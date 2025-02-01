@@ -25,6 +25,10 @@ class BoolInterval(Interval):
         self.lo = lo
         self.hi = hi
 
+    @staticmethod
+    def from_val(val: bool):
+        return BoolInterval(val, val)
+
     def union(self, other: Self):
         if not isinstance(other, BoolInterval):
             raise TypeError(f'expected BoolInterval, got {other}')
@@ -46,6 +50,10 @@ class RealInterval(Interval):
     def __init__(self, lo: Digital, hi: Digital):
         self.lo = lo
         self.hi = hi
+
+    @staticmethod
+    def from_val(val: Digital):
+        return RealInterval(val, val)
 
     def union(self, other: Self):
         if not isinstance(other, RealInterval):
