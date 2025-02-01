@@ -4,7 +4,10 @@ to compute the true real number result.
 """
 
 from titanfp.arithmetic.evalctx import EvalCtx
+from titanfp.arithmetic.ieee754 import ieee_ctx
 from titanfp.titanic.ndarray import NDArray
+from titanfp.titanic.digital import Digital
+from titanfp.titanic import gmpmath
 
 from .interval import BoolInterval, RealInterval
 
@@ -25,6 +28,20 @@ TensorArg = NDArray | tuple | list
 
 class _Interpreter(ReduceVisitor):
     """Single-use real number interpreter"""
+    env: dict[str, BoolInterval | RealInterval | NDArray]
+
+    # TODO: what are the semantics of arguments
+    def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
+        if isinstance(arg, str | int | float):
+            x = gmpmath.mpfr(arg, ctx.p)
+            return gmpmath.mpfr_to_digital(x)
+        elif isinstance(arg, Digital):
+            x = gmpmath.mpfr(arg, ctx.p)
+            return gmpmath.mpfr_to_digital(x)
+        elif isinstance(arg, tuple | list):
+            raise NotImplementedError()
+        else:
+            raise NotImplementedError(f'unknown argument type {arg}')
 
     def eval(self,
         func: FunctionDef,
@@ -33,7 +50,31 @@ class _Interpreter(ReduceVisitor):
     ):
         if not isinstance(func, FunctionDef):
             raise TypeError(f'Expected Function, got {type(func)}')
-        raise NotImplementedError()
+
+        # check arity
+        args = tuple(args)
+        if len(args) != len(func.args):
+            raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
+
+        # default context if none is specified
+        if ctx is None:
+            ctx = ieee_ctx(11, 64)
+
+        for val, arg in zip(args, func.args):
+            match arg.ty:
+                case AnyType():
+                    x = self._arg_to_mpmf(val, ctx)
+                    self.env[arg.name] = RealInterval.from_val(x)
+                case RealType():
+                    x = self._arg_to_mpmf(val, ctx)
+                    if not isinstance(x, RealInterval):
+                        raise TypeError(f'Expected real value, got {val}')
+                    self.env[arg.name] = RealInterval.from_val(x)
+                case _:
+                    raise NotImplementedError(f'unsupported argument type {arg.ty}')
+
+        return self._visit_block(func.body, ctx)
+
 
     def _visit_var(self, e, ctx):
         raise NotImplementedError
