@@ -2,7 +2,7 @@
 
 from ..ir import *
 
-_CtxType = set[str]
+_CtxType = set[NamedId]
 
 class InvalidIRError(Exception):
     pass
@@ -11,7 +11,7 @@ class InvalidIRError(Exception):
 class _VerifyPassInstance(DefaultVisitor):
     """Single instance of the `VerifyPass`."""
     func: FunctionDef
-    types: dict[str, IRType]
+    types: dict[NamedId, IRType]
 
     def __init__(self, func: FunctionDef):
         self.func = func
@@ -21,29 +21,41 @@ class _VerifyPassInstance(DefaultVisitor):
         self.types = {}
         self._visit_function(self.func, set())
 
-    def _visit_var(self, e, ctx: _CtxType):
+    def _visit_var(self, e: Var, ctx: _CtxType):
         if e.name not in ctx:
             raise InvalidIRError(f'undefined variable {e.name}')
 
-    def _visit_comp_expr(self, e, ctx: _CtxType):
+    def _visit_comp_expr(self, e: CompExpr, ctx: _CtxType):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
         for var in e.vars:
-            if var in self.types:
-                raise InvalidIRError(f'reassignment of variable {var}')
-            self.types[var] = AnyType()
-            ctx.add(var)
+            match var:
+                case NamedId():
+                    if var in self.types:
+                        raise InvalidIRError(f'reassignment of variable {var}')
+                    self.types[var] = AnyType()
+                    ctx.add(var)
+                case UnderscoreId():
+                    pass
+                case _:
+                    raise InvalidIRError('unreachable', var)
         self._visit_expr(e.elt, ctx)
 
-    def _visit_var_assign(self, stmt, ctx: _CtxType):
+    def _visit_var_assign(self, stmt: VarAssign, ctx: _CtxType):
         self._visit_expr(stmt.expr, ctx)
-        if stmt.var in self.types:
-            raise InvalidIRError(f'reassignment of variable {stmt.var}')
-        self.types[stmt.var] = AnyType()
-        ctx.add(stmt.var)
+        match stmt.var:
+            case NamedId():
+                if stmt.var in self.types:
+                    raise InvalidIRError(f'reassignment of variable {stmt.var}')
+                self.types[stmt.var] = AnyType()
+                ctx.add(stmt.var)
+            case UnderscoreId():
+                pass
+            case _:
+                raise InvalidIRError('unreachable', stmt.var)
         return ctx
 
-    def _visit_tuple_assign(self, stmt, ctx: _CtxType):
+    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: _CtxType):
         self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
             if var in self.types:
@@ -52,7 +64,7 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx.add(var)
         return ctx
 
-    def _visit_ref_assign(self, stmt, ctx: _CtxType):
+    def _visit_ref_assign(self, stmt: RefAssign, ctx: _CtxType):
         if stmt.var not in ctx:
             raise InvalidIRError(f'undefined variable {stmt.var}')
         for s in stmt.slices:
@@ -60,7 +72,7 @@ class _VerifyPassInstance(DefaultVisitor):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_if1_stmt(self, stmt, ctx: _CtxType):
+    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _CtxType):
         self._visit_expr(stmt.cond, ctx)
         body_ctx = self._visit_block(stmt.body, ctx.copy())
         # check validty of phi nodes and update context
@@ -79,7 +91,7 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx -= { orig, new }
         return ctx
 
-    def _visit_if_stmt(self, stmt, ctx: _CtxType):
+    def _visit_if_stmt(self, stmt: IfStmt, ctx: _CtxType):
         self._visit_expr(stmt.cond, ctx)
         ift_ctx = self._visit_block(stmt.ift, ctx.copy())
         iff_ctx = self._visit_block(stmt.iff, ctx.copy())
@@ -99,7 +111,7 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx -= { ift_name, iff_name }
         return ctx
 
-    def _visit_while_stmt(self, stmt, ctx: _CtxType):
+    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _CtxType):
         # check (partial) validity of phi variables and update context
         for phi in stmt.phis:
             name, orig = phi.name, phi.lhs
@@ -123,14 +135,20 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx -= { new }
         return ctx
 
-    def _visit_for_stmt(self, stmt, ctx: _CtxType):
+    def _visit_for_stmt(self, stmt: ForStmt, ctx: _CtxType):
         # check iterable expression
         self._visit_expr(stmt.iterable, ctx)
         # bind the loop variable
-        if stmt.var in self.types:
-            raise InvalidIRError(f'reassignment of variable {stmt.var}')
-        self.types[stmt.var] = AnyType()
-        ctx.add(stmt.var)
+        match stmt.var:
+            case NamedId():
+                if stmt.var in self.types:
+                    raise InvalidIRError(f'reassignment of variable {stmt.var}')
+                self.types[stmt.var] = AnyType()
+                ctx.add(stmt.var)
+            case UnderscoreId():
+                pass
+            case _:
+                raise InvalidIRError('unreachable', stmt.var)
         # check (partial) validity of phi variables and update context
         for phi in stmt.phis:
             name, orig = phi.name, phi.lhs
@@ -153,15 +171,15 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx -= { new }
         return ctx
 
-    def _visit_context(self, stmt, ctx: _CtxType):
-        if stmt.name is not None:
+    def _visit_context(self, stmt: ContextStmt, ctx: _CtxType):
+        if stmt.name is not None and isinstance(stmt.name, NamedId):
             if stmt.name in self.types:
                 raise InvalidIRError(f'reassignment of variable {stmt.name}')
             self.types[stmt.name] = AnyType()
-            ctx += stmt.name
+            ctx.add(stmt.name)
         return self._visit_block(stmt.body, ctx)
 
-    def _visit_block(self, block, ctx: _CtxType):
+    def _visit_block(self, block: Block, ctx: _CtxType):
         for stmt in block.stmts:
             if not isinstance(stmt, Stmt):
                 raise InvalidIRError(f'expected a statement {stmt}')
@@ -172,18 +190,19 @@ class _VerifyPassInstance(DefaultVisitor):
                 ctx = self._visit_statement(stmt, ctx.copy())
         return ctx
 
-    def _visit_function(self, func, ctx: _CtxType):
+    def _visit_function(self, func: FunctionDef, ctx: _CtxType):
         for arg in func.args:
-            self.types[arg.name] = AnyType()
-            ctx.add(arg.name)
+            if isinstance(arg.name, NamedId):
+                self.types[arg.name] = AnyType()
+                ctx.add(arg.name)
         self._visit_block(func.body, ctx)
 
     # override for typing hint
-    def _visit_expr(self, e, ctx: _CtxType) -> None:
+    def _visit_expr(self, e: Expr, ctx: _CtxType) -> None:
         super()._visit_expr(e, ctx)
 
     # override for typing hint
-    def _visit_statement(self, stmt, ctx: _CtxType) -> _CtxType:
+    def _visit_statement(self, stmt: Stmt, ctx: _CtxType) -> _CtxType:
         return super()._visit_statement(stmt, ctx)
 
 

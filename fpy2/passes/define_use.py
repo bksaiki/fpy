@@ -5,7 +5,7 @@ from ..ir import *
 class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""
     func: FunctionDef
-    uses: dict[str, set[Var | PhiNode]]
+    uses: dict[NamedId, set[Var | PhiNode]]
     done: bool
 
     def __init__(self, func: FunctionDef):
@@ -20,7 +20,7 @@ class _DefineUseInstance(DefaultVisitor):
         self.done = True
         return self.uses
 
-    def _visit_var(self, e: Var, ctx):
+    def _visit_var(self, e: Var, ctx: None):
         if e.name not in self.uses:
             raise NotImplementedError(f'undefined variable {e.name}')
         self.uses[e.name].add(e)
@@ -29,12 +29,14 @@ class _DefineUseInstance(DefaultVisitor):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
         for var in e.vars:
-            self.uses[var] = set()
+            if isinstance(var, NamedId):
+                self.uses[var] = set()
         self._visit_expr(e.elt, ctx)
 
     def _visit_var_assign(self, stmt: VarAssign, ctx: None):
         self._visit_expr(stmt.expr, ctx)
-        self.uses[stmt.var] = set()
+        if isinstance(stmt.var, NamedId):
+            self.uses[stmt.var] = set()
 
     def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
         self._visit_expr(stmt.expr, ctx)
@@ -69,7 +71,8 @@ class _DefineUseInstance(DefaultVisitor):
 
     def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
         self._visit_expr(stmt.iterable, ctx)
-        self.uses[stmt.var] = set()
+        if isinstance(stmt.var, NamedId):
+            self.uses[stmt.var] = set()
         for phi in stmt.phis:
             self.uses[phi.name] = set()
             self.uses[phi.lhs].add(phi)
@@ -79,7 +82,8 @@ class _DefineUseInstance(DefaultVisitor):
 
     def _visit_function(self, func: FunctionDef, ctx):
         for arg in func.args:
-            self.uses[arg.name] = set()
+            if isinstance(arg.name, NamedId):
+                self.uses[arg.name] = set()
         self._visit_block(func.body, ctx)
 
     # override to get typing hint

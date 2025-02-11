@@ -2,6 +2,9 @@ name: Build and check
 
 on: [push]
 
+env:
+  FPBENCH: ~/fpbench
+
 jobs:
   build:
     name: "Build"
@@ -54,3 +57,28 @@ jobs:
         run: pip install .
       - name: Lint
         run: ruff check
+
+  unit:
+    name: "Unit Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Checkout fpbench/fpbench"
+        uses: actions/checkout@v4
+        with:
+          repository: fpbench/fpbench
+          path: ~/fpbench
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Create virtual environment
+        run: python3 -m venv .env/
+      - name: Activate virtual environment
+        run: source .env/bin/activate
+      - name: Install
+        run: pip install .[dev]
+      - name: Tests (unit)
+        run: python3 -m tests.unit
+      - name: Tests (FPCore)
+        run: python3 -m tests.fpbench

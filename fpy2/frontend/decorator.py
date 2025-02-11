@@ -3,6 +3,7 @@ Decorators for the FPy language.
 """
 
 import inspect
+import textwrap
 
 from typing import Callable, Optional
 from typing import ParamSpec, TypeVar, overload
@@ -15,7 +16,7 @@ from .parser import Parser
 from .syntax_check import SyntaxCheck
 
 from ..passes import SSA, VerifyIR
-from ..runtime import Function
+from ..runtime import Function, PythonEnv
 
 P = ParamSpec('P')
 R = TypeVar('R')
@@ -29,7 +30,8 @@ def fpy(**kwargs) -> Callable[[Callable[P, R]], Callable[P, R]]:
     ...
 
 def fpy(
-    func: Optional[Callable[P, R]] = None, **kwargs
+    func: Optional[Callable[P, R]] = None,
+    **kwargs
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Decorator to parse a Python function into FPy.
@@ -43,21 +45,38 @@ def fpy(
     else:
         return _apply_decorator(func, **kwargs)
 
+def _function_env(func: Callable) -> PythonEnv:
+    globs = func.__globals__
+    if func.__closure__ is None:
+        nonlocals = {}
+    else:
+        nonlocals = {
+            v: c for v, c in
+            zip(func.__code__.co_freevars, func.__closure__)
+        }
+
+    return PythonEnv(globs, nonlocals)
 
 def _apply_decorator(func: Callable[P, R], **kwargs):
-    # read the original source of the function
-    sourcename = inspect.getabsfile(func)
-    lines, start_line = inspect.getsourcelines(func)
-    source = ''.join(lines)
+    # read the original source the function
+    src_name = inspect.getabsfile(func)
+    _, start_line = inspect.getsourcelines(func)
+    src = textwrap.dedent(inspect.getsource(func))
+
+    # get defining environment
+    cvars = inspect.getclosurevars(func)
+    fvs = cvars.nonlocals.keys() | cvars.globals.keys()
+    env = _function_env(func)
 
     # parse the source as an FPy function
-    ast = Parser(sourcename, source, start_line).parse()
+    ast = Parser(src_name, src, start_line).parse()
     assert isinstance(ast, FunctionDef), "must be a function"
 
     # add context information
     ast.ctx = { **kwargs }
+    ast.fvs = fvs
 
-    print(ast.format())
+    # print(ast.format())
 
     # analyze and lower to the IR
     SyntaxCheck.analyze(ast)
@@ -68,4 +87,4 @@ def _apply_decorator(func: Callable[P, R], **kwargs):
     VerifyIR.check(ir)
 
     # wrap the IR in a Function
-    return Function(ir, func.__globals__)
+    return Function(ir, env)

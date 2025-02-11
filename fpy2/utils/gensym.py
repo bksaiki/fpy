@@ -1,45 +1,52 @@
-"""Unique name generation"""
+"""
+This module defines the `Gensym` object that generates unique identifiers.
+"""
+
+from .identifier import Id, NamedId, UnderscoreId
 
 class Gensym(object):
     """
-    Unique name generator.
-    
-    Generates names of the form `<prefix><integer>`.
-    The name is guaranteed to be unique among the names it
-    has generated and any reserved names that are set during
-    initialization of the generator.
-    """
+    Unique identifier generator.
 
-    _names: set[str]
+    The identifier is guaranteed to be unique among names that it
+    has generated or reserved.
+    """
+    _idents: set[NamedId]
     _counter: int
 
-    def __init__(self, *names: str):
-        self._names = set(names)
-        self._counter = len(names)
+    def __init__(self, *idents: NamedId):
+        self._idents = set(idents)
+        self._counter = len(idents)
 
-    def reserve(self, *names: str):
-        """Reserves a list of names."""
-        for name in names:
-            if not isinstance(name, str):
-                raise TypeError('must be a list of strings', names)
-        self._names.update(names)
+    def reserve(self, *idents: NamedId):
+        """Reserves a set of identifiers"""
+        for ident in idents:
+            if not isinstance(ident, NamedId):
+                raise TypeError('must be a list of identifiers', idents)
+            if ident in self._idents:
+                raise RuntimeError(f'identifier `{ident}` already reserved')
+            self._idents.add(ident)
 
-    def fresh(self, prefix: str = 't'):
-        """Generates a unique name with a given prefix."""
-        name = prefix
-        while name in self._names:
-            name = f'{prefix}{self._counter}'
+    def refresh(self, ident: NamedId):
+        """Generates a unique identifier for an existing identifier."""
+        ident = NamedId(ident.base, ident.count)
+        while ident in self._idents:
+            ident.count = self._counter
             self._counter += 1
 
-        self._names.add(name)
-        return name
+        self._idents.add(ident)
+        return ident
 
-    def __contains__(self, name: str):
-        return name in self._names
+    def fresh(self, prefix: str = 't'):
+        """Generates a unique identifier with a given prefix."""
+        return self.refresh(NamedId(prefix))
+
+    def __contains__(self, name: NamedId):
+        return name in self._idents
 
     def __len__(self):
-        return len(self._names)
+        return len(self._idents)
 
     @property
     def names(self):
-        return set(self._names)
+        return set(self._idents)

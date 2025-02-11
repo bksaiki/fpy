@@ -1,10 +1,14 @@
 """FPy functions are the result of `@fpy` decorators."""
 
+import inspect
+
 from abc import abstractmethod
-from typing import Any, Optional
+from typing import Optional
+from types import FunctionType
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.arithmetic.evalctx import EvalCtx
 
+from .env import PythonEnv
 from ..ir import FunctionDef
 from ..frontend.fpc import fpcore_to_fpy
 
@@ -16,25 +20,33 @@ class Function:
     a function in the FPy runtime.
     """
     ir: FunctionDef
-    env: dict[str, Any]
-    rt: Optional['BaseInterpreter']
+    env: PythonEnv
+    runtime: Optional['BaseInterpreter']
+
+    _func: Optional[FunctionType]
+    """original native function"""
 
     def __init__(
         self,
         ir: FunctionDef,
-        env: dict[str, Any],
-        rt: Optional['BaseInterpreter'] = None
+        env: PythonEnv,
+        runtime: Optional['BaseInterpreter'] = None,
+        func: Optional[FunctionType] = None
     ):
         self.ir = ir
         self.env = env
-        self.rt = rt
+        self.runtime = runtime
+        self._func = func
 
     def __repr__(self):
         return f'{self.__class__.__name__}(ir={self.ir}, ...)'
 
     def __call__(self, *args, ctx: Optional[EvalCtx] = None):
-        rt = get_default_interpreter() if self.rt is None else self.rt
+        rt = get_default_interpreter() if self.runtime is None else self.runtime
         return rt.eval(self, args, ctx=ctx)
+
+    def format(self):
+        return self.ir.format()
 
     @property
     def args(self):
@@ -49,13 +61,14 @@ class Function:
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
         ir = fpcore_to_fpy(core)
-        return Function(ir, {})
+        return Function(ir, PythonEnv.empty())
 
     def with_rt(self, rt: 'BaseInterpreter'):
         if not isinstance(rt, BaseInterpreter):
             raise TypeError(f'expected BaseInterpreter, got {rt}')
-        return Function(self.ir, self.env, rt)
-
+        if not isinstance(self._func, FunctionType):
+            raise TypeError(f'expected FunctionType, got {self._func}')
+        return Function(self.ir, self.env, runtime=rt, func=self._func)
 
 class BaseInterpreter:
     """Abstract base class for FPy interpreters."""

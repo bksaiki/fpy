@@ -11,7 +11,7 @@ from .verify import VerifyIR
 from ..ir import *
 from ..utils import Gensym
 
-_CtxType = dict[str, Expr]
+_CtxType = dict[NamedId, Expr]
 """
 Visitor method context type for expressions
 """
@@ -21,7 +21,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     func: FunctionDef
     gensym: Gensym
 
-    def __init__(self, func: FunctionDef, names: set[str]):
+    def __init__(self, func: FunctionDef, names: set[NamedId]):
         self.func = func
         self.gensym = Gensym(*names)
 
@@ -114,7 +114,7 @@ class WhileBundling:
     """
 
     @staticmethod
-    def apply(func: FunctionDef, names: Optional[set[str]] = None) -> FunctionDef:
+    def apply(func: FunctionDef, names: Optional[set[NamedId]] = None) -> FunctionDef:
         if names is None:
             uses = DefineUse.analyze(func)
             names = set(uses.keys())

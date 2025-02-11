@@ -51,6 +51,7 @@ _unary_table = {
     UnaryOpKind.ISNORMAL: ir.IsNormal,
     UnaryOpKind.SIGNBIT: ir.Signbit,
     UnaryOpKind.CAST: ir.Cast,
+    UnaryOpKind.SHAPE: ir.Shape,
     UnaryOpKind.RANGE: ir.Range,
     UnaryOpKind.DIM: ir.Dim,
 }
@@ -86,35 +87,35 @@ class _IRCodegenInstance(AstVisitor):
     def lower(self) -> ir.FunctionDef:
         return self._visit_function(self.func, None)
 
-    def _visit_var(self, e, ctx: None):
+    def _visit_var(self, e: Var, ctx: None):
         return ir.Var(e.name)
 
-    def _visit_decnum(self, e, ctx: None):
+    def _visit_decnum(self, e: Decnum, ctx: None):
         return ir.Decnum(e.val)
 
-    def _visit_hexnum(self, e, ctx: None):
+    def _visit_hexnum(self, e: Hexnum, ctx: None):
         return ir.Hexnum(e.val)
 
-    def _visit_integer(self, e, ctx: None):
+    def _visit_integer(self, e: Integer, ctx: None):
         return ir.Integer(e.val)
 
-    def _visit_rational(self, e, ctx: None):
+    def _visit_rational(self, e: Rational, ctx: None):
         return ir.Rational(e.p, e.q)
 
-    def _visit_digits(self, e, ctx: None):
+    def _visit_digits(self, e: Digits, ctx: None):
         return ir.Digits(e.m, e.e, e.b)
 
-    def _visit_constant(self, e, ctx: None):
+    def _visit_constant(self, e: Constant, ctx: None):
         return ir.Constant(e.val)
 
-    def _visit_unaryop(self, e, ctx: None):
+    def _visit_unaryop(self, e: UnaryOp, ctx: None):
         if e.op in _unary_table:
             arg = self._visit_expr(e.arg, ctx)
             return _unary_table[e.op](arg)
         else:
             raise NotImplementedError('unexpected op', e.op)
 
-    def _visit_binaryop(self, e, ctx: None):
+    def _visit_binaryop(self, e: BinaryOp, ctx: None):
         if e.op in _binary_table:
             lhs = self._visit_expr(e.left, ctx)
             rhs = self._visit_expr(e.right, ctx)
@@ -122,7 +123,7 @@ class _IRCodegenInstance(AstVisitor):
         else:
             raise NotImplementedError('unexpected op', e.op)
 
-    def _visit_ternaryop(self, e, ctx: None):
+    def _visit_ternaryop(self, e: TernaryOp, ctx: None):
         arg0 = self._visit_expr(e.arg0, ctx)
         arg1 = self._visit_expr(e.arg1, ctx)
         arg2 = self._visit_expr(e.arg2, ctx)
@@ -131,7 +132,7 @@ class _IRCodegenInstance(AstVisitor):
         else:
             raise NotImplementedError('unexpected op', e.op)
 
-    def _visit_naryop(self, e, ctx: None):
+    def _visit_naryop(self, e: NaryOp, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         match e.op:
             case NaryOpKind.AND:
@@ -141,42 +142,42 @@ class _IRCodegenInstance(AstVisitor):
             case _:
                 raise NotImplementedError('unexpected op', e.op)
 
-    def _visit_compare(self, e, ctx: None):
+    def _visit_compare(self, e: Compare, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         return ir.Compare(e.ops, args)
 
-    def _visit_call(self, e, ctx: None):
+    def _visit_call(self, e: Call, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         return ir.UnknownCall(e.op, *args)
 
-    def _visit_tuple_expr(self, e, ctx: None):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         elts = [self._visit_expr(arg, ctx) for arg in e.args]
         return ir.TupleExpr(*elts)
 
-    def _visit_comp_expr(self, e, ctx: None):
+    def _visit_comp_expr(self, e: CompExpr, ctx: None):
         iterables = [self._visit_expr(arg, ctx) for arg in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return ir.CompExpr(e.vars, iterables, elt)
+        return ir.CompExpr(list(e.vars), iterables, elt)
 
-    def _visit_ref_expr(self, e, ctx: None):
+    def _visit_ref_expr(self, e: RefExpr, ctx: None):
         value = self._visit_expr(e.value, ctx)
         slices = [self._visit_expr(s, ctx) for s in e.slices]
         return ir.TupleRef(value, *slices)
 
-    def _visit_if_expr(self, e, ctx: None):
+    def _visit_if_expr(self, e: IfExpr, ctx: None):
         cond = self._visit_expr(e.cond, ctx)
         ift = self._visit_expr(e.ift, ctx)
         iff = self._visit_expr(e.iff, ctx)
         return ir.IfExpr(cond, ift, iff)
 
-    def _visit_var_assign(self, stmt, ctx: None):
+    def _visit_var_assign(self, stmt: VarAssign, ctx: None):
         expr = self._visit_expr(stmt.expr, ctx)
         return ir.VarAssign(stmt.var, ir.AnyType(), expr)
 
     def _visit_tuple_binding(self, vars: TupleBinding):
-        new_vars: list[str | ir.TupleBinding] = []
+        new_vars: list[Id | ir.TupleBinding] = []
         for name in vars:
-            if isinstance(name, str):
+            if isinstance(name, Id):
                 new_vars.append(name)
             elif isinstance(name, TupleBinding):
                 new_vars.append(self._visit_tuple_binding(name))
@@ -184,17 +185,17 @@ class _IRCodegenInstance(AstVisitor):
                 raise NotImplementedError('unexpected tuple identifier', name)
         return ir.TupleBinding(new_vars)
 
-    def _visit_tuple_assign(self, stmt, ctx: None):
+    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
         return ir.TupleAssign(binding, ir.AnyType(), expr)
 
-    def _visit_ref_assign(self, stmt, ctx: None):
+    def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
         return ir.RefAssign(stmt.var, slices, value)
 
-    def _visit_if_stmt(self, stmt, ctx: None):
+    def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
         ift = self._visit_block(stmt.ift, ctx)
         if stmt.iff is None:
@@ -203,27 +204,31 @@ class _IRCodegenInstance(AstVisitor):
             iff = self._visit_block(stmt.iff, ctx)
             return ir.IfStmt(cond, ift, iff, [])
 
-    def _visit_while_stmt(self, stmt, ctx: None):
+    def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
         body = self._visit_block(stmt.body, ctx)
         return ir.WhileStmt(cond, body, [])
 
-    def _visit_for_stmt(self, stmt, ctx: None):
+    def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
         iterable = self._visit_expr(stmt.iterable, ctx)
         body = self._visit_block(stmt.body, ctx)
         return ir.ForStmt(stmt.var, ir.AnyType(), iterable, body, [])
 
-    def _visit_context(self, stmt, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: None):
         block = self._visit_block(stmt.body, ctx)
         return ir.ContextStmt(stmt.name, stmt.props, block)
 
-    def _visit_return(self, stmt, ctx: None):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+        test = self._visit_expr(stmt.test, ctx)
+        return ir.AssertStmt(test, stmt.msg)
+
+    def _visit_return(self, stmt: Return, ctx: None):
         return ir.Return(self._visit_expr(stmt.expr, ctx))
 
-    def _visit_block(self, block, ctx: None):
+    def _visit_block(self, block: Block, ctx: None):
         return ir.Block([self._visit_statement(stmt, ctx) for stmt in block.stmts])
 
-    def _visit_function(self, func, ctx: None):
+    def _visit_function(self, func: FunctionDef, ctx: None):
         args: list[ir.Argument] = []
         for arg in func.args:
             # TODO: use type annotation

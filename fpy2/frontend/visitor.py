@@ -107,9 +107,13 @@ class AstVisitor(ABC):
     @abstractmethod
     def _visit_for_stmt(self, stmt: ForStmt, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
-    
+
     @abstractmethod
     def _visit_context(self, stmt: ContextStmt, ctx: Any) -> Any:
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
+    def _visit_assert(self, stmt: AssertStmt, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
@@ -190,6 +194,8 @@ class AstVisitor(ABC):
                 return self._visit_for_stmt(stmt, ctx)
             case ContextStmt():
                 return self._visit_context(stmt, ctx)
+            case AssertStmt():
+                return self._visit_assert(stmt, ctx)
             case Return():
                 return self._visit_return(stmt, ctx)
             case _:

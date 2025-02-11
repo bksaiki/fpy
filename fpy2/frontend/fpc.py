@@ -78,17 +78,17 @@ _ternary_table = {
 }
 
 def _zeros(ns: list[Expr]) -> Expr:
-    vars = ['_' for _ in ns]
+    vars = [UnderscoreId() for _ in ns]
     args = [UnaryOp(UnaryOpKind.RANGE, n, None) for n in ns]
     return CompExpr(vars, args, Integer(0, None), None)
 
 class _Ctx:
-    env: dict[str, str]
+    env: dict[str, NamedId]
     stmts: list[Stmt]
 
     def __init__(
         self,
-        env: Optional[dict[str, str]] = None,
+        env: Optional[dict[str, NamedId]] = None,
         stmts: Optional[list[Stmt]] = None
     ):
         if env is None:
@@ -348,8 +348,8 @@ class _FPCore2FPy:
 
     def _make_tensor_body(
         self,
-        iter_vars: list[str],
-        range_vars: list[str],
+        iter_vars: list[NamedId],
+        range_vars: list[NamedId],
         stmts: list[Stmt] = []
     ) -> list[Stmt]:
         if len(iter_vars) == 0:
@@ -379,25 +379,24 @@ class _FPCore2FPy:
         #
 
         # bind iteration bounds to temporaries
-        env = ctx.env
-        bound_vars: list[str] = []
+        bound_vars: list[NamedId] = []
         for var, val in e.dim_bindings:
             t = self.gensym.fresh('t')
             stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
             ctx.stmts.append(stmt)
             bound_vars.append(t)
-            env[t] = t
 
         # initialize loop variables
+        init_env = ctx.env.copy()
+        init_ctx = _Ctx(env=ctx.env, stmts=ctx.stmts)
         for var, init, _ in e.while_bindings:
             # compile value
-            init_ctx = _Ctx(env=env, stmts=ctx.stmts)
             init_e = self._visit(init, init_ctx)
             # bind value to variable
             t = self.gensym.fresh(var)
             stmt = VarAssign(t, init_e, None, None)
             ctx.stmts.append(stmt)
-            env = { **env, var: t }
+            init_env[var] = t
 
         # initialize tensor
         tuple_id = self.gensym.fresh('t')
@@ -406,15 +405,16 @@ class _FPCore2FPy:
         ctx.stmts.append(stmt)
 
         # initial iteration variables
-        iter_vars: list[str] = []
+        iter_vars: list[NamedId] = []
+        loop_env = init_env.copy()
         for var, _ in e.dim_bindings:
             iter_id = self.gensym.fresh(var)
             iter_vars.append(iter_id)
-            env = { **env, var: iter_id }
+            loop_env[var] = iter_id
 
         # generate for loops
         loop_stmts = self._make_tensor_body(iter_vars, bound_vars, ctx.stmts)
-        loop_ctx = _Ctx(env=env, stmts=loop_stmts)
+        loop_ctx = _Ctx(env=loop_env, stmts=loop_stmts)
 
         # set tensor element
         body_e = self._visit(e.body, loop_ctx)
@@ -433,10 +433,48 @@ class _FPCore2FPy:
         return Var(tuple_id, None)
 
     def _visit_tensor(self, e: fpc.Tensor, ctx: _Ctx) -> Expr:
-        raise NotImplementedError(e)
+        # (tensor ([<i0> <e0>] ...) <body>)
+        #
+        # <n0> = <e0>
+        # ...
+        # <t> = zeros(<n0>, ...)
+        # for <i0> in range(<n0>):
+        #    ...
+        #      t[<i0>, ...] = <body>
+        #
 
-    def _visit_forstar(self, e: fpc.ForStar, ctx: _Ctx) -> Expr:
-        raise NotImplementedError(e)
+        # bind iteration bounds to temporaries
+        bound_vars: list[NamedId] = []
+        for var, val in e.dim_bindings:
+            t = self.gensym.fresh('t')
+            stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
+            ctx.stmts.append(stmt)
+            bound_vars.append(t)
+
+        # initialize tensor
+        tuple_id = self.gensym.fresh('t')
+        zeroed = _zeros([Var(var, None) for var in bound_vars])
+        stmt = VarAssign(tuple_id, zeroed, None, None)
+        ctx.stmts.append(stmt)
+
+        # initial iteration variables
+        iter_vars: list[NamedId] = []
+        loop_env = ctx.env.copy()
+        for var, _ in e.dim_bindings:
+            iter_id = self.gensym.fresh(var)
+            iter_vars.append(iter_id)
+            loop_env[var] = iter_id
+
+        # generate for loops
+        loop_stmts = self._make_tensor_body(iter_vars, bound_vars, ctx.stmts)
+        loop_ctx = _Ctx(env=loop_env, stmts=loop_stmts)
+
+        # set tensor element
+        body_e = self._visit(e.body, loop_ctx)
+        stmt = RefAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
+        loop_stmts.append(stmt)
+
+        return Var(tuple_id, None)
 
     def _visit_for(self, e: fpc.For, ctx: _Ctx) -> Expr:
         # (for ([<i0> <e0>] ...) ([<x0> <init0> <update0>] ...) <body>)
@@ -454,7 +492,66 @@ class _FPCore2FPy:
         # <body>
         #
 
-        raise NotImplementedError(e)
+        is_star = isinstance(e, fpc.ForStar)
+
+        # bind iteration bounds to temporaries
+        bound_vars: list[NamedId] = []
+        for var, val in e.dim_bindings:
+            t = self.gensym.fresh('t')
+            stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
+            ctx.stmts.append(stmt)
+            bound_vars.append(t)
+
+        # initialize loop variables
+        init_env = ctx.env.copy()
+        for var, init, _ in e.while_bindings:
+            # compile value
+            init_ctx = _Ctx(init_env if is_star else ctx.env, ctx.stmts)
+            init_e = self._visit(init, init_ctx)
+            # bind value to variable
+            t = self.gensym.fresh(var)
+            stmt = VarAssign(t, init_e, None, None)
+            ctx.stmts.append(stmt)
+            init_env[var] = t
+
+        # initial iteration variables
+        iter_vars: list[NamedId] = []
+        for var, _ in e.dim_bindings:
+            iter_id = self.gensym.fresh(var)
+            iter_vars.append(iter_id)
+            init_env[var] = iter_id
+
+        # generate for loops
+        loop_env = init_env.copy()
+        loop_stmts = self._make_tensor_body(iter_vars, bound_vars, ctx.stmts)
+        loop_ctx = _Ctx(env=loop_env, stmts=loop_stmts)
+
+        if is_star:
+            # update loop variables
+            for var, _, update in e.while_bindings:
+                t = loop_env[var]
+                update_e = self._visit(update, loop_ctx)
+                stmt = VarAssign(t, update_e, None, None)
+                loop_stmts.append(stmt)
+        else:
+            # temporary update variables
+            update_env = loop_env.copy()
+            for var, _, update in e.while_bindings:
+                update_e = self._visit(update, loop_ctx)
+                update_var = self.gensym.fresh(var)
+                stmt = VarAssign(update_var, update_e, None, None)
+                loop_stmts.append(stmt)
+                update_env[var] = update_var
+
+            # bind temporaries to loop variables
+            for var, _, _ in e.while_bindings:
+                x = init_env[var]
+                t = update_env[var]
+                stmt = VarAssign(x, Var(t, None), None, None)
+                loop_stmts.append(stmt)
+
+        body_ctx = _Ctx(env=init_env, stmts=ctx.stmts)
+        return self._visit(e.body, body_ctx)
 
     def _visit_ctx(self, e: fpc.Ctx, ctx: _Ctx) -> Expr:
         # compile body
@@ -508,8 +605,6 @@ class _FPCore2FPy:
                 return self._visit_tensorstar(e, ctx)
             case fpc.Tensor():
                 return self._visit_tensor(e, ctx)
-            case fpc.ForStar():
-                return self._visit_forstar(e, ctx)
             case fpc.For():
                 return self._visit_for(e, ctx)
             case fpc.Ctx():
@@ -533,6 +628,23 @@ class _FPCore2FPy:
             args.append(arg)
             ctx.env[name] = t
 
+            if shape is not None and any(isinstance(dim, str) for dim in shape):
+                dim_ids: list[Id] = []
+                for dim in shape:
+                    if isinstance(dim, str):
+                        d = self.gensym.fresh(dim)
+                        dim_ids.append(d)
+                    else:
+                        dim_ids.append(UnderscoreId())
+
+                shape_e = UnaryOp(UnaryOpKind.SHAPE, Var(t, None), None)
+                stmt = TupleAssign(TupleBinding(dim_ids, None), shape_e, None)
+                ctx.stmts.append(stmt)
+                for dim, dim_id in zip(shape, dim_ids):
+                    if isinstance(dim, str):
+                        assert isinstance(dim_id, NamedId), "must be a NamedId"
+                        ctx.env[dim] = dim_id
+
         # compile function body
         e = self._visit(f.e, ctx)
         block = Block(ctx.stmts + [Return(e, None)])
@@ -549,7 +661,6 @@ class _FPCore2FPy:
 
 def fpcore_to_fpy(core: fpc.FPCore):
     ast = _FPCore2FPy(core).convert()
-    print(ast.format())
 
     # analyze and lower to the IR
     SyntaxCheck.analyze(ast)

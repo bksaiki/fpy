@@ -119,10 +119,10 @@ class FPyParserError(Exception):
 class Parser:
     """
     FPy parser.
-    
+
     Converts a Python AST (from the `ast` module) to a FPy AST.
     """
-    
+
     name: str
     source: str
     lines: list[str]
@@ -183,6 +183,12 @@ class Parser:
                 return ScalarTypeAnn(ScalarType.BOOL, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported FPy type annotation', ann)
+
+    def _parse_id(self, e: ast.Name):
+        if e.id == '_':
+            return UnderscoreId()
+        else:
+            return NamedId(e.id)
 
     def _parse_constant(self, e: ast.Constant, loc: Location):
         # TODO: reparse all constants to get exact value
@@ -313,7 +319,8 @@ class Parser:
         loc = self._parse_location(e)
         match e:
             case ast.Name():
-                return Var(e.id, loc)
+                ident = self._parse_id(e)
+                return Var(ident, loc)
             case ast.Constant():
                 return self._parse_constant(e, loc)
             case ast.UnaryOp():
@@ -357,7 +364,7 @@ class Parser:
             case ast.List():
                 return TupleExpr([self._parse_expr(e) for e in e.elts], loc)
             case ast.ListComp():
-                vars: list[str] = []
+                vars: list[Id] = []
                 iterables: list[Expr] = []
                 for gen in e.generators:
                     var, iterable = self._parse_comprehension(gen, loc)
@@ -380,7 +387,7 @@ class Parser:
         loc = self._parse_location(target)
         match target:
             case ast.Name():
-                return target.id
+                return self._parse_id(target)
             case ast.Tuple():
                 elts = [self._parse_tuple_target(elt, st) for elt in target.elts]
                 return TupleBinding(elts, loc)
@@ -394,7 +401,9 @@ class Parser:
             raise FPyParserError(loc, 'FPy does not support if conditions in comprehensions', gen)
         match gen.target:
             case ast.Name():
-                return gen.target.id, self._parse_expr(gen.iter)
+                ident = self._parse_id(gen.target)
+                iterable = self._parse_expr(gen.iter)
+                return ident, iterable
             case _:
                 raise FPyParserError(loc, 'FPy expects an identifier', gen.target, gen)
 
@@ -446,7 +455,10 @@ class Parser:
         loc = self._parse_location(stmt)
         if not isinstance(stmt.target, ast.Name):
             raise FPyParserError(loc, 'Unsupported target in FPy', stmt)
-        name = stmt.target.id
+
+        ident = self._parse_id(stmt.target)
+        if not isinstance(ident, NamedId):
+            raise FPyParserError(loc, 'Not a valid FPy identifier', stmt)
 
         match stmt.op:
             case ast.Add():
@@ -463,8 +475,8 @@ class Parser:
                 raise FPyParserError(loc, 'Unsupported operator-assignment in FPy', stmt)
 
         value = self._parse_expr(stmt.value)
-        e = BinaryOp(op, Var(name, loc), value, loc)
-        return VarAssign(name, e, None, loc)
+        e = BinaryOp(op, Var(ident, loc), value, loc)
+        return VarAssign(ident, e, None, loc)
 
     def _parse_statement(self, stmt: ast.stmt) -> Stmt:
         """Parse a Python statement."""
@@ -479,19 +491,20 @@ class Parser:
                     raise FPyParserError(loc, 'FPy requires a type annotation', stmt)
                 if stmt.value is None:
                     raise FPyParserError(loc, 'FPy requires a value', stmt)
-                name = stmt.target.id
+
+                ident = self._parse_id(stmt.target)
                 ty = self._parse_type_annotation(stmt.annotation)
                 value = self._parse_expr(stmt.value)
-                return VarAssign(name, value, ty, loc)
+                return VarAssign(ident, value, ty, loc)
             case ast.Assign():
                 if len(stmt.targets) != 1:
                     raise FPyParserError(loc, 'FPy only supports single assignment', stmt)
                 target = stmt.targets[0]
                 match target:
                     case ast.Name():
-                        var = target.id
+                        ident = self._parse_id(target)
                         value = self._parse_expr(stmt.value)
-                        return VarAssign(var, value, None, loc)
+                        return VarAssign(ident, value, None, loc)
                     case ast.Tuple():
                         binding = self._parse_tuple_target(target, stmt)
                         value = self._parse_expr(stmt.value)
@@ -523,10 +536,11 @@ class Parser:
                     raise FPyParserError(loc, 'FPy does not support else clause in for statement', stmt)
                 if not isinstance(stmt.target, ast.Name):
                     raise FPyParserError(loc, 'FPy expects an identifier', stmt)
-                var = stmt.target.id
+
+                ident = self._parse_id(stmt.target)
                 iterable = self._parse_expr(stmt.iter)
                 block = self._parse_statements(stmt.body)
-                return ForStmt(var, iterable, block, loc)
+                return ForStmt(ident, iterable, block, loc)
             case ast.Return():
                 if stmt.value is None:
                     raise FPyParserError(loc, 'Return statement must have value', stmt)
@@ -540,6 +554,11 @@ class Parser:
                 props = self._parse_contextexpr(item)
                 block = self._parse_statements(stmt.body)
                 return ContextStmt(name, props, block, loc)
+            case ast.Assert():
+                test = self._parse_expr(stmt.test)
+                if stmt.msg is not None:
+                    raise FPyParserError(loc, 'FPy does not support assert messages', stmt)
+                return AssertStmt(test, None, loc)
             case _:
                 raise NotImplementedError('statement is unsupported in FPy', stmt)
 
@@ -558,12 +577,12 @@ class Parser:
 
         args: list[Argument] = []
         for arg in pos_args:
-            name = '_' if arg.arg is None else arg.arg
+            ident = UnderscoreId() if arg.arg == '_' else NamedId(arg.arg)
             if arg.annotation is None:
-                args.append(Argument(name, AnyTypeAnn(loc), loc))
+                args.append(Argument(ident, AnyTypeAnn(loc), loc))
             else:
                 ty = self._parse_type_annotation(arg.annotation)
-                args.append(Argument(name, ty, loc))
+                args.append(Argument(ident, ty, loc))
 
         block = self._parse_statements(f.body)
         return FunctionDef(f.name, args, block, loc)

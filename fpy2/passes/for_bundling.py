@@ -16,7 +16,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
     func: FunctionDef
     gensym: Gensym
 
-    def __init__(self, func: FunctionDef, names: set[str]):
+    def __init__(self, func: FunctionDef, names: set[NamedId]):
         self.func = func
         self.gensym = Gensym(*names)
 
@@ -98,7 +98,7 @@ class ForBundling:
     """
 
     @staticmethod
-    def apply(func: FunctionDef, names: Optional[set[str]] = None) -> FunctionDef:
+    def apply(func: FunctionDef, names: Optional[set[NamedId]] = None) -> FunctionDef:
         if names is None:
             uses = DefineUse.analyze(func)
             names = set(uses.keys())

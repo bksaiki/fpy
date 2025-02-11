@@ -13,7 +13,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
     func: FunctionDef
     gensym: Gensym
 
-    def __init__(self, func: FunctionDef, names: set[str]):
+    def __init__(self, func: FunctionDef, names: set[NamedId]):
         self.func = func
         self.gensym = Gensym(*names)
 
@@ -100,7 +100,7 @@ class SimplifyIf:
     """
 
     @staticmethod
-    def apply(func: FunctionDef, names: Optional[set[str]] = None):
+    def apply(func: FunctionDef, names: Optional[set[NamedId]] = None):
         if names is None:
             uses = DefineUse.analyze(func)
             names = (uses.keys())

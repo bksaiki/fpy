@@ -2,10 +2,11 @@
 This module contains the intermediate representation (IR).
 """
 
+from abc import abstractmethod
 from typing import Any, Optional, Self, Sequence
 
 from .types import IRType
-from ..utils import CompareOp
+from ..utils import CompareOp, Id, NamedId, UnderscoreId
 
 class IR:
     """FPy IR: base class for all IR nodes."""
@@ -18,6 +19,11 @@ class IR:
         name = self.__class__.__name__
         items = ', '.join(f'{k}={repr(v)}' for k, v in self.__dict__.items())
         return f'{name}({items})'
+
+    def format(self) -> str:
+        """Format the AST node as a string."""
+        formatter = get_default_formatter()
+        return formatter.format(self)
 
 class Expr(IR):
     """FPy IR: expression"""
@@ -47,9 +53,9 @@ class ValueExpr(Expr):
 
 class Var(ValueExpr):
     """FPy node: variable"""
-    name: str
+    name: NamedId
 
-    def __init__(self, name: str):
+    def __init__(self, name: NamedId):
         super().__init__()
         self.name = name
 
@@ -388,6 +394,10 @@ class Cast(UnaryExpr):
 
 # Tensor operators
 
+class Shape(UnaryExpr):
+    """FPy node: range constructor"""
+    name: str = 'shape'
+
 class Range(UnaryExpr):
     """FPy node: range constructor"""
     name: str = 'range'
@@ -424,13 +434,14 @@ class TupleExpr(Expr):
         super().__init__()
         self.children = list(children)
 
+# TODO: type annotation for variables
 class CompExpr(Expr):
     """FPy node: comprehension expression"""
-    vars: list[str]
+    vars: list[Id]
     iterables: list[Expr]
     elt: Expr
 
-    def __init__(self, vars: Sequence[str], iterables: Sequence[Expr], elt: Expr):
+    def __init__(self, vars: Sequence[Id], iterables: Sequence[Expr], elt: Expr):
         super().__init__()
         self.vars = list(vars)
         self.iterables = list(iterables)
@@ -472,11 +483,11 @@ class IfExpr(Expr):
 
 class VarAssign(Stmt):
     """FPy node: assignment to a single variable"""
-    var: str
+    var: Id
     ty: IRType
     expr: Expr
 
-    def __init__(self, var: str, ty: IRType, expr: Expr):
+    def __init__(self, var: Id, ty: IRType, expr: Expr):
         super().__init__()
         self.var = var
         self.ty = ty
@@ -484,22 +495,24 @@ class VarAssign(Stmt):
 
 class TupleBinding(IR):
     """FPy IR: tuple binding"""
-    elts: list[str | Self]
+    elts: list[Id | Self]
 
-    def __init__(self, elts: Sequence[str | Self]):
+    def __init__(self, elts: Sequence[Id | Self]):
         super().__init__()
         self.elts = list(elts)
 
     def __iter__(self):
         return iter(self.elts)
-    
-    def names(self) -> set[str]:
-        ids: set[str] = set()
+
+    def names(self) -> set[NamedId]:
+        ids: set[NamedId] = set()
         for v in self.elts:
-            if isinstance(v, TupleBinding):
-                ids |= v.names()
-            elif isinstance(v, str):
+            if isinstance(v, NamedId):
                 ids.add(v)
+            elif isinstance(v, UnderscoreId):
+                pass
+            elif isinstance(v, TupleBinding):
+                ids |= v.names()
             else:
                 raise NotImplementedError('unexpected tuple identifier', v)
         return ids
@@ -518,11 +531,11 @@ class TupleAssign(Stmt):
 
 class RefAssign(Stmt):
     """FPy node: assignment to a tuple element"""
-    var: str
+    var: NamedId
     slices: list[Expr]
     expr: Expr
 
-    def __init__(self, var: str, slices: Sequence[Expr], expr: Expr):
+    def __init__(self, var: NamedId, slices: Sequence[Expr], expr: Expr):
         super().__init__()
         self.var = var
         self.slices = list(slices)
@@ -530,12 +543,12 @@ class RefAssign(Stmt):
 
 class PhiNode(IR):
     """FPy IR: phi node"""
-    name: str
-    lhs: str
-    rhs: str
+    name: NamedId
+    lhs: NamedId
+    rhs: NamedId
     ty: IRType
 
-    def __init__(self, name: str, lhs: str, rhs: str, ty: IRType):
+    def __init__(self, name: NamedId, lhs: NamedId, rhs: NamedId, ty: IRType):
         super().__init__()
         self.name = name
         self.lhs = lhs
@@ -591,7 +604,6 @@ class WhileStmt(Stmt):
     - `phi.rhs` is the SSA name of the variable exiting the loop block
     - `phi.name` is the SSA name of the variable after the block
     """
-
     cond: Expr
     body: Block
     phis: list[PhiNode]
@@ -612,13 +624,13 @@ class ForStmt(Stmt):
     - `phi.name` is the SSA name of the variable after the block
     """
 
-    var: str
+    var: Id
     ty: IRType
     iterable: Expr
     body: Block
     phis: list[PhiNode]
 
-    def __init__(self, var: str, ty: IRType, iterable: Expr, body: Block, phis: list[PhiNode]):
+    def __init__(self, var: Id, ty: IRType, iterable: Expr, body: Block, phis: list[PhiNode]):
         super().__init__()
         self.var = var
         self.ty = ty
@@ -628,15 +640,25 @@ class ForStmt(Stmt):
 
 class ContextStmt(Stmt):
     """FPy IR: context statement"""
-    name: Optional[str]
+    name: Optional[Id]
     props: dict[str, Any]
     body: Block
 
-    def __init__(self, name: Optional[str], props: dict[str, Any], body: Block):
+    def __init__(self, name: Optional[Id], props: dict[str, Any], body: Block):
         super().__init__()
         self.name = name
         self.props = props.copy()
         self.body = body
+
+class AssertStmt(Stmt):
+    """FPy IR: assert statement"""
+    test: Expr
+    msg: Optional[str]
+
+    def __init__(self, test: Expr, msg: Optional[str]):
+        super().__init__()
+        self.test = test
+        self.msg = msg
 
 class Return(Stmt):
     """FPy IR: return statement"""
@@ -648,10 +670,10 @@ class Return(Stmt):
 
 class Argument(IR):
     """FPy IR: function argument"""
-    name: str
+    name: Id
     ty: IRType
 
-    def __init__(self, name: str, ty: IRType):
+    def __init__(self, name: Id, ty: IRType):
         super().__init__()
         self.name = name
         self.ty = ty
@@ -677,3 +699,27 @@ class FunctionDef(IR):
         self.body = body
         self.ty = ty
         self.ctx = ctx.copy()
+
+
+class BaseFormatter:
+    """Abstract base class for IR formatters."""
+
+    @abstractmethod
+    def format(self, ast: IR) -> str:
+        raise NotImplementedError('virtual method')
+
+_default_formatter: Optional[BaseFormatter] = None
+
+def get_default_formatter() -> BaseFormatter:
+    """Get the default formatter for FPy IRs."""
+    global _default_formatter
+    if _default_formatter is None:
+        raise RuntimeError('no default formatter available')
+    return _default_formatter
+
+def set_default_formatter(formatter: BaseFormatter):
+    """Set the default formatter for FPy IRs."""
+    global _default_formatter
+    if not isinstance(formatter, BaseFormatter):
+        raise TypeError(f'expected BaseFormatter, got {formatter}')
+    _default_formatter = formatter

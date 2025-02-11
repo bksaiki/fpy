@@ -6,7 +6,7 @@ An embedded Python DSL for numerical computing.
 
 Create a virtual environment:
 ```bash
-python -m venv .env/
+python3 -m venv .env/
 ```
 and activate it using using
 ```bash

@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional, Self, Sequence
-from ..utils import CompareOp
+from ..utils import CompareOp, Id, NamedId, UnderscoreId
 
 @dataclass
 class Location:
@@ -77,8 +77,9 @@ class UnaryOpKind(Enum):
     SIGNBIT = 37
     CAST = 38
     # tensor operations
-    RANGE = 39
-    DIM = 40
+    SHAPE = 39
+    RANGE = 40
+    DIM = 41
 
     def __str__(self):
         return self.name.lower()
@@ -187,9 +188,9 @@ class ValueExpr(Expr):
 
 class Var(ValueExpr):
     """FPy AST: variable"""
-    name: str
+    name: NamedId
 
-    def __init__(self, name: str, loc: Optional[Location]):
+    def __init__(self, name: NamedId, loc: Optional[Location]):
         super().__init__(loc)
         self.name = name
 
@@ -360,13 +361,13 @@ class TupleExpr(Expr):
 
 class CompExpr(Expr):
     """FPy AST: comprehension expression"""
-    vars: list[str]
+    vars: list[Id]
     iterables: list[Expr]
     elt: Expr
 
     def __init__(
         self,
-        vars: Sequence[str],
+        vars: Sequence[Id],
         iterables: Sequence[Expr],
         elt: Expr,
         loc: Optional[Location]
@@ -430,13 +431,13 @@ class Block(Ast):
 
 class VarAssign(Stmt):
     """FPy AST: variable assignment"""
-    var: str
+    var: Id
     expr: Expr
     ann: Optional[TypeAnn]
 
     def __init__(
         self,
-        var: str,
+        var: Id,
         expr: Expr,
         ann: Optional[TypeAnn],
         loc: Optional[Location]
@@ -448,29 +449,31 @@ class VarAssign(Stmt):
 
 class TupleBinding(Ast):
     """FPy AST: tuple binding"""
-    elts: list[str | Self]
+    elts: list[Id | Self]
 
     def __init__(
         self,
-        vars: list[str | Self],
+        vars: Sequence[Id | Self],
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.elts = vars
+        self.elts = list(vars)
 
-    def names(self) -> set[str]:
-        ids: set[str] = set()
+    def __iter__(self):
+        return iter(self.elts)
+
+    def names(self) -> set[NamedId]:
+        ids: set[NamedId] = set()
         for v in self.elts:
-            if isinstance(v, TupleBinding):
-                ids |= v.names()
-            elif isinstance(v, str):
+            if isinstance(v, NamedId):
                 ids.add(v)
+            elif isinstance(v, UnderscoreId):
+                pass
+            elif isinstance(v, TupleBinding):
+                ids |= v.names()
             else:
                 raise NotImplementedError('unexpected tuple identifier', v)
         return ids
-    
-    def __iter__(self):
-        return iter(self.elts)
 
 class TupleAssign(Stmt):
     """FPy AST: tuple assignment"""
@@ -489,13 +492,13 @@ class TupleAssign(Stmt):
 
 class RefAssign(Stmt):
     """FPy AST: assignment to tuple indexing"""
-    var: str
+    var: NamedId
     slices: list[Expr]
     expr: Expr
 
     def __init__(
         self,
-        var: str,
+        var: NamedId,
         slices: Sequence[Expr],
         expr: Expr,
         loc: Optional[Location]
@@ -540,13 +543,13 @@ class WhileStmt(Stmt):
 
 class ForStmt(Stmt):
     """FPy AST: for statement"""
-    var: str
+    var: Id
     iterable: Expr
     body: Block
 
     def __init__(
         self,
-        var: str,
+        var: Id,
         iterable: Expr,
         body: Block,
         loc: Optional[Location]
@@ -558,13 +561,13 @@ class ForStmt(Stmt):
 
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
-    name: Optional[str]
+    name: Optional[Id]
     props: dict[str, Any]
     body: Block
 
     def __init__(
         self,
-        name: Optional[str],
+        name: Optional[Id],
         props: dict[str, Any],
         body: Block,
         loc: Optional[Location]
@@ -573,6 +576,21 @@ class ContextStmt(Stmt):
         self.props = props
         self.name = name
         self.body = body
+
+class AssertStmt(Stmt):
+    """FPy AST: assert statement"""
+    test: Expr
+    msg: Optional[str]
+
+    def __init__(
+        self,
+        test: Expr,
+        msg: Optional[str],
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.test = test
+        self.msg = msg
 
 class Return(Stmt):
     """FPy AST: return statement"""
@@ -588,12 +606,12 @@ class Return(Stmt):
 
 class Argument(Ast):
     """FPy AST: function argument"""
-    name: str
+    name: Id
     type: Optional[TypeAnn]
 
     def __init__(
         self,
-        name: str,
+        name: Id,
         type: Optional[TypeAnn],
         loc: Optional[Location]
     ):
@@ -607,7 +625,7 @@ class FunctionDef(Ast):
     args: list[Argument]
     body: Block
     ctx: dict[str, Any]
-    globals: dict[str, Any]
+    fvs: set[str]
 
     def __init__(
         self,
@@ -621,8 +639,7 @@ class FunctionDef(Ast):
         self.args = list(args)
         self.body = body
         self.ctx = {}
-        self.globals = {}
-
+        self.fvs = set()
 
 class BaseFormatter:
     """Abstract base class for AST formatters."""
