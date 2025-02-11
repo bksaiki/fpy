@@ -2,7 +2,7 @@
 FPy runtime backed by the Titanic library.
 """
 
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence, TypeAlias
 
 from titanfp.arithmetic.evalctx import EvalCtx
 from titanfp.arithmetic.ieee754 import ieee_ctx
@@ -15,14 +15,14 @@ import titanfp.titanic.gmpmath as gmpmath
 from ..function import BaseInterpreter, Function
 from ...ir import *
 
-ScalarVal = bool | Digital
+ScalarVal: TypeAlias = bool | Digital
 """Type of scalar values in FPy programs."""
-TensorVal = NDArray
+TensorVal: TypeAlias = NDArray
 """Type of tensor values in FPy programs."""
 
-ScalarArg = ScalarVal | str | int | float
+ScalarArg: TypeAlias = ScalarVal | str | int | float
 """Type of scalar arguments in FPy programs; includes native Python types"""
-TensorArg = NDArray | tuple | list
+TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
 def _isinf(x: MPMF) -> bool:
@@ -86,7 +86,13 @@ _method_table: dict[str, Callable[..., Any]] = {
 }
 
 class _Interpreter(ReduceVisitor):
-    """Single-use interpreter"""
+    """Single-use interpreter for a function"""
+    func: FunctionDef
+    env: dict[NamedId, ScalarVal | TensorVal]
+
+    def __init__(self, func: FunctionDef):
+        self.func = func
+        self.env = {}
 
     # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
@@ -99,36 +105,39 @@ class _Interpreter(ReduceVisitor):
         else:
             raise NotImplementedError(f'unknown argument type {arg}')
 
-    def eval(self,
-        func: FunctionDef,
+    def eval(
+        self,
         args: Sequence[Any],
         ctx: Optional[EvalCtx] = None
     ):
-        if not isinstance(func, FunctionDef):
-            raise TypeError(f'Expected Function, got {type(func)}')
         args = tuple(args)
-        if len(args) != len(func.args):
-            raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
+        if len(args) != len(self.func.args):
+            raise TypeError(f'Expected {len(self.func.args)} arguments, got {len(args)}')
         if ctx is None:
             ctx = ieee_ctx(11, 64)
-        for val, arg in zip(args, func.args):
+        for val, arg in zip(args, self.func.args):
             match arg.ty:
                 case AnyType():
-                    ctx = ctx.let([(arg.name, self._arg_to_mpmf(val, ctx))])
+                    x = self._arg_to_mpmf(val, ctx)
+                    if isinstance(arg.name, NamedId):
+                        self.env[arg.name] = x
                 case RealType():
                     x = self._arg_to_mpmf(val, ctx)
-                    if isinstance(x, Digital):
-                        ctx = ctx.let([(arg.name, x)])
-                    else:
+                    if not isinstance(x, Digital):
                         raise NotImplementedError(f'argument is a scalar, got data {val}')
+                    if isinstance(arg.name, NamedId):
+                        self.env[arg.name] = x
                 case _:
                     raise NotImplementedError(f'unknown argument type {arg.ty}')
-        return self._visit_block(func.body, ctx)
+        return self._visit_block(self.func.body, ctx)
+
+    def _lookup(self, name: NamedId):
+        if name not in self.env:
+            raise RuntimeError(f'unbound variable {name}')
+        return self.env[name]
 
     def _visit_var(self, e: Var, ctx: EvalCtx):
-        if e.name not in ctx.bindings:
-            raise RuntimeError(f'unbound variable {e.name}')
-        return ctx.bindings[e.name]
+        return self._lookup(e.name)
 
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
         return MPMF(x=e.val, ctx=ctx)
@@ -290,13 +299,21 @@ class _Interpreter(ReduceVisitor):
             if not isinstance(array, NDArray):
                 raise TypeError(f'expected a tensor, got {array}')
             for val in array:
-                elt_ctx = ctx.let([(var, val)]) if isinstance(var, NamedId) else ctx
-                self._apply_comp(bindings[1:], elt, elt_ctx, elts)
+                if isinstance(var, NamedId):
+                    self.env[var] = val
+                self._apply_comp(bindings[1:], elt, ctx, elts)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: EvalCtx):
+        # evaluate comprehension
         elts: list[Any] = []
         bindings = [(var, iterable) for var, iterable in zip(e.vars, e.iterables)]
         self._apply_comp(bindings, e.elt, ctx, elts)
+
+        # remove temporarily bound variables
+        for var in e.vars:
+            if isinstance(var, NamedId):
+                del self.env[var]
+
         return NDArray(elts)
 
     def _visit_if_expr(self, e: IfExpr, ctx: EvalCtx):
@@ -305,41 +322,39 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
+    def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx) -> None:
         val = self._visit_expr(stmt.expr, ctx)
         match stmt.var:
             case NamedId():
-                return ctx.let([(stmt.var, val)])
+                self.env[stmt.var] = val
             case UnderscoreId():
-                return ctx
+                pass
             case _:
-                raise NotImplementedError('unreachable', stmt.var)
+                raise NotImplementedError('unknown variable', stmt.var)
 
-    def _unpack_tuple(self, binding: TupleBinding, val: NDArray, ctx: EvalCtx):
+    def _unpack_tuple(self, binding: TupleBinding, val: NDArray, ctx: EvalCtx) -> None:
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
         for elt, v in zip(binding.elts, val):
             match elt:
                 case NamedId():
-                    ctx = ctx.let([(elt, v)])
+                    self.env[elt] = v
                 case UnderscoreId():
                     pass
                 case TupleBinding():
-                    ctx = self._unpack_tuple(elt, v, ctx)
+                    self._unpack_tuple(elt, v, ctx)
                 case _:
                     raise NotImplementedError('unknown tuple element', elt)
-        return ctx
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: EvalCtx):
+    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: EvalCtx) -> None:
         val = self._visit_expr(stmt.expr, ctx)
         if not isinstance(val, NDArray):
             raise TypeError(f'expected a tuple, got {val}')
-        return self._unpack_tuple(stmt.binding, val, ctx)
+        self._unpack_tuple(stmt.binding, val, ctx)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: EvalCtx):
-        if stmt.var not in ctx.bindings:
-            raise RuntimeError(f'unbound variable {stmt.var}')
-        array = ctx.bindings[stmt.var]
+    def _visit_ref_assign(self, stmt: RefAssign, ctx: EvalCtx) -> None:
+        # lookup array
+        array = self._lookup(stmt.var)
 
         # evaluate indices
         slices: list[int] = []
@@ -354,69 +369,64 @@ class _Interpreter(ReduceVisitor):
         # evaluate and update array
         val = self._visit_expr(stmt.expr, ctx)
         array[slices] = val
-        return ctx
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
-            ctx = self._visit_block(stmt.body, ctx)
+            self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
-                ctx = ctx.let([(phi.name, ctx.bindings[phi.rhs])])
+                self.env[phi.name] = self.env[phi.rhs]
         else:
             for phi in stmt.phis:
-                ctx = ctx.let([(phi.name, ctx.bindings[phi.lhs])])
-        return ctx
+                self.env[phi.name] = self.env[phi.lhs]
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
+    def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx) -> None:
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
-            ctx = self._visit_block(stmt.ift, ctx)
+            self._visit_block(stmt.ift, ctx)
             for phi in stmt.phis:
-                ctx = ctx.let([(phi.name, ctx.bindings[phi.lhs])])
+                self.env[phi.name] = self.env[phi.lhs]
         else:
-            ctx = self._visit_block(stmt.iff, ctx)
+            self._visit_block(stmt.iff, ctx)
             for phi in stmt.phis:
-                ctx = ctx.let([(phi.name, ctx.bindings[phi.rhs])])
-        return ctx
+                self.env[phi.name] = self.env[phi.rhs]
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx):
+    def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx) -> None:
         for phi in stmt.phis:
-            ctx = ctx.let([(phi.name, ctx.bindings[phi.lhs])])
+            self.env[phi.name] = self.env[phi.lhs]
+            del self.env[phi.lhs]
 
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
         while cond:
-            ctx = self._visit_block(stmt.body, ctx)
+            self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
-                ctx = ctx.let([(phi.name, ctx.bindings[phi.rhs])])
+                self.env[phi.name] = self.env[phi.rhs]
 
             cond = self._visit_expr(stmt.cond, ctx)
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
-        return ctx
-
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx):
+    def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx) -> None:
         for phi in stmt.phis:
-            ctx = ctx.let([(phi.name, ctx.bindings[phi.lhs])])
+            self.env[phi.name] = self.env[phi.lhs]
 
         iterable = self._visit_expr(stmt.iterable, ctx)
         if not isinstance(iterable, NDArray):
             raise TypeError(f'expected a tensor, got {iterable}')
 
         for val in iterable:
-            ctx = ctx.let([(stmt.var, val)])
-            ctx = self._visit_block(stmt.body, ctx)
+            if isinstance(stmt.var, NamedId):
+                self.env[stmt.var] = val
+            self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
-                ctx = ctx.let([(phi.name, ctx.bindings[phi.rhs])])
-
-        return ctx
+                self.env[phi.name] = self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
         return self._visit_block(stmt.body, ctx)
@@ -438,19 +448,19 @@ class _Interpreter(ReduceVisitor):
     def _visit_loop_phis(self, phis, lctx, rctx):
         raise NotImplementedError('do not call directly')
 
-    def _visit_block(self, block, ctx: EvalCtx) -> EvalCtx:
+    def _visit_block(self, block, ctx: EvalCtx) -> Optional[ScalarVal | TensorVal]:
         for stmt in block.stmts:
             if isinstance(stmt, Return):
                 return self._visit_return(stmt, ctx)
-            else:
-                ctx = self._visit_statement(stmt, ctx)
-        return ctx
+            self._visit_statement(stmt, ctx)
+
+        return None
 
     def _visit_function(self, func, ctx: EvalCtx):
         raise NotImplementedError('do not call directly')
 
     # override typing hint
-    def _visit_statement(self, stmt, ctx: EvalCtx) -> EvalCtx:
+    def _visit_statement(self, stmt, ctx: EvalCtx) -> None:
         return super()._visit_statement(stmt, ctx)
 
 
@@ -473,4 +483,4 @@ class TitanicInterpreter(BaseInterpreter):
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
-        return _Interpreter().eval(func.ir, args, ctx)
+        return _Interpreter(func.ir).eval(args, ctx)

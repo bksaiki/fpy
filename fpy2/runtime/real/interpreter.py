@@ -3,6 +3,8 @@ This module defines an FPy interpreter that uses the Rival interval library
 to compute the true real number result.
 """
 
+from typing import Any, Optional, Sequence, TypeAlias
+
 from titanfp.arithmetic.evalctx import EvalCtx
 from titanfp.arithmetic.ieee754 import ieee_ctx
 from titanfp.titanic.ndarray import NDArray
@@ -15,14 +17,14 @@ from ..function import BaseInterpreter, Function
 from ...ir import *
 
 
-ScalarVal = BoolInterval | RealInterval
+ScalarVal: TypeAlias = BoolInterval | RealInterval
 """Type of scalar values in FPy programs."""
-TensorVal = NDArray
+TensorVal: TypeAlias = NDArray
 """Type of tensor values in FPy programs."""
 
-ScalarArg = ScalarVal | str | int | float
+ScalarArg: TypeAlias = ScalarVal | str | int | float
 """Type of scalar arguments in FPy programs; includes native Python types"""
-TensorArg = NDArray | tuple | list
+TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
 
@@ -78,10 +80,10 @@ class _Interpreter(ReduceVisitor):
         return self._visit_block(func.body, ctx)
 
 
-    def _visit_var(self, e, ctx):
+    def _visit_var(self, e: Var, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_decnum(self, e, ctx):
+    def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
         raise NotImplementedError
 
     def _visit_hexnum(self, e, ctx):
