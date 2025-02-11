@@ -86,88 +86,87 @@ class _Interpreter(ReduceVisitor):
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_hexnum(self, e, ctx):
+    def _visit_hexnum(self, e: Hexnum, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_integer(self, e, ctx):
+    def _visit_integer(self, e: Integer, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_rational(self, e, ctx):
+    def _visit_rational(self, e: Rational, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_constant(self, e, ctx):
+    def _visit_constant(self, e: Constant, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_digits(self, e, ctx):
+    def _visit_digits(self, e: Digits, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_unknown(self, e, ctx):
+    def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_nary_expr(self, e, ctx):
+    def _visit_nary_expr(self, e: NaryExpr, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_compare(self, e, ctx):
+    def _visit_compare(self, e: Compare, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_tuple_expr(self, e, ctx):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_tuple_ref(self, e, ctx):
+    def _visit_tuple_ref(self, e: TupleRef, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_tuple_set(self, e, ctx):
+    def _visit_tuple_set(self, e: TupleSet, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_comp_expr(self, e, ctx):
+    def _visit_comp_expr(self, e: CompExpr, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_if_expr(self, e, ctx):
+    def _visit_if_expr(self, e: IfExpr, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_var_assign(self, stmt, ctx):
+    def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_tuple_assign(self, stmt, ctx):
+    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_ref_assign(self, stmt, ctx):
+    def _visit_ref_assign(self, stmt: RefAssign, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_if1_stmt(self, stmt, ctx):
+    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_if_stmt(self, stmt, ctx):
+    def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_while_stmt(self, stmt, ctx):
+    def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_for_stmt(self, stmt, ctx):
+    def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_context(self, stmt, ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
         raise NotImplementedError
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_return(self, stmt, ctx):
+    def _visit_return(self, stmt: Return, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_phis(self, phis, lctx, rctx):
+    def _visit_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_loop_phis(self, phis, lctx, rctx):
+    def _visit_loop_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_block(self, block, ctx):
+    def _visit_block(self, block: Block, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_function(self, func, ctx):
+    def _visit_function(self, func: FunctionDef, ctx: EvalCtx):
         raise NotImplementedError
- 
- 
+
 
 class RealInterpreter(BaseInterpreter):
     """
