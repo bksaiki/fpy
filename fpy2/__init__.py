@@ -4,7 +4,8 @@ from .backend import FPCoreCompiler
 from .runtime import (
     Function,
     BaseInterpreter,
-    Interpreter,
+    TitanicInterpreter,
+    RealInterpreter,
     set_default_interpreter,
     get_default_interpreter
 )

@@ -1,4 +1,6 @@
-"""Module containing the interpreter for FPy programs."""
+"""
+FPy runtime backed by the Titanic library.
+"""
 
 from typing import Any, Callable, Optional, Sequence
 
@@ -10,8 +12,8 @@ from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.ops import OP
 import titanfp.titanic.gmpmath as gmpmath
 
-from .function import BaseInterpreter, Function
-from ..ir import *
+from ..function import BaseInterpreter, Function
+from ...ir import *
 
 ScalarVal = bool | Digital
 """Type of scalar values in FPy programs."""
@@ -162,13 +164,13 @@ class _Interpreter(ReduceVisitor):
                 raise TypeError(f'expected a real number argument for {e.name}, got {val}')
             args.append(val)
         return fn(*args)
-    
+
     def _apply_not(self, e: Not, ctx: EvalCtx):
         arg = self._visit_expr(e.children[0], ctx)
         if not isinstance(arg, bool):
             raise TypeError(f'expected a boolean argument, got {arg}')
         return not arg
-    
+
     def _apply_and(self, e: And, ctx: EvalCtx):
         args: list[bool] = []
         for arg in e.children:
@@ -186,7 +188,7 @@ class _Interpreter(ReduceVisitor):
                 raise TypeError(f'expected a boolean argument, got {val}')
             args.append(val)
         return any(args)
-    
+
     def _apply_range(self, e: Range, ctx: EvalCtx):
         stop = self._visit_expr(e.children[0], ctx)
         if not isinstance(stop, Digital):
@@ -452,7 +454,7 @@ class _Interpreter(ReduceVisitor):
         return super()._visit_statement(stmt, ctx)
 
 
-class Interpreter(BaseInterpreter):
+class TitanicInterpreter(BaseInterpreter):
     """
     Standard interpreter for FPy programs.
 
