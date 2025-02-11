@@ -28,7 +28,7 @@ TensorArg = NDArray | tuple | list
 
 class _Interpreter(ReduceVisitor):
     """Single-use real number interpreter"""
-    env: dict[str, BoolInterval | RealInterval | NDArray]
+    env: dict[NamedId, BoolInterval | RealInterval | NDArray]
 
     # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
@@ -64,12 +64,14 @@ class _Interpreter(ReduceVisitor):
             match arg.ty:
                 case AnyType():
                     x = self._arg_to_mpmf(val, ctx)
-                    self.env[arg.name] = RealInterval.from_val(x)
+                    if isinstance(arg.name, NamedId):
+                        self.env[arg.name] = RealInterval.from_val(x)
                 case RealType():
                     x = self._arg_to_mpmf(val, ctx)
                     if not isinstance(x, RealInterval):
                         raise TypeError(f'Expected real value, got {val}')
-                    self.env[arg.name] = RealInterval.from_val(x)
+                    if isinstance(arg.name, NamedId):
+                        self.env[arg.name] = RealInterval.from_val(x)
                 case _:
                     raise NotImplementedError(f'unsupported argument type {arg.ty}')
 
@@ -143,6 +145,9 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
     def _visit_context(self, stmt, ctx):
+        raise NotImplementedError
+
+    def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
         raise NotImplementedError
 
     def _visit_return(self, stmt, ctx):
