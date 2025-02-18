@@ -80,8 +80,13 @@ class _Interpreter(ReduceVisitor):
         return self._visit_block(func.body, ctx)
 
 
+    def _lookup(self, name: NamedId):
+        if name not in self.env:
+            raise RuntimeError(f'unbound variable {name}')
+        return self.env[name]
+
     def _visit_var(self, e: Var, ctx: EvalCtx):
-        raise NotImplementedError
+        return self._lookup(e.name)
 
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
         raise NotImplementedError
@@ -90,7 +95,7 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
     def _visit_integer(self, e: Integer, ctx: EvalCtx):
-        raise NotImplementedError
+        return RealInterval.from_val(e)
 
     def _visit_rational(self, e: Rational, ctx: EvalCtx):
         raise NotImplementedError
@@ -126,7 +131,14 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
     def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
-        raise NotImplementedError
+        val = self._visit_expr(stmt.expr, ctx)
+        match stmt.var:
+            case NamedId():
+                self.env[stmt.var] = val
+            case UnderscoreId():
+                pass
+            case _:
+                raise NotImplementedError('unknown variable', stmt.var)
 
     def _visit_tuple_assign(self, stmt: TupleAssign, ctx: EvalCtx):
         raise NotImplementedError
@@ -147,13 +159,18 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
-        raise NotImplementedError
+        return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
-        raise NotImplementedError
+        test = self._visit_expr(stmt.test, ctx)
+        if not isinstance(test, bool):
+            raise TypeError(f'expected a boolean, got {test}')
+        if not test:
+            raise AssertionError(stmt.msg)
+        return ctx
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx):
-        raise NotImplementedError
+        return self._visit_expr(stmt.expr, ctx)
 
     def _visit_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
         raise NotImplementedError
@@ -162,7 +179,13 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
     def _visit_block(self, block: Block, ctx: EvalCtx):
-        raise NotImplementedError
+        for stmt in block.stmts:
+            if isinstance(stmt, Return):
+                return self._visit_return(stmt, ctx)
+            else:
+                ctx = self._visit_statement(stmt, ctx)
+
+        return None
 
     def _visit_function(self, func: FunctionDef, ctx: EvalCtx):
         raise NotImplementedError
