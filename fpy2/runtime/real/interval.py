@@ -7,6 +7,8 @@ from typing import Optional, Self
 
 from titanfp.titanic.digital import Digital
 
+from ...utils import default_repr
+
 class Interval(ABC):
     """Abstract base class for intervals."""
 
@@ -15,7 +17,7 @@ class Interval(ABC):
         """Union of two intervals."""
         raise NotImplementedError('virtual method')
 
-
+@default_repr
 class BoolInterval(Interval):
     """Boolean interval."""
     lo: bool
@@ -41,7 +43,7 @@ class BoolInterval(Interval):
             return self.lo
         return None
 
-
+@default_repr
 class RealInterval(Interval):
     """Real interval."""
     lo: Digital
