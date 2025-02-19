@@ -1,5 +1,9 @@
 from .frontend import fpy
-from .backend import FPCoreCompiler
+from .backend import (
+    Backend,
+    FPCoreCompiler,
+    FPYCompiler
+)
 
 from .runtime import (
     Function,
@@ -9,3 +13,4 @@ from .runtime import (
     set_default_interpreter,
     get_default_interpreter
 )
+

@@ -9,6 +9,8 @@ from ..passes import *
 from ..ir import *
 from ..utils import Gensym
 
+from .backend import Backend
+
 _op_table = {
     '+': fpc.Add,
     '-': fpc.Sub,
@@ -460,7 +462,7 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_statement(self, stmt: Stmt, ctx: fpc.Expr) -> fpc.Expr:
         return super()._visit_statement(stmt, ctx)
 
-class FPCoreCompiler:
+class FPCoreCompiler(Backend):
     """Compiler from FPy IR to FPCore"""
 
     def compile(self, func: Function) -> fpc.FPCore:
@@ -471,5 +473,5 @@ class FPCoreCompiler:
         ir = ForBundling.apply(ir)
         ir = WhileBundling.apply(ir)
         ir = SimplifyIf.apply(ir)
-    
+
         return FPCoreCompileInstance(ir).compile()

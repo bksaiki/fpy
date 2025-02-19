@@ -1,10 +1,9 @@
 from argparse import ArgumentParser
 from pathlib import Path
 from typing import Optional
-from sys import stdout
 
 from titanfp.fpbench.fpcast import FPCore
-from fpy2 import Function
+from fpy2 import Function, FPYCompiler
 
 from .fetch import read_dir, read_file
 
@@ -43,9 +42,11 @@ for path in input_paths:
 if output_path is None:
     for core in cores:
         func = Function.from_fpcore(core)
-        print(func.format())
+        ast = FPYCompiler().compile(func)
+        print(ast.format())
 else:
     with open(output_path, 'w') as f:
         for core in cores:
             func = Function.from_fpcore(core)
-            print(func.format())
+            ast = FPYCompiler().compile(func)
+            print(ast.format(), file=f)

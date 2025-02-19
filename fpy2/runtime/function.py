@@ -1,7 +1,5 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-import inspect
-
 from abc import abstractmethod
 from typing import Optional
 from types import FunctionType
