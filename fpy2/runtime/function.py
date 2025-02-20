@@ -55,10 +55,10 @@ class Function:
         return self.ir.name
 
     @staticmethod
-    def from_fpcore(core: FPCore):
+    def from_fpcore(core: FPCore, default_name: str = 'f'):
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
-        ir = fpcore_to_fpy(core)
+        ir = fpcore_to_fpy(core, default_name=default_name)
         return Function(ir, PythonEnv.empty())
 
     def with_rt(self, rt: 'BaseInterpreter'):

@@ -73,7 +73,7 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_binary_expr(self, e: BinaryExpr, ctx: None):
         cls = type(e)
         if cls not in _binary_rev_table:
-            raise NotImplementedError(f'unsupported unary expression {e}')
+            raise NotImplementedError(f'unsupported binary expression {e}')
         kind = _binary_rev_table[cls]
         lhs = self._visit_expr(e.children[0], None)
         rhs = self._visit_expr(e.children[1], None)
@@ -82,7 +82,7 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_ternary_expr(self, e: TernaryExpr, ctx: None):
         cls = type(e)
         if cls not in _ternary_rev_table:
-            raise NotImplementedError(f'unsupported unary expression {e}')
+            raise NotImplementedError(f'unsupported ternary expression {e}')
         kind = _ternary_rev_table[cls]
         arg0 = self._visit_expr(e.children[0], None)
         arg1 = self._visit_expr(e.children[1], None)
@@ -99,8 +99,8 @@ class _FPyCompilerInstance(ReduceVisitor):
                 return self._visit_ternary_expr(e, ctx)
             case NaryExpr():
                 cls = type(e)
-                if cls not in _unary_rev_table:
-                    raise NotImplementedError(f'unsupported unary expression {e}')
+                if cls not in _nary_rev_table:
+                    raise NotImplementedError(f'unsupported N-ary expression {e}')
                 kind = _nary_rev_table[cls]
                 args = [self._visit_expr(arg, None) for arg in e.children]
                 return ast.NaryOp(kind, args, None)

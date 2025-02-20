@@ -112,10 +112,12 @@ class _FPCore2FPy:
     """Compiler from FPCore to the FPy AST."""
     core: fpc.FPCore
     gensym: Gensym
+    default_name: str
 
-    def __init__(self, core: fpc.FPCore):
+    def __init__(self, core: fpc.FPCore, default_name: str):
         self.core = core
         self.gensym = Gensym()
+        self.default_name = default_name
 
     def _visit_var(self, e: fpc.Var, ctx: _Ctx) -> Expr:
         if e.value not in ctx.env:
@@ -649,7 +651,8 @@ class _FPCore2FPy:
         e = self._visit(f.e, ctx)
         block = Block(ctx.stmts + [Return(e, None)])
 
-        ast = FunctionDef(f.ident, args, block, None)
+        name = self.default_name if f.ident is None else f.ident
+        ast = FunctionDef(name, args, block, None)
         ast.ctx = props
         return ast
 
@@ -659,8 +662,8 @@ class _FPCore2FPy:
             raise TypeError(f'should have produced a FunctionDef {ast}')
         return ast
 
-def fpcore_to_fpy(core: fpc.FPCore):
-    ast = _FPCore2FPy(core).convert()
+def fpcore_to_fpy(core: fpc.FPCore, default_name: str = 'f'):
+    ast = _FPCore2FPy(core, default_name).convert()
 
     # analyze and lower to the IR
     SyntaxCheck.analyze(ast)

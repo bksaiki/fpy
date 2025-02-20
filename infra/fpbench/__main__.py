@@ -1,4 +1,7 @@
+import re
+
 from argparse import ArgumentParser
+from sys import stdout
 from pathlib import Path
 from typing import Optional
 
@@ -7,12 +10,41 @@ from fpy2 import Function, FPYCompiler
 
 from .fetch import read_dir, read_file
 
+VALID_NAME_CHAR = re.compile('[a-zA-Z0-9_]')
+
 def _resolve_path(s: str):
     path = Path(s).resolve()
     if not path.exists():
         print(f"error: {path} does not exist")
         exit(1)
     return path
+
+def _fix_name(s: str):
+    name: str = ''
+    for c in s:
+        if re.match(VALID_NAME_CHAR, c):
+            name += c
+        else:
+            # TODO: convert char to unicode
+            name += f'_u_'
+    return name
+
+def _fpcore_name(core: FPCore, default_name: str):
+    if core.ident is not None:
+        return core.ident
+    elif 'name' in core.props:
+        name_data = core.props['name']
+        return _fix_name(name_data.value.value)
+    else:
+        return default_name
+
+def _write_cores(cores: list[FPCore], f):
+    for i, core in enumerate(cores):
+        name = _fpcore_name(core, f'f{i}')
+        func = Function.from_fpcore(core, default_name=name)
+        ast = FPYCompiler().compile(func)
+        print(ast.format(), file=f)
+        print('', file=f)
 
 # parse command line arguments
 parser = ArgumentParser(description="converts FPCore benchmarks to FPy")
@@ -40,13 +72,7 @@ for path in input_paths:
 
 # write FPy functions to files
 if output_path is None:
-    for core in cores:
-        func = Function.from_fpcore(core)
-        ast = FPYCompiler().compile(func)
-        print(ast.format())
+    _write_cores(cores, stdout)
 else:
     with open(output_path, 'w') as f:
-        for core in cores:
-            func = Function.from_fpcore(core)
-            ast = FPYCompiler().compile(func)
-            print(ast.format(), file=f)
+        _write_cores(cores, f)

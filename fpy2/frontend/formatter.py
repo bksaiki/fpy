@@ -212,15 +212,10 @@ class _FormatterInstance(AstVisitor):
 
     def _visit_function(self, func: FunctionDef, ctx: _Ctx):
         # TODO: type annotation
-        if func.name is None:
-            name = 'unnamed'
-        else:
-            name = func.name
-
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)
         self._format_decorator(func.ctx, ctx)
-        self._add_line(f'def {name}({arg_str}):', ctx)
+        self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)
 
     # override for typing hint
