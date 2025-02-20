@@ -7,15 +7,21 @@ Useful for source-to-source transformations.
 from ..ir import *
 
 from ..frontend import fpyast as ast
+from ..frontend.codegen import (
+    _unary_table,
+    _binary_table,
+    _ternary_table,
+    _nary_table
+)
 from ..runtime import Function
 
 from .backend import Backend
 
-_nary_table = {
-    And: ast.NaryOpKind.AND,
-    Or: ast.NaryOpKind.OR,
-}
-
+# reverse operator tables
+_unary_rev_table = { v: k for k, v in _unary_table.items() }
+_binary_rev_table = { v: k for k, v in _binary_table.items() }
+_ternary_rev_table = { v: k for k, v in _ternary_table.items() }
+_nary_rev_table = { v: k for k, v in _nary_table.items() }
 
 class _FPyCompilerInstance(ReduceVisitor):
     """Compilation instance from FPy to FPCore"""
@@ -55,72 +61,141 @@ class _FPyCompilerInstance(ReduceVisitor):
         return ast.Call(e.name, args, None)
 
     def _visit_nary_expr(self, e: NaryExpr, ctx: None):
-        if type(e) not in _nary_table:
+        cls = type(e)
+        if cls in _unary_rev_table:
+            kind = _unary_rev_table[cls]
+            arg = self._visit_expr(e.children[0], None)
+            return ast.UnaryOp(kind, arg, None)
+        elif cls in _binary_rev_table:
+            kind = _binary_rev_table[cls]
+            lhs = self._visit_expr(e.children[0], None)
+            rhs = self._visit_expr(e.children[1], None)
+            return ast.BinaryOp(kind, lhs, rhs, None)
+        elif cls in _ternary_rev_table:
+            kind = _ternary_rev_table[cls]
+            arg0 = self._visit_expr(e.children[0], None)
+            arg1 = self._visit_expr(e.children[1], None)
+            arg2 = self._visit_expr(e.children[2], None)
+            return ast.TernaryOp(kind, arg0, arg1, arg2, None)
+        elif cls in _nary_rev_table:
+            kind = _nary_rev_table[cls]
+            args = [self._visit_expr(arg, None) for arg in e.children]
+            return ast.NaryOp(kind, args, None)
+        else:
             raise NotImplementedError(f'unsupported expression {e}')
-        kind = _nary_table[type(e)]
-        args = [self._visit_expr(arg, None) for arg in e.children]
-        return ast.NaryOp(kind, args, None)
 
     def _visit_compare(self, e: Compare, ctx: None):
         args = [self._visit_expr(arg, None) for arg in e.children]
         return ast.Compare(list(e.ops), args, None)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
-        raise NotImplementedError
+        args = [self._visit_expr(arg, None) for arg in e.children]
+        return ast.TupleExpr(args, None)
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: None):
-        raise NotImplementedError
+        slices = [self._visit_expr(s, None) for s in e.slices]
+        value = self._visit_expr(e.value, None)
+        return ast.RefExpr(value, slices, None)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: None):
-        raise NotImplementedError
+        raise NotImplementedError('do not call')
 
     def _visit_comp_expr(self, e: CompExpr, ctx: None):
-        raise NotImplementedError
+        iters = [self._visit_expr(i, None) for i in e.iterables]
+        elt = self._visit_expr(e.elt, None)
+        return ast.CompExpr(e.vars, iters, elt, None)
 
     def _visit_if_expr(self, e: IfExpr, ctx: None):
-        raise NotImplementedError
+        cond = self._visit_expr(e.cond, None)
+        ift = self._visit_expr(e.ift, None)
+        iff = self._visit_expr(e.iff, None)
+        return ast.IfExpr(cond, ift, iff, None)
 
     def _visit_var_assign(self, stmt: VarAssign, ctx: None):
-        raise NotImplementedError
+        # TODO: typing annotation
+        e = self._visit_expr(stmt.expr, None)
+        return ast.VarAssign(stmt.var, e, None, None)
+
+    def _visit_tuple_binding(self, vars: TupleBinding):
+        new_vars: list[Id | ast.TupleBinding] = []
+        for name in vars:
+            if isinstance(name, Id):
+                new_vars.append(name)
+            elif isinstance(name, TupleBinding):
+                new_vars.append(self._visit_tuple_binding(name))
+            else:
+                raise NotImplementedError('unexpected tuple identifier', name)
+        return ast.TupleBinding(new_vars, None)
 
     def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
-        raise NotImplementedError
+        binding = self._visit_tuple_binding(stmt.binding)
+        expr = self._visit_expr(stmt.expr, ctx)
+        return ast.TupleAssign(binding, expr, None)
 
     def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
-        raise NotImplementedError
+        slices = [self._visit_expr(s, ctx) for s in stmt.slices]
+        value = self._visit_expr(stmt.expr, ctx)
+        return ast.RefAssign(stmt.var, slices, value, None)
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, None)
+        body = self._visit_block(stmt.body, None)
+        return ast.IfStmt(cond, body, None, None)
 
     def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, None)
+        ift = self._visit_block(stmt.ift, None)
+        iff = self._visit_block(stmt.iff, None)
+        return ast.IfStmt(cond, ift, iff, None)
 
     def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, None)
+        body = self._visit_block(stmt.body, None)
+        return ast.WhileStmt(cond, body, None)
 
     def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
-        raise NotImplementedError
+        iterable = self._visit_expr(stmt.iterable, None)
+        body = self._visit_block(stmt.body, None)
+        return ast.ForStmt(stmt.var, iterable, body, None)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        raise NotImplementedError
+        body = self._visit_block(stmt.body, None)
+        return ast.ContextStmt(stmt.name, dict(stmt.props), body, None)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
-        raise NotImplementedError
+        e = self._visit_expr(stmt.test, None)
+        return ast.AssertStmt(e, stmt.msg, None)
 
     def _visit_return(self, stmt: Return, ctx: None):
-        raise NotImplementedError
+        e = self._visit_expr(stmt.expr, None)
+        return ast.Return(e, None)
 
     def _visit_phis(self, phis: list[PhiNode], lctx: None, rctx: None):
-        raise NotImplementedError
+        raise NotImplementedError('do not call')
 
     def _visit_loop_phis(self, phis: list[PhiNode], lctx: None, rctx: None):
-        raise NotImplementedError
+        raise NotImplementedError('do not call')
 
     def _visit_block(self, block: Block, ctx: None):
-        raise NotImplementedError
+        stmts = [self._visit_statement(s, None) for s in block.stmts]
+        return ast.Block(stmts)
 
     def _visit_function(self, func: FunctionDef, ctx: None):
-        raise NotImplementedError
+        args: list[ast.Argument] = []
+        for arg in func.args:
+            # TODO: translate typing annotation
+            args.append(ast.Argument(arg.name, None, None))
+
+        body = self._visit_block(func.body, None)
+        return ast.FunctionDef(func.name, args, body, None)
+
+    # override for typing hint:
+    def _visit_expr(self, e: Expr, ctx: None) -> ast.Expr:
+        return super()._visit_expr(e, None)
+    
+    # override for typing hint:
+    def _visit_statement(self, stmt: Stmt, ctx: None) -> ast.Stmt:
+        return super()._visit_statement(stmt, None)
 
 
 class FPYCompiler(Backend):

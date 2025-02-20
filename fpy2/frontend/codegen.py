@@ -3,9 +3,7 @@ This module does intermediate code generation, compiling
 the abstract syntax tree (AST) to the intermediate representation (IR).
 """
 
-from .definition import DefinitionAnalysis
 from .fpyast import *
-from .live_vars import LiveVarAnalysis
 from .visitor import AstVisitor
 
 from .. import ir
@@ -77,6 +75,11 @@ _ternary_table = {
     TernaryOpKind.FMA: ir.Fma,
 }
 
+_nary_table = {
+    NaryOpKind.AND: ir.And,
+    NaryOpKind.OR: ir.Or
+}
+
 class _IRCodegenInstance(AstVisitor):
     """Single-use instance of lowering an AST to an IR."""
     func: FunctionDef
@@ -134,13 +137,10 @@ class _IRCodegenInstance(AstVisitor):
 
     def _visit_naryop(self, e: NaryOp, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        match e.op:
-            case NaryOpKind.AND:
-                return ir.And(*args)
-            case NaryOpKind.OR:
-                return ir.Or(*args)
-            case _:
-                raise NotImplementedError('unexpected op', e.op)
+        if e.op in _nary_table:
+            return _nary_table[e.op](*args)
+        else:
+            raise NotImplementedError('unexpected op', e.op)
 
     def _visit_compare(self, e: Compare, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
