@@ -62,29 +62,50 @@ class _FPyCompilerInstance(ReduceVisitor):
         args = [self._visit_expr(arg, None) for arg in e.children]
         return ast.Call(e.name, args, None)
 
-    def _visit_nary_expr(self, e: NaryExpr, ctx: None):
+    def _visit_unary_expr(self, e: UnaryExpr, ctx: None):
         cls = type(e)
-        if cls in _unary_rev_table:
-            kind = _unary_rev_table[cls]
-            arg = self._visit_expr(e.children[0], None)
-            return ast.UnaryOp(kind, arg, None)
-        elif cls in _binary_rev_table:
-            kind = _binary_rev_table[cls]
-            lhs = self._visit_expr(e.children[0], None)
-            rhs = self._visit_expr(e.children[1], None)
-            return ast.BinaryOp(kind, lhs, rhs, None)
-        elif cls in _ternary_rev_table:
-            kind = _ternary_rev_table[cls]
-            arg0 = self._visit_expr(e.children[0], None)
-            arg1 = self._visit_expr(e.children[1], None)
-            arg2 = self._visit_expr(e.children[2], None)
-            return ast.TernaryOp(kind, arg0, arg1, arg2, None)
-        elif cls in _nary_rev_table:
-            kind = _nary_rev_table[cls]
-            args = [self._visit_expr(arg, None) for arg in e.children]
-            return ast.NaryOp(kind, args, None)
-        else:
-            raise NotImplementedError(f'unsupported expression {e}')
+        if cls not in _unary_rev_table:
+            raise NotImplementedError(f'unsupported unary expression {e}')
+        kind = _unary_rev_table[cls]
+        arg = self._visit_expr(e.children[0], None)
+        return ast.UnaryOp(kind, arg, None)
+
+    def _visit_binary_expr(self, e: BinaryExpr, ctx: None):
+        cls = type(e)
+        if cls not in _binary_rev_table:
+            raise NotImplementedError(f'unsupported unary expression {e}')
+        kind = _binary_rev_table[cls]
+        lhs = self._visit_expr(e.children[0], None)
+        rhs = self._visit_expr(e.children[1], None)
+        return ast.BinaryOp(kind, lhs, rhs, None)
+
+    def _visit_ternary_expr(self, e: TernaryExpr, ctx: None):
+        cls = type(e)
+        if cls not in _ternary_rev_table:
+            raise NotImplementedError(f'unsupported unary expression {e}')
+        kind = _ternary_rev_table[cls]
+        arg0 = self._visit_expr(e.children[0], None)
+        arg1 = self._visit_expr(e.children[1], None)
+        arg2 = self._visit_expr(e.children[2], None)
+        return ast.TernaryOp(kind, arg0, arg1, arg2, None)
+
+    def _visit_nary_expr(self, e: NaryExpr, ctx: None):
+        match e:
+            case UnaryExpr():
+                return self._visit_unary_expr(e, ctx)
+            case BinaryExpr():
+                return self._visit_binary_expr(e, ctx)
+            case TernaryExpr():
+                return self._visit_ternary_expr(e, ctx)
+            case NaryExpr():
+                cls = type(e)
+                if cls not in _unary_rev_table:
+                    raise NotImplementedError(f'unsupported unary expression {e}')
+                kind = _nary_rev_table[cls]
+                args = [self._visit_expr(arg, None) for arg in e.children]
+                return ast.NaryOp(kind, args, None)
+            case _:
+                raise NotImplementedError(f'unsupported expression {e}')
 
     def _visit_compare(self, e: Compare, ctx: None):
         args = [self._visit_expr(arg, None) for arg in e.children]

@@ -9,7 +9,7 @@ from .visitor import AstVisitor
 from .. import ir
 from ..utils import Gensym
 
-_unary_table = {
+_unary_table: dict[UnaryOpKind, type[ir.UnaryExpr]] = {
     UnaryOpKind.NEG: ir.Neg,
     UnaryOpKind.NOT: ir.Not,
     UnaryOpKind.FABS: ir.Fabs,
@@ -54,7 +54,7 @@ _unary_table = {
     UnaryOpKind.DIM: ir.Dim,
 }
 
-_binary_table = {
+_binary_table: dict[BinaryOpKind, type[ir.BinaryExpr]] = {
     BinaryOpKind.ADD: ir.Add,
     BinaryOpKind.SUB: ir.Sub,
     BinaryOpKind.MUL: ir.Mul,
@@ -71,11 +71,11 @@ _binary_table = {
     BinaryOpKind.SIZE: ir.Size,
 }
 
-_ternary_table = {
+_ternary_table: dict[TernaryOpKind, type[ir.TernaryExpr]] = {
     TernaryOpKind.FMA: ir.Fma,
 }
 
-_nary_table = {
+_nary_table: dict[NaryOpKind, type[ir.NaryExpr]] = {
     NaryOpKind.AND: ir.And,
     NaryOpKind.OR: ir.Or
 }
