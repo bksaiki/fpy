@@ -254,6 +254,15 @@ class _FPyCompilerInstance(ReduceVisitor):
         stmts = [self._visit_statement(s, None) for s in block.stmts]
         return ast.Block(stmts)
 
+    def _visit_props(self, props: dict[str, Any]):
+        new_props: dict[str, Any] = {}
+        for k, v in props.items():
+            if isinstance(v, Expr):
+                new_props[k] = self._visit_expr(v, None)
+            else:
+                new_props[k] = v
+        return new_props
+
     def _visit_function(self, func: FunctionDef, ctx: None):
         args: list[ast.Argument] = []
         for arg in func.args:
@@ -263,7 +272,9 @@ class _FPyCompilerInstance(ReduceVisitor):
             args.append(ast.Argument(arg.name, None, None))
 
         body = self._visit_block(func.body, None)
-        return ast.FunctionDef(func.name, args, body, None)
+        stx = ast.FunctionDef(func.name, args, body, None)
+        stx.ctx = self._visit_props(func.ctx)
+        return stx
 
     # override for typing hint:
     def _visit_expr(self, e: Expr, ctx: None) -> ast.Expr:

@@ -197,16 +197,23 @@ class _FormatterInstance(AstVisitor):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
+    def _format_data(self, data):
+        if isinstance(data, Expr):
+            return self._visit_expr(data, 0)
+        else:
+            return repr(data)
+
     def _format_decorator(self, props: dict[str, str], ctx: _Ctx):
         if len(props) == 0:
             self._add_line('@fpy', ctx)
         elif len(props) == 1:
             k, *_ = tuple(props.keys())
-            v = props[k]
+            v = self._format_data(props[k])
             self._add_line(f'@fpy({k}={v})', ctx)
         else:
             self._add_line('@fpy(', ctx)
-            for k, v in props.items():
+            for k, data in props.items():
+                v = self._format_data(data)
                 self._add_line(f'{k}={v},', ctx + 1)
             self._add_line(')', ctx)
 

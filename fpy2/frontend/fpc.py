@@ -2,7 +2,10 @@
 FPy parsing from FPCore.
 """
 
+from typing import TypeAlias
+
 import titanfp.fpbench.fpcast as fpc
+from titanfp.fpbench.fpcparser import data_as_expr
 
 from .codegen import IRCodegen
 from .definition import DefinitionAnalysis
@@ -12,6 +15,9 @@ from .syntax_check import SyntaxCheck
 
 from ..passes import SSA, VerifyIR
 from ..utils import Gensym
+
+
+DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 
 _unary_table = {
     'neg': UnaryOpKind.NEG,
@@ -560,10 +566,13 @@ class _FPCore2FPy:
         val_ctx = ctx.without_stmts()
         val = self._visit(e.body, val_ctx)
 
+        # compile properties
+        props = self._visit_props(e.props, _Ctx(env=ctx.env))
+
         # bind value to temporary
         t = self.gensym.fresh('t')
         block = Block(val_ctx.stmts + [VarAssign(t, val, None, None)])
-        stmt = ContextStmt(None, dict(e.props), block, None)
+        stmt = ContextStmt(None, props, block, None)
         ctx.stmts.append(stmt)
         return Var(t, None)
 
@@ -614,10 +623,29 @@ class _FPCore2FPy:
             case _:
                 raise NotImplementedError(f'cannot convert to FPy {e}')
 
-    def _visit_function(self, f: fpc.FPCore):
-        # TODO: parse properties
-        props = dict(f.props)
+    def _visit_data(self, data: DataElt):
+        match data:
+            case fpc.String():
+                return data.value
+            case fpc.ValueExpr():
+                return data.value
+            case tuple():
+                return [self._visit_data(d) for d in data]
+            case _:
+                raise NotImplementedError(repr(data))
 
+    def _visit_props(self, props: dict[str, fpc.Data], ctx: _Ctx):
+        new_props: dict[str, Any] = {}
+        for k, v in props.items():
+            match k:
+                case 'pre' | 'spec' | 'alt':
+                    e = data_as_expr(v, strict=True)
+                    new_props[k] = self._visit(e, _Ctx(env=ctx.env))
+                case _:
+                    new_props[k] = self._visit_data(v.value)
+        return new_props
+
+    def _visit_function(self, f: fpc.FPCore):
         # setup context
         ctx = _Ctx()
 
@@ -646,6 +674,9 @@ class _FPCore2FPy:
                     if isinstance(dim, str):
                         assert isinstance(dim_id, NamedId), "must be a NamedId"
                         ctx.env[dim] = dim_id
+
+        # compile 
+        props = self._visit_props(f.props, _Ctx(env=ctx.env))
 
         # compile function body
         e = self._visit(f.e, ctx)

@@ -215,8 +215,9 @@ class _IRCodegenInstance(AstVisitor):
         return ir.ForStmt(stmt.var, ir.AnyType(), iterable, body, [])
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
+        props = self._visit_props(stmt.props)
         block = self._visit_block(stmt.body, ctx)
-        return ir.ContextStmt(stmt.name, stmt.props, block)
+        return ir.ContextStmt(stmt.name, props, block)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
         test = self._visit_expr(stmt.test, ctx)
@@ -227,6 +228,15 @@ class _IRCodegenInstance(AstVisitor):
 
     def _visit_block(self, block: Block, ctx: None):
         return ir.Block([self._visit_statement(stmt, ctx) for stmt in block.stmts])
+
+    def _visit_props(self, props: dict[str, Any]):
+        new_props: dict[str, Any] = {}
+        for k, v in props.items():
+            if isinstance(v, Expr):
+                new_props[k] = self._visit_expr(v, None)
+            else:
+                new_props[k] = v
+        return new_props
 
     def _visit_function(self, func: FunctionDef, ctx: None):
         args: list[ir.Argument] = []

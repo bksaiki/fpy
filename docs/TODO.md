@@ -9,6 +9,7 @@ Middle-end:
 
 Backend:
  - fpc:
+    - properties
     - fuse let expressions
     - detect multi-variable while loops
     - detect multi-variable for loops
