@@ -2,6 +2,8 @@
 This module defines the `Gensym` object that generates unique identifiers.
 """
 
+from typing import Callable, Optional
+
 from .identifier import Id, NamedId, UnderscoreId
 
 class Gensym(object):
@@ -13,10 +15,21 @@ class Gensym(object):
     """
     _idents: set[NamedId]
     _counter: int
+    _rename_hook: Optional[Callable[[str], str]]
 
-    def __init__(self, *idents: NamedId):
-        self._idents = set(idents)
-        self._counter = len(idents)
+    def __init__(
+        self,
+        reserved: Optional[set[NamedId]] = None,
+        rename_hook: Optional[Callable[[str], str]] = None
+    ):
+        if reserved is None:
+            self._idents = set()
+            self._counter = 0
+        else:
+            self._idents = set(reserved)
+            self._counter = len(reserved)
+
+        self._rename_hook = rename_hook
 
     def reserve(self, *idents: NamedId):
         """Reserves a set of identifiers"""
@@ -38,7 +51,14 @@ class Gensym(object):
         return ident
 
     def fresh(self, prefix: str = 't'):
-        """Generates a unique identifier with a given prefix."""
+        """
+        Generates a unique identifier with a given prefix.
+
+        If this generator was initialized with `rename_hook=...`,
+        then the identifier is potentially transformed.
+        """
+        if self._rename_hook:
+            prefix = self._rename_hook(prefix)
         return self.refresh(NamedId(prefix))
 
     def __contains__(self, name: NamedId):

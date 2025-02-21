@@ -7,6 +7,7 @@ from typing import Optional
 
 from titanfp.fpbench.fpcast import FPCore
 from fpy2 import Function, FPYCompiler
+from fpy2.utils import pythonize_id
 
 from .fetch import read_dir, read_file
 
@@ -15,24 +16,12 @@ VALID_NAME_CHAR = re.compile('[a-zA-Z0-9_]')
 def _resolve_path(s: str):
     return Path(s).resolve()
 
-def _fix_name(s: str):
-    name: str = ''
-    for c in s:
-        if re.match(VALID_NAME_CHAR, c):
-            name += c
-        elif c == '-':
-            name += '_'
-        else:
-            # TODO: convert char to unicode
-            name += f'_u_'
-    return name
-
 def _fpcore_name(core: FPCore, default_name: str):
     if core.ident is not None:
         return core.ident
     elif 'name' in core.props:
         name_data = core.props['name']
-        return _fix_name(name_data.value.value)
+        return pythonize_id(name_data.value.value)
     else:
         return default_name
 

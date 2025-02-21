@@ -18,7 +18,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
 
     def __init__(self, func: FunctionDef, names: set[NamedId]):
         self.func = func
-        self.gensym = Gensym(*names)
+        self.gensym = Gensym(reserved=names)
 
     def apply(self) -> FunctionDef:
         return self._visit_function(self.func, {})

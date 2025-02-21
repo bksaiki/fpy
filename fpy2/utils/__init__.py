@@ -5,3 +5,4 @@ from .defaults import default_repr
 from .error import FPySyntaxError, raise_type_error
 from .gensym import Gensym
 from .identifier import Id, NamedId, UnderscoreId
+from .string import pythonize_id

@@ -1,6 +1,8 @@
 """Typing hints for FPy programs"""
 
-Real = int | float
+from typing import TypeAlias
+
+Real: TypeAlias = int | float
 
 def __add__(self: Real, other: Real) -> Real: ...
 def __sub__(self: Real, other: Real) -> Real: ...

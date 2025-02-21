@@ -2,8 +2,6 @@
 FPy parsing from FPCore.
 """
 
-import re
-
 from typing import TypeAlias
 
 import titanfp.fpbench.fpcast as fpc
@@ -16,23 +14,9 @@ from .live_vars import LiveVarAnalysis
 from .syntax_check import SyntaxCheck
 
 from ..passes import SSA, VerifyIR
-from ..utils import Gensym
+from ..utils import Gensym, pythonize_id
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
-
-VALID_ID_CHAR_PATTERN = re.compile('[a-zA-Z0-9_]')
-
-def _fix_name(s: str):
-    name: str = ''
-    for c in s:
-        if re.match(VALID_ID_CHAR_PATTERN, c):
-            name += c
-        elif c == '-':
-            name += '_'
-        else:
-            # TODO: convert char to unicode
-            name += f'_u_'
-    return name
 
 _unary_table = {
     'neg': UnaryOpKind.NEG,
@@ -137,14 +121,13 @@ class _FPCore2FPy:
 
     def __init__(self, core: fpc.FPCore, default_name: str):
         self.core = core
-        self.gensym = Gensym()
+        self.gensym = Gensym(rename_hook=pythonize_id)
         self.default_name = default_name
 
     def _visit_var(self, e: fpc.Var, ctx: _Ctx) -> Expr:
-        name = _fix_name(e.value)
-        if name not in ctx.env:
-            raise ValueError(f'variable {name} not in scope')
-        return Var(ctx.env[name], None)
+        if e.value not in ctx.env:
+            raise ValueError(f'variable {e.value} not in scope')
+        return Var(ctx.env[e.value], None)
 
     def _visit_decnum(self, e: fpc.Decnum, ctx: _Ctx) -> Expr:
         return Decnum(str(e.value), None)
@@ -286,7 +269,6 @@ class _FPCore2FPy:
             val_ctx = _Ctx(env=env, stmts=ctx.stmts) if is_star else ctx
             v_e = self._visit(val, val_ctx)
             # bind value to variable
-            var = _fix_name(var)
             t = self.gensym.fresh(var)
             env = { **env, var: t }
             stmt = VarAssign(t, v_e, None, None)
@@ -301,7 +283,6 @@ class _FPCore2FPy:
             init_ctx = _Ctx(env=env, stmts=ctx.stmts)
             init_e = self._visit(init, init_ctx)
             # bind value to variable
-            var = _fix_name(var)
             t = self.gensym.fresh(var)
             env = { **env, var: t }
             stmt = VarAssign(t, init_e, None, None)
@@ -660,7 +641,7 @@ class _FPCore2FPy:
                     e = data_as_expr(v, strict=True)
                     new_props[k] = self._visit(e, _Ctx(env=ctx.env))
                 case _:
-                    new_props[_fix_name(k)] = self._visit_data(v.value)
+                    new_props[pythonize_id(k)] = self._visit_data(v.value)
         return new_props
 
     def _visit_function(self, f: fpc.FPCore):
@@ -671,7 +652,6 @@ class _FPCore2FPy:
         args: list[Argument] = []
         for name, _, shape in f.inputs:
             # TODO: argument properties and shape
-            name = _fix_name(name)
             t = self.gensym.fresh(name)
             arg = Argument(t, None, None)
             args.append(arg)
@@ -681,7 +661,6 @@ class _FPCore2FPy:
                 dim_ids: list[Id] = []
                 for dim in shape:
                     if isinstance(dim, str):
-                        dim = _fix_name(dim)
                         d = self.gensym.fresh(dim)
                         dim_ids.append(d)
                     else:
@@ -692,7 +671,6 @@ class _FPCore2FPy:
                 ctx.stmts.append(stmt)
                 for dim, dim_id in zip(shape, dim_ids):
                     if isinstance(dim, str):
-                        dim = _fix_name(dim)
                         assert isinstance(dim_id, NamedId), "must be a NamedId"
                         ctx.env[dim] = dim_id
 
@@ -703,7 +681,7 @@ class _FPCore2FPy:
         e = self._visit(f.e, ctx)
         block = Block(ctx.stmts + [Return(e, None)])
 
-        name = self.default_name if f.ident is None else _fix_name(f.ident)
+        name = self.default_name if f.ident is None else pythonize_id(f.ident)
         ast = FunctionDef(name, args, block, None)
         ast.ctx = props
         return ast

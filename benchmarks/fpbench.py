@@ -6,7 +6,7 @@ from fpy2.typing import *
     pre=lambda x, y: 1 <= x <= 100 and 1 <= y <= 100,
     spec=lambda x, y: hypot(x, y),
 )
-def carthesianToPolar_u__u_radius(x, y):
+def carthesianToPolar_u44__radius(x, y):
     return sqrt(((x * x) + (y * y)))
 
 @fpy(
@@ -14,7 +14,7 @@ def carthesianToPolar_u__u_radius(x, y):
     pre=lambda x, y: 1 <= x <= 100 and 1 <= y <= 100,
     spec=lambda x, y: (atan2(y, x) * (180 / PI)),
 )
-def carthesianToPolar_u__u_theta(x, y):
+def carthesianToPolar_u44__theta(x, y):
     pi = 3.14159265359
     radiant = atan((y / x))
     return (radiant * (180.0 / pi))
@@ -24,7 +24,7 @@ def carthesianToPolar_u__u_theta(x, y):
     pre=lambda radius, theta: 1 <= radius <= 10 and 0 <= theta <= 360,
     spec=lambda radius, theta: (radius * cos((theta * (180 / PI)))),
 )
-def polarToCarthesian_u__u_x(radius, theta):
+def polarToCarthesian_u44__x(radius, theta):
     pi = 3.14159265359
     radiant = (theta * (pi / 180.0))
     return (radius * cos(radiant))
@@ -34,7 +34,7 @@ def polarToCarthesian_u__u_x(radius, theta):
     pre=lambda radius, theta: 1 <= radius <= 10 and 0 <= theta <= 360,
     spec=lambda radius, theta: (radius * sin((theta * (180 / PI)))),
 )
-def polarToCarthesian_u__u_y(radius, theta):
+def polarToCarthesian_u44__y(radius, theta):
     pi = 3.14159265359
     radiant = (theta * (pi / 180.0))
     return (radius * sin(radiant))
@@ -129,7 +129,7 @@ def test04_dqmom9(m0, m1, m2, w0, w1, w2, a0, a1, a2):
     precision='binary64',
     pre=lambda x: 1.00001 < x < 2,
 )
-def test05_nonlin1_u__u_r4(x):
+def test05_nonlin1_u44__r4(x):
     r1 = (x - 1)
     r2 = (x * x)
     return (r1 / (r2 - 1))
@@ -139,7 +139,7 @@ def test05_nonlin1_u__u_r4(x):
     precision='binary64',
     pre=lambda x: 1.00001 < x < 2,
 )
-def test05_nonlin1_u__u_test2(x):
+def test05_nonlin1_u44__test2(x):
     return (1 / (x + 1))
 
 @fpy(
@@ -147,7 +147,7 @@ def test05_nonlin1_u__u_test2(x):
     precision='binary32',
     pre=lambda x0, x1, x2, x3: -1e-5 < x0 < 1.00001 and 0 < x1 < 1 and 0 < x2 < 1 and 0 < x3 < 1,
 )
-def test06_sums4_u__u_sum1(x0, x1, x2, x3):
+def test06_sums4_u44__sum1(x0, x1, x2, x3):
     return (((x0 + x1) + x2) + x3)
 
 @fpy(
@@ -155,7 +155,7 @@ def test06_sums4_u__u_sum1(x0, x1, x2, x3):
     precision='binary32',
     pre=lambda x0, x1, x2, x3: -1e-5 < x0 < 1.00001 and 0 < x1 < 1 and 0 < x2 < 1 and 0 < x3 < 1,
 )
-def test06_sums4_u__u_sum2(x0, x1, x2, x3):
+def test06_sums4_u44__sum2(x0, x1, x2, x3):
     return ((x0 + x1) + (x2 + x3))
 
 @fpy(
@@ -165,10 +165,10 @@ def test06_sums4_u__u_sum2(x0, x1, x2, x3):
     cite=['damouche-martel-chapoutot-fmics15'],
     fpbench_domain='controls',
     precision='binary32',
-    pre=lambda sr_u_, sl_u_: 0.05 < sl_u_ < (2 * PI) and 0.05 < sr_u_ < (2 * PI),
+    pre=lambda sr_u42_, sl_u42_: 0.05 < sl_u42_ < (2 * PI) and 0.05 < sr_u42_ < (2 * PI),
     example=[['sr*', '0.0785398163397'], ['sl*', '0.0525398163397']],
 )
-def Odometry(sr_u_, sl_u_):
+def Odometry(sr_u42_, sl_u42_):
     inv_l = 0.1
     c = 12.34
     delta_dl = 0.0
@@ -182,9 +182,9 @@ def Odometry(sr_u_, sl_u_):
     y = 0.0
     theta = -.985
     t = 0
-    tmp = sl_u_
-    sl = sl_u_
-    sr = sr_u_
+    tmp = sl_u42_
+    sl = sl_u42_
+    sr = sr_u42_
     j = 0
     while t < 1000:
         delta_dl = (c * sl)
@@ -255,14 +255,14 @@ def PID(m, kp, ki, kd, c):
     cite=['damouche-martel-chapoutot-fmics15'],
     fpbench_domain='mathematics',
     precision='binary32',
-    pre=lambda h, y_n_u_, c: 0 < y_n_u_ < 100 and 10e-6 < h < 0.1 and 50 < c < 200,
+    pre=lambda h, y_n_u42_, c: 0 < y_n_u42_ < 100 and 10e-6 < h < 0.1 and 50 < c < 200,
     example=[['h', '0.1'], ['y_n*', '10.1'], ['c', '100.1']],
 )
-def Runge_Kutta_u_4(h, y_n_u_, c):
+def Runge_Kutta_4(h, y_n_u42_, c):
     sixieme = (1 / 6)
     eps = 0.005
     k = 1.2
-    y_n = y_n_u_
+    y_n = y_n_u42_
     i = 0.0
     e = 1.0
     while e > eps:
@@ -292,7 +292,7 @@ def Runge_Kutta_u_4(h, y_n_u_, c):
     pre=lambda y, yd: 0 < yd < 50 and 0 < y < 50,
     example=[['y', '2.5'], ['yd', '5.0']],
 )
-def Lead_lag_u_System(y, yd):
+def Lead_lag_System(y, yd):
     eps = 0.01
     Dc = -1280.0
     Ac00 = .499
@@ -363,7 +363,7 @@ def Trapeze(u):
     precision='binary32',
     example=[['Mf', '150000.0'], ['A', '140.0']],
 )
-def Rocket_u_Trajectory(Mf, A):
+def Rocket_Trajectory(Mf, A):
     R = 6400.0e3
     G = 6.67428e-11
     Mt = 5.9736e24
@@ -454,7 +454,7 @@ def Rocket_u_Trajectory(Mf, A):
  ['b3', '0.25'],
  ['b4', ['/', '1.0', '5.0']]],
 )
-def Jacobi_u_s_u_Method(a11, a22, a33, a44, b1, b2, b3, b4):
+def Jacobi_u39_s_Method(a11, a22, a33, a44, b1, b2, b3, b4):
     eps = 0.00000000000000001
     x_n1 = 0.0
     x_n2 = 0.0
@@ -488,7 +488,7 @@ def Jacobi_u_s_u_Method(a11, a22, a33, a44, b1, b2, b3, b4):
     pre=lambda x0: 0 < x0 < 3,
     example=[['x0', '0.0']],
 )
-def Newton_Raphson_u_s_u_Method(x0):
+def Newton_Raphson_u39_s_Method(x0):
     eps = 0.0005
     x_n = 0.0
     e = 1.0
@@ -532,7 +532,7 @@ def Newton_Raphson_u_s_u_Method(x0):
  ['v3', '0.0'],
  ['v4', '1.0']],
 )
-def Eigenvalue_u_Computation(a11, a12, a13, a14, a21, a22, a23, a24, a31, a32, a33, a34, a41, a42, a43, a44, v1, v2, v3, v4):
+def Eigenvalue_Computation(a11, a12, a13, a14, a21, a22, a23, a24, a31, a32, a33, a34, a41, a42, a43, a44, v1, v2, v3, v4):
     eps = 0.0005
     vx = 0
     vy = 0
@@ -574,7 +574,7 @@ def Eigenvalue_u_Computation(a11, a12, a13, a14, a21, a22, a23, a24, a31, a32, a
  ['Q32', ['/', '1', '2601']],
  ['Q33', ['/', '1', '2583']]],
 )
-def Iterative_u_Gram_Schmidt_u_Method(Q11, Q12, Q13, Q21, Q22, Q23, Q31, Q32, Q33):
+def Iterative_Gram_Schmidt_Method(Q11, Q12, Q13, Q21, Q22, Q23, Q31, Q32, Q33):
     eps = .000005
     h1 = 0
     h2 = 0
@@ -611,14 +611,14 @@ def Iterative_u_Gram_Schmidt_u_Method(Q11, Q12, Q13, Q21, Q22, Q23, Q31, Q32, Q3
     name="Rump's example, with pow",
     example=[['a', '77617'], ['b', '33096']],
 )
-def Rump_u_s_u_example_u__u_with_u_pow(a, b):
+def Rump_u39_s_example_u44__with_pow(a, b):
     return ((((333.75 * pow(b, 6)) + (pow(a, 2) * (((((11 * pow(a, 2)) * pow(b, 2)) - pow(b, 6)) - (121 * pow(b, 4))) - 2))) + (5.5 * pow(b, 8))) + (a / (2 * b)))
 
 @fpy(
     name="Rump's example, from C program",
     example=[['a', '77617'], ['b', '33096']],
 )
-def Rump_u_s_u_example_u__u_from_u_C_u_program(a, b):
+def Rump_u39_s_example_u44__from_C_program(a, b):
     b2 = (b * b)
     b4 = (b2 * b2)
     b6 = (b4 * b2)
@@ -632,7 +632,7 @@ def Rump_u_s_u_example_u__u_from_u_C_u_program(a, b):
     example=[['a', '77617'], ['b', '33096']],
     cite=['rump-revisited-2002'],
 )
-def Rump_u_s_u_example_u_revisited_u_for_u_floating_u_point(a, b):
+def Rump_u39_s_example_revisited_for_floating_point(a, b):
     b2 = (b * b)
     b4 = (b2 * b2)
     b6 = (b4 * b2)
@@ -645,14 +645,14 @@ def Rump_u_s_u_example_u_revisited_u_for_u_floating_u_point(a, b):
     name='Complex square root',
     cite=['herbie-2015'],
 )
-def Complex_u_square_u_root(re, im):
+def Complex_square_root(re, im):
     return (0.5 * sqrt((2.0 * (sqrt(((re * re) + (im * im))) + re))))
 
 @fpy(
     name='Complex sine and cosine',
     cite=['herbie-2015'],
 )
-def Complex_u_sine_u_and_u_cosine(re, im):
+def Complex_sine_and_cosine(re, im):
     return ((0.5 * sin(re)) * (exp(-im) - exp(im)))
 
 @fpy(
@@ -660,7 +660,7 @@ def Complex_u_sine_u_and_u_cosine(re, im):
     cite=['herbie-2015'],
     pre=lambda cp, cn, t, s: 0 < cp and 0 < cn,
 )
-def Probabilities_u_in_u_a_u_clustering_u_algorithm(cp, cn, t, s):
+def Probabilities_in_a_clustering_algorithm(cp, cn, t, s):
     return ((pow((1 / (1 + exp(-s))), cp) * pow((1 - (1 / (1 + exp(-s)))), cn)) / (pow((1 / (1 + exp(-t))), cp) * pow((1 - (1 / (1 + exp(-t)))), cn)))
 
 @fpy(
@@ -843,11 +843,11 @@ def rigidBody2(x1, x2, x3):
 )
 def jetEngine(x1, x2):
     t = ((((3 * x1) * x1) + (2 * x2)) - x1)
-    t_u_ = ((((3 * x1) * x1) - (2 * x2)) - x1)
+    t_u42_ = ((((3 * x1) * x1) - (2 * x2)) - x1)
     d = ((x1 * x1) + 1)
     s = (t / d)
-    s_u_ = (t_u_ / d)
-    return (x1 + (((((((((2 * x1) * s) * (s - 3)) + ((x1 * x1) * ((4 * s) - 6))) * d) + (((3 * x1) * x1) * s)) + ((x1 * x1) * x1)) + x1) + (3 * s_u_)))
+    s_u42_ = (t_u42_ / d)
+    return (x1 + (((((((((2 * x1) * s) * (s - 3)) + ((x1 * x1) * ((4 * s) - 6))) * d) + (((3 * x1) * x1) * s)) + ((x1 * x1) * x1)) + x1) + (3 * s_u42_)))
 
 @fpy(
     name='turbine1',
@@ -1166,7 +1166,7 @@ def triangleSorted(a, b, c):
     fpbench_domain='science',
     pre=lambda x0, y0, z0, vx0, vy0, vz0: -6 < x0 < 6 and -6 < y0 < 6 and -0.2 < z0 < 0.2 and -3 < vx0 < 3 and -3 < vy0 < 3 and -0.1 < vz0 < 0.1,
 )
-def N_u_Body_u_Simulation(x0, y0, z0, vx0, vy0, vz0):
+def N_Body_Simulation(x0, y0, z0, vx0, vy0, vz0):
     dt = 0.1
     solarMass = 39.47841760435743
     x = x0
@@ -1227,11 +1227,11 @@ def Pendulum(t0, w0, N):
         k2t = (w + ((h / 2) * k1w))
         t0 = (t + (h * k2t))
         k2w = ((-g / L) * sin((t + ((h / 2) * w))))
-        t3 = (w + (h * k2w))
-        t2 = (n + 1)
+        t1 = (w + (h * k2w))
+        t3 = (n + 1)
         t = t0
-        w = t3
-        n = t2
+        w = t1
+        n = t3
     return t
 
 @fpy(
@@ -1239,7 +1239,7 @@ def Pendulum(t0, w0, N):
     fpbench_domain='mathematics',
     pre=lambda x0: -1 < x0 < 1,
 )
-def Sine_u_Newton(x0):
+def Sine_Newton(x0):
     x = x0
     i = 0
     while i < 10:
@@ -1427,7 +1427,7 @@ def himmilbeau(x1, x2):
     fpbench_domain='textbook',
     pre=lambda x: x >= 0,
 )
-def NMSE_u_example_u_3_u_1(x):
+def NMSE_example_3_u46_1(x):
     return (sqrt((x + 1)) - sqrt(x))
 
 @fpy(
@@ -1435,7 +1435,7 @@ def NMSE_u_example_u_3_u_1(x):
     cite=['hamming-1987', 'herbie-2015'],
     fpbench_domain='textbook',
 )
-def NMSE_u_example_u_3_u_3(x, eps):
+def NMSE_example_3_u46_3(x, eps):
     return (sin((x + eps)) - sin(x))
 
 @fpy(
@@ -1444,7 +1444,7 @@ def NMSE_u_example_u_3_u_3(x, eps):
     fpbench_domain='textbook',
     pre=lambda x: x != 0,
 )
-def NMSE_u_example_u_3_u_4(x):
+def NMSE_example_3_u46_4(x):
     return ((1 - cos(x)) / sin(x))
 
 @fpy(
@@ -1452,7 +1452,7 @@ def NMSE_u_example_u_3_u_4(x):
     cite=['hamming-1987', 'herbie-2015'],
     fpbench_domain='textbook',
 )
-def NMSE_u_example_u_3_u_5(N):
+def NMSE_example_3_u46_5(N):
     return (atan((N + 1)) - atan(N))
 
 @fpy(
@@ -1461,7 +1461,7 @@ def NMSE_u_example_u_3_u_5(N):
     fpbench_domain='textbook',
     pre=lambda x: x >= 0,
 )
-def NMSE_u_example_u_3_u_6(x):
+def NMSE_example_3_u46_6(x):
     return ((1 / sqrt(x)) - (1 / sqrt((x + 1))))
 
 @fpy(
@@ -1470,7 +1470,7 @@ def NMSE_u_example_u_3_u_6(x):
     fpbench_domain='textbook',
     pre=lambda x: x != 0,
 )
-def NMSE_u_problem_u_3_u_3_u_1(x):
+def NMSE_problem_3_u46_3_u46_1(x):
     return ((1 / (x + 1)) - (1 / x))
 
 @fpy(
@@ -1478,7 +1478,7 @@ def NMSE_u_problem_u_3_u_3_u_1(x):
     cite=['hamming-1987', 'herbie-2015'],
     fpbench_domain='textbook',
 )
-def NMSE_u_problem_u_3_u_3_u_2(x, eps):
+def NMSE_problem_3_u46_3_u46_2(x, eps):
     return (tan((x + eps)) - tan(x))
 
 @fpy(
@@ -1487,7 +1487,7 @@ def NMSE_u_problem_u_3_u_3_u_2(x, eps):
     fpbench_domain='textbook',
     pre=lambda x: x != 0 != 1 != -1,
 )
-def NMSE_u_problem_u_3_u_3_u_3(x):
+def NMSE_problem_3_u46_3_u46_3(x):
     return (((1 / (x + 1)) - (2 / x)) + (1 / (x - 1)))
 
 @fpy(
@@ -1496,7 +1496,7 @@ def NMSE_u_problem_u_3_u_3_u_3(x):
     fpbench_domain='textbook',
     pre=lambda x: x >= 0,
 )
-def NMSE_u_problem_u_3_u_3_u_4(x):
+def NMSE_problem_3_u46_3_u46_4(x):
     return (pow((x + 1), (1 / 3)) - pow(x, (1 / 3)))
 
 @fpy(
@@ -1504,7 +1504,7 @@ def NMSE_u_problem_u_3_u_3_u_4(x):
     cite=['hamming-1987', 'herbie-2015'],
     fpbench_domain='textbook',
 )
-def NMSE_u_problem_u_3_u_3_u_5(x, eps):
+def NMSE_problem_3_u46_3_u46_5(x, eps):
     return (cos((x + eps)) - cos(x))
 
 @fpy(
@@ -1513,7 +1513,7 @@ def NMSE_u_problem_u_3_u_3_u_5(x, eps):
     fpbench_domain='textbook',
     pre=lambda N: N > 0,
 )
-def NMSE_u_problem_u_3_u_3_u_6(N):
+def NMSE_problem_3_u46_3_u46_6(N):
     return (log((N + 1)) - log(N))
 
 @fpy(
@@ -1521,7 +1521,7 @@ def NMSE_u_problem_u_3_u_3_u_6(N):
     cite=['hamming-1987', 'herbie-2015'],
     fpbench_domain='textbook',
 )
-def NMSE_u_problem_u_3_u_3_u_7(x):
+def NMSE_problem_3_u46_3_u46_7(x):
     return ((exp(x) - 2) + exp(-x))
 
 @fpy(
@@ -1530,7 +1530,7 @@ def NMSE_u_problem_u_3_u_3_u_7(x):
     fpbench_domain='textbook',
     pre=lambda a, b, c: (b * b) >= (4 * (a * c)) and a != 0,
 )
-def NMSE_u_p42_u__u_positive(a, b, c):
+def NMSE_p42_u44__positive(a, b, c):
     return ((-b + sqrt(((b * b) - (4 * (a * c))))) / (2 * a))
 
 @fpy(
@@ -1539,7 +1539,7 @@ def NMSE_u_p42_u__u_positive(a, b, c):
     fpbench_domain='textbook',
     pre=lambda a, b, c: (b * b) >= (4 * (a * c)) and a != 0,
 )
-def NMSE_u_p42_u__u_negative(a, b, c):
+def NMSE_p42_u44__negative(a, b, c):
     return ((-b - sqrt(((b * b) - (4 * (a * c))))) / (2 * a))
 
 @fpy(
@@ -1548,7 +1548,7 @@ def NMSE_u_p42_u__u_negative(a, b, c):
     fpbench_domain='textbook',
     pre=lambda a, b2, c: (b2 * b2) >= (a * c) and a != 0,
 )
-def NMSE_u_problem_u_3_u_2_u_1_u__u_positive(a, b2, c):
+def NMSE_problem_3_u46_2_u46_1_u44__positive(a, b2, c):
     return ((-b2 + sqrt(((b2 * b2) - (a * c)))) / a)
 
 @fpy(
@@ -1557,7 +1557,7 @@ def NMSE_u_problem_u_3_u_2_u_1_u__u_positive(a, b2, c):
     fpbench_domain='textbook',
     pre=lambda a, b2, c: (b2 * b2) >= (a * c) and a != 0,
 )
-def NMSE_u_problem_u_3_u_2_u_1_u__u_negative(a, b2, c):
+def NMSE_problem_3_u46_2_u46_1_u44__negative(a, b2, c):
     return ((-b2 - sqrt(((b2 * b2) - (a * c)))) / a)
 
 @fpy(
@@ -1565,7 +1565,7 @@ def NMSE_u_problem_u_3_u_2_u_1_u__u_negative(a, b2, c):
     cite=['hamming-1987', 'herbie-2015'],
     fpbench_domain='textbook',
 )
-def NMSE_u_example_u_3_u_7(x):
+def NMSE_example_3_u46_7(x):
     return (exp(x) - 1)
 
 @fpy(
@@ -1574,7 +1574,7 @@ def NMSE_u_example_u_3_u_7(x):
     fpbench_domain='textbook',
     pre=lambda N: N > 0,
 )
-def NMSE_u_example_u_3_u_8(N):
+def NMSE_example_3_u46_8(N):
     return ((((N + 1) * log((N + 1))) - (N * log(N))) - 1)
 
 @fpy(
@@ -1583,7 +1583,7 @@ def NMSE_u_example_u_3_u_8(N):
     fpbench_domain='textbook',
     pre=lambda x: x != 0,
 )
-def NMSE_u_example_u_3_u_9(x):
+def NMSE_example_3_u46_9(x):
     return ((1 / x) - (1 / tan(x)))
 
 @fpy(
@@ -1593,7 +1593,7 @@ def NMSE_u_example_u_3_u_9(x):
     daisy_pre=['<', '-0.99', 'x', '0.99'],
     pre=lambda x: -1 < x < 1,
 )
-def NMSE_u_example_u_3_u_10(x):
+def NMSE_example_3_u46_10(x):
     return (log((1 - x)) / log((1 + x)))
 
 @fpy(
@@ -1602,7 +1602,7 @@ def NMSE_u_example_u_3_u_10(x):
     fpbench_domain='textbook',
     pre=lambda x: x != 0,
 )
-def NMSE_u_problem_u_3_u_4_u_1(x):
+def NMSE_problem_3_u46_4_u46_1(x):
     return ((1 - cos(x)) / (x * x))
 
 @fpy(
@@ -1611,7 +1611,7 @@ def NMSE_u_problem_u_3_u_4_u_1(x):
     fpbench_domain='textbook',
     pre=lambda a, b, eps: eps != 0,
 )
-def NMSE_u_problem_u_3_u_4_u_2(a, b, eps):
+def NMSE_problem_3_u46_4_u46_2(a, b, eps):
     return ((eps * (exp(((a + b) * eps)) - 1)) / ((exp((a * eps)) - 1) * (exp((b * eps)) - 1)))
 
 @fpy(
@@ -1620,7 +1620,7 @@ def NMSE_u_problem_u_3_u_4_u_2(a, b, eps):
     fpbench_domain='textbook',
     pre=lambda eps: -1 < eps < 1,
 )
-def NMSE_u_problem_u_3_u_4_u_3(eps):
+def NMSE_problem_3_u46_4_u46_3(eps):
     return log(((1 - eps) / (1 + eps)))
 
 @fpy(
@@ -1629,7 +1629,7 @@ def NMSE_u_problem_u_3_u_4_u_3(eps):
     fpbench_domain='textbook',
     pre=lambda x: x != 0,
 )
-def NMSE_u_problem_u_3_u_4_u_4(x):
+def NMSE_problem_3_u46_4_u46_4(x):
     return sqrt(((exp((2 * x)) - 1) / (exp(x) - 1)))
 
 @fpy(
@@ -1638,7 +1638,7 @@ def NMSE_u_problem_u_3_u_4_u_4(x):
     fpbench_domain='textbook',
     pre=lambda x: x != 0,
 )
-def NMSE_u_problem_u_3_u_4_u_5(x):
+def NMSE_problem_3_u46_4_u46_5(x):
     return ((x - sin(x)) / (x - tan(x)))
 
 @fpy(
@@ -1647,7 +1647,7 @@ def NMSE_u_problem_u_3_u_4_u_5(x):
     fpbench_domain='textbook',
     pre=lambda x, n: x >= 0,
 )
-def NMSE_u_problem_u_3_u_4_u_6(x, n):
+def NMSE_problem_3_u46_4_u46_6(x, n):
     return (pow((x + 1), (1 / n)) - pow(x, (1 / n)))
 
 @fpy(
@@ -1655,7 +1655,7 @@ def NMSE_u_problem_u_3_u_4_u_6(x, n):
     cite=['hamming-1987', 'herbie-2015'],
     fpbench_domain='textbook',
 )
-def NMSE_u_section_u_3_u_5(a, x):
+def NMSE_section_3_u46_5(a, x):
     return (exp((a * x)) - 1)
 
 @fpy(
@@ -1664,7 +1664,7 @@ def NMSE_u_section_u_3_u_5(a, x):
     fpbench_domain='textbook',
     pre=lambda x: x != 0,
 )
-def NMSE_u_section_u_3_u_11(x):
+def NMSE_section_3_u46_11(x):
     return (exp(x) / (exp(x) - 1))
 
 @fpy(
@@ -1693,7 +1693,7 @@ def Arrow_Hurwicz(x, y, u, v):
     cite=['adje-2010', 'bibek-2020'],
     pre=lambda x, v: 0 <= x <= 1 and 0 <= v <= 1,
 )
-def Euler_u_Oscillator(x, v):
+def Euler_Oscillator(x, v):
     h = 0.01
     v0 = v
     x1 = x
@@ -1722,7 +1722,7 @@ def Filter(x, y):
     cite=['adje-2010', 'bibek-2020'],
     pre=lambda x, v: 0 <= x <= 1 and v <= 0 <= 1,
 )
-def Symplectic_u_Oscillator(x, v):
+def Symplectic_Oscillator(x, v):
     tau = 0.1
     x0 = x
     v1 = v
@@ -1769,7 +1769,7 @@ def Flower(x, y):
     fpbench_allowed_ulps='10',
     fpbench_pre_override=['<=', '10', 'x', '200'],
 )
-def arclength_u_of_u_a_u_wiggly_u_function(n):
+def arclength_of_a_wiggly_function(n):
     dppi = PI
     h = (dppi / n)
     t1 = 0
@@ -1784,7 +1784,7 @@ def arclength_u_of_u_a_u_wiggly_u_function(n):
         with Context(precision='binary32'):
             t1 = 1
         d1 = t1
-        t14 = x
+        t12 = x
         with Context(precision='integer'):
             t3 = 1
         k = t3
@@ -1792,11 +1792,11 @@ def arclength_u_of_u_a_u_wiggly_u_function(n):
             with Context(precision='binary32'):
                 t4 = (d1 * 2)
             d1 = t4
-            t14 = (t14 + (sin((d1 * x)) / d1))
+            t12 = (t12 + (sin((d1 * x)) / d1))
             with Context(precision='integer'):
                 t5 = (k + 1)
             k = t5
-        t2 = t14
+        t2 = t12
         s0 = sqrt(((h * h) + ((t2 - t10) * (t2 - t10))))
         with Context(precision='binary80'):
             t6 = (s1 + s0)
@@ -1814,7 +1814,7 @@ def arclength_u_of_u_a_u_wiggly_u_function(n):
     pre=lambda n: n >= 0,
     fpbench_pre_override=['<=', '10', 'x', '50'],
 )
-def arclength_u_of_u_a_u_wiggly_u_function_u__u_old_u_version_u_(n):
+def arclength_of_a_wiggly_function__u40_old_version_u41_(n):
     dppi = acos(-1.0)
     h = (dppi / n)
     s1 = 0.0
