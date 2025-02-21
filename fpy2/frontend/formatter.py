@@ -1,5 +1,7 @@
 """Pretty printing of FPy ASTs"""
 
+from pprint import pformat
+
 from .fpyast import *
 from .visitor import AstVisitor
 
@@ -178,7 +180,7 @@ class _FormatterInstance(AstVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         # TODO: format data
-        props = ', '.join(f'{k}={v}' for k, v in stmt.props.items())
+        props = ', '.join(f'{k}={pformat(v)}' for k, v in stmt.props.items())
         self._add_line(f'with Context({props}):', ctx)
         self._visit_block(stmt.body, ctx + 1)
 
@@ -197,23 +199,24 @@ class _FormatterInstance(AstVisitor):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
-    def _format_data(self, data):
+    def _format_data(self, data, arg_str: str):
         if isinstance(data, Expr):
-            return self._visit_expr(data, 0)
+            e = self._visit_expr(data, 0)
+            return f'lambda {arg_str}: {e}'
         else:
-            return repr(data)
+            return pformat(data)
 
-    def _format_decorator(self, props: dict[str, str], ctx: _Ctx):
+    def _format_decorator(self, props: dict[str, str], arg_str: str, ctx: _Ctx):
         if len(props) == 0:
             self._add_line('@fpy', ctx)
         elif len(props) == 1:
             k, *_ = tuple(props.keys())
-            v = self._format_data(props[k])
+            v = self._format_data(props[k], arg_str)
             self._add_line(f'@fpy({k}={v})', ctx)
         else:
             self._add_line('@fpy(', ctx)
             for k, data in props.items():
-                v = self._format_data(data)
+                v = self._format_data(data, arg_str)
                 self._add_line(f'{k}={v},', ctx + 1)
             self._add_line(')', ctx)
 
@@ -221,14 +224,14 @@ class _FormatterInstance(AstVisitor):
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)
-        self._format_decorator(func.ctx, ctx)
+        self._format_decorator(func.ctx, arg_str, ctx)
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: _Ctx) -> str:
         return super()._visit_expr(e, ctx)
-    
+
     # override for typing hint
     def _visit_statement(self, stmt: Stmt, ctx: _Ctx) -> None:
         return super()._visit_statement(stmt, ctx)

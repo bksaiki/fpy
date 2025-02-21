@@ -13,17 +13,15 @@ from .fetch import read_dir, read_file
 VALID_NAME_CHAR = re.compile('[a-zA-Z0-9_]')
 
 def _resolve_path(s: str):
-    path = Path(s).resolve()
-    if not path.exists():
-        print(f"error: {path} does not exist")
-        exit(1)
-    return path
+    return Path(s).resolve()
 
 def _fix_name(s: str):
     name: str = ''
     for c in s:
         if re.match(VALID_NAME_CHAR, c):
             name += c
+        elif c == '-':
+            name += '_'
         else:
             # TODO: convert char to unicode
             name += f'_u_'
@@ -74,5 +72,9 @@ for path in input_paths:
 if output_path is None:
     _write_cores(cores, stdout)
 else:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
+        print('from fpy2 import fpy', file=f)
+        print('from fpy2.typing import *', file=f)
+        print('', file=f)
         _write_cores(cores, f)

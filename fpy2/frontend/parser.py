@@ -218,6 +218,18 @@ class Parser:
             raise FPyParserError(loc, 'FPy `digits` expects an integer as third argument', e)
         return Digits(m_e.val, e_e.val, b_e.val, loc)
 
+    def _parse_boolop(self, e: ast.BoolOp):
+        loc = self._parse_location(e)
+        match e.op:
+            case ast.And():
+                args = [self._parse_expr(e) for e in e.values]
+                return NaryOp(NaryOpKind.AND, args, loc)
+            case ast.Or():
+                args = [self._parse_expr(e) for e in e.values]
+                return NaryOp(NaryOpKind.OR, args, loc)
+            case _:
+                raise FPyParserError(loc, 'Not a valid FPy operator', e.op, e)
+
     def _parse_unaryop(self, e: ast.UnaryOp):
         loc = self._parse_location(e)
         match e.op:
@@ -323,6 +335,8 @@ class Parser:
                 return Var(ident, loc)
             case ast.Constant():
                 return self._parse_constant(e, loc)
+            case ast.BoolOp():
+                return self._parse_boolop(e)
             case ast.UnaryOp():
                 return self._parse_unaryop(e)
             case ast.BinOp():

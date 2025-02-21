@@ -26,6 +26,9 @@ dev = ["mypy", "ruff", "build", "twine"]
 Homepage = "https://github.com/bksaiki/fpy"
 Issues = "https://github.com/bksaiki/fpy/issues"
 
+[tool.setuptools.packages.find]
+include = ["fpy2*"]
+
 [tool.mypy]
 disable_error_code = ["import-untyped"]
 
