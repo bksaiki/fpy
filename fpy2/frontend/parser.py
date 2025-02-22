@@ -76,7 +76,9 @@ _unary_table = {
     'signbit': UnaryOpKind.SIGNBIT,
     'not': UnaryOpKind.NOT,
     'cast': UnaryOpKind.CAST,
-    'range': UnaryOpKind.RANGE
+    'range': UnaryOpKind.RANGE,
+    'shape': UnaryOpKind.SHAPE,
+    'dim': UnaryOpKind.DIM,
 }
 
 _binary_table = {
@@ -92,7 +94,8 @@ _binary_table = {
     'remainder': BinaryOpKind.REMAINDER,
     'hypot': BinaryOpKind.HYPOT,
     'atan2': BinaryOpKind.ATAN2,
-    'pow': BinaryOpKind.POW
+    'pow': BinaryOpKind.POW,
+    'size': BinaryOpKind.SIZE
 }
 
 _ternary_table = {
