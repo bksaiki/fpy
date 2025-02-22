@@ -210,10 +210,10 @@ def Odometry(sr_u42_, sl_u42_):
             t31 = sr
         sr = t31
         if j == 50:
-            t34 = 0
+            t35 = 0
         else:
-            t34 = (j + 1)
-        j = t34
+            t35 = (j + 1)
+        j = t35
     return x
 
 @fpy(
@@ -1697,7 +1697,7 @@ def Euler_Oscillator(x, v):
     h = 0.01
     v0 = v
     x1 = x
-    while TRUE:
+    while True:
         t = ((v0 * (1 - h)) - (h * x1))
         t2 = (x1 + (h * v0))
         v0 = t
@@ -1712,7 +1712,7 @@ def Euler_Oscillator(x, v):
 def Filter(x, y):
     x0 = x
     y1 = y
-    while TRUE:
+    while True:
         x0 = ((3/4 * x0) - (1/8 * y1))
         y1 = x0
     return y1
@@ -1740,7 +1740,7 @@ def Circle(x, y):
     d = 0
     x0 = x
     y1 = y
-    while TRUE:
+    while True:
         d = (((0.1 + (x0 * x0)) + (y1 * y1)) / 2)
         x0 = (x0 * d)
         y1 = (y1 * d)

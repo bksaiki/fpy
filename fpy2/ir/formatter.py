@@ -59,6 +59,9 @@ class _FormatterInstance(BaseVisitor):
     def _visit_var(self, e: Var, ctx: _IndentCtx):
         return str(e.name)
 
+    def _visit_bool(self, e: Bool, ctx: Any):
+        return str(e.val)
+
     def _visit_decnum(self, e: Decnum, ctx: _IndentCtx):
         return e.val
 

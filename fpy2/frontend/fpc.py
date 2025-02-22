@@ -145,7 +145,13 @@ class _FPCore2FPy:
         return Digits(e.m, e.e, e.b, None)
 
     def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
-        return Constant(str(e.value), None)
+        match e.value:
+            case 'TRUE':
+                return Bool(True, None)
+            case 'FALSE':
+                return Bool(False, None)
+            case _:
+                return Constant(str(e.value), None)
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         if e.name == '-':

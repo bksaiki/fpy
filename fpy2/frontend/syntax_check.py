@@ -66,6 +66,10 @@ class SyntaxCheckInstance(AstVisitor):
             raise FPySyntaxError(f'variable `{e.name}` not defined along all paths')
         return env
 
+    def _visit_bool(self, e: Bool, ctx: _Ctx):
+        env, _ = ctx
+        return env
+
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
         env, _ = ctx
         return env

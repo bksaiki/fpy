@@ -19,6 +19,10 @@ class LiveVarAnalysisInstance(AstVisitor):
         e.attribs[LiveVarAnalysis.analysis_name] = set(live)
         return live
 
+    def _visit_bool(self, e: Bool, ctx: None) -> _LiveSet:
+        e.attribs[LiveVarAnalysis.analysis_name] = set()
+        return set()
+
     def _visit_decnum(self, e: Decnum, ctx: None) -> _LiveSet:
         e.attribs[LiveVarAnalysis.analysis_name] = set()
         return set()

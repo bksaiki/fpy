@@ -94,7 +94,7 @@ class FPCoreCompileInstance(ReduceVisitor):
     def __init__(self, func: FunctionDef):
         uses = DefineUse().analyze(func)
         self.func = func
-        self.gensym = Gensym(*uses.keys())
+        self.gensym = Gensym(reserved=uses.keys())
 
     def compile(self) -> fpc.FPCore:
         f = self._visit_function(self.func, None)
@@ -142,6 +142,9 @@ class FPCoreCompileInstance(ReduceVisitor):
 
     def _visit_var(self, e, ctx) -> fpc.Expr:
         return fpc.Var(str(e.name))
+
+    def _visit_bool(self, e: Bool, ctx: None):
+        return fpc.Constant('TRUE' if e.val else 'FALSE')
 
     def _visit_decnum(self, e, ctx) -> fpc.Expr:
         return fpc.Decnum(e.val)

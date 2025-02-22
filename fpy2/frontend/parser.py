@@ -193,6 +193,8 @@ class Parser:
     def _parse_constant(self, e: ast.Constant, loc: Location):
         # TODO: reparse all constants to get exact value
         match e.value:
+            case bool():
+                return Bool(e.value, loc)
             case int():
                 return Integer(e.value, loc)
             case float():

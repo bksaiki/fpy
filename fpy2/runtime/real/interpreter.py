@@ -88,6 +88,9 @@ class _Interpreter(ReduceVisitor):
     def _visit_var(self, e: Var, ctx: EvalCtx):
         return self._lookup(e.name)
 
+    def _visit_bool(self, e: Bool, ctx: Any):
+        raise NotImplementedError
+
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
         raise NotImplementedError
 

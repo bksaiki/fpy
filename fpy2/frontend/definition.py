@@ -21,6 +21,9 @@ class DefinitionAnalysisInstance(AstVisitor):
     def _visit_var(self, e, ctx):
         raise NotImplementedError('should not be called')
 
+    def _visit_bool(self, e, ctx):
+        raise NotImplementedError('should not be called')
+
     def _visit_decnum(self, e, ctx):
         raise NotImplementedError('should not be called')
 

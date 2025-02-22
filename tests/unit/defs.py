@@ -14,6 +14,14 @@ def test_simple1():
 def test_simple2():
     return 0
 
+@fpy(name='Test boolean (1/2)')
+def test_bool1():
+    return True
+
+@fpy(name='Test boolean (2/2)')
+def test_bool2():
+    return False
+
 @fpy(
     name='Test decnum (1/1)',
     spec='0.0'
@@ -476,6 +484,8 @@ tests = [
     # Tests
     test_simple1,
     test_simple2,
+    test_bool1,
+    test_bool2,
     test_decnum,
     test_digits1,
     test_digits2,

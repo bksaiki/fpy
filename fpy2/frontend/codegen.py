@@ -7,7 +7,6 @@ from .fpyast import *
 from .visitor import AstVisitor
 
 from .. import ir
-from ..utils import Gensym
 
 _unary_table: dict[UnaryOpKind, type[ir.UnaryExpr]] = {
     UnaryOpKind.NEG: ir.Neg,
@@ -92,6 +91,9 @@ class _IRCodegenInstance(AstVisitor):
 
     def _visit_var(self, e: Var, ctx: None):
         return ir.Var(e.name)
+
+    def _visit_bool(self, e: Bool, ctx: None):
+        return ir.Bool(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ir.Decnum(e.val)

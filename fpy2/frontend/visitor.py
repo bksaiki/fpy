@@ -18,6 +18,10 @@ class AstVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
+    def _visit_bool(self, e: Bool, ctx: Any) -> Any:
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
     def _visit_decnum(self, e: Decnum, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
@@ -142,6 +146,8 @@ class AstVisitor(ABC):
         match e:
             case Var():
                 return self._visit_var(e, ctx)
+            case Bool():
+                return self._visit_bool(e, ctx)
             case Decnum():
                 return self._visit_decnum(e, ctx)
             case Hexnum():

@@ -194,6 +194,14 @@ class Var(ValueExpr):
         super().__init__(loc)
         self.name = name
 
+class Bool(ValueExpr):
+    """FPy AST: boolean"""
+    val: bool
+
+    def __init__(self, val: bool, loc: Optional[Location]):
+        super().__init__(loc)
+        self.val = val
+
 class Decnum(ValueExpr):
     """FPy AST: decimal number"""
     val: str

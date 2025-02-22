@@ -40,6 +40,9 @@ class _FPyCompilerInstance(ReduceVisitor):
         name = self.env.get(e.name, e.name)
         return ast.Var(name, None)
 
+    def _visit_bool(self, e: Bool, ctx: None):
+        return ast.Bool(e.val, None)
+
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ast.Decnum(e.val, None)
 

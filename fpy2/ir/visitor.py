@@ -17,6 +17,10 @@ class BaseVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
+    def _visit_bool(self, e: Bool, ctx: Any) -> Any:
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
     def _visit_decnum(self, e: Decnum, ctx: Any):
         """Visitor method for `Decnum` nodes."""
         raise NotImplementedError('virtual method')
@@ -187,6 +191,8 @@ class BaseVisitor(ABC):
         match e:
             case Var():
                 return self._visit_var(e, ctx)
+            case Bool():
+                return self._visit_bool(e, ctx)
             case Decnum():
                 return self._visit_decnum(e, ctx)
             case Hexnum():
@@ -260,6 +266,9 @@ class TransformVisitor(BaseVisitor):
 class DefaultVisitor(Visitor):
     """Default visitor: visits all nodes without doing anything."""
     def _visit_var(self, e: Var, ctx: Any):
+        pass
+
+    def _visit_bool(self, e: Bool, ctx: Any):
         pass
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
@@ -376,6 +385,9 @@ class DefaultTransformVisitor(TransformVisitor):
 
     def _visit_var(self, e: Var, ctx: Any):
         return Var(e.name)
+
+    def _visit_bool(self, e: Bool, ctx: Any):
+        return Bool(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
         return Decnum(e.val)

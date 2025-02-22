@@ -59,6 +59,14 @@ class Var(ValueExpr):
         super().__init__()
         self.name = name
 
+class Bool(ValueError):
+    """FPy node: boolean constant"""
+    val: bool
+
+    def __init__(self, val: bool):
+        super().__init__()
+        self.val = val
+
 class Decnum(ValueExpr):
     """FPy node: decimal number"""
     val: str

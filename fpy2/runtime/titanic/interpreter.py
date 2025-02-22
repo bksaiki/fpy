@@ -139,6 +139,9 @@ class _Interpreter(ReduceVisitor):
     def _visit_var(self, e: Var, ctx: EvalCtx):
         return self._lookup(e.name)
 
+    def _visit_bool(self, e: Bool, ctx: Any):
+        return e.val
+
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
         return MPMF(x=e.val, ctx=ctx)
 
