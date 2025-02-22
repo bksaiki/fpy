@@ -91,3 +91,10 @@ def set_default_interpreter(rt: Interpreter):
     if not isinstance(rt, Interpreter):
         raise TypeError(f'expected BaseInterpreter, got {rt}')
     _default_interpreter = rt
+
+
+class FunctionReturnException(Exception):
+    """Raised when a function returns a value."""
+
+    def __init__(self, value):
+        self.value = value

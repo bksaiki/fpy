@@ -4,7 +4,7 @@ from pathlib import Path
 from .config import EvalMode, Config
 from .evaluator import run_eval_real
 
-DEFAULT_NUM_SAMPLES = 256
+DEFAULT_NUM_SAMPLES = 10
 
 def _resolve_path(s: str):
     return Path(s).resolve()

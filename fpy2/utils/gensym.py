@@ -34,7 +34,7 @@ class Gensym(object):
     def _copy_id(self, id: NamedId) -> NamedId:
         match id:
             case SourceId():
-                return SourceId(id.base, id.loc, id.count)
+                return SourceId(id.base, id.count)
             case NamedId():
                 return NamedId(id.base, id.count)
 

@@ -4,7 +4,7 @@ FPy runtime backed by the Titanic library.
 
 from typing import Any, Callable, Optional, Sequence, TypeAlias
 
-from titanfp.arithmetic.evalctx import EvalCtx
+from titanfp.arithmetic.evalctx import EvalCtx, determine_ctx
 from titanfp.arithmetic.ieee754 import ieee_ctx
 from titanfp.arithmetic.mpmf import MPMF
 from titanfp.titanic.digital import Digital
@@ -12,7 +12,7 @@ from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.ops import OP
 import titanfp.titanic.gmpmath as gmpmath
 
-from ..function import Interpreter, Function
+from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
 
 ScalarVal: TypeAlias = bool | Digital
@@ -113,8 +113,11 @@ class _Interpreter(ReduceVisitor):
         args = tuple(args)
         if len(args) != len(self.func.args):
             raise TypeError(f'Expected {len(self.func.args)} arguments, got {len(args)}')
+
         if ctx is None:
             ctx = ieee_ctx(11, 64)
+        ctx = determine_ctx(ctx, self.func.ctx)
+
         for val, arg in zip(args, self.func.args):
             match arg.ty:
                 case AnyType():
@@ -129,7 +132,12 @@ class _Interpreter(ReduceVisitor):
                         self.env[arg.name] = x
                 case _:
                     raise NotImplementedError(f'unknown argument type {arg.ty}')
-        return self._visit_block(self.func.body, ctx)
+
+        try:
+            self._visit_block(self.func.body, ctx)
+            raise RuntimeError('no return statement encountered')
+        except FunctionReturnException as e:
+            return e.value
 
     def _lookup(self, name: NamedId):
         if name not in self.env:
@@ -146,7 +154,8 @@ class _Interpreter(ReduceVisitor):
         return MPMF(x=e.val, ctx=ctx)
 
     def _visit_integer(self, e: Integer, ctx: EvalCtx):
-        return MPMF(x=e.val, ctx=ctx)
+        x = Digital(m=e.val, exp=0, inexact=False)
+        return MPMF._round_to_context(x, ctx=ctx)
 
     def _visit_hexnum(self, e: Hexnum, ctx: EvalCtx):
         return MPMF(x=e.val, ctx=ctx)
@@ -411,14 +420,17 @@ class _Interpreter(ReduceVisitor):
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.rhs]
+                del self.env[phi.rhs]
 
             cond = self._visit_expr(stmt.cond, ctx)
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
+
     def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx) -> None:
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
+            del self.env[phi.lhs]
 
         iterable = self._visit_expr(stmt.iterable, ctx)
         if not isinstance(iterable, NDArray):
@@ -430,6 +442,7 @@ class _Interpreter(ReduceVisitor):
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.rhs]
+                del self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
         return self._visit_block(stmt.body, ctx)
@@ -451,15 +464,14 @@ class _Interpreter(ReduceVisitor):
     def _visit_loop_phis(self, phis, lctx, rctx):
         raise NotImplementedError('do not call directly')
 
-    def _visit_block(self, block, ctx: EvalCtx) -> Optional[ScalarVal | TensorVal]:
+    def _visit_block(self, block: Block, ctx: EvalCtx):
         for stmt in block.stmts:
             if isinstance(stmt, Return):
-                return self._visit_return(stmt, ctx)
+                x = self._visit_return(stmt, ctx)
+                raise FunctionReturnException(x)
             self._visit_statement(stmt, ctx)
 
-        return None
-
-    def _visit_function(self, func, ctx: EvalCtx):
+    def _visit_function(self, func: FunctionDef, ctx: EvalCtx):
         raise NotImplementedError('do not call directly')
 
     # override typing hint

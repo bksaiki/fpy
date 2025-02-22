@@ -189,7 +189,7 @@ class Parser:
             case _:
                 raise NotImplementedError('cannot parse', ptree)
 
-    def _parse_location(self, e: ast.expr | ast.stmt) -> Location:
+    def _parse_location(self, e: ast.expr | ast.stmt | ast.arg) -> Location:
         """Extracts the parse location of a  Python ST node."""
         assert e.end_lineno is not None, "missing end line number"
         assert e.end_col_offset is not None, "missing end column offset"
@@ -220,7 +220,7 @@ class Parser:
         if e.id == '_':
             return UnderscoreId()
         else:
-            return SourceId(e.id, self._parse_location(e))
+            return SourceId(e.id)
 
     def _parse_constant(self, e: ast.Constant):
         # TODO: reparse all constants to get exact value
@@ -653,7 +653,7 @@ class Parser:
 
         args: list[Argument] = []
         for arg in pos_args:
-            ident = UnderscoreId() if arg.arg == '_' else NamedId(arg.arg)
+            ident = UnderscoreId() if arg.arg == '_' else SourceId(arg.arg)
             if arg.annotation is None:
                 args.append(Argument(ident, AnyTypeAnn(loc), loc))
             else:
