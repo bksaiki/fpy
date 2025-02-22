@@ -43,13 +43,13 @@ class _FormatterInstance(AstVisitor):
         return e.val
 
     def _visit_hexnum(self, e: Hexnum, ctx: _Ctx):
-        return e.val
+        return f'hexfloat(\'{e.val}\')'
 
     def _visit_integer(self, e: Integer, ctx: _Ctx):
         return str(e.val)
 
     def _visit_rational(self, e: Rational, ctx: _Ctx):
-        return f'{e.p}/{e.q}'
+        return f'rational({e.p}, {e.q})'
 
     def _visit_digits(self, e: Digits, ctx: _Ctx):
         return f'digits({e.m}, {e.e}, {e.b})'

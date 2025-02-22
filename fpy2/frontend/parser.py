@@ -20,6 +20,11 @@ def _ipow(expr: Expr, n: int, loc: Location):
             e = BinaryOp(BinaryOpKind.MUL, e, expr, loc)
         return e
 
+_constants: set[str] = {
+    'PI',
+    'E'
+}
+
 _unary_table = {
     'fabs': UnaryOpKind.FABS,
     'sqrt': UnaryOpKind.SQRT,
@@ -80,6 +85,15 @@ _binary_table = {
 
 _ternary_table = {
     'fma': TernaryOpKind.FMA
+}
+
+_nary_table = {
+    'and': NaryOpKind.AND,
+    'or': NaryOpKind.OR
+}
+
+_special_functions = {
+    'digits',
 }
 
 class FPyParserError(Exception):
@@ -204,6 +218,27 @@ class Parser:
                     return Decnum(str(e.value), loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
+
+    def _parse_hexfloat(self, e: ast.Call):
+        loc = self._parse_location(e)
+        if len(e.args) != 1:
+            raise FPyParserError(loc, 'FPy `hexfloat` expects one argument', e)
+        arg = e.args[0]
+        if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
+            raise FPyParserError(loc, 'FPy `hexfloat` expects a string', e)
+        return Hexnum(arg.value, loc)
+
+    def _parse_rational(self, e: ast.Call):
+        loc = self._parse_location(e)
+        if len(e.args) != 2:
+            raise FPyParserError(loc, 'FPy `rational` expects two arguments', e)
+        p = e.args[0]
+        if not isinstance(p, ast.Constant) or not isinstance(p.value, int):
+            raise FPyParserError(loc, 'FPy `rational` expects an integer as first argument', e)
+        q = e.args[1]
+        if not isinstance(q, ast.Constant) or not isinstance(q.value, int):
+            raise FPyParserError(loc, 'FPy `rational` expects an integer as second argument', e)
+        return Rational(p.value, q.value, loc)
 
     def _parse_digits(self, e: ast.Call):
         loc = self._parse_location(e)
@@ -333,8 +368,11 @@ class Parser:
         loc = self._parse_location(e)
         match e:
             case ast.Name():
-                ident = self._parse_id(e)
-                return Var(ident, loc)
+                if e.id in _constants:
+                    return Constant(e.id, loc)
+                else:
+                    ident = self._parse_id(e)
+                    return Var(ident, loc)
             case ast.Constant():
                 return self._parse_constant(e, loc)
             case ast.BoolOp():
@@ -365,12 +403,13 @@ class Parser:
                     arg1 = self._parse_expr(e.args[1])
                     arg2 = self._parse_expr(e.args[2])
                     return TernaryOp(_ternary_table[name], arg0, arg1, arg2, loc)
-                elif name == 'or':
+                elif name in _nary_table:
                     args = [self._parse_expr(arg) for arg in e.args]
-                    return NaryOp(NaryOpKind.OR, args, loc)
-                elif name == 'and':
-                    args = [self._parse_expr(arg) for arg in e.args]
-                    return NaryOp(NaryOpKind.AND, args, loc)
+                    return NaryOp(_nary_table[name], args, loc)
+                elif name == 'rational':
+                    return self._parse_rational(e)
+                elif name == 'hexfloat':
+                    return self._parse_hexfloat(e)
                 elif name == 'digits':
                     return self._parse_digits(e)
                 else:
