@@ -4,6 +4,8 @@ Frontend:
  - parser:
    - fix ISSUE#1
    - use variables in the defining namespace
+ - language:
+   - preconditions?
 
 Middle-end:
 

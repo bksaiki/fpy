@@ -22,7 +22,19 @@ def _ipow(expr: Expr, n: int, loc: Location):
 
 _constants: set[str] = {
     'PI',
-    'E'
+    'E',
+    'NAN',
+    'INFINITY',
+    'LOG2E',
+    'LOG10E',
+    'LN2',
+    'PI_2',
+    'PI_4',
+    'M_1_PI',
+    'M_2_PI',
+    'M_2_SQRTPI',
+    'SQRT2',
+    'SQRT1_2'
 }
 
 _unary_table = {
@@ -94,6 +106,8 @@ _nary_table = {
 
 _special_functions = {
     'digits',
+    'hexfloat',
+    'rational'
 }
 
 class FPyParserError(Exception):
@@ -204,8 +218,9 @@ class Parser:
         else:
             return NamedId(e.id)
 
-    def _parse_constant(self, e: ast.Constant, loc: Location):
+    def _parse_constant(self, e: ast.Constant):
         # TODO: reparse all constants to get exact value
+        loc = self._parse_location(e)
         match e.value:
             case bool():
                 return Bool(e.value, loc)
@@ -216,6 +231,8 @@ class Parser:
                     return Integer(int(e.value), loc)
                 else:
                     return Decnum(str(e.value), loc)
+            case str():
+                return String(e.value, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
 
@@ -223,22 +240,22 @@ class Parser:
         loc = self._parse_location(e)
         if len(e.args) != 1:
             raise FPyParserError(loc, 'FPy `hexfloat` expects one argument', e)
-        arg = e.args[0]
-        if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
+        arg = self._parse_expr(e.args[0])
+        if not isinstance(arg, String):
             raise FPyParserError(loc, 'FPy `hexfloat` expects a string', e)
-        return Hexnum(arg.value, loc)
+        return Hexnum(arg.val, loc)
 
     def _parse_rational(self, e: ast.Call):
         loc = self._parse_location(e)
         if len(e.args) != 2:
             raise FPyParserError(loc, 'FPy `rational` expects two arguments', e)
-        p = e.args[0]
-        if not isinstance(p, ast.Constant) or not isinstance(p.value, int):
+        p = self._parse_expr(e.args[0])
+        if not isinstance(p, Integer):
             raise FPyParserError(loc, 'FPy `rational` expects an integer as first argument', e)
-        q = e.args[1]
-        if not isinstance(q, ast.Constant) or not isinstance(q.value, int):
+        q = self._parse_expr(e.args[1])
+        if not isinstance(q, Integer):
             raise FPyParserError(loc, 'FPy `rational` expects an integer as second argument', e)
-        return Rational(p.value, q.value, loc)
+        return Rational(p.val, q.val, loc)
 
     def _parse_digits(self, e: ast.Call):
         loc = self._parse_location(e)
@@ -374,7 +391,7 @@ class Parser:
                     ident = self._parse_id(e)
                     return Var(ident, loc)
             case ast.Constant():
-                return self._parse_constant(e, loc)
+                return self._parse_constant(e)
             case ast.BoolOp():
                 return self._parse_boolop(e)
             case ast.UnaryOp():
@@ -469,7 +486,7 @@ class Parser:
                 if isinstance(e.value, str):
                     return e.value
                 else:
-                    return self._parse_constant(e, loc)
+                    return self._parse_constant(e)
             case ast.List() | ast.Tuple():
                 return [self._parse_contextdata(elt) for elt in e.elts]
             case _:

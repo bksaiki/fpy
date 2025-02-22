@@ -202,6 +202,14 @@ class Bool(ValueExpr):
         super().__init__(loc)
         self.val = val
 
+class String(ValueExpr):
+    """FPy AST: string"""
+    val: str
+
+    def __init__(self, val: str, loc: Optional[Location]):
+        super().__init__(loc)
+        self.val = val
+
 class Decnum(ValueExpr):
     """FPy AST: decimal number"""
     val: str
