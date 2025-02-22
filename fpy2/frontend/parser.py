@@ -7,6 +7,7 @@ import ast
 from typing import cast
 
 from .fpyast import *
+from ..utils import NamedId, UnderscoreId, SourceId
 
 def _ipow(expr: Expr, n: int, loc: Location):
     assert n >= 0, "must be a non-negative integer"
@@ -219,7 +220,7 @@ class Parser:
         if e.id == '_':
             return UnderscoreId()
         else:
-            return NamedId(e.id)
+            return SourceId(e.id, self._parse_location(e))
 
     def _parse_constant(self, e: ast.Constant):
         # TODO: reparse all constants to get exact value

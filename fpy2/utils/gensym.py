@@ -4,7 +4,7 @@ This module defines the `Gensym` object that generates unique identifiers.
 
 from typing import Callable, Optional
 
-from .identifier import Id, NamedId, UnderscoreId
+from .identifier import *
 
 class Gensym(object):
     """
@@ -31,6 +31,13 @@ class Gensym(object):
 
         self._rename_hook = rename_hook
 
+    def _copy_id(self, id: NamedId) -> NamedId:
+        match id:
+            case SourceId():
+                return SourceId(id.base, id.loc, id.count)
+            case NamedId():
+                return NamedId(id.base, id.count)
+
     def reserve(self, *idents: NamedId):
         """Reserves a set of identifiers"""
         for ident in idents:
@@ -42,7 +49,7 @@ class Gensym(object):
 
     def refresh(self, ident: NamedId):
         """Generates a unique identifier for an existing identifier."""
-        ident = NamedId(ident.base, ident.count)
+        ident = self._copy_id(ident)
         while ident in self._idents:
             ident.count = self._counter
             self._counter += 1
