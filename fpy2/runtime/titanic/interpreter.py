@@ -12,7 +12,7 @@ from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.ops import OP
 import titanfp.titanic.gmpmath as gmpmath
 
-from ..function import BaseInterpreter, Function
+from ..function import Interpreter, Function
 from ...ir import *
 
 ScalarVal: TypeAlias = bool | Digital
@@ -467,7 +467,7 @@ class _Interpreter(ReduceVisitor):
         return super()._visit_statement(stmt, ctx)
 
 
-class TitanicInterpreter(BaseInterpreter):
+class TitanicInterpreter(Interpreter):
     """
     Standard interpreter for FPy programs.
 

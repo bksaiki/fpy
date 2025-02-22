@@ -13,7 +13,7 @@ from titanfp.titanic import gmpmath
 
 from .interval import BoolInterval, RealInterval
 
-from ..function import BaseInterpreter, Function
+from ..function import Interpreter, Function
 from ...ir import *
 
 
@@ -194,7 +194,7 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
 
-class RealInterpreter(BaseInterpreter):
+class RealInterpreter(Interpreter):
     """
     Real-number interpreter for FPy functions.
 

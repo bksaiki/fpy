@@ -19,7 +19,7 @@ class Function:
     """
     ir: FunctionDef
     env: PythonEnv
-    runtime: Optional['BaseInterpreter']
+    runtime: Optional['Interpreter']
 
     _func: Optional[FunctionType]
     """original native function"""
@@ -28,7 +28,7 @@ class Function:
         self,
         ir: FunctionDef,
         env: PythonEnv,
-        runtime: Optional['BaseInterpreter'] = None,
+        runtime: Optional['Interpreter'] = None,
         func: Optional[FunctionType] = None
     ):
         self.ir = ir
@@ -61,14 +61,14 @@ class Function:
         ir = fpcore_to_fpy(core, default_name=default_name)
         return Function(ir, PythonEnv.empty())
 
-    def with_rt(self, rt: 'BaseInterpreter'):
-        if not isinstance(rt, BaseInterpreter):
+    def with_rt(self, rt: 'Interpreter'):
+        if not isinstance(rt, Interpreter):
             raise TypeError(f'expected BaseInterpreter, got {rt}')
         if not isinstance(self._func, FunctionType):
             raise TypeError(f'expected FunctionType, got {self._func}')
         return Function(self.ir, self.env, runtime=rt, func=self._func)
 
-class BaseInterpreter:
+class Interpreter:
     """Abstract base class for FPy interpreters."""
 
     @abstractmethod
@@ -76,18 +76,18 @@ class BaseInterpreter:
         raise NotImplementedError('virtual method')
 
 
-_default_interpreter: Optional[BaseInterpreter] = None
+_default_interpreter: Optional[Interpreter] = None
 
-def get_default_interpreter() -> BaseInterpreter:
+def get_default_interpreter() -> Interpreter:
     """Get the default FPy interpreter."""
     global _default_interpreter
     if _default_interpreter is None:
         raise RuntimeError('no default interpreter available')
     return _default_interpreter
 
-def set_default_interpreter(rt: BaseInterpreter):
+def set_default_interpreter(rt: Interpreter):
     """Sets the default FPy interpreter"""
     global _default_interpreter
-    if not isinstance(rt, BaseInterpreter):
+    if not isinstance(rt, Interpreter):
         raise TypeError(f'expected BaseInterpreter, got {rt}')
     _default_interpreter = rt

@@ -7,7 +7,7 @@ from .backend import (
 
 from .runtime import (
     Function,
-    BaseInterpreter,
+    Interpreter,
     TitanicInterpreter,
     RealInterpreter,
     set_default_interpreter,

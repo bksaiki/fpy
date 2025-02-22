@@ -18,3 +18,4 @@ class EvalMode(IntEnum):
 class Config:
     mode: EvalMode
     input_paths: list[Path]
+    num_samples: int

@@ -1,7 +1,7 @@
 from .env import PythonEnv
 from .function import (
     Function,
-    BaseInterpreter,
+    Interpreter,
     get_default_interpreter,
     set_default_interpreter
 )
