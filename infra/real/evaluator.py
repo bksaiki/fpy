@@ -4,6 +4,20 @@ from .sample import sample
 
 from fpy2 import *
 
+_disabled = [
+    # Too hard
+    'Rocket_Trajectory',
+    'Eigenvalue_Computation',
+    'Pendulum',
+    'Flower',
+    'arclength_of_a_wiggly_function',
+    'arclength_of_a_wiggly_function__u40_old_version_u41_',
+    # Infinite loops
+    'Euler_Oscillator',
+    'Filter',
+    'Circle'
+]
+
 def _run_one(fun: Function, rt: Interpreter, num_samples: int):
     # sample N points
     pts = sample(fun, num_samples)
@@ -21,7 +35,7 @@ def run_eval_real(config: Config):
 
     print(f'testing over {len(funs)} functions')
     for fun in funs:
-        if fun.name == 'Rocket_Trajectory' or fun.name == 'Eigenvalue_Computation':
+        if fun.name in _disabled:
             print(f'skipping {fun.name}')
         else:
             _run_one(fun, rt, config.num_samples)

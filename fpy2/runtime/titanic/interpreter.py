@@ -184,7 +184,22 @@ class _Interpreter(ReduceVisitor):
             if not isinstance(val, Digital):
                 raise TypeError(f'expected a real number argument for {e.name}, got {val}')
             args.append(val)
-        return fn(*args)
+
+        # compute the result
+        try:
+            result = fn(*args)
+        except gmpmath.SignedOverflow as e:
+            # we overflowed beyond MPFR's limits, generate a large value and round it
+            exp = ctx.emax + 1
+            x = Digital(negative=e.sign, c=1, exp=exp)
+            result = MPMF._round_to_context(x, ctx=ctx)
+        except gmpmath.SignedUnderflow as e:
+            # we underflowed beyond MPFR's limits, generate a small value and round it
+            exp = ctx.emin - ctx.p - 1
+            x = Digital(negative=e.sign, c=1, exp=exp)
+            result = MPMF._round_to_context(x, ctx=ctx)
+
+        return result
 
     def _apply_not(self, e: Not, ctx: EvalCtx):
         arg = self._visit_expr(e.children[0], ctx)
@@ -221,6 +236,9 @@ class _Interpreter(ReduceVisitor):
     def _visit_nary_expr(self, e: NaryExpr, ctx: EvalCtx):
         if e.name in _method_table:
             return self._apply_method(e, ctx)
+        elif isinstance(e, Cast):
+            x = self._visit_expr(e.children[0], ctx)
+            return MPMF._round_to_context(x, ctx)
         elif isinstance(e, Not):
             return self._apply_not(e, ctx)
         elif isinstance(e, And):
