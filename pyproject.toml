@@ -17,7 +17,7 @@ classifiers = [
 license = {file = "LICENSE"}
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["titanfp==0.1.0"]
+dependencies = ["titanfp==0.1.1"]
 
 [project.optional-dependencies]
 dev = ["mypy", "ruff", "build", "twine"]
