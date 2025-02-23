@@ -21,7 +21,7 @@ class UnderscoreId(Id):
     """
 
     def __repr__(self):
-        return f'UnderscoreId()'
+        return 'UnderscoreId()'
 
     def __str__(self):
         return '_'

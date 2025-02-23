@@ -56,7 +56,7 @@ jobs:
       - name: Install fpy2
         run: pip install .
       - name: Lint
-        run: ruff check
+        run: ruff check fpy2/ infra/ tests/
 
   unit:
     name: "Unit Tests"

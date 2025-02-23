@@ -26,9 +26,9 @@ class FunctionProfiler:
 
         If no interpreter is provided, the default interpreter is used.
         """
-        if interpreter is None:
-            interpreter = get_default_interpreter()
-        ref_interpreter = RealInterpreter()
+        # if interpreter is None:
+        #     interpreter = get_default_interpreter()
+        # ref_interpreter = RealInterpreter()
 
         # TODO: howww?
         raise NotImplementedError
