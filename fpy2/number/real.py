@@ -20,6 +20,15 @@ class Real:
 
     There are no constraints on the values of `exp` and `c`.
     Unlike IEEE 754, this number cannot encode infinity or NaN.
+
+    This type can also encode uncertainty introduced by rounding.
+    The uncertaintly is represented by an interval, also called
+    a rounding envelope. The interval includes this value and
+    extends either below or above it (`interval_down`).
+    The interval always contains this value and may contain
+    the other endpoint as well (`interval_closed`).
+    The size of the interval is `2**(exp + interval_size)`.
+    It must be the case that `interval_size <= 0`.
     """
 
     s: bool = False
@@ -29,15 +38,25 @@ class Real:
     c: int = 0
     """integer significand"""
 
+    interval_size: Optional[int] = None
+    """rounding envelope: size relative to `2**exp`"""
+    interval_down: bool = False
+    """rounding envelope: does the interval extend towards zero?"""
+    interval_closed: bool = False
+    """rounding envelope: is the interval closed at the other endpoint?"""
+
     def __init__(
         self,
         s: Optional[bool] = None,
         exp: Optional[int] = None,
         c: Optional[int] = None,
         *,
+        x: Optional[Self] = None,
         e: Optional[int] = None,
         m: Optional[int] = None,
-        x: Optional[Self] = None,
+        interval_size: Optional[int] = None,
+        interval_down: Optional[bool] = None,
+        interval_closed: Optional[bool] = None,
     ):
         """
         Creates a new `Real` value.
@@ -88,9 +107,41 @@ class Real:
         else:
             self.exp = type(self).exp
 
+        # rounding envelope size
+        if interval_size is not None:
+            if interval_size > 0:
+                raise ValueError(f'cannot specify interval_size={interval_size}, must be <= 0')
+            self.interval_size = interval_size
+        elif x is not None:
+            self.interval_size = x.interval_size
+        else:
+            self.interval_down = type(self).interval_down
+
+        # rounding envelope direction
+        if interval_down is not None:
+            self.interval_down = interval_down
+        elif x is not None:
+            self.interval_down = x.interval_down
+        else:
+            self.interval_down = type(self).interval_down
+
+        # rounding envelope endpoint
+        if interval_closed is not None:
+            self.interval_closed = interval_closed
+        elif x is not None:
+            self.interval_closed = x.interval_closed
+        else:
+            self.interval_closed = type(self).interval_closed
+
 
     def __repr__(self):
-        return 'Real(s=' + repr(self.s) + ', exp=' + repr(self.exp) + ', c=' + repr(self.c) + ')'
+        return 'Real(s=' + repr(self.s) + \
+            ', exp=' + repr(self.exp) + \
+            ', c=' + repr(self.c) + \
+            ', interval_size=' + repr(self.interval_size) + \
+            ', interval_down=' + repr(self.interval_down) + \
+            ', interval_closed=' + repr(self.interval_closed) + \
+        ')'
 
     def __hash__(self):
         if self.c == 0:
@@ -311,7 +362,15 @@ class Real:
         """Is the value encoded identically to another `Real` value?"""
         if not isinstance(other, Real):
             return TypeError(f'expected Real, got {type(other)}')
-        return self.s == other.s and self.exp == other.exp and self.c == other.c
+
+        return (
+            self.s == other.s
+            and self.exp == other.exp
+            and self.c == other.c
+            and self.interval_size == other.interval_size
+            and self.interval_down == other.interval_down
+            and self.interval_closed == other.interval_closed
+        )
 
     def round_params(self, max_p: Optional[int] = None, min_n: Optional[int] = None):
         """
@@ -363,17 +422,83 @@ class Real:
 
         return kept, half_bit, lower_bits
 
-    def _round_requires_increment(
+    def _round_prepare(
         self,
         kept: Self,
         half_bit: bool,
         lower_bits: bool,
-        nearest: bool,
-        direction: RoundingDirection,
+        rm: RoundingMode,
     ):
         """
-        Does the rounding operation require incrementing truncated digits?
+        Determines the direction to round based on the rounding mode.
+        Also computes the rounding envelope.
         """
+
+        # convert the rounding mode to a direction
+        nearest, direction = rm.to_direction(kept.s)
+
+        # rounding envelope
+        interval_size: Optional[int] = None
+        interval_closed: bool = False
+        increment: bool = False
+
+        # case split on nearest mode
+        if nearest:
+            # nearest rounding mode
+            # case split on halfway bit
+            if half_bit:
+                # at least halfway
+                interval_size = -1
+                if lower_bits:
+                    # above halfway
+                    increment = True
+                else:
+                    # exact halfway
+                    interval_closed = True
+                    match direction:
+                        case RoundingDirection.RTZ:
+                            increment = False
+                        case RoundingDirection.RAZ:
+                            increment = True
+                        case RoundingDirection.RTE:
+                            is_even = (kept.c & 1) == 0
+                            increment = not is_even
+                        case RoundingDirection.RTO:
+                            is_even = (kept.c & 1) == 0
+                            increment = is_even
+            else:
+                # below halfway
+                increment = False
+                interval_closed = False
+                if lower_bits:
+                    # inexact
+                    interval_size = -1
+                else:
+                    # exact
+                    interval_size = None
+        else:
+            # non-nearest rounding mode
+            interval_closed = False
+            if half_bit or lower_bits:
+                # inexact
+                interval_size = 0
+                match direction:
+                    case RoundingDirection.RTZ:
+                        increment = False
+                    case RoundingDirection.RAZ:
+                        increment = True
+                    case RoundingDirection.RTE:
+                        is_even = (kept.c & 1) == 0
+                        increment = not is_even
+                    case RoundingDirection.RTO:
+                        is_even = (kept.c & 1) == 0
+                        increment = is_even
+            else:
+                # exact
+                interval_size = None
+                increment = False
+
+        return interval_size, interval_closed, increment
 
     def round_finalize(
         self,
@@ -388,22 +513,30 @@ class Real:
         and additional rounding information.
         """
 
-        # convert rounding mode
-        nearest, direction = rm.to_direction(kept.s)
+        # prepare the rounding operation
+        interval_size, interval_closed, increment = self._round_prepare(kept, half_bit, lower_bits, rm)
 
-        # check if we need to increment to round correctly
-        requires_increment = self._round_requires_increment(kept, half_bit, lower_bits, nearest, direction)
-        if requires_increment:
-            # increment the significand
+        # increment if necessary
+        if increment:
             kept.c += 1
-            rounded = True
             if p is not None and kept.c.bit_length() > p:
+                # adjust the exponent since we exceeded precision bounds
+                # the value is guaranteed to be a power of two
+                # TODO: for p=0, should we still subtract from `interval_size`
                 kept.c >>= 1
                 kept.exp += 1
-        else:
-            rounded = False
+                interval_size -= 1
 
-        raise NotImplementedError
+        # interval direction is opposite of if we incremented
+        interval_down = not increment
+
+        return Real(
+            x=kept,
+            interval_size=interval_size,
+            interval_down=interval_down,
+            interval_closed=interval_closed
+        )
+
 
     def round(
         self,
