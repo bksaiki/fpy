@@ -1,5 +1,5 @@
 """
-This module defines the basic floating-point type.
+This module defines the basic floating-point number type `RealFloat`.
 """
 
 from typing import Optional, Self
@@ -7,7 +7,7 @@ from typing import Optional, Self
 from .round import RoundingMode, RoundingDirection
 from ..utils import bitmask, Ordering
 
-class Real:
+class RealFloat:
     """
     The basic floating-point number.
 
@@ -51,7 +51,7 @@ class Real:
         exp: Optional[int] = None,
         c: Optional[int] = None,
         *,
-        x: Optional[Self] = None,
+        x: Optional['RealFloat'] = None,
         e: Optional[int] = None,
         m: Optional[int] = None,
         interval_size: Optional[int] = None,
@@ -59,13 +59,16 @@ class Real:
         interval_closed: Optional[bool] = None,
     ):
         """
-        Creates a new `Real` value.
+        Creates a new `RealFloat` value.
 
         The sign may be optionally specified with `s`.
         The exponent may be specified with `exp` or `e`.
         The significand may be specified with `c` or `m` (unless `x` is given).
         If `x` is given, any field not specified is copied from `x`.
         """
+        if x is not None and not isinstance(x, RealFloat):
+            raise TypeError(f'expected RealFloat, got {type(x)}')
+
         # c and negative
         if c is not None:
             if m is not None:
@@ -133,9 +136,9 @@ class Real:
         else:
             self.interval_closed = type(self).interval_closed
 
-
     def __repr__(self):
-        return 'Real(s=' + repr(self.s) + \
+        return self.__class__.__name__ + \
+            '(s=' + repr(self.s) + \
             ', exp=' + repr(self.exp) + \
             ', c=' + repr(self.c) + \
             ', interval_size=' + repr(self.interval_size) + \
@@ -150,26 +153,26 @@ class Real:
             return hash((self.s, self.exp, self.c))
 
     def __eq__(self, other) -> bool:
-        return isinstance(other, Real) and self.compare(other) == Ordering.EQUAL
+        return isinstance(other, RealFloat) and self.compare(other) == Ordering.EQUAL
 
     def __lt__(self, other: Self) -> bool:
-        if not isinstance(other, Real):
-            return TypeError(f'\'<\' not supported between instances \'Real\' and \'{type(other)}\'')
+        if not isinstance(other, RealFloat):
+            return TypeError(f'\'<\' not supported between instances \'RealFloat\' and \'{type(other)}\'')
         return self.compare(other) == Ordering.LESS
 
     def __le__(self, other: Self) -> bool:
-        if not isinstance(other, Real):
-            return TypeError(f'\'<=\' not supported between instances \'Real\' and \'{type(other)}\'')
+        if not isinstance(other, RealFloat):
+            return TypeError(f'\'<=\' not supported between instances \'RealFloat\' and \'{type(other)}\'')
         return self.compare(other) != Ordering.GREATER
 
     def __gt__(self, other: Self) -> bool:
-        if not isinstance(other, Real):
-            return TypeError(f'\'>\' not supported between instances \'Real\' and \'{type(other)}\'')
+        if not isinstance(other, RealFloat):
+            return TypeError(f'\'>\' not supported between instances \'RealFloat\' and \'{type(other)}\'')
         return self.compare(other) == Ordering.GREATER
 
     def __ge__(self, other: Self) -> bool:
-        if not isinstance(other, Real):
-            return TypeError(f'\'>=\' not supported between instances \'Real\' and \'{type(other)}\'')
+        if not isinstance(other, RealFloat):
+            return TypeError(f'\'>=\' not supported between instances \'RealFloat\' and \'{type(other)}\'')
         return self.compare(other) != Ordering.LESS
 
     @property
@@ -272,11 +275,11 @@ class Real:
         shift = p - self.p
         exp = self.exp - shift
         c = self.c << shift
-        return Real(self.s, exp, c)
+        return RealFloat(self.s, exp, c)
 
     def split(self, n: int):
         """
-        Splits `self` into two `Real` values where the first value represents
+        Splits `self` into two `RealFloat` values where the first value represents
         the digits above `n` and the second value represents the digits below
         and including `n`.
         """
@@ -285,18 +288,18 @@ class Real:
 
         if self.is_zero():
             # special case: 0 has no precision
-            hi = Real(self.s, n + 1, 0)
-            lo = Real(self.s, n, 0)
+            hi = RealFloat(self.s, n + 1, 0)
+            lo = RealFloat(self.s, n, 0)
             return (hi, lo)
         elif n >= self.e:
             # check if all digits are in the lower part
-            hi = Real(self.s, n + 1, 0)
-            lo = Real(self.s, self.exp, self.c)
+            hi = RealFloat(self.s, n + 1, 0)
+            lo = RealFloat(self.s, self.exp, self.c)
             return (hi, lo)
         elif n < self.exp:
             # check if all digits are in the upper part
-            hi = Real(self.s, self.exp, self.c)
-            lo = Real(self.s, n, 0)
+            hi = RealFloat(self.s, self.exp, self.c)
+            lo = RealFloat(self.s, n, 0)
             return (hi, lo)
         else:
             # splitting the digits
@@ -309,14 +312,14 @@ class Real:
             exp_lo = self.exp
             c_lo = self.c & mask_lo
 
-            hi = Real(self.s, exp_hi, c_hi)
-            lo = Real(self.s, exp_lo, c_lo)
+            hi = RealFloat(self.s, exp_hi, c_hi)
+            lo = RealFloat(self.s, exp_lo, c_lo)
             return (hi, lo)
 
     def compare(self, other: Self) -> Ordering:
-        """Compare two `Real` values returning an `Ordering`."""
-        if not isinstance(other, Real):
-            raise TypeError(f"expected Real, got {type(other)}")
+        """Compare two `RealFloat` values returning an `Ordering`."""
+        if not isinstance(other, RealFloat):
+            raise TypeError(f"expected RealFloat, got {type(other)}")
 
         if self.c == 0:
             if other.c == 0:
@@ -359,9 +362,9 @@ class Real:
                 return cmp
 
     def is_identical_to(self, other: Self) -> bool:
-        """Is the value encoded identically to another `Real` value?"""
-        if not isinstance(other, Real):
-            return TypeError(f'expected Real, got {type(other)}')
+        """Is the value encoded identically to another `RealFloat` value?"""
+        if not isinstance(other, RealFloat):
+            return TypeError(f'expected RealFloat, got {type(other)}')
 
         return (
             self.s == other.s
@@ -386,7 +389,7 @@ class Real:
             c >>= 1
             exp  += 1
 
-        return Real(s=self.s, c=c, exp=exp)
+        return RealFloat(s=self.s, c=c, exp=exp)
 
     def _prev_float(self):
         """
@@ -401,7 +404,7 @@ class Real:
             c = (c << 1) | 1
             exp -= 1
 
-        return Real(s=self.s, c=c, exp=exp)
+        return RealFloat(s=self.s, c=c, exp=exp)
 
     def next_float(self):
         """
@@ -583,7 +586,7 @@ class Real:
         interval_down = not increment
 
         # return the rounded value
-        return Real(
+        return RealFloat(
             x=kept,
             interval_size=interval_size,
             interval_down=interval_down,
@@ -598,7 +601,7 @@ class Real:
         rm: RoundingMode = RoundingMode.RNE,
     ):
         """
-        Creates a new `Real` value by rounding `self` to a value with at
+        Creates a new `RealFloat` value by rounding `self` to a value with at
         most `max_p` digits of precision or a least absolute digit position
         `min_n` whichever bound is encountered first, using the rounding mode
         specified by `rm`.
