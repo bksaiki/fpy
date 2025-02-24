@@ -6,6 +6,7 @@ with a NaN value.
 from typing import Optional
 
 from .real import RealFloat
+from .round import RoundingMode
 from ..utils import Ordering
 
 class ProjFloat(RealFloat):
@@ -56,31 +57,29 @@ class ProjFloat(RealFloat):
             self.is_nan = type(self).is_nan
 
     def is_zero(self):
-        return not self.is_nan and super().is_zero()
+        return not self.is_nar() and super().is_zero()
 
     def is_finite_real(self):
-        # OPT: the super class is only finite real
         return not self.is_nan
 
     def is_nar(self):
-        # OPT: the super class is only finite real
         return self.is_nan
 
     def is_integer(self):
-        return not self.is_nan and super().is_integer()
+        return not self.is_nar() and super().is_integer()
 
     def bit(self, n: int) -> bool:
-        if self.is_nan:
+        if self.is_nar():
             raise TypeError('cannot call bit() on a NaN value')
         return super().bit(n)
 
     def normalize(self, p: int):
-        if self.is_nan:
+        if self.is_nar():
             raise TypeError('cannot call normalize() on a NaN value')
         return super().normalize(p)
 
     def split(self, p: int):
-        if self.is_nan:
+        if self.is_nar():
             raise TypeError('cannot call split() on a NaN value')
         return super().split(p)
 
@@ -88,9 +87,33 @@ class ProjFloat(RealFloat):
         if not isinstance(other, RealFloat):
             raise TypeError(f"expected RealFloat, got {type(other)}")
 
-        if self.is_nan:
+        if self.is_nar():
             return None
         elif isinstance(other, ProjFloat) and other.is_nan:
             return None
         else:
             return super().compare(other)
+
+    def as_real_float(self) -> RealFloat:
+        """
+        Converts this value to a `RealFloat` value.
+
+        If this value is NaN, a `TypeError` is raised.
+        """
+        if self.is_nar():
+            raise TypeError('cannot convert NaN to RealFloat')
+        return RealFloat(x=self)
+
+    def round(
+        self,
+        max_p: Optional[int] = None,
+        min_n: Optional[int] = None,
+        rm = RoundingMode.RNE
+    ):
+        if max_p is None and min_n is None:
+            raise ValueError(f'must specify {max_p} or {min_n}')
+
+        if self.is_nar():
+            return ProjFloat(x=self)
+        else:
+            return super().round(max_p, min_n, rm)

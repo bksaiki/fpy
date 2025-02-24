@@ -22,3 +22,6 @@ Backend:
 Misc:
   - Rational contains a Fraction
   - decnum and hexnum conversion to Fraction
+
+Numbers:
+  - hashing by numerical equality (except NaN!)

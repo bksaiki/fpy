@@ -5,11 +5,13 @@ with infinity and NaN values.
 
 from typing import Optional
 
+from .proj import ProjFloat
 from .real import RealFloat
+from .round import RoundingMode
 from ..utils import Ordering
 
 
-class UnboundFloat(RealFloat):
+class UnboundFloat(ProjFloat):
     """
     A basic floating-point number with infinity and NaN values.
     This type is a subtype of `ProjFloat`.
@@ -22,20 +24,17 @@ class UnboundFloat(RealFloat):
      - `c` is the integer significand.
 
     There are no constraints on the values of `exp` and `c`.
-    Unlike `RealFloat`, this type allows for infinite and NaN values.
+    Type allows for infinite and NaN values.
     """
 
     is_inf: bool = False
     """is this value infinity?"""
-    is_nan: bool = False
-    """is this value NaN?"""
 
     def __init__(
         self,
         *args,
         x: Optional[RealFloat] = None,
         is_inf: Optional[bool] = None,
-        is_nan: Optional[bool] = None,
         **kwargs
     ):
         if x is not None and not isinstance(x, RealFloat):
@@ -51,19 +50,45 @@ class UnboundFloat(RealFloat):
         else:
             self.is_inf = type(self).is_inf
 
-        # is_nan
-        if is_nan is not None:
-            self.is_nan = is_nan
-        elif x is not None and isinstance(x, UnboundFloat):
-            self.is_nan = x.is_nan
+    def is_nar(self) -> bool:
+        return not self.is_inf and super().is_nar()
+
+    def compare(self, other):
+        if self.is_nan or isinstance(other, UnboundFloat) and other.is_nan:
+            return None
+        elif self.is_inf:
+            if isinstance(other, UnboundFloat) and other.is_inf:
+                if self.s == other.s:
+                    return Ordering.EQUAL
+                else:
+                    if self.s:
+                        return Ordering.LESS
+                    else:
+                        return Ordering.GREATER
+            else:
+                if self.s:
+                    return Ordering.LESS
+                else:
+                    return Ordering.GREATER
+        elif isinstance(other, UnboundFloat) and other.is_inf:
+            if other.s:
+                return Ordering.GREATER
+            else:
+                return Ordering.LESS
         else:
-            self.is_nan = type(self).is_nan
+            # OPT: already handled NaN so use RealFloat.compare
+            return RealFloat.compare(self, other)
 
-    def compare(self, other: RealFloat) -> Optional[Ordering]:
-        """
-        Compare this and a `RealFloat` instance returning an `Optional[Ordering]`.
+    def round(
+        self,
+        max_p: Optional[int] = None,
+        min_n: Optional[int] = None,
+        rm = RoundingMode.RNE
+    ):
+        if max_p is None and min_n is None:
+            raise ValueError(f'must specify {max_p} or {min_n}')
 
-        The result is `None` if either number is NaN.
-        Otherwise, the result is the expected ordering.
-        """
-        raise NotImplementedError
+        if self.is_nar():
+            return UnboundFloat(x=self)
+        else:
+            return super().round(max_p, min_n, rm)

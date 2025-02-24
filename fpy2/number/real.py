@@ -138,12 +138,6 @@ class RealFloat:
         else:
             self.interval_closed = type(self).interval_closed
 
-    def __hash__(self):
-        if self.c == 0:
-            return hash(self.s)
-        else:
-            return hash((self.s, self.exp, self.c))
-
     @property
     def base(self):
         """Integer base of this number. Always 2."""
@@ -199,14 +193,6 @@ class RealFloat:
     def is_negative(self) -> bool:
         """Returns whether this value is negative."""
         return self.c != 0 and self.s
-
-    def is_finite_real(self) -> bool:
-        """Returns whether this value is a finite real number."""
-        return True
-
-    def is_nar(self) -> bool:
-        """Returns whether this value is a not-a-real value."""
-        return False
 
     def is_integer(self) -> bool:
         """Returns whether this value is an integer."""
@@ -595,10 +581,9 @@ class RealFloat:
         rm: RoundingMode = RoundingMode.RNE,
     ):
         """
-        Creates a new `RealFloat` value by rounding `self` to a value with at
-        most `max_p` digits of precision or a least absolute digit position
-        `min_n` whichever bound is encountered first, using the rounding mode
-        specified by `rm`.
+        Creates a copy of `self` rounded to at most `max_p` digits of precision
+        or a least absolute digit position `min_n`, whichever bound is encountered first,
+        using the rounding mode specified by `rm`.
 
         At least one of `max_p` or `min_n` must be specified:
         `max_p >= 0` while `min_n` may be any integer.
