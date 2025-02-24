@@ -31,12 +31,68 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
+"""Maps python operator to the corresponding operator in Rival"""
+_method_table: dict[str, str] = {
+    '+': '+',
+    '-': '-',
+    '*': '*',
+    '/': '/',
+    'fabs': 'fabs',
+    'sqrt': 'sqrt',
+    'fma': 'fma',
+    'neg': 'neg',
+    'copysign': 'copysign',
+    'fdim': 'fdim',
+    'fmax': 'fmax',
+    'fmin': 'fmin',
+    'fmod': 'fmod',
+    'remainder': 'remainder',
+    'hypot': 'hypot',
+    'cbrt': 'cbrt',
+    'ceil': 'ceil',
+    'floor': 'floor',
+    'nearbyint': 'nearbyint',
+    'round': 'round',
+    'trunc': 'trunc',
+    'acos': 'acos',
+    'asin': 'asin',
+    'atan': 'atan',
+    'atan2': 'atan2',
+    'cos': 'cos',
+    'sin': 'sin',
+    'tan': 'tan',
+    'acosh': 'acosh',
+    'asinh': 'asinh',
+    'atanh': 'atanh',
+    'cosh': 'cosh',
+    'sinh': 'sinh',
+    'tanh': 'tanh',
+    'exp': 'exp',
+    'exp2': 'exp2',
+    'expm1': 'expm1',
+    'log': 'log',
+    'log10': 'log10',
+    'log1p': 'log1p',
+    'log2': 'log2',
+    'pow': 'pow',
+    'erf': 'erf',
+    'erfc': 'erfc',
+    'lgamma': 'lgamma',
+    'tgamma': 'tgamma',
+    'isfinite': 'isfinite',
+    'isinf': 'isinf',
+    'isnan': 'isnan',
+    'isnormal': 'isnormal',
+    'signbit': 'signbit',
+}
+
 
 class _Interpreter(ReduceVisitor):
     """Single-use real number interpreter"""
     env: dict[NamedId, BoolInterval | RealInterval | NDArray]
     
     def __init__(self, p = 4):
+        self.env = {}
         self.rival = RivalManager()
         self.p = p
         self.rival.set_precision(p)
@@ -70,6 +126,11 @@ class _Interpreter(ReduceVisitor):
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
         if isinstance(arg, str | int | float):
             x = gmpmath.mpfr(arg, ctx.p)
+            return gmpmath.mpfr_to_digital(x)
+        elif isinstance(arg, int):
+            return Digital(m=arg, exp=0)
+        elif isinstance(arg, float):
+            x = gmpmath.mpfr(arg, 53)
             return gmpmath.mpfr_to_digital(x)
         elif isinstance(arg, Digital):
             x = gmpmath.mpfr(arg, ctx.p)
@@ -142,9 +203,10 @@ class _Interpreter(ReduceVisitor):
         return self.rival.eval_expr(f"f {e.m} {e.e} {e.b}")
 
     def _visit_nary_expr(self, e: NaryExpr, ctx: EvalCtx):
-        if isinstance(e, Cast):
-            x = self._visit_expr(e.children[0], ctx)
-            return x
+        if e.name in _method_table:
+            return self._apply_method(e, ctx)
+        elif isinstance(e, Cast):
+            return self._visit_expr(e.children[0], ctx)
         elif isinstance(e, Not):
             return self._apply_not(e, ctx)
         elif isinstance(e, And):
@@ -152,9 +214,30 @@ class _Interpreter(ReduceVisitor):
         elif isinstance(e, Or):
             return self._apply_or(e, ctx)
         else:
-            print(e)
-            # TODO: try to evaluate in Rival
             raise NotImplementedError('unknown n-ary expression', e)
+    
+    def _apply_method(self, e: NaryExpr, ctx: EvalCtx):
+        fn = _method_table[e.name]
+        args: list[RealInterval] = []
+        for arg in e.children:
+            val = self._visit_expr(arg, ctx)
+            if not isinstance(val, RealInterval):
+                raise TypeError(f'expected a real number argument for {e.name}, got {val}')
+            args.append(val)
+
+        arg_names = [f"arg{i+1}" for i in range(len(args))]
+        arg_list_str = " ".join(arg_names)
+        arg_values_str = " ".join(map(str, args))
+        function_def = f"(f {arg_list_str}) ({fn} {arg_list_str})"
+        function_call = f"f {arg_values_str}"
+
+        # TODO: debug function call
+        print(function_def)
+        print(function_call)
+
+        self.rival.define_function(function_def)
+        return self.rival.eval_expr(function_call)
+
         
     def _apply_not(self, e: Not, ctx: EvalCtx):
         arg = self._visit_expr(e.children[0], ctx)
