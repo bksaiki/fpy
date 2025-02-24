@@ -94,7 +94,6 @@ class RivalManager:
         Converts `x` into a `Digital` type without loss of accuracy.
         Raises an exception if `x` cannot be represented exactly at the given precision.
         """
-        print(x)
         rto_round = mpfr(x, prec=self.prec)
         rounded = mpfr_to_digital(rto_round).round_new(max_p=self.prec)
         if rounded.inexact:

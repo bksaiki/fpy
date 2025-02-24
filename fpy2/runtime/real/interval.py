@@ -65,5 +65,9 @@ class RealInterval(Interval):
         return RealInterval(lo, hi)
     
     def __str__(self):
-        return f'(ival {self.lo} {self.hi})'
+        return f'(ival {self.str(self.lo)} {self.str(self.hi)})'
+    
+    def str(self, x: Digital) -> str:
+        sign_str = '-' if x.negative else '+'
+        return f'{sign_str}{x.c}e{x.exp}'
 
