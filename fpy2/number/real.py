@@ -372,6 +372,58 @@ class Real:
             and self.interval_closed == other.interval_closed
         )
 
+
+    def _next_float(self):
+        """
+        Computes the next number (with the same precision),
+        away from zero.
+        """
+        c = self.c + 1
+        exp = self.exp
+        if c.bit_length() > self.p:
+            # adjust the exponent since we exceeded precision bounds
+            # the value is guaranteed to be a power of two
+            c >>= 1
+            exp  += 1
+
+        return Real(s=self.s, c=c, exp=exp)
+
+    def _prev_float(self):
+        """
+        Computes the previous number (with the same precision),
+        towards zero.
+        """
+        c = self.c - 1
+        exp = self.exp
+        if c.bit_length() < self.p:
+            # previously at a power of two
+            # need to add a lower bit
+            c = (c << 1) | 1
+            exp -= 1
+
+        return Real(s=self.s, c=c, exp=exp)
+
+    def next_float(self):
+        """
+        Computes the next number (with the same precison),
+        towards positive infinity.
+        """
+        if self.s:
+            return self._prev_float()
+        else:   
+            return self._next_float()
+
+    def prev_float(self):
+        """
+        Computes the previous number (with the same precision),
+        towards negative infinity.
+        """
+        if self.s:
+            return self._next_float()
+        else:
+            return self._prev_float()
+
+
     def round_params(self, max_p: Optional[int] = None, min_n: Optional[int] = None):
         """
         Computes rounding parameters `p` and `n`.
@@ -530,6 +582,7 @@ class Real:
         # interval direction is opposite of if we incremented
         interval_down = not increment
 
+        # return the rounded value
         return Real(
             x=kept,
             interval_size=interval_size,
@@ -557,11 +610,11 @@ class Real:
         rounding and the resulting significand may have more than `max_p` bits
         (any values can be clamped after this operation).
         If only `min_p` is given, rounding is performed liked floating-point
-        without an exponent bound; the integer significand has at most
-        `max_p` digits.
+        without an exponent bound; the integer significand has at
+        most `max_p` digits.
         If both are specified, rounding is performed like IEEE 754 floating-point
-        arithmetic; `min_n` takes precedence,so the value may have less than
-        `max_p` precision.
+        arithmetic; `min_n` takes precedence, so the value may have
+        less than `max_p` precision.
         """
 
         if max_p is None and min_n is None:
