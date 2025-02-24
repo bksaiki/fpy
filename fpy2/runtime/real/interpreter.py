@@ -156,7 +156,7 @@ class _Interpreter(ReduceVisitor):
         # default context if none is specified
         if ctx is None:
             ctx = ieee_ctx(11, 64)
-        ctx = determine_ctx(ctx, self.func.ctx)
+        ctx = determine_ctx(ctx, func.ctx)
 
         for val, arg in zip(args, func.args):
             match arg.ty:
