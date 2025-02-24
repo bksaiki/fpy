@@ -5,8 +5,10 @@ This module defines the basic floating-point number type `RealFloat`.
 from typing import Optional, Self
 
 from .round import RoundingMode, RoundingDirection
-from ..utils import bitmask, Ordering
+from ..utils import bitmask, default_repr, partial_ord, Ordering
 
+@default_repr
+@partial_ord
 class RealFloat:
     """
     The basic floating-point number.
@@ -118,7 +120,7 @@ class RealFloat:
         elif x is not None:
             self.interval_size = x.interval_size
         else:
-            self.interval_down = type(self).interval_down
+            self.interval_size = type(self).interval_size
 
         # rounding envelope direction
         if interval_down is not None:
@@ -136,44 +138,11 @@ class RealFloat:
         else:
             self.interval_closed = type(self).interval_closed
 
-    def __repr__(self):
-        return self.__class__.__name__ + \
-            '(s=' + repr(self.s) + \
-            ', exp=' + repr(self.exp) + \
-            ', c=' + repr(self.c) + \
-            ', interval_size=' + repr(self.interval_size) + \
-            ', interval_down=' + repr(self.interval_down) + \
-            ', interval_closed=' + repr(self.interval_closed) + \
-        ')'
-
     def __hash__(self):
         if self.c == 0:
             return hash(self.s)
         else:
             return hash((self.s, self.exp, self.c))
-
-    def __eq__(self, other) -> bool:
-        return isinstance(other, RealFloat) and self.compare(other) == Ordering.EQUAL
-
-    def __lt__(self, other: Self) -> bool:
-        if not isinstance(other, RealFloat):
-            return TypeError(f'\'<\' not supported between instances \'RealFloat\' and \'{type(other)}\'')
-        return self.compare(other) == Ordering.LESS
-
-    def __le__(self, other: Self) -> bool:
-        if not isinstance(other, RealFloat):
-            return TypeError(f'\'<=\' not supported between instances \'RealFloat\' and \'{type(other)}\'')
-        return self.compare(other) != Ordering.GREATER
-
-    def __gt__(self, other: Self) -> bool:
-        if not isinstance(other, RealFloat):
-            return TypeError(f'\'>\' not supported between instances \'RealFloat\' and \'{type(other)}\'')
-        return self.compare(other) == Ordering.GREATER
-
-    def __ge__(self, other: Self) -> bool:
-        if not isinstance(other, RealFloat):
-            return TypeError(f'\'>=\' not supported between instances \'RealFloat\' and \'{type(other)}\'')
-        return self.compare(other) != Ordering.LESS
 
     @property
     def base(self):
@@ -214,9 +183,30 @@ class RealFloat:
         """
         return -self.c if self.s else self.c
 
+    @property
+    def inexact(self) -> bool:
+        """Is this value inexact?"""
+        return self.interval_size is not None
+
     def is_zero(self) -> bool:
         """Returns whether this value represents zero."""
         return self.c == 0
+
+    def is_positive(self) -> bool:
+        """Returns whether this value is positive."""
+        return self.c != 0 and not self.s
+
+    def is_negative(self) -> bool:
+        """Returns whether this value is negative."""
+        return self.c != 0 and self.s
+
+    def is_finite_real(self) -> bool:
+        """Returns whether this value is a finite real number."""
+        return True
+
+    def is_nar(self) -> bool:
+        """Returns whether this value is a not-a-real value."""
+        return False
 
     def is_integer(self) -> bool:
         """Returns whether this value is an integer."""
@@ -316,8 +306,12 @@ class RealFloat:
             lo = RealFloat(self.s, exp_lo, c_lo)
             return (hi, lo)
 
-    def compare(self, other: Self) -> Ordering:
-        """Compare two `RealFloat` values returning an `Ordering`."""
+    def compare(self, other: 'RealFloat') -> Optional[Ordering]:
+        """
+        Compare `self` and `other` values returning an `Optional[Ordering]`.
+
+        For two `RealFloat` values, the result is never `None`.
+        """
         if not isinstance(other, RealFloat):
             raise TypeError(f"expected RealFloat, got {type(other)}")
 

@@ -1,16 +1,18 @@
 """
-This module defines the basic floating-point number `Float` class.
+This module defines the basic floating-point number type
+with infinity and NaN values.
 """
 
-from typing import Optional, Self
+from typing import Optional
 
 from .real import RealFloat
+from ..utils import Ordering
 
 
 class UnboundFloat(RealFloat):
     """
-    An unbounded floating-point number with infinites and NaN.
-    This type is a subtype of `RealFloat`.
+    A basic floating-point number with infinity and NaN values.
+    This type is a subtype of `ProjFloat`.
 
     This type encodes a base-2 number in unnormalized scientific notation:
     `(-1)^s * 2^exp * c` where:
@@ -57,14 +59,11 @@ class UnboundFloat(RealFloat):
         else:
             self.is_nan = type(self).is_nan
 
-    def __repr__(self):
-      return self.__class__.__name__ + \
-          '(s=' + repr(self.s) + \
-          ', exp=' + repr(self.exp) + \
-          ', c=' + repr(self.c) + \
-          ', is_inf=' + repr(self.is_inf) + \
-          ', is_nan=' + repr(self.is_nan) + \
-          ', interval_size=' + repr(self.interval_size) + \
-          ', interval_down=' + repr(self.interval_down) + \
-          ', interval_closed=' + repr(self.interval_closed) + \
-      ')'
+    def compare(self, other: RealFloat) -> Optional[Ordering]:
+        """
+        Compare this and a `RealFloat` instance returning an `Optional[Ordering]`.
+
+        The result is `None` if either number is NaN.
+        Otherwise, the result is the expected ordering.
+        """
+        raise NotImplementedError
