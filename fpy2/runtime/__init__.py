@@ -5,6 +5,8 @@ from .function import (
     get_default_interpreter,
     set_default_interpreter
 )
+
+from .native import PythonInterpreter
 from .real import RealInterpreter
 from .titanic import TitanicInterpreter
 
