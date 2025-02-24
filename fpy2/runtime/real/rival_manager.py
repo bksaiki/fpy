@@ -1,6 +1,10 @@
 import subprocess
 import select
 
+from titanfp.titanic.digital import Digital
+from titanfp.titanic.gmpmath import mpfr_to_digital, mpfr
+from fpy2.runtime.real.interval import RealInterval
+
 class RivalManager:
     def __init__(self):
         """Initialize and start the Racket subprocess with the Rival library."""
@@ -12,6 +16,7 @@ class RivalManager:
             text=True,
             bufsize=1
         )
+        self.prec = None
     
     def send_command(self, command: str) -> str:
         """Send a command to the Racket subprocess and return the output."""
@@ -34,13 +39,25 @@ class RivalManager:
         
         return '\n'.join(result_lines)
 
-    def eval_expr(self, expr: str) -> str:
+    def eval_expr(self, expr: str) -> bool | RealInterval:
         """Evaluate an expression using Rival."""
-        return self.send_command(f'(eval {expr})')
+        response = self.send_command(f'(eval {expr})')
 
-    def set_precision(self, precision: int):
+        if response == "#t":
+            return True
+        elif response == "#f":
+            return False
+        elif "Could not evaluate" in response:
+            raise ValueError("Evaluation failed: Could not evaluate")
+        else:
+            # Try to evaluate as Digital
+            real = self.real_to_digital(response)
+            return self.digital_to_ival(real)
+
+    def set_precision(self, prec: int):
         """Set precision in Rival."""
-        self.send_command(f'(set precision {precision})')
+        self.prec = prec
+        self.send_command(f'(set precision {prec})')
 
     def define_function(self, function_definition: str):
         """Define a new function in Rival."""
@@ -57,6 +74,32 @@ class RivalManager:
     def __del__(self):
         """Destructor to ensure the subprocess is cleaned up."""
         self.close()
+
+    def digital_to_ival(self, x: Digital):
+        """
+        Converts `x` into an interval that represents the rounding envelope of `x`,
+        i.e., the tightest set of values that would round to `x` at the
+        current precision of `x`.
+        """
+        y = x.round_new(max_p=x.p + 1)  # increase precision by 1
+        prev = y.prev_float()        # next floating-point number (toward zero)
+        next = y.next_float()        # previous floating-point number (away zero)
+        if x.negative:
+            return RealInterval(next, prev)
+        else:
+            return RealInterval(prev, next)
+
+    def real_to_digital(self, x: str | int | float):
+        """
+        Converts `x` into a `Digital` type without loss of accuracy.
+        Raises an exception if `x` cannot be represented exactly at the given precision.
+        """
+        print(x)
+        rto_round = mpfr(x, prec=self.prec)
+        rounded = mpfr_to_digital(rto_round).round_new(max_p=self.prec)
+        if rounded.inexact:
+            raise ValueError(f"cannot represent {x} exactly at precision {self.prec}")
+        return rounded
 
 # Example usage
 if __name__ == "__main__":

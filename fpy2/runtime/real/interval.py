@@ -63,5 +63,7 @@ class RealInterval(Interval):
         lo = min(self.lo, other.lo)
         hi = max(self.hi, other.hi)
         return RealInterval(lo, hi)
-
+    
+    def __str__(self):
+        return f'(ival {self.lo} {self.hi})'
 
