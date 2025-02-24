@@ -34,9 +34,10 @@ class Real:
         s: Optional[bool] = None,
         exp: Optional[int] = None,
         c: Optional[int] = None,
-        x: Optional[Self] = None,
+        *,
         e: Optional[int] = None,
         m: Optional[int] = None,
+        x: Optional[Self] = None,
     ):
         """
         Creates a new `Real` value.
@@ -231,37 +232,35 @@ class Real:
         if not isinstance(n, int):
             raise ValueError('expected an integer', n)
 
-        # special case: 0 has no precision
         if self.is_zero():
+            # special case: 0 has no precision
             hi = Real(self.s, n + 1, 0)
             lo = Real(self.s, n, 0)
             return (hi, lo)
-
-        # check if all digits are in the lower part
-        if n >= self.e:
+        elif n >= self.e:
+            # check if all digits are in the lower part
             hi = Real(self.s, n + 1, 0)
             lo = Real(self.s, self.exp, self.c)
             return (hi, lo)
-
-        # check if all digits are in the upper part
-        if n < self.exp:
+        elif n < self.exp:
+            # check if all digits are in the upper part
             hi = Real(self.s, self.exp, self.c)
             lo = Real(self.s, n, 0)
             return (hi, lo)
+        else:
+            # splitting the digits
+            p_lo = (n + 1) - self.exp
+            mask_lo = bitmask(p_lo)
 
-        # splitting the digits
-        p_lo = (n + 1) - self.exp
-        mask_lo = bitmask(p_lo)
+            exp_hi = self.exp + p_lo
+            c_hi = self.c >> p_lo
 
-        exp_hi = self.exp + p_lo
-        c_hi = self.c >> p_lo
+            exp_lo = self.exp
+            c_lo = self.c & mask_lo
 
-        exp_lo = self.exp
-        c_lo = self.c & mask_lo
-
-        hi = Real(self.s, exp_hi, c_hi)
-        lo = Real(self.s, exp_lo, c_lo)
-        return (hi, lo)
+            hi = Real(self.s, exp_hi, c_hi)
+            lo = Real(self.s, exp_lo, c_lo)
+            return (hi, lo)
 
     def compare(self, other: Self) -> Ordering:
         """Compare two `Real` values returning an `Ordering`."""
@@ -314,7 +313,7 @@ class Real:
             return TypeError(f'expected Real, got {type(other)}')
         return self.s == other.s and self.exp == other.exp and self.c == other.c
 
-    def _round_params(self, max_p: Optional[int] = None, min_n: Optional[int] = None):
+    def round_params(self, max_p: Optional[int] = None, min_n: Optional[int] = None):
         """
         Computes rounding parameters `p` and `n`.
 
@@ -339,7 +338,7 @@ class Real:
 
         return p, n
 
-    def _round_at(self, n: int):
+    def round_at(self, n: int):
         """
         Splits `self` at absolute digit position `n`.
 
@@ -376,9 +375,7 @@ class Real:
         Does the rounding operation require incrementing truncated digits?
         """
 
-
-
-    def _round_finalize(
+    def round_finalize(
         self,
         kept: Self,
         half_bit: bool,
@@ -388,7 +385,7 @@ class Real:
     ):
         """
         Completes the rounding operation using truncated digits
-        and rounding information.
+        and additional rounding information.
         """
 
         # convert rounding mode
@@ -408,7 +405,6 @@ class Real:
 
         raise NotImplementedError
 
-
     def round(
         self,
         max_p: Optional[int] = None,
@@ -416,9 +412,10 @@ class Real:
         rm: RoundingMode = RoundingMode.RNE,
     ):
         """
-        Rounds `self` to another value with at most `max_p` digits of precision
-        or a least absolute digit position `min_n` whichever bound is encountered
-        first, using the rounding mode specified by `rm`.
+        Creates a new `Real` value by rounding `self` to a value with at
+        most `max_p` digits of precision or a least absolute digit position
+        `min_n` whichever bound is encountered first, using the rounding mode
+        specified by `rm`.
 
         At least one of `max_p` or `min_n` must be specified:
         `max_p >= 0` while `min_n` may be any integer.
@@ -438,11 +435,10 @@ class Real:
             raise ValueError(f'must specify {max_p} or {min_n}')
 
         # compute rounding parameters
-        p, n = self._round_params(max_p, min_n)
+        p, n = self.round_params(max_p, min_n)
 
-        # split the significand and keep rounding bits
-        kept, half_bit, lower_bits = self._round_at(n)
-        assert p is None or kept.c.bit_length() <= p
+        # split the number at the rounding position
+        kept, half_bit, lower_bits = self.round_at(n)
 
-        # finalize rounding
-        return self._round_finalize(kept, half_bit, lower_bits, p, rm)
+        # finalize the rounding operation
+        return self.round_finalize(kept, half_bit, lower_bits, p, rm)
