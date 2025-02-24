@@ -469,7 +469,7 @@ class _Interpreter(ReduceVisitor):
                 del self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
-        # TODO: update context
+        ctx = determine_ctx(ctx, stmt.props)
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):

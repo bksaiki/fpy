@@ -5,7 +5,7 @@ to compute the true real number result.
 
 from typing import Any, Optional, Sequence, TypeAlias
 
-from titanfp.arithmetic.evalctx import EvalCtx
+from titanfp.arithmetic.evalctx import EvalCtx, determine_ctx
 from titanfp.arithmetic.ieee754 import ieee_ctx
 from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.digital import Digital
@@ -156,6 +156,7 @@ class _Interpreter(ReduceVisitor):
         # default context if none is specified
         if ctx is None:
             ctx = ieee_ctx(11, 64)
+        ctx = determine_ctx(ctx, self.func.ctx)
 
         for val, arg in zip(args, func.args):
             match arg.ty:
@@ -309,6 +310,7 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
+        ctx = determine_ctx(ctx, stmt.props)
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
