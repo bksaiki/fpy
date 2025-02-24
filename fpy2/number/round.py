@@ -55,8 +55,8 @@ class RoundingMode(IntEnum):
             case (_, RoundingMode.RAZ):
                 return False, RoundingDirection.RAZ
             case (_, RoundingMode.RTO):
-                return True, RoundingDirection.RTO
+                return False, RoundingDirection.RTO
             case (_, RoundingMode.RTE):
-                return True, RoundingDirection.RTE
+                return False, RoundingDirection.RTE
             case _:
                 raise ValueError('unsupported rounding mode', self)
