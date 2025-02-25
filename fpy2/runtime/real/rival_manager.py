@@ -36,8 +36,10 @@ class RivalManager:
                 result_lines.append(line)
             else:
                 break  # Timeout occurred
-        
+
         return '\n'.join(result_lines)
+
+# 9007199254740991/9007199254740992, 18014398509481983/18014398509481984
 
     def eval_expr(self, expr: str) -> bool | RealInterval:
         """Evaluate an expression using Rival."""
