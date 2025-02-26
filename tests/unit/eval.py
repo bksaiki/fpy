@@ -1,4 +1,4 @@
-from fpy2 import Function
+from fpy2 import Function, set_default_interpreter, RealInterpreter
 from .defs import tests, examples
 
 def test_eval():
@@ -8,3 +8,6 @@ def test_eval():
         args = [1.0 for _ in range(len(core.args))]
         print(core.name, fn(*args))
 
+if __name__ == '__main__':
+    set_default_interpreter(RealInterpreter())
+    test_eval()

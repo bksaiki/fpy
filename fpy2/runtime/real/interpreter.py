@@ -9,17 +9,12 @@ from titanfp.arithmetic.evalctx import EvalCtx, determine_ctx
 from titanfp.arithmetic.ieee754 import ieee_ctx
 from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.digital import Digital
-from titanfp.titanic import gmpmath
 
 from .interval import BoolInterval, RealInterval
-
-from ..function import Interpreter, Function
-from ...ir import *
-
-from titanfp.titanic.gmpmath import mpfr_to_digital, mpfr
-from fpy2.runtime.real.interval import RealInterval
 from .rival_manager import RivalManager, InsufficientPrecisionError
 
+from ..function import Interpreter, Function, FunctionReturnException
+from ...ir import *
 
 ScalarVal: TypeAlias = BoolInterval | RealInterval
 """Type of scalar values in FPy programs."""
@@ -89,13 +84,11 @@ _method_table: dict[str, str] = {
 
 class _Interpreter(ReduceVisitor):
     """Single-use real number interpreter"""
-    env: dict[NamedId, BoolInterval | RealInterval | NDArray | str]
+    env: dict[NamedId, ScalarVal]
     
-    def __init__(self, p = 4):
+    def __init__(self):
         self.env = {}
         self.rival = RivalManager()
-        self.p = p
-        self.rival.set_precision(p)
         self.rival.set_print_ival(True)
 
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
@@ -123,6 +116,7 @@ class _Interpreter(ReduceVisitor):
         if ctx is None:
             ctx = ieee_ctx(11, 64)
         ctx = determine_ctx(ctx, func.ctx)
+        self.rival.set_precision(ctx.p)
 
         for val, arg in zip(args, func.args):
             match arg.ty:
@@ -138,15 +132,15 @@ class _Interpreter(ReduceVisitor):
                         self.env[arg.name] = x
                 case _:
                     raise NotImplementedError(f'unsupported argument type {arg.ty}')
-        
+
         try:
-            return self._visit_block(func.body, ctx)
-        except InsufficientPrecisionError:
-            print(f"Insufficient precision, retrying with p={self.p}")
-            self.p *= 2
-            self.rival.set_precision(self.p)
-            self.env = {}
-            return self.eval(func, args, ctx)
+            self._visit_block(func.body, ctx)
+            raise RuntimeError('no return statement encountered')
+        except FunctionReturnException as e:
+            return e.value
+        except InsufficientPrecisionError as e:
+            print(f"Insufficient precision, retrying with p={e.prec}")
+            raise e
 
 
     def _lookup(self, name: NamedId):
@@ -306,7 +300,7 @@ class _Interpreter(ReduceVisitor):
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx):
         return self._visit_rival(stmt.expr, ctx)
-    
+
     def _visit_rival(self, expr: Expr, ctx: EvalCtx):
         val = self._visit_expr(expr, ctx)
         if isinstance(val, str) and not isinstance(expr, Digits) and val.startswith('('):
@@ -323,12 +317,11 @@ class _Interpreter(ReduceVisitor):
     def _visit_block(self, block: Block, ctx: EvalCtx):
         for stmt in block.stmts:
             if isinstance(stmt, Return):
-                return self._visit_return(stmt, ctx)
+                v = self._visit_return(stmt, ctx)
+                raise FunctionReturnException(v)
             else:
                 ctx = self._visit_statement(stmt, ctx)
 
-        return None
-    
     def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx) -> None:
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
@@ -348,11 +341,14 @@ class _Interpreter(ReduceVisitor):
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
-    
+    # override for typing
+    def _visit_expr(self, e: Expr, ctx: EvalCtx) -> str:
+        return super()._visit_expr(e, ctx)
+
     # Currently have no plan to implement functionalities below
     def _visit_comp_expr(self, e: CompExpr, ctx: EvalCtx):
         raise NotImplementedError
-    
+
     def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
         raise NotImplementedError
     
