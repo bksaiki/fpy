@@ -3,6 +3,11 @@ import select
 import re
 from fpy2.runtime.real.interval import RealInterval
 
+class InsufficientPrecisionError(Exception):
+    """Raised when the precision is not sufficient for evaluation."""
+    def __init__(self, evaluation):
+        super().__init__(f"Precision {self.prec} is insufficient for: {evaluation}")
+
 class RivalManager:
     def __init__(self):
         """Initialize and start the Racket subprocess with the Rival library."""
@@ -49,7 +54,7 @@ class RivalManager:
         elif response == "#f":
             return False
         elif "Could not evaluate" in response:
-            raise ValueError("Evaluation failed: Could not evaluate")
+            raise InsufficientPrecisionError(expr)
         else:
             matches = re.findall(r"[^\s\[\],]+", response)
             assert len(matches) == 2

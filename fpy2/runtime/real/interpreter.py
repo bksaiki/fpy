@@ -18,7 +18,7 @@ from ...ir import *
 
 from titanfp.titanic.gmpmath import mpfr_to_digital, mpfr
 from fpy2.runtime.real.interval import RealInterval
-from .rival_manager import RivalManager
+from .rival_manager import RivalManager, InsufficientPrecisionError
 
 
 ScalarVal: TypeAlias = BoolInterval | RealInterval
@@ -139,8 +139,16 @@ class _Interpreter(ReduceVisitor):
                         self.env[arg.name] = x
                 case _:
                     raise NotImplementedError(f'unsupported argument type {arg.ty}')
+        
+        try:
+            return self._visit_block(func.body, ctx)
+        except InsufficientPrecisionError:
+            self.p *= 2
+            self.rival.set_precision(self.p)
+            print(f"Insufficient precision, retrying with p={self.p}")  # Debugging output
 
-        return self._visit_block(func.body, ctx)
+            self.env = {}
+            return self.eval(func, args, ctx)
 
 
     def _lookup(self, name: NamedId):
