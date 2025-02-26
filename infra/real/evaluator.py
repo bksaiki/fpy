@@ -31,7 +31,7 @@ def _run_one(fun: Function, rt: Interpreter, num_samples: int):
 
 
 def run_eval_real(config: Config):
-    rt = PythonInterpreter()
+    rt = RealInterpreter(logging=True)
     funs = load_funs(config.input_paths)
 
     print(f'testing over {len(funs)} functions')
