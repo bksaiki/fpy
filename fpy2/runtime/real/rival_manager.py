@@ -1,16 +1,40 @@
-import subprocess
-import select
 import re
-from fpy2.runtime.real.interval import RealInterval
+import subprocess
+
+from typing import Any, Optional
+
+from .interval import RealInterval
+
+
+INTERVAL_REGEX = re.compile(r"\[([^\s]+),[\s*]([^\s]+)\]")
 
 class InsufficientPrecisionError(Exception):
     """Raised when the precision is not sufficient for evaluation."""
-    def __init__(self, evaluation, prec):
-        super().__init__(f"Precision {prec} is insufficient for: {evaluation}")
+
+    expr: str
+    prec: int
+
+    def __init__(self, e: str, prec: int):
+        super().__init__(f"Precision {prec} is insufficient for: {e}")
+        self.expr = e
+        self.prec = prec
 
 class RivalManager:
-    def __init__(self):
+    """Wrapper around a Rival subprocess."""
+
+    prec: Optional[int]
+    """Precision to use for Rival calculations"""
+
+    logging: bool
+    """Enable logging?"""
+
+    process: Any
+    """Underlying subprocess object"""
+
+    def __init__(self, logging: bool = False):
         """Initialize and start the Racket subprocess with the Rival library."""
+        self.prec = None
+        self.logging = logging
         self.process = subprocess.Popen(
             ['racket', '-l', 'rival'],
             stdin=subprocess.PIPE,
@@ -19,35 +43,30 @@ class RivalManager:
             text=True,
             bufsize=1
         )
-        self.prec = None
-    
-    def send_command(self, command: str) -> str:
+
+    def send_command(self, command: str, wait_on_output: bool = True) -> Optional[str]:
         """Send a command to the Racket subprocess and return the output."""
         if not self.process:
             raise RuntimeError("RivalManager process is not running.")
-        
-        print("Send command: %s" % command)
+
+        # send command to Rival
+        if self.logging:
+            print(f"Send command: {command}")
         self.process.stdin.write(command + "\n")
         self.process.stdin.flush()
-        
-        result_lines = []
-        while True:
-            ready, _, _ = select.select([self.process.stdout], [], [], 0.5) # Timeout of 0.5 second waiting for the result
-            if self.process.stdout in ready:
-                line = self.process.stdout.readline().strip()
-                if not line: # Subprocess ended
-                    break
-                result_lines.append(line)
-            else:
-                break  # Timeout occurred
 
-        return '\n'.join(result_lines)
+        # exit if we do not need to wait
+        if not wait_on_output:
+            return None
 
-# 9007199254740991/9007199254740992, 18014398509481983/18014398509481984
+        # read line from stdout
+        return self.process.stdout.readline().strip()
+
 
     def eval_expr(self, expr: str) -> bool | RealInterval:
         """Evaluate an expression using Rival."""
         response = self.send_command(f'(eval {expr})')
+        assert response is not None
 
         if response == "#t":
             return True
@@ -56,21 +75,25 @@ class RivalManager:
         elif "Could not evaluate" in response:
             raise InsufficientPrecisionError(expr, self.prec)
         else:
-            matches = re.findall(r"[^\s\[\],]+", response)
-            assert len(matches) == 2
-            return RealInterval(matches[0], matches[1])
-        
+            matches = re.match(INTERVAL_REGEX, response)
+            if matches is None:
+                raise ValueError(f"Could not parse interval from response: {response}")
+            else:
+                lo = matches.group(1)
+                hi = matches.group(2)
+                return RealInterval(lo, hi)
+
     def set_print_ival(self, flag: bool):
-        self.send_command(f"(set print-ival? #{'t' if flag else 'f'})")
+        self.send_command(f"(set print-ival? #{'t' if flag else 'f'})", wait_on_output=False)
 
     def set_precision(self, prec: int):
         """Set precision in Rival."""
         self.prec = prec
-        self.send_command(f'(set precision {prec})')
+        self.send_command(f'(set precision {prec})', wait_on_output=False)
 
     def define_function(self, function_definition: str):
         """Define a new function in Rival."""
-        self.send_command(f'(define {function_definition})')
+        self.send_command(f'(define {function_definition})', wait_on_output=False)
 
     def close(self):
         """Close the subprocess cleanly."""
@@ -88,7 +111,8 @@ class RivalManager:
 if __name__ == "__main__":
     rival = RivalManager()
 
-    # Set precision
+    # Set precision and print mode
+    rival.set_print_ival(True)
     rival.set_precision(1000)
 
     # Evaluate an expression
