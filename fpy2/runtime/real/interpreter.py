@@ -328,6 +328,25 @@ class _Interpreter(ReduceVisitor):
                 ctx = self._visit_statement(stmt, ctx)
 
         return None
+    
+    def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx) -> None:
+        for phi in stmt.phis:
+            self.env[phi.name] = self.env[phi.lhs]
+            del self.env[phi.lhs]
+
+        cond = self._visit_expr(stmt.cond, ctx)
+        if not isinstance(cond, bool):
+            raise TypeError(f'expected a boolean, got {cond}')
+
+        while cond:
+            self._visit_block(stmt.body, ctx)
+            for phi in stmt.phis:
+                self.env[phi.name] = self.env[phi.rhs]
+                del self.env[phi.rhs]
+
+            cond = self._visit_expr(stmt.cond, ctx)
+            if not isinstance(cond, bool):
+                raise TypeError(f'expected a boolean, got {cond}')
 
     
     # Currently have no plan to implement functionalities below
@@ -353,9 +372,6 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
     def _visit_ref_assign(self, stmt: RefAssign, ctx: EvalCtx):
-        raise NotImplementedError
-    
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx):
         raise NotImplementedError
 
     def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx):
