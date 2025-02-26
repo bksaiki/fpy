@@ -255,7 +255,7 @@ class _Interpreter(ReduceVisitor):
                 raise NotImplementedError('unknown variable', stmt.var)
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
-        cond = self._visit_expr(stmt.cond, ctx)
+        cond = self._visit_expr_top(stmt.cond, ctx, force=True)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
@@ -267,7 +267,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.lhs]
 
     def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
-        cond = self._visit_expr(stmt.cond, ctx)
+        cond = self._visit_expr_top(stmt.cond, ctx, force=True)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
@@ -300,23 +300,6 @@ class _Interpreter(ReduceVisitor):
         else:
             return lo
 
-    def _visit_return(self, stmt: Return, ctx: EvalCtx) -> bool | float:
-        # since we are returning we actually want a value
-        val = self._visit_rival(stmt.expr, ctx)
-        match val:
-            case bool():
-                return val
-            case str():
-                val = self.rival.eval_expr(val)
-                if isinstance(val, RealInterval):
-                    return self._interval_to_real(val)
-                else:
-                    return val
-            case RealInterval():
-                return self._interval_to_real(val)
-            case _:
-                raise NotImplementedError('unreachable', val)
-
     def _visit_rival(self, expr: Expr, ctx: EvalCtx):
         val = self._visit_expr(expr, ctx)
         if isinstance(val, NamedId):
@@ -333,6 +316,29 @@ class _Interpreter(ReduceVisitor):
             # numerical constant
             return val
 
+    def _visit_expr_top(self, expr: Expr, ctx: EvalCtx, force: bool = False) -> bool | float:
+        val = self._visit_rival(expr, ctx)
+        if not force:
+            return val
+        else:
+            match val:
+                case bool():
+                    return val
+                case str():
+                    val = self.rival.eval_expr(val)
+                    if isinstance(val, RealInterval):
+                        return self._interval_to_real(val)
+                    else:
+                        return val
+                case RealInterval():
+                    return self._interval_to_real(val)
+                case _:
+                    raise NotImplementedError('unreachable', val)
+
+    def _visit_return(self, stmt: Return, ctx: EvalCtx) -> bool | float:
+        # since we are returning we actually want a value
+        return self._visit_expr_top(stmt.expr, ctx, force=True)
+
     def _visit_block(self, block: Block, ctx: EvalCtx):
         for stmt in block.stmts:
             if isinstance(stmt, Return):
@@ -346,7 +352,7 @@ class _Interpreter(ReduceVisitor):
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]
 
-        cond = self._visit_expr(stmt.cond, ctx)
+        cond = self._visit_expr_top(stmt.cond, ctx, force=True)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
@@ -356,7 +362,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-            cond = self._visit_expr(stmt.cond, ctx)
+            cond = self._visit_expr_top(stmt.cond, ctx, force=True)
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
