@@ -9,5 +9,5 @@ def test_eval():
         print(core.name, fn(*args))
 
 if __name__ == '__main__':
-    set_default_interpreter(RealInterpreter())
+    set_default_interpreter(RealInterpreter(True))
     test_eval()
