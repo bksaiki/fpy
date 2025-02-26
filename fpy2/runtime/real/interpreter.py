@@ -96,45 +96,12 @@ class _Interpreter(ReduceVisitor):
         self.rival = RivalManager()
         self.p = p
         self.rival.set_precision(p)
-
-    def _digital_to_ival(self, x: Digital):
-        """
-        Converts `x` into an interval that represents the rounding envelope of `x`,
-        i.e., the tightest set of values that would round to `x` at the
-        current precision of `x`.
-        """
-        y = x.round_new(max_p=x.p + 1)  # increase precision by 1
-        prev = y.prev_float()        # next floating-point number (toward zero)
-        next = y.next_float()        # previous floating-point number (away zero)
-        if x.negative:
-            return RealInterval(next, prev)
-        else:
-            return RealInterval(prev, next)
-
-    def _real_to_digital(self, x: str | int | float, prec: int):
-        """
-        Converts `x` into a `Digital` type without loss of accuracy.
-        Raises an exception if `x` cannot be represented exactly at the given precision.
-        """
-        rto_round = mpfr(x, prec=prec)
-        rounded = mpfr_to_digital(rto_round).round_new(max_p=prec)
-        if rounded.inexact:
-            raise ValueError(f"cannot represent {x} exactly at precision {prec}")
-        return rounded
+        self.rival.set_print_ival(True)
 
     # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
-        if isinstance(arg, str | int | float):
-            x = gmpmath.mpfr(arg, ctx.p)
-            return gmpmath.mpfr_to_digital(x)
-        elif isinstance(arg, int):
-            return Digital(m=arg, exp=0)
-        elif isinstance(arg, float):
-            x = gmpmath.mpfr(arg, 53)
-            return gmpmath.mpfr_to_digital(x)
-        elif isinstance(arg, Digital):
-            x = gmpmath.mpfr(arg, ctx.p)
-            return gmpmath.mpfr_to_digital(x)
+        if isinstance(arg, str | int | float | Digital):
+            return str(arg)
         elif isinstance(arg, tuple | list):
             raise NotImplementedError()
         else:
@@ -169,7 +136,7 @@ class _Interpreter(ReduceVisitor):
                     if not isinstance(x, RealInterval):
                         raise TypeError(f'Expected real value, got {val}')
                     if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = RealInterval.from_val(x)
+                        self.env[arg.name] = x
                 case _:
                     raise NotImplementedError(f'unsupported argument type {arg.ty}')
 
@@ -179,7 +146,7 @@ class _Interpreter(ReduceVisitor):
     def _lookup(self, name: NamedId):
         if name not in self.env:
             raise RuntimeError(f'unbound variable {name}')
-        return self.env[name]
+        return name.base # We return the name rather than the value in expression
 
     def _visit_var(self, e: Var, ctx: EvalCtx):
         return self._lookup(e.name)
@@ -188,20 +155,19 @@ class _Interpreter(ReduceVisitor):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
-        return self.rival.eval_expr(e.val)
+        return str(e.val)
 
     def _visit_hexnum(self, e: Hexnum, ctx: EvalCtx):
-        return self.rival.eval_expr(e.val)
+        return str(e.val)
 
     def _visit_integer(self, e: Integer, ctx: EvalCtx):
-        return self.rival.eval_expr(e.val)
+        return str(e.val)
 
     def _visit_rational(self, e: Rational, ctx: EvalCtx):
-        return self.rival.eval_expr(e.val)
+        return str(e.val)
 
     def _visit_digits(self, e: Digits, ctx: EvalCtx):
-        self.rival.define_function(f'(f m e b) (* m (pow b e))')
-        return self.rival.eval_expr(f"f {e.m} {e.e} {e.b}")
+        return f'(* {e.m} (pow {e.b} {e.e}))'
 
     def _visit_nary_expr(self, e: NaryExpr, ctx: EvalCtx):
         if e.name in _method_table:
@@ -219,25 +185,15 @@ class _Interpreter(ReduceVisitor):
     
     def _apply_method(self, e: NaryExpr, ctx: EvalCtx):
         fn = _method_table[e.name]
-        args: list[RealInterval] = []
+        args: list[str] = []
         for arg in e.children:
             val = self._visit_expr(arg, ctx)
-            if not isinstance(val, RealInterval):
-                raise TypeError(f'expected a real number argument for {e.name}, got {val}')
+            if not isinstance(val, str):
+                raise TypeError(f'expected a string argument for {e.name}, got {val} with type {type(val)}.')
             args.append(val)
 
-        arg_names = [f"arg{i+1}" for i in range(len(args))]
-        arg_list_str = " ".join(arg_names)
         arg_values_str = " ".join(map(str, args))
-        function_def = f"(f {arg_list_str}) ({fn} {arg_list_str})"
-        function_call = f"f {arg_values_str}"
-
-        # TODO: debug function call
-        print(function_def)
-        print(function_call)
-
-        self.rival.define_function(function_def)
-        return self.rival.eval_expr(function_call)
+        return f"({fn} {arg_values_str})"
 
         
     def _apply_not(self, e: Not, ctx: EvalCtx):
@@ -286,18 +242,17 @@ class _Interpreter(ReduceVisitor):
         if op not in op_map:
             raise NotImplementedError("unknown comparison operator", op)
 
-        self.rival.define_function(f"(f x y) ({op_map[op]} x y)")
-        return self.rival.eval_expr(f"f {lhs} {rhs}")
+        self.rival.define_function(f"(f {' '.join(list(self.env.keys()))}) ({op_map[op]} {lhs} {rhs})")
+        return self.rival.eval_expr(f"f {' '.join(list(self.env.values()))}")
 
 
     def _visit_if_expr(self, e: IfExpr, ctx: EvalCtx):
         raise NotImplementedError
 
     def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
-        val = self._visit_expr(stmt.expr, ctx)
         match stmt.var:
             case NamedId():
-                self.env[stmt.var] = val
+                self.env[stmt.var] = self._visit_rival(stmt, ctx)
             case UnderscoreId():
                 pass
             case _:
@@ -322,7 +277,14 @@ class _Interpreter(ReduceVisitor):
         return ctx
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx):
-        return self._visit_expr(stmt.expr, ctx)
+        return self._visit_rival(stmt, ctx)
+    
+    def _visit_rival(self, stmt: Return | VarAssign, ctx: EvalCtx):
+        val = self._visit_expr(stmt.expr, ctx)
+        if isinstance(val, str) and val.startswith('(') and not isinstance(stmt.expr, Digits):
+            self.rival.define_function(f"(f {' '.join(map(str, self.env.keys()))}) {val}")
+            val = self.rival.eval_expr(f"f {' '.join(list(self.env.values()))}")
+        return val
 
     def _visit_block(self, block: Block, ctx: EvalCtx):
         for stmt in block.stmts:
