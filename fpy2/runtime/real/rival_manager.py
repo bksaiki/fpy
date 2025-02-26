@@ -1,8 +1,6 @@
 import subprocess
 import select
-
-from titanfp.titanic.digital import Digital
-from titanfp.titanic.gmpmath import mpfr_to_digital, mpfr
+import re
 from fpy2.runtime.real.interval import RealInterval
 
 class RivalManager:
@@ -23,6 +21,7 @@ class RivalManager:
         if not self.process:
             raise RuntimeError("RivalManager process is not running.")
         
+        print("Send command: %s" % command)
         self.process.stdin.write(command + "\n")
         self.process.stdin.flush()
         
@@ -52,9 +51,12 @@ class RivalManager:
         elif "Could not evaluate" in response:
             raise ValueError("Evaluation failed: Could not evaluate")
         else:
-            # Try to evaluate as Digital
-            real = self.real_to_digital(response)
-            return self.digital_to_ival(real)
+            matches = re.findall(r"[^\s\[\],]+", response)
+            assert len(matches) == 2
+            return RealInterval(matches[0], matches[1])
+        
+    def set_print_ival(self, flag: bool):
+        self.send_command(f"(set print-ival? #{'t' if flag else 'f'})")
 
     def set_precision(self, prec: int):
         """Set precision in Rival."""
@@ -76,31 +78,6 @@ class RivalManager:
     def __del__(self):
         """Destructor to ensure the subprocess is cleaned up."""
         self.close()
-
-    def digital_to_ival(self, x: Digital):
-        """
-        Converts `x` into an interval that represents the rounding envelope of `x`,
-        i.e., the tightest set of values that would round to `x` at the
-        current precision of `x`.
-        """
-        y = x.round_new(max_p=x.p + 1)  # increase precision by 1
-        prev = y.prev_float()        # next floating-point number (toward zero)
-        next = y.next_float()        # previous floating-point number (away zero)
-        if x.negative:
-            return RealInterval(next, prev)
-        else:
-            return RealInterval(prev, next)
-
-    def real_to_digital(self, x: str | int | float):
-        """
-        Converts `x` into a `Digital` type without loss of accuracy.
-        Raises an exception if `x` cannot be represented exactly at the given precision.
-        """
-        rto_round = mpfr(x, prec=self.prec)
-        rounded = mpfr_to_digital(rto_round).round_new(max_p=self.prec)
-        if rounded.inexact:
-            raise ValueError(f"cannot represent {x} exactly at precision {self.prec}")
-        return rounded
 
 # Example usage
 if __name__ == "__main__":
