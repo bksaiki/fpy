@@ -170,7 +170,7 @@ class _Interpreter(ReduceVisitor):
         return str(e.val)
 
     def _visit_rational(self, e: Rational, ctx: EvalCtx):
-        return str(e.val)
+        return f'(/ {e.p} {e.q})'
 
     def _visit_digits(self, e: Digits, ctx: EvalCtx):
         return f'(* {e.m} (pow {e.b} {e.e}))'

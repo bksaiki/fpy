@@ -32,7 +32,7 @@ class RivalManager:
         
         result_lines = []
         while True:
-            ready, _, _ = select.select([self.process.stdout], [], [], 1.0) # Timeout of 1 second waiting for the result
+            ready, _, _ = select.select([self.process.stdout], [], [], 0.5) # Timeout of 0.5 second waiting for the result
             if self.process.stdout in ready:
                 line = self.process.stdout.readline().strip()
                 if not line: # Subprocess ended
