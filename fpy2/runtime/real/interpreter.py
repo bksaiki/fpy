@@ -89,7 +89,7 @@ _method_table: dict[str, str] = {
 
 class _Interpreter(ReduceVisitor):
     """Single-use real number interpreter"""
-    env: dict[NamedId, BoolInterval | RealInterval | NDArray]
+    env: dict[NamedId, BoolInterval | RealInterval | NDArray | str]
     
     def __init__(self, p = 4):
         self.env = {}
@@ -98,7 +98,6 @@ class _Interpreter(ReduceVisitor):
         self.rival.set_precision(p)
         self.rival.set_print_ival(True)
 
-    # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
         if isinstance(arg, str | int | float | Digital):
             return str(arg)
@@ -143,10 +142,9 @@ class _Interpreter(ReduceVisitor):
         try:
             return self._visit_block(func.body, ctx)
         except InsufficientPrecisionError:
+            print(f"Insufficient precision, retrying with p={self.p}")
             self.p *= 2
             self.rival.set_precision(self.p)
-            print(f"Insufficient precision, retrying with p={self.p}")  # Debugging output
-
             self.env = {}
             return self.eval(func, args, ctx)
 
@@ -249,28 +247,50 @@ class _Interpreter(ReduceVisitor):
         
         if op not in op_map:
             raise NotImplementedError("unknown comparison operator", op)
-
-        self.rival.define_function(f"(f {' '.join(list(self.env.keys()))}) ({op_map[op]} {lhs} {rhs})")
-        return self.rival.eval_expr(f"f {' '.join(list(self.env.values()))}")
+        
+        self.rival.define_function(f"(f {' '.join(map(str, self.env.keys()))}) ({op_map[op]} {lhs} {rhs})")
+        return self.rival.eval_expr(f"f {' '.join(map(str, self.env.values()))}")
 
 
     def _visit_if_expr(self, e: IfExpr, ctx: EvalCtx):
-        raise NotImplementedError
+        cond = self._visit_expr(e.cond, ctx)
+        if not isinstance(cond, bool):
+            raise TypeError(f'expected a boolean, got {cond}')
+        return self._visit_expr(e.ift if cond else e.iff, ctx)
 
     def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
         match stmt.var:
             case NamedId():
-                self.env[stmt.var] = self._visit_rival(stmt, ctx)
+                self.env[stmt.var] = self._visit_rival(stmt.expr, ctx)
             case UnderscoreId():
                 pass
             case _:
                 raise NotImplementedError('unknown variable', stmt.var)
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, ctx)
+        if not isinstance(cond, bool):
+            raise TypeError(f'expected a boolean, got {cond}')
+        elif cond:
+            self._visit_block(stmt.body, ctx)
+            for phi in stmt.phis:
+                self.env[phi.name] = self.env[phi.rhs]
+        else:
+            for phi in stmt.phis:
+                self.env[phi.name] = self.env[phi.lhs]
 
     def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, ctx)
+        if not isinstance(cond, bool):
+            raise TypeError(f'expected a boolean, got {cond}')
+        elif cond:
+            self._visit_block(stmt.ift, ctx)
+            for phi in stmt.phis:
+                self.env[phi.name] = self.env[phi.lhs]
+        else:
+            self._visit_block(stmt.iff, ctx)
+            for phi in stmt.phis:
+                self.env[phi.name] = self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
         ctx = determine_ctx(ctx, stmt.props)
@@ -285,13 +305,19 @@ class _Interpreter(ReduceVisitor):
         return ctx
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx):
-        return self._visit_rival(stmt, ctx)
+        return self._visit_rival(stmt.expr, ctx)
     
-    def _visit_rival(self, stmt: Return | VarAssign, ctx: EvalCtx):
-        val = self._visit_expr(stmt.expr, ctx)
-        if isinstance(val, str) and val.startswith('(') and not isinstance(stmt.expr, Digits):
+    def _visit_rival(self, expr: Expr, ctx: EvalCtx):
+        val = self._visit_expr(expr, ctx)
+        if isinstance(val, str) and not isinstance(expr, Digits) and val.startswith('('):
+            # Expression to be evaluated by Rival
             self.rival.define_function(f"(f {' '.join(map(str, self.env.keys()))}) {val}")
-            val = self.rival.eval_expr(f"f {' '.join(list(self.env.values()))}")
+            val = self.rival.eval_expr(f"f {' '.join(map(str, self.env.values()))}")
+        else:
+            # It might be a variable name. If so get the value from it
+            for k, v in self.env.items():
+                if str(k) == val:
+                    val = v
         return val
 
     def _visit_block(self, block: Block, ctx: EvalCtx):
