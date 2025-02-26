@@ -5,8 +5,8 @@ from fpy2.runtime.real.interval import RealInterval
 
 class InsufficientPrecisionError(Exception):
     """Raised when the precision is not sufficient for evaluation."""
-    def __init__(self, evaluation):
-        super().__init__(f"Precision {self.prec} is insufficient for: {evaluation}")
+    def __init__(self, evaluation, prec):
+        super().__init__(f"Precision {prec} is insufficient for: {evaluation}")
 
 class RivalManager:
     def __init__(self):
@@ -54,7 +54,7 @@ class RivalManager:
         elif response == "#f":
             return False
         elif "Could not evaluate" in response:
-            raise InsufficientPrecisionError(expr)
+            raise InsufficientPrecisionError(expr, self.prec)
         else:
             matches = re.findall(r"[^\s\[\],]+", response)
             assert len(matches) == 2
