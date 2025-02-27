@@ -84,15 +84,28 @@ _method_table: dict[str, str] = {
     'signbit': 'signbit',
 }
 
+def _interval_to_real(val: RealInterval):
+        # round the endpoints inwards, see if they converge
+        lo = Float(x=val.lo, ctx=ieee_ctx(11, 64, RM.RAZ))
+        hi = Float(x=val.hi, ctx=ieee_ctx(11, 64, RM.RTZ))
+        if lo != hi:
+            raise ValueError(f'interval {val} did not converge')
+        else:
+            return lo
+
 
 class _Interpreter(ReduceVisitor):
     """Single-use real number interpreter"""
+
     env: dict[NamedId, str | RealInterval | bool]
+    """mappping from variable names to values"""
+
+    rival: RivalManager
+    """Rival object for evaluating expressions"""
     
-    def __init__(self, logging: bool = False):
+    def __init__(self, rival: RivalManager):
         self.env = {}
-        self.rival = RivalManager(logging)
-        self.rival.set_print_ival(True)
+        self.rival = rival
 
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
         if isinstance(arg, str | int | float | Digital):
@@ -245,17 +258,56 @@ class _Interpreter(ReduceVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'(if {cond} {ift} {iff})'
 
+    def _eval_rival(self, expr: Expr, ctx: EvalCtx):
+        """
+        Applies Rival to an expression.
+        If the expression is exact, returns its value as a string.
+        """
+        val = self._visit_expr(expr, ctx)
+        if isinstance(val, NamedId):
+            # variable name
+            return self.env[val]
+        elif isinstance(val, bool):
+            # boolean
+            return val
+        elif val.startswith('('):
+            # expression to be evaluated by Rival
+            self.rival.define_function(f"(f {' '.join(map(str, self.env.keys()))}) {val}")
+            return self.rival.eval_expr(f"f {' '.join(map(str, self.env.values()))}")
+        else:
+            # numerical constant
+            return val
+
+    def _force_value(self, val: bool | str | RealInterval):
+        """
+        Not every expression is evaluated to a concrete value.
+        This function ensures that the result is a concrete value.
+        """
+        match val:
+            case bool():
+                return val
+            case str():
+                val = self.rival.eval_expr(val)
+                if isinstance(val, RealInterval):
+                    return _interval_to_real(val)
+                else:
+                    return val
+            case RealInterval():
+                return _interval_to_real(val)
+            case _:
+                raise NotImplementedError('unreachable', val)
+
     def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
         match stmt.var:
             case NamedId():
-                self.env[stmt.var] = self._visit_rival(stmt.expr, ctx)
+                self.env[stmt.var] = self._eval_rival(stmt.expr, ctx)
             case UnderscoreId():
                 pass
             case _:
                 raise NotImplementedError('unknown variable', stmt.var)
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
-        cond = self._visit_expr_top(stmt.cond, ctx, force=True)
+        cond = self._force_value(self._eval_rival(stmt.cond, ctx))
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
@@ -267,7 +319,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.lhs]
 
     def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
-        cond = self._visit_expr_top(stmt.cond, ctx, force=True)
+        cond = self._force_value(self._eval_rival(stmt.cond, ctx))
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
@@ -284,60 +336,17 @@ class _Interpreter(ReduceVisitor):
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
-        test = self._visit_expr(stmt.test, ctx)
+        test = self._force_value(self._eval_rival(stmt.test, ctx))
         if not isinstance(test, bool):
             raise TypeError(f'expected a boolean, got {test}')
         if not test:
             raise AssertionError(stmt.msg)
         return ctx
 
-    def _interval_to_real(self, val: RealInterval) -> float:
-        # round the endpoints inwards, see if they converge
-        lo = Float(x=val.lo, ctx=ieee_ctx(11, 64, RM.RAZ))
-        hi = Float(x=val.hi, ctx=ieee_ctx(11, 64, RM.RTZ))
-        if lo != hi:
-            raise ValueError(f'interval {val} did not converge')
-        else:
-            return lo
-
-    def _visit_rival(self, expr: Expr, ctx: EvalCtx):
-        val = self._visit_expr(expr, ctx)
-        if isinstance(val, NamedId):
-            # variable name
-            return self.env[val]
-        elif isinstance(val, bool):
-            # boolean
-            return val
-        elif val.startswith('('):
-            # expression to be evaluated by Rival
-            self.rival.define_function(f"(f {' '.join(map(str, self.env.keys()))}) {val}")
-            return self.rival.eval_expr(f"f {' '.join(map(str, self.env.values()))}")
-        else:
-            # numerical constant
-            return val
-
-    def _visit_expr_top(self, expr: Expr, ctx: EvalCtx, force: bool = False) -> bool | float:
-        val = self._visit_rival(expr, ctx)
-        if not force:
-            return val
-        else:
-            match val:
-                case bool():
-                    return val
-                case str():
-                    val = self.rival.eval_expr(val)
-                    if isinstance(val, RealInterval):
-                        return self._interval_to_real(val)
-                    else:
-                        return val
-                case RealInterval():
-                    return self._interval_to_real(val)
-                case _:
-                    raise NotImplementedError('unreachable', val)
-
     def _visit_return(self, stmt: Return, ctx: EvalCtx) -> bool | float:
         # since we are returning we actually want a value
-        return self._visit_expr_top(stmt.expr, ctx, force=True)
+        val = self._eval_rival(stmt.expr, ctx)
+        return self._force_value(val)
 
     def _visit_block(self, block: Block, ctx: EvalCtx):
         for stmt in block.stmts:
@@ -345,14 +354,14 @@ class _Interpreter(ReduceVisitor):
                 v = self._visit_return(stmt, ctx)
                 raise FunctionReturnException(v)
             else:
-                ctx = self._visit_statement(stmt, ctx)
+                self._visit_statement(stmt, ctx)
 
     def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx) -> None:
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]
 
-        cond = self._visit_expr_top(stmt.cond, ctx, force=True)
+        cond = self._force_value(self._eval_rival(stmt.cond, ctx))
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
@@ -362,7 +371,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-            cond = self._visit_expr_top(stmt.cond, ctx, force=True)
+            cond = self._force_value(self._eval_rival(stmt.cond, ctx))
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
@@ -418,12 +427,13 @@ class RealInterpreter(Interpreter):
     More information on the Rival library and the Herbie project can
     be found here: https://herbie.uwplse.org/.
     """
-    
-    logging: bool
-    """enable logging?"""
+
+    rival: RivalManager
+    """Rival object for evaluating expressions"""
 
     def __init__(self, logging: bool = False):
-        self.logging = logging
+        self.rival = RivalManager(logging=logging)
+        self.rival.set_print_ival(True)
 
     def eval(
         self,
@@ -433,4 +443,4 @@ class RealInterpreter(Interpreter):
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
-        return _Interpreter(logging=self.logging).eval(func.ir, args, ctx)
+        return _Interpreter(self.rival).eval(func.ir, args, ctx)
