@@ -8,7 +8,7 @@ from fractions import Fraction
 from typing import Any, Optional, Sequence, TypeAlias
 
 from titanfp.arithmetic.evalctx import EvalCtx, determine_ctx
-from titanfp.arithmetic.ieee754 import Float, ieee_ctx
+from titanfp.arithmetic.ieee754 import Float, IEEECtx, ieee_ctx
 from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.digital import Digital
 from titanfp.titanic.ops import RM
@@ -85,10 +85,14 @@ _method_table: dict[str, str] = {
     'signbit': 'signbit',
 }
 
-def _interval_to_real(val: RealInterval):
+def _interval_to_real(val: RealInterval, ctx: EvalCtx):
+        # rounding contexts
+        assert isinstance(ctx, IEEECtx)
+        lo_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RAZ)
+        hi_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTZ)
         # round the endpoints inwards, see if they converge
-        lo = Float(x=val.lo, ctx=ieee_ctx(11, 64, RM.RAZ))
-        hi = Float(x=val.hi, ctx=ieee_ctx(11, 64, RM.RTZ))
+        lo = Float(x=val.lo, ctx=lo_ctx)
+        hi = Float(x=val.hi, ctx=hi_ctx)
         if lo != hi:
             raise InsufficientPrecisionError(None, None)
         else:
@@ -166,7 +170,8 @@ class _Interpreter(ReduceVisitor):
             except FunctionReturnException as e:
                 return e.value
             except InsufficientPrecisionError as e:
-                print(f"Insufficient precision, retrying iter={iter_num}")
+                if self.rival.logging:
+                    print(f"Insufficient precision, retrying iter={iter_num}")
 
 
     def _lookup(self, name: NamedId):
@@ -298,7 +303,7 @@ class _Interpreter(ReduceVisitor):
             # numerical constant
             return val
 
-    def _force_value(self, val: bool | str | RealInterval):
+    def _force_value(self, val: bool | str | RealInterval, ctx: EvalCtx):
         """
         Not every expression is evaluated to a concrete value.
         This function ensures that the result is a concrete value.
@@ -309,11 +314,11 @@ class _Interpreter(ReduceVisitor):
             case str():
                 val = self.rival.eval_expr(val)
                 if isinstance(val, RealInterval):
-                    return _interval_to_real(val)
+                    return _interval_to_real(val, ctx)
                 else:
                     return val
             case RealInterval():
-                return _interval_to_real(val)
+                return _interval_to_real(val, ctx)
             case _:
                 raise NotImplementedError('unreachable', val)
 
@@ -336,7 +341,7 @@ class _Interpreter(ReduceVisitor):
                 raise NotImplementedError('unknown variable', stmt.var)
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
-        cond = self._force_value(self._eval_rival(stmt.cond, ctx))
+        cond = self._force_value(self._eval_rival(stmt.cond, ctx), ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
@@ -348,7 +353,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.lhs]
 
     def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
-        cond = self._force_value(self._eval_rival(stmt.cond, ctx))
+        cond = self._force_value(self._eval_rival(stmt.cond, ctx), ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
@@ -365,7 +370,7 @@ class _Interpreter(ReduceVisitor):
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
-        test = self._force_value(self._eval_rival(stmt.test, ctx))
+        test = self._force_value(self._eval_rival(stmt.test, ctx), ctx)
         if not isinstance(test, bool):
             raise TypeError(f'expected a boolean, got {test}')
         if not test:
@@ -374,8 +379,9 @@ class _Interpreter(ReduceVisitor):
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx) -> bool | float:
         # since we are returning we actually want a value
+        self.rival.set_precision(ctx.p)
         val = self._eval_rival(stmt.expr, ctx)
-        return self._force_value(val)
+        return self._force_value(val, ctx)
 
     def _visit_block(self, block: Block, ctx: EvalCtx):
         for stmt in block.stmts:
@@ -390,7 +396,7 @@ class _Interpreter(ReduceVisitor):
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]
 
-        cond = self._force_value(self._eval_rival(stmt.cond, ctx))
+        cond = self._force_value(self._eval_rival(stmt.cond, ctx), ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
@@ -400,7 +406,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-            cond = self._force_value(self._eval_rival(stmt.cond, ctx))
+            cond = self._force_value(self._eval_rival(stmt.cond, ctx), ctx)
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
@@ -414,10 +420,10 @@ class _Interpreter(ReduceVisitor):
 
     def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
         raise NotImplementedError
-    
+
     def _visit_constant(self, e: Constant, ctx: EvalCtx):
         raise NotImplementedError
-    
+
     def _visit_tuple_expr(self, e: TupleExpr, ctx: EvalCtx):
         raise NotImplementedError
 
