@@ -14,7 +14,7 @@ from titanfp.titanic.digital import Digital
 from titanfp.titanic.ops import RM
 
 from .interval import BoolInterval, RealInterval
-from .rival_manager import RivalManager, InsufficientPrecisionError
+from .rival_manager import RivalManager, InsufficientPrecisionError, ConvergenceFailed
 
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
@@ -168,8 +168,7 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError(f'unsupported argument type {arg.ty}')
 
-        # TODO: how to loop
-        for iter_num in range(5):
+        for iter_num in range(20):
             try:
                 self._visit_block(func.body, ctx)
                 raise RuntimeError('no return statement encountered')
@@ -178,6 +177,9 @@ class _Interpreter(ReduceVisitor):
             except InsufficientPrecisionError as e:
                 if self.rival.logging:
                     print(f"Insufficient precision, retrying iter={iter_num}")
+                iter_num += 1
+
+        raise ConvergenceFailed('failed to converge')
 
 
     def _lookup(self, name: NamedId):

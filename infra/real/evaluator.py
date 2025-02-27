@@ -3,7 +3,7 @@ from .load import load_funs
 from .sample import sample
 
 from fpy2 import *
-from fpy2.runtime.real.rival_manager import PrecisionLimitExceeded
+from fpy2.runtime.real.rival_manager import PrecisionLimitExceeded, ConvergenceFailed
 
 _disabled = [
     # Too hard
@@ -32,8 +32,10 @@ def _run_one(fun: Function, rt: Interpreter, num_samples: int):
     for pt in pts:
         try:
             rt.eval(fun, pt)
-        except PrecisionLimitExceeded:
+        except ConvergenceFailed:
             print('X', end='', flush=True)
+        except PrecisionLimitExceeded:
+            print('?', end='', flush=True)
         print('.', end='', flush=True)
     print('', flush=True)
 
