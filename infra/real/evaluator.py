@@ -32,11 +32,11 @@ def _run_one(fun: Function, rt: Interpreter, num_samples: int):
     for pt in pts:
         try:
             rt.eval(fun, pt)
+            print('.', end='', flush=True)
         except ConvergenceFailed:
             print('X', end='', flush=True)
         except PrecisionLimitExceeded:
             print('?', end='', flush=True)
-        print('.', end='', flush=True)
     print('', flush=True)
 
 
