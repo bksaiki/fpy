@@ -29,7 +29,6 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
-
 MAX_ITERS = 50
 
 """Maps python operator to the corresponding operator in Rival"""
@@ -121,6 +120,9 @@ class _Interpreter(ReduceVisitor):
     req_prec: dict[NamedId, int]
     """mapping from variables names to required precision"""
 
+    visited: set[NamedId]
+    """"set of visited variables during this iteration"""
+
     dirty: bool
     """has a variable precision been updated?"""
 
@@ -130,6 +132,8 @@ class _Interpreter(ReduceVisitor):
         self.env = {}
         self.curr_prec = {}
         self.req_prec = {}
+        self.visited = set()
+        self.dirty = False
 
     def _arg_to_real(self, arg: Any):
         if isinstance(arg, str):
@@ -178,6 +182,7 @@ class _Interpreter(ReduceVisitor):
         iter_num = 0
         while iter_num < MAX_ITERS:
             try:
+                self.visited = set()
                 self.dirty = False
                 self._visit_block(func.body, ctx)
                 raise RuntimeError('no return statement encountered')
@@ -353,8 +358,11 @@ class _Interpreter(ReduceVisitor):
                     self.curr_prec[stmt.var] = ctx.p
                 else:
                     # revisiting this assignment
-                    self.curr_prec[stmt.var] = 2 * self.curr_prec[stmt.var]
-                    self.dirty = True
+                    if stmt.var not in self.visited:
+                        # first time visiting during this iteration
+                        self.curr_prec[stmt.var] = 2 * self.curr_prec[stmt.var]
+                        self.visited.add(stmt.var)
+                        self.dirty = True
 
                 self.rival.set_precision(self.curr_prec[stmt.var])
                 self.env[stmt.var] = self._eval_rival(stmt.expr, ctx)
