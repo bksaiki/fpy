@@ -88,15 +88,19 @@ _method_table: dict[str, str] = {
 def _interval_to_real(val: RealInterval, ctx: EvalCtx):
         # rounding contexts
         assert isinstance(ctx, IEEECtx)
-        lo_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RAZ)
-        hi_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTZ)
+        lo_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTP)
+        hi_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTN)
         # round the endpoints inwards, see if they converge
         lo = Float(x=val.lo, ctx=lo_ctx)
         hi = Float(x=val.hi, ctx=hi_ctx)
         if lo != hi:
-            raise InsufficientPrecisionError(None, None)
-        else:
-            return lo
+            raise InsufficientPrecisionError(str(val), ctx.p)
+        # converged to the same value
+        return lo
+
+def _digital_to_str(x: Digital) -> str:
+    sign_str = '-' if x.negative else '+'
+    return f'{sign_str}{x.c}e{x.exp}'
 
 
 class _Interpreter(ReduceVisitor):
@@ -121,8 +125,12 @@ class _Interpreter(ReduceVisitor):
         self.req_prec = {}
 
     def _arg_to_real(self, arg: Any):
-        if isinstance(arg, str | int | float | Digital):
+        if isinstance(arg, str):
+            return arg
+        elif isinstance(arg, int | float):
             return str(arg)
+        elif isinstance(arg, Digital):
+            return _digital_to_str(arg)
         elif isinstance(arg, tuple | list):
             raise NotImplementedError()
         else:
@@ -152,11 +160,9 @@ class _Interpreter(ReduceVisitor):
                 case AnyType():
                     x = self._arg_to_real(val)
                     if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = RealInterval.from_val(x)
+                        self.env[arg.name] = x
                 case RealType():
                     x = self._arg_to_real(val)
-                    if not isinstance(x, RealInterval):
-                        raise TypeError(f'Expected real value, got {val}')
                     if isinstance(arg.name, NamedId):
                         self.env[arg.name] = x
                 case _:
@@ -279,7 +285,7 @@ class _Interpreter(ReduceVisitor):
         elif isinstance(arg, str):
             return arg
         elif isinstance(arg, RealInterval):
-            return f'(ival {arg.lo} {arg.hi})'
+            return f'(ival {arg.lo} {arg.hi} {arg.prec})'
         else:
             raise NotImplementedError(f'unknown argument type {arg}')
 

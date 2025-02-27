@@ -46,17 +46,16 @@ class RealInterval(Interval):
     """Real interval."""
     lo: str
     hi: str
+    prec: int
 
-    def __init__(self, lo: str, hi: str):
+    def __init__(self, lo: str, hi: str, prec: int):
         self.lo = lo
         self.hi = hi
+        self.prec = prec
 
     @staticmethod
     def from_val(val: str):
-        return RealInterval(val, val)
-    
+        return RealInterval(val, val, 53)
+
     def union(self, other: Self):
-        pass
-    
-    def __str__(self):
-        return f'(ival {self.lo} {self.hi})'
+        raise NotImplementedError('unimplemented')

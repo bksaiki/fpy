@@ -21,6 +21,7 @@ _disabled = [
     # tensor
     'Symplectic_Oscillator',
     'Flower',
+    'Arrow_Hurwicz'
 ]
 
 def _run_one(fun: Function, rt: Interpreter, num_samples: int):

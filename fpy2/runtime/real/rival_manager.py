@@ -93,7 +93,7 @@ class RivalManager:
             else:
                 lo = matches.group(1)
                 hi = matches.group(2)
-                return RealInterval(lo, hi)
+                return RealInterval(lo, hi, self.prec + 1)
 
     def set_print_ival(self, flag: bool):
         self.send_command(f"(set print-ival? #{'t' if flag else 'f'})", wait_on_output=False)
