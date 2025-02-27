@@ -102,12 +102,21 @@ class _Interpreter(ReduceVisitor):
 
     rival: RivalManager
     """Rival object for evaluating expressions"""
-    
-    def __init__(self, rival: RivalManager):
-        self.env = {}
-        self.rival = rival
 
-    def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
+    curr_prec: dict[NamedId, int]
+    """mapping from variables names to current precision"""
+
+    req_prec: dict[NamedId, int]
+    """mapping from variables names to required precision"""
+
+    def __init__(self, rival: RivalManager):
+        self.rival = rival
+        self.env = {}
+        self.curr_prec = {}
+        self.req_prec = {}
+
+
+    def _arg_to_real(self, arg: Any):
         if isinstance(arg, str | int | float | Digital):
             return str(arg)
         elif isinstance(arg, tuple | list):
@@ -137,11 +146,11 @@ class _Interpreter(ReduceVisitor):
         for val, arg in zip(args, func.args):
             match arg.ty:
                 case AnyType():
-                    x = self._arg_to_mpmf(val, ctx)
+                    x = self._arg_to_real(val)
                     if isinstance(arg.name, NamedId):
                         self.env[arg.name] = RealInterval.from_val(x)
                 case RealType():
-                    x = self._arg_to_mpmf(val, ctx)
+                    x = self._arg_to_real(val)
                     if not isinstance(x, RealInterval):
                         raise TypeError(f'Expected real value, got {val}')
                     if isinstance(arg.name, NamedId):
@@ -300,6 +309,8 @@ class _Interpreter(ReduceVisitor):
     def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
         match stmt.var:
             case NamedId():
+                if stmt.var not in self.req_prec:
+                    self.req_prec[stmt.var] = ctx.p
                 self.env[stmt.var] = self._eval_rival(stmt.expr, ctx)
             case UnderscoreId():
                 pass
@@ -406,7 +417,7 @@ class _Interpreter(ReduceVisitor):
 
     def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx):
         raise NotImplementedError
-    
+
     def _visit_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
         raise NotImplementedError
 
