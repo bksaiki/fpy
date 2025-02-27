@@ -99,8 +99,9 @@ def _interval_to_real(val: RealInterval, ctx: EvalCtx):
         return lo
 
 def _digital_to_str(x: Digital) -> str:
-    sign_str = '-' if x.negative else '+'
-    return f'{sign_str}{x.c}e{x.exp}'
+    m = (-1 if x.negative else 1) * x.c
+    pow2 = Fraction(2) ** x.exp
+    return str(m * pow2)
 
 
 class _Interpreter(ReduceVisitor):
@@ -176,9 +177,11 @@ class _Interpreter(ReduceVisitor):
                 return e.value
             except InsufficientPrecisionError as e:
                 if self.rival.logging:
-                    print(f"Insufficient precision, retrying iter={iter_num}")
+                    print(f"Insufficient precision, retrying iter={iter_num}, e={e.expr}, prec={e.prec}")
                 iter_num += 1
 
+        # TODO: if we get here, we didn't hit the precision limit
+        # which means we never increased precision anywhere
         raise ConvergenceFailed('failed to converge')
 
 
@@ -305,8 +308,9 @@ class _Interpreter(ReduceVisitor):
             return val
         elif val.startswith('('):
             # expression to be evaluated by Rival
-            self.rival.define_function(f"(f {' '.join(map(str, self.env.keys()))}) {val}")
-            return self.rival.eval_expr(f"f {' '.join(map(self._arg_to_rival, self.env.values()))}")
+            fun_str = f"(f {' '.join(map(str, self.env.keys()))}) {val}"
+            self.rival.define_function(fun_str)
+            return self.rival.eval_expr(f"f {' '.join(map(self._arg_to_rival, self.env.values()))}", fun_str)
         else:
             # numerical constant
             return val
@@ -320,7 +324,7 @@ class _Interpreter(ReduceVisitor):
             case bool():
                 return val
             case str():
-                val = self.rival.eval_expr(val)
+                val = self.rival.eval_expr(val, val)
                 if isinstance(val, RealInterval):
                     return _interval_to_real(val, ctx)
                 else:
