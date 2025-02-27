@@ -22,7 +22,7 @@ class InsufficientPrecisionError(Exception):
 class RivalManager:
     """Wrapper around a Rival subprocess."""
 
-    prec: Optional[int]
+    prec: int
     """Precision to use for Rival calculations"""
 
     logging: bool
@@ -31,9 +31,9 @@ class RivalManager:
     process: Any
     """Underlying subprocess object"""
 
-    def __init__(self, logging: bool = False):
+    def __init__(self, logging: bool = False, prec: int = 53):
         """Initialize and start the Racket subprocess with the Rival library."""
-        self.prec = None
+        self.prec = prec
         self.logging = logging
         self.process = subprocess.Popen(
             ['racket', '-l', 'rival'],

@@ -29,6 +29,7 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
+
 """Maps python operator to the corresponding operator in Rival"""
 _method_table: dict[str, str] = {
     '+': '+',
@@ -115,7 +116,6 @@ class _Interpreter(ReduceVisitor):
         self.curr_prec = {}
         self.req_prec = {}
 
-
     def _arg_to_real(self, arg: Any):
         if isinstance(arg, str | int | float | Digital):
             return str(arg)
@@ -158,14 +158,15 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError(f'unsupported argument type {arg.ty}')
 
-        try:
-            self._visit_block(func.body, ctx)
-            raise RuntimeError('no return statement encountered')
-        except FunctionReturnException as e:
-            return e.value
-        except InsufficientPrecisionError as e:
-            print(f"Insufficient precision, retrying with p={e.prec}")
-            raise e
+        # TODO: how to loop
+        for iter_num in range(5):
+            try:
+                self._visit_block(func.body, ctx)
+                raise RuntimeError('no return statement encountered')
+            except FunctionReturnException as e:
+                return e.value
+            except InsufficientPrecisionError as e:
+                print(f"Insufficient precision, retrying iter={iter_num}")
 
 
     def _lookup(self, name: NamedId):
@@ -267,6 +268,16 @@ class _Interpreter(ReduceVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'(if {cond} {ift} {iff})'
 
+    def _arg_to_rival(self, arg: bool | str | RealInterval):
+        if isinstance(arg, bool):
+            return '#t' if arg else '#f'
+        elif isinstance(arg, str):
+            return arg
+        elif isinstance(arg, RealInterval):
+            return f'(ival {arg.lo} {arg.hi})'
+        else:
+            raise NotImplementedError(f'unknown argument type {arg}')
+
     def _eval_rival(self, expr: Expr, ctx: EvalCtx):
         """
         Applies Rival to an expression.
@@ -282,7 +293,7 @@ class _Interpreter(ReduceVisitor):
         elif val.startswith('('):
             # expression to be evaluated by Rival
             self.rival.define_function(f"(f {' '.join(map(str, self.env.keys()))}) {val}")
-            return self.rival.eval_expr(f"f {' '.join(map(str, self.env.values()))}")
+            return self.rival.eval_expr(f"f {' '.join(map(self._arg_to_rival, self.env.values()))}")
         else:
             # numerical constant
             return val
@@ -310,7 +321,14 @@ class _Interpreter(ReduceVisitor):
         match stmt.var:
             case NamedId():
                 if stmt.var not in self.req_prec:
+                    # first time visiting this assignment
                     self.req_prec[stmt.var] = ctx.p
+                    self.curr_prec[stmt.var] = ctx.p
+                else:
+                    # revisiting this assignment
+                    self.curr_prec[stmt.var] = 2 * ctx.p
+
+                self.rival.set_precision(self.curr_prec[stmt.var])
                 self.env[stmt.var] = self._eval_rival(stmt.expr, ctx)
             case UnderscoreId():
                 pass
