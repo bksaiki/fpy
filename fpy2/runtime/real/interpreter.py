@@ -90,7 +90,7 @@ def _interval_to_real(val: RealInterval):
         lo = Float(x=val.lo, ctx=ieee_ctx(11, 64, RM.RAZ))
         hi = Float(x=val.hi, ctx=ieee_ctx(11, 64, RM.RTZ))
         if lo != hi:
-            raise ValueError(f'interval {val} did not converge')
+            raise InsufficientPrecisionError(None, None)
         else:
             return lo
 
@@ -326,7 +326,7 @@ class _Interpreter(ReduceVisitor):
                     self.curr_prec[stmt.var] = ctx.p
                 else:
                     # revisiting this assignment
-                    self.curr_prec[stmt.var] = 2 * ctx.p
+                    self.curr_prec[stmt.var] = 2 * self.curr_prec[stmt.var]
 
                 self.rival.set_precision(self.curr_prec[stmt.var])
                 self.env[stmt.var] = self._eval_rival(stmt.expr, ctx)
