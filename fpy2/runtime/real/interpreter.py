@@ -14,7 +14,7 @@ from titanfp.titanic.digital import Digital
 from titanfp.titanic.ops import RM
 
 from .interval import BoolInterval, RealInterval
-from .rival_manager import RivalManager, InsufficientPrecisionError, ConvergenceFailed
+from .rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
 
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
@@ -29,6 +29,8 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
+
+MAX_ITERS = 50
 
 """Maps python operator to the corresponding operator in Rival"""
 _method_table: dict[str, str] = {
@@ -119,6 +121,10 @@ class _Interpreter(ReduceVisitor):
     req_prec: dict[NamedId, int]
     """mapping from variables names to required precision"""
 
+    dirty: bool
+    """has a variable precision been updated?"""
+
+
     def __init__(self, rival: RivalManager):
         self.rival = rival
         self.env = {}
@@ -169,8 +175,10 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError(f'unsupported argument type {arg.ty}')
 
-        for iter_num in range(20):
+        iter_num = 0
+        while iter_num < MAX_ITERS:
             try:
+                self.dirty = False
                 self._visit_block(func.body, ctx)
                 raise RuntimeError('no return statement encountered')
             except FunctionReturnException as e:
@@ -178,11 +186,13 @@ class _Interpreter(ReduceVisitor):
             except InsufficientPrecisionError as e:
                 if self.rival.logging:
                     print(f"Insufficient precision, retrying iter={iter_num}, e={e.expr}, prec={e.prec}")
+                if iter_num > 0 and not self.dirty:
+                    # we didn't increase precision anywhere
+                    raise PrecisionLimitExceeded(f'precision limit exceeded')
                 iter_num += 1
 
-        # TODO: if we get here, we didn't hit the precision limit
-        # which means we never increased precision anywhere
-        raise ConvergenceFailed('failed to converge')
+        # something has definitely went wrong
+        raise NotImplementedError('unreachable')
 
 
     def _lookup(self, name: NamedId):
@@ -344,6 +354,7 @@ class _Interpreter(ReduceVisitor):
                 else:
                     # revisiting this assignment
                     self.curr_prec[stmt.var] = 2 * self.curr_prec[stmt.var]
+                    self.dirty = True
 
                 self.rival.set_precision(self.curr_prec[stmt.var])
                 self.env[stmt.var] = self._eval_rival(stmt.expr, ctx)
@@ -352,11 +363,18 @@ class _Interpreter(ReduceVisitor):
             case _:
                 raise NotImplementedError('unknown variable', stmt.var)
 
+    def _visit_cond(self, cond: Expr, ctx: EvalCtx):
+        val = self._force_value(self._eval_rival(cond, ctx), ctx)
+        if val == '+nan.0':
+            # Rival instance returns +nan.0 even if the expression is a boolean
+            return False
+        elif not isinstance(val, bool):
+            raise TypeError(f'expected a boolean, got {val}')
+        else:
+            return val
+
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
-        cond = self._force_value(self._eval_rival(stmt.cond, ctx), ctx)
-        if not isinstance(cond, bool):
-            raise TypeError(f'expected a boolean, got {cond}')
-        elif cond:
+        if self._visit_cond(stmt.cond, ctx):
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.rhs]
@@ -365,10 +383,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.lhs]
 
     def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
-        cond = self._force_value(self._eval_rival(stmt.cond, ctx), ctx)
-        if not isinstance(cond, bool):
-            raise TypeError(f'expected a boolean, got {cond}')
-        elif cond:
+        if self._visit_cond(stmt.cond, ctx):
             self._visit_block(stmt.ift, ctx)
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.lhs]
@@ -382,9 +397,7 @@ class _Interpreter(ReduceVisitor):
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
-        test = self._force_value(self._eval_rival(stmt.test, ctx), ctx)
-        if not isinstance(test, bool):
-            raise TypeError(f'expected a boolean, got {test}')
+        test = self._visit_cond(stmt.test, ctx)
         if not test:
             raise AssertionError(stmt.msg)
         return ctx
@@ -408,19 +421,11 @@ class _Interpreter(ReduceVisitor):
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]
 
-        cond = self._force_value(self._eval_rival(stmt.cond, ctx), ctx)
-        if not isinstance(cond, bool):
-            raise TypeError(f'expected a boolean, got {cond}')
-
-        while cond:
+        while self._visit_cond(stmt.cond, ctx):
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
-
-            cond = self._force_value(self._eval_rival(stmt.cond, ctx), ctx)
-            if not isinstance(cond, bool):
-                raise TypeError(f'expected a boolean, got {cond}')
 
     # override for typing
     def _visit_expr(self, e: Expr, ctx: EvalCtx) -> NamedId | str | bool:

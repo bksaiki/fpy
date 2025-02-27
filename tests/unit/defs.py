@@ -445,7 +445,7 @@ def lod_anisotropic(
         minor = major / aniso_ratio
     else:
         minor = det / major
-    
+
     # clamp LOD
     if minor < 1.0:
         aniso_ratio = fmax(1.0, aniso_ratio * minor)
