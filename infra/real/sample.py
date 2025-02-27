@@ -14,7 +14,7 @@ def sample_val(ctx: EvalCtx):
         case _:
             raise NotImplementedError(ctx)
 
-def sample_one(args: list[Argument], ctx: EvalCtx):
+def sample_one(args: list[Argument], ctx: EvalCtx) -> list[ieee754.Float]:
     if len(args) == 0:
         return []
 
@@ -29,7 +29,15 @@ def sample_one(args: list[Argument], ctx: EvalCtx):
     # TODO: reject points that are not in the domain of the function
     return pt
 
-def sample(fun: Function, n: int):
+def sample(fun: Function, n: int, only_real: bool = False):
     default_ctx = ieee754.ieee_ctx(11, 64)
     ctx = determine_ctx(default_ctx, fun.ir.ctx)
-    return [sample_one(fun.args, ctx) for _ in range(n)]
+
+    pts: list[list[ieee754.Float]] = []
+    while len(pts) < n:
+        pt = sample_one(fun.args, ctx)
+        if only_real and any(map(lambda x: x.is_nar(), pt)):
+            continue
+        pts.append(pt)
+
+    return pts

@@ -3,6 +3,7 @@ from .load import load_funs
 from .sample import sample
 
 from fpy2 import *
+from fpy2.runtime.real.rival_manager import PrecisionLimitExceeded
 
 _disabled = [
     # Too hard
@@ -16,22 +17,28 @@ _disabled = [
     # Infinite loops
     'Euler_Oscillator',
     'Filter',
-    'Circle'
+    'Circle',
+    # tensor
+    'Symplectic_Oscillator',
+    'Flower',
 ]
 
 def _run_one(fun: Function, rt: Interpreter, num_samples: int):
     # sample N points
-    pts = sample(fun, num_samples)
+    pts = sample(fun, num_samples, only_real=True)
     # evaluate over each point
     print(f'evaluating {fun.name} ', end='', flush=True)
     for pt in pts:
-        rt.eval(fun, pt)
+        try:
+            rt.eval(fun, pt)
+        except PrecisionLimitExceeded:
+            print('X', end='', flush=True)
         print('.', end='', flush=True)
     print('', flush=True)
 
 
 def run_eval_real(config: Config):
-    rt = RealInterpreter(logging=True)
+    rt = RealInterpreter()
     funs = load_funs(config.input_paths)
 
     print(f'testing over {len(funs)} functions')

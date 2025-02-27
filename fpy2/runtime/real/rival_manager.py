@@ -5,8 +5,9 @@ from typing import Any, Optional
 
 from .interval import RealInterval
 
-
 INTERVAL_REGEX = re.compile(r"\[([^\s]+),[\s*]([^\s]+)\]")
+
+MAX_RIVAL_PRECISION = 2 ** 14
 
 class InsufficientPrecisionError(Exception):
     """Raised when the precision is not sufficient for evaluation."""
@@ -18,6 +19,12 @@ class InsufficientPrecisionError(Exception):
         super().__init__(f"Precision {prec} is insufficient for: {e}")
         self.expr = e
         self.prec = prec
+
+class PrecisionLimitExceeded(Exception):
+
+    def __init__(self, msg: str):
+        super().__init__(msg)
+
 
 class RivalManager:
     """Wrapper around a Rival subprocess."""
@@ -41,7 +48,6 @@ class RivalManager:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1
         )
 
     def send_command(self, command: str, wait_on_output: bool = True) -> Optional[str]:
@@ -63,7 +69,7 @@ class RivalManager:
         return self.process.stdout.readline().strip()
 
 
-    def eval_expr(self, expr: str) -> bool | RealInterval:
+    def eval_expr(self, expr: str) -> bool | str | RealInterval:
         """Evaluate an expression using Rival."""
         response = self.send_command(f'(eval {expr})')
         assert response is not None
@@ -74,6 +80,12 @@ class RivalManager:
             return False
         elif "Could not evaluate" in response:
             raise InsufficientPrecisionError(expr, self.prec)
+        elif 'Domain error' in response:
+            return '+nan.0' # TODO: is it safe to return this?
+        elif response == '+inf.bf':
+            return '+inf.0' # TODO: is it safe to return this?
+        elif response == '-inf.bf':
+            return '-inf.0' # TODO: is it safe to return this?
         else:
             matches = re.match(INTERVAL_REGEX, response)
             if matches is None:
@@ -88,6 +100,9 @@ class RivalManager:
 
     def set_precision(self, prec: int):
         """Set precision in Rival."""
+        if prec > MAX_RIVAL_PRECISION:
+            raise PrecisionLimitExceeded(f'Precision {prec} exceeds maximum of {MAX_RIVAL_PRECISION}')
+
         self.prec = prec
         self.send_command(f'(set precision {prec})', wait_on_output=False)
 
