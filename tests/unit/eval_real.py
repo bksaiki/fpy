@@ -1,4 +1,5 @@
 from fpy2 import Function, set_default_interpreter, RealInterpreter
+from fpy2.runtime.real.rival_manager import PrecisionLimitExceeded
 from .defs import tests, examples
 
 _banned_tests = [
@@ -30,8 +31,14 @@ def test_eval():
         assert isinstance(core, Function)
         if core.name not in _banned_tests:
             args = [1.0 for _ in range(len(core.args))]
-            print(core.name, fn(*args))
+            try:
+                result = fn(*args)
+                print(core.name, result)
+            except PrecisionLimitExceeded:
+                print(core.name, 'precision limit exceeded')
+
 
 if __name__ == '__main__':
-    set_default_interpreter(RealInterpreter(True))
+    rt = RealInterpreter(logging=True)
+    set_default_interpreter(rt)
     test_eval()
