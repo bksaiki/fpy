@@ -14,5 +14,5 @@ source .env/bin/activate
 ```
 Then, install the dependencies:
 ```bash
-pip install .[dev]
+pip install -e .[dev]
 ```
