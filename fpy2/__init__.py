@@ -12,6 +12,7 @@ from .runtime import (
     RealInterpreter,
     TitanicInterpreter,
     set_default_interpreter,
-    get_default_interpreter
+    get_default_interpreter,
+    FunctionProfiler
 )
 
