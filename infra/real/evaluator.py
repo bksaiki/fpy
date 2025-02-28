@@ -24,25 +24,40 @@ _disabled = [
     'Arrow_Hurwicz'
 ]
 
-def _run_one(fun: Function, rt: Interpreter, num_samples: int):
+def _run_one(
+    fun: Function,
+    rt: Interpreter,
+    num_samples: int,
+    print_result: bool = False
+):
     # sample N points
     pts = sample(fun, num_samples, only_real=True)
     # evaluate over each point
     print(f'evaluating {fun.name} ', end='', flush=True)
     for pt in pts:
         try:
-            rt.eval(fun, pt)
-            print('.', end='', flush=True)
+            result = rt.eval(fun, pt)
+            if print_result:
+                print(' ', result, flush=True)
+            else:
+                print('.', end='', flush=True)
         except ConvergenceFailed:
-            print('X', end='', flush=True)
+            if print_result:
+                print(' X', flush=True)
+            else:
+                print('X', end='', flush=True)
         except PrecisionLimitExceeded:
-            print('?', end='', flush=True)
+            if print_result:
+                print(' ?', flush=True)
+            else:
+                print('?', end='', flush=True)
     print('', flush=True)
 
 
 def run_eval_real(config: Config):
     rt = RealInterpreter()
     funs = load_funs(config.input_paths)
+    print(len(funs))
 
     print(f'testing over {len(funs)} functions')
     for fun in funs:
