@@ -2,11 +2,16 @@
 Profiler for numerical accuracy.
 """
 
+import math
+
 from typing import Any, Optional
+from titanfp.arithmetic.ieee754 import Float
 
 from ..function import Function, Interpreter, get_default_interpreter
 from .interpreter import RealInterpreter
 from .rival_manager import PrecisionLimitExceeded
+
+from .error import ordinal_error
 
 class FunctionProfiler:
     """
@@ -31,27 +36,44 @@ class FunctionProfiler:
             interpreter = get_default_interpreter()
         ref_interpreter = RealInterpreter()
 
-        # TODO: what happens when Rival fails
+        skipped_inputs: list[Any] = []
         fl_outputs: list[Any] = []
         ref_outputs: list[Any] = []
+
+        # evaluate for every input
         for input in inputs:
             try:
-                fl_output = interpreter.eval(func, input)
+                # evaluate in both interpreters
                 ref_output = ref_interpreter.eval(func, input)
-                fl_outputs.append(fl_output)
+                fl_output = interpreter.eval(func, input)
+                # add to set of points
                 ref_outputs.append(ref_output)
-            except PrecisionLimitExceeded as e:
-                pass
-
-        # TODO: compute accuracy metrics
-        assert len(fl_outputs) == len(ref_outputs)
+                fl_outputs.append(self._normalize(ref_output, fl_output))
+            except PrecisionLimitExceeded:
+                skipped_inputs.append(input)
 
         # TODO: Use the math library to compute the accuracy metrics
         # Report how many points are being skipped for precision errors
         errors = []
         for fl, ref in zip(fl_outputs, ref_outputs):
-            errors.append(abs(float(fl) - float(ref)) / (abs(float(ref)) + 1e-8) * 100)
+            ord_err = ordinal_error(fl, ref)
+            errors.append(math.log2(ord_err + 1))
 
-        accuracy = 1.0 - sum(errors) / len(errors)
-        return accuracy
+        # TODO: summarize better
+        if errors == []:
+            return (None, len(skipped_inputs))
+        else:
+            avg_error = sum(errors) / len(errors)
+            return (avg_error, len(skipped_inputs))
 
+
+    def _normalize(self, ref, fl):
+        """Returns `fl` so that it is the same type as `ref`."""
+        match ref:
+            case Float():
+                if math.isnan(fl):
+                    return Float(isnan=True, ctx=ref.ctx)
+                else:
+                    return Float(x=fl, ctx=ref.ctx)
+            case _:
+                raise NotADirectoryError(f'unexpected type {ref}')
