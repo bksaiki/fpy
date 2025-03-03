@@ -3,6 +3,7 @@ from pathlib import Path
 
 from .config import EvalMode, Config
 from .evaluator import run_eval_real
+from .func_profiler import run_func_profiler
 
 DEFAULT_NUM_SAMPLES = 10
 
@@ -13,6 +14,10 @@ def _run_eval(config: Config):
     match config.mode:
         case EvalMode.REAL:
             run_eval_real(config)
+        case EvalMode.FUN_PROFILE:
+            run_func_profiler(config)
+        case _:
+            raise ValueError(f"invalid mode: {config.mode}")
 
 parser = ArgumentParser(
     prog='python3 -m infra.real',
