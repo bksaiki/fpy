@@ -74,10 +74,13 @@ class RivalManager:
         return self.process.stdout.readline().strip()
 
 
-    def eval_expr(self, expr: str, fun_str: str) -> bool | str | RealInterval:
+    def eval_expr(self, expr: str, fun_str: Optional[str] = None) -> bool | str | RealInterval:
         """Evaluate an expression using Rival."""
         response = self.send_command(f'(eval {expr})')
         assert response is not None, 'expected a response'
+
+        if fun_str is None:
+            fun_str = expr
 
         if response == "#t":
             return True
