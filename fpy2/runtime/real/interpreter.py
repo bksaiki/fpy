@@ -238,6 +238,8 @@ class _Interpreter(ReduceVisitor):
             return self._apply_and(e, ctx)
         elif isinstance(e, Or):
             return self._apply_or(e, ctx)
+        elif isinstance(e, Range):
+            return self._apply_range(e, ctx)
         else:
             raise NotImplementedError('unknown n-ary expression', e)
 
@@ -266,6 +268,33 @@ class _Interpreter(ReduceVisitor):
     def _apply_or(self, e: Or, ctx: EvalCtx):
         args = [self._visit_expr(arg, ctx) for arg in e.children]
         return self._nary_to_2ary('or', args)
+
+    def _apply_range(self, e: Range, ctx: EvalCtx):
+        stop = self._force_value(self._eval_rival(e.children[0], ctx), ctx)
+        if not isinstance(stop, Float):
+            raise TypeError(f'expected a real number argument, got {stop}')
+        if not stop.is_integer():
+            raise TypeError(f'expected an integer argument, got {stop}')
+        return NDArray([str(i) for i in range(int(stop))])
+
+    def _visit_comp_expr(self, e: CompExpr, ctx: EvalCtx):
+        raise NotImplementedError
+
+    def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
+        raise NotImplementedError
+
+    def _visit_constant(self, e: Constant, ctx: EvalCtx):
+        raise NotImplementedError
+
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: EvalCtx):
+        elts = [self._eval_rival(elt, ctx) for elt in e.children]
+        return NDArray(elts)
+
+    def _visit_tuple_ref(self, e: TupleRef, ctx: EvalCtx):
+        raise NotImplementedError
+
+    def _visit_tuple_set(self, e: TupleSet, ctx: EvalCtx):
+        raise NotImplementedError
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
@@ -326,8 +355,8 @@ class _Interpreter(ReduceVisitor):
         if isinstance(val, NamedId):
             # variable name
             return self.env[val]
-        elif isinstance(val, bool):
-            # boolean
+        elif isinstance(val, bool | NDArray):
+            # boolean or tuple
             return val
         elif val.startswith('('):
             # expression to be evaluated by Rival
@@ -366,6 +395,8 @@ class _Interpreter(ReduceVisitor):
                         raise NotImplementedError(f'unreachable {default}')
             case RealInterval():
                 return _interval_to_real(val, ctx)
+            case NDArray():
+                return NDArray([self._force_value(elt, ctx) for elt in val])
             case _:
                 raise NotImplementedError(f'unreachable {val}')
 
@@ -456,29 +487,6 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-    # override for typing
-    def _visit_expr(self, e: Expr, ctx: EvalCtx) -> NamedId | str | bool:
-        return super()._visit_expr(e, ctx)
-
-    # Currently have no plan to implement functionalities below
-    def _visit_comp_expr(self, e: CompExpr, ctx: EvalCtx):
-        raise NotImplementedError
-
-    def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
-        raise NotImplementedError
-
-    def _visit_constant(self, e: Constant, ctx: EvalCtx):
-        raise NotImplementedError
-
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: EvalCtx):
-        raise NotImplementedError
-
-    def _visit_tuple_ref(self, e: TupleRef, ctx: EvalCtx):
-        raise NotImplementedError
-
-    def _visit_tuple_set(self, e: TupleSet, ctx: EvalCtx):
-        raise NotImplementedError
-
     def _visit_tuple_assign(self, stmt: TupleAssign, ctx: EvalCtx):
         raise NotImplementedError
 
@@ -486,16 +494,34 @@ class _Interpreter(ReduceVisitor):
         raise NotImplementedError
 
     def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx):
-        raise NotImplementedError
+        for phi in stmt.phis:
+            self.env[phi.name] = self.env[phi.lhs]
+            del self.env[phi.lhs]
+
+        iterable = self._visit_expr(stmt.iterable, ctx)
+        if not isinstance(iterable, NDArray):
+            raise TypeError(f'expected a tensor, got {iterable}')
+
+        for val in iterable:
+            if isinstance(stmt.var, NamedId):
+                self.env[stmt.var] = val
+            self._visit_block(stmt.body, ctx)
+            for phi in stmt.phis:
+                self.env[phi.name] = self.env[phi.rhs]
+                del self.env[phi.rhs]
 
     def _visit_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
-        raise NotImplementedError
+        raise NotImplementedError('do not call directly')
 
     def _visit_loop_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
-        raise NotImplementedError
+        raise NotImplementedError('do not call directly')
 
     def _visit_function(self, func: FunctionDef, ctx: EvalCtx):
-        raise NotImplementedError
+        raise NotImplementedError('do not call directly')
+    
+    # override for typing
+    def _visit_expr(self, e: Expr, ctx: EvalCtx) -> NDArray | NamedId | str | bool:
+        return super()._visit_expr(e, ctx)
 
 
 class RealInterpreter(Interpreter):
