@@ -1,20 +1,18 @@
 """
-This module defines the basic floating-point number type
-with infinity and NaN values.
+This module defines the floating-point number type `Float`.
 """
 
-from typing import Optional
+from typing import Optional, Self
 
-from .proj import ProjFloat
 from .real import RealFloat
-from .round import RoundingMode
-from ..utils import Ordering
+from ..utils import default_repr, Ordering, partial_ord, rcomparable
 
-
-class UnboundFloat(ProjFloat):
+@rcomparable(RealFloat)
+@default_repr
+@partial_ord
+class Float:
     """
-    A basic floating-point number with infinity and NaN values.
-    This type is a subtype of `ProjFloat`.
+    The basic floating-point number extended with infinities and NaN.
 
     This type encodes a base-2 number in unnormalized scientific notation:
     `(-1)^s * 2^exp * c` where:
@@ -24,71 +22,211 @@ class UnboundFloat(ProjFloat):
      - `c` is the integer significand.
 
     There are no constraints on the values of `exp` and `c`.
-    Type allows for infinite and NaN values.
+    Unlike `RealFloat`, this number can encode infinity and NaN.
+
+    This type can also encode uncertainty introduced by rounding.
+    The uncertaintly is represented by an interval, also called
+    a rounding envelope. The interval includes this value and
+    extends either below or above it (`interval_down`).
+    The interval always contains this value and may contain
+    the other endpoint as well (`interval_closed`).
+    The size of the interval is `2**(exp + interval_size)`.
+    It must be the case that `interval_size <= 0`.
     """
 
-    is_inf: bool = False
-    """is this value infinity?"""
+    isinf: bool = False
+    """is this number is infinite?"""
+
+    isnan: bool = False
+    """is this number is NaN?"""
+
+    _real: RealFloat
+    """the real number (if it is real)"""
 
     def __init__(
         self,
-        *args,
-        x: Optional[RealFloat] = None,
-        is_inf: Optional[bool] = None,
-        **kwargs
+        s: Optional[bool] = None,
+        exp: Optional[int] = None,
+        c: Optional[int] = None,
+        *,
+        x: Optional[RealFloat | Self] = None,
+        e: Optional[int] = None,
+        m: Optional[int] = None,
+        isinf: Optional[bool] = None,
+        isnan: Optional[bool] = None,
+        interval_size: Optional[int] = None,
+        interval_down: Optional[bool] = None,
+        interval_closed: Optional[bool] = None,
     ):
-        if x is not None and not isinstance(x, RealFloat):
-            raise TypeError(f'expected RealFloat, got {type(x)}')
+        if x is not None and not isinstance(x, RealFloat | Float):
+            raise TypeError(f'expected Float, got {type(x)}')
 
-        super().__init__(*args, x=x, **kwargs)
-
-        # is_inf
-        if is_inf is not None:
-            self.is_inf = is_inf
-        elif x is not None and isinstance(x, UnboundFloat):
-            self.is_inf = x.is_inf
+        if isinf is not None:
+            self.isinf = isinf
+        elif isinstance(x, Float):
+            self.isinf = x.isinf
         else:
-            self.is_inf = type(self).is_inf
+            self.isinf = type(self).isinf
+
+        if isnan is not None:
+            self.isnan = isnan
+        elif isinstance(x, Float):
+            self.isnan = x.isnan
+        else:
+            self.isnan = type(self).isnan
+
+        if self.isinf and self.isnan:
+            raise ValueError('cannot be both infinite and NaN')
+
+        if isinstance(x, RealFloat):
+            real = x
+        elif isinstance(x, Float):
+            real = x._real
+        else:
+            real = None
+
+        self._real = RealFloat(
+            s=s,
+            exp=exp,
+            c=c,
+            x=real,
+            e=e,
+            m=m,
+            interval_size=interval_size,
+            interval_down=interval_down,
+            interval_closed=interval_closed
+        )
+
+    @property
+    def base(self):
+        """Integer base of this number. Always 2."""
+        return 2
+
+    @property
+    def s(self) -> bool:
+        """Is the sign negative?"""
+        return self._real.s
+
+    @property
+    def exp(self) -> int:
+        """Absolute position of the LSB."""
+        return self._real.exp
+
+    @property
+    def c(self) -> int:
+        """Integer significand."""
+        return self._real.c
+
+    @property
+    def p(self):
+        """Minimum number of binary digits required to represent this number."""
+        if self.is_nar():
+            raise ValueError('cannot compute precision of infinity or NaN')
+        return self._real.p
+
+    @property
+    def e(self) -> int:
+        """
+        Normalized exponent of this number.
+
+        When `self.c == 0` (i.e. the number is zero), this method returns
+        `self.exp - 1`. In other words, `self.c != 0` iff `self.e >= self.exp`.
+
+        The interval `[self.exp, self.e]` represents the absolute positions
+        of digits in the significand.
+        """
+        if self.is_nar():
+            raise ValueError('cannot compute exponent of infinity or NaN')
+        return self._real.e
+
+    @property
+    def n(self) -> int:
+        """
+        Position of the first unrepresentable digit below the significant digits.
+        This is exactly `self.exp - 1`.
+        """
+        if self.is_nar():
+            raise ValueError('cannot compute exponent of infinity or NaN')
+        return self._real.n
+
+    @property
+    def m(self) -> int:
+        """Significand of this number."""
+        if self.is_nar():
+            raise ValueError('cannot compute significand of infinity or NaN')
+        return self._real.m
+
+    @property
+    def interval_size(self) -> int | None:
+        """Rounding envelope: size relative to `2**exp`."""
+        return self._real.interval_size
+
+    @property
+    def interval_down(self) -> bool | None:
+        """Rounding envelope: extends below the value."""
+        return self._real.interval_down
+
+    @property
+    def inexact(self) -> bool:
+        """Return whether this number is inexact."""
+        return self._real.inexact
+
+    def is_zero(self) -> bool:
+        """Returns whether this value represents zero."""
+        return not self.is_nar() and self._real.is_zero()
+
+    def is_positive(self) -> bool:
+        """Returns whether this value is positive."""
+        return not self.is_nar() and self._real.is_positive()
+
+    def is_negative(self) -> bool:
+        """Returns whether this value is negative."""
+        return not self.is_nar() and self._real.is_negative()
+
+    def is_integer(self) -> bool:
+        """Returns whether this value is an integer."""
+        return not self.is_nar() and self._real.is_integer()
 
     def is_nar(self) -> bool:
-        return not self.is_inf and super().is_nar()
+        """Return whether this number is infinity or NaN."""
+        return self.isinf or self.isnan
 
-    def compare(self, other):
-        if self.is_nan or isinstance(other, UnboundFloat) and other.is_nan:
-            return None
-        elif self.is_inf:
-            if isinstance(other, UnboundFloat) and other.is_inf:
-                if self.s == other.s:
-                    return Ordering.EQUAL
-                else:
-                    if self.s:
-                        return Ordering.LESS
-                    else:
-                        return Ordering.GREATER
-            else:
+    def as_real(self) -> RealFloat:
+        """Return the real part of this number."""
+        if self.is_nar():
+            raise ValueError('cannot convert infinity or NaN to real')
+        return self._real
+
+    def compare(self, other: Self | RealFloat) -> Optional[Ordering]:
+        """
+        Compare `self` and `other` values returning an `Optional[Ordering]`.
+        """
+        if isinstance(other, RealFloat):
+            if self.isnan:
+                return None
+            elif self.isnan:
                 if self.s:
                     return Ordering.LESS
                 else:
                     return Ordering.GREATER
-        elif isinstance(other, UnboundFloat) and other.is_inf:
-            if other.s:
-                return Ordering.GREATER
             else:
-                return Ordering.LESS
+                return self._real.compare(other)
+        elif isinstance(other, Float):
+            if self.isnan or other.isnan:
+                return None
+            elif self.isinf:
+                if other.isinf and self.s == other.s:
+                    return Ordering.EQUAL
+                elif self.s:
+                    return Ordering.LESS
+                else:
+                    return Ordering.GREATER
+            elif other.isinf:
+                if other.s:
+                    return Ordering.GREATER
+                else:
+                    return Ordering.LESS
+            else:
+                return self._real.compare(other._real)
         else:
-            # OPT: already handled NaN so use RealFloat.compare
-            return RealFloat.compare(self, other)
-
-    def round(
-        self,
-        max_p: Optional[int] = None,
-        min_n: Optional[int] = None,
-        rm = RoundingMode.RNE
-    ):
-        if max_p is None and min_n is None:
-            raise ValueError(f'must specify {max_p} or {min_n}')
-
-        if self.is_nar():
-            return UnboundFloat(x=self)
-        else:
-            return super().round(max_p, min_n, rm)
+            raise TypeError(f'expected Float or RealFloat, got {type(other)}')

@@ -151,7 +151,7 @@ class RealFloat:
     @property
     def e(self) -> int:
         """
-        Unnormalized exponent of this number.
+        Normalized exponent of this number.
 
         When `self.c == 0` (i.e. the number is zero), this method returns
         `self.exp - 1`. In other words, `self.c != 0` iff `self.e >= self.exp`.

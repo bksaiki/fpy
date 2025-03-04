@@ -1,3 +1,2 @@
-from .float import UnboundFloat
-from .proj import ProjFloat
+from .float import Float
 from .real import RealFloat
