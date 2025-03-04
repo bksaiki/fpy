@@ -77,7 +77,7 @@ class RivalManager:
     def eval_expr(self, expr: str, fun_str: str) -> bool | str | RealInterval:
         """Evaluate an expression using Rival."""
         response = self.send_command(f'(eval {expr})')
-        assert response is not None
+        assert response is not None, 'expected a response'
 
         if response == "#t":
             return True
@@ -86,11 +86,11 @@ class RivalManager:
         elif "Could not evaluate" in response:
             raise InsufficientPrecisionError(fun_str, self.prec)
         elif 'Domain error' in response:
-            return '+nan.0' # TODO: is it safe to return this?
+            return 'nan'
         elif response == '+inf.bf':
-            return '+inf.0' # TODO: is it safe to return this?
+            return '+inf'
         elif response == '-inf.bf':
-            return '-inf.0' # TODO: is it safe to return this?
+            return '-inf'
         else:
             matches = re.match(INTERVAL_REGEX, response)
             if matches is None:

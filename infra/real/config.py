@@ -1,6 +1,7 @@
 from enum import IntEnum
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 class EvalMode(IntEnum):
     REAL = 0
@@ -22,3 +23,4 @@ class Config:
     mode: EvalMode
     input_paths: list[Path]
     num_samples: int
+    seed: Optional[int]

@@ -19,7 +19,7 @@ from .rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLi
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
 
-ScalarVal: TypeAlias = BoolInterval | RealInterval
+ScalarVal: TypeAlias = str | bool | RealInterval
 """Type of scalar values in FPy programs."""
 TensorVal: TypeAlias = NDArray
 """Type of tensor values in FPy programs."""
@@ -108,7 +108,7 @@ def _digital_to_str(x: Digital) -> str:
 class _Interpreter(ReduceVisitor):
     """Single-use real number interpreter"""
 
-    env: dict[NamedId, str | RealInterval | bool]
+    env: dict[NamedId, ScalarVal]
     """mappping from variable names to values"""
 
     rival: RivalManager
@@ -299,15 +299,23 @@ class _Interpreter(ReduceVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'(if {cond} {ift} {iff})'
 
-    def _arg_to_rival(self, arg: bool | str | RealInterval):
-        if isinstance(arg, bool):
-            return '#t' if arg else '#f'
-        elif isinstance(arg, str):
-            return arg
-        elif isinstance(arg, RealInterval):
-            return f'(ival {arg.lo} {arg.hi} {arg.prec})'
-        else:
-            raise NotImplementedError(f'unknown argument type {arg}')
+    def _arg_to_rival(self, arg: ScalarVal):
+        match arg:
+            case bool():
+                return '#t' if arg else '#f'
+            case str():
+                if arg == 'nan':
+                    return '+nan.0'
+                elif arg == '+inf':
+                    return '+inf.0'
+                elif arg == '-inf':
+                    return '-inf.0'
+                else:
+                    return arg
+            case RealInterval():
+                return f'(ival {arg.lo} {arg.hi} {arg.prec})'
+            case _:
+                raise NotImplementedError(f'unknown type {arg} {type(arg)}')
 
     def _eval_rival(self, expr: Expr, ctx: EvalCtx):
         """
@@ -330,7 +338,7 @@ class _Interpreter(ReduceVisitor):
             # numerical constant
             return val
 
-    def _force_value(self, val: bool | str | RealInterval, ctx: EvalCtx):
+    def _force_value(self, val: ScalarVal, ctx: EvalCtx):
         """
         Not every expression is evaluated to a concrete value.
         This function ensures that the result is a concrete value.
@@ -339,15 +347,27 @@ class _Interpreter(ReduceVisitor):
             case bool():
                 return val
             case str():
-                val = self.rival.eval_expr(val, val)
-                if isinstance(val, RealInterval):
-                    return _interval_to_real(val, ctx)
-                else:
-                    return val
+                match self.rival.eval_expr(self._arg_to_rival(val), val):
+                    case bool() as b:
+                        return b
+                    case str() as s:
+                        assert isinstance(ctx, IEEECtx), 'expected an IEEECtx'
+                        if s == 'nan':
+                            return Float(isnan=True, ctx=ctx)
+                        elif s == '+inf':
+                            return Float(isinf=True, negative=False, ctx=ctx)
+                        elif s == '-inf':
+                            return Float(isinf=True, negative=True, ctx=ctx)
+                        else:
+                            raise NotImplementedError(f'unknown string value {s}')
+                    case RealInterval() as ival:
+                        return _interval_to_real(ival, ctx)
+                    case default:
+                        raise NotImplementedError(f'unreachable {default}')
             case RealInterval():
                 return _interval_to_real(val, ctx)
             case _:
-                raise NotImplementedError('unreachable', val)
+                raise NotImplementedError(f'unreachable {val}')
 
     def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
         match stmt.var:
@@ -372,13 +392,14 @@ class _Interpreter(ReduceVisitor):
                 raise NotImplementedError('unknown variable', stmt.var)
 
     def _visit_cond(self, cond: Expr, ctx: EvalCtx):
-        val = self._force_value(self._eval_rival(cond, ctx), ctx)
-        if val == '+nan.0':
+        v = self._eval_rival(cond, ctx)
+        if v == 'nan':
             # Rival instance returns +nan.0 even if the expression is a boolean
             return False
-        elif not isinstance(val, bool):
-            raise TypeError(f'expected a boolean, got {val}')
         else:
+            val = self._force_value(v, ctx)
+            if not isinstance(val, bool):
+                raise TypeError(f'expected a boolean, got {val}')
             return val
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):

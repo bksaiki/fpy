@@ -34,7 +34,7 @@ class FunctionProfiler:
         """
         if interpreter is None:
             interpreter = get_default_interpreter()
-        ref_interpreter = RealInterpreter()
+        ref_interpreter = RealInterpreter(logging=True)
 
         skipped_inputs: list[Any] = []
         fl_outputs: list[Any] = []
