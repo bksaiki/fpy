@@ -13,7 +13,7 @@ from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.digital import Digital
 from titanfp.titanic.ops import RM
 
-from .interval import BoolInterval, RealInterval
+from .interval import RealInterval
 from .rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
 
 from ..function import Interpreter, Function, FunctionReturnException
@@ -403,6 +403,9 @@ class _Interpreter(ReduceVisitor):
     def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
         match stmt.var:
             case NamedId():
+                # only `SourceId` comes from the parser
+                # if isinstance(stmt.var, SourceId):
+                #   <do something>
                 if stmt.var not in self.req_prec:
                     # first time visiting this assignment
                     self.req_prec[stmt.var] = ctx.p

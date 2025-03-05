@@ -220,7 +220,8 @@ class Parser:
         if e.id == '_':
             return UnderscoreId()
         else:
-            return SourceId(e.id)
+            loc = self._parse_location(e)
+            return SourceId(e.id, loc)
 
     def _parse_constant(self, e: ast.Constant):
         # TODO: reparse all constants to get exact value
@@ -653,7 +654,12 @@ class Parser:
 
         args: list[Argument] = []
         for arg in pos_args:
-            ident = UnderscoreId() if arg.arg == '_' else SourceId(arg.arg)
+            if arg.arg == '_':
+                ident: Id = UnderscoreId()
+            else:
+                loc = self._parse_location(arg)
+                ident = SourceId(arg.arg, loc)
+
             if arg.annotation is None:
                 args.append(Argument(ident, AnyTypeAnn(loc), loc))
             else:
