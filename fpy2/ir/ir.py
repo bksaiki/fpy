@@ -6,7 +6,7 @@ from abc import abstractmethod
 from typing import Any, Optional, Self, Sequence
 
 from .types import IRType
-from ..utils import CompareOp, Id, NamedId, UnderscoreId
+from ..utils import CompareOp, Id, NamedId, UnderscoreId, SourceId
 
 class IR:
     """FPy IR: base class for all IR nodes."""
