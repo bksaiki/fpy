@@ -407,7 +407,7 @@ class RealFloat:
             return self._prev_float()
 
 
-    def round_params(self, max_p: Optional[int] = None, min_n: Optional[int] = None):
+    def _round_params(self, max_p: Optional[int] = None, min_n: Optional[int] = None):
         """
         Computes rounding parameters `p` and `n`.
 
@@ -432,32 +432,7 @@ class RealFloat:
 
         return p, n
 
-    def round_at(self, n: int):
-        """
-        Splits `self` at absolute digit position `n`.
-
-        Computes the digits of `self.c` above digit `n` and the digit
-        at position `n` as the "half" bit and a boolean to indicate
-        if any digits below position n are 1.
-        """
-
-        kept, lost = self.split(n)
-        if lost.is_zero():
-            # no bits are remaining at or below n
-            half_bit = False
-            lower_bits = False
-        elif lost.e == n:
-            # the MSB of lo is at position n
-            half_bit = (lost.c & bitmask(lost.p - 1)) != 0
-            lower_bits = (lost.c & bitmask(lost.p - 1)) != 0
-        else:
-            # the MSB of lo is below position n
-            half_bit = False
-            lower_bits = True
-
-        return kept, half_bit, lower_bits
-
-    def _round_prepare(
+    def _round_direction(
         self,
         kept: Self,
         half_bit: bool,
@@ -535,7 +510,7 @@ class RealFloat:
 
         return interval_size, interval_closed, increment
 
-    def round_finalize(
+    def _round_finalize(
         self,
         kept: Self,
         half_bit: bool,
@@ -549,7 +524,7 @@ class RealFloat:
         """
 
         # prepare the rounding operation
-        interval_size, interval_closed, increment = self._round_prepare(kept, half_bit, lower_bits, rm)
+        interval_size, interval_closed, increment = self._round_direction(kept, half_bit, lower_bits, rm)
 
         # increment if necessary
         if increment:
@@ -572,6 +547,31 @@ class RealFloat:
             interval_down=interval_down,
             interval_closed=interval_closed
         )
+
+    def round_at(self, n: int):
+        """
+        Splits `self` at absolute digit position `n`.
+
+        Computes the digits of `self.c` above digit `n` and the digit
+        at position `n` as the "half" bit and a boolean to indicate
+        if any digits below position n are 1.
+        """
+
+        kept, lost = self.split(n)
+        if lost.is_zero():
+            # no bits are remaining at or below n
+            half_bit = False
+            lower_bits = False
+        elif lost.e == n:
+            # the MSB of lo is at position n
+            half_bit = (lost.c & bitmask(lost.p - 1)) != 0
+            lower_bits = (lost.c & bitmask(lost.p - 1)) != 0
+        else:
+            # the MSB of lo is below position n
+            half_bit = False
+            lower_bits = True
+
+        return kept, half_bit, lower_bits
 
 
     def round(
@@ -603,10 +603,10 @@ class RealFloat:
             raise ValueError(f'must specify {max_p} or {min_n}')
 
         # compute rounding parameters
-        p, n = self.round_params(max_p, min_n)
+        p, n = self._round_params(max_p, min_n)
 
         # split the number at the rounding position
         kept, half_bit, lower_bits = self.round_at(n)
 
         # finalize the rounding operation
-        return self.round_finalize(kept, half_bit, lower_bits, p, rm)
+        return self._round_finalize(kept, half_bit, lower_bits, p, rm)

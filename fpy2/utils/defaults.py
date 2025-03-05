@@ -105,9 +105,6 @@ def rcomparable(cls):
     comparison functionality by reversing the comparison.
     """
     def wrap(this_cls):
-        if not hasattr(this_cls, 'compare'):
-            raise TypeError(f"{this_cls.__name__} must implement an abstract method 'compare'")
-
         old_eq = cls.__eq__
         old_lt = cls.__lt__
         old_le = cls.__le__
