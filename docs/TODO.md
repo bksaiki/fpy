@@ -8,6 +8,7 @@ Frontend:
    - preconditions?
 
 Middle-end:
+ - do we really need a separate AST / IR?
 
 Backend:
  - fpc:
@@ -16,3 +17,6 @@ Backend:
     - detect multi-variable while loops
     - detect multi-variable for loops
 
+Misc:
+  - Rational contains a Fraction
+  - decnum and hexnum conversion to Fraction
