@@ -5,8 +5,14 @@ Decorators for the FPy language.
 import inspect
 import textwrap
 
-from typing import Callable, Optional
-from typing import ParamSpec, TypeVar, overload
+from typing import (
+    Any,
+    Callable,
+    Optional,
+    overload,
+    ParamSpec,
+    TypeVar
+)
 
 from .codegen import IRCodegen
 from .definition import DefinitionAnalysis
@@ -41,9 +47,10 @@ def fpy(
     any function that is not valid in FPy.
     """
     if func is None:
-        return lambda func: _apply_decorator(func, **kwargs)
+        # create a new decorator to be applied directly
+        return lambda func: _apply_decorator(func, kwargs)
     else:
-        return _apply_decorator(func, **kwargs)
+        return _apply_decorator(func, kwargs)
 
 def _function_env(func: Callable) -> PythonEnv:
     globs = func.__globals__
@@ -57,7 +64,7 @@ def _function_env(func: Callable) -> PythonEnv:
 
     return PythonEnv(globs, nonlocals)
 
-def _apply_decorator(func: Callable[P, R], **kwargs):
+def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     # read the original source the function
     src_name = inspect.getabsfile(func)
     _, start_line = inspect.getsourcelines(func)
@@ -69,14 +76,25 @@ def _apply_decorator(func: Callable[P, R], **kwargs):
     env = _function_env(func)
 
     # parse the source as an FPy function
-    ast = Parser(src_name, src, start_line).parse()
-    assert isinstance(ast, FunctionDef), "must be a function"
+    parser = Parser(src_name, src, start_line)
+    ast, decorator_list = parser.parse_function()
+
+    # try to reparse the @fpy decorator
+    dec_ast = parser.find_decorator(
+        decorator_list,
+        fpy,
+        globals=func.__globals__,
+        locals=cvars.nonlocals
+    )
+
+    # parse any relevant properties from the decorator
+    props = parser.parse_decorator(dec_ast)
 
     # add context information
-    ast.ctx = { **kwargs }
+    ast.ctx = { **kwargs, **props }
     ast.fvs = fvs
 
-    # print(ast.format())
+    print(ast.ctx)
 
     # analyze and lower to the IR
     SyntaxCheck.analyze(ast)
