@@ -94,8 +94,6 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     ast.ctx = { **kwargs, **props }
     ast.fvs = fvs
 
-    print(ast.ctx)
-
     # analyze and lower to the IR
     SyntaxCheck.analyze(ast)
     DefinitionAnalysis.analyze(ast)

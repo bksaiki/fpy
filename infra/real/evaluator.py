@@ -1,8 +1,8 @@
 from .config import Config
 from .load import load_funs
-from .sample import sample
 
 from fpy2 import *
+from fpy2.runtime import sample_function
 from fpy2.runtime.real.rival_manager import PrecisionLimitExceeded, ConvergenceFailed
 
 _disabled = [
@@ -31,7 +31,7 @@ def _run_one(
     print_result: bool = False
 ):
     # sample N points
-    pts = sample(fun, num_samples, only_real=True)
+    pts = sample_function(fun, num_samples, only_real=True)
     # evaluate over each point
     print(f'evaluating {fun.name} ', end='', flush=True)
     for pt in pts:
