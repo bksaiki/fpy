@@ -34,4 +34,4 @@ disable_error_code = ["import-untyped"]
 
 [tool.ruff.lint]
 extend-select = ["B"]
-ignore = ["F401", "F403", "F405"]
+ignore = ["F401", "F403", "F405", "B905"]
