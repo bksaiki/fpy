@@ -7,6 +7,7 @@ import random
 from titanfp.arithmetic.evalctx import EvalCtx, determine_ctx
 from titanfp.arithmetic import ieee754
 
+from .table import RangeTable
 from ..function import Function
 from ...ir import *
 
@@ -116,7 +117,9 @@ def sample_function(
         return _sample_infallable(fun, num_samples, ctx, only_real)
 
     # process precondition
-    # pre = _precondition_to_table(fun)
+    pre: FunctionDef = fun.ir.ctx['pre']
+    print(pre)
+    table = RangeTable.from_precondition(pre)
 
     # fallback to the default method
     return _sample_default(fun, num_samples, ctx, only_real, ignore_pre)

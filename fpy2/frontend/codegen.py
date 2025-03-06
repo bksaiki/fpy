@@ -241,13 +241,25 @@ class _IRCodegenInstance(AstVisitor):
         return new_props
 
     def _visit_function(self, func: FunctionDef, ctx: None):
+        # translate arguments
         args: list[ir.Argument] = []
         for arg in func.args:
             # TODO: use type annotation
             ty = ir.AnyType()
             args.append(ir.Argument(arg.name, ty))
+
+        # translate properties
+        props: dict[str, Any] = {}
+        for name, val in func.ctx.items():
+            if isinstance(val, FunctionDef):
+                props[name] = self._visit_function(val, ctx)
+            else:
+                props[name] = val
+
+        # translate body
         e = self._visit_block(func.body, ctx)
-        return ir.FunctionDef(func.name, args, e, ir.AnyType(), func.ctx)
+
+        return ir.FunctionDef(func.name, args, e, ir.AnyType(), props)
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: None) -> ir.Expr:
