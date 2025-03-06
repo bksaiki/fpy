@@ -18,6 +18,12 @@ class DisjointUnionError(Exception):
     def __init__(self, msg: str):
         super().__init__(msg)
 
+class DisjointIntersectionError(Exception):
+    """Exception raised when taking the intersection of disjoint intervals."""
+
+    def __init__(self, msg: str):
+        super().__init__(msg)
+
 class RangeTableParseError(Exception):
     """Parsing error for `RangeTable.from_precondition()`."""
 
@@ -60,6 +66,8 @@ class Interval:
         lo_closed: bool,
         hi_closed: bool,
     ):
+        if lo > hi:
+            raise ValueError(f'invalid interval lo={lo}, hi={hi}')
         self.lo = Endpoint(lo, lo_closed)
         self.hi = Endpoint(hi, hi_closed)
 
@@ -75,6 +83,8 @@ class Interval:
 
         lo = max(self.lo.val, other.lo.val)
         hi = min(self.hi.val, other.hi.val)
+        if lo > hi:
+            raise DisjointIntersectionError(f'disjoint intervals {self} and {other}')
 
         if self.lo.val < other.lo.val:
             lo_closed = other.lo.closed
@@ -116,16 +126,26 @@ class RangeTable:
 
     def __init__(
         self,
-        table: dict[NamedId, Interval] = {},
+        table: Optional[dict[NamedId, Interval]] = None,
         valid: bool = True,
         sound: bool = True,
     ):
-        self.table = table
+        if table is None:
+            self.table = {}
+        else:
+            self.table = table
+
         self.valid = valid
         self.sound = sound
 
     def __repr__(self):
         return f'{self.__class__.__name__}(table={str(self.table)}, valid={self.valid}, sound={self.sound})'
+
+    def __getitem__(self, key: NamedId) -> Interval:
+        return self.table[key]
+
+    def __setitem__(self, key: NamedId, value: Interval):
+        self.table[key] = value
 
     @staticmethod
     def null():
@@ -136,6 +156,10 @@ class RangeTable:
     def unsound():
         """Creates an empty unsound range table."""
         return RangeTable(sound=False)
+
+    @staticmethod
+    def default_interval():
+        return Interval(_NEG_INF, _POS_INF, False, False)
 
     @staticmethod
     def from_condition(cond: FunctionDef):
@@ -157,7 +181,7 @@ class RangeTable:
         merged = RangeTable(sound=sound)
         for var, ival in self.table.items():
             if var in other.table:
-                merged.table[var] &= ival
+                merged.table[var] = ival & other.table[var]
             else:
                 merged.table[var] = ival
 
@@ -180,7 +204,7 @@ class RangeTable:
         merged = RangeTable(sound=sound)
         for var, ival in self.table.items():
             if var in other.table:
-                merged.table[var] |= ival
+                merged.table[var] = ival | other.table[var]
             else:
                 merged.table[var] = ival
 
