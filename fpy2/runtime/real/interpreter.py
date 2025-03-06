@@ -15,6 +15,7 @@ from titanfp.titanic.ops import RM
 
 from .interval import RealInterval
 from .rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
+from .expr_trace import ExprTrace
 
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
@@ -87,17 +88,17 @@ _method_table: dict[str, str] = {
 }
 
 def _interval_to_real(val: RealInterval, ctx: EvalCtx):
-        # rounding contexts
-        assert isinstance(ctx, IEEECtx)
-        lo_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTP)
-        hi_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTN)
-        # round the endpoints inwards, see if they converge
-        lo = Float(x=val.lo, ctx=lo_ctx)
-        hi = Float(x=val.hi, ctx=hi_ctx)
-        if lo != hi:
-            raise InsufficientPrecisionError(str(val), ctx.p)
-        # converged to the same value
-        return lo
+    # rounding contexts
+    assert isinstance(ctx, IEEECtx)
+    lo_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTP)
+    hi_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTN)
+    # round the endpoints inwards, see if they converge
+    lo = Float(x=val.lo, ctx=lo_ctx)
+    hi = Float(x=val.hi, ctx=hi_ctx)
+    if lo != hi:
+        raise InsufficientPrecisionError(str(val), ctx.p)
+    # converged to the same value
+    return lo
 
 def _digital_to_str(x: Digital) -> str:
     m = (-1 if x.negative else 1) * x.c
@@ -126,14 +127,22 @@ class _Interpreter(ReduceVisitor):
     dirty: bool
     """has a variable precision been updated?"""
 
+    expr_trace: list[ExprTrace]
+    """list of rival expression trace"""
 
-    def __init__(self, rival: RivalManager):
+    trace: bool
+    """has trace be enabled?"""
+
+
+    def __init__(self, rival: RivalManager, trace: bool):
         self.rival = rival
         self.env = {}
         self.curr_prec = {}
         self.req_prec = {}
         self.visited = set()
         self.dirty = False
+        self.expr_trace = []
+        self.trace = trace
 
     def _arg_to_real(self, arg: Any):
         if isinstance(arg, str):
@@ -150,7 +159,7 @@ class _Interpreter(ReduceVisitor):
     def eval(self,
         func: FunctionDef,
         args: Sequence[Any],
-        ctx: Optional[EvalCtx] = None
+        ctx: Optional[EvalCtx] = None,
     ):
         if not isinstance(func, FunctionDef):
             raise TypeError(f'Expected Function, got {type(func)}')
@@ -184,9 +193,12 @@ class _Interpreter(ReduceVisitor):
             try:
                 self.visited = set()
                 self.dirty = False
+                self.expr_trace.clear()
                 self._visit_block(func.body, ctx)
                 raise RuntimeError('no return statement encountered')
             except FunctionReturnException as e:
+                if self.trace:
+                    return self.expr_trace
                 return e.value
             except InsufficientPrecisionError as e:
                 if self.rival.logging:
@@ -362,7 +374,15 @@ class _Interpreter(ReduceVisitor):
             # expression to be evaluated by Rival
             fun_str = f"(f {' '.join(map(str, self.env.keys()))}) {val}"
             self.rival.define_function(fun_str)
-            return self.rival.eval_expr(f"f {' '.join(map(self._arg_to_rival, self.env.values()))}", fun_str)
+            real_val = self.rival.eval_expr(f"f {' '.join(map(self._arg_to_rival, self.env.values()))}", fun_str)
+
+            # save expression trace
+            if self.trace:
+                env = {key: self._force_value(value, ctx) for key, value in self.env.items()}
+                self.expr_trace.append(ExprTrace(expr, self._force_value(real_val, ctx), env, ctx))
+
+            return real_val
+
         else:
             # numerical constant
             return val
@@ -549,8 +569,17 @@ class RealInterpreter(Interpreter):
         self,
         func: Function,
         args: Sequence[Any],
+        trace = False,
         ctx: Optional[EvalCtx] = None
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
-        return _Interpreter(self.rival).eval(func.ir, args, ctx)
+        return _Interpreter(self.rival, trace).eval(func.ir, args, ctx)
+    
+    def trace(
+        self,
+        func: Function,
+        args: Sequence[Any],
+        ctx: Optional[EvalCtx] = None
+    ):
+        return self.eval(func, args, True, ctx)
