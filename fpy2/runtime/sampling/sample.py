@@ -20,10 +20,6 @@ def _ordinal_to_float(x: int, ctx: ieee754.IEEECtx):
     x = ieee754.bits_to_digital(abs(x))
     return ieee754.Float(negative=negative, x=x, ctx=ctx)
 
-def _precondition_to_table(fun: Function):
-    pre: Expr = fun.ir.ctx['pre']
-    raise NotImplementedError(pre.format())
-
 def _sample_between(
     lo: ieee754.Float,
     hi: ieee754.Float,

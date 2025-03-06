@@ -67,7 +67,13 @@ class Bool(ValueError):
         super().__init__()
         self.val = val
 
-class Decnum(ValueExpr):
+class RealExpr(ValueExpr):
+    """FPy node: abstract real number"""
+
+    def __init__(self):
+        super().__init__()
+
+class Decnum(RealExpr):
     """FPy node: decimal number"""
     val: str
 
@@ -75,7 +81,7 @@ class Decnum(ValueExpr):
         super().__init__()
         self.val = val
 
-class Hexnum(ValueExpr):
+class Hexnum(RealExpr):
     """FPy node: hexadecimal number"""
     val: str
 
@@ -83,7 +89,7 @@ class Hexnum(ValueExpr):
         super().__init__()
         self.val = val
 
-class Integer(ValueExpr):
+class Integer(RealExpr):
     """FPy node: numerical constant (integer)"""
     val: int
 
@@ -91,7 +97,7 @@ class Integer(ValueExpr):
         super().__init__()
         self.val = val
 
-class Rational(ValueExpr):
+class Rational(RealExpr):
     """FPy node: numerical constant (rational)"""
     p: int
     q: int
@@ -101,7 +107,7 @@ class Rational(ValueExpr):
         self.p = p
         self.q = q
 
-class Constant(ValueExpr):
+class Constant(RealExpr):
     """FPy node: numerical constant (symbolic)"""
     val: str
 
@@ -109,7 +115,7 @@ class Constant(ValueExpr):
         super().__init__()
         self.val = val
 
-class Digits(ValueExpr):
+class Digits(RealExpr):
     """FPy node: numerical constant in scientific notation"""
     m: int
     e: int
