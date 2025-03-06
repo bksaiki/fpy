@@ -14,6 +14,7 @@ import titanfp.titanic.gmpmath as gmpmath
 
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
+from ..real.expr_trace import ExprTrace
 
 ScalarVal: TypeAlias = bool | Digital
 """Type of scalar values in FPy programs."""
@@ -87,11 +88,9 @@ _method_table: dict[str, Callable[..., Any]] = {
 
 class _Interpreter(ReduceVisitor):
     """Single-use interpreter for a function"""
-    func: FunctionDef
     env: dict[NamedId, ScalarVal | TensorVal]
 
-    def __init__(self, func: FunctionDef):
-        self.func = func
+    def __init__(self):
         self.env = {}
 
     # TODO: what are the semantics of arguments
@@ -104,21 +103,34 @@ class _Interpreter(ReduceVisitor):
             raise NotImplementedError()
         else:
             raise NotImplementedError(f'unknown argument type {arg}')
+        
+    def eval_expr(
+        self, 
+        expr_trace: list[ExprTrace]
+    ):
+        result = []
+        for trace in expr_trace:
+            self.env = trace.env
+            trace.value = self._visit_expr(trace.expr, trace.ctx)
+            result.append(trace)
+        return result
+
 
     def eval(
         self,
+        func: FunctionDef,
         args: Sequence[Any],
         ctx: Optional[EvalCtx] = None
     ):
         args = tuple(args)
-        if len(args) != len(self.func.args):
-            raise TypeError(f'Expected {len(self.func.args)} arguments, got {len(args)}')
+        if len(args) != len(func.args):
+            raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
         if ctx is None:
             ctx = ieee_ctx(11, 64)
-        ctx = determine_ctx(ctx, self.func.ctx)
+        ctx = determine_ctx(ctx, func.ctx)
 
-        for val, arg in zip(args, self.func.args):
+        for val, arg in zip(args, func.args):
             match arg.ty:
                 case AnyType():
                     x = self._arg_to_mpmf(val, ctx)
@@ -134,7 +146,7 @@ class _Interpreter(ReduceVisitor):
                     raise NotImplementedError(f'unknown argument type {arg.ty}')
 
         try:
-            self._visit_block(self.func.body, ctx)
+            self._visit_block(func.body, ctx)
             raise RuntimeError('no return statement encountered')
         except FunctionReturnException as e:
             return e.value
@@ -523,4 +535,10 @@ class TitanicInterpreter(Interpreter):
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
-        return _Interpreter(func.ir).eval(args, ctx)
+        return _Interpreter().eval(func.ir, args, ctx)
+
+    def eval_expr(
+        self,
+        expr_trace: list[ExprTrace]
+    ):
+        return _Interpreter().eval_expr(expr_trace)
