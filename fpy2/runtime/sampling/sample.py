@@ -114,8 +114,9 @@ def sample_function(
 
     # process precondition
     pre: FunctionDef = fun.ir.ctx['pre']
-    print(pre)
-    table = RangeTable.from_precondition(pre)
+    table = RangeTable.from_condition(pre)
+    if not table.valid or not table.sound:
+        print(f'WARN: cannot parse {pre.format()}: {table}')
 
     # fallback to the default method
     return _sample_default(fun, num_samples, ctx, only_real, ignore_pre)

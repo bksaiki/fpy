@@ -5,9 +5,9 @@ Defines a range table, a map from variable to interval.
 import math
 
 from fractions import Fraction
-from typing import Optional
 
 from ...ir import *
+from ...utils import digits_to_fraction, hexnum_to_fraction, default_repr
 
 _POS_INF = math.inf
 _NEG_INF = -math.inf
@@ -24,14 +24,13 @@ class RangeTableParseError(Exception):
     def __init__(self, msg: str):
         super().__init__(msg)
 
-
 class Endpoint:
     """An interval endpoint."""
 
     val: Fraction | float
     """
     Value of the endpoint.
-    
+
     Any finite endpoint is a `Fraction`.
     Any infinite endpoint is a `float`, specifically `float('inf')` or `float('-inf')`.
     """
@@ -63,6 +62,11 @@ class Interval:
     ):
         self.lo = Endpoint(lo, lo_closed)
         self.hi = Endpoint(hi, hi_closed)
+
+    def __repr__(self):
+        lo = '[' if self.lo.closed else '('
+        hi = ']' if self.hi.closed else ')'
+        return f'{lo}{self.lo.val}, {self.hi.val}{hi}'
 
     def __and__(self, other):
         """Intersection of two intervals."""
@@ -100,19 +104,28 @@ class Interval:
 
         raise NotImplementedError(self, other)
 
-
 class RangeTable:
     """Mapping from variable to interval."""
+
     table: dict[NamedId, Interval]
+    """mapping from variable to interval"""
     valid: bool
+    """does any variable have no valid interval?"""
+    sound: bool
+    """is the range table sound?"""
 
     def __init__(
         self,
         table: dict[NamedId, Interval] = {},
-        valid: bool = True
+        valid: bool = True,
+        sound: bool = True,
     ):
         self.table = table
         self.valid = valid
+        self.sound = sound
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(table={str(self.table)}, valid={self.valid}, sound={self.sound})'
 
     @staticmethod
     def null():
@@ -120,11 +133,16 @@ class RangeTable:
         return RangeTable(valid=False)
 
     @staticmethod
-    def from_precondition(pre: FunctionDef):
+    def unsound():
+        """Creates an empty unsound range table."""
+        return RangeTable(sound=False)
+
+    @staticmethod
+    def from_condition(cond: FunctionDef):
         """Creates a range table from an expression."""
-        stmts = pre.body.stmts
+        stmts = cond.body.stmts
         if len(stmts) != 1 or not isinstance(stmts[0], Return):
-            raise ValueError(f'precondition must be a single return statement {pre.format()}')
+            raise ValueError(f'precondition must be a single return statement {cond.format()}')
         return _parse_expr(stmts[0].expr)
 
     def __and__(self, other):
@@ -135,7 +153,8 @@ class RangeTable:
             return RangeTable.null()
 
         # process `self`
-        merged = RangeTable()
+        sound = self.sound and other.sound
+        merged = RangeTable(sound=sound)
         for var, ival in self.table.items():
             if var in other.table:
                 merged.table[var] &= ival
@@ -157,7 +176,8 @@ class RangeTable:
             return RangeTable.null()
 
         # process `self`
-        merged = RangeTable()
+        sound = self.sound and other.sound
+        merged = RangeTable(sound=sound)
         for var, ival in self.table.items():
             if var in other.table:
                 merged.table[var] |= ival
@@ -175,38 +195,70 @@ class RangeTable:
 def _parse_number(e: RealExpr) -> Fraction | float:
     """Parses a real expression into a fraction."""
     match e:
-        case Integer():
+        case Decnum() | Integer():
             return Fraction(e.val)
+        case Hexnum():
+            return hexnum_to_fraction(e.val)
+        case Digits():
+            return digits_to_fraction(e.m, e.e, e.b)
+        case Rational():
+            return Fraction(e.p, e.q)
         case _:
             raise RangeTableParseError(f'cannot represent {e} as a fraction')
 
+
+def _parse_cmp2(op: CompareOp, x: NamedId, n: Fraction | float) -> RangeTable:
+    match op:
+        case CompareOp.EQ:
+            return RangeTable({x: Interval(n, n, True, True)})
+        case CompareOp.NE:
+            # TODO: unsupported
+            return RangeTable.unsound()
+        case CompareOp.LT:
+            return RangeTable({x: Interval(_NEG_INF, n, False, False)})
+        case CompareOp.LE:
+            return RangeTable({x: Interval(_NEG_INF, n, False, True)})
+        case CompareOp.GT:
+            return RangeTable({x: Interval(n, _POS_INF, False, False)})
+        case CompareOp.GE:
+            return RangeTable({x: Interval(n, _POS_INF, True, False)})
+        case _:
+            raise RuntimeError(f'unreachable {op}')
+
 def _parse_cmp(op: CompareOp, lhs: Expr, rhs: Expr):
     match (lhs, rhs):
-        case (Var(), RealExpr()):
-            n = _parse_number(rhs)
-            match op:
-                case CompareOp.EQ:
-                    return RangeTable({lhs.name: Interval(n, n, True, True)})
-                case CompareOp.NE:
-                    raise RangeTableParseError(f'unsupported comparison {op}')
-                case CompareOp.LT:
-                    return RangeTable({lhs.name: Interval(_NEG_INF, n, False, False)})
-                case CompareOp.LE:
-                    return RangeTable({lhs.name: Interval(_NEG_INF, n, False, True)})
-                case CompareOp.GT:
-                    return RangeTable({lhs.name: Interval(n, _POS_INF, False, False)})
-                case CompareOp.GE:
-                    return RangeTable({lhs.name: Interval(n, _POS_INF, True, False)})
-                case _:
-                    raise RuntimeError(f'unreachable {op}')
-        case (RealExpr(), Var()):
+        case (Var(), Var()):
+            # unsupported
+            return RangeTable.unsound()
+        case (_, Var()):
             return _parse_cmp(op.invert(), rhs, lhs)
+        case (Var(), RealExpr()):
+            try:
+                n = _parse_number(rhs)
+                return _parse_cmp2(op, lhs.name, n)
+            except RangeTableParseError:
+                return RangeTable.unsound()
+        case (Var(), Neg()):
+            if not isinstance(rhs.children[0], RealExpr):
+                # unsupported
+                return RangeTable.unsound()
+            try:
+                n = _parse_number(rhs.children[0])
+                return _parse_cmp2(op, lhs.name, -n)
+            except RangeTableParseError:
+                return RangeTable.unsound()
         case _:
-            raise RangeTableParseError(f'unsupported comparison {lhs} {op} {rhs}')
+            # unsupported
+            return RangeTable.unsound()
 
 def _parse_expr(e: Expr) -> RangeTable:
     """Parses a range expression."""
     match e:
+        case Bool():
+            if e.val:
+                return RangeTable()
+            else:
+                return RangeTable.null()
         case Compare():
             table = RangeTable()
             for op, lhs, rhs in zip(e.ops, e.children, e.children[1:]):
@@ -223,4 +275,5 @@ def _parse_expr(e: Expr) -> RangeTable:
                 table |= _parse_expr(child)
             return table
         case _:
-            raise RangeTableParseError(f'unsupported expression {e}')
+            # unsupported
+            return RangeTable.unsound()
