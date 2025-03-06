@@ -1,12 +1,16 @@
-import random
+"""
+This module defines sampling methods.
+"""
 
-from fpy2 import Function
-from fpy2.ir import *
+import random
 
 from titanfp.arithmetic.evalctx import EvalCtx, determine_ctx
 from titanfp.arithmetic import ieee754
 
-def sample_val(ctx: EvalCtx):
+from .function import Function
+from ..ir import *
+
+def _sample_value(ctx: EvalCtx):
     match ctx:
         case ieee754.IEEECtx():
             x = random.randint(0, 2 ** ctx.nbits - 1)
@@ -14,7 +18,7 @@ def sample_val(ctx: EvalCtx):
         case _:
             raise NotImplementedError(ctx)
 
-def sample_one(args: list[Argument], ctx: EvalCtx) -> list[ieee754.Float]:
+def _sample_one(args: list[Argument], ctx: EvalCtx) -> list[ieee754.Float]:
     if len(args) == 0:
         return []
 
@@ -24,18 +28,26 @@ def sample_one(args: list[Argument], ctx: EvalCtx) -> list[ieee754.Float]:
             raise ValueError(f"expected Real, got {arg.ty}")
 
     # sample point for each argument
-    pt = [sample_val(ctx) for _ in args]
+    pt = [_sample_value(ctx) for _ in args]
 
     # TODO: reject points that are not in the domain of the function
     return pt
 
-def sample(fun: Function, n: int, only_real: bool = False):
+
+
+def sample_function(
+    fun: Function,
+    num_samples: int,
+    *,
+    only_real: bool = False,
+    ignore_pre: bool = False  
+):
     default_ctx = ieee754.ieee_ctx(11, 64)
     ctx = determine_ctx(default_ctx, fun.ir.ctx)
 
     pts: list[list[ieee754.Float]] = []
-    while len(pts) < n:
-        pt = sample_one(fun.args, ctx)
+    while len(pts) < num_samples:
+        pt = _sample_one(fun.args, ctx)
         if only_real and any(map(lambda x: x.is_nar(), pt)):
             continue
         pts.append(pt)

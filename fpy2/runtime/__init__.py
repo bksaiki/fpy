@@ -8,6 +8,7 @@ from .function import (
 
 from .native import PythonInterpreter
 from .real import RealInterpreter, FunctionProfiler
+from .sampling import sample_function
 from .titanic import TitanicInterpreter
 
 set_default_interpreter(TitanicInterpreter())
