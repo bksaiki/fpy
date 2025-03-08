@@ -9,6 +9,8 @@ from .interpreter import RealInterpreter
 from ..titanic import TitanicInterpreter
 from .rival_manager import PrecisionLimitExceeded
 from .expr_trace import ExprTrace
+from .error import ordinal_error
+import math
 
 
 
@@ -53,13 +55,34 @@ class ExpressionProfiler:
             except PrecisionLimitExceeded:
                 skipped_inputs.append(input)
 
-        # TODO: What format do we prefer? 
-        # Currently it is 2 list of ExprTrace objects which feels redundant.
-        # Perhaps ExprTrace should have 2 values field? 
-        # Or we just save the value from fl_output without the trace
-        for i in range(len(ref_outputs)):
-            print(i, ref_outputs[0][i].value, fl_outputs[0][i].value)
+        # Aggreagte result by expression id
+        result = self._group_expr_traces(ref_output, fl_output)
 
-        # TODO: Aggregate across location??
+        # Compute average ordinal errors
+        for k, v in result.items():
+            errors = []
+            for val in v["values"]:
+                # TODO: what to do with booleans
+                if isinstance(val[0], bool): continue
+                ord_err = ordinal_error(val[1], val[0])
+                errors.append(math.log2(ord_err + 1))
 
-        # TODO: compute error
+            # TODO
+            if len(errors) == 0: continue
+            result[k]["errors"] = sum(errors) / len(errors)
+        
+        return result
+
+    def _group_expr_traces(self, traces1, traces2):
+        result = {}
+        assert len(traces1) == len(traces2)
+
+        for i in range(len(traces1)):
+            eid = id(traces1[i].expr)
+            if eid not in result:
+                result[eid] = {
+                    "expression": traces1[i].expr,
+                    "values": []
+                }
+            result[eid]["values"].append((traces1[i].value, traces2[i].value))
+        return result
