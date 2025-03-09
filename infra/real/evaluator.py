@@ -2,27 +2,10 @@ from .config import Config
 from .load import load_funs
 
 from fpy2 import *
-from fpy2.runtime import sample_function
+from fpy2.runtime.sampling import sample_function
 from fpy2.runtime.real.rival_manager import PrecisionLimitExceeded, ConvergenceFailed
 
-_disabled = [
-    # Too hard
-    'Rocket_Trajectory',
-    'Eigenvalue_Computation',
-    'Pendulum',
-    'Flower',
-    'arclength_of_a_wiggly_function',
-    'arclength_of_a_wiggly_function__u40_old_version_u41_',
-    'Jacobi_u39_s_Method',
-    # Infinite loops
-    'Euler_Oscillator',
-    'Filter',
-    'Circle',
-    # tensor
-    'Symplectic_Oscillator',
-    'Flower',
-    'Arrow_Hurwicz'
-]
+from .common import _disabled
 
 def _run_one(
     fun: Function,

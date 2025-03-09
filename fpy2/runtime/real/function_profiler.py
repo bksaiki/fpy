@@ -21,6 +21,11 @@ class FunctionProfiler:
     Compare the actual output against the real number result.
     """
 
+    logging: bool
+
+    def __init__(self, logging: bool = False):
+        self.logging = logging
+
     def profile(
         self,
         func: Function,
@@ -49,8 +54,13 @@ class FunctionProfiler:
                 # add to set of points
                 ref_outputs.append(ref_output)
                 fl_outputs.append(self._normalize(ref_output, fl_output))
+                # log
+                if self.logging:
+                    print('.', end='', flush=True)
             except PrecisionLimitExceeded:
-                skipped_inputs.append(input)
+                skipped_inputs.append(input)# log
+                if self.logging:
+                    print('X', end='', flush=True)
 
         # TODO: Use the math library to compute the accuracy metrics
         # Report how many points are being skipped for precision errors
