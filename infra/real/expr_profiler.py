@@ -7,6 +7,8 @@ from fpy2.runtime.real import ExpressionProfiler
 
 from .common import _disabled
 
+disabled = _disabled + ['PID']
+
 
 def _run_one(fun: Function, profiler: ExpressionProfiler, num_samples: int):
     # sample N points
@@ -18,13 +20,13 @@ def _run_one(fun: Function, profiler: ExpressionProfiler, num_samples: int):
 
 
 def run_expr_profiler(config: Config):
-    profiler = ExpressionProfiler()
+    profiler = ExpressionProfiler(logging=True)
     funs = load_funs(config.input_paths)
     print(len(funs))
 
     print(f'testing over {len(funs)} functions')
     for fun in funs:
-        if fun.name in _disabled:
+        if fun.name in disabled:
             print(f'skipping {fun.name}')
         else:
             _run_one(fun, profiler, config.num_samples)

@@ -2,16 +2,16 @@
 Profiler for numerical accuracy.
 """
 
+import math
 from typing import Any, Optional
 
 from ..function import Function, Interpreter, get_default_interpreter
 from .interpreter import RealInterpreter
-from ..titanic import TitanicInterpreter
 from .rival_manager import PrecisionLimitExceeded
-from .expr_trace import ExprTrace
+from .expr_trace import ExprTraceEntry
 from .error import ordinal_error
-import math
 
+from ...ir import Expr
 
 
 class ExpressionProfiler:
@@ -21,6 +21,11 @@ class ExpressionProfiler:
     Profiles each expression in a function for its numerical accuracy
     on a set of inputs.
     """
+
+    logging: bool
+
+    def __init__(self, logging: bool = False):
+        self.logging = logging
 
     def profile(
         self,
@@ -34,55 +39,43 @@ class ExpressionProfiler:
         If no interpreter is provided, the default interpreter is used.
         """
         if interpreter is None:
-            interpreter = TitanicInterpreter() # default interpreter is returning RealInterpreter
+            interpreter = get_default_interpreter()
         ref_interpreter = RealInterpreter()
 
         skipped_inputs: list[Any] = []
-        fl_outputs: list[Any] = []
-        ref_outputs: list[Any] = []
+        traces: list[list[ExprTraceEntry]] = []
 
         # evaluate for every input
         for input in inputs:
             try:
                 # evaluate in both interpreters
-                ref_output = ref_interpreter.trace(func, input)
-                fl_output = interpreter.eval_expr(ref_output)
-
-                # add to set of points
-                ref_outputs.append(ref_output)
-                fl_outputs.append(fl_output)
-
+                trace = ref_interpreter.trace(func, input)
+                traces.append(trace)
+                # log
+                if self.logging:
+                    print('.', end='', flush=True)
             except PrecisionLimitExceeded:
                 skipped_inputs.append(input)
+                if self.logging:
+                    print('X', end='', flush=True)
 
-        # Aggreagte result by expression id
-        result = self._group_expr_traces(ref_output, fl_output)
+        errors_by_expr: dict[Expr, list[float]] = {}
+        for trace in traces:
+            for entry in trace:
+                if not isinstance(entry.value, bool):
+                    fl_output = interpreter.eval_expr(entry.expr, entry.env, entry.ctx)
+                    ord_err = ordinal_error(fl_output, entry.value)
+                    repr_err = math.log2(ord_err + 1)
+                    if entry.expr not in errors_by_expr:
+                        errors_by_expr[entry.expr] = [repr_err]
+                    else:
+                        errors_by_expr[entry.expr].append(repr_err)
 
-        # Compute average ordinal errors
-        for k, v in result.items():
-            errors = []
-            for val in v["values"]:
-                # TODO: what to do with booleans
-                if isinstance(val[0], bool): continue
-                ord_err = ordinal_error(val[1], val[0])
-                errors.append(math.log2(ord_err + 1))
+        result: dict[str, tuple[float, int]] = {}
+        for e, errors in errors_by_expr.items():
+            s = e.format()
+            avg = sum(errors) / len(errors)
+            total = len(errors)
+            result[s] = (avg, total)
 
-            # TODO
-            if len(errors) == 0: continue
-            result[k]["errors"] = sum(errors) / len(errors)
-        
-        return result
-
-    def _group_expr_traces(self, traces1, traces2):
-        result = {}
-        assert len(traces1) == len(traces2)
-
-        for i in range(len(traces1)):
-            eid = id(traces1[i].expr)
-            if eid not in result:
-                result[eid] = {
-                    "expression": traces1[i].expr,
-                    "values": []
-                }
-            result[eid]["values"].append((traces1[i].value, traces2[i].value))
-        return result
+        return (result, len(skipped_inputs))

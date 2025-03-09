@@ -12,10 +12,11 @@ from titanfp.arithmetic.ieee754 import Float, IEEECtx, ieee_ctx
 from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.digital import Digital
 from titanfp.titanic.ops import RM
+from titanfp.titanic import gmpmath
 
 from .interval import RealInterval
 from .rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
-from .expr_trace import ExprTrace
+from .expr_trace import ExprTraceEntry
 
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
@@ -87,18 +88,16 @@ _method_table: dict[str, str] = {
     'signbit': 'signbit',
 }
 
+
 def _interval_to_real(val: RealInterval, ctx: EvalCtx):
     # rounding contexts
     assert isinstance(ctx, IEEECtx)
-    lo_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTP)
-    hi_ctx = ieee_ctx(ctx.es, ctx.nbits, rm=RM.RTN)
-    # round the endpoints inwards, see if they converge
-    lo = Float(x=val.lo, ctx=lo_ctx)
-    hi = Float(x=val.hi, ctx=hi_ctx)
-    if lo != hi:
-        raise InsufficientPrecisionError(str(val), ctx.p)
-    # converged to the same value
-    return lo
+    # compute the midpoint
+    # TODO: not entirely sound, should be inside the rounding envelope
+    lo = Fraction(val.lo)
+    hi = Fraction(val.hi)
+    mid = (lo + hi) / 2
+    return Float(x=mid, ctx=ctx)
 
 def _digital_to_str(x: Digital) -> str:
     m = (-1 if x.negative else 1) * x.c
@@ -127,12 +126,11 @@ class _Interpreter(ReduceVisitor):
     dirty: bool
     """has a variable precision been updated?"""
 
-    expr_trace: list[ExprTrace]
-    """list of rival expression trace"""
+    expr_trace: list[ExprTraceEntry]
+    """expression trace"""
 
     trace: bool
-    """has trace be enabled?"""
-
+    """expression tracing enabled?"""
 
     def __init__(self, rival: RivalManager, trace: bool):
         self.rival = rival
@@ -197,8 +195,6 @@ class _Interpreter(ReduceVisitor):
                 self._visit_block(func.body, ctx)
                 raise RuntimeError('no return statement encountered')
             except FunctionReturnException as e:
-                if self.trace:
-                    return self.expr_trace
                 return e.value
             except InsufficientPrecisionError as e:
                 if self.rival.logging:
@@ -358,34 +354,36 @@ class _Interpreter(ReduceVisitor):
             case _:
                 raise NotImplementedError(f'unknown type {arg} {type(arg)}')
 
+    def _eval_rival_inner(self, expr: Expr, ctx: EvalCtx):
+        match self._visit_expr(expr, ctx):
+            case bool() as b:
+                return b
+            case NamedId() as var:
+                return self.env[var]
+            case NDArray() as arr:
+                return arr
+            case str() as s:
+                if s.startswith('('):
+                    # hacky way to check if we need Rival to evaluate
+                    fun_str = f"(f {' '.join(map(str, self.env.keys()))}) {s}"
+                    self.rival.define_function(fun_str)
+                    rival_env = list(map(self._arg_to_rival, self.env.values()))
+                    return self.rival.eval_expr(f"f {' '.join(rival_env)}", fun_str)
+                else:
+                    # numerical constant
+                    return s
+
     def _eval_rival(self, expr: Expr, ctx: EvalCtx):
         """
         Applies Rival to an expression.
         If the expression is exact, returns its value as a string.
         """
-        val = self._visit_expr(expr, ctx)
-        if isinstance(val, NamedId):
-            # variable name
-            return self.env[val]
-        elif isinstance(val, bool | NDArray):
-            # boolean or tuple
-            return val
-        elif val.startswith('('):
-            # expression to be evaluated by Rival
-            fun_str = f"(f {' '.join(map(str, self.env.keys()))}) {val}"
-            self.rival.define_function(fun_str)
-            real_val = self.rival.eval_expr(f"f {' '.join(map(self._arg_to_rival, self.env.values()))}", fun_str)
-
-            # save expression trace
-            if self.trace:
-                env = {key: self._force_value(value, ctx) for key, value in self.env.items()}
-                self.expr_trace.append(ExprTrace(expr, self._force_value(real_val, ctx), env, ctx))
-
-            return real_val
-
-        else:
-            # numerical constant
-            return val
+        val = self._eval_rival_inner(expr, ctx)
+        if self.trace:
+            env = {k: self._force_value(v, ctx) for k, v in self.env.items()}
+            trace = ExprTraceEntry(expr, self._force_value(val, ctx), env, ctx)
+            self.expr_trace.append(trace)
+        return val
 
     def _force_value(self, val: ScalarVal, ctx: EvalCtx):
         """
@@ -569,17 +567,25 @@ class RealInterpreter(Interpreter):
         self,
         func: Function,
         args: Sequence[Any],
-        trace = False,
         ctx: Optional[EvalCtx] = None
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
-        return _Interpreter(self.rival, trace).eval(func.ir, args, ctx)
-    
+        rt = _Interpreter(self.rival, False)
+        return rt.eval(func.ir, args, ctx)
+
+    def eval_expr(self, expr, env, ctx):
+        raise NotImplementedError
+
     def trace(
         self,
         func: Function,
         args: Sequence[Any],
         ctx: Optional[EvalCtx] = None
     ):
-        return self.eval(func, args, True, ctx)
+        if not isinstance(func, Function):
+            raise TypeError(f'Expected Function, got {func}')
+        rt = _Interpreter(self.rival, True)
+        rt.eval(func.ir, args, ctx)
+        return rt.expr_trace
+
