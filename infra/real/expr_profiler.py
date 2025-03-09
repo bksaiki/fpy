@@ -3,11 +3,12 @@ from .load import load_funs
 
 from fpy2 import *
 from fpy2.runtime.sampling import sample_function
-from fpy2.runtime.real import FunctionProfiler
+from fpy2.runtime.real import ExpressionProfiler
 
 from .common import _disabled
 
-def _run_one(fun: Function, profiler: FunctionProfiler, num_samples: int):
+
+def _run_one(fun: Function, profiler: ExpressionProfiler, num_samples: int):
     # sample N points
     pts = sample_function(fun, num_samples, only_real=True)
     # evaluate over each point
@@ -16,8 +17,8 @@ def _run_one(fun: Function, profiler: FunctionProfiler, num_samples: int):
     print(report)
 
 
-def run_func_profiler(config: Config):
-    profiler = FunctionProfiler(logging=True)
+def run_expr_profiler(config: Config):
+    profiler = ExpressionProfiler()
     funs = load_funs(config.input_paths)
     print(len(funs))
 

@@ -6,6 +6,7 @@ from typing import Optional
 class EvalMode(IntEnum):
     REAL = 0
     FUN_PROFILE = 1
+    EXPR_PROFILE= 2
 
     @staticmethod
     def from_str(s: str):
@@ -14,6 +15,8 @@ class EvalMode(IntEnum):
                 return EvalMode.REAL
             case 'function':
                 return EvalMode.FUN_PROFILE
+            case 'expr':
+                return EvalMode.EXPR_PROFILE
             case _:
                 raise ValueError(f"invalid mode: {s}")
 

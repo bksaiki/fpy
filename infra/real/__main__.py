@@ -7,6 +7,7 @@ from typing import Optional
 from .config import EvalMode, Config
 from .evaluator import run_eval_real
 from .func_profiler import run_func_profiler
+from .expr_profiler import run_expr_profiler
 
 DEFAULT_NUM_SAMPLES = 10
 
@@ -20,6 +21,8 @@ def _run_eval(config: Config):
             run_eval_real(config)
         case EvalMode.FUN_PROFILE:
             run_func_profiler(config)
+        case EvalMode.EXPR_PROFILE:
+            run_expr_profiler(config)
         case _:
             raise ValueError(f"invalid mode: {config.mode}")
 
