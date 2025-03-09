@@ -14,7 +14,6 @@ import titanfp.titanic.gmpmath as gmpmath
 
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
-from ..real.expr_trace import ExprTrace
 
 ScalarVal: TypeAlias = bool | Digital
 """Type of scalar values in FPy programs."""
@@ -86,12 +85,17 @@ _method_table: dict[str, Callable[..., Any]] = {
     'signbit': MPMF.signbit,
 }
 
+_Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
+
 class _Interpreter(ReduceVisitor):
     """Single-use interpreter for a function"""
-    env: dict[NamedId, ScalarVal | TensorVal]
+    env: _Env
 
-    def __init__(self):
-        self.env = {}
+    def __init__(self, env: Optional[_Env] = None):
+        if env is None:
+            self.env = {}
+        else:
+            self.env = env
 
     # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
@@ -103,18 +107,6 @@ class _Interpreter(ReduceVisitor):
             raise NotImplementedError()
         else:
             raise NotImplementedError(f'unknown argument type {arg}')
-        
-    def eval_expr(
-        self, 
-        expr_trace: list[ExprTrace]
-    ):
-        result = []
-        for trace in expr_trace:
-            self.env = trace.env
-            trace.value = self._visit_expr(trace.expr, trace.ctx)
-            result.append(trace)
-        return result
-
 
     def eval(
         self,
@@ -537,8 +529,6 @@ class TitanicInterpreter(Interpreter):
             raise TypeError(f'Expected Function, got {func}')
         return _Interpreter().eval(func.ir, args, ctx)
 
-    def eval_expr(
-        self,
-        expr_trace: list[ExprTrace]
-    ):
-        return _Interpreter().eval_expr(expr_trace)
+    def eval_expr(self, expr: Expr, env: _Env, ctx: EvalCtx):
+        return _Interpreter(env)._visit_expr(expr, ctx)
+

@@ -1,13 +1,13 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import Optional
 from types import FunctionType
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.arithmetic.evalctx import EvalCtx
 
 from .env import PythonEnv
-from ..ir import FunctionDef
+from ..ir import FunctionDef, Expr
 from ..frontend.fpc import fpcore_to_fpy
 
 class Function:
@@ -68,12 +68,17 @@ class Function:
             raise TypeError(f'expected FunctionType, got {self._func}')
         return Function(self.ir, self.env, runtime=rt, func=self._func)
 
-class Interpreter:
+
+class Interpreter(ABC):
     """Abstract base class for FPy interpreters."""
 
     @abstractmethod
     def eval(self, func: Function, args, ctx: Optional[EvalCtx] = None):
         raise NotImplementedError('virtual method')
+
+    @abstractmethod
+    def eval_expr(self, expr: Expr, env: dict, ctx: EvalCtx):
+        raise NotADirectoryError('virtual method')
 
 
 _default_interpreter: Optional[Interpreter] = None
