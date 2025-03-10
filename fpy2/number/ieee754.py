@@ -3,12 +3,12 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
-from ..utils import default_repr
+from ..utils import default_repr, bitmask
 
 from .context import SizedContext
 from .float import Float
 from .real import RealFloat
-from .round import RoundingMode
+from .round import RoundingMode, RoundingDirection
 
 @default_repr
 class IEEEContext(SizedContext):
@@ -72,9 +72,6 @@ class IEEEContext(SizedContext):
         """The exponent "bias" as defined by the IEEE 754 standard."""
         return self.emax
 
-    def _overflow_to_infinity(self, x: RealFloat):
-        """Should overflows round to infinity (rather than MAX_VAL)?"""
-
     def is_representable(self, x: Float):
         if not isinstance(x, Float):
             # exclude wrong datatype
@@ -83,7 +80,7 @@ class IEEEContext(SizedContext):
             # special values are valid
             return True
         elif x.exp < self.expmin or x.e > self.emax:
-            # rough check on definitely out of range values
+            # rough check on out of range values
             return False
         elif x.p > self.pmax:
             # check on precision
@@ -97,6 +94,25 @@ class IEEEContext(SizedContext):
         else:
             # tight check (non-negative values)
             return self.minval(False) <= x <= self.maxval(False)
+
+    def _overflow_to_infinity(self, x: RealFloat):
+        """Should overflows round to infinity (rather than MAX_VAL)?"""
+        _, direction = self.rm.to_direction(x.s)
+        match direction:
+            case RoundingDirection.RTZ:
+                # always round towards zero
+                return False
+            case RoundingDirection.RAZ:
+                # always round towards infinity
+                return True
+            case RoundingDirection.RTE:
+                # infinity is considered even for rounding
+                return True
+            case RoundingDirection.RTO:
+                # infinity is considered even for rounding
+                return False
+            case _:
+                raise RuntimeError(f'unrechable {direction}')
 
     def round(self, x: RealFloat | Float):
         # step 1. handle special values
@@ -138,7 +154,11 @@ class IEEEContext(SizedContext):
         return Float(s=s, c=1, exp=self.expmin, ctx=self)
 
     def encode(self, x: Float) -> int:
+        if not self.is_representable(x):
+            raise TypeError(f'Expected representable value x={x}')
         raise NotImplementedError
 
     def decode(self, x: int) -> Float:
+        if not isinstance(x, int) and x >= 0 and x < 2 ** self.nbits:
+            raise TypeError(f'Expected integer x={x} on [0, 2 ** {self.nbits})')
         raise NotImplementedError

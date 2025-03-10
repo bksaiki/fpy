@@ -532,7 +532,6 @@ class RealFloat:
             if p is not None and kept.c.bit_length() > p:
                 # adjust the exponent since we exceeded precision bounds
                 # the value is guaranteed to be a power of two
-                # TODO: for p=0, should we still subtract from `interval_size`
                 kept.c >>= 1
                 kept.exp += 1
                 interval_size -= 1
