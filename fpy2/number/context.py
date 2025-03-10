@@ -23,18 +23,32 @@ class Context(ABC):
     """
 
     @abstractmethod
+    def is_representable(self, x) -> bool:
+        """Returns if `x` is representable under this context."""
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
     def round(self, x):
         """Rounds any digital number according to this context."""
         raise NotImplementedError('virtual method')
 
-
-class FixedSizeContext(Context):
+class SizedContext(Context):
     """
     Rounding context for formats encodable in a fixed size.
 
     Most common number formats fall under this category.
     These formats define a way to encode a number in memory.
     """
+
+    @abstractmethod
+    def maxval(self, s: bool = False):
+        """Returns the maximum (signed) real number under this context."""
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
+    def minval(self, s: bool = False):
+        """Returns the minimum (signed) real number under this context."""
+        raise NotImplementedError('virtual method')
 
     @abstractmethod
     def encode(self, x) -> int:
@@ -51,4 +65,3 @@ class FixedSizeContext(Context):
         This operation is context dependent.
         """
         raise NotImplementedError('virtual method')
-

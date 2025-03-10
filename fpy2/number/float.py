@@ -5,6 +5,8 @@ This module defines the floating-point number type `Float`.
 from typing import Optional, Self
 
 from .real import RealFloat
+from .context import Context
+
 from ..utils import default_repr, Ordering, partial_ord, rcomparable
 
 @rcomparable(RealFloat)
@@ -40,6 +42,9 @@ class Float:
     isnan: bool = False
     """is this number is NaN?"""
 
+    ctx: Optional[Context] = None
+    """rounding context during construction"""
+
     _real: RealFloat
     """the real number (if it is real)"""
 
@@ -57,6 +62,7 @@ class Float:
         interval_size: Optional[int] = None,
         interval_down: Optional[bool] = None,
         interval_closed: Optional[bool] = None,
+        ctx: Optional[Context] = None
     ):
         if x is not None and not isinstance(x, RealFloat | Float):
             raise TypeError(f'expected Float, got {type(x)}')
@@ -77,6 +83,13 @@ class Float:
 
         if self.isinf and self.isnan:
             raise ValueError('cannot be both infinite and NaN')
+
+        if ctx is not None:
+            self.ctx = ctx
+        elif isinstance(x, Float):
+            self.ctx = x.ctx
+        else:
+            self.ctx = type(self).ctx
 
         if isinstance(x, RealFloat):
             real = x
@@ -190,6 +203,14 @@ class Float:
     def is_nar(self) -> bool:
         """Return whether this number is infinity or NaN."""
         return self.isinf or self.isnan
+
+    def is_valid(self) -> bool:
+        """
+        Checks if this number is representable under
+        the rounding context during its construction.
+        Usually just a sanity check.
+        """
+        return self.ctx is None or self.ctx.is_representable(self)
 
     def as_real(self) -> RealFloat:
         """Return the real part of this number."""

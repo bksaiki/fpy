@@ -1,0 +1,144 @@
+"""
+This module defines floating-point numbers as defined
+by the IEEE 754 standard.
+"""
+
+from ..utils import default_repr
+
+from .context import SizedContext
+from .float import Float
+from .real import RealFloat
+from .round import RoundingMode
+
+@default_repr
+class IEEEContext(SizedContext):
+    """
+    Rounding context for IEEE 754 floating-point values.
+    """
+
+    es: int
+    """size of the exponent field"""
+
+    nbits: int
+    """size of the total representation"""
+
+    rm: RoundingMode
+    """rounding mode"""
+
+    def __init__(self, es: int, nbits: int, rm: RoundingMode):
+        if es < 2:
+            raise ValueError(f'Invalid es={es}, must be at least 2')
+        if nbits < es + 2:
+            raise ValueError(f'Invalid nbits={nbits}, must be at least es+2={es + 2}')
+
+        self.es = es
+        self.nbits = nbits
+        self.rm = rm
+
+    @property
+    def pmax(self):
+        """Maximum allowable precision."""
+        return self.nbits - self.es
+
+    @property
+    def emax(self):
+        """Maximum normalized exponent."""
+        return (1 << (self.es - 1)) - 1
+
+    @property
+    def emin(self):
+        """Minimum normalized exponent."""
+        return 1 - self.emax
+
+    @property
+    def expmax(self):
+        """Maximum unnormalized exponent."""
+        return self.emax - self.pmax + 1
+
+    @property
+    def expmin(self):
+        """Minimum unnormalized exponent."""
+        return self.emin - self.pmax + 1
+
+    @property
+    def nmin(self):
+        """
+        First unrepresentable digit for every value in the representation.
+        """
+        return self.expmin - 1
+
+    @property
+    def ebias(self):
+        """The exponent "bias" as defined by the IEEE 754 standard."""
+        return self.emax
+
+    def _overflow_to_infinity(self, x: RealFloat):
+        """Should overflows round to infinity (rather than MAX_VAL)?"""
+
+    def is_representable(self, x: Float):
+        if not isinstance(x, Float):
+            # exclude wrong datatype
+            return False
+        elif x.isnan or x.isinf:
+            # special values are valid
+            return True
+        elif x.exp < self.expmin or x.e > self.emax:
+            # rough check on definitely out of range values
+            return False
+        elif x.p > self.pmax:
+            # check on precision
+            return False
+        elif x.is_zero():
+            # shortcut for exact zero
+            return True
+        elif x.s:
+            # tight check (negative values)
+            return self.maxval(True) <= x <= self.minval(True)
+        else:
+            # tight check (non-negative values)
+            return self.minval(False) <= x <= self.maxval(False)
+
+    def round(self, x: RealFloat | Float):
+        # step 1. handle special values
+        if isinstance(x, Float):
+            if x.isnan:
+                return Float(isnan=True, ctx=self)
+            elif x.isinf:
+                return Float(s=x.s, isinf=True, ctx=self)
+            else:
+                x = x.as_real()
+
+        # step 2. shortcut for exact zero values
+        if x.is_zero():
+            # exactly zero
+            return Float(ctx=self)
+
+        # step 3. round value based on rounding parameters
+        rounded = x.round(self.pmax, self.nmin, self.rm)
+
+        # step 4. check for overflow
+        if rounded.e > self.emax:
+            # overflowing => check which way to round
+            if self._overflow_to_infinity(rounded):
+                # overflow to infinity
+                return Float(x=x, isinf=True, ctx=self)
+            else:
+                # overflow to MAX_VAL
+                max_val = self.maxval(rounded.s)
+                return Float(x=max_val, ctx=self)
+
+        # step 5. return rounded result
+        return Float(x=rounded, ctx=self)
+
+    def maxval(self, s = False):
+        c = 1 << self.pmax
+        return Float(s=s, c=c, exp=self.expmax, ctx=self)
+
+    def minval(self, s = False):
+        return Float(s=s, c=1, exp=self.expmin, ctx=self)
+
+    def encode(self, x: Float) -> int:
+        raise NotImplementedError
+
+    def decode(self, x: int) -> Float:
+        raise NotImplementedError
