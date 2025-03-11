@@ -5,7 +5,7 @@ by the IEEE 754 standard.
 
 from fractions import Fraction
 
-from ..utils import default_repr
+from ..utils import default_repr, bitmask
 
 from .context import SizedContext
 from .float import Float
@@ -44,6 +44,11 @@ class IEEEContext(SizedContext):
         return self.nbits - self.es
 
     @property
+    def m(self):
+        """Size of the mantissa field."""
+        return self.pmax - 1
+
+    @property
     def emax(self):
         """Maximum normalized exponent."""
         return (1 << (self.es - 1)) - 1
@@ -74,6 +79,27 @@ class IEEEContext(SizedContext):
     def ebias(self):
         """The exponent "bias" as defined by the IEEE 754 standard."""
         return self.emax
+
+
+    def is_zero(self, x: Float):
+        """Returns if `x` is a zero number."""
+        return x.is_zero()
+
+    def is_subnormal(self, x: Float):
+        """Returns if `x` is a subnormal number."""
+        return x.is_nonzero() and x.e < self.emin
+
+    def is_normal(self, x: Float):
+        """Returns if `x` is a normal number."""
+        return x.is_nonzero() and x.e >= self.emin
+
+    def is_infinite(self, x: Float):
+        """Returns if `x` is an infinite number."""
+        return x.isinf
+
+    def is_nan(self, x: Float):
+        """Returns if `x` is a NaN number."""
+        return x.isnan
 
     def is_representable(self, x: Float):
         if not isinstance(x, Float):
@@ -168,19 +194,80 @@ class IEEEContext(SizedContext):
 
         return self._round_float(x_)
 
-    def maxval(self, s = False):
+    def maxval(self, s: bool = False):
         c = 1 << self.pmax
         return Float(s=s, c=c, exp=self.expmax, ctx=self)
 
-    def minval(self, s = False):
+    def minval(self, s: bool = False):
         return Float(s=s, c=1, exp=self.expmin, ctx=self)
+
+    def to_ordinal(self, x: Float):
+        raise NotImplementedError
+
+    def from_ordinal(self, x: int):
+        raise NotImplementedError
 
     def encode(self, x: Float) -> int:
         if not self.is_representable(x):
             raise TypeError(f'Expected representable value x={x}')
-        raise NotImplementedError
+
+        # sign bit
+        sbit = 1 if x.s else 0
+
+        # case split by class
+        if x.isnan:
+            # NaN => qNaN(0)
+            ebits = bitmask(self.es)
+            mbits = 1 << (self.m - 1)
+        elif x.isinf:
+            # infinite
+            ebits = bitmask(self.es)
+            mbits = 0
+        elif x.is_zero():
+            # zero
+            ebits = 0
+            mbits = 0
+        elif x.e <= self.emin:
+            # subnormal
+            offset = x.exp - self.expmin
+            ebits = 0
+            mbits = x.c << offset
+        else:
+            # normal
+            raise NotImplementedError(x)
+
+        return (sbit << (self.nbits - 1)) | (ebits << self.m) | mbits
+
 
     def decode(self, x: int) -> Float:
         if not isinstance(x, int) and x >= 0 and x < 2 ** self.nbits:
             raise TypeError(f'Expected integer x={x} on [0, 2 ** {self.nbits})')
-        raise NotImplementedError
+
+        # bitmasks
+        emask = bitmask(self.es)
+        mmask = bitmask(self.m)
+
+        # extract bits
+        sbit = x >> (self.nbits - 1)
+        ebits = (x >> self.m) & emask
+        mbits = x & mmask
+
+        # sign bit
+        s = sbit != 0
+
+        # case split on ebits
+        if ebits == 0:
+            # subnormal / zero
+            c = mbits
+            return Float(s=s, c=c, exp=self.expmin, ctx=self)
+        elif ebits == emask:
+            # infinite / NaN
+            if mbits == 0:
+                return Float(s=s, isinf=True, ctx=self)
+            else:
+                return Float(s=s, isnan=True, ctx=self)
+        else:
+            # normal number
+            c = (1 << self.m) | mbits
+            exp = self.expmin + (ebits - 1)
+            return Float(s=s, c=c, exp=exp, ctx=self)

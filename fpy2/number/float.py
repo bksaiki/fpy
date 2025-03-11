@@ -206,6 +206,14 @@ class Float:
         """Returns whether this value is an integer."""
         return not self.is_nar() and self._real.is_integer()
 
+    def is_finite(self) -> bool:
+        """Returns whether this value is finite."""
+        return not self.is_nar()
+
+    def is_nonzero(self) -> bool:
+        """Returns whether this value is (finite) nonzero."""
+        return self.is_finite() and not self.is_zero()
+
     def is_nar(self) -> bool:
         """Return whether this number is infinity or NaN."""
         return self.isinf or self.isnan

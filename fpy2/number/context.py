@@ -32,7 +32,28 @@ class Context(ABC):
         """Rounds any digital number according to this context."""
         raise NotImplementedError('virtual method')
 
-class SizedContext(Context):
+
+class OrdinalContext(Context):
+    """
+    Rounding context for formats that map to ordinal numbers.
+
+    Most common number formats fall under this category.
+    There exists a bijection between representable values
+    and a subset of the integers.
+    """
+
+    @abstractmethod
+    def to_ordinal(self, x) -> int:
+        """Maps a digital number to an ordinal number."""
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
+    def from_ordinal(self, x: int):
+        """Maps an ordinal number to a digital number."""
+        raise NotImplementedError('virtual method')
+
+
+class SizedContext(OrdinalContext):
     """
     Rounding context for formats encodable in a fixed size.
 
@@ -42,12 +63,18 @@ class SizedContext(Context):
 
     @abstractmethod
     def maxval(self, s: bool = False):
-        """Returns the maximum (signed) real number under this context."""
+        """
+        Returns the (signed) representable value with the maximum magnitude
+        under this context.
+        """
         raise NotImplementedError('virtual method')
 
     @abstractmethod
     def minval(self, s: bool = False):
-        """Returns the minimum (signed) real number under this context."""
+        """
+        Returns the (signed) representable value with the minimum magnitude
+        under this context.
+        """
         raise NotImplementedError('virtual method')
 
     @abstractmethod
