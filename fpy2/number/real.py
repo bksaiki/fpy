@@ -292,7 +292,7 @@ class RealFloat:
             lo = RealFloat(self.s, exp_lo, c_lo)
             return (hi, lo)
 
-    def compare(self, other: 'RealFloat') -> Optional[Ordering]:
+    def compare(self, other: 'RealFloat'):
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
 
@@ -601,11 +601,11 @@ class RealFloat:
         if max_p is None and min_n is None:
             raise ValueError(f'must specify {max_p} or {min_n}')
 
-        # compute rounding parameters
+        # step 1. compute rounding parameters
         p, n = self._round_params(max_p, min_n)
 
-        # split the number at the rounding position
+        # step 2. split the number at the rounding position
         kept, half_bit, lower_bits = self.round_at(n)
 
-        # finalize the rounding operation
+        # step 3. finalize the rounding operation
         return self._round_finalize(kept, half_bit, lower_bits, p, rm)

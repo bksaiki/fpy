@@ -34,6 +34,12 @@ class Float:
     the other endpoint as well (`interval_closed`).
     The size of the interval is `2**(exp + interval_size)`.
     It must be the case that `interval_size <= 0`.
+
+    Instances of `Float` are usually constructed under
+    some rounding context, i.e., the result of an operation with rounding.
+    The attribute `ctx` stores that rounding context if one exists.
+    In general, `Float` objects should not be manually constructed,
+    but rather through context-based constructors.
     """
 
     isinf: bool = False

@@ -3,12 +3,15 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
-from ..utils import default_repr, bitmask
+from fractions import Fraction
+
+from ..utils import default_repr
 
 from .context import SizedContext
 from .float import Float
 from .real import RealFloat
 from .round import RoundingMode, RoundingDirection
+from .utils import from_mpfr
 
 @default_repr
 class IEEEContext(SizedContext):
@@ -114,7 +117,8 @@ class IEEEContext(SizedContext):
             case _:
                 raise RuntimeError(f'unrechable {direction}')
 
-    def round(self, x: RealFloat | Float):
+    def _round_float(self, x: RealFloat | Float):
+        """Like `self.round()` but for only `RealFloat` and `Float` inputs"""
         # step 1. handle special values
         if isinstance(x, Float):
             if x.isnan:
@@ -145,6 +149,24 @@ class IEEEContext(SizedContext):
 
         # step 5. return rounded result
         return Float(x=rounded, ctx=self)
+
+    def round(self, x):
+        match x:
+            case Float() | RealFloat():
+                x_ = x
+            case int():
+                x_ = RealFloat(c=x)
+            case float() | str():
+                x_ = from_mpfr(x, self.pmax)
+            case Fraction():
+                if x.is_integer():
+                    x_ = RealFloat(c=int(x))
+                else:
+                    x_ = from_mpfr(x, self.pmax)
+            case _:
+                raise TypeError(f'not valid argument x={x}')
+
+        return self._round_float(x_)
 
     def maxval(self, s = False):
         c = 1 << self.pmax
