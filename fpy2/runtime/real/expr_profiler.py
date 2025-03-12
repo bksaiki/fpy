@@ -87,7 +87,6 @@ class ExpressionProfiler:
                 if not isinstance(entry.value, bool):
                     fl_output = interpreter.eval_expr(entry.expr, entry.env, entry.ctx)
                     ref_output, fl_output = self._normalize(entry.value, fl_output, entry.ctx)
-                    print(ref_output, fl_output)
                     ord_err = ordinal_error(ref_output, fl_output)
                     repr_err = math.log2(ord_err + 1)
                     if entry.expr not in errors_by_expr:
