@@ -5,7 +5,8 @@ Profiler for numerical accuracy.
 import math
 
 from typing import Any, Optional
-from titanfp.arithmetic.ieee754 import Float
+from titanfp.arithmetic.ieee754 import Float, IEEECtx
+from titanfp.arithmetic.mpmf import MPMF
 
 from ..function import Function, Interpreter, get_default_interpreter
 from .interpreter import RealInterpreter
@@ -68,8 +69,8 @@ class FunctionProfiler:
                 ref_output = self.reference.eval(func, input)
                 fl_output = interpreter.eval(func, input)
                 # add to set of points
-                ref_outputs.append(ref_output)
-                fl_outputs.append(self._normalize(ref_output, fl_output))
+                ref_outputs.append(self._normalize(ref_output, fl_output))
+                fl_outputs.append(fl_output)
                 if self.logging:
                     print('.', end='', flush=True)
             except PrecisionLimitExceeded:
@@ -93,12 +94,9 @@ class FunctionProfiler:
 
 
     def _normalize(self, ref, fl):
-        """Returns `fl` so that it is the same type as `ref`."""
-        match ref:
-            case Float():
-                if math.isnan(fl):
-                    return Float(isnan=True, ctx=ref.ctx)
-                else:
-                    return Float(x=fl, ctx=ref.ctx)
-            case _:
-                raise NotADirectoryError(f'unexpected type {ref}')
+        """Returns `ref` rounded to the same context as `fl`."""
+        if not isinstance(fl, Float | MPMF):
+            raise TypeError(f'Expected Float or MPMF for {fl}, got {type(fl)}')
+        if not isinstance(fl.ctx, IEEECtx):
+            raise TypeError(f'Expected IEEECtx for {fl}, got {type(fl.ctx)}')
+        return Float(ref, ctx=fl.ctx)

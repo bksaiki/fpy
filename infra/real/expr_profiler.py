@@ -4,7 +4,7 @@ from fpy2 import *
 from fpy2.runtime.sampling import sample_function
 from fpy2.runtime.real import ExpressionProfiler
 
-from .common import disabled_tests
+from .common import disabled_tests, select_interpreter
 from .config import Config
 from .load import load_funs
 
@@ -28,7 +28,8 @@ def _run_one(
 
 
 def run_expr_profiler(config: Config):
-    profiler = ExpressionProfiler(logging=True)
+    reference = select_interpreter(config.ref_mode)
+    profiler = ExpressionProfiler(reference=reference, logging=True)
     funs = load_funs(config.input_paths)
     print(len(funs))
 
