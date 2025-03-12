@@ -956,7 +956,7 @@ def sineOrder3(x):
     name='smartRoot',
     cite=['darulova-kuncak-2014'],
     fpbench_domain='mathematics',
-    pre=lambda c: -2 <= c <= 2 and ((b * b) - ((a * c) * 4.0)) > 0.1,
+    pre=lambda c: -2 <= c <= 2 and ((3.5 * 3.5) - ((3 * c) * 4.0)) > 0.1,
     rosa_ensuring='6e-15',
 )
 def smartRoot(c):

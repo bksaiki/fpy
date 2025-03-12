@@ -1,6 +1,7 @@
 Frontend:
  - fpc2fpy:
    - clean up names
+   - preconditions with statements
  - parser:
    - fix ISSUE#1
    - use variables in the defining namespace
