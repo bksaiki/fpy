@@ -10,7 +10,7 @@ from titanfp.arithmetic import ieee754
 from .table import RangeTable
 from ..titanic import TitanicInterpreter
 from ..function import Function
-from ..env import PythonEnv
+from ..env import ForeignEnv
 from ...ir import *
 
 _DEFAULT_FUEL = 32
@@ -87,7 +87,7 @@ def _sample_rejection_one(
         rt = TitanicInterpreter()
 
         assert 'pre' in fun.ir.ctx, 'missing precondition'
-        pre = Function(fun.ir.ctx['pre'], PythonEnv.empty())
+        pre = Function(fun.ir.ctx['pre'], ForeignEnv.empty())
 
         start_fuel = fuel
         while fuel > 0:

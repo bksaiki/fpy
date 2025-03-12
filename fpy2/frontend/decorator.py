@@ -22,7 +22,7 @@ from .parser import Parser
 from .syntax_check import SyntaxCheck
 
 from ..passes import SSA, VerifyIR
-from ..runtime import Function, PythonEnv
+from ..runtime import Function, ForeignEnv
 
 P = ParamSpec('P')
 R = TypeVar('R')
@@ -52,7 +52,7 @@ def fpy(
     else:
         return _apply_decorator(func, kwargs)
 
-def _function_env(func: Callable) -> PythonEnv:
+def _function_env(func: Callable) -> ForeignEnv:
     globs = func.__globals__
     if func.__closure__ is None:
         nonlocals = {}
@@ -62,7 +62,7 @@ def _function_env(func: Callable) -> PythonEnv:
             zip(func.__code__.co_freevars, func.__closure__)
         }
 
-    return PythonEnv(globs, nonlocals)
+    return ForeignEnv(globs, nonlocals)
 
 def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     # read the original source the function

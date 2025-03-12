@@ -6,7 +6,7 @@ from types import FunctionType
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.arithmetic.evalctx import EvalCtx
 
-from .env import PythonEnv
+from .env import ForeignEnv
 from .expr_trace import ExprTraceEntry
 from ..ir import FunctionDef, Expr
 from ..frontend.fpc import fpcore_to_fpy
@@ -19,7 +19,7 @@ class Function:
     a function in the FPy runtime.
     """
     ir: FunctionDef
-    env: PythonEnv
+    env: ForeignEnv
     runtime: Optional['Interpreter']
 
     _func: Optional[FunctionType]
@@ -28,7 +28,7 @@ class Function:
     def __init__(
         self,
         ir: FunctionDef,
-        env: PythonEnv,
+        env: ForeignEnv,
         runtime: Optional['Interpreter'] = None,
         func: Optional[FunctionType] = None
     ):
@@ -60,7 +60,7 @@ class Function:
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
         ir = fpcore_to_fpy(core, default_name=default_name)
-        return Function(ir, PythonEnv.empty())
+        return Function(ir, ForeignEnv.empty())
 
     def with_rt(self, rt: 'Interpreter'):
         if not isinstance(rt, Interpreter):
