@@ -1,4 +1,4 @@
-from .env import PythonEnv
+from .env import ForeignEnv
 from .function import (
     Function,
     Interpreter,

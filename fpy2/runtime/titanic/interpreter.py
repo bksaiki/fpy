@@ -13,6 +13,7 @@ from titanfp.titanic.ops import OP
 import titanfp.titanic.gmpmath as gmpmath
 
 from ..expr_trace import ExprTraceEntry
+from ..env import ForeignEnv
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
 
@@ -91,6 +92,8 @@ _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 class _Interpreter(ReduceVisitor):
     """Single-use interpreter for a function"""
 
+    foreign: ForeignEnv
+    """foreign environment"""
     override_ctx: Optional[EvalCtx]
     """optional overriding context"""
     env: _Env
@@ -101,7 +104,9 @@ class _Interpreter(ReduceVisitor):
     """expression tracing enabled?"""
 
     def __init__(
-        self, *,
+        self, 
+        foreign: ForeignEnv,
+        *,
         override_ctx: Optional[EvalCtx] = None,
         env: Optional[_Env] = None,
         enable_trace: bool = False
@@ -109,6 +114,7 @@ class _Interpreter(ReduceVisitor):
         if env is None:
             env = {}
 
+        self.foreign = foreign
         self.override_ctx = override_ctx
         self.env = env
         self.trace = []
@@ -127,7 +133,7 @@ class _Interpreter(ReduceVisitor):
         elif isinstance(arg, Digital):
             return MPMF(x=arg, ctx=ctx)
         elif isinstance(arg, tuple | list):
-            raise NotImplementedError()
+            return NDArray([self._arg_to_mpmf(x, ctx) for x in arg])
         else:
             raise NotImplementedError(f'unknown argument type {arg}')
 
@@ -205,9 +211,6 @@ class _Interpreter(ReduceVisitor):
         ctx = self._eval_ctx(ctx)
         x = gmpmath.compute_digits(e.m, e.e, e.b, prec=ctx.p)
         return MPMF._round_to_context(x, ctx)
-
-    def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
-        raise NotImplementedError('unknown call', e)
 
     def _apply_method(self, e: NaryExpr, ctx: EvalCtx):
         fn = _method_table[e.name]
@@ -290,6 +293,15 @@ class _Interpreter(ReduceVisitor):
             return self._apply_range(e, ctx)
         else:
             raise NotImplementedError('unknown n-ary expression', e)
+
+    def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
+        args = [self._visit_expr(arg, ctx) for arg in e.children]
+        fn = self.foreign[e.name]
+        if not isinstance(fn, Function):
+            raise RuntimeError(f'can only call other FPy functions {e.name}')
+
+        rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
+        return rt.eval(fn.ir, args, ctx)
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
@@ -591,14 +603,14 @@ class TitanicInterpreter(Interpreter):
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
-        rt = _Interpreter(override_ctx=self.ctx)
+        rt = _Interpreter(func.env, override_ctx=self.ctx)
         return rt.eval(func.ir, args, ctx)
 
     def eval_with_trace(self, func: Function, args: Sequence[Any], ctx = None):
-        rt = _Interpreter(override_ctx=self.ctx, enable_trace=True)
+        rt = _Interpreter(func.env, override_ctx=self.ctx, enable_trace=True)
         result = rt.eval(func.ir, args, ctx)
         return result, rt.trace
 
     def eval_expr(self, expr: Expr, env: _Env, ctx: EvalCtx):
-        rt = _Interpreter(override_ctx=self.ctx, env=env)
+        rt = _Interpreter(ForeignEnv.empty(), override_ctx=self.ctx, env=env)
         return rt._visit_expr(expr, ctx)

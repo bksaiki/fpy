@@ -91,6 +91,8 @@ _binary_table = {
     'copysign': BinaryOpKind.COPYSIGN,
     'fdim': BinaryOpKind.FDIM,
     'fmax': BinaryOpKind.FMAX,
+    'min': BinaryOpKind.FMIN,
+    'max': BinaryOpKind.FMAX,
     'fmin': BinaryOpKind.FMIN,
     'fmod': BinaryOpKind.FMOD,
     'remainder': BinaryOpKind.REMAINDER,
@@ -211,7 +213,8 @@ class Parser:
             case ast.Name('bool'):
                 return ScalarTypeAnn(ScalarType.BOOL, loc)
             case _:
-                raise FPyParserError(loc, 'Unsupported FPy type annotation', ann)
+                # TODO: implement
+                return ScalarTypeAnn(ScalarType.REAL, loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':
@@ -634,7 +637,7 @@ class Parser:
                     raise FPyParserError(loc, 'FPy does not support assert messages', stmt)
                 return AssertStmt(test, None, loc)
             case _:
-                raise NotImplementedError('statement is unsupported in FPy', stmt)
+                raise NotImplementedError('statement is unsupported in FPy', ast.dump(stmt))
 
     def _parse_statements(self, stmts: list[ast.stmt]):
         """Parse a list of Python statements."""
@@ -676,9 +679,16 @@ class Parser:
         if f.args.kwarg:
             raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
 
+        # description
+        docstring = ast.get_docstring(f)
+        if docstring is not None:
+            body = f.body[1:]
+        else:
+            body = f.body
+
         # parse arguments and body
         args = self._parse_arguments(pos_args)
-        block = self._parse_statements(f.body)
+        block = self._parse_statements(body)
 
         # return AST and decorator list
         return FunctionDef(f.name, args, block, loc), f.decorator_list
