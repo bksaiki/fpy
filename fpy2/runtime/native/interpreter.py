@@ -84,11 +84,12 @@ _method_table: dict[str, Callable[..., Any]] = {
     'signbit': lambda x: math.copysign(1, x) < 0,
 }
 
+_Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 
 class _Interpreter(ReduceVisitor):
     """Single-use interpreter for a function."""
     func: FunctionDef
-    env: dict[NamedId, ScalarVal | TensorVal]
+    env: _Env
 
     def __init__(self, ir: FunctionDef):
         self.func = ir
@@ -504,3 +505,9 @@ class PythonInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
         return _Interpreter(func.ir).eval(args, ctx)
+
+    def eval_with_trace(self, func: Function, args: Sequence[Any], ctx = None):
+        raise NotImplementedError('not implemented')
+
+    def eval_expr(self, expr: Expr, env: _Env, ctx: EvalCtx):
+        raise NotImplementedError('not implemented')
