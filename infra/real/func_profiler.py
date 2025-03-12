@@ -25,7 +25,7 @@ def _run_one(
 
 def run_func_profiler(config: Config):
     reference = select_interpreter(config.ref_mode)
-    profiler = FunctionProfiler(logging=True)
+    profiler = FunctionProfiler(reference=reference, logging=True)
     funs = load_funs(config.input_paths)
     print(len(funs))
 

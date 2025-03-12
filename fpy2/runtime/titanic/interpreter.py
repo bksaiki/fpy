@@ -89,13 +89,20 @@ _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 
 class _Interpreter(ReduceVisitor):
     """Single-use interpreter for a function"""
-    env: _Env
 
-    def __init__(self, env: Optional[_Env] = None):
+    override_ctx: Optional[EvalCtx]
+    """optional overriding context"""
+
+    env: _Env
+    """Environment mapping variable names to values"""
+
+    def __init__(self, *, override_ctx: Optional[EvalCtx] = None, env: Optional[_Env] = None):
         if env is None:
-            self.env = {}
-        else:
-            self.env = env
+            env = {}
+
+        self.override_ctx = override_ctx
+        self.env = env
+
 
     # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
@@ -118,9 +125,12 @@ class _Interpreter(ReduceVisitor):
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
-        if ctx is None:
-            ctx = ieee_ctx(11, 64)
-        ctx = determine_ctx(ctx, func.ctx)
+        if self.override_ctx is not None:
+            ctx = self.override_ctx
+        else:
+            if ctx is None:
+                ctx = ieee_ctx(11, 64)
+            ctx = determine_ctx(ctx, func.ctx)
 
         for val, arg in zip(args, func.args):
             match arg.ty:
@@ -473,7 +483,8 @@ class _Interpreter(ReduceVisitor):
                 del self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
-        ctx = determine_ctx(ctx, stmt.props)
+        if self.override_ctx is None:
+            ctx = determine_ctx(ctx, stmt.props)
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
@@ -519,6 +530,12 @@ class TitanicInterpreter(Interpreter):
     All operations are correctly-rounded.
     """
 
+    ctx: Optional[EvalCtx] = None
+    """optionaly overriding context"""
+
+    def __init__(self, ctx: Optional[EvalCtx] = None):
+        self.ctx = ctx
+
     def eval(
         self,
         func: Function,
@@ -527,8 +544,10 @@ class TitanicInterpreter(Interpreter):
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
-        return _Interpreter().eval(func.ir, args, ctx)
+        rt = _Interpreter(override_ctx=self.ctx)
+        return rt.eval(func.ir, args, ctx)
 
     def eval_expr(self, expr: Expr, env: _Env, ctx: EvalCtx):
-        return _Interpreter(env)._visit_expr(expr, ctx)
+        rt = _Interpreter(override_ctx=self.ctx, env=env)
+        return rt._visit_expr(expr, ctx)
 
