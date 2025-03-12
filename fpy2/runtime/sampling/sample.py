@@ -22,7 +22,7 @@ class SamplingFailure(Exception):
 
 
 def _float_to_ordinal(x: ieee754.Float):
-    pos_ord = ieee754.digital_to_bits(x.fabs())
+    pos_ord = ieee754.digital_to_bits(x.fabs(), ctx=x.ctx)
     return (-1 if x.negative else 1) * pos_ord
 
 def _ordinal_to_float(x: int, ctx: ieee754.IEEECtx):
