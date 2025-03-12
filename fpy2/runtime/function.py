@@ -1,12 +1,13 @@
 """FPy functions are the result of `@fpy` decorators."""
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, Optional
 from types import FunctionType
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.arithmetic.evalctx import EvalCtx
 
 from .env import PythonEnv
+from .expr_trace import ExprTraceEntry
 from ..ir import FunctionDef, Expr
 from ..frontend.fpc import fpcore_to_fpy
 
@@ -74,6 +75,10 @@ class Interpreter(ABC):
 
     @abstractmethod
     def eval(self, func: Function, args, ctx: Optional[EvalCtx] = None):
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
+    def eval_with_trace(self, func: Function, args, ctx: Optional[EvalCtx] = None) -> tuple[Any, list[ExprTraceEntry]]:
         raise NotImplementedError('virtual method')
 
     @abstractmethod

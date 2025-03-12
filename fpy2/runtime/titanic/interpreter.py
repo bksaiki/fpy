@@ -12,6 +12,7 @@ from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.ops import OP
 import titanfp.titanic.gmpmath as gmpmath
 
+from ..expr_trace import ExprTraceEntry
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
 
@@ -92,17 +93,32 @@ class _Interpreter(ReduceVisitor):
 
     override_ctx: Optional[EvalCtx]
     """optional overriding context"""
-
     env: _Env
     """Environment mapping variable names to values"""
+    trace: list[ExprTraceEntry]
+    """expression trace"""
+    enable_trace: bool
+    """expression tracing enabled?"""
 
-    def __init__(self, *, override_ctx: Optional[EvalCtx] = None, env: Optional[_Env] = None):
+    def __init__(
+        self, *,
+        override_ctx: Optional[EvalCtx] = None,
+        env: Optional[_Env] = None,
+        enable_trace: bool = False
+    ):
         if env is None:
             env = {}
 
         self.override_ctx = override_ctx
         self.env = env
+        self.trace = []
+        self.enable_trace = enable_trace
 
+    def _eval_ctx(self, ctx: EvalCtx):
+        if self.override_ctx is None:
+            return ctx
+        else:
+            return self.override_ctx
 
     # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
@@ -125,12 +141,9 @@ class _Interpreter(ReduceVisitor):
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
-        if self.override_ctx is not None:
-            ctx = self.override_ctx
-        else:
-            if ctx is None:
-                ctx = ieee_ctx(11, 64)
-            ctx = determine_ctx(ctx, func.ctx)
+        if ctx is None:
+            ctx = ieee_ctx(11, 64)
+        ctx = determine_ctx(ctx, func.ctx)
 
         for val, arg in zip(args, func.args):
             match arg.ty:
@@ -165,9 +178,11 @@ class _Interpreter(ReduceVisitor):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
+        ctx = self._eval_ctx(ctx)
         return MPMF(x=e.val, ctx=ctx)
 
     def _visit_integer(self, e: Integer, ctx: EvalCtx):
+        ctx = self._eval_ctx(ctx)
         x = Digital(m=e.val, exp=0, inexact=False)
         return MPMF._round_to_context(x, ctx=ctx)
 
@@ -175,16 +190,19 @@ class _Interpreter(ReduceVisitor):
         return MPMF(x=e.val, ctx=ctx)
 
     def _visit_rational(self, e: Rational, ctx: EvalCtx):
+        ctx = self._eval_ctx(ctx)
         p = Digital(m=e.p, exp=0, inexact=False)
         q = Digital(m=e.q, exp=0, inexact=False)
         x = gmpmath.compute(OP.div, p, q, prec=ctx.p)
         return MPMF._round_to_context(x, ctx=ctx)
 
     def _visit_constant(self, e: Constant, ctx: EvalCtx):
+        ctx = self._eval_ctx(ctx)
         x = gmpmath.compute_constant(e.val, prec=ctx.p)
         return MPMF._round_to_context(x, ctx=ctx)
 
     def _visit_digits(self, e: Digits, ctx: EvalCtx):
+        ctx = self._eval_ctx(ctx)
         x = gmpmath.compute_digits(e.m, e.e, e.b, prec=ctx.p)
         return MPMF._round_to_context(x, ctx)
 
@@ -201,8 +219,9 @@ class _Interpreter(ReduceVisitor):
             args.append(val)
 
         # compute the result
+        ctx = self._eval_ctx(ctx)
         try:
-            result = fn(*args)
+            result = fn(*args, ctx=ctx)
         except gmpmath.SignedOverflow as e:
             # we overflowed beyond MPFR's limits, generate a large value and round it
             exp = ctx.emax + 1
@@ -210,6 +229,7 @@ class _Interpreter(ReduceVisitor):
             result = MPMF._round_to_context(x, ctx=ctx)
         except gmpmath.SignedUnderflow as e:
             # we underflowed beyond MPFR's limits, generate a small value and round it
+            ctx = self._eval_ctx(ctx)
             exp = ctx.emin - ctx.p - 1
             x = Digital(negative=e.sign, c=1, exp=exp)
             result = MPMF._round_to_context(x, ctx=ctx)
@@ -220,6 +240,7 @@ class _Interpreter(ReduceVisitor):
         x = self._visit_expr(e.children[0], ctx)
         if not isinstance(x, Digital):
             raise TypeError(f'expected a real number argument, got {x}')
+        ctx = self._eval_ctx(ctx)
         return MPMF._round_to_context(x, ctx)
 
     def _apply_not(self, e: Not, ctx: EvalCtx):
@@ -374,6 +395,10 @@ class _Interpreter(ReduceVisitor):
 
     def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx) -> None:
         val = self._visit_expr(stmt.expr, ctx)
+        if self.enable_trace:
+            entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
+            self.trace.append(entry)
+
         match stmt.var:
             case NamedId():
                 self.env[stmt.var] = val
@@ -400,6 +425,11 @@ class _Interpreter(ReduceVisitor):
         val = self._visit_expr(stmt.expr, ctx)
         if not isinstance(val, NDArray):
             raise TypeError(f'expected a tuple, got {val}')
+
+        if self.enable_trace:
+            entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
+            self.trace.append(entry)
+
         self._unpack_tuple(stmt.binding, val, ctx)
 
     def _visit_ref_assign(self, stmt: RefAssign, ctx: EvalCtx) -> None:
@@ -436,7 +466,12 @@ class _Interpreter(ReduceVisitor):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
-        elif cond:
+
+        if self.enable_trace:
+            entry = ExprTraceEntry(stmt.cond, cond, dict(self.env), ctx)
+            self.trace.append(entry)
+
+        if cond:
             self._visit_block(stmt.ift, ctx)
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.lhs]
@@ -454,6 +489,10 @@ class _Interpreter(ReduceVisitor):
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
+        if self.enable_trace:
+            entry = ExprTraceEntry(stmt.cond, cond, dict(self.env), ctx)
+            self.trace.append(entry)
+
         while cond:
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
@@ -463,6 +502,10 @@ class _Interpreter(ReduceVisitor):
             cond = self._visit_expr(stmt.cond, ctx)
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
+
+            if self.enable_trace:
+                entry = ExprTraceEntry(stmt.cond, cond, dict(self.env), ctx)
+                self.trace.append(entry)
 
 
     def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx) -> None:
@@ -483,8 +526,7 @@ class _Interpreter(ReduceVisitor):
                 del self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
-        if self.override_ctx is None:
-            ctx = determine_ctx(ctx, stmt.props)
+        ctx = determine_ctx(ctx, stmt.props)
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
@@ -496,7 +538,12 @@ class _Interpreter(ReduceVisitor):
         return ctx
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx):
-        return self._visit_expr(stmt.expr, ctx)
+        val = self._visit_expr(stmt.expr, ctx)
+        if self.enable_trace:
+            entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
+            self.trace.append(entry)
+
+        return val
 
     def _visit_phis(self, phis, lctx, rctx):
         raise NotImplementedError('do not call directly')
@@ -547,7 +594,11 @@ class TitanicInterpreter(Interpreter):
         rt = _Interpreter(override_ctx=self.ctx)
         return rt.eval(func.ir, args, ctx)
 
+    def eval_with_trace(self, func: Function, args: Sequence[Any], ctx = None):
+        rt = _Interpreter(override_ctx=self.ctx, enable_trace=True)
+        result = rt.eval(func.ir, args, ctx)
+        return result, rt.trace
+
     def eval_expr(self, expr: Expr, env: _Env, ctx: EvalCtx):
         rt = _Interpreter(override_ctx=self.ctx, env=env)
         return rt._visit_expr(expr, ctx)
-

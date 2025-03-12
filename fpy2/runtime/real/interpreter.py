@@ -11,13 +11,11 @@ from titanfp.arithmetic.evalctx import EvalCtx, determine_ctx
 from titanfp.arithmetic.ieee754 import Float, IEEECtx, ieee_ctx
 from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.digital import Digital
-from titanfp.titanic.ops import RM
-from titanfp.titanic import gmpmath
 
 from .interval import RealInterval
 from .rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
-from .expr_trace import ExprTraceEntry
 
+from ..expr_trace import ExprTraceEntry
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
 
@@ -108,27 +106,22 @@ def _digital_to_str(x: Digital) -> str:
 class _Interpreter(ReduceVisitor):
     """Single-use real number interpreter"""
 
-    env: dict[NamedId, ScalarVal]
-    """mappping from variable names to values"""
-
     rival: RivalManager
     """Rival object for evaluating expressions"""
 
+    env: dict[NamedId, ScalarVal]
+    """mappping from variable names to values"""
     curr_prec: dict[NamedId, int]
     """mapping from variables names to current precision"""
-
     req_prec: dict[NamedId, int]
     """mapping from variables names to required precision"""
-
     visited: set[NamedId]
     """"set of visited variables during this iteration"""
-
     dirty: bool
     """has a variable precision been updated?"""
 
     expr_trace: list[ExprTraceEntry]
     """expression trace"""
-
     trace: bool
     """expression tracing enabled?"""
 
@@ -577,7 +570,7 @@ class RealInterpreter(Interpreter):
     def eval_expr(self, expr, env, ctx):
         raise NotImplementedError
 
-    def trace(
+    def eval_with_trace(
         self,
         func: Function,
         args: Sequence[Any],
@@ -586,6 +579,6 @@ class RealInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
         rt = _Interpreter(self.rival, True)
-        rt.eval(func.ir, args, ctx)
-        return rt.expr_trace
+        result = rt.eval(func.ir, args, ctx)
+        return (result, rt.expr_trace)
 

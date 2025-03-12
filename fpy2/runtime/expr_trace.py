@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from titanfp.arithmetic.evalctx import EvalCtx
 from titanfp.arithmetic.ieee754 import Float
 
-from ...ir import *
+from ..ir import *
 
 @dataclass
 class ExprTraceEntry:
