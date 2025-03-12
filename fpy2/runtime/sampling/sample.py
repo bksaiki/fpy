@@ -10,6 +10,7 @@ from titanfp.arithmetic import ieee754
 from .table import RangeTable
 from ..titanic import TitanicInterpreter
 from ..function import Function
+from ..env import PythonEnv
 from ...ir import *
 
 _DEFAULT_FUEL = 32
@@ -85,13 +86,18 @@ def _sample_rejection_one(
         hi = ieee754.Float(negative=False, isinf=True, ctx=ctx)
         rt = TitanicInterpreter()
 
+        assert 'pre' in fun.ir.ctx, 'missing precondition'
+        pre = Function(fun.ir.ctx['pre'], PythonEnv.empty())
+
+        start_fuel = fuel
         while fuel > 0:
             pt = [_sample_between(lo, hi, ctx) for _ in range(len(fun.args))]
-            if rt.eval(fun, pt):
+            if rt.eval(pre, pt):
                 return pt
             fuel -= 1
 
-        raise SamplingFailure(f'failed to sample after {fuel} attempts for {fun.name}')
+        print(f'FAIL: cannot sample after {start_fuel} attempts for {fun.name}, returning point anyways')
+        return pt
 
 def _sample_rejection(
     fun: Function,

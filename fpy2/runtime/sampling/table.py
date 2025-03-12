@@ -5,6 +5,7 @@ Defines a range table, a map from variable to interval.
 import math
 
 from fractions import Fraction
+from titanfp.titanic.gmpmath import compute_constant
 
 from ...ir import *
 from ...utils import digits_to_fraction, hexnum_to_fraction, default_repr
@@ -227,6 +228,13 @@ def _parse_number(e: RealExpr) -> Fraction | float:
             return digits_to_fraction(e.m, e.e, e.b)
         case Rational():
             return Fraction(e.p, e.q)
+        case Constant():
+            if e.val == 'PI':
+                # TODO: this is definitely unsound
+                d = compute_constant(e.val, 1024)
+                return (-1 if d.negative else 1) * d.c * (Fraction(2) ** d.exp)
+            else:
+                raise RangeTableParseError(f'cannot represent {e} as a fraction')
         case _:
             raise RangeTableParseError(f'cannot represent {e} as a fraction')
 
@@ -269,6 +277,36 @@ def _parse_cmp(op: CompareOp, lhs: Expr, rhs: Expr):
             try:
                 n = _parse_number(rhs.children[0])
                 return _parse_cmp2(op, lhs.name, -n)
+            except RangeTableParseError:
+                return RangeTable.unsound()
+        case (Var(), Add()):
+            if not isinstance(rhs.children[0], RealExpr) or not isinstance(rhs.children[1], RealExpr):
+                # unsupported
+                return RangeTable.unsound()
+            try:
+                n1 = _parse_number(rhs.children[0])
+                n2 = _parse_number(rhs.children[1])
+                return _parse_cmp2(op, lhs.name, n1 + n2)
+            except RangeTableParseError:
+                return RangeTable.unsound()
+        case (Var(), Sub()):
+            if not isinstance(rhs.children[0], RealExpr) or not isinstance(rhs.children[1], RealExpr):
+                # unsupported
+                return RangeTable.unsound()
+            try:
+                n1 = _parse_number(rhs.children[0])
+                n2 = _parse_number(rhs.children[1])
+                return _parse_cmp2(op, lhs.name, n1 - n2)
+            except RangeTableParseError:
+                return RangeTable.unsound()
+        case (Var(), Mul()):
+            if not isinstance(rhs.children[0], RealExpr) or not isinstance(rhs.children[1], RealExpr):
+                # unsupported
+                return RangeTable.unsound()
+            try:
+                n1 = _parse_number(rhs.children[0])
+                n2 = _parse_number(rhs.children[1])
+                return _parse_cmp2(op, lhs.name, n1 * n2)
             except RangeTableParseError:
                 return RangeTable.unsound()
         case _:
