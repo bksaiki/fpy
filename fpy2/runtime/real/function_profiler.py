@@ -21,25 +21,41 @@ class FunctionProfiler:
     Compare the actual output against the real number result.
     """
 
+    interpreter: Optional[Interpreter]
+    """the interpreter to use"""
+
+    reference: Interpreter
+    """the reference interpreter to use"""
+
     logging: bool
+    """is logging enabled?"""
 
-    def __init__(self, logging: bool = False):
-        self.logging = logging
-
-    def profile(
+    def __init__(
         self,
-        func: Function,
-        inputs: list[Any],
+        *,
         interpreter: Optional[Interpreter] = None,
+        reference: Optional[Interpreter] = None,
+        logging: bool = False
     ):
         """
-        Profile the function.
-
         If no interpreter is provided, the default interpreter is used.
+        If no reference interpreter is provided, the `RealInterpreter` is used.
         """
-        if interpreter is None:
+        if reference is None:
+            reference = RealInterpreter()
+
+        self.interpreter = interpreter
+        self.reference = reference
+        self.logging = logging
+
+
+    def profile(self, func: Function, inputs: list[Any]):
+        """Profile the function on a list of input points"""
+        # select the interpreter
+        if self.interpreter is None:
             interpreter = get_default_interpreter()
-        ref_interpreter = RealInterpreter()
+        else:
+            interpreter = self.interpreter
 
         skipped_inputs: list[Any] = []
         fl_outputs: list[Any] = []
@@ -49,16 +65,15 @@ class FunctionProfiler:
         for input in inputs:
             try:
                 # evaluate in both interpreters
-                ref_output = ref_interpreter.eval(func, input)
+                ref_output = self.reference.eval(func, input)
                 fl_output = interpreter.eval(func, input)
                 # add to set of points
                 ref_outputs.append(ref_output)
                 fl_outputs.append(self._normalize(ref_output, fl_output))
-                # log
                 if self.logging:
                     print('.', end='', flush=True)
             except PrecisionLimitExceeded:
-                skipped_inputs.append(input)# log
+                skipped_inputs.append(input)
                 if self.logging:
                     print('X', end='', flush=True)
 
