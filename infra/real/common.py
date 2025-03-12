@@ -1,3 +1,5 @@
+from .config import Config, ReferenceMode
+
 _disabled = [
     # Too hard
     'Rocket_Trajectory',
@@ -16,3 +18,9 @@ _disabled = [
     'Flower',
     'Arrow_Hurwicz'
 ]
+
+def select_interpreter(mode: ReferenceMode):
+    raise NotImplementedError(mode)
+
+def disabled_tests():
+    return list(_disabled)

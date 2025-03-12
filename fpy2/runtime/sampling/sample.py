@@ -114,6 +114,7 @@ def sample_function(
     fun: Function,
     num_samples: int,
     *,
+    seed: Optional[int] = None,
     only_real: bool = False,
     ignore_pre: bool = False,
     fuel: int = _DEFAULT_FUEL,
@@ -126,6 +127,10 @@ def sample_function(
     (excludes infinity and NaN). Specify `ignore_pre=true`
     to ignore the preconditions of the function.
     """
+
+    # set seed
+    if seed is not None:
+        random.seed(seed)
 
     # compute the context
     default_ctx = ieee754.ieee_ctx(11, 64)
