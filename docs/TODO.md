@@ -6,7 +6,8 @@ Frontend:
    - fix ISSUE#1
    - use variables in the defining namespace
  - language:
-   - preconditions?
+   - support for zip()
+   - support for vector addition/multiplication
 
 Middle-end:
  - do we really need a separate AST / IR?

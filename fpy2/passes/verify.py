@@ -179,6 +179,10 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx.add(stmt.name)
         return self._visit_block(stmt.body, ctx)
 
+    def _visit_assert(self, stmt: AssertStmt, ctx: _CtxType):
+        self._visit_expr(stmt.test, ctx)
+        return ctx
+
     def _visit_block(self, block: Block, ctx: _CtxType):
         for stmt in block.stmts:
             if not isinstance(stmt, Stmt):
