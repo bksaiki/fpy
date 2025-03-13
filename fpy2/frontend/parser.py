@@ -40,6 +40,7 @@ _constants: set[str] = {
 }
 
 _unary_table = {
+    'abs': UnaryOpKind.FABS,
     'fabs': UnaryOpKind.FABS,
     'sqrt': UnaryOpKind.SQRT,
     'cbrt': UnaryOpKind.CBRT,

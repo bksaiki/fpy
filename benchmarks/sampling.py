@@ -1,8 +1,15 @@
 from fpy2 import fpy
 from fpy2.typing import *
 
+@fpy(name='clamp')
+def clamp(x: Real, a: Real, b: Real):
+    """
+    Clamps a value `x` to the range [a, b].
+    """
+    return min(max(x, a), b)
+
 #
-#   Sampling based on linear interpolation
+# Sampling a linear function
 #
 
 @fpy(
@@ -59,7 +66,7 @@ def invert_linear_sample(x: Real, a: Real, b: Real):
     return x * (a * (2 - x) + b * x) / (a + b)
 
 #
-#   Uniform sampling of a triangle
+# Uniform sampling of a triangle
 #
 
 @fpy(
@@ -103,7 +110,7 @@ def invert_uniform_triangle_sample(b: tuple[Real, Real, Real]):
     return u0, u1
 
 #
-#   Sampling the "tent" function of radius r
+# Sampling the "tent" function of radius r
 #
 
 @fpy(
@@ -180,7 +187,7 @@ def invert_tent_sample(x: Real, r: Real):
     return u
 
 #
-#   Sampling the exponential function
+# Sampling the exponential function
 #
 
 @fpy(
@@ -219,6 +226,10 @@ def invert_exponential_sample(x: Real, a: Real):
     """
     return 1 - exp(-a * x)
 
+#
+# Sampling the Gaussian distribution
+#
+
 @fpy(
     name='PDF of Gaussian sampling',
     cite='pbrt-v4',
@@ -233,3 +244,261 @@ def normal_pdf(x: Real, mu: Real, sigma: Real):
     scale = 1 / (abs(sigma) * sqrt(2 * PI))
     unscaled = exp(-(mu * mu) / (2 * sigma * sigma))
     return scale * unscaled
+
+@fpy(
+    name='Sample Gaussian distribution',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda u: 0 <= u <= 1
+)
+def sample_normal(u: Real, mu: Real, sigma: Real):
+    """
+    Generates a sample from a Gaussian distribution.
+    """
+    return mu + SQRT2 * sigma * erfc(2 * u - 1)
+
+@fpy(
+    name='inversion of Gaussian sampling',
+    cite='pbrt-v4',
+    precision='binary32',
+)
+def invert_normal_sample(x: Real, mu: Real, sigma: Real):
+    """
+    Transforms a sample from a Gaussian distribution to a uniform sample.
+    """
+    return 0.5 * (1 + erf((x - mu) / (sigma * SQRT2)))
+
+#
+# Sampling the logistic function
+#
+
+@fpy(
+    name='PDF of logistic sampling',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda x, s: s > 0
+)
+def logistic_pdf(x: Real, s: Real):
+    """
+    PDF of sampling from a logistic distribution.
+    """
+    x = abs(x)
+    t = 1 + exp(-x / s)
+    return exp(-x / s) / (s * t * t)
+
+@fpy(
+    name='Sample logistic distribution',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda u: 0 <= u <= 1
+)
+def sample_logistic(u: Real, s: Real):
+    """
+    Generates a sample from a logistic distribution.
+    """
+    return -s * log(1 / u - 1)
+
+@fpy(
+    name='inversion of logistic sampling',
+    cite='pbrt-v4',
+    precision='binary32',
+)
+def invert_logistic_sample(x: Real, s: Real):
+    """
+    Transforms a sample from a logistic distribution to a uniform sample.
+    """
+    return 1 / (1 + exp(-x / s))
+
+#
+# Sampling the "trimmed" logistic function
+#
+
+@fpy(
+    name='PDF of trimmed logistic sampling',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda x, a, b, s: s > 0 and a <= b
+)
+def trimmed_logistic_pdf(x: Real, a: Real, b: Real, s: Real):
+    """
+    PDF of sampling from a "trimmed" logistic distribution.
+    """
+
+    if x < a or x > b:
+        pdf = 0
+    else:
+        t = logistic_pdf(x, x)
+        inv_a = invert_logistic_sample(a, s)
+        inv_b = invert_logistic_sample(b, s)
+        pdf = t / (inv_b - inv_a)
+
+    return pdf
+
+@fpy(
+    name='Sample trimmed logistic distribution',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda u, a, b, s: a <= b and s > 0
+)
+def sample_trimmed_logistic(u: Real, a: Real, b: Real, s: Real):
+    """
+    Generates a sample from a "trimmed" logistic distribution.
+    """
+    inv_a = invert_logistic_sample(a, s)
+    inv_b = invert_logistic_sample(b, s)
+    u = lerp(u, inv_a, inv_b)
+
+    x = sample_logistic(u, s)
+    return clamp(x, a, b)
+
+@fpy(
+    name='inversion of trimmed logistic sampling',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda x, a, b, s: a < b and s > 0
+)
+def invert_trimmed_logistic_sample(x: Real, a: Real, b: Real, s: Real):
+    """
+    Transforms a sample from a "trimmed" logistic distribution to a uniform sample.
+    """
+    inv_a = invert_logistic_sample(a, s)
+    inv_b = invert_logistic_sample(b, s)
+    inv_x = invert_logistic_sample(x, s)
+    return (inv_x - inv_a) / (inv_b - inv_a)
+
+#
+# Sampling a cubic interpolant
+#
+
+@fpy(
+    name='cubic interpolation',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda x, a, b: a <= b
+)
+def smooth_step(x: Real, a: Real, b: Real):
+    """
+    Cubic interpolation between two value `a` and `b`.
+
+    Given a range [a, b] and a value x, the function returns
+    0 when `x <= a`, 1 when `x >= b`, and a interpolates between
+    them usig a cubic polynomial that ensures that the first
+    derivative is continuous.
+    """
+    if a == b:
+        if x < a:
+            y = 0
+        else:
+            y = 1
+    else:
+        t = clamp((x - a) / (b - a), 0, 1)
+        y = t * t * (3 - 2 * t)
+
+    return y
+
+
+@fpy(
+    name='PDF of cubic interpolation',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda x, a, b: a <= b
+)
+def smooth_step_pdf(x: Real, a: Real, b: Real):
+    """
+    PDF of sampling a cubic interpolant between two values.
+    """
+    if x < a or x > b:
+        pdf = 0
+    else:
+        pdf = 2 / (b - a) * smooth_step(x, a, b)
+    return pdf
+
+
+@fpy(name='single step of Newton iteration')
+def _sample_smooth_step_newton_once(x: Real, u: Real, a: Real, b: Real):
+    """
+    Single step of Newton iteration for the cubic interpolant.
+    """
+    t = (x - a) / (b - a)
+    p = 2 * (t * t * t) - (t * t * t * t)
+    pderiv = smooth_step_pdf(x, a, b)
+    return p - u, pderiv
+
+
+@fpy(
+    name='Sample cubic interpolation',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda u, a, b: a <= b
+)
+def sample_smooth_step(u: Real, a: Real, b: Real):
+    """
+    Generates a sample from a cubic interpolant between two values.
+    """
+    eps = 1e-6
+
+    # initial endpoints
+    x0 = a
+    x1 = b
+
+    # compute outputs
+    fx0, _ = _sample_smooth_step_newton_once(x0, u, a, b)
+    fx1, _ = _sample_smooth_step_newton_once(x1, u, a, b)
+
+    if abs(fx0) < eps:
+        x = x0
+    elif abs(fx1) < eps:
+        x = x1
+    else:
+        start_negative = fx0 < 0
+
+        # initial midpoint
+        xmid = x0 + (x1 - x0) * -fx0 / (fx1 - fx0)
+
+        # fall back to bisection is _xmid_ is out of bounds
+        if xmid <= x0 or xmid >= x1:
+            xmid = (x0 + x1) / 2
+
+        # evaluate the function at the midpoint
+        fmid, fmid_deriv = _sample_smooth_step_newton_once(xmid, u, a, b)
+        if start_negative == (fmid < 0):
+            x0 = xmid
+        else:
+            x1 = xmid
+
+        # Iterate
+        while x1 - x0 >= eps and abs(fmid) >= eps:
+            # recompute the mid point
+            xmid -= fmid / fmid_deriv
+
+            # fall back to bisection is _xmid_ is out of bounds
+            if xmid <= x0 or xmid >= x1:
+                xmid = (x0 + x1) / 2
+
+            # evaluate the function at the midpoint
+            fmid, fmid_deriv = _sample_smooth_step_newton_once(xmid, u, a, b)
+            if start_negative == (fmid < 0):
+                x0 = xmid
+            else:
+                x1 = xmid
+
+        x = xmid
+
+    return x
+
+
+@fpy(
+    name='inversion of cubic interpolation',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda x, a, b: a <= x <= b
+)
+def invert_smooth_step_sample(x: Real, a: Real, b: Real):
+    """
+    Transforms a sample from a cubic interpolant between two values to a uniform sample.
+    """
+    t = (x - a) / (b - a)
+    inv_a = 2 * (a * a * a) - (a * a * a * a)
+    inv_b = 2 * (b * b * b) - (b * b * b * b)
+    inv_x = 2 * (x * x * x) - (x * x * x * x)
+    return (inv_x - inv_a) / (inv_b - inv_a)
