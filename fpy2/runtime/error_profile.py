@@ -1,5 +1,6 @@
 from ..ir import Expr
 from typing import Any, Literal
+import numpy as np
 
 Verbosity = Literal["minimal", "standard", "detailed"]
 
@@ -22,26 +23,24 @@ class ErrorProfile:
 
     def _compute_statistics(self, stats: list[float], verbosity: Verbosity) -> dict[str, float]:
         """
-        Computes statistics based on the provided list of error values with given verbosity.
+        Computes statistics based on the provided list of error values with given verbosity
         """
-        mean = sum(stats) / len(stats)
+        stats = np.array(stats)
+        mean = np.mean(stats)
         statistics = {"Mean": mean}
         
         if verbosity in ["standard", "detailed"]:
             statistics.update({
-                "Median": stats[len(stats) // 2],
-                "Min": stats[0],
-                "Max": stats[-1]
+                "Median": np.median(stats),
+                "Min": np.min(stats),
+                "Max": np.max(stats)
             })
         
         if verbosity == "detailed":
-            q1 = stats[len(stats) // 4]
-            q3 = stats[3 * len(stats) // 4]
-            variance = sum((x - mean) ** 2 for x in stats) / (len(stats) - 1) if len(stats) > 1 else 0
             statistics.update({
-                "Q1": q1,
-                "Q3": q3,
-                "Std Dev": variance ** 0.5
+                "Q1": np.percentile(stats, 25),
+                "Q3": np.percentile(stats, 75),
+                "Std Dev": np.std(stats, ddof=1)
             })
         
         return statistics
@@ -66,8 +65,7 @@ class ErrorProfile:
             print(f"  Number of evaluations: {len(evaluations)}")
             
             if evaluations:
-                stats = sorted(evaluations)
-                statistics = self._compute_statistics(stats, verbosity)
+                statistics = self._compute_statistics(evaluations, verbosity)
                 
                 print("  Error Stats:")
 
@@ -92,7 +90,7 @@ class ErrorProfile:
         num_skipped = len(self.skipped_samples)
         
         exprs_summary = [
-            {"expr": expr.format(), "mean_error": round(sum(evals) / len(evals), 4) if evals else None} # TODO: 4 decimal places?
+            {"expr": expr.format(), "mean_error": round(np.mean(evals).item(), 4) if evals else None} # TODO: 4 decimal places?
             for expr, evals in self.errors.items()
         ]
         
