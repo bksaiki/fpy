@@ -1,12 +1,43 @@
 from fpy2 import fpy
 from fpy2.typing import *
 
+#
+# Utilities
+#
+
 @fpy(name='clamp')
 def clamp(x: Real, a: Real, b: Real):
     """
     Clamps a value `x` to the range [a, b].
     """
     return min(max(x, a), b)
+
+# TODO: add support for zip
+@fpy(name='vector addition')
+def vector_add(x: tuple[Real, ...], y: tuple[Real, ...]):
+    assert len(x) == len(y)
+    return [x[i] + y[i] for i in range(len(x))]
+
+# TODO: add support for zip
+@fpy(name='vector subtraction')
+def vector_sub(x: tuple[Real, ...], y: tuple[Real, ...]):
+    assert len(x) == len(y)
+    return [x[i] - y[i] for i in range(len(x))]
+
+@fpy(name='scalar-vector multiplication')
+def vector_mul(s: Real, x: tuple[Real, ...]):
+    return [s * xi for xi in x]
+
+@fpy(name='transforms spherical coordinates')
+def spherical_direction(sin_theta: Real, cos_theta: Real, phi: Real):
+    sin_theta = clamp(sin_theta, -1, 1)
+    cos_theta = clamp(cos_theta, -1, 1)
+    return sin_theta * cos(phi), sin_theta * sin(phi), cos_theta
+
+@fpy(name='phi coordinate in spherical coordinates')
+def spherical_phi(v: tuple[Real, Real, Real]):
+    p = atan2(v[1], v[0])
+    return p + 2 * PI if p < 0 else p
 
 #
 # Sampling a linear function
@@ -225,6 +256,49 @@ def invert_exponential_sample(x: Real, a: Real):
     Transforms a sample from the exponential function to a uniform sample.
     """
     return 1 - exp(-a * x)
+
+#
+#   Sampling the trimmed exponential function
+#
+
+@fpy(
+    name='sample the (trimmed) exponential function',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda u, a, x_max: a > 0 and x_max > 0
+)
+def sample_trimmed_exponential(u: Real, a: Real, x_max: Real):
+    """
+    Generates a sample from the (trimmed) exponential function.
+    """
+    return log(1 - u * (1 - exp(-a * x_max))) / -a
+@fpy(
+    name='PDF of the exponential function',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda x, a, x_max: a > 0 and x_max > 0
+)
+def trimmed_exponential_pdf(x: Real, a: Real, x_max: Real):
+    """
+    PDF of the (trimmed) exponential function.
+    """
+    if x < 0 or x > x_max:
+        pdf: Real = 0
+    else:
+        pdf = a / (1 - exp(-a * x_max)) * exp(-a * x)
+    return pdf
+
+@fpy(
+    name='inversion of (trimmed) exponential sampling',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda x, a, x_max: a > 0 and x_max > 0
+)
+def invert_trimmed_exponential_sample(x: Real, a: Real, x_max: Real):
+    """
+    Transforms a sample from the exponential function to a uniform sample.
+    """
+    return (1 - exp(-a * x)) / (1 - exp(-a * x_max))
 
 #
 # Sampling the Gaussian distribution
@@ -502,3 +576,274 @@ def invert_smooth_step_sample(x: Real, a: Real, b: Real):
     inv_b = 2 * (b * b * b) - (b * b * b * b)
     inv_x = 2 * (x * x * x) - (x * x * x * x)
     return (inv_x - inv_a) / (inv_b - inv_a)
+
+#
+#   Sample uniform disk
+#
+
+@fpy(
+    name='sample uniform disk (polar)',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+)
+def sample_uniform_disk_polar(u: tuple[Real, Real]):
+    """
+    Given a uniform sample from the unit square, produces a 
+    uniform sample on the unit disk in Cartesian coordinates.
+
+    This mapping interprets the unit square as (scaled) polar coordinates.
+    """
+    r = sqrt(u[0])
+    theta = 2 * PI * u[1]
+    return r * cos(theta), r * sin(theta)
+
+@fpy(
+    name='inversion of uniform disk sampling',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda p: 0 <= p[0] * p[0] * p[1] * p[1] <= 1
+)
+def invert_uniform_disk_polar_sample(p: tuple[Real, Real]):
+    """
+    Transforms a sample on the unit disk to one on the unit square.
+    """
+    phi = atan2(p[1], p[0])
+    if phi < 0:
+        phi += 2 * PI
+    r = p[0] * p[0] * p[1] * p[1]
+    return r, phi / (2 * PI)
+
+@fpy(
+    name='sample unit disk (concentric)',
+    cite='pbrt-v4',
+    precision='binary32',
+    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+)
+def sample_uniform_disk_concentric(u: tuple[Real, Real]):
+    """
+    Given a uniform sample from the unit square, produces a 
+    uniform sample on the unit disk in Cartesian coordinates.
+
+    This transform uses concentric mapping rather than polar coordinates.
+    """
+    # map _u_ to $[-1, -1]^s$ and handle degeneracy at the origin
+    u = vector_sub(vector_mul(2, u), (1, 1))
+    if u[0] == 0 and u[1] == 0:
+        p = (0, 0)
+    else:
+        # apply concentric mapping to point
+        if abs(u[0]) > abs(u[1]):
+            r = u[0]
+            theta = PI_4 * (u[1] / u[0])
+        else:
+            r = u[1]
+            theta = PI_2 - PI_4 * (u[0] / u[1])
+        p = vector_mul(r, (cos(theta), sin(theta)))
+
+    return p
+
+@fpy(
+    name='inversion of sample unit disk (concentric)',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda p: 0 <= p[0] * p[0] * p[1] * p[1] <= 1,
+)
+def invert_uniform_disk_concentric_sample(p: tuple[Real, Real]):
+    """
+    Transforms a sample on the unit disk to one on the unit square.
+    """
+    theta = atan2(p[1], p[0])
+    r = sqrt(p[0] * p[0] + p[1] * p[1])
+
+    if abs(theta) < PI_4 or abs(theta) > 3 * PI_4:
+        r = copysign(r, p[0])
+        u_0 = r
+        if p[0] < 0:
+            if p[1] < 0:
+                u_1 = (PI + theta) * r / PI_4
+            else:
+                u_1 = (theta - PI) * r / PI_4
+        else:
+            u_1 = (theta * r) / PI_4
+    else:
+        r = copysign(r, p[1])
+        u_1 = r
+        if p[1] < 0:
+            u_0 = -(PI_2 + theta) * r / PI_4
+        else:
+            u_0 = (PI_2 - theta) * r / PI_4
+
+    return (u_0 + 1) / 2, (u_1 + 1) / 2
+
+#
+# Sample hemisphere
+#
+
+@fpy(
+    name='sample a hemisphere uniformly',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+)
+def sample_uniform_hemisphere(u: tuple[Real, Real]):
+    """
+    Given a uniform sample from the unit square, produces a
+    sample on the hemisphere in spherical coordinates.
+    """
+    z = u[0]
+    r = sqrt(1 - z * z)
+    phi = 2 * PI * u[1]
+    return r * cos(phi), r * sin(phi), z
+
+
+@fpy(
+    name='invert uniform hemisphere sample',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and 0 <= w[2] <= 1
+)
+def invert_uniform_hemisphere_sample(w : tuple[Real, Real, Real]):
+    """
+    Transforms a sample on the hemisphere to one on the unit square.
+    """
+    phi = atan2(w[1], w[0])
+    if phi < 0:
+        phi += 2 * PI
+    return w[2], phi / (2 * PI)
+
+@fpy(
+    name='sample a hemisphere uniformly (cosine)',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+)
+def sample_cosine_hemisphere(u: tuple[Real, Real]):
+    """
+    Given a uniform sample from the unit square, produces a
+    sample on the hemisphere in spherical coordinates.
+
+    This transformation first samples from the uniform disk
+    and then sets the z coordinate accordingly.
+    """
+    d = sample_uniform_disk_concentric(u)
+    z = sqrt(1 - d[0] * d[0] - d[1] * d[1])
+    return (d[0], d[1], z)
+
+@fpy(
+    name='PDF of a (cosine) hemisphere sampler',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda cos_theta: -1 <= cos_theta <= 1
+)
+def cosine_hemisphere_pdf(cos_theta: Real):
+    """
+    Returns the PDF of the (cosine) hemisphere sampler
+    based on the cosine along the z-axis.
+    """
+    return cos_theta * M_1_PI
+
+@fpy(
+    name='invert uniform hemisphere sample',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and 0 <= w[2] <= 1
+)
+def invert_cosine_hemisphere_sample(w: tuple[Real, Real, Real]):
+    return invert_uniform_disk_concentric_sample((w[0], w[1]))
+
+@fpy(
+    name='sample uniform hemisphere (concentric)',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+)
+def sample_uniform_hemisphere_concentric(u: tuple[Real, Real]):
+    # map uniform random numbers to $[-1,1]^2$
+    u = vector_add(vector_mul(2, u), (1, 1))
+
+    # handle degeneracy at origin
+    if u[0] == 0 and u[1] == 0:
+        p: tuple[Real, Real, Real] = (0, 0, 1)
+    else:
+        # apply concentric mapping
+        if abs(u[0]) > abs(u[1]):
+            r = u[0]
+            theta = PI_4 * (u[1] / u[0])
+        else:
+            r = u[1]
+            theta = PI_2 - PI_4 * (u[0] / u[1])
+    
+        t = sqrt(2 - r * r)
+        p = (cos(theta) * r * t, sin(theta) * r * t, 1 - r * r)
+
+    return p
+
+#
+# Sample sphere
+#
+
+@fpy(
+    name='sample a sphere uniformly',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+)
+def sample_uniform_sphere(u: tuple[Real, Real]):
+    """
+    Given a uniform sample from the unit square, produces a
+    sample on the sphere in spherical coordinates.
+    """
+    z = 1 - 2 * u[0]
+    r = sqrt(1 - z * z)
+    phi = 2 * PI * u[1]
+    return r * cos(phi), r * sin(phi), z
+
+@fpy(
+    name='invert uniform sphere sample',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and -1 <= w[2] <= 1
+)
+def invert_uniform_sphere_sample(w: tuple[Real, Real, Real]):
+    """
+    Transforms a sample on the sphere to one on the unit square.
+    """
+    phi = atan2(w[1], w[0])
+    if phi < 0:
+        phi += 2 * PI
+    return (1 - w[2]) / 1, phi / (2 * PI)
+
+#
+# sample uniform cone
+#
+
+@fpy(
+    name='uniform cone sampler',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+)
+def sample_uniform_cone(u: tuple[Real, Real], cos_theta_max: Real):
+    """
+    Given a uniform sample from the unit square, produces a
+    sample on the cone in spherical coordinates.
+    """
+    cos_theta = lerp(u[0], 1, cos_theta_max)
+    sin_theta = sqrt(1 - cos_theta * cos_theta)
+    phi = u[1] * 2 * PI
+    return spherical_direction(sin_theta, cos_theta, phi)
+
+@fpy(
+    name='invert uniform cone sample',
+    cite='pbrt-4',
+    precision='binary32',
+    pre=lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and -1 <= w[2] <= 1
+)
+def invert_uniform_cone_sample(w: tuple[Real, Real, Real], cos_theta_max: Real):
+    """
+    Transforms a sample on the cone to one on the unit square.
+    """
+    cos_theta = w[2]
+    phi = spherical_phi(w)
+    return (cos_theta - 1) / (cos_theta_max - 1), phi / (2 * PI)
