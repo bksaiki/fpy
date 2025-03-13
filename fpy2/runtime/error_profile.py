@@ -10,9 +10,9 @@ class ErrorProfile:
     including the skipped samples and their associated error statistics.
     """
 
-    inputs: list[Any]
+    samples: list[Any]
 
-    skipped_inputs: list[Any]
+    skipped_samples: list[Any]
 
     errors: dict[Expr, list[float]]
 
@@ -52,20 +52,43 @@ class ErrorProfile:
 
         num_samples       = len(self.samples)
         num_skipped       = len(self.skipped_samples)
-        percent_skipped   = (num_skipped / num_samples) * 100 if num_samples > 0 else 0
+        percent_samples   = ((num_samples - num_skipped) / num_samples) * 100 if num_samples > 0 else 0
         total_expressions = len(self.errors)
+
+        # Compute mean errors and categorize expressions
+        error_expr = []
+        no_error_exprs = []
         
-        print(f"Number of Sample points     : {num_samples}")
-        print(f"Skipped sample points       : {num_skipped}")
-        print(f"Percentage of points skipped: {percent_skipped:.2f}%")
-        print(f"Number of expressions       : {total_expressions}\n")
+        for expr, eval in self.errors.items():
+            mean_error = np.mean(eval).item()
+            if mean_error > 0:
+                error_expr.append((expr, eval, mean_error))
+            else:
+                no_error_exprs.append((expr, len(eval)))
+
+        # Sort expressions by descending mean error
+        error_expr.sort(key=lambda x: x[2], reverse=True)
+
+        # Compute percentage of expressions with non-zero errors
+        num_error_expr = len(error_expr)
+        percent_error_expr = (num_error_expr / total_expressions) * 100 if total_expressions > 0 else 0
         
-        for idx, (expr, evaluations) in enumerate(self.errors.items(), start=1):
-            print(f"Expression {idx}: {expr.format()}")
-            print(f"  Number of evaluations: {len(evaluations)}")
+        print("=" * 40)
+        print(" Expression Profiler Summary".center(40))
+        print("=" * 40)
+        print(f"Evaluated Sampled points: {num_samples - num_skipped} / {num_samples} ({percent_samples:.2f}%)")
+        print(f"Expressions with errors : {num_error_expr} / {total_expressions} ({percent_error_expr:.2f}%)\n")
+        
+        if error_expr:
+            print(f"Expressions with errors (sorted by mean error in descending order):")
+            print("=" * 40)
+
+        for idx, (expr, eval, _) in enumerate(error_expr, start=1):
+            print(f"{idx}. {expr.format()}")
+            print(f"  Number of evaluations: {len(eval)}")
             
-            if evaluations:
-                statistics = self._compute_statistics(evaluations, verbosity)
+            if eval:
+                statistics = self._compute_statistics(eval, verbosity)
                 
                 print("  Error Stats:")
 
@@ -83,6 +106,15 @@ class ErrorProfile:
             else:
                 print("  No evaluations available.")
             
+            print()
+
+        # Print expressions with zero errors at the end
+        if no_error_exprs:
+            print(f"Expressions with no errors:")
+            print("=" * 40)
+            for idx, (expr, eval_count) in enumerate(no_error_exprs, start = 1):
+                print(f"{idx}.  {expr.format()}")
+                print(f"  Number of evaluations: {eval_count}")
             print()
 
     def __repr__(self) -> str:
