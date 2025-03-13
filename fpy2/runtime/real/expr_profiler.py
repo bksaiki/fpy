@@ -12,6 +12,7 @@ from ..function import Function, Interpreter, get_default_interpreter
 from .interpreter import RealInterpreter
 from .rival_manager import PrecisionLimitExceeded
 from .error import ordinal_error
+from ..error_profile import ErrorProfile
 
 from ..expr_trace import ExprTraceEntry
 from ...ir import Expr
@@ -94,14 +95,7 @@ class ExpressionProfiler:
                     else:
                         errors_by_expr[entry.expr].append(repr_err)
 
-        result: dict[str, tuple[float, int]] = {}
-        for e, errors in errors_by_expr.items():
-            s = e.format()
-            avg = sum(errors) / len(errors)
-            total = len(errors)
-            result[s] = (avg, total)
-
-        return (result, len(skipped_inputs))
+        return ErrorProfile(inputs, skipped_inputs, errors_by_expr)
 
     def _normalize(self, ref, fl, ctx):
         """Returns `ref` rounded to the same context as `fl`."""
