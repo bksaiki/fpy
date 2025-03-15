@@ -27,11 +27,12 @@ def run_func_profiler(config: Config):
     reference = select_interpreter(config.ref_mode)
     profiler = FunctionProfiler(reference=reference, logging=True)
     funs = load_funs(config.input_paths)
-    print(len(funs))
+    
+    disabled = disabled_tests()
 
     print(f'testing over {len(funs)} functions')
     for fun in funs:
-        if fun.name in disabled_tests():
+        if fun.name in disabled:
             print(f'skipping {fun.name}')
         else:
             _run_one(fun, profiler, config.num_samples, seed=config.seed)

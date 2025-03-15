@@ -25,12 +25,6 @@ class PrecisionLimitExceeded(Exception):
     def __init__(self, msg: str):
         super().__init__(msg)
 
-class ConvergenceFailed(Exception):
-
-    def __init__(self, msg: str):
-        super().__init__(msg)
-
-
 class RivalManager:
     """Wrapper around a Rival subprocess."""
 
