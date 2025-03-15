@@ -8,9 +8,6 @@ from .common import disabled_tests, select_interpreter
 from .config import Config
 from .load import load_funs
 
-
-_disabled = disabled_tests() + ['PID']
-
 def _run_one(
     fun: Function,
     profiler: ExpressionProfiler,
@@ -31,11 +28,12 @@ def run_expr_profiler(config: Config):
     reference = select_interpreter(config.ref_mode)
     profiler = ExpressionProfiler(reference=reference, logging=True)
     funs = load_funs(config.input_paths)
-    print(len(funs))
+
+    disabled = disabled_tests()
 
     print(f'testing over {len(funs)} functions')
     for fun in funs:
-        if fun.name in _disabled:
+        if fun.name in disabled:
             print(f'skipping {fun.name}')
         else:
             _run_one(fun, profiler, config.num_samples, seed=config.seed)
