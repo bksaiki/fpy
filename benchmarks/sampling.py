@@ -571,7 +571,7 @@ def invert_smooth_step_sample(x: Real, a: Real, b: Real):
     """
     Transforms a sample from a cubic interpolant between two values to a uniform sample.
     """
-    t = (x - a) / (b - a)
+    # TODO: file bug with PBRT
     inv_a = 2 * (a * a * a) - (a * a * a * a)
     inv_b = 2 * (b * b * b) - (b * b * b * b)
     inv_x = 2 * (x * x * x) - (x * x * x * x)
