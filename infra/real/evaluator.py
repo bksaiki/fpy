@@ -18,7 +18,7 @@ class Report:
     seed: Optional[int]
     num_samples: int
     num_failed: int
-    slowdown: Optional[float]
+    slowdowns: list[float]
 
     @property
     def num_passed(self):
@@ -44,9 +44,11 @@ def _run_one(
     slowdowns = []
     for pt in pts:
         try:
-            start = time.time()
+            start = time.monotonic_ns()
             result = rt.eval(fun, pt)
-            end = time.time()
+            end = time.monotonic_ns()
+            time_elapsed = end - start
+            assert time_elapsed >= 0, f'{time_elapsed}'
 
             if print_result:
                 print(' ', result, flush=True)
@@ -54,10 +56,13 @@ def _run_one(
                 print('.', end='', flush=True)
 
             if base_rt is not None:
-                base_start = time.time()
+                base_start = time.monotonic_ns()
                 base_rt.eval(fun, pt)
-                base_end = time.time()
-                slowdown = (end - start) / (base_end - base_start)
+                base_end = time.monotonic_ns()
+                base_time_elapsed = base_end - base_start
+                assert base_time_elapsed >= 0, f'{base_time_elapsed}'
+
+                slowdown = time_elapsed / base_time_elapsed
                 slowdowns.append(slowdown)
 
         except PrecisionLimitExceeded:
@@ -74,7 +79,7 @@ def _run_one(
         seed=seed,
         num_samples=num_samples,
         num_failed=num_failed,
-        slowdown=None if slowdowns == [] else sum(slowdowns) / len(slowdowns),
+        slowdowns=slowdowns
     )
 
 
@@ -86,8 +91,8 @@ def _summarize(reports: list[Report]):
 
     slowdowns: list[float] = []
     for report in reports:
-        if report.slowdown is not None:
-            slowdowns.append(report.slowdown)
+        for slowdown in report.slowdowns:
+            slowdowns.append(slowdown)
 
     avg_slowdown = geometric_mean(slowdowns)
     print(f'Average slowdown: {avg_slowdown:.2f}')
@@ -101,12 +106,16 @@ def run_eval_real(config: Config):
     disabled = disabled_tests()
 
     print(f'testing over {len(funs)} functions')
+
+    num_skipped = 0
     reports: list[Report] = []
     for fun in funs:
         if fun.name in disabled:
             print(f'skipping {fun.name}')
+            num_skipped += 1
         else:
             report = _run_one(fun, rt, config.num_samples, seed=config.seed, base_rt=base_rt)
             reports.append(report)
 
     _summarize(reports)
+    print(f'Skipped: {num_skipped}')
