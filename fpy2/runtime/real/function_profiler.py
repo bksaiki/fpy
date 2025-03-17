@@ -58,6 +58,12 @@ class FunctionProfiler:
         else:
             interpreter = self.interpreter
 
+        # select the reference function
+        if 'spec' in func.ir.ctx:
+            ref_fn = func.ir.ctx['spec']
+        else:
+            ref_fn = func
+
         skipped_inputs: list[Any] = []
         fl_outputs: list[Any] = []
         ref_outputs: list[Any] = []
@@ -66,7 +72,7 @@ class FunctionProfiler:
         for input in inputs:
             try:
                 # evaluate in both interpreters
-                ref_output = self.reference.eval(func, input)
+                ref_output = self.reference.eval(ref_fn, input)
                 fl_output = interpreter.eval(func, input)
                 # add to set of points
                 ref_outputs.append(self._normalize(ref_output, fl_output))
