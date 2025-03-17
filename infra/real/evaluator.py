@@ -2,11 +2,12 @@ import time
 
 from dataclasses import dataclass
 from statistics import geometric_mean
-from typing import Optional
+from typing import Optional, Sequence
 
 from fpy2 import *
 from fpy2.runtime.sampling import sample_function
 from fpy2.runtime.real.rival_manager import PrecisionLimitExceeded
+from titanfp.arithmetic.ieee754 import ieee_ctx
 
 from .common import disabled_tests
 from .config import Config
@@ -18,7 +19,7 @@ class Report:
     seed: Optional[int]
     num_samples: int
     num_failed: int
-    slowdowns: list[float]
+    slowdowns: list[list[float]]
 
     @property
     def num_passed(self):
@@ -32,16 +33,20 @@ def _run_one(
     *,
     seed: Optional[int] = None,
     print_result: bool = False,
-    base_rt: Optional[Interpreter] = None,
+    base_rts: Optional[Sequence[Interpreter]] = None,
 ):
     # sample N points
     pts = sample_function(fun, num_samples, seed=seed, only_real=True)
+
+    # prepare base interpreters
+    if base_rts is None:
+        base_rts = []
 
     print(f'evaluating {fun.name} ', end='', flush=True)
 
     # evaluate over each point
     num_failed = 0
-    slowdowns = []
+    slowdownss: list[list[float]] = [[] for _ in base_rts]
     for pt in pts:
         try:
             start = time.monotonic_ns()
@@ -55,7 +60,7 @@ def _run_one(
             else:
                 print('.', end='', flush=True)
 
-            if base_rt is not None:
+            for base_rt, slowdowns in zip(base_rts, slowdownss):
                 base_start = time.monotonic_ns()
                 base_rt.eval(fun, pt)
                 base_end = time.monotonic_ns()
@@ -73,36 +78,45 @@ def _run_one(
                 print('?', end='', flush=True)
 
     print('', flush=True)
-
     return Report(
         name=fun.name,
         seed=seed,
         num_samples=num_samples,
         num_failed=num_failed,
-        slowdowns=slowdowns
+        slowdowns=slowdownss
     )
 
-
 def _summarize(reports: list[Report]):
+    assert reports != [], 'no reports to summarize'
+
+    # report success rate
     num_passed = sum(r.num_passed for r in reports)
     num_samples = sum(r.num_samples for r in reports)
     pct = 100 * (num_passed / num_samples)
     print(f'Successful: {pct:.2f}%')
 
-    slowdowns: list[float] = []
-    for report in reports:
-        for slowdown in report.slowdowns:
-            slowdowns.append(slowdown)
-
-    avg_slowdown = geometric_mean(slowdowns)
-    print(f'Average slowdown: {avg_slowdown:.2f}')
+    # report overhead
+    num_base_rts = len(reports[0].slowdowns)
+    for i in range(num_base_rts):
+        slowdowns: list[float] = []
+        for r in reports:
+            slowdowns.extend(r.slowdowns[i])
+        avg = geometric_mean(slowdowns)
+        print(f'Baseline {i} avg slowdown: {avg:.2f}')
 
 
 def run_eval_real(config: Config):
+    # reference interpreter
     rt = RealInterpreter()
-    base_rt = TitanicInterpreter()
-    funs = load_funs(config.input_paths)
 
+    # baseline interpreter
+    rt_1k = TitanicInterpreter(ctx=ieee_ctx(19, 1024))
+    rt_2k = TitanicInterpreter(ctx=ieee_ctx(19, 2048))
+    rt_4k = TitanicInterpreter(ctx=ieee_ctx(19, 4096))
+    base_rts = [rt_1k, rt_2k, rt_4k]
+
+    # load benchmarks
+    funs = load_funs(config.input_paths)
     disabled = disabled_tests()
 
     print(f'testing over {len(funs)} functions')
@@ -114,7 +128,7 @@ def run_eval_real(config: Config):
             print(f'skipping {fun.name}')
             num_skipped += 1
         else:
-            report = _run_one(fun, rt, config.num_samples, seed=config.seed, base_rt=base_rt)
+            report = _run_one(fun, rt, config.num_samples, seed=config.seed, base_rts=base_rts)
             reports.append(report)
 
     _summarize(reports)

@@ -89,8 +89,7 @@ class FunctionProfiler:
         if errors == []:
             return (None, len(skipped_inputs))
         else:
-            avg_error = sum(errors) / len(errors)
-            return (avg_error, len(skipped_inputs))
+            return (errors, len(skipped_inputs))
 
 
     def _normalize(self, ref, fl):
