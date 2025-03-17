@@ -132,12 +132,28 @@ class ExprProfileResult:
                 print(f"  Number of evaluations: {eval_count}")
             print()
 
+    def result_dict(self) -> dict:
+        num_samples = len(self.samples)
+        num_skipped = len(self.skipped_samples)
+        
+        exprs_summary = sorted([
+            {"expr": expr.format(), "id": id(expr), "stats": self._compute_statistics(evals, "standard") if evals else None}
+            for expr, evals in self.errors.items()
+        ], key=lambda x: x["id"])
+        
+        return {
+            "sampled": num_samples,
+            "skipped": num_skipped,
+            "exprs": exprs_summary
+        }
+
+
     def __repr__(self) -> str:
         num_samples = len(self.samples)
         num_skipped = len(self.skipped_samples)
         
         exprs_summary = [
-            {"expr": expr.format(), "mean_error": round(np.mean(evals).item(), 4) if evals else None} # TODO: 4 decimal places?
+            {"expr": expr.format(), "mean_error": round(np.mean(evals).item(), 4) if evals else None}
             for expr, evals in self.errors.items()
         ]
         
