@@ -19,7 +19,7 @@ from ...ir import Expr
 
 Verbosity = Literal["minimal", "standard", "detailed"]
 
-class ErrorProfile:
+class ExprProfileResult:
     """
     A class to store and analyze the errors in a set of sampled data, 
     including the skipped samples and their associated error statistics.
@@ -40,24 +40,24 @@ class ErrorProfile:
         """
         Computes statistics based on the provided list of error values with given verbosity
         """
-        stats = np.array(stats)
-        mean = np.mean(stats)
+        np_stats = np.array(stats)
+        mean = np.mean(np_stats)
         statistics = {"Mean": mean}
-        
+
         if verbosity in ["standard", "detailed"]:
             statistics.update({
-                "Median": np.median(stats),
-                "Min": np.min(stats),
-                "Max": np.max(stats)
+                "Median": np.median(np_stats),
+                "Min": np.min(np_stats),
+                "Max": np.max(np_stats)
             })
-        
+
         if verbosity == "detailed":
             statistics.update({
-                "Q1": np.percentile(stats, 25),
-                "Q3": np.percentile(stats, 75),
-                "Std Dev": np.std(stats, ddof=1)
+                "Q1": np.percentile(np_stats, 25),
+                "Q3": np.percentile(np_stats, 75),
+                "Std Dev": np.std(np_stats, ddof=1)
             })
-        
+
         return statistics
 
     def print_summary(self, verbosity: Verbosity = "standard", decimal_places = 4) -> None:
@@ -73,7 +73,7 @@ class ErrorProfile:
         # Compute mean errors and categorize expressions
         error_expr = []
         no_error_exprs = []
-        
+
         for expr, eval in self.errors.items():
             mean_error = np.mean(eval).item()
             if mean_error > 0:
@@ -87,13 +87,13 @@ class ErrorProfile:
         # Compute percentage of expressions with non-zero errors
         num_error_expr = len(error_expr)
         percent_error_expr = (num_error_expr / total_expressions) * 100 if total_expressions > 0 else 0
-        
+
         print("=" * 40)
         print(" Expression Profiler Summary".center(40))
         print("=" * 40)
         print(f"Evaluated Sampled points: {num_samples - num_skipped} / {num_samples} ({percent_samples:.2f}%)")
         print(f"Expressions with errors : {num_error_expr} / {total_expressions} ({percent_error_expr:.2f}%)\n")
-        
+
         if error_expr:
             print(f"Expressions with errors (sorted by mean error in descending order):")
             print("=" * 40)
@@ -101,10 +101,10 @@ class ErrorProfile:
         for idx, (expr, eval, _) in enumerate(error_expr, start=1):
             print(f"{idx}. {expr.format()}")
             print(f"  Number of evaluations: {len(eval)}")
-            
+
             if eval:
                 statistics = self._compute_statistics(eval, verbosity)
-                
+
                 print("  Error Stats:")
 
                 # Enforce ordering of error keys
@@ -113,14 +113,14 @@ class ErrorProfile:
                     ordered_keys = ["Min", "Median", "Mean", "Max"]
                 elif verbosity == "minimal":
                     ordered_keys = ["Mean"]
-                
+
                 max_key_length = max(len(key) for key in ordered_keys if key in statistics)
                 for key in ordered_keys:
                     if key in statistics:
                         print(f"    {key.ljust(max_key_length)} : {statistics[key]:.{decimal_places}f}") 
             else:
                 print("  No evaluations available.")
-            
+
             print()
 
         # Print expressions with zero errors at the end
@@ -226,7 +226,7 @@ class ExprProfiler:
                     else:
                         errors_by_expr[entry.expr].append(repr_err)
 
-        return ErrorProfile(inputs, skipped_inputs, errors_by_expr)
+        return ExprProfileResult(inputs, skipped_inputs, errors_by_expr)
 
     def _normalize(self, ref, fl, ctx):
         """Returns `ref` rounded to the same context as `fl`."""
