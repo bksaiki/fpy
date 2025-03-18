@@ -16,7 +16,7 @@ def ordinal_error(x: Float, y: Float) -> Float:
     Ordinal error measures approximately how many floating-point values
     are between `x` and `y`.
     """
-    assert type(x.ctx) == type(y.ctx), 'must be under the same context'
+    assert x.ctx is y.ctx, 'must be under the same context'
 
     ctx = x.ctx
     if x.isnan:

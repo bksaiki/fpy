@@ -14,7 +14,6 @@ from titanfp.titanic.ops import RM
 
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
-import math
 
 def _safe_div(x: float, y: float):
     if y == 0:

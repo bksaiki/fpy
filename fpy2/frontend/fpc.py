@@ -364,7 +364,7 @@ class _FPCore2FPy:
         self,
         iter_vars: list[NamedId],
         range_vars: list[NamedId],
-        stmts: list[Stmt] = []
+        stmts: list[Stmt],
     ) -> list[Stmt]:
         if len(iter_vars) == 0:
             return stmts
@@ -394,7 +394,7 @@ class _FPCore2FPy:
 
         # bind iteration bounds to temporaries
         bound_vars: list[NamedId] = []
-        for var, val in e.dim_bindings:
+        for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
             stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
             ctx.stmts.append(stmt)
@@ -459,7 +459,7 @@ class _FPCore2FPy:
 
         # bind iteration bounds to temporaries
         bound_vars: list[NamedId] = []
-        for var, val in e.dim_bindings:
+        for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
             stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
             ctx.stmts.append(stmt)
@@ -510,7 +510,7 @@ class _FPCore2FPy:
 
         # bind iteration bounds to temporaries
         bound_vars: list[NamedId] = []
-        for var, val in e.dim_bindings:
+        for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
             stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
             ctx.stmts.append(stmt)

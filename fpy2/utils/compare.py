@@ -18,13 +18,20 @@ class CompareOp(Enum):
     def invert(self):
         """Assuming `a op b`, returns `op` such that `b op a`."""
         match self:
-            case CompareOp.LT: return CompareOp.GT
-            case CompareOp.LE: return CompareOp.GE
-            case CompareOp.GE: return CompareOp.LE
-            case CompareOp.GT: return CompareOp.LT
-            case CompareOp.EQ: return CompareOp.EQ
-            case CompareOp.NE: return CompareOp.NE
-            case _: raise RuntimeError('unreachable')
+            case CompareOp.LT:
+                return CompareOp.GT
+            case CompareOp.LE:
+                return CompareOp.GE
+            case CompareOp.GE:
+                return CompareOp.LE
+            case CompareOp.GT:
+                return CompareOp.LT
+            case CompareOp.EQ:
+                return CompareOp.EQ
+            case CompareOp.NE:
+                return CompareOp.NE
+            case _:
+                raise RuntimeError('unreachable')
 
 
 _symbol_table = {
