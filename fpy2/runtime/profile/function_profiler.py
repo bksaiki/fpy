@@ -3,6 +3,7 @@ Profiler for numerical accuracy.
 """
 
 import math
+import numpy as np
 
 from typing import Any, Optional
 from titanfp.arithmetic.ieee754 import Float, IEEECtx
@@ -12,6 +13,48 @@ from ..function import Function, Interpreter, get_default_interpreter
 from ..metric import ordinal_error
 from ..real.interpreter import RealInterpreter
 from ..real.rival_manager import PrecisionLimitExceeded
+
+class FunctionProfileResult:
+    """
+    Result of `FunctionProfiler::profile()`.
+
+    Tracks recorded errors and provides statistics for convenience.
+    """
+
+    errors: list[Optional[float]]
+    """errors computed or None if evaluator failed"""
+
+    np_errors: np.typing.NDArray
+    """numerical errors only"""
+
+    invalid: bool
+    """were no numerical errors computed"""
+
+    def __init__(self, errors: list[Optional[float]]):
+        self.errors = list(errors)
+        self.np_errors = np.array(tuple(filter(lambda e: e is not None, self.errors)))
+        self.invalid = all(map(lambda e: e is None, errors))
+
+    def average(self):
+        if self.invalid:
+            raise ValueError('cannot average: all evaluations failed to produce a result')
+        return float(np.average(self.np_errors))
+
+    def min(self):
+        if self.invalid:
+            raise ValueError('cannot average: all evaluations failed to produce a result')
+        return float(np.min(self.np_errors))
+
+    def max(self):
+        if self.invalid:
+            raise ValueError('cannot average: all evaluations failed to produce a result')
+        num_errors = np.array(filter(lambda e: e is not None, self.errors))
+        return float(np.max(self.np_errors))
+
+    def sample_size(self):
+        return len(self.errors)
+
+
 
 class FunctionProfiler:
     """
@@ -63,38 +106,28 @@ class FunctionProfiler:
         else:
             ref_fn = func
 
-        skipped_inputs: list[Any] = []
-        fl_outputs: list[Any] = []
-        ref_outputs: list[Any] = []
-
-        # evaluate for every input
+        # evaluate for every input and compute error if possible
+        errors: list[Optional[float]] = []
         for input in inputs:
             try:
                 # evaluate in both interpreters
                 ref_output = self.reference.eval(ref_fn, input)
                 fl_output = interpreter.eval(func, input)
-                # add to set of points
-                ref_outputs.append(self._normalize(ref_output, fl_output))
-                fl_outputs.append(fl_output)
+                # cast to expected type
+                ref_output = self._normalize(ref_output, fl_output)
+                # compute errors
+                ord_err = ordinal_error(fl_output, ref_output)
+                log_ord_err = math.log2(ord_err + 1)
+                # append to errors
+                errors.append(log_ord_err)
                 if self.logging:
                     print('.', end='', flush=True)
             except PrecisionLimitExceeded:
-                skipped_inputs.append(input)
+                errors.append(None)
                 if self.logging:
                     print('X', end='', flush=True)
 
-        # TODO: Use the math library to compute the accuracy metrics
-        # Report how many points are being skipped for precision errors
-        errors = []
-        for fl, ref in zip(fl_outputs, ref_outputs):
-            ord_err = ordinal_error(fl, ref)
-            errors.append(math.log2(ord_err + 1))
-
-        # TODO: summarize better
-        if errors == []:
-            return (None, len(skipped_inputs))
-        else:
-            return (errors, len(skipped_inputs))
+        return FunctionProfileResult(errors)
 
 
     def _normalize(self, ref, fl):
