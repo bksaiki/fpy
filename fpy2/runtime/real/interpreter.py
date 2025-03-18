@@ -193,7 +193,7 @@ class _Interpreter(ReduceVisitor):
                     print(f"Insufficient precision, retrying iter={iter_num}, e={e.expr}, prec={e.prec}")
                 if iter_num > 0 and not self.dirty:
                     # we didn't increase precision anywhere
-                    raise PrecisionLimitExceeded(f'precision limit exceeded')
+                    raise PrecisionLimitExceeded('precision limit exceeded') from e
                 iter_num += 1
 
         # something has definitely went wrong

@@ -95,7 +95,7 @@ class ExprProfileResult:
         print(f"Expressions with errors : {num_error_expr} / {total_expressions} ({percent_error_expr:.2f}%)\n")
 
         if error_expr:
-            print(f"Expressions with errors (sorted by mean error in descending order):")
+            print("Expressions with errors (sorted by mean error in descending order):")
             print("=" * 40)
 
         for idx, (expr, eval, _) in enumerate(error_expr, start=1):
@@ -125,7 +125,7 @@ class ExprProfileResult:
 
         # Print expressions with zero errors at the end
         if no_error_exprs:
-            print(f"Expressions with no errors:")
+            print("Expressions with no errors:")
             print("=" * 40)
             for idx, (expr, eval_count) in enumerate(no_error_exprs, start = 1):
                 print(f"{idx}.  {expr.format()}")

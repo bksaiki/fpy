@@ -95,9 +95,9 @@ def _sample_rejection_one(
             if rt.eval(pre, pt):
                 return pt
             fuel -= 1
-        
+
         # TODO: unsound, we should not return point
-        # print(f'FAIL: cannot sample after {start_fuel} attempts for {fun.name}, returning point anyways')
+        print(f'FAIL: cannot sample after {start_fuel} attempts for {fun.name}, returning point anyways')
         return pt
 
 def _sample_rejection(

@@ -5,12 +5,11 @@ Strings are not sufficient as identifiers, especially when (re)-generating
 unique identifiers.
 """
 
-from abc import ABC
 from typing import Optional
 
 from .location import Location
 
-class Id(ABC):
+class Id(object):
     """Abstract base class for identifiers."""
 
 class UnderscoreId(Id):
