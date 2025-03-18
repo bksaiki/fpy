@@ -6,8 +6,8 @@ from types import FunctionType
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.arithmetic.evalctx import EvalCtx
 
+from .common import ExprTraceEntry
 from .env import ForeignEnv
-from .expr_trace import ExprTraceEntry
 from ..ir import FunctionDef, Expr
 from ..frontend.fpc import fpcore_to_fpy
 

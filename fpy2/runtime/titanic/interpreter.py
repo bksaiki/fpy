@@ -12,7 +12,7 @@ from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.ops import OP
 import titanfp.titanic.gmpmath as gmpmath
 
-from ..expr_trace import ExprTraceEntry
+from ..common import ExprTraceEntry
 from ..env import ForeignEnv
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *

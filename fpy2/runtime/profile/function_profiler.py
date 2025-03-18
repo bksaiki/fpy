@@ -9,10 +9,9 @@ from titanfp.arithmetic.ieee754 import Float, IEEECtx
 from titanfp.arithmetic.mpmf import MPMF
 
 from ..function import Function, Interpreter, get_default_interpreter
-from .interpreter import RealInterpreter
-from .rival_manager import PrecisionLimitExceeded
-
-from .error import ordinal_error
+from ..metric import ordinal_error
+from ..real.interpreter import RealInterpreter
+from ..real.rival_manager import PrecisionLimitExceeded
 
 class FunctionProfiler:
     """
@@ -59,7 +58,7 @@ class FunctionProfiler:
             interpreter = self.interpreter
 
         # select the reference function
-        if 'spec' in func.ir.ctx:
+        if 'spec' in func.ir.ctx and isinstance(func.ir.ctx['spec'], Function):
             ref_fn = func.ir.ctx['spec']
         else:
             ref_fn = func

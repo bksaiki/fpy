@@ -15,7 +15,7 @@ from titanfp.titanic.digital import Digital
 from .interval import RealInterval
 from .rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
 
-from ..expr_trace import ExprTraceEntry
+from ..common import ExprTraceEntry
 from ..function import Interpreter, Function, FunctionReturnException
 from ...ir import *
 
@@ -85,7 +85,6 @@ _method_table: dict[str, str] = {
     'isnormal': 'isnormal',
     'signbit': 'signbit',
 }
-
 
 def _interval_to_real(val: RealInterval, ctx: EvalCtx):
     # rounding contexts
