@@ -124,6 +124,26 @@ class IEEEContext(SizedContext):
             # tight check (non-negative values)
             return self.minval(False) <= x <= self.maxval(False)
 
+    def is_canonical(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
+        if not self.is_representable(x):
+            raise TypeError(f'Expected representable value x={x}')
+
+        # case split by class
+        if x.is_nar():
+            # NaN or Inf
+            return True
+        elif x.c == 0:
+            # zero
+            return x.exp == self.expmin
+        elif x.e < self.emin:
+            # subnormal
+            return x.exp == self.expmin
+        else:
+            # normal
+            return x.p == self.pmax
+
     def _overflow_to_infinity(self, x: RealFloat):
         """Should overflows round to infinity (rather than MAX_VAL)?"""
         _, direction = self.rm.to_direction(x.s)
@@ -198,7 +218,7 @@ class IEEEContext(SizedContext):
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
         if not self.is_representable(x):
-            raise TypeError(f'Expected representable value x={x}') 
+            raise TypeError(f'Expected representable value x={x}')
         
         # case split by class
         if x.isnan:

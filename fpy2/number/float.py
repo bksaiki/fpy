@@ -226,6 +226,21 @@ class Float:
         """
         return self.ctx is None or self.ctx.is_representable(self)
 
+    def is_canonical(self) -> bool:
+        """
+        Returns if `x` is canonical under this context.
+
+        This function only considers relevant attributes to judge
+        if a value is canonical. Thus, there may be more than
+        one canonical value for a given number despite the function name.
+        The result of `self.normalize()` is always canonical.
+
+        Raises a `ValueError` when `self.ctx is None`.
+        """
+        if self.ctx is None:
+            raise ValueError(f'Float values without a context cannot be normalized: self={self}')
+        return self.ctx.is_canonical(self)
+
     def as_real(self) -> RealFloat:
         """Returns the real part of this number."""
         if self.is_nar():
@@ -233,7 +248,11 @@ class Float:
         return self._real
 
     def normalize(self) -> 'Float':
-        """Returns the canonical reprsentation of this number."""
+        """
+        Returns the canonical reprsentation of this number.
+
+        Raises a `ValueError` when `self.ctx is None`.
+        """
         if self.ctx is None:
             raise ValueError(f'Float values without a context cannot be normalized: self={self}')
         return self.ctx.normalize(self)

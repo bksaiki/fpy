@@ -28,6 +28,18 @@ class Context(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
+    def is_canonical(self, x) -> bool:
+        """
+        Returns if `x` is canonical under this context.
+
+        This function only considers relevant attributes to judge
+        if a value is canonical. Thus, there may be more than
+        one canonical value for a given number despite the function name.
+        The result of `self.normalize()` is always canonical.
+        """
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
     def normalize(self, x):
         """Returns the canonical form of `x` under this context."""
         raise NotImplementedError('virtual method')
