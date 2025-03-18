@@ -232,26 +232,48 @@ class RealFloat:
         bit = self.c & (1 << idx)
         return bit != 0
 
-    def normalize(self, p: int):
+    def normalize(self, p: int, n: Optional[int] = None):
         """
         Returns a copy of `self` that has exactly `p` bits of precision.
-        If `p < self.p`, a `ValueError` is thrown.
+        Optionally, specify `n` to ensure that if `y = x.normalize(p, n)`,
+        then `y.exp > n` or `y` is zero.
+
+        For non-zero values, raises a `ValueError` if any significand digits
+        are shifted off, i.e., `x != x.normalize(p, n)`.
         """
         if not isinstance(p, int) or p < 0:
             raise ValueError('expected a non-negative integer', p)
 
-        # special case: 0 has no precision ever
+        # special case: 0 has no precision
         if self.is_zero():
             return self
 
-        # check that the requested precision is enough
-        if p < self.p:
-            raise ValueError('insufficient precision', self, p)
-
+        # compute maximum shift and resulting exponent
         shift = p - self.p
         exp = self.exp - shift
-        c = self.c << shift
+
+        # test if exponent is below `n`
+        if n is not None and exp <= n:
+            # too small, so adjust accordingly
+            adjust = n - exp + 1
+            shift -= adjust
+            exp += adjust
+
+        # compute new significand `c`
+        if shift >= 0:
+            # shifting left by a non-negative amount
+            c = self.c << shift
+        else:
+            # shift right by a positive amount
+            shift = -shift
+            c = self.c >> shift
+            # check that we didn't lose significant digits
+            if (self.c & bitmask(shift)) != 0:
+                raise ValueError(f'shifting off digits: p={p}, n={n}, x={self}')
+
+        # return result
         return RealFloat(self.s, exp, c)
+
 
     def split(self, n: int):
         """
@@ -299,7 +321,7 @@ class RealFloat:
         For two `RealFloat` values, the result is never `None`.
         """
         if not isinstance(other, RealFloat):
-            raise TypeError(f"expected RealFloat, got {type(other)}")
+            raise TypeError(f'comparison not supported between \'RealFloat\' and \'{type(other)}\'')
 
         if self.c == 0:
             if other.c == 0:

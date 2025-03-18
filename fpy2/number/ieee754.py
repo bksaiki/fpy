@@ -227,14 +227,20 @@ class IEEEContext(SizedContext):
             # zero
             ebits = 0
             mbits = 0
-        elif x.e <= self.emin:
-            # subnormal
-            offset = x.exp - self.expmin
-            ebits = 0
-            mbits = x.c << offset
         else:
-            # normal
-            raise NotImplementedError(x)
+            # non-zero number
+            # first, canonicalize number with maximum precision
+            xr = x.as_real().normalize(self.pmax, self.nmin)
+
+            # case split by class
+            if xr.e <= self.emin:
+                # subnormal number
+                ebits = 0
+                mbits = xr.c
+            else:
+                # normal number
+                ebits = xr.e - self.emin + 1
+                mbits = xr.c & bitmask(self.pmax - 1)
 
         return (sbit << (self.nbits - 1)) | (ebits << self.m) | mbits
 
