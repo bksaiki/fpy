@@ -28,6 +28,11 @@ class Context(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
+    def normalize(self, x):
+        """Returns the canonical form of `x` under this context."""
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
     def round(self, x):
         """Rounds any digital number according to this context."""
         raise NotImplementedError('virtual method')

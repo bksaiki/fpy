@@ -227,10 +227,16 @@ class Float:
         return self.ctx is None or self.ctx.is_representable(self)
 
     def as_real(self) -> RealFloat:
-        """Return the real part of this number."""
+        """Returns the real part of this number."""
         if self.is_nar():
             raise ValueError('cannot convert infinity or NaN to real')
         return self._real
+
+    def normalize(self) -> 'Float':
+        """Returns the canonical reprsentation of this number."""
+        if self.ctx is None:
+            raise ValueError(f'Float values without a context cannot be normalized: self={self}')
+        return self.ctx.normalize(self)
 
     def compare(self, other: Self | RealFloat) -> Optional[Ordering]:
         """

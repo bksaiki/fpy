@@ -101,11 +101,11 @@ class IEEEContext(SizedContext):
         """Returns if `x` is a NaN number."""
         return x.isnan
 
-    def is_representable(self, x: Float):
+    def is_representable(self, x: Float) -> bool:
         if not isinstance(x, Float):
-            # exclude wrong datatype
-            return False
-        elif x.isnan or x.isinf:
+            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
+
+        if x.isnan or x.isinf:
             # special values are valid
             return True
         elif x.exp < self.expmin or x.e > self.emax:
@@ -194,6 +194,26 @@ class IEEEContext(SizedContext):
 
         return self._round_float(x_)
 
+    def normalize(self, x: Float) -> Float:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
+        if not self.is_representable(x):
+            raise TypeError(f'Expected representable value x={x}') 
+        
+        # case split by class
+        if x.isnan:
+            # NaN
+            return Float(isnan=True, s=x.s, ctx=self)
+        elif x.isinf:
+            # Inf
+            return Float(isinf=True, s=x.s, ctx=self)
+        elif x.c == 0:
+            # zero
+            return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
+        else:
+            # non-zero
+            return Float(x=x.as_real().normalize(self.pmax, self.nmin), ctx=self)
+
     def maxval(self, s: bool = False):
         c = 1 << self.pmax
         return Float(s=s, c=c, exp=self.expmax, ctx=self)
@@ -208,6 +228,8 @@ class IEEEContext(SizedContext):
         raise NotImplementedError
 
     def encode(self, x: Float) -> int:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
         if not self.is_representable(x):
             raise TypeError(f'Expected representable value x={x}')
 
@@ -230,17 +252,17 @@ class IEEEContext(SizedContext):
         else:
             # non-zero number
             # first, canonicalize number with maximum precision
-            xr = x.as_real().normalize(self.pmax, self.nmin)
+            x = x.normalize()
 
             # case split by class
-            if xr.e <= self.emin:
+            if x.e <= self.emin:
                 # subnormal number
                 ebits = 0
-                mbits = xr.c
+                mbits = x.c
             else:
                 # normal number
-                ebits = xr.e - self.emin + 1
-                mbits = xr.c & bitmask(self.pmax - 1)
+                ebits = x.e - self.emin + 1
+                mbits = x.c & bitmask(self.pmax - 1)
 
         return (sbit << (self.nbits - 1)) | (ebits << self.m) | mbits
 
