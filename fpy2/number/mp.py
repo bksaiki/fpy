@@ -106,21 +106,21 @@ class MPContext(Context):
         # step 3. round value based on rounding parameters
         return x.round(max_p=self.pmax, rm=self.rm)
 
-    def round(self, x: Float) -> Float:
+    def round(self, x) -> Float:
         match x:
             case Float() | RealFloat():
-                x_ = x
+                xr = x
             case int():
-                x_ = RealFloat(c=x)
+                xr = RealFloat(c=x)
             case float() | str():
-                x_ = from_mpfr(x, self.pmax)
+                xr = from_mpfr(x, self.pmax)
             case Fraction():
                 if x.is_integer():
-                    x_ = RealFloat(c=int(x))
+                    xr = RealFloat(c=int(x))
                 else:
-                    x_ = from_mpfr(x, self.pmax)
+                    xr = from_mpfr(x, self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float(x_)
+        return self._round_float(xr)
 

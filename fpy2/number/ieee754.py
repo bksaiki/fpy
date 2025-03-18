@@ -199,20 +199,20 @@ class IEEEContext(SizedContext):
     def round(self, x):
         match x:
             case Float() | RealFloat():
-                x_ = x
+                xr = x
             case int():
-                x_ = RealFloat(c=x)
+                xr = RealFloat(c=x)
             case float() | str():
-                x_ = from_mpfr(x, self.pmax)
+                xr = from_mpfr(x, self.pmax)
             case Fraction():
                 if x.is_integer():
-                    x_ = RealFloat(c=int(x))
+                    xr = RealFloat(c=int(x))
                 else:
-                    x_ = from_mpfr(x, self.pmax)
+                    xr = from_mpfr(x, self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float(x_)
+        return self._round_float(xr)
 
     def normalize(self, x: Float) -> Float:
         if not isinstance(x, Float):
