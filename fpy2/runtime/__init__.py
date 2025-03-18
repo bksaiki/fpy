@@ -7,7 +7,9 @@ from .function import (
 )
 
 from .native import PythonInterpreter
-from .real import RealInterpreter, FunctionProfiler, ExpressionProfiler
+from .real import RealInterpreter
 from .titanic import TitanicInterpreter
+
+from .profile import ExprProfiler, FunctionProfiler
 
 set_default_interpreter(TitanicInterpreter())

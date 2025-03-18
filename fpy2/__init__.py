@@ -14,6 +14,6 @@ from .runtime import (
     set_default_interpreter,
     get_default_interpreter,
     FunctionProfiler,
-    ExpressionProfiler
+    ExprProfiler
 )
 

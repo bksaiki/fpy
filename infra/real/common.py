@@ -5,9 +5,9 @@ from .config import ReferenceMode
 
 _disabled = [
     # Too hard
-    # 'Rocket_Trajectory',
-    # 'Eigenvalue_Computation',
-    # 'Pendulum',
+    'Rocket_Trajectory',
+    'Eigenvalue_Computation',
+    'Pendulum',
     # 'Flower',
     'arclength_of_a_wiggly_function',
     'arclength_of_a_wiggly_function__u40_old_version_u41_',
