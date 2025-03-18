@@ -230,20 +230,20 @@ class IEEEContext(SizedContext):
 
         return self._round_float(xr)
 
-    def maxval(self, s: bool = False):
-        c = 1 << self.pmax
-        return Float(s=s, c=c, exp=self.expmax, ctx=self)
-
-    def minval(self, s: bool = False):
-        return Float(s=s, c=1, exp=self.expmin, ctx=self)
-
-    def to_ordinal(self, x: Float) -> int:
+    def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         raise NotImplementedError
 
-    def from_ordinal(self, x: int) -> Float:
+    def from_ordinal(self, x: int, infval = False):
         raise NotImplementedError
+    
+    def minval(self, s: bool = False):
+        return Float(s=s, c=1, exp=self.expmin, ctx=self)
+
+    def maxval(self, s: bool = False):
+        c = 1 << self.pmax
+        return Float(s=s, c=c, exp=self.expmax, ctx=self)
 
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
@@ -267,8 +267,10 @@ class IEEEContext(SizedContext):
             mbits = 0
         else:
             # non-zero number
-            # first, canonicalize number with maximum precision
-            x = x.normalize()
+
+            # canonicalize number if necessary
+            if not x.is_canonical():
+                x = x.normalize()
 
             # case split by class
             if x.e <= self.emin:
@@ -315,3 +317,4 @@ class IEEEContext(SizedContext):
             c = (1 << self.m) | mbits
             exp = self.expmin + (ebits - 1)
             return Float(s=s, c=c, exp=exp, ctx=self)
+

@@ -1,12 +1,12 @@
 """
 This module defines floating-point numbers as implemented by MPFR
-but with a subnormalization, that is multiprecision floating-point
+but with a subnormalization, that is multi-precision floating-point
 numbers with subnormals. Hence, "MP-S."
 """
 
 from fractions import Fraction
 
-from ..utils import default_repr
+from ..utils import default_repr, bitmask
 
 from .context import OrdinalContext
 from .float import Float
@@ -17,7 +17,7 @@ from .utils import from_mpfr
 @default_repr
 class MPSContext(OrdinalContext):
     """
-    Rounding context for multiprecision floating-point numbers with
+    Rounding context for multi-precision floating-point numbers with
     a minimum exponent (and subnormalization).
 
     This context is parameterized by a fixed precision `pmax`,
@@ -161,13 +161,62 @@ class MPSContext(OrdinalContext):
 
         return self._round_float(xr)
 
-    def to_ordinal(self, x: Float) -> int:
+    def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        raise NotImplementedError
+        if infval:
+            raise ValueError('infval=True is invalid for contexts without a maximum value')
 
-    def from_ordinal(self, x: int) -> Float:
-        raise NotImplementedError
+        # case split by class
+        if x.is_nar():
+            # NaN or Inf
+            raise TypeError(f'Expected a finite value for x={x}')
+        elif x.is_zero():
+            # zero
+            return 0
+        else:
+            # finite
+
+            # canonicalize number if necessary
+            if not x.is_canonical():
+                x = x.normalize()
+
+            # case split by class
+            if x.e <= self.emin:
+                # subnormal number
+                eord = 0
+                mord = x.c
+            else:
+                # normal number
+                eord = x.e - self.emin + 1
+                mord = x.c & bitmask(self.pmax - 1)
+
+        uord = eord * self.pmax + mord
+        return (-1 if x.s else 1) * uord
+
+    def from_ordinal(self, x: int, infval = False):
+        if not isinstance(x, int):
+            raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
+        if infval:
+            raise ValueError('infval=True is invalid for contexts without a maximum value')
+
+        s = x < 0
+        uord = abs(x)
+
+        if x == 0:
+            # zero
+            return Float(ctx=self)
+        else:
+            # finite values
+            eord, mord = divmod(uord, self.pmax)
+            if eord == 0:
+                # subnormal
+                return Float(s=s, c=mord, exp=self.expmin, ctx=self)
+            else:
+                # normal
+                c = 1 << self.pmax | mord
+                exp = self.expmin + (eord - 1)
+                return Float(s=s, c=c, exp=exp, ctx=self)
 
     def minval(self, s = False):
         return Float(s=s, c=1, exp=self.expmin, ctx=self)

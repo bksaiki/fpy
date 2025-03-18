@@ -60,13 +60,25 @@ class OrdinalContext(Context):
     """
 
     @abstractmethod
-    def to_ordinal(self, x) -> int:
-        """Maps a digital number to an ordinal number."""
+    def to_ordinal(self, x, infval: bool = False) -> int:
+        """
+        Maps a digital number to an ordinal number.
+
+        When `infval=True`, infinities are mapped to the next (or previous)
+        logical ordinal value after +/-MAX_VAL. This option is only
+        valid when the context has a maximum value.
+        """
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def from_ordinal(self, x: int):
-        """Maps an ordinal number to a digital number."""
+    def from_ordinal(self, x: int, infval: bool = False):
+        """
+        Maps an ordinal number to a digital number.
+        
+        When `infval=True`, infinities are mapped to the next (or previous)
+        logical ordinal value after +/-MAX_VAL. This option is only
+        valid when the context has a maximum value.
+        """
         raise NotImplementedError('virtual method')
 
     @abstractmethod

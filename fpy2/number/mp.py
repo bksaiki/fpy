@@ -1,6 +1,6 @@
 """
 This module defines floating-point numbers as implemented by MPFR,
-that is, multiprecision floating-point numbers. Hence, "MP."
+that is, multi-precision floating-point numbers. Hence, "MP."
 """
 
 from fractions import Fraction
@@ -16,7 +16,7 @@ from .utils import from_mpfr
 @default_repr
 class MPContext(Context):
     """
-    Rounding context for multiprecision floating-point numbers.
+    Rounding context for multi-precision floating-point numbers.
 
     This context is parameterized by a fixed precision `pmax`
     and a rounding mode `rm`. It emulates floating-point numbers
