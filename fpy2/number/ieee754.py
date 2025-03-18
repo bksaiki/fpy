@@ -105,18 +105,18 @@ class IEEEContext(SizedContext):
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
 
-        if x.isnan or x.isinf:
+        if x.is_nar():
             # special values are valid
             return True
         elif x.exp < self.expmin or x.e > self.emax:
-            # rough check on out of range values
-            return False
-        elif x.p > self.pmax:
-            # check on precision
+            # rough check on out of range values (even for zero)
             return False
         elif x.is_zero():
             # shortcut for exact zero
             return True
+        elif x.p > self.pmax:
+            # check on precision
+            return False
         elif x.s:
             # tight check (negative values)
             return self.maxval(True) <= x <= self.minval(True)
