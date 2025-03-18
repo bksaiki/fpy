@@ -69,6 +69,16 @@ class OrdinalContext(Context):
         """Maps an ordinal number to a digital number."""
         raise NotImplementedError('virtual method')
 
+    @abstractmethod
+    def minval(self, s: bool = False):
+        """
+        Returns the (signed) representable value with the minimum magnitude
+        under this context.
+
+        This value will map to +/-1 through `to_ordinal()`.
+        """
+        raise NotImplementedError('virtual method')
+
 
 class SizedContext(OrdinalContext):
     """
@@ -82,14 +92,6 @@ class SizedContext(OrdinalContext):
     def maxval(self, s: bool = False):
         """
         Returns the (signed) representable value with the maximum magnitude
-        under this context.
-        """
-        raise NotImplementedError('virtual method')
-
-    @abstractmethod
-    def minval(self, s: bool = False):
-        """
-        Returns the (signed) representable value with the minimum magnitude
         under this context.
         """
         raise NotImplementedError('virtual method')

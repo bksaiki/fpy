@@ -125,10 +125,8 @@ class IEEEContext(SizedContext):
             return self.minval(False) <= x <= self.maxval(False)
 
     def is_canonical(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
-        if not self.is_representable(x):
-            raise TypeError(f'Expected representable value x={x}')
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split by class
         if x.is_nar():
@@ -143,6 +141,24 @@ class IEEEContext(SizedContext):
         else:
             # normal
             return x.p == self.pmax
+
+    def normalize(self, x: Float) -> Float:
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+
+        # case split by class
+        if x.isnan:
+            # NaN
+            return Float(isnan=True, s=x.s, ctx=self)
+        elif x.isinf:
+            # Inf
+            return Float(isinf=True, s=x.s, ctx=self)
+        elif x.c == 0:
+            # zero
+            return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
+        else:
+            # non-zero
+            return Float(x=x.as_real().normalize(self.pmax, self.nmin), ctx=self)
 
     def _overflow_to_infinity(self, x: RealFloat):
         """Should overflows round to infinity (rather than MAX_VAL)?"""
@@ -214,26 +230,6 @@ class IEEEContext(SizedContext):
 
         return self._round_float(xr)
 
-    def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
-        if not self.is_representable(x):
-            raise TypeError(f'Expected representable value x={x}')
-        
-        # case split by class
-        if x.isnan:
-            # NaN
-            return Float(isnan=True, s=x.s, ctx=self)
-        elif x.isinf:
-            # Inf
-            return Float(isinf=True, s=x.s, ctx=self)
-        elif x.c == 0:
-            # zero
-            return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
-        else:
-            # non-zero
-            return Float(x=x.as_real().normalize(self.pmax, self.nmin), ctx=self)
-
     def maxval(self, s: bool = False):
         c = 1 << self.pmax
         return Float(s=s, c=c, exp=self.expmax, ctx=self)
@@ -241,17 +237,17 @@ class IEEEContext(SizedContext):
     def minval(self, s: bool = False):
         return Float(s=s, c=1, exp=self.expmin, ctx=self)
 
-    def to_ordinal(self, x: Float):
+    def to_ordinal(self, x: Float) -> int:
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         raise NotImplementedError
 
-    def from_ordinal(self, x: int):
+    def from_ordinal(self, x: int) -> Float:
         raise NotImplementedError
 
     def encode(self, x: Float) -> int:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
-        if not self.is_representable(x):
-            raise TypeError(f'Expected representable value x={x}')
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # sign bit
         sbit = 1 if x.s else 0

@@ -18,8 +18,8 @@ class MPContext(Context):
     """
     Rounding context for multiprecision floating-point numbers.
 
-    This context is parameterized by just a fixed precision
-    and a rounding mode. It emulates floating-point numbers
+    This context is parameterized by a fixed precision `pmax`
+    and a rounding mode `rm`. It emulates floating-point numbers
     as implemented by MPFR.
     """
 
@@ -41,8 +41,8 @@ class MPContext(Context):
         self.rm = rm
 
     def is_representable(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split on class
         if x.is_nar() or x.is_zero():
@@ -53,8 +53,8 @@ class MPContext(Context):
             return x.p > self.pmax
 
     def is_canonical(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split on class
         if x.is_nar():
@@ -68,10 +68,8 @@ class MPContext(Context):
             return x.p == self.pmax
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
-        if not self.is_representable(x):
-            raise TypeError(f'Expected representable value x={x}')
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split by class
         if x.isnan:
