@@ -32,10 +32,10 @@ class MPContext(Context):
     def __init__(self, pmax: int, rm: RoundingMode):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
-        if not isinstance(rm, RoundingMode):
-            raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if pmax < 1:
             raise TypeError(f'Expected integer p < 1 for p={pmax}')
+        if not isinstance(rm, RoundingMode):
+            raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
 
         self.pmax = pmax
         self.rm = rm

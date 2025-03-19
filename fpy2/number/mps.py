@@ -41,12 +41,12 @@ class MPSContext(OrdinalContext):
     def __init__(self, pmax: int, emin: int, rm: RoundingMode):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
+        if pmax < 1:
+            raise TypeError(f'Expected integer p < 1 for p={pmax}')
         if not isinstance(emin, int):
             raise TypeError(f'Expected \'int\' for emin={emin}, got {type(emin)}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
-        if pmax < 1:
-            raise TypeError(f'Expected integer p < 1 for p={pmax}')
 
         self.pmax = pmax
         self.emin = emin

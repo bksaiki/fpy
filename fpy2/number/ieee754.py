@@ -7,14 +7,14 @@ from fractions import Fraction
 
 from ..utils import default_repr, bitmask
 
-from .context import SizedContext
+from .context import EncodableContext
 from .float import Float
 from .real import RealFloat
 from .round import RoundingMode, RoundingDirection
 from .utils import from_mpfr
 
 @default_repr
-class IEEEContext(SizedContext):
+class IEEEContext(EncodableContext):
     """
     Rounding context for IEEE 754 floating-point values.
     """

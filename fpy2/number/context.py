@@ -96,8 +96,8 @@ class SizedContext(OrdinalContext):
     """
     Rounding context for formats encodable in a fixed size.
 
-    Most common number formats fall under this category.
-    These formats define a way to encode a number in memory.
+    These formats may be mapped to ordinal numbers, and they
+    have a (positive) minimum and (positive) maximum value.
     """
 
     @abstractmethod
@@ -107,6 +107,15 @@ class SizedContext(OrdinalContext):
         under this context.
         """
         raise NotImplementedError('virtual method')
+
+
+class EncodableContext(SizedContext):
+    """
+    Rounding context for formats that can be encoded as bitstrings.
+
+    Most common number formats fall under this category.
+    These formats define a way to encode a number in memory.
+    """
 
     @abstractmethod
     def encode(self, x) -> int:
