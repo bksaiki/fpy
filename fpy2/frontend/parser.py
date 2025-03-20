@@ -701,7 +701,7 @@ class Parser:
         locals: Optional[Mapping[str, object]] = None
     ):
         globals = None if globals is None else dict(globals)
-        return eval(ast.unparse(e), globals=globals, locals=locals)
+        return eval(ast.unparse(e), globals, locals)
 
     def find_decorator(
         self,
