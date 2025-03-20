@@ -8,3 +8,5 @@ def test_eval():
         args = [1.0 for _ in range(len(core.args))]
         print(core.name, fn(*args))
 
+if __name__ == '__main__':
+    test_eval()

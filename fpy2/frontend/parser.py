@@ -4,7 +4,8 @@ This module contains the parser for the FPy language.
 
 import ast
 
-from typing import cast
+from typing import cast, Mapping
+from types import FunctionType
 
 from .fpyast import *
 from ..utils import NamedId, UnderscoreId, SourceId
@@ -39,6 +40,7 @@ _constants: set[str] = {
 }
 
 _unary_table = {
+    'abs': UnaryOpKind.FABS,
     'fabs': UnaryOpKind.FABS,
     'sqrt': UnaryOpKind.SQRT,
     'cbrt': UnaryOpKind.CBRT,
@@ -90,6 +92,8 @@ _binary_table = {
     'copysign': BinaryOpKind.COPYSIGN,
     'fdim': BinaryOpKind.FDIM,
     'fmax': BinaryOpKind.FMAX,
+    'min': BinaryOpKind.FMIN,
+    'max': BinaryOpKind.FMAX,
     'fmin': BinaryOpKind.FMIN,
     'fmod': BinaryOpKind.FMOD,
     'remainder': BinaryOpKind.REMAINDER,
@@ -171,23 +175,19 @@ class Parser:
         self.lines = source.splitlines()
         self.start_line = start_line
 
-    def parse(self):
-        """
-        Parse the source code into an FPy AST.
-        """
+    def parse_function(self):
+        """Parses `self.source` as an FPy `FunctionDef`."""
+        start_loc = Location(self.name, self.start_line, 0, self.start_line, 0)
+
         mod = ast.parse(self.source, self.name)
-        assert isinstance(mod, ast.Module), "expected module"
-        # just grab the first function
+        if len(mod.body) > 1:
+            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
+
         ptree = mod.body[0]
-        match ptree:
-            case ast.FunctionDef():
-                return self._parse_function(ptree)
-            case ast.expr():
-                return self._parse_expr(ptree)
-            case ast.stmt():
-                return self._parse_statement(ptree)
-            case _:
-                raise NotImplementedError('cannot parse', ptree)
+        if not isinstance(ptree, ast.FunctionDef):
+            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
+
+        return self._parse_function(ptree)
 
     def _parse_location(self, e: ast.expr | ast.stmt | ast.arg) -> Location:
         """Extracts the parse location of a  Python ST node."""
@@ -214,13 +214,15 @@ class Parser:
             case ast.Name('bool'):
                 return ScalarTypeAnn(ScalarType.BOOL, loc)
             case _:
-                raise FPyParserError(loc, 'Unsupported FPy type annotation', ann)
+                # TODO: implement
+                return ScalarTypeAnn(ScalarType.REAL, loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':
             return UnderscoreId()
         else:
-            return SourceId(e.id)
+            loc = self._parse_location(e)
+            return SourceId(e.id, loc)
 
     def _parse_constant(self, e: ast.Constant):
         # TODO: reparse all constants to get exact value
@@ -636,29 +638,119 @@ class Parser:
                     raise FPyParserError(loc, 'FPy does not support assert messages', stmt)
                 return AssertStmt(test, None, loc)
             case _:
-                raise NotImplementedError('statement is unsupported in FPy', stmt)
+                raise NotImplementedError('statement is unsupported in FPy', ast.dump(stmt))
 
     def _parse_statements(self, stmts: list[ast.stmt]):
         """Parse a list of Python statements."""
         return Block([self._parse_statement(s) for s in stmts])
 
-    def _parse_function(self, f: ast.FunctionDef) -> FunctionDef:
-        """Parse a Python function definition."""
-        loc = self._parse_location(f)
-        pos_args = f.args.posonlyargs + f.args.args
-        if f.args.vararg:
-            raise FPyParserError(loc, 'FPy does not support variary arguments', f, f.args.vararg)
-        if f.args.kwarg:
-            raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
-
+    def _parse_arguments(self, pos_args: list[ast.arg]):
         args: list[Argument] = []
         for arg in pos_args:
-            ident = UnderscoreId() if arg.arg == '_' else SourceId(arg.arg)
+            if arg.arg == '_':
+                ident: Id = UnderscoreId()
+            else:
+                loc = self._parse_location(arg)
+                ident = SourceId(arg.arg, loc)
+
             if arg.annotation is None:
                 args.append(Argument(ident, AnyTypeAnn(loc), loc))
             else:
                 ty = self._parse_type_annotation(arg.annotation)
                 args.append(Argument(ident, ty, loc))
 
-        block = self._parse_statements(f.body)
-        return FunctionDef(f.name, args, block, loc)
+        return args
+
+    def _parse_lambda(self, f: ast.Lambda):
+        """Parse a Python lambda expression."""
+        loc = self._parse_location(f)
+        args = self._parse_arguments(f.args.args)
+        expr = self._parse_expr(f.body)
+        block = Block([Return(expr, expr.loc)])
+        return FunctionDef('pre', args, block, loc)
+
+    def _parse_function(self, f: ast.FunctionDef):
+        """Parse a Python function definition."""
+        loc = self._parse_location(f)
+
+        # check arguments are only positional
+        pos_args = f.args.posonlyargs + f.args.args
+        if f.args.vararg:
+            raise FPyParserError(loc, 'FPy does not support variary arguments', f, f.args.vararg)
+        if f.args.kwarg:
+            raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
+
+        # description
+        docstring = ast.get_docstring(f)
+        if docstring is not None:
+            body = f.body[1:]
+        else:
+            body = f.body
+
+        # parse arguments and body
+        args = self._parse_arguments(pos_args)
+        block = self._parse_statements(body)
+
+        # return AST and decorator list
+        return FunctionDef(f.name, args, block, loc), f.decorator_list
+
+    def _eval(
+        self,
+        e: ast.expr,
+        globals: Optional[Mapping[str, Any]] = None,
+        locals: Optional[Mapping[str, object]] = None
+    ):
+        globals = None if globals is None else dict(globals)
+        return eval(ast.unparse(e), globals, locals)
+
+    def find_decorator(
+        self,
+        decorator_list: list[ast.expr],
+        decorator: Any,
+        globals: Optional[Mapping[str, Any]] = None,
+        locals: Optional[Mapping[str, object]] = None
+    ):
+        """Returns the decorator AST for a particular decorator"""
+        for dec in reversed(decorator_list):
+            match dec:
+                case ast.Call():
+                    f = self._eval(dec.func, globals=globals, locals=locals)
+                    if isinstance(f, FunctionType) and f == decorator:
+                        return dec
+                case ast.Name():
+                    f = self._eval(dec, globals=globals, locals=locals)
+                    if isinstance(f, FunctionType) and f == decorator:
+                        return dec
+
+        raise RuntimeError('unreachable')
+
+    # reparse
+    def parse_decorator(self, decorator: ast.expr) -> dict[str, Any]:
+        """
+        (Re)-parses the `@fpy` decorator.
+
+        Returns a `dict` where each key is only the set of keywords that must be parsed.
+        Supported keywords include:
+
+        - `pre`: a precondition expression
+        """
+        match decorator:
+            case ast.Name():
+                return {}
+            case ast.Call():
+                if decorator.args != []:
+                    loc = self._parse_location(decorator)
+                    raise FPyParserError(loc, 'FPy decorators do not accept arguments', decorator)
+
+                props: dict[str, Any] = {}
+                for kwd in decorator.keywords:
+                    match kwd.arg:
+                        case 'pre':
+                            # TODO: check arguments are a strict subset?
+                            if not isinstance(kwd.value, ast.Lambda):
+                                loc = self._parse_location(kwd.value)
+                                raise FPyParserError(loc, 'FPy `pre` expects a lambda expression', kwd.value)
+                            props['pre'] = self._parse_lambda(kwd.value)
+                return props
+            case _:
+                raise NotImplementedError('unsupported decorator', decorator)

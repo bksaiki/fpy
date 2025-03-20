@@ -33,4 +33,5 @@ include = ["fpy2*"]
 disable_error_code = ["import-untyped"]
 
 [tool.ruff.lint]
-ignore = ["F401", "F403", "F405"]
+extend-select = ["B"]
+ignore = ["F401", "F403", "F405", "B905"]

@@ -5,8 +5,6 @@ This module defines intervals for the `RealInterpreter`.
 from abc import ABC, abstractmethod
 from typing import Optional, Self
 
-from titanfp.titanic.digital import Digital
-
 from ...utils import default_repr
 
 class Interval(ABC):
@@ -46,22 +44,18 @@ class BoolInterval(Interval):
 @default_repr
 class RealInterval(Interval):
     """Real interval."""
-    lo: Digital
-    hi: Digital
+    lo: str
+    hi: str
+    prec: int
 
-    def __init__(self, lo: Digital, hi: Digital):
+    def __init__(self, lo: str, hi: str, prec: int):
         self.lo = lo
         self.hi = hi
+        self.prec = prec
 
     @staticmethod
-    def from_val(val: Digital):
-        return RealInterval(val, val)
+    def from_val(val: str):
+        return RealInterval(val, val, 53)
 
     def union(self, other: Self):
-        if not isinstance(other, RealInterval):
-            raise TypeError(f'expected RealInterval, got {other}')
-        lo = min(self.lo, other.lo)
-        hi = max(self.hi, other.hi)
-        return RealInterval(lo, hi)
-
-
+        raise NotImplementedError('unimplemented')

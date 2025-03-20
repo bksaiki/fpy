@@ -8,9 +8,12 @@ from .backend import (
 from .runtime import (
     Function,
     Interpreter,
-    TitanicInterpreter,
+    PythonInterpreter,
     RealInterpreter,
+    TitanicInterpreter,
     set_default_interpreter,
-    get_default_interpreter
+    get_default_interpreter,
+    FunctionProfiler,
+    ExprProfiler
 )
 
