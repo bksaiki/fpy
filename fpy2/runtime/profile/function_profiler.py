@@ -48,7 +48,6 @@ class FunctionProfileResult:
     def max(self):
         if self.invalid:
             raise ValueError('cannot average: all evaluations failed to produce a result')
-        num_errors = np.array(filter(lambda e: e is not None, self.errors))
         return float(np.max(self.np_errors))
 
     def sample_size(self):
