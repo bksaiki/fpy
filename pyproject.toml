@@ -11,10 +11,9 @@ authors = [
 description = "An embedded DSL for numerical computing"
 classifiers = [
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
 ]
-license = {file = "LICENSE"}
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["titanfp==0.1.1"]
