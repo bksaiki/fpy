@@ -148,10 +148,14 @@ class IEEEContext(EncodableContext):
         return self._mpb_ctx.from_ordinal(x, infval=infval)
 
     def minval(self, s: bool = False):
-        return self._mpb_ctx.minval(s)
+        minval = self._mpb_ctx.minval(s)
+        minval.ctx = self
+        return minval
 
     def maxval(self, s: bool = False):
-        return self._mpb_ctx.maxval(s)
+        maxval = self._mpb_ctx.maxval(s)
+        maxval.ctx = self
+        return maxval
 
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):

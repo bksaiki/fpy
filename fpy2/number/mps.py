@@ -73,7 +73,7 @@ class MPSContext(OrdinalContext):
         if not isinstance(x, Float):
             raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
 
-        if not self._mp_ctx.is_representable():
+        if not self._mp_ctx.is_representable(x):
             # not representable even without subnormalization
             return False
         elif not x.is_nonzero():
@@ -217,7 +217,7 @@ class MPSContext(OrdinalContext):
                 exp = self.expmin + (eord - 1)
                 return Float(s=s, c=c, exp=exp, ctx=self)
 
-    def minval(self, s = False):
+    def minval(self, s = False) -> Float:
         return Float(s=s, c=1, exp=self.expmin, ctx=self)
 
 

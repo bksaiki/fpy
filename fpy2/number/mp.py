@@ -41,7 +41,7 @@ class MPContext(Context):
         self.rm = rm
 
     def is_representable(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split on class
@@ -50,7 +50,7 @@ class MPContext(Context):
             return True
         else:
             # non-zero value
-            return x.p > self.pmax
+            return x.p <= self.pmax
 
     def is_canonical(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.is_representable(x):

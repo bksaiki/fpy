@@ -281,10 +281,10 @@ class MPBContext(SizedContext):
             # must be a finite number
             return self._mps_ctx.from_ordinal(x)
 
-    def minval(self, s = False):
-        self._mps_ctx.minval(s=s)
+    def minval(self, s = False) -> Float:
+        return self._mps_ctx.minval(s=s)
 
-    def maxval(self, s = False):
+    def maxval(self, s = False) -> Float:
         if s:
             return Float(x=self.neg_maxval, ctx=self)
         else:
