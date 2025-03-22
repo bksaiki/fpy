@@ -7,7 +7,7 @@ from typing import Optional, Self
 from .real import RealFloat
 from .context import Context
 
-from ..utils import default_repr, Ordering, partial_ord, rcomparable
+from ..utils import default_repr, Ordering, rcomparable
 
 @rcomparable(RealFloat)
 @default_repr
@@ -50,7 +50,7 @@ class Float:
     ctx: Optional[Context] = None
     """rounding context during construction"""
 
-    _real: RealFloat
+    real: RealFloat
     """the real number (if it is real)"""
 
     def __init__(
@@ -99,11 +99,11 @@ class Float:
         if isinstance(x, RealFloat):
             real = x
         elif isinstance(x, Float):
-            real = x._real
+            real = x.real
         else:
             real = None
 
-        self._real = RealFloat(
+        self.real = RealFloat(
             s=s,
             exp=exp,
             c=c,
@@ -143,24 +143,24 @@ class Float:
     @property
     def s(self) -> bool:
         """Is the sign negative?"""
-        return self._real.s
+        return self.real.s
 
     @property
     def exp(self) -> int:
         """Absolute position of the LSB."""
-        return self._real.exp
+        return self.real.exp
 
     @property
     def c(self) -> int:
         """Integer significand."""
-        return self._real.c
+        return self.real.c
 
     @property
     def p(self):
         """Minimum number of binary digits required to represent this number."""
         if self.is_nar():
             raise ValueError('cannot compute precision of infinity or NaN')
-        return self._real.p
+        return self.real.p
 
     @property
     def e(self) -> int:
@@ -175,7 +175,7 @@ class Float:
         """
         if self.is_nar():
             raise ValueError('cannot compute exponent of infinity or NaN')
-        return self._real.e
+        return self.real.e
 
     @property
     def n(self) -> int:
@@ -185,45 +185,45 @@ class Float:
         """
         if self.is_nar():
             raise ValueError('cannot compute exponent of infinity or NaN')
-        return self._real.n
+        return self.real.n
 
     @property
     def m(self) -> int:
         """Significand of this number."""
         if self.is_nar():
             raise ValueError('cannot compute significand of infinity or NaN')
-        return self._real.m
+        return self.real.m
 
     @property
     def interval_size(self) -> int | None:
         """Rounding envelope: size relative to `2**exp`."""
-        return self._real.interval_size
+        return self.real.interval_size
 
     @property
     def interval_down(self) -> bool | None:
         """Rounding envelope: extends below the value."""
-        return self._real.interval_down
+        return self.real.interval_down
 
     @property
     def inexact(self) -> bool:
         """Return whether this number is inexact."""
-        return self._real.inexact
+        return self.real.inexact
 
     def is_zero(self) -> bool:
         """Returns whether this value represents zero."""
-        return not self.is_nar() and self._real.is_zero()
+        return not self.is_nar() and self.real.is_zero()
 
     def is_positive(self) -> bool:
         """Returns whether this value is positive."""
-        return not self.is_nar() and self._real.is_positive()
+        return not self.is_nar() and self.real.is_positive()
 
     def is_negative(self) -> bool:
         """Returns whether this value is negative."""
-        return not self.is_nar() and self._real.is_negative()
+        return not self.is_nar() and self.real.is_negative()
 
     def is_integer(self) -> bool:
         """Returns whether this value is an integer."""
-        return not self.is_nar() and self._real.is_integer()
+        return not self.is_nar() and self.real.is_integer()
 
     def is_finite(self) -> bool:
         """Returns whether this value is finite."""
@@ -264,7 +264,7 @@ class Float:
         """Returns the real part of this number."""
         if self.is_nar():
             raise ValueError('cannot convert infinity or NaN to real')
-        return RealFloat(x=self._real)
+        return RealFloat(x=self.real)
 
     def normalize(self) -> 'Float':
         """
@@ -289,7 +289,7 @@ class Float:
                 else:
                     return Ordering.GREATER
             else:
-                return self._real.compare(other)
+                return self.real.compare(other)
         elif isinstance(other, Float):
             if self.isnan or other.isnan:
                 return None
@@ -306,6 +306,6 @@ class Float:
                 else:
                     return Ordering.LESS
             else:
-                return self._real.compare(other._real)
+                return self.real.compare(other.real)
         else:
             raise TypeError(f'expected Float or RealFloat, got {type(other)}')

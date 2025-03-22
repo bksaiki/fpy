@@ -120,7 +120,7 @@ class MPSContext(OrdinalContext):
             return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
         else:
             # non-zero
-            xr = x._real.normalize(self.pmax, self.nmin)
+            xr = x.real.normalize(self.pmax, self.nmin)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
     def _round_float(self, x: RealFloat | Float):
@@ -132,7 +132,7 @@ class MPSContext(OrdinalContext):
             elif x.isinf:
                 return Float(s=x.s, isinf=True, ctx=self)
             else:
-                x = x._real
+                x = x.real
 
         # step 2. shortcut for exact zero values
         if x.is_zero():
@@ -173,24 +173,17 @@ class MPSContext(OrdinalContext):
         elif x.is_zero():
             # zero
             return 0
+        elif x.e <= self.emin:
+            # subnormal
+            eord = 0
+            mord = x.c << (x.exp - self.expmin)  # normalize so that exp=self.expmin
         else:
-            # finite
+            # normal
+            c = x.c << (self.pmax - x.p) # normalize so that p=self.pmax
+            eord = x.e - self.emin + 1
+            mord = c & bitmask(self.pmax - 1)
 
-            # canonicalize number if necessary
-            if not x.is_canonical():
-                x = x.normalize()
-
-            # case split by class
-            if x.e <= self.emin:
-                # subnormal number
-                eord = 0
-                mord = x.c
-            else:
-                # normal number
-                eord = x.e - self.emin + 1
-                mord = x.c & bitmask(self.pmax - 1)
-
-        uord = eord * self.pmax + mord
+        uord = (eord << (self.pmax - 1)) + mord
         return (-1 if x.s else 1) * uord
 
     def from_ordinal(self, x: int, infval = False):

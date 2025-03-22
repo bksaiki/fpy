@@ -5,7 +5,7 @@ This module defines the basic floating-point number type `RealFloat`.
 from typing import Optional, Self
 
 from .round import RoundingMode, RoundingDirection
-from ..utils import bitmask, default_repr, partial_ord, Ordering
+from ..utils import bitmask, default_repr, Ordering
 
 @default_repr
 class RealFloat:

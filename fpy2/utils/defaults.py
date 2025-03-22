@@ -2,10 +2,6 @@
 Decorators implementing some default behavior.
 """
 
-from typing import Optional, overload
-
-from .ordering import Ordering
-
 ###########################################################
 # Default __repr__ decorator
 

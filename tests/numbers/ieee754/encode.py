@@ -4,7 +4,7 @@ import random
 from fpy2.number import Float, IEEEContext, RM
 
 class DecodeTestCase(unittest.TestCase):
-    """Ensure `IEEEContext.decode()` does not fail for valid inputs."""
+    """Testing `IEEEContext.decode()`"""
 
     def test_native(self, num_encodings: int = 10_000):
         # rounding context for native Python floats
@@ -28,7 +28,7 @@ class DecodeTestCase(unittest.TestCase):
                     self.assertIsInstance(x, Float, f'i={i}, x={x}')
 
 class EncodeTestCase(unittest.TestCase):
-    """Ensure `IEEEContext.encode()` does not fail for valid inputs."""
+    """Testing `IEEEContext.encode()`"""
 
     def test_native(self, num_encodings: int = 10_000):
         # rounding context for native Python floats
@@ -68,8 +68,8 @@ class EncodeTestCase(unittest.TestCase):
                             self.assertLess(i, 1 << ctx.nbits, f'x={x}, i={i}')
 
 
-class RoundTripTestCase(unittest.TestCase):
-    """Ensure for a valid encoding `i`, `i == encode(decode((i)))."""
+class EncodeRoundTripTestCase(unittest.TestCase):
+    """Ensure `IEEEContext.decode()` and `IEEEContext.encode()` roundtrips."""
 
     def test_native(self, num_encodings: int = 10_000):
         # rounding context for native Python floats

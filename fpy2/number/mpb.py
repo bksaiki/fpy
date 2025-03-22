@@ -254,7 +254,7 @@ class MPBContext(SizedContext):
                 return self._pos_maxval_ord + 1
         else:
             # finite, real
-            self._mps_ctx.to_ordinal(x)
+            return self._mps_ctx.to_ordinal(x)
 
 
     def from_ordinal(self, x, infval = False):
