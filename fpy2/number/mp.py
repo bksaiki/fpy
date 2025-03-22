@@ -83,7 +83,8 @@ class MPContext(Context):
             return Float(c=0, exp=0, s=x.s, ctx=self)
         else:
             # non-zero
-            return Float(x=x.as_real().normalize(self.pmax), ctx=self)
+            xr = x.as_real().normalize(self.pmax, None)
+            return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
     def _round_float(self, x: RealFloat | Float):
         """Like `self.round()` but for only `RealFloat` and `Float` inputs"""

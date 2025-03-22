@@ -11,12 +11,13 @@ from ..utils import default_repr, bitmask
 
 from .context import SizedContext
 from .float import Float
+from .mps import MPSContext
 from .real import RealFloat
 from .round import RoundingMode, RoundingDirection
 from .utils import from_mpfr
 
 
-@default_repr
+@default_repr(ignore=['_mps_ctx', '_pos_maxval_ord', '_neg_maxval_ord'])
 class MPBContext(SizedContext):
     """
     Rounding context for multi-precision floating-point numbers with
@@ -47,6 +48,15 @@ class MPBContext(SizedContext):
 
     rm: RoundingMode
     """rounding mode"""
+
+    _mps_ctx: MPSContext
+    """this context without maximum values"""
+
+    _pos_maxval_ord: int
+    """precomputed ordinal of `self.pos_maxval`"""
+
+    _neg_maxval_ord: int
+    """precomputed ordinal of `self.neg_maxval`"""
 
     def __init__(
         self,
@@ -87,6 +97,11 @@ class MPBContext(SizedContext):
         self.neg_maxval = neg_maxval
         self.rm = rm
 
+        self._mps_ctx = MPSContext(pmax, emin, rm)
+        self._pos_maxval_ord = self._mps_ctx.to_ordinal(Float(x=self.pos_maxval))
+        self._neg_maxval_ord = self._mps_ctx.to_ordinal(Float(x=self.neg_maxval))
+
+
     @property
     def emax(self):
         """Maximum normalized exponent."""
@@ -102,74 +117,40 @@ class MPBContext(SizedContext):
     @property
     def expmin(self):
         """Minimum unnormalized exponent."""
-        return self.emin - self.pmax + 1
+        return self._mps_ctx.expmin
 
     @property
     def nmin(self):
         """
         First unrepresentable digit for every value in the representation.
         """
-        return self.expmin - 1
+        return self._mps_ctx.nmin
 
     def is_representable(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
 
-        if x.is_nar():
-            # special values are valid
-            return True
-        elif x.exp < self.expmin or x.e > self.emax:
-            # rough check on out of range values (even for zero)
-            return False
-        elif x.is_zero():
-            # shortcut for exact zero
-            return True
-        elif x.p > self.pmax:
-            # check on precision
+        if not self._mps_ctx.is_representable(x):
+            # not representable even without a maximum value
             return False
         elif x.s:
-            # tight check (negative values)
-            return self.maxval(True) <= x <= self.minval(True)
+            # check bounded (negative values)
+            return self.maxval(True) <= x
         else:
-            # tight check (non-negative values)
-            return self.minval(False) <= x <= self.maxval(False)
+            # check bounded (non-negative values)
+            return x <= self.maxval(False)
 
     def is_canonical(self, x):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
-        # case split by class
-        if x.is_nar():
-            # NaN or Inf
-            return True
-        elif x.c == 0:
-            # zero
-            return x.exp == self.expmin
-        elif x.e < self.emin:
-            # subnormal
-            return x.exp == self.expmin
-        else:
-            # normal
-            return x.p == self.pmax
+        return self._mps_ctx.is_canonical(x)
 
     def normalize(self, x):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
-        # case split by class
-        if x.isnan:
-            # NaN
-            return Float(isnan=True, s=x.s, ctx=self)
-        elif x.isinf:
-            # Inf
-            return Float(isinf=True, s=x.s, ctx=self)
-        elif x.c == 0:
-            # zero
-            return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
-        else:
-            # non-zero
-            xr = x.as_real().normalize(self.pmax, self.nmin)
-            return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
+        x = self._mps_ctx.normalize(x)
+        x.ctx = self
+        return x
 
     def _is_overflowing(self, x: RealFloat) -> bool:
         """Checks if `x` is overflowing."""
@@ -230,7 +211,6 @@ class MPBContext(SizedContext):
         # step 5. return rounded result
         return Float(x=rounded, ctx=self)
 
-
     def round(self, x):
         match x:
             case Float() | RealFloat():
@@ -249,65 +229,55 @@ class MPBContext(SizedContext):
 
         return self._round_float(xr)
 
-    def to_ordinal(self, x, infval = False):
+    def to_ordinal(self, x: Float, infval = False):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        if infval:
-            raise ValueError('infval=True is invalid for contexts without a maximum value')
 
         # case split by class
-        if x.is_nar():
-            # NaN or Inf
+        if x.isnan:
+            # NaN
             raise TypeError(f'Expected a finite value for x={x}')
-        elif x.is_zero():
-            # zero
-            return 0
-        else:
-            # finite
-
-            # canonicalize number if necessary
-            if not x.is_canonical():
-                x = x.normalize()
-
-            # case split by class
-            if x.e <= self.emin:
-                # subnormal number
-                eord = 0
-                mord = x.c
+        elif x.isinf:
+            # Inf
+            if not infval:
+                raise TypeError(f'Expected a finite value for x={x}')
+            elif x.s:
+                # -Inf is mapped to 1 less than -MAX
+                return self._neg_maxval_ord - 1
             else:
-                # normal number
-                eord = x.e - self.emin + 1
-                mord = x.c & bitmask(self.pmax - 1)
+                # +Inf is mapped to 1 greater than +MAX
+                return self._pos_maxval_ord + 1
+        else:
+            # finite, real
+            self._mps_ctx.to_ordinal(x)
 
-        uord = eord * self.pmax + mord
-        return (-1 if x.s else 1) * uord
 
     def from_ordinal(self, x, infval = False):
         if not isinstance(x, int):
             raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
-        if infval:
-            raise ValueError('infval=True is invalid for contexts without a maximum value')
-
-        s = x < 0
-        uord = abs(x)
-
-        if x == 0:
-            # zero
-            return Float(ctx=self)
-        else:
-            # finite values
-            eord, mord = divmod(uord, self.pmax)
-            if eord == 0:
-                # subnormal
-                return Float(s=s, c=mord, exp=self.expmin, ctx=self)
+ 
+        if x > self._pos_maxval_ord:
+            # ordinal too large to be a finite number
+            if not infval or x > self._pos_maxval_ord + 1:
+                # infinity ordinal is disabled or ordinal is too large to even be infinity
+                raise TypeError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
             else:
-                # normal
-                c = 1 << self.pmax | mord
-                exp = self.expmin + (eord - 1)
-                return Float(s=s, c=c, exp=exp, ctx=self)
+                # +Inf
+                return Float(isinf=True, ctx=self)
+        elif x < self._neg_maxval_ord:
+            # ordinal is too large to be a finite number
+            if not infval or x < self._neg_maxval_ord - 1:
+                # infinity ordinal is disabled or ordinal is too large to even be infinity
+                raise TypeError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
+            else:
+                # -Inf
+                return Float(s=True, isinf=True, ctx=self)
+        else:
+            # must be a finite number
+            return self._mps_ctx.from_ordinal(x)
 
     def minval(self, s = False):
-        raise NotImplementedError
+        self._mps_ctx.minval(s=s)
 
     def maxval(self, s = False):
         if s:

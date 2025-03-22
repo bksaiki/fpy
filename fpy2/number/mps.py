@@ -14,7 +14,7 @@ from .real import RealFloat
 from .round import RoundingMode
 from .utils import from_mpfr
 
-@default_repr
+@default_repr(ignore=['_mp_ctx'])
 class MPSContext(OrdinalContext):
     """
     Rounding context for multi-precision floating-point numbers with
@@ -105,7 +105,6 @@ class MPSContext(OrdinalContext):
             # normal
             return x.p == self.pmax
 
-
     def normalize(self, x):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
@@ -122,7 +121,8 @@ class MPSContext(OrdinalContext):
             return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
         else:
             # non-zero
-            return Float(x=x.as_real().normalize(self.pmax, self.nmin), ctx=self)
+            xr = x.as_real().normalize(self.pmax, self.nmin)
+            return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
     def _round_float(self, x: RealFloat | Float):
         """Like `self.round()` but for only `RealFloat` and `Float` inputs"""

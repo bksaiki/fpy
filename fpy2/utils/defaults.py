@@ -2,7 +2,7 @@
 Decorators implementing some default behavior.
 """
 
-from typing import Optional
+from typing import Optional, overload
 
 from .ordering import Ordering
 
