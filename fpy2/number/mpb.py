@@ -80,7 +80,7 @@ class MPBContext(SizedContext):
         if maxval.s:
             raise ValueError(f'Expected positive maxval={maxval}, got {maxval}')
         elif maxval.p > pmax:
-            raise ValueError(f'Expected maxval={maxval} to be representable in pmax={pmax}')
+            raise ValueError(f'Expected maxval={maxval} to be representable in pmax={pmax} (p={maxval.p})')
 
         if neg_maxval is None:
             neg_maxval = RealFloat(s=True, x=maxval)
@@ -98,8 +98,10 @@ class MPBContext(SizedContext):
         self.rm = rm
 
         self._mps_ctx = MPSContext(pmax, emin, rm)
-        self._pos_maxval_ord = self._mps_ctx.to_ordinal(Float(x=self.pos_maxval))
-        self._neg_maxval_ord = self._mps_ctx.to_ordinal(Float(x=self.neg_maxval))
+        pos_maxval_mps = Float(x=self.pos_maxval, ctx=self._mps_ctx)
+        neg_maxval_mps = Float(x=self.neg_maxval, ctx=self._mps_ctx)
+        self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_mps)
+        self._neg_maxval_ord = self._mps_ctx.to_ordinal(neg_maxval_mps)
 
 
     @property

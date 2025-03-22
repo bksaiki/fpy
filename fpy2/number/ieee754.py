@@ -9,11 +9,26 @@ from ..utils import default_repr, bitmask
 
 from .context import EncodableContext
 from .float import Float
+from .mpb import MPBContext
 from .real import RealFloat
 from .round import RoundingMode, RoundingDirection
 from .utils import from_mpfr
 
-@default_repr
+def _ieee_to_mpb(es: int, nbits: int, rm: RoundingMode):
+    """Converts IEEEContext parameters to MPBContext parameters"""
+    # IEEE 754 derived parameters
+    p = nbits - es
+    emax = (1 << (es - 1)) - 1
+    emin = 1 - emax
+    expmax = emax - p + 1
+    expmin = emin - p + 1
+    # +MAX_VAL
+    maxval = RealFloat(c=bitmask(p), exp=expmax)
+    # MPBContext
+    return MPBContext(p, emin, maxval, rm)
+
+
+@default_repr(ignore=['_mpb_ctx'])
 class IEEEContext(EncodableContext):
     """
     Rounding context for IEEE 754 floating-point values.
@@ -28,6 +43,9 @@ class IEEEContext(EncodableContext):
     rm: RoundingMode
     """rounding mode"""
 
+    _mpb_ctx: MPBContext
+    """this context as an `MPBContext`"""
+
     def __init__(self, es: int, nbits: int, rm: RoundingMode):
         if es < 2:
             raise ValueError(f'Invalid es={es}, must be at least 2')
@@ -37,11 +55,39 @@ class IEEEContext(EncodableContext):
         self.es = es
         self.nbits = nbits
         self.rm = rm
+        self._mpb_ctx = _ieee_to_mpb(es, nbits, rm)
 
     @property
     def pmax(self):
         """Maximum allowable precision."""
-        return self.nbits - self.es
+        return self._mpb_ctx.pmax
+
+    @property
+    def emax(self):
+        """Maximum normalized exponent."""
+        return self._mpb_ctx.emax
+
+    @property
+    def emin(self):
+        """Minimum normalized exponent."""
+        return self._mpb_ctx.emin
+
+    @property
+    def expmax(self):
+        """Maximum unnormalized exponent."""
+        return self._mpb_ctx.expmax
+
+    @property
+    def expmin(self):
+        """Minimum unnormalized exponent."""
+        return self._mpb_ctx.expmin
+
+    @property
+    def nmin(self):
+        """
+        First unrepresentable digit for every value in the representation.
+        """
+        return self._mpb_ctx.nmin
 
     @property
     def m(self):
@@ -49,37 +95,9 @@ class IEEEContext(EncodableContext):
         return self.pmax - 1
 
     @property
-    def emax(self):
-        """Maximum normalized exponent."""
-        return (1 << (self.es - 1)) - 1
-
-    @property
-    def emin(self):
-        """Minimum normalized exponent."""
-        return 1 - self.emax
-
-    @property
-    def expmax(self):
-        """Maximum unnormalized exponent."""
-        return self.emax - self.pmax + 1
-
-    @property
-    def expmin(self):
-        """Minimum unnormalized exponent."""
-        return self.emin - self.pmax + 1
-
-    @property
-    def nmin(self):
-        """
-        First unrepresentable digit for every value in the representation.
-        """
-        return self.expmin - 1
-
-    @property
     def ebias(self):
         """The exponent "bias" as defined by the IEEE 754 standard."""
         return self.emax
-
 
     def is_zero(self, x: Float):
         """Returns if `x` is a zero number."""
@@ -104,147 +122,36 @@ class IEEEContext(EncodableContext):
     def is_representable(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
-
-        if x.is_nar():
-            # special values are valid
-            return True
-        elif x.exp < self.expmin or x.e > self.emax:
-            # rough check on out of range values (even for zero)
-            return False
-        elif x.is_zero():
-            # shortcut for exact zero
-            return True
-        elif x.p > self.pmax:
-            # check on precision
-            return False
-        elif x.s:
-            # tight check (negative values)
-            return self.maxval(True) <= x <= self.minval(True)
-        else:
-            # tight check (non-negative values)
-            return self.minval(False) <= x <= self.maxval(False)
+        return self._mpb_ctx.is_representable(x)
 
     def is_canonical(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
-        # case split by class
-        if x.is_nar():
-            # NaN or Inf
-            return True
-        elif x.c == 0:
-            # zero
-            return x.exp == self.expmin
-        elif x.e < self.emin:
-            # subnormal
-            return x.exp == self.expmin
-        else:
-            # normal
-            return x.p == self.pmax
+        return self._mpb_ctx.is_canonical(x)
 
     def normalize(self, x: Float) -> Float:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
-        # case split by class
-        if x.isnan:
-            # NaN
-            return Float(isnan=True, s=x.s, ctx=self)
-        elif x.isinf:
-            # Inf
-            return Float(isinf=True, s=x.s, ctx=self)
-        elif x.c == 0:
-            # zero
-            return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
-        else:
-            # non-zero
-            xr = x.as_real().normalize(self.pmax, self.nmin)
-            return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
-
-    def _overflow_to_infinity(self, x: RealFloat):
-        """Should overflows round to infinity (rather than MAX_VAL)?"""
-        _, direction = self.rm.to_direction(x.s)
-        match direction:
-            case RoundingDirection.RTZ:
-                # always round towards zero
-                return False
-            case RoundingDirection.RAZ:
-                # always round towards infinity
-                return True
-            case RoundingDirection.RTE:
-                # infinity is considered even for rounding
-                return True
-            case RoundingDirection.RTO:
-                # infinity is considered even for rounding
-                return False
-            case _:
-                raise RuntimeError(f'unrechable {direction}')
-
-    def _round_float(self, x: RealFloat | Float):
-        """Like `self.round()` but for only `RealFloat` and `Float` inputs"""
-        # step 1. handle special values
-        if isinstance(x, Float):
-            if x.isnan:
-                return Float(isnan=True, ctx=self)
-            elif x.isinf:
-                return Float(s=x.s, isinf=True, ctx=self)
-            else:
-                x = x.as_real()
-
-        # step 2. shortcut for exact zero values
-        if x.is_zero():
-            # exactly zero
-            return Float(ctx=self)
-
-        # step 3. round value based on rounding parameters
-        rounded = x.round(self.pmax, self.nmin, self.rm)
-
-        # step 4. check for overflow
-        if rounded.e > self.emax:
-            # overflowing => check which way to round
-            if self._overflow_to_infinity(rounded):
-                # overflow to infinity
-                return Float(x=x, isinf=True, ctx=self)
-            else:
-                # overflow to MAX_VAL
-                max_val = self.maxval(rounded.s)
-                return Float(x=max_val, ctx=self)
-
-        # step 5. return rounded result
-        return Float(x=rounded, ctx=self)
+        x = self._mpb_ctx.normalize(x)
+        x.ctx = self
+        return x
 
     def round(self, x):
-        match x:
-            case Float() | RealFloat():
-                xr = x
-            case int():
-                xr = RealFloat(c=x)
-            case float() | str():
-                xr = from_mpfr(x, self.pmax)
-            case Fraction():
-                if x.is_integer():
-                    xr = RealFloat(c=int(x))
-                else:
-                    xr = from_mpfr(x, self.pmax)
-            case _:
-                raise TypeError(f'not valid argument x={x}')
-
-        return self._round_float(xr)
+        return self._mpb_ctx.round(x)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        raise NotImplementedError
+        return self._mpb_ctx.to_ordinal(x, infval=infval)
 
     def from_ordinal(self, x: int, infval = False):
-        raise NotImplementedError
+        return self._mpb_ctx.from_ordinal(x, infval=infval)
 
     def minval(self, s: bool = False):
-        return Float(s=s, c=1, exp=self.expmin, ctx=self)
+        return self._mpb_ctx.minval(s)
 
     def maxval(self, s: bool = False):
-        c = 1 << self.pmax
-        return Float(s=s, c=c, exp=self.expmax, ctx=self)
+        return self._mpb_ctx.maxval(s)
 
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):

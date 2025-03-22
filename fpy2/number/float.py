@@ -245,7 +245,7 @@ class Float:
         """Returns the real part of this number."""
         if self.is_nar():
             raise ValueError('cannot convert infinity or NaN to real')
-        return self._real
+        return RealFloat(x=self._real)
 
     def normalize(self) -> 'Float':
         """
