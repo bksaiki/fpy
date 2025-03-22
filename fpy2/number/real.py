@@ -8,7 +8,6 @@ from .round import RoundingMode, RoundingDirection
 from ..utils import bitmask, default_repr, partial_ord, Ordering
 
 @default_repr
-@partial_ord
 class RealFloat:
     """
     The basic floating-point number.
@@ -137,6 +136,36 @@ class RealFloat:
             self.interval_closed = x.interval_closed
         else:
             self.interval_closed = type(self).interval_closed
+
+    def __eq__(self, other):
+        if not isinstance(other, RealFloat):
+            return False
+        ord = self.compare(other)
+        return ord is not None and ord == Ordering.EQUAL
+
+    def __lt__(self, other):
+        if not isinstance(RealFloat):
+            raise TypeError(f'\'<\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
+        ord = self.compare(other)
+        return ord is not None and ord == Ordering.LESS
+
+    def __le__(self, other):
+        if not isinstance(RealFloat):
+            raise TypeError(f'\'<=\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
+        ord = self.compare(other)
+        return ord is not None and ord != Ordering.GREATER
+
+    def __gt__(self, other):
+        if not isinstance(RealFloat):
+            raise TypeError(f'\'>\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
+        ord = self.compare(other)
+        return ord is not None and ord == Ordering.GREATER
+
+    def __ge__(self, other):
+        if not isinstance(RealFloat):
+            raise TypeError(f'\'>=\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
+        ord = self.compare(other)
+        return ord is not None and ord != Ordering.LESS
 
     @property
     def base(self):

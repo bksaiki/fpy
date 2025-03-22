@@ -11,7 +11,6 @@ from ..utils import default_repr, Ordering, partial_ord, rcomparable
 
 @rcomparable(RealFloat)
 @default_repr
-@partial_ord
 class Float:
     """
     The basic floating-point number extended with infinities and NaN.
@@ -115,6 +114,26 @@ class Float:
             interval_down=interval_down,
             interval_closed=interval_closed
         )
+
+    def __eq__(self, other):
+        ord = self.compare(other)
+        return ord is not None and ord == Ordering.EQUAL
+
+    def __lt__(self, other):
+        ord = self.compare(other)
+        return ord is not None and ord == Ordering.LESS
+
+    def __le__(self, other):
+        ord = self.compare(other)
+        return ord is not None and ord != Ordering.GREATER
+
+    def __gt__(self, other):
+        ord = self.compare(other)
+        return ord is not None and ord == Ordering.GREATER
+
+    def __ge__(self, other):
+        ord = self.compare(other)
+        return ord is not None and ord != Ordering.LESS
 
     @property
     def base(self):
