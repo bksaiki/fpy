@@ -10,6 +10,7 @@ from ..utils import default_repr, bitmask
 
 from .context import OrdinalContext
 from .float import Float
+from .mp import MPContext
 from .real import RealFloat
 from .round import RoundingMode
 from .utils import from_mpfr
@@ -35,6 +36,9 @@ class MPSContext(OrdinalContext):
     emin: int
     """minimum (normalized exponent)"""
 
+    _mp_ctx: MPContext
+    """this context without subnormalization"""
+
     rm: RoundingMode
     """rounding mode"""
 
@@ -51,6 +55,7 @@ class MPSContext(OrdinalContext):
         self.pmax = pmax
         self.emin = emin
         self.rm = rm
+        self._mp_ctx = MPContext(pmax, rm)
 
     @property
     def expmin(self):
@@ -68,18 +73,12 @@ class MPSContext(OrdinalContext):
         if not isinstance(x, Float):
             raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
 
-        if x.is_nar():
-            # special values are valid
-            return True
-        elif x.exp < self.expmin:
-            # rough check on out of range values (even for zero)
+        if not self._mp_ctx.is_representable():
+            # not representable even without subnormalization
             return False
-        elif x.is_zero():
-            # shortcut for exact zero
+        elif not x.is_nonzero():
+            # NaN, Inf, 0
             return True
-        elif x.p > self.pmax:
-            # check on precision
-            return False
         elif x.s:
             # tight check (negative values)
             return x <= self.minval(True)

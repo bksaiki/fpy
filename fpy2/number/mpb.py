@@ -135,6 +135,9 @@ class MPBContext(SizedContext):
         if not self._mps_ctx.is_representable(x):
             # not representable even without a maximum value
             return False
+        elif not x.is_nonzero():
+            # NaN, Inf, 0
+            return True
         elif x.s:
             # check bounded (negative values)
             return self.maxval(True) <= x
