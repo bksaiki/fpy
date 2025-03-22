@@ -10,7 +10,6 @@ from .context import Context
 from ..utils import default_repr, Ordering, rcomparable
 
 @rcomparable(RealFloat)
-@default_repr
 class Float:
     """
     The basic floating-point number extended with infinities and NaN.
@@ -50,7 +49,7 @@ class Float:
     ctx: Optional[Context] = None
     """rounding context during construction"""
 
-    real: RealFloat
+    _real: RealFloat
     """the real number (if it is real)"""
 
     def __init__(
@@ -99,11 +98,11 @@ class Float:
         if isinstance(x, RealFloat):
             real = x
         elif isinstance(x, Float):
-            real = x.real
+            real = x._real
         else:
             real = None
 
-        self.real = RealFloat(
+        self._real = RealFloat(
             s=s,
             exp=exp,
             c=c,
@@ -113,6 +112,20 @@ class Float:
             interval_size=interval_size,
             interval_down=interval_down,
             interval_closed=interval_closed
+        )
+
+    def __repr__(self):
+        return (f'{self.__class__.__name__}('
+            + 's=' + repr(self._real.s)
+            + ', exp=' + repr(self._real.exp)
+            + ', c=' + repr(self._real.c)
+            + ', isinf=' + repr(self.isinf)
+            + ', isnan=' + repr(self.isnan)
+            + ', interval_size=' + repr(self._real.interval_size)
+            + ', interval_down=' + repr(self._real.interval_size)
+            + ', interval_closed=' + repr(self._real.interval_closed)
+            + ', ctx=' + repr(self.ctx)
+            + ')'
         )
 
     def __eq__(self, other):
@@ -143,24 +156,24 @@ class Float:
     @property
     def s(self) -> bool:
         """Is the sign negative?"""
-        return self.real.s
+        return self._real.s
 
     @property
     def exp(self) -> int:
         """Absolute position of the LSB."""
-        return self.real.exp
+        return self._real.exp
 
     @property
     def c(self) -> int:
         """Integer significand."""
-        return self.real.c
+        return self._real.c
 
     @property
     def p(self):
         """Minimum number of binary digits required to represent this number."""
         if self.is_nar():
             raise ValueError('cannot compute precision of infinity or NaN')
-        return self.real.p
+        return self._real.p
 
     @property
     def e(self) -> int:
@@ -175,7 +188,7 @@ class Float:
         """
         if self.is_nar():
             raise ValueError('cannot compute exponent of infinity or NaN')
-        return self.real.e
+        return self._real.e
 
     @property
     def n(self) -> int:
@@ -185,45 +198,45 @@ class Float:
         """
         if self.is_nar():
             raise ValueError('cannot compute exponent of infinity or NaN')
-        return self.real.n
+        return self._real.n
 
     @property
     def m(self) -> int:
         """Significand of this number."""
         if self.is_nar():
             raise ValueError('cannot compute significand of infinity or NaN')
-        return self.real.m
+        return self._real.m
 
     @property
     def interval_size(self) -> int | None:
         """Rounding envelope: size relative to `2**exp`."""
-        return self.real.interval_size
+        return self._real.interval_size
 
     @property
     def interval_down(self) -> bool | None:
         """Rounding envelope: extends below the value."""
-        return self.real.interval_down
+        return self._real.interval_down
 
     @property
     def inexact(self) -> bool:
         """Return whether this number is inexact."""
-        return self.real.inexact
+        return self._real.inexact
 
     def is_zero(self) -> bool:
         """Returns whether this value represents zero."""
-        return not self.is_nar() and self.real.is_zero()
+        return not self.is_nar() and self._real.is_zero()
 
     def is_positive(self) -> bool:
         """Returns whether this value is positive."""
-        return not self.is_nar() and self.real.is_positive()
+        return not self.is_nar() and self._real.is_positive()
 
     def is_negative(self) -> bool:
         """Returns whether this value is negative."""
-        return not self.is_nar() and self.real.is_negative()
+        return not self.is_nar() and self._real.is_negative()
 
     def is_integer(self) -> bool:
         """Returns whether this value is an integer."""
-        return not self.is_nar() and self.real.is_integer()
+        return not self.is_nar() and self._real.is_integer()
 
     def is_finite(self) -> bool:
         """Returns whether this value is finite."""
@@ -264,7 +277,7 @@ class Float:
         """Returns the real part of this number."""
         if self.is_nar():
             raise ValueError('cannot convert infinity or NaN to real')
-        return RealFloat(x=self.real)
+        return RealFloat(x=self._real)
 
     def normalize(self) -> 'Float':
         """
@@ -289,7 +302,7 @@ class Float:
                 else:
                     return Ordering.GREATER
             else:
-                return self.real.compare(other)
+                return self._real.compare(other)
         elif isinstance(other, Float):
             if self.isnan or other.isnan:
                 return None
@@ -306,6 +319,6 @@ class Float:
                 else:
                     return Ordering.LESS
             else:
-                return self.real.compare(other.real)
+                return self._real.compare(other._real)
         else:
             raise TypeError(f'expected Float or RealFloat, got {type(other)}')

@@ -86,7 +86,7 @@ class MPContext(Context):
             return Float(c=0, exp=0, s=x.s, ctx=self)
         else:
             # non-zero
-            xr = x.real.normalize(self.pmax, None)
+            xr = x._real.normalize(self.pmax, None)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
     def _round_float(self, x: RealFloat | Float):
@@ -98,7 +98,7 @@ class MPContext(Context):
             elif x.isinf:
                 return Float(s=x.s, isinf=True, ctx=self)
             else:
-                x = x.real
+                x = x._real
 
         # step 2. shortcut for exact zero values
         if x.is_zero():

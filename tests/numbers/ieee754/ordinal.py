@@ -19,7 +19,7 @@ class ToOrdinalTestCase(unittest.TestCase):
             x = Float(s, exp, c, ctx=fp64)
             assert fp64.is_representable(x)
             xs.append(x)
-        # run encoding
+        # run ordinal conversion
         for x in xs:
             i = fp64.to_ordinal(x)
             self.assertIsInstance(i, int, f'x={x}, i={i}')
@@ -59,9 +59,29 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
             x = Float(s, exp, c, ctx=fp64)
             assert fp64.is_representable(x)
             xs.append(x)
-        # run encoding
+        # run ordinal conversion
         for x in xs:
             i = fp64.to_ordinal(x)
             y = fp64.from_ordinal(i)
-            self.assertIsInstance(y, Float, f'i={i}, x={x}')
-            self.assertEqual(x, y, f'x={x}, y={y}')
+            self.assertIsInstance(y, Float, f'x={x}, i={i}, y={y}')
+            self.assertEqual(x, y, f'x={x}, i={i}, y={y}')
+
+    def test_small(self, es_max: int = 6, nbits_max: int = 8):
+        # iterate over possible contexts
+        for es in range(2, es_max+1):
+            for nbits in range(es + 2, nbits_max+1):
+                ctx = IEEEContext(es, nbits, RM.RNE)
+                # for ctx, encode all possible values
+                for s in (True, False):
+                    for exp in range(ctx.expmin, ctx.expmax):
+                        for c in range(0, 1 << ctx.pmax - 1):
+                            x = Float(s, exp, c, ctx=ctx)
+                            assert ctx.is_representable(x)
+
+                            # run ordinal conversion
+                            i = ctx.to_ordinal(x)
+                            y = ctx.from_ordinal(i)
+                            self.assertIsInstance(y, Float, f'x={x}, i={i}, y={y}')
+                            self.assertEqual(x, y, f'x={x}, i={i}, y={y}')
+
+
