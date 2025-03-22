@@ -2,18 +2,29 @@
 Decorators implementing some default behavior.
 """
 
+from typing import Optional
+
 from .ordering import Ordering
 
 ###########################################################
 # Default __repr__ decorator
 
-def __default_repr__(x: object):
-    return f'{x.__class__.__name__}({", ".join(f"{k}={v!r}" for k, v in x.__dict__.items())})'
+def _make_default_repr(ignore: list[str]):
+    def __default_repr__(x: object):
+        cls_name = x.__class__.__name__
+        items = ', '.join(f'{k}={v!r}' for k, v in x.__dict__.items() if k not in ignore)
+        return f'{cls_name}({items})'
+    return __default_repr__
 
-def default_repr(cls):
+def default_repr(cls = None, *, ignore: Optional[list[str]] = None):
     """Default __repr__ implementation for a class."""
-    cls.__repr__ = __default_repr__
-    return cls
+    if cls is None:
+        return lambda cls: default_repr(cls, ignore=ignore)
+    else:
+        if ignore is None:
+            ignore = []
+        cls.__repr__ = _make_default_repr(ignore)
+        return cls
 
 ###########################################################
 # Decorators
