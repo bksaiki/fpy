@@ -120,7 +120,7 @@ class MPSContext(OrdinalContext):
             return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
         else:
             # non-zero
-            xr = x.as_real().normalize(self.pmax, self.nmin)
+            xr = x._real.normalize(self.pmax, self.nmin)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
     def _round_float(self, x: RealFloat | Float):
@@ -132,7 +132,7 @@ class MPSContext(OrdinalContext):
             elif x.isinf:
                 return Float(s=x.s, isinf=True, ctx=self)
             else:
-                x = x.as_real()
+                x = x._real
 
         # step 2. shortcut for exact zero values
         if x.is_zero():

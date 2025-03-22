@@ -173,22 +173,15 @@ class IEEEContext(EncodableContext):
             # zero
             ebits = 0
             mbits = 0
+        elif x.e <= self.emin:
+            # subnormal
+            ebits = 0
+            mbits = x.c << (x.exp - self.expmin)  # normalize so that exp=self.expmin
         else:
-            # non-zero number
-
-            # canonicalize number if necessary
-            if not x.is_canonical():
-                x = x.normalize()
-
-            # case split by class
-            if x.e <= self.emin:
-                # subnormal number
-                ebits = 0
-                mbits = x.c
-            else:
-                # normal number
-                ebits = x.e - self.emin + 1
-                mbits = x.c & bitmask(self.pmax - 1)
+            # normal
+            c = x.c << (self.pmax - x.p) # normalize so that p=self.pmax
+            ebits = x.e - self.emin + 1
+            mbits = c & bitmask(self.pmax - 1)
 
         return (sbit << (self.nbits - 1)) | (ebits << self.m) | mbits
 
