@@ -3,16 +3,13 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
-from fractions import Fraction
-
 from ..utils import default_repr, bitmask
 
 from .context import EncodableContext
 from .float import Float
 from .mpb import MPBContext
 from .real import RealFloat
-from .round import RoundingMode, RoundingDirection
-from .utils import from_mpfr
+from .round import RoundingMode
 
 def _ieee_to_mpb(es: int, nbits: int, rm: RoundingMode):
     """Converts IEEEContext parameters to MPBContext parameters"""
@@ -21,14 +18,13 @@ def _ieee_to_mpb(es: int, nbits: int, rm: RoundingMode):
     emax = (1 << (es - 1)) - 1
     emin = 1 - emax
     expmax = emax - p + 1
-    expmin = emin - p + 1
     # +MAX_VAL
     maxval = RealFloat(c=bitmask(p), exp=expmax)
     # MPBContext
     return MPBContext(p, emin, maxval, rm)
 
 
-@default_repr(ignore=['_mpb_ctx'])
+@default_repr
 class IEEEContext(EncodableContext):
     """
     Rounding context for IEEE 754 floating-point values.

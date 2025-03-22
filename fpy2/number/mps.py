@@ -15,7 +15,7 @@ from .real import RealFloat
 from .round import RoundingMode
 from .utils import from_mpfr
 
-@default_repr(ignore=['_mp_ctx'])
+@default_repr
 class MPSContext(OrdinalContext):
     """
     Rounding context for multi-precision floating-point numbers with

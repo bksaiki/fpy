@@ -7,7 +7,7 @@ and bounded. Hence, "MP-B."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr, bitmask
+from ..utils import default_repr
 
 from .context import SizedContext
 from .float import Float
@@ -17,7 +17,7 @@ from .round import RoundingMode, RoundingDirection
 from .utils import from_mpfr
 
 
-@default_repr(ignore=['_mps_ctx', '_pos_maxval_ord', '_neg_maxval_ord'])
+@default_repr
 class MPBContext(SizedContext):
     """
     Rounding context for multi-precision floating-point numbers with

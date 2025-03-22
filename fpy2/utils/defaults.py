@@ -9,22 +9,15 @@ from .ordering import Ordering
 ###########################################################
 # Default __repr__ decorator
 
-def _make_default_repr(ignore: list[str]):
-    def __default_repr__(x: object):
-        cls_name = x.__class__.__name__
-        items = ', '.join(f'{k}={v!r}' for k, v in x.__dict__.items() if k not in ignore)
-        return f'{cls_name}({items})'
-    return __default_repr__
+def __default_repr__(x: object):
+    cls_name = x.__class__.__name__
+    items = ', '.join(f'{k}={v!r}' for k, v in x.__dict__.items() if not k.startswith('_'))
+    return f'{cls_name}({items})'
 
-def default_repr(cls = None, *, ignore: Optional[list[str]] = None):
+def default_repr(cls):
     """Default __repr__ implementation for a class."""
-    if cls is None:
-        return lambda cls: default_repr(cls, ignore=ignore)
-    else:
-        if ignore is None:
-            ignore = []
-        cls.__repr__ = _make_default_repr(ignore)
-        return cls
+    cls.__repr__ = __default_repr__
+    return cls
 
 ###########################################################
 # Decorators
