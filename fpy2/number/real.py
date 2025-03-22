@@ -186,6 +186,10 @@ class RealFloat:
         """Returns whether this value represents zero."""
         return self.c == 0
 
+    def is_nonzero(self) -> bool:
+        """Returns whether this value does not represent zero."""
+        return self.c != 0
+
     def is_positive(self) -> bool:
         """Returns whether this value is positive."""
         return self.c != 0 and not self.s
@@ -246,7 +250,7 @@ class RealFloat:
 
         # special case: 0 has no precision
         if self.is_zero():
-            return self
+            return RealFloat()
 
         # compute maximum shift and resulting exponent
         shift = p - self.p
@@ -378,7 +382,7 @@ class RealFloat:
         )
 
 
-    def _next_float(self):
+    def next_away(self):
         """
         Computes the next number (with the same precision),
         away from zero.
@@ -393,7 +397,7 @@ class RealFloat:
 
         return RealFloat(s=self.s, c=c, exp=exp)
 
-    def _prev_float(self):
+    def next_towards(self):
         """
         Computes the previous number (with the same precision),
         towards zero.
@@ -408,25 +412,25 @@ class RealFloat:
 
         return RealFloat(s=self.s, c=c, exp=exp)
 
-    def next_float(self):
+    def next_up(self):
         """
         Computes the next number (with the same precison),
         towards positive infinity.
         """
         if self.s:
-            return self._prev_float()
+            return self.next_towards()
         else:   
-            return self._next_float()
+            return self.next_away()
 
-    def prev_float(self):
+    def next_down(self):
         """
         Computes the previous number (with the same precision),
         towards negative infinity.
         """
         if self.s:
-            return self._next_float()
+            return self.next_away()
         else:
-            return self._prev_float()
+            return self.next_towards()
 
 
     def _round_params(self, max_p: Optional[int] = None, min_n: Optional[int] = None):

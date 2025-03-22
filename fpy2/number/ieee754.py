@@ -115,9 +115,9 @@ class IEEEContext(EncodableContext):
         """Returns if `x` is a NaN number."""
         return x.isnan
 
-    def is_representable(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
+    def is_representable(self, x: RealFloat | Float) -> bool:
+        if not isinstance(x, RealFloat | Float):
+            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_ctx.is_representable(x)
 
     def is_canonical(self, x: Float) -> bool:

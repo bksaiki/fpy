@@ -218,7 +218,7 @@ class Float:
         """Return whether this number is infinity or NaN."""
         return self.isinf or self.isnan
 
-    def is_valid(self) -> bool:
+    def is_representable(self) -> bool:
         """
         Checks if this number is representable under
         the rounding context during its construction.
@@ -254,7 +254,7 @@ class Float:
         Raises a `ValueError` when `self.ctx is None`.
         """
         if self.ctx is None:
-            raise ValueError(f'Float values without a context cannot be normalized: self={self}')
+            raise ValueError(f'cannot normalize without a context: self={self}')
         return self.ctx.normalize(self)
 
     def compare(self, other: Self | RealFloat) -> Optional[Ordering]:

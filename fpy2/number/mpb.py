@@ -128,9 +128,9 @@ class MPBContext(SizedContext):
         """
         return self._mps_ctx.nmin
 
-    def is_representable(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'RealFloat\', got \'{type(x)}\' for x={x}')
+    def is_representable(self, x: RealFloat | Float) -> bool:
+        if not isinstance(x, RealFloat | Float):
+            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
         if not self._mps_ctx.is_representable(x):
             # not representable even without a maximum value

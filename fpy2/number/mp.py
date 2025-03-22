@@ -40,12 +40,15 @@ class MPContext(Context):
         self.pmax = pmax
         self.rm = rm
 
-    def is_representable(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+    def is_representable(self, x: RealFloat | Float) -> bool:
+        if not isinstance(x, RealFloat | Float):
+            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split on class
-        if x.is_nar() or x.is_zero():
+        if isinstance(x, Float) and x.is_nar():
+            # special value
+            return True
+        elif x.is_zero():
             # special values and zeros are valid
             return True
         else:

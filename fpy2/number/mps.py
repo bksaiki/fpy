@@ -69,9 +69,9 @@ class MPSContext(OrdinalContext):
         """
         return self.expmin - 1
 
-    def is_representable(self, x):
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
+    def is_representable(self, x: RealFloat | Float) -> bool:
+        if not isinstance(x, RealFloat | Float):
+            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
         if not self._mp_ctx.is_representable(x):
             # not representable even without subnormalization
