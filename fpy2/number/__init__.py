@@ -6,6 +6,7 @@ from .real import RealFloat
 from .context import Context, OrdinalContext, SizedContext, EncodableContext
 from .ieee754 import IEEEContext
 from .mp import MPContext
+from .mpb import MPBContext
 from .mps import MPSContext
 
 # Rounding

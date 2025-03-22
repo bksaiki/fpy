@@ -158,7 +158,8 @@ class IEEEContext(EncodableContext):
             return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
         else:
             # non-zero
-            return Float(x=x.as_real().normalize(self.pmax, self.nmin), ctx=self)
+            xr = x.as_real().normalize(self.pmax, self.nmin)
+            return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
     def _overflow_to_infinity(self, x: RealFloat):
         """Should overflows round to infinity (rather than MAX_VAL)?"""
@@ -237,7 +238,7 @@ class IEEEContext(EncodableContext):
 
     def from_ordinal(self, x: int, infval = False):
         raise NotImplementedError
-    
+
     def minval(self, s: bool = False):
         return Float(s=s, c=1, exp=self.expmin, ctx=self)
 
