@@ -37,7 +37,7 @@ class RoundTestCase(unittest.TestCase):
         random.seed(1)
         xs: list[str] = []
         for _ in range(num_values):
-            s = random.choice([False, True])
+            s = random.choice(['-', '+'])
             c = ''.join(random.choices('0123456789', k=mantissa_len))
             e = random.randint(-320, 308)
             x = f'{s}1.{c}e{e}'
