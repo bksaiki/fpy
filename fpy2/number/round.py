@@ -43,15 +43,15 @@ class RoundingMode(IntEnum):
             case (_, RoundingMode.RNA):
                 return True, RoundingDirection.RAZ
             case (True, RoundingMode.RTP):
-                return True, RoundingDirection.RTZ
-            case (False, RoundingMode.RTP):
                 return False, RoundingDirection.RTZ
+            case (False, RoundingMode.RTP):
+                return False, RoundingDirection.RAZ
             case (True, RoundingMode.RTN):
                 return False, RoundingDirection.RAZ
             case (False, RoundingMode.RTN):
-                return True, RoundingDirection.RAZ
+                return False, RoundingDirection.RTZ
             case (_, RoundingMode.RTZ):
-                return True, RoundingDirection.RTZ
+                return False, RoundingDirection.RTZ
             case (_, RoundingMode.RAZ):
                 return False, RoundingDirection.RAZ
             case (_, RoundingMode.RTO):

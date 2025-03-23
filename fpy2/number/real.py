@@ -144,25 +144,25 @@ class RealFloat:
         return ord is not None and ord == Ordering.EQUAL
 
     def __lt__(self, other):
-        if not isinstance(RealFloat):
+        if not isinstance(other, RealFloat):
             raise TypeError(f'\'<\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
         ord = self.compare(other)
         return ord is not None and ord == Ordering.LESS
 
     def __le__(self, other):
-        if not isinstance(RealFloat):
+        if not isinstance(other, RealFloat):
             raise TypeError(f'\'<=\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
         ord = self.compare(other)
         return ord is not None and ord != Ordering.GREATER
 
     def __gt__(self, other):
-        if not isinstance(RealFloat):
+        if not isinstance(other, RealFloat):
             raise TypeError(f'\'>\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
         ord = self.compare(other)
         return ord is not None and ord == Ordering.GREATER
 
     def __ge__(self, other):
-        if not isinstance(RealFloat):
+        if not isinstance(other, RealFloat):
             raise TypeError(f'\'>=\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
         ord = self.compare(other)
         return ord is not None and ord != Ordering.LESS
@@ -618,7 +618,7 @@ class RealFloat:
             lower_bits = False
         elif lost.e == n:
             # the MSB of lo is at position n
-            half_bit = (lost.c & bitmask(lost.p - 1)) != 0
+            half_bit = (lost.c >> (lost.p - 1)) != 0
             lower_bits = (lost.c & bitmask(lost.p - 1)) != 0
         else:
             # the MSB of lo is below position n

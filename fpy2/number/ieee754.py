@@ -149,7 +149,9 @@ class IEEEContext(EncodableContext):
         return x
 
     def round(self, x):
-        return self._mpb_ctx.round(x)
+        rounded = self._mpb_ctx.round(x)
+        rounded.ctx = self
+        return rounded
 
     def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
