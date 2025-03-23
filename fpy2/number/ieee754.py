@@ -143,6 +143,9 @@ class IEEEContext(EncodableContext):
     def from_ordinal(self, x: int, infval = False):
         return self._mpb_ctx.from_ordinal(x, infval=infval)
 
+    def zero(self, s: bool = False):
+        return Float(s=s, ctx=self)
+
     def minval(self, s: bool = False):
         minval = self._mpb_ctx.minval(s)
         minval.ctx = self

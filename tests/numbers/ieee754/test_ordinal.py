@@ -3,6 +3,12 @@ import random
 
 from fpy2.number import Float, IEEEContext, RM
 
+def _maxval_ordinal(ctx: IEEEContext):
+    # [emin, emax] + subnormal
+    num_binades = ctx.emax - ctx.emin + 2
+    return (num_binades << (ctx.pmax - 1)) - 1
+
+
 class ToOrdinalTestCase(unittest.TestCase):
     """Testing `IEEEContext.to_ordinal()`"""
 
@@ -42,6 +48,44 @@ class ToOrdinalTestCase(unittest.TestCase):
                             self.assertIsInstance(i, int, f'x={x}, i={i}')
                             self.assertGreaterEqual(i, -(1 << ctx.nbits - 1), f'x={x}, i={i}')
                             self.assertLess(i, 1 << ctx.nbits - 1, f'x={x}, i={i}')
+
+    def test_values_native(self):
+        # rounding context for native Python floats
+        fp64 = IEEEContext(11, 64, RM.RNE)
+
+        tests = [
+            (fp64.zero(), 0),
+            (fp64.zero(True), 0),
+            (fp64.minval(), 1),
+            (fp64.minval(True), -1),
+            (fp64.maxval(), _maxval_ordinal(fp64)),
+            (fp64.maxval(True), -_maxval_ordinal(fp64))
+        ]
+
+        for x, expect in tests:
+            i = fp64.to_ordinal(x)
+            self.assertEqual(i, expect, f'x={x}, i={i}, expect={expect}')
+
+    def test_values_small(self, es_max: int = 6, nbits_max: int = 8):
+        # rounding context for native Python floats
+        # iterate over possible contexts
+        for es in range(2, es_max+1):
+            for nbits in range(es + 2, nbits_max+1):
+                ctx = IEEEContext(es, nbits, RM.RNE)
+
+                tests = [
+                    (ctx.zero(), 0),
+                    (ctx.zero(True), 0),
+                    (ctx.minval(), 1),
+                    (ctx.minval(True), -1),
+                    (ctx.maxval(), _maxval_ordinal(ctx)),
+                    (ctx.maxval(True), -_maxval_ordinal(ctx))
+                ]
+
+                for x, expect in tests:
+                    i = ctx.to_ordinal(x)
+                    self.assertEqual(i, expect, f'x={x}, i={i}, expect={expect}')
+
 
 class OrdinalRoundTripTestCase(unittest.TestCase):
     """Ensure `IEEEContext.to_ordinal()` and `IEEEContext.from_ordinal()` roundtrips."""
