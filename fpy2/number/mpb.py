@@ -225,7 +225,7 @@ class MPBContext(SizedContext):
             case float() | str():
                 xr = from_mpfr(x, self.pmax)
             case Fraction():
-                if x.is_integer():
+                if x.denominator == 1:
                     xr = RealFloat(c=int(x))
                 else:
                     xr = from_mpfr(x, self.pmax)
