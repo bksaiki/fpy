@@ -27,7 +27,7 @@ def _float_as_real(x: float):
         exp = int(e_str) - 4 * len(c_str)
         return Float(s=s, exp=exp, c=c)
 
-class DecodeTestCase(unittest.TestCase):
+class RoundTestCase(unittest.TestCase):
     """Testing `IEEEContext.round()`"""
 
     def test_native(self, num_values: int = 10_000, mantissa_len=128):
@@ -37,7 +37,7 @@ class DecodeTestCase(unittest.TestCase):
         random.seed(1)
         xs: list[str] = []
         for _ in range(num_values):
-            s = '-' if random.randint(0, 1) == 0 else ''
+            s = random.choice([False, True])
             c = ''.join(random.choices('0123456789', k=mantissa_len))
             e = random.randint(-320, 308)
             x = f'{s}1.{c}e{e}'

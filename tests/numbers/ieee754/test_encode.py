@@ -37,7 +37,7 @@ class EncodeTestCase(unittest.TestCase):
         random.seed(1)
         xs: list[Float] = []
         for _ in range(num_encodings):
-            s = True if random.randint(0, 1) == 0 else False
+            s = random.choice([False, True])
             exp = random.randint(fp64.expmin, fp64.expmax)
             c = random.randint(0, (1 << fp64.pmax) - 1)
             x = Float(s, exp, c, ctx=fp64)
