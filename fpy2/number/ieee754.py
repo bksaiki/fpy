@@ -3,6 +3,8 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
+from enum import IntEnum
+
 from ..utils import default_repr, bitmask
 
 from .context import EncodableContext
@@ -22,6 +24,20 @@ def _ieee_to_mpb(es: int, nbits: int, rm: RoundingMode):
     maxval = RealFloat(c=bitmask(p), exp=expmax)
     # MPBContext
     return MPBContext(p, emin, maxval, rm)
+
+class IEEEClass(IntEnum):
+    """10 group classification of IEEE 754 values """
+    SIGNALING_NAN = 0
+    QUIET_NAN = 1
+    NEGATIVE_INFINITY = 2
+    NEGATIVE_NORMAL = 3
+    NEGATIVE_SUBNORMAL = 4
+    NEGATIVE_ZERO = 5
+    POSITIVE_ZERO = 6
+    POSITIVE_SUBNORMAL = 7
+    POSITIVE_NORMAL = 8
+    POSITIVE_INFINITY = 9
+
 
 
 @default_repr
@@ -222,3 +238,31 @@ class IEEEContext(EncodableContext):
             exp = self.expmin + (ebits - 1)
             return Float(s=s, c=c, exp=exp, ctx=self)
 
+
+    def classify(self, x: Float) -> IEEEClass:
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+
+        if x.isnan:
+            # all of our NaNs are quiet
+            return IEEEClass.QUIET_NAN
+        elif x.isinf:
+            if x.s:
+                return IEEEClass.NEGATIVE_INFINITY
+            else:
+                return IEEEClass.POSITIVE_INFINITY
+        elif x.c == 0:
+            if x.s:
+                return IEEEClass.NEGATIVE_ZERO
+            else:
+                return IEEEClass.POSITIVE_ZERO
+        elif x.e <= self.emin:
+            if x.s:
+                return IEEEClass.NEGATIVE_SUBNORMAL
+            else:
+                return IEEEClass.POSITIVE_SUBNORMAL
+        else:
+            if x.s:
+                return IEEEClass.NEGATIVE_NORMAL
+            else:
+                return IEEEClass.POSITIVE_NORMAL
