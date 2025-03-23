@@ -39,7 +39,6 @@ class IEEEClass(IntEnum):
     POSITIVE_INFINITY = 9
 
 
-
 @default_repr
 class IEEEContext(EncodableContext):
     """
