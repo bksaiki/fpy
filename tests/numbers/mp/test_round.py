@@ -2,7 +2,7 @@ import gmpy2 as gmp
 import random
 import unittest
 
-from fpy2.number import RealFloat, MPContext, RM
+from fpy2 import RealFloat, MPContext, RM
 
 def _mpfr_rm(rm: RM):
     match rm:

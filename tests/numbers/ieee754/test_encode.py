@@ -1,7 +1,7 @@
 import unittest
 import random
 
-from fpy2.number import Float, IEEEContext, RM
+from fpy2 import Float, IEEEContext, RM
 
 class DecodeTestCase(unittest.TestCase):
     """Testing `IEEEContext.decode()`"""

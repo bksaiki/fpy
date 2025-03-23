@@ -3,7 +3,7 @@ import random
 import re
 import unittest
 
-from fpy2.number import Float, IEEEContext, RM
+from fpy2 import Float, IEEEContext, RM
 
 
 _FLOAT_RE = re.compile(r'([+/-]?)0x(0|1).([0-9a-f]+)p([+/-]?[0-9]+)')

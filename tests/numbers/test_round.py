@@ -1,6 +1,6 @@
 import unittest
 
-from fpy2.number import RealFloat, RM
+from fpy2 import RealFloat, RM
 
 
 class RoundTestCase(unittest.TestCase):

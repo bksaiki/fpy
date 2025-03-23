@@ -1,7 +1,7 @@
 import random
 import unittest
 
-from fpy2.number import Float, MPContext, RM
+from fpy2 import Float, MPContext, RM
 
 class NormalizeTestCase(unittest.TestCase):
     """Testing `IEEEContext.normalize()`"""

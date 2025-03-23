@@ -1,7 +1,7 @@
 import unittest
 import random
 
-from fpy2.number import Float, IEEEContext, RM
+from fpy2 import Float, IEEEContext, RM
 
 def _maxval_ordinal(ctx: IEEEContext):
     # [emin, emax] + subnormal
