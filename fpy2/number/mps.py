@@ -206,7 +206,7 @@ class MPSContext(OrdinalContext):
                 return Float(s=s, c=mord, exp=self.expmin, ctx=self)
             else:
                 # normal
-                c = 1 << self.pmax | mord
+                c = (1 << (self.pmax - 1)) | mord
                 exp = self.expmin + (eord - 1)
                 return Float(s=s, c=c, exp=exp, ctx=self)
 

@@ -79,7 +79,7 @@ jobs:
       - name: Install
         run: pip install -e .[dev]
       - name: Tests (unittest)
-        run: python3 -m unittest -v tests
+        run: python3 -m unittest -v
 
   infra:
     name: "Infrastructure Tests"
