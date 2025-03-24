@@ -14,7 +14,7 @@ from .float import Float
 from .mps import MPSContext
 from .real import RealFloat
 from .round import RoundingMode, RoundingDirection
-from .utils import from_mpfr
+from .gmp import from_mpfr
 
 
 @default_repr

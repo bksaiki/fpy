@@ -13,7 +13,7 @@ from .float import Float
 from .mp import MPContext
 from .real import RealFloat
 from .round import RoundingMode
-from .utils import from_mpfr
+from .gmp import from_mpfr
 
 @default_repr
 class MPSContext(OrdinalContext):

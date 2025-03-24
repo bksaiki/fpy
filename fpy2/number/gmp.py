@@ -1,5 +1,5 @@
 """
-This module defines utility functions.
+This module defines a nicer interface to the gmpy2 / MPFR.
 """
 
 import gmpy2 as gmp

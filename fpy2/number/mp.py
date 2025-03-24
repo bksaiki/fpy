@@ -11,7 +11,7 @@ from .context import Context
 from .float import Float
 from .real import RealFloat
 from .round import RoundingMode
-from .utils import from_mpfr
+from .gmp import from_mpfr
 
 @default_repr
 class MPContext(Context):
