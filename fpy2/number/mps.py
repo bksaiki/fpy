@@ -13,7 +13,7 @@ from .float import Float
 from .mp import MPContext
 from .real import RealFloat
 from .round import RoundingMode
-from .gmp import from_mpfr
+from .gmp import mpfr_constant
 
 @default_repr
 class MPSContext(OrdinalContext):
@@ -152,12 +152,12 @@ class MPSContext(OrdinalContext):
             case int():
                 xr = RealFloat(c=x)
             case float() | str():
-                xr = from_mpfr(x, self.pmax)
+                xr = mpfr_constant(x, self.pmax)
             case Fraction():
                 if x.denominator == 1:
                     xr = RealFloat(c=int(x))
                 else:
-                    xr = from_mpfr(x, self.pmax)
+                    xr = mpfr_constant(x, self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
