@@ -3,7 +3,7 @@ This module defines the rounding context type.
 """
 
 from abc import ABC, abstractmethod
-from typing import TypeAlias
+from typing import Optional, TypeAlias, Union
 
 from . import float as fl
 from . import real
@@ -11,7 +11,6 @@ from . import real
 # avoids circular dependency issues (useful for type checking)
 Float: TypeAlias = 'fl.Float'
 RealFloat: TypeAlias = 'real.RealFloat'
-
 
 class Context(ABC):
     """
@@ -32,7 +31,7 @@ class Context(ABC):
     """
 
     @abstractmethod
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def is_representable(self, x: Union[Float, RealFloat]) -> bool:
         """Returns if `x` is representable under this context."""
         raise NotImplementedError('virtual method')
 
@@ -51,6 +50,18 @@ class Context(ABC):
     @abstractmethod
     def normalize(self, x: Float) -> Float:
         """Returns the canonical form of `x` under this context."""
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
+    def round_params(self) -> tuple[Optional[int], Optional[int]]:
+        """
+        Returns the rounding parameters `(max_p, min_n)` used
+        for rounding under this context. Either `max_p` or `min_n`
+        may be `None` but never both.
+
+        These parameters also determine the amount of precision for
+        intermediate round-to-odd operations (provided by MPFR / `gmpy2`).
+        """
         raise NotImplementedError('virtual method')
 
     @abstractmethod

@@ -108,6 +108,9 @@ class MPContext(Context):
         # step 3. round value based on rounding parameters
         return x.round(max_p=self.pmax, rm=self.rm)
 
+    def round_params(self):
+        return (self.pmax, None)
+
     def round(self, x) -> Float:
         match x:
             case Float() | RealFloat():

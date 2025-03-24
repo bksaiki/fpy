@@ -147,6 +147,9 @@ class IEEEContext(EncodableContext):
         x.ctx = self
         return x
 
+    def round_params(self):
+        return self._mpb_ctx.round_params()
+
     def round(self, x):
         rounded = self._mpb_ctx.round(x)
         rounded.ctx = self

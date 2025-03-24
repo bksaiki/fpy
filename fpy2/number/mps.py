@@ -123,6 +123,9 @@ class MPSContext(OrdinalContext):
             xr = x._real.normalize(self.pmax, self.nmin)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
+    def round_params(self):
+        return (self.pmax, self.nmin)
+
     def _round_float(self, x: RealFloat | Float):
         """Like `self.round()` but for only `RealFloat` and `Float` inputs"""
         # step 1. handle special values

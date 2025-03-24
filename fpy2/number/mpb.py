@@ -157,6 +157,9 @@ class MPBContext(SizedContext):
         x.ctx = self
         return x
 
+    def round_params(self):
+        return self._mps_ctx.round_params()
+
     def _is_overflowing(self, x: RealFloat) -> bool:
         """Checks if `x` is overflowing."""
         if x.s:
