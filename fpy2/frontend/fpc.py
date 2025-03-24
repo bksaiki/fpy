@@ -364,7 +364,7 @@ class _FPCore2FPy:
         self,
         iter_vars: list[NamedId],
         range_vars: list[NamedId],
-        stmts: list[Stmt],
+        stmts: list[Stmt]
     ) -> list[Stmt]:
         if len(iter_vars) == 0:
             return stmts
