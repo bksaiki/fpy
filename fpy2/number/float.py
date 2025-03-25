@@ -2,12 +2,30 @@
 This module defines the floating-point number type `Float`.
 """
 
-from typing import Optional, Self
+from typing import Callable, Optional, Self, TypeAlias
 
 from .real import RealFloat
 from .context import Context
 
 from ..utils import default_repr, Ordering, rcomparable
+
+
+_FloatCvt: TypeAlias = Callable[['Float'], float]
+
+_default_float_converter: Optional[_FloatCvt] = None
+
+def get_default_float_converter() -> _FloatCvt:
+    """Gets the default `__float__` implementation for `Float`."""
+    global _default_float_converter
+    if _default_float_converter is None:
+        raise RuntimeError('default float converter not set')
+    return _default_float_converter
+
+def set_default_float_converter(cvt: _FloatCvt):
+    """Sets the default `__float__` implementation for `Float`."""
+    global _default_float_converter
+    _default_float_converter = cvt
+
 
 @rcomparable(RealFloat)
 class Float:
@@ -147,6 +165,10 @@ class Float:
     def __ge__(self, other):
         ord = self.compare(other)
         return ord is not None and ord != Ordering.LESS
+
+    def __float__(self):
+        cvt = get_default_float_converter()
+        return cvt(self)
 
     @property
     def base(self):

@@ -68,6 +68,11 @@ class IEEEContext(EncodableContext):
         self.rm = rm
         self._mpb_ctx = _ieee_to_mpb(es, nbits, rm)
 
+    def __eq__(self, other):
+        if not isinstance(other, IEEEContext):
+            return False
+        return self.es == other.es and self.nbits == other.nbits and self.rm == other.rm
+
     @property
     def pmax(self):
         """Maximum allowable precision."""
