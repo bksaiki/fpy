@@ -365,16 +365,6 @@ def mpfr_neg(x: Float, prec: int):
     """
     return _mpfr_1ary(gmp.neg, x, prec)
 
-def mpfr_nearbyint(x: Float, prec: int):
-    """
-    Rounds `x` to the nearest integer using MPFR such that it may be
-    safely re-rounded accurately to `prec` digits of precision.
-
-    This function uses the current rounding mode to determine
-    which integer to round to in case of a tie.
-    """
-    return _mpfr_1ary(gmp.nearbyint, x, prec)
-
 def mpfr_pow(x: Float, y: Float, prec: int):
     """
     Computes `x ** y` using MPFR such that it may be safely re-rounded
