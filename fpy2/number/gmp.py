@@ -155,12 +155,12 @@ def mpfr_atan(x: Float, prec: int):
     """
     return _mpfr_1ary(gmp.atan, x, prec)
 
-def mpfr_atan2(x: Float, y: Float, prec: int):
+def mpfr_atan2(y: Float, x: Float, prec: int):
     """
-    Computes `atan2(x, y)` using MPFR such that it may be safely re-rounded
+    Computes `atan2(y, x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
-    return _mpfr_2ary(gmp.atan2, x, y, prec)
+    return _mpfr_2ary(gmp.atan2, y, x, prec)
 
 def mpfr_atanh(x: Float, prec: int):
     """
