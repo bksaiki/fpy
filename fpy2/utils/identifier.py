@@ -78,7 +78,7 @@ class SourceId(NamedId):
         return f'SourceId(\'{str(self)}\')'
 
     def __eq__(self, other):
-        if not isinstance(other, SourceId):
+        if not isinstance(other, NamedId | SourceId):
             return False
         return self.base == other.base and self.count == other.count
 
