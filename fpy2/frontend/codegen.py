@@ -259,7 +259,10 @@ class _IRCodegenInstance(AstVisitor):
         # translate body
         e = self._visit_block(func.body, ctx)
 
-        return ir.FunctionDef(func.name, args, e, ir.AnyType(), props)
+        # return type
+        ty = ir.AnyType()
+
+        return ir.FunctionDef(func.name, args, e, ty, func.ctx, func.free_vars)
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: None) -> ir.Expr:

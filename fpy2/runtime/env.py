@@ -19,5 +19,13 @@ class ForeignEnv:
         if key in self.globals:
             return self.globals[key]
         if key in self.nonlocals:
-            return self.nonlocals[key]
+            return self.nonlocals[key].cell_contents
         raise KeyError(key)
+
+    def get(self, key, default=None) -> Any:
+        """Like `get()` for `dict` instances."""
+        if key in self.globals:
+            return self.globals[key]
+        if key in self.nonlocals:
+            return self.nonlocals[key].cell_contents
+        return default

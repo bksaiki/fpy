@@ -615,7 +615,7 @@ class FunctionDef(Ast):
     args: list[Argument]
     body: Block
     ctx: dict[str, Any]
-    fvs: set[str]
+    free_vars: set[NamedId]
 
     def __init__(
         self,
@@ -629,7 +629,7 @@ class FunctionDef(Ast):
         self.args = list(args)
         self.body = body
         self.ctx = {}
-        self.fvs = set()
+        self.free_vars = set()
 
 class BaseFormatter:
     """Abstract base class for AST formatters."""

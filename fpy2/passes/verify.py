@@ -195,6 +195,9 @@ class _VerifyPassInstance(DefaultVisitor):
         return ctx
 
     def _visit_function(self, func: FunctionDef, ctx: _CtxType):
+        for var in func.free_vars:
+            self.types[var] = AnyType()
+            ctx.add(var)
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 self.types[arg.name] = AnyType()

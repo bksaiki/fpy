@@ -564,7 +564,7 @@ class DefaultTransformVisitor(TransformVisitor):
 
     def _visit_function(self, func: FunctionDef, ctx: Any):
         body, _ = self._visit_block(func.body, ctx)
-        return FunctionDef(func.name, func.args, body, func.ty, func.ctx)
+        return FunctionDef(func.name, func.args, body, func.ty, func.ctx, func.free_vars)
 
     #######################################################
     # Dynamic dispatch

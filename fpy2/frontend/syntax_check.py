@@ -253,6 +253,8 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_function(self, func: FunctionDef, ctx: _Ctx):
         env, _ = ctx
+        for fv in func.free_vars:
+            env = env.extend(fv)
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 env = env.extend(arg.name)

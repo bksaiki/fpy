@@ -16,13 +16,13 @@ from typing import (
 
 from .codegen import IRCodegen
 from .definition import DefinitionAnalysis
-from .fpyast import FunctionDef
 from .live_vars import LiveVarAnalysis
 from .parser import Parser
 from .syntax_check import SyntaxCheck
 
 from ..passes import SSA, VerifyIR
 from ..runtime import Function, ForeignEnv
+from ..utils import NamedId
 
 P = ParamSpec('P')
 R = TypeVar('R')
@@ -92,7 +92,7 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
 
     # add context information
     ast.ctx = { **kwargs, **props }
-    ast.fvs = fvs
+    ast.free_vars = [NamedId(v) for v in fvs]
 
     # analyze and lower to the IR
     SyntaxCheck.analyze(ast)
