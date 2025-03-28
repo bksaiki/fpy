@@ -2,13 +2,16 @@
 This module defines the basic floating-point number type `RealFloat`.
 """
 
+import math
+import numbers
+
 from typing import Optional, Self
 
 from .round import RoundingMode, RoundingDirection
 from ..utils import bitmask, default_repr, Ordering
 
 @default_repr
-class RealFloat:
+class RealFloat(numbers.Rational):
     """
     The basic floating-point number.
 
@@ -167,6 +170,158 @@ class RealFloat:
         ord = self.compare(other)
         return ord is not None and ord != Ordering.LESS
 
+    def __add__(self, other: 'RealFloat'):
+        """
+        Adds `self` and `other` exactly.
+
+        This operation never fails when `other` is a `RealFloat`.
+        """
+        if not isinstance(other, RealFloat):
+            raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+
+        if self.c == 0:
+            # 0 + b = b
+            return RealFloat(x=other)
+        elif other.c == 0:
+            # a + 0 = a
+            return RealFloat(x=self)
+        else:
+            # adding non-zero values
+
+            # compute the smallest exponent
+            exp = min(self.exp, other.exp)
+
+            # normalize significands relative to `exp`
+            c1 = self.c << (self.exp - exp)
+            c2 = other.c << (other.exp - exp)
+
+            # apply signs
+            m1 = -c1 if self.s else c1
+            m2 = -c2 if self.s else c2
+
+            # add/subtract
+            m = m1 + m2
+
+            # decompose into `s` and `c`
+            s = m < 0
+            c = -m if s else m
+
+            # return the result
+            return RealFloat(s=s, exp=exp, c=c)
+
+
+    def __radd__(self, other):
+        return self + other
+
+    def __neg__(self):
+        """
+        Unary minus.
+
+        Returns this `RealFloat` with opposite sign (`self.s`)
+        even when `self.is_zero()`.
+        """
+        return RealFloat(s=not self.s, x=self)
+
+    def __pos__(self):
+        """
+        Unary plus. 
+
+        Returns a copy of `self`.
+        """
+        return RealFloat(x=self)
+
+    def __mul__(self, other: 'RealFloat'):
+        """
+        Multiplies `self` and `other` exactly.
+
+        This operation never fails when `other` is a `RealFloat`.
+        """
+        if not isinstance(other, RealFloat):
+            raise TypeError(f'unsupported operand type(s) for *: \'RealFloat\' and \'{type(other)}\'')
+
+        s = self.s != other.s
+        if self.c == 0 or other.c == 0:
+            # 0 * b = 0 or a * 0 = 0
+            # respects signedness
+            return RealFloat(s=s)
+        else:
+            # multiplying non-zero values
+            exp = self.exp + other.exp
+            c = self.c * other.c
+            return RealFloat(s=s, exp=exp, c=c)
+
+    def __rmul__(self, other):
+        return self * other
+
+    def __truediv__(self, other):
+        raise NotImplementedError('division cannot be implemented exactly')
+
+    def __rtruediv__(self, other):
+        raise NotImplementedError('division cannot be implemented exactly')
+
+    def __pow__(self, exponent):
+        """
+        Raising `self` by `exponent` exactly.
+
+        This operation is only valid for `exponent` of type `int` with `exponent >= 0`.
+        """
+        if not isinstance(exponent, int):
+            raise TypeError(f'unsupported operand type(s) for **: \'RealFloat\' and \'{type(exponent)}\'')
+        if exponent < 0:
+            raise ValueError('negative exponent unsupported; cannot be implemented exactly')
+
+        if exponent == 0:
+            # b ** 0 = 1
+            return RealFloat(c=1)
+        else:
+            # exponent > 0
+            s = self.s and (exponent % 2 == 1)
+            exp = self.exp * exponent
+            c = self.c ** exponent
+            return RealFloat(s=s, exp=exp, c=c)
+
+    def __rpow__(self, base):
+        raise NotImplementedError
+
+    def __abs__(self):
+        """
+        Absolute value.
+
+        Returns this `RealFloat` with `self.s = False`.
+        """
+        return RealFloat(s=False, x=self)
+
+    def __trunc__(self):
+        return self.round(min_n=-1, rm=RoundingMode.RTZ)
+
+    def __floor__(self):
+        return self.round(min_n=-1, rm=RoundingMode.RTN)
+
+    def __ceil__(self):
+        return self.round(min_n=-1, rm=RoundingMode.RTP)
+
+    def __round__(self, ndigits=None):
+        if ndigits is not None:
+            if not isinstance(ndigits, int):
+                raise TypeError(f'Expected \'int\' for ndigits, got {type(ndigits)}')
+            if ndigits != 0:
+                raise ValueError('Non-zero ndigits not supported')
+            return self.round(max_p=ndigits, rm=RoundingMode.RNE)
+
+        return self.round(min_n=-1, rm=RoundingMode.RNE)
+
+    def __floordiv__(self, other):
+        raise NotImplementedError('division cannot be implemented exactly')
+
+    def __rfloordiv__(self, other):
+        raise NotImplementedError('division cannot be implemented exactly')
+
+    def __mod__(self, other):
+        raise NotImplementedError('modulus cannot be implemented exactly')
+
+    def __rmod__(self, other):
+        raise NotImplementedError('modulus cannot be implemented exactly')
+
     @property
     def base(self):
         """Integer base of this number. Always 2."""
@@ -210,6 +365,41 @@ class RealFloat:
     def inexact(self) -> bool:
         """Is this value inexact?"""
         return self.interval_size is not None
+
+    @property
+    def numerator(self):
+        if self.c == 0:
+            # case: value is zero
+            return 0
+        elif self.exp >= 0:
+            # case: value is definitely an integer
+            return self.c << self.exp
+        else:
+            # case: fractional digits
+
+            # compute gcd
+            numerator = self.c
+            denominator = (1 << -self.exp)
+            gcd = math.gcd(numerator, denominator)
+
+            # divide numerator
+            return numerator // gcd
+
+    @property
+    def denominator(self):
+        if self.c == 0 or self.exp >= 0:
+            # case: value is zero or definitely an integer
+            return 1
+        else:
+            # case: fractional digits
+
+            # compute gcd
+            numerator = self.c
+            denominator = (1 << -self.exp)
+            gcd = math.gcd(numerator, denominator)
+
+            # divide numerator
+            return denominator // gcd
 
     def is_zero(self) -> bool:
         """Returns whether this value represents zero."""
@@ -664,3 +854,4 @@ class RealFloat:
 
         # step 3. finalize the rounding operation
         return self._round_finalize(kept, half_bit, lower_bits, p, rm)
+
