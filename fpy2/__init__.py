@@ -56,3 +56,9 @@ from .runtime import (
     ExprProfiler
 )
 
+from .utils import (
+    fraction,
+    digits_to_fraction as digits,
+    decnum_to_fraction as decnum,
+    hexnum_to_fraction as hexnum
+)

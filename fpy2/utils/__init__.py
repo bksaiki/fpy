@@ -3,7 +3,7 @@
 from .compare import CompareOp
 from .defaults import default_repr, rcomparable
 from .error import FPySyntaxError, raise_type_error
-from .fraction import digits_to_fraction, hexnum_to_fraction
+from .fractions import fraction, digits_to_fraction, decnum_to_fraction, hexnum_to_fraction
 from .gensym import Gensym
 from .identifier import Id, NamedId, UnderscoreId, SourceId
 from .location import Location
