@@ -674,6 +674,14 @@ class AssertStmt(Stmt):
         self.test = test
         self.msg = msg
 
+class EffectStmt(Stmt):
+    """FPy IR: an expression without a result"""
+    expr: Expr
+
+    def __init__(self, expr: Expr):
+        super().__init__()
+        self.expr = expr
+
 class Return(Stmt):
     """FPy IR: return statement"""
     expr: Expr

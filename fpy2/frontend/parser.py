@@ -639,6 +639,9 @@ class Parser:
                 if stmt.msg is not None:
                     raise FPyParserError(loc, 'FPy does not support assert messages', stmt)
                 return AssertStmt(test, None, loc)
+            case ast.Expr():
+                e = self._parse_expr(stmt.value)
+                return EffectStmt(e, loc)
             case _:
                 raise NotImplementedError('statement is unsupported in FPy', ast.dump(stmt))
 

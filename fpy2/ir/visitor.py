@@ -139,6 +139,11 @@ class BaseVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
+    def _visit_effect(self, stmt: EffectStmt, ctx: Any):
+        """Visitor method for `EffectStmt` nodes."""
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
     def _visit_return(self, stmt: Return, ctx: Any):
         """Visitor method for `Return` nodes."""
         raise NotImplementedError('virtual method')
@@ -245,6 +250,8 @@ class BaseVisitor(ABC):
                 return self._visit_context(stmt, ctx)
             case AssertStmt():
                 return self._visit_assert(stmt, ctx)
+            case EffectStmt():
+                return self._visit_effect(stmt, ctx)
             case Return():
                 return self._visit_return(stmt, ctx)
             case _:
@@ -359,6 +366,9 @@ class DefaultVisitor(Visitor):
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
         self._visit_expr(stmt.test, ctx)
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: Any):
+        self._visit_expr(stmt.expr, ctx)
 
     def _visit_return(self, stmt: Return, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
@@ -532,6 +542,11 @@ class DefaultTransformVisitor(TransformVisitor):
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
         test = self._visit_expr(stmt.test, ctx)
         s = AssertStmt(test, stmt.msg)
+        return s, ctx
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: Any):
+        expr = self._visit_expr(stmt.expr, ctx)
+        s = EffectStmt(expr)
         return s, ctx
 
     def _visit_return(self, stmt: Return, ctx: Any):

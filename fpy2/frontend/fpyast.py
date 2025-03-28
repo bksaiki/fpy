@@ -582,6 +582,18 @@ class AssertStmt(Stmt):
         self.test = test
         self.msg = msg
 
+class EffectStmt(Stmt):
+    """FPy AST: an expression without a result"""
+    expr: Expr
+
+    def __init__(
+        self,
+        expr: Expr,
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.expr = expr
+
 class Return(Stmt):
     """FPy AST: return statement"""
     expr: Expr

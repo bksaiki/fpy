@@ -312,9 +312,11 @@ class _Interpreter(ReduceVisitor):
             # calling FPy function
             rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
             return rt.eval(fn.ir, args, ctx)
-        elif isinstance(fn, Callable):
+        elif callable(fn):
             # calling foreign function
             return fn(*args)
+        else:
+            raise RuntimeError(f'not a function {fn}')
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
@@ -567,6 +569,10 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a boolean, got {test}')
         if not test:
             raise AssertionError(stmt.msg)
+        return ctx
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: EvalCtx):
+        self._visit_expr(stmt.expr, ctx)
         return ctx
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx):

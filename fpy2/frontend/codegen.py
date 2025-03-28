@@ -225,6 +225,10 @@ class _IRCodegenInstance(AstVisitor):
         test = self._visit_expr(stmt.test, ctx)
         return ir.AssertStmt(test, stmt.msg)
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+        expr = self._visit_expr(stmt.expr, ctx)
+        return ir.EffectStmt(expr)
+
     def _visit_return(self, stmt: Return, ctx: None):
         return ir.Return(self._visit_expr(stmt.expr, ctx))
 

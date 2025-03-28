@@ -243,6 +243,10 @@ class _FPyCompilerInstance(ReduceVisitor):
         e = self._visit_expr(stmt.test, None)
         return ast.AssertStmt(e, stmt.msg, None)
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+        e = self._visit_expr(stmt.expr, None)
+        return ast.EffectStmt(e, None)
+
     def _visit_return(self, stmt: Return, ctx: None):
         e = self._visit_expr(stmt.expr, None)
         return ast.Return(e, None)
@@ -282,7 +286,7 @@ class _FPyCompilerInstance(ReduceVisitor):
     # override for typing hint:
     def _visit_expr(self, e: Expr, ctx: None) -> ast.Expr:
         return super()._visit_expr(e, None)
-    
+
     # override for typing hint:
     def _visit_statement(self, stmt: Stmt, ctx: None) -> ast.Stmt:
         return super()._visit_statement(stmt, None)

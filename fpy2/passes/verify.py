@@ -183,6 +183,10 @@ class _VerifyPassInstance(DefaultVisitor):
         self._visit_expr(stmt.test, ctx)
         return ctx
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: _CtxType):
+        self._visit_expr(stmt.expr, ctx)
+        return ctx
+
     def _visit_block(self, block: Block, ctx: _CtxType):
         for stmt in block.stmts:
             if not isinstance(stmt, Stmt):

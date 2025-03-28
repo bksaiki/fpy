@@ -194,6 +194,10 @@ class _FormatterInstance(AstVisitor):
         else:
             self._add_line(f'assert {test}, {stmt.msg}', ctx)
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
+        expr = self._visit_expr(stmt.expr, ctx)
+        self._add_line(f'{expr}', ctx)
+
     def _visit_return(self, stmt: Return, ctx: _Ctx):
         s = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'return {s}', ctx)

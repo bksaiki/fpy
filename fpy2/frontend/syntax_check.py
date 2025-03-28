@@ -243,6 +243,11 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(stmt.test, ctx)
         return env
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
+        env, _ = ctx
+        self._visit_expr(stmt.expr, ctx)
+        return env
+
     def _visit_return(self, stmt: Return, ctx: _Ctx):
         return self._visit_expr(stmt.expr, ctx)
 

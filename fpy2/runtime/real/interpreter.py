@@ -475,6 +475,9 @@ class _Interpreter(ReduceVisitor):
             raise AssertionError(stmt.msg)
         return ctx
 
+    def _visit_effect(self, stmt, ctx):
+        raise NotImplementedError
+
     def _visit_return(self, stmt: Return, ctx: EvalCtx) -> bool | float:
         # since we are returning we actually want a value
         self.rival.set_precision(ctx.p)

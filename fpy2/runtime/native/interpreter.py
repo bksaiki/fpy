@@ -484,6 +484,10 @@ class _Interpreter(ReduceVisitor):
             raise AssertionError(stmt.msg)
         return ctx
 
+    def _visit_effect(self, stmt, ctx):
+        self._visit_expr(stmt.expr, ctx)
+        return ctx
+
     def _visit_return(self, stmt: Return, ctx: EvalCtx):
         return self._visit_expr(stmt.expr, ctx)
 

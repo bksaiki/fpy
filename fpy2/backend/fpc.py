@@ -415,6 +415,9 @@ class FPCoreCompileInstance(ReduceVisitor):
         # strip the assertion
         return ctx
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: fpc.Expr):
+        raise FPCoreCompileError('FPCore does not support effectful computation')
+
     def _visit_return(self, stmt, ctx) -> fpc.Expr:
         return self._visit_expr(stmt.expr, ctx)
 
