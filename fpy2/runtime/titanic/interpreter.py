@@ -308,11 +308,13 @@ class _Interpreter(ReduceVisitor):
     def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
         args = [self._visit_expr(arg, ctx) for arg in e.children]
         fn = self.foreign[e.name]
-        if not isinstance(fn, Function):
-            raise RuntimeError(f'can only call other FPy functions {e.name}')
-
-        rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
-        return rt.eval(fn.ir, args, ctx)
+        if isinstance(fn, Function):
+            # calling FPy function
+            rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
+            return rt.eval(fn.ir, args, ctx)
+        elif isinstance(fn, Callable):
+            # calling foreign function
+            return fn(*args)
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
