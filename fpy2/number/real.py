@@ -8,7 +8,7 @@ import numbers
 from typing import Optional, Self
 
 from .round import RoundingMode, RoundingDirection
-from ..utils import bitmask, default_repr, Ordering
+from ..utils import bitmask, default_repr, float_to_bits, Ordering
 
 @default_repr
 class RealFloat(numbers.Rational):
@@ -321,6 +321,66 @@ class RealFloat(numbers.Rational):
 
     def __rmod__(self, other):
         raise NotImplementedError('modulus cannot be implemented exactly')
+
+    @staticmethod
+    def zero(s: bool = False):
+        """
+        Creates a new `RealFloat` value representing zero.
+
+        The sign may be specified with `s`.
+        """
+        return RealFloat(s=s, exp=0, c=0)
+
+    @staticmethod
+    def one(s: bool = False):
+        """
+        Creates a new `RealFloat` value representing one.
+
+        The sign may be specified with `s`.
+        """
+        return RealFloat(s=s, exp=0, c=1)
+
+    @staticmethod
+    def from_float(x: float):
+        """
+        Creates a new `RealFloat` value from a Python `float`.
+
+        This conversion is exact.
+        """
+        if not isinstance(x, float):
+            raise TypeError(f'expected float, got {type(x)}')
+
+        # IEEE 754 constants
+        NBITS = 64                   # size of the representation
+        ES = 11                      # size of the exponent field
+        P = NBITS - ES               # precision
+        M = P - 1                    # mantissa size
+        EMAX = (1 << (ES - 1)) - 1   # maximum (normalized) exponent
+        EMIN = 1 - EMAX              # minimum (normalized) exponent
+        EXPMIN = EMIN - P + 1        # minimum (unnormalized) exponent
+
+        # convert to bits
+        b = float_to_bits(x)
+        sbits = b >> (NBITS - 1)
+        ebits = (b >> M) & bitmask(ES)
+        mbits = b & bitmask(M)
+
+        # sign
+        s = sbits != 0
+
+        # case split on exponent
+        if ebits == 0:
+            # zero / subnormal
+            return RealFloat(s=s, exp=EXPMIN, c=mbits)
+        elif ebits == bitmask(ES):
+            # infinity / NaN
+            raise ValueError(f'expected finite float, got x={x}')
+        else:
+            # normal
+            exp = EXPMIN + (ebits - 1)
+            c = (1 << (P - 1)) | mbits
+            return RealFloat(s=s, exp=exp, c=c)
+
 
     @property
     def base(self):
