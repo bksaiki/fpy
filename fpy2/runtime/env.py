@@ -10,7 +10,7 @@ class ForeignEnv:
 
     @staticmethod
     def empty():
-        return ForeignEnv({}, {})
+        return ForeignEnv({}, {}, {})
 
     def __contains__(self, key) -> bool:
         return key in self.globals or key in self.nonlocals or key in self.builtins
