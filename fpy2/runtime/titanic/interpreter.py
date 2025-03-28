@@ -143,14 +143,17 @@ class _Interpreter(ReduceVisitor):
         args: Sequence[Any],
         ctx: Optional[EvalCtx] = None
     ):
+        # check arity
         args = tuple(args)
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
+        # determine context if `None` is specified
         if ctx is None:
             ctx = ieee_ctx(11, 64)
         ctx = determine_ctx(ctx, func.ctx)
 
+        # process arguments and add to environment
         for val, arg in zip(args, func.args):
             match arg.ty:
                 case AnyType():
@@ -166,6 +169,12 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError(f'unknown argument type {arg.ty}')
 
+        # process free variables
+        for var in func.free_vars:
+            x = self._arg_to_mpmf(self.foreign[var.base], ctx)
+            self.env[var] = x
+
+        # evaluation
         try:
             self._visit_block(func.body, ctx)
             raise RuntimeError('no return statement encountered')
