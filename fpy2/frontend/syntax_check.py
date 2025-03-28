@@ -136,6 +136,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_call(self, e: Call, ctx: _Ctx):
         env, _ = ctx
+        self._mark_use(NamedId(e.op), env)
         for c in e.args:
             self._visit_expr(c, ctx)
         return env
