@@ -60,6 +60,7 @@ class NamedId(Id):
     def __hash__(self):
         return hash((self.base, self.count))
 
+
 class SourceId(NamedId):
     """
     Named identifier from the original source.

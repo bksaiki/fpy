@@ -72,7 +72,7 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
 
     # get defining environment
     cvars = inspect.getclosurevars(func)
-    fvs = cvars.nonlocals.keys() | cvars.globals.keys()
+    free_vars = cvars.nonlocals.keys() | cvars.globals.keys()
     env = _function_env(func)
 
     # parse the source as an FPy function
@@ -92,10 +92,11 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
 
     # add context information
     ast.ctx = { **kwargs, **props }
-    ast.free_vars = [NamedId(v) for v in fvs]
+
+    # syntax checking (and compute relevant free vars)
+    ast.free_vars = SyntaxCheck.analyze(ast, free_vars)
 
     # analyze and lower to the IR
-    SyntaxCheck.analyze(ast)
     DefinitionAnalysis.analyze(ast)
     LiveVarAnalysis.analyze(ast)
     ir = IRCodegen.lower(ast)

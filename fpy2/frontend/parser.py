@@ -495,6 +495,8 @@ class Parser:
                     return self._parse_constant(e)
             case ast.List() | ast.Tuple():
                 return [self._parse_contextdata(elt) for elt in e.elts]
+            case ast.Name():
+                return self._parse_id(e)
             case _:
                 raise FPyParserError(loc, 'unexpected FPy context data', e)
 
@@ -508,7 +510,7 @@ class Parser:
             case _:
                 loc = self._parse_location(var)
                 raise FPyParserError(loc, '`Context` can only be optionally bound to an identifier`', var, item)
-    
+
     def _parse_contextexpr(self, item: ast.withitem):
         e = item.context_expr
         loc = self._parse_location(e)
