@@ -44,12 +44,16 @@ class SyntaxCheckInstance(AstVisitor):
     """Single-use instance of syntax checking"""
     func: FunctionDef
     free_vars: set[str]
+    ignore_unknown: bool
+
     free_var_args: set[NamedId]
     rets: set[Stmt]
 
-    def __init__(self, func: FunctionDef, free_vars: set[str]):
+    def __init__(self, func: FunctionDef, free_vars: set[str], ignore_unknown: bool):
         self.func = func
         self.free_vars = free_vars
+        self.ignore_unknown = ignore_unknown
+
         self.free_var_args = set()
         self.rets = set()
 
@@ -61,11 +65,18 @@ class SyntaxCheckInstance(AstVisitor):
             raise FPySyntaxError('function has multiple return statements')
         return self.free_var_args
 
-    def _mark_use(self, name: NamedId, env: _Env):
-        if name not in env:
-            raise FPySyntaxError(f'unbound variable `{name}`')
-        if not env[name]:
-            raise FPySyntaxError(f'variable `{name}` not defined along all paths')
+    def _mark_use(
+        self,
+        name: NamedId,
+        env: _Env,
+        *,
+        ignore_missing: bool = False
+    ):
+        if not ignore_missing:
+            if name not in env:
+                raise FPySyntaxError(f'unbound variable `{name}`')
+            if not env[name]:
+                raise FPySyntaxError(f'variable `{name}` not defined along all paths')
         if name.base in self.free_vars:
             self.free_var_args.add(name)
 
@@ -136,7 +147,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_call(self, e: Call, ctx: _Ctx):
         env, _ = ctx
-        self._mark_use(NamedId(e.op), env)
+        self._mark_use(NamedId(e.op), env, ignore_missing=self.ignore_unknown)
         for c in e.args:
             self._visit_expr(c, ctx)
         return env
@@ -309,7 +320,12 @@ class SyntaxCheck:
     """
 
     @staticmethod
-    def analyze(func: FunctionDef, free_vars: Optional[set[str]] = None):
+    def analyze(
+        func: FunctionDef,
+        *,
+        free_vars: Optional[set[str]] = None,
+        ignore_unknown: bool = False
+    ):
         """
         Analyzes the function for syntax errors.
 
@@ -320,4 +336,6 @@ class SyntaxCheck:
             raise TypeError(f'expected a Function, got {func}')
         if free_vars is None:
             free_vars = set()
-        return SyntaxCheckInstance(func, free_vars).analyze()
+
+        inst = SyntaxCheckInstance(func, free_vars, ignore_unknown)
+        return inst.analyze()

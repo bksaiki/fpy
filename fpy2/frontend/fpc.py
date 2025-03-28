@@ -699,11 +699,16 @@ class _FPCore2FPy:
             raise TypeError(f'should have produced a FunctionDef {ast}')
         return ast
 
-def fpcore_to_fpy(core: fpc.FPCore, default_name: str = 'f'):
+def fpcore_to_fpy(
+    core: fpc.FPCore,
+    *,
+    default_name: str = 'f',
+    ignore_unknown: bool = False
+):
     ast = _FPCore2FPy(core, default_name).convert()
 
     # analyze and lower to the IR
-    SyntaxCheck.analyze(ast)
+    SyntaxCheck.analyze(ast, ignore_unknown=ignore_unknown)
     DefinitionAnalysis.analyze(ast)
     LiveVarAnalysis.analyze(ast)
     ir = IRCodegen.lower(ast)

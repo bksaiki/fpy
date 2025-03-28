@@ -5,7 +5,7 @@ from .fetch import fetch_cores
 
 def _parse(cores: list[FPCore]):
     for core in cores:
-        func = Function.from_fpcore(core)
+        func = Function.from_fpcore(core, ignore_unknown=True)
         print(func.format())
 
 def test_parse():

@@ -56,10 +56,22 @@ class Function:
         return self.ir.name
 
     @staticmethod
-    def from_fpcore(core: FPCore, default_name: str = 'f'):
+    def from_fpcore(
+        core: FPCore,
+        *,
+        default_name: str = 'f',
+        ignore_unknown: bool = False
+    ):
+        """
+        Converts an `FPCore` (from `titanfp`) to an `FPy` function.
+
+        Optionally, specify `default_name` to set the name of the function.
+        If `ignore_unknown` is set to `True`, then the syntax checker will not
+        raise an exception when encountering unknown functions.
+        """
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
-        ir = fpcore_to_fpy(core, default_name=default_name)
+        ir = fpcore_to_fpy(core, default_name=default_name, ignore_unknown=ignore_unknown)
         return Function(ir, ForeignEnv.empty())
 
     def with_rt(self, rt: 'Interpreter'):
