@@ -674,6 +674,14 @@ class AssertStmt(Stmt):
         self.test = test
         self.msg = msg
 
+class EffectStmt(Stmt):
+    """FPy IR: an expression without a result"""
+    expr: Expr
+
+    def __init__(self, expr: Expr):
+        super().__init__()
+        self.expr = expr
+
 class Return(Stmt):
     """FPy IR: return statement"""
     expr: Expr
@@ -699,6 +707,7 @@ class FunctionDef(IR):
     body: Block
     ty: IRType
     ctx: dict[str, Any]
+    free_vars: set[NamedId]
 
     def __init__(self,
         name: str,
@@ -706,6 +715,7 @@ class FunctionDef(IR):
         body: Block,
         ty: IRType,
         ctx: dict[str, Any],
+        free_vars: set[NamedId],
     ):
         super().__init__()
         self.name = name
@@ -713,7 +723,7 @@ class FunctionDef(IR):
         self.body = body
         self.ty = ty
         self.ctx = ctx.copy()
-
+        self.free_vars = free_vars.copy()
 
 class BaseFormatter:
     """Abstract base class for IR formatters."""

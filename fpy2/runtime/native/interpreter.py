@@ -13,6 +13,7 @@ from titanfp.titanic.digital import Digital
 from titanfp.titanic.ops import RM
 
 from ..function import Interpreter, Function, FunctionReturnException
+from ..env import ForeignEnv
 from ...ir import *
 
 def _safe_div(x: float, y: float):
@@ -87,12 +88,18 @@ _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 
 class _Interpreter(ReduceVisitor):
     """Single-use interpreter for a function."""
-    func: FunctionDef
-    env: _Env
 
-    def __init__(self, ir: FunctionDef):
-        self.func = ir
-        self.env = {}
+    foreign: ForeignEnv
+    """foreign environment"""
+    env: _Env
+    """environment mapping variable names to values"""
+
+    def __init__(self, foreign: ForeignEnv, *, env: Optional[_Env] = None):
+        if env is None:
+            env = {}
+
+        self.foreign = foreign
+        self.env = env
 
     def _is_python_ctx(self, ctx: EvalCtx):
         return (
@@ -110,7 +117,7 @@ class _Interpreter(ReduceVisitor):
         elif isinstance(arg, tuple | list):
             raise NotImplementedError()
         else:
-            raise NotImplementedError(f'unknown argument type {arg}')
+            return arg
 
     def _lookup(self, name: NamedId):
         if name not in self.env:
@@ -119,24 +126,25 @@ class _Interpreter(ReduceVisitor):
 
     def eval(
         self,
+        func: FunctionDef,
         args: Sequence[Any],
         ctx: Optional[EvalCtx] = None
     ):
         args = tuple(args)
-        if len(args) != len(self.func.args):
-            raise TypeError(f'Expected {len(self.func.args)} arguments, got {len(args)}')
+        if len(args) != len(func.args):
+            raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
         # determine context
         if ctx is None:
             ctx = ieee_ctx(11, 64)
-        ctx = determine_ctx(ctx, self.func.ctx)
+        ctx = determine_ctx(ctx, func.ctx)
 
         # Python only has doubles
         if not self._is_python_ctx(ctx):
             raise ValueError(f'Unsupported context {ctx}; Python only has doubles')
 
         # bind arguments
-        for val, arg in zip(args, self.func.args):
+        for val, arg in zip(args, func.args):
             match arg.ty:
                 case AnyType():
                     x = self._arg_to_float(val)
@@ -151,9 +159,14 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError(f'unknown argument type {arg.ty}')
 
+        # process free variables
+        for var in func.free_vars:
+            x = self._arg_to_float(self.foreign[var.base])
+            self.env[var] = x
+
         # evaluate the body
         try:
-            self._visit_block(self.func.body, ctx)
+            self._visit_block(func.body, ctx)
             raise RuntimeError('no return statement encountered')
         except FunctionReturnException as e:
             return e.value
@@ -452,6 +465,12 @@ class _Interpreter(ReduceVisitor):
                 del self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
+        props = {}
+        for k, v in stmt.props.items():
+            if isinstance(v, NamedId):
+                props[k] = self._lookup(v)
+            else:
+                props[k] = v
         ctx = determine_ctx(ctx, stmt.props)
         if not self._is_python_ctx(ctx):
             raise NotImplementedError(f'unsupported context {ctx}')
@@ -463,6 +482,10 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a boolean, got {test}')
         if not test:
             raise AssertionError(stmt.msg)
+        return ctx
+
+    def _visit_effect(self, stmt, ctx):
+        self._visit_expr(stmt.expr, ctx)
         return ctx
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx):
@@ -503,7 +526,8 @@ class PythonInterpreter(Interpreter):
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
-        return _Interpreter(func.ir).eval(args, ctx)
+        rt = _Interpreter(func.env)
+        return rt.eval(func.ir, args, ctx)
 
     def eval_with_trace(self, func: Function, args: Sequence[Any], ctx = None):
         raise NotImplementedError('not implemented')

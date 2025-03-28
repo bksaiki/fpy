@@ -43,10 +43,18 @@ _Ctx = tuple[_Env, bool]
 class SyntaxCheckInstance(AstVisitor):
     """Single-use instance of syntax checking"""
     func: FunctionDef
+    free_vars: set[str]
+    ignore_unknown: bool
+
+    free_var_args: set[NamedId]
     rets: set[Stmt]
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FunctionDef, free_vars: set[str], ignore_unknown: bool):
         self.func = func
+        self.free_vars = free_vars
+        self.ignore_unknown = ignore_unknown
+
+        self.free_var_args = set()
         self.rets = set()
 
     def analyze(self):
@@ -55,16 +63,28 @@ class SyntaxCheckInstance(AstVisitor):
             raise FPySyntaxError('function has no return statement')
         elif len(self.rets) > 1:
             raise FPySyntaxError('function has multiple return statements')
+        return self.free_var_args
+
+    def _mark_use(
+        self,
+        name: NamedId,
+        env: _Env,
+        *,
+        ignore_missing: bool = False
+    ):
+        if not ignore_missing:
+            if name not in env:
+                raise FPySyntaxError(f'unbound variable `{name}`')
+            if not env[name]:
+                raise FPySyntaxError(f'variable `{name}` not defined along all paths')
+        if name.base in self.free_vars:
+            self.free_var_args.add(name)
 
     def _visit_var(self, e: Var, ctx: _Ctx):
         env, _ = ctx
         if not isinstance(e.name, NamedId):
             raise FPySyntaxError(f'expected a NamedId, got {e.name}')
-        if e.name not in env:
-            print(repr(e.name), repr(env.env))
-            raise FPySyntaxError(f'unbound variable `{e.name}`')
-        if not env[e.name]:
-            raise FPySyntaxError(f'variable `{e.name}` not defined along all paths')
+        self._mark_use(e.name, env)
         return env
 
     def _visit_bool(self, e: Bool, ctx: _Ctx):
@@ -127,6 +147,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_call(self, e: Call, ctx: _Ctx):
         env, _ = ctx
+        self._mark_use(NamedId(e.op), env, ignore_missing=self.ignore_unknown)
         for c in e.args:
             self._visit_expr(c, ctx)
         return env
@@ -188,6 +209,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_ref_assign(self, stmt: RefAssign, ctx: _Ctx):
         env, _ = ctx
+        self._mark_use(stmt.var, env)
         for s in stmt.slices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
@@ -221,6 +243,9 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env, is_top = ctx
+        for _, v in stmt.props.items():
+            if isinstance(v, NamedId):
+                self._mark_use(v, env)
         if stmt.name is not None and isinstance(stmt.name, NamedId):
             env = env.extend(stmt.name)
         return self._visit_block(stmt.body, (env, is_top))
@@ -228,6 +253,11 @@ class SyntaxCheckInstance(AstVisitor):
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.test, ctx)
+        return env
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
+        env, _ = ctx
+        self._visit_expr(stmt.expr, ctx)
         return env
 
     def _visit_return(self, stmt: Return, ctx: _Ctx):
@@ -253,6 +283,8 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_function(self, func: FunctionDef, ctx: _Ctx):
         env, _ = ctx
+        for var in self.free_vars:
+            env = env.extend(NamedId(var))
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 env = env.extend(arg.name)
@@ -271,8 +303,8 @@ class SyntaxCheck:
     """
     Syntax checker for the FPy AST.
 
-    Basic syntax check to eliminate malformed FPy programs that
-    the parser can't detect.
+    Basic syntax check to eliminate malformed FPy programs
+    that the parser can't detect.
 
     Rules enforced:
 
@@ -288,7 +320,22 @@ class SyntaxCheck:
     """
 
     @staticmethod
-    def analyze(func: FunctionDef):
+    def analyze(
+        func: FunctionDef,
+        *,
+        free_vars: Optional[set[str]] = None,
+        ignore_unknown: bool = False
+    ):
+        """
+        Analyzes the function for syntax errors.
+
+        Returns the subset of `free_vars` that are relevant to FPy.
+        """
+
         if not isinstance(func, FunctionDef):
             raise TypeError(f'expected a Function, got {func}')
-        SyntaxCheckInstance(func).analyze()
+        if free_vars is None:
+            free_vars = set()
+
+        inst = SyntaxCheckInstance(func, free_vars, ignore_unknown)
+        return inst.analyze()

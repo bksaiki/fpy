@@ -296,13 +296,17 @@ class _SSAInstance(DefaultTransformVisitor):
 
     def _visit_function(self, func: FunctionDef, ctx: _Ctx):
         ctx = ctx.copy()
+        for var in func.free_vars:
+            self.gensym.reserve(var)
+            ctx[var] = var
+
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 self.gensym.reserve(arg.name)
                 ctx[arg.name] = arg.name
 
         body, _ = self._visit_block(func.body, ctx)
-        return FunctionDef(func.name, func.args, body, func.ty, func.ctx)
+        return FunctionDef(func.name, func.args, body, func.ty, func.ctx, func.free_vars)
 
     # override to get typing hint
     def _visit_statement(self, stmt: Stmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:

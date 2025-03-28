@@ -128,14 +128,14 @@ class _Interpreter(ReduceVisitor):
 
     # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
-        if isinstance(arg, str | int | float):
+        if isinstance(arg, int | float):
             return MPMF(x=arg, ctx=ctx)
         elif isinstance(arg, Digital):
             return MPMF(x=arg, ctx=ctx)
         elif isinstance(arg, tuple | list):
             return NDArray([self._arg_to_mpmf(x, ctx) for x in arg])
         else:
-            raise NotImplementedError(f'unknown argument type {arg}')
+            return arg
 
     def eval(
         self,
@@ -143,14 +143,17 @@ class _Interpreter(ReduceVisitor):
         args: Sequence[Any],
         ctx: Optional[EvalCtx] = None
     ):
+        # check arity
         args = tuple(args)
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
+        # determine context if `None` is specified
         if ctx is None:
             ctx = ieee_ctx(11, 64)
         ctx = determine_ctx(ctx, func.ctx)
 
+        # process arguments and add to environment
         for val, arg in zip(args, func.args):
             match arg.ty:
                 case AnyType():
@@ -166,6 +169,12 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError(f'unknown argument type {arg.ty}')
 
+        # process free variables
+        for var in func.free_vars:
+            x = self._arg_to_mpmf(self.foreign[var.base], ctx)
+            self.env[var] = x
+
+        # evaluation
         try:
             self._visit_block(func.body, ctx)
             raise RuntimeError('no return statement encountered')
@@ -222,9 +231,11 @@ class _Interpreter(ReduceVisitor):
             args.append(val)
 
         # compute the result
+        print(list(map(float, args)))
         ctx = self._eval_ctx(ctx)
         try:
             result = fn(*args, ctx=ctx)
+            print(result)
         except gmpmath.SignedOverflow as e:
             # we overflowed beyond MPFR's limits, generate a large value and round it
             exp = ctx.emax + 1
@@ -297,11 +308,15 @@ class _Interpreter(ReduceVisitor):
     def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
         args = [self._visit_expr(arg, ctx) for arg in e.children]
         fn = self.foreign[e.name]
-        if not isinstance(fn, Function):
-            raise RuntimeError(f'can only call other FPy functions {e.name}')
-
-        rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
-        return rt.eval(fn.ir, args, ctx)
+        if isinstance(fn, Function):
+            # calling FPy function
+            rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
+            return rt.eval(fn.ir, args, ctx)
+        elif callable(fn):
+            # calling foreign function
+            return fn(*args)
+        else:
+            raise RuntimeError(f'not a function {fn}')
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
@@ -538,7 +553,14 @@ class _Interpreter(ReduceVisitor):
                 del self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
-        ctx = determine_ctx(ctx, stmt.props)
+        props = {}
+        for k, v in stmt.props.items():
+            if isinstance(v, NamedId):
+                props[k] = self._lookup(v)
+            else:
+                props[k] = v
+
+        ctx = determine_ctx(ctx, props)
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
@@ -547,6 +569,10 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a boolean, got {test}')
         if not test:
             raise AssertionError(stmt.msg)
+        return ctx
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: EvalCtx):
+        self._visit_expr(stmt.expr, ctx)
         return ctx
 
     def _visit_return(self, stmt: Return, ctx: EvalCtx):

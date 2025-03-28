@@ -91,6 +91,9 @@ class _ReachingDefsInstance(DefaultVisitor):
     def _visit_assert(self, stmt: AssertStmt, ctx: _StmtCtx) -> _RetType:
         return ctx
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: _StmtCtx) -> _RetType:
+        return ctx
+
     def _visit_return(self, stmt: Return, ctx: _StmtCtx) -> _RetType:
         return ctx
 

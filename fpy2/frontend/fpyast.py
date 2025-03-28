@@ -582,6 +582,18 @@ class AssertStmt(Stmt):
         self.test = test
         self.msg = msg
 
+class EffectStmt(Stmt):
+    """FPy AST: an expression without a result"""
+    expr: Expr
+
+    def __init__(
+        self,
+        expr: Expr,
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.expr = expr
+
 class Return(Stmt):
     """FPy AST: return statement"""
     expr: Expr
@@ -615,7 +627,7 @@ class FunctionDef(Ast):
     args: list[Argument]
     body: Block
     ctx: dict[str, Any]
-    fvs: set[str]
+    free_vars: set[NamedId]
 
     def __init__(
         self,
@@ -629,7 +641,7 @@ class FunctionDef(Ast):
         self.args = list(args)
         self.body = body
         self.ctx = {}
-        self.fvs = set()
+        self.free_vars = set()
 
 class BaseFormatter:
     """Abstract base class for AST formatters."""

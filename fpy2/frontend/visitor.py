@@ -121,8 +121,13 @@ class AstVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
+    def _visit_effect(self, stmt: EffectStmt, ctx: Any) -> Any:
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
     def _visit_return(self, stmt: Return, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
+
 
     #######################################################
     # Block
@@ -202,6 +207,8 @@ class AstVisitor(ABC):
                 return self._visit_context(stmt, ctx)
             case AssertStmt():
                 return self._visit_assert(stmt, ctx)
+            case EffectStmt():
+                return self._visit_effect(stmt, ctx)
             case Return():
                 return self._visit_return(stmt, ctx)
             case _:

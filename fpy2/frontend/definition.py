@@ -109,6 +109,9 @@ class DefinitionAnalysisInstance(AstVisitor):
     def _visit_assert(self, stmt: AssertStmt, ctx: _DefSet):
         return ctx
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: _DefSet):
+        return ctx
+
     def _visit_return(self, stmt: Return, ctx: _DefSet):
         return set(ctx)
 

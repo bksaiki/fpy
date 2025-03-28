@@ -225,6 +225,10 @@ class _IRCodegenInstance(AstVisitor):
         test = self._visit_expr(stmt.test, ctx)
         return ir.AssertStmt(test, stmt.msg)
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+        expr = self._visit_expr(stmt.expr, ctx)
+        return ir.EffectStmt(expr)
+
     def _visit_return(self, stmt: Return, ctx: None):
         return ir.Return(self._visit_expr(stmt.expr, ctx))
 
@@ -259,7 +263,10 @@ class _IRCodegenInstance(AstVisitor):
         # translate body
         e = self._visit_block(func.body, ctx)
 
-        return ir.FunctionDef(func.name, args, e, ir.AnyType(), props)
+        # return type
+        ty = ir.AnyType()
+
+        return ir.FunctionDef(func.name, args, e, ty, func.ctx, func.free_vars)
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: None) -> ir.Expr:

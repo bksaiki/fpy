@@ -2,6 +2,7 @@
 Decorators for the FPy language.
 """
 
+import builtins
 import inspect
 import textwrap
 
@@ -16,13 +17,13 @@ from typing import (
 
 from .codegen import IRCodegen
 from .definition import DefinitionAnalysis
-from .fpyast import FunctionDef
 from .live_vars import LiveVarAnalysis
 from .parser import Parser
 from .syntax_check import SyntaxCheck
 
 from ..passes import SSA, VerifyIR
 from ..runtime import Function, ForeignEnv
+from ..utils import NamedId
 
 P = ParamSpec('P')
 R = TypeVar('R')
@@ -54,6 +55,12 @@ def fpy(
 
 def _function_env(func: Callable) -> ForeignEnv:
     globs = func.__globals__
+    built_ins = {
+        name: getattr(builtins, name)
+        for name in dir(builtins)
+        if not name.startswith("__")
+    }
+
     if func.__closure__ is None:
         nonlocals = {}
     else:
@@ -62,7 +69,7 @@ def _function_env(func: Callable) -> ForeignEnv:
             zip(func.__code__.co_freevars, func.__closure__)
         }
 
-    return ForeignEnv(globs, nonlocals)
+    return ForeignEnv(globs, nonlocals, built_ins)
 
 def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     # read the original source the function
@@ -72,7 +79,7 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
 
     # get defining environment
     cvars = inspect.getclosurevars(func)
-    fvs = cvars.nonlocals.keys() | cvars.globals.keys()
+    free_vars = cvars.nonlocals.keys() | cvars.globals.keys() | cvars.builtins.keys()
     env = _function_env(func)
 
     # parse the source as an FPy function
@@ -92,10 +99,11 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
 
     # add context information
     ast.ctx = { **kwargs, **props }
-    ast.fvs = fvs
+
+    # syntax checking (and compute relevant free vars)
+    ast.free_vars = SyntaxCheck.analyze(ast, free_vars=free_vars)
 
     # analyze and lower to the IR
-    SyntaxCheck.analyze(ast)
     DefinitionAnalysis.analyze(ast)
     LiveVarAnalysis.analyze(ast)
     ir = IRCodegen.lower(ast)

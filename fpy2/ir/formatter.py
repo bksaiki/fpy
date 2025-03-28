@@ -208,6 +208,10 @@ class _FormatterInstance(BaseVisitor):
         else:
             self._add_line(f'assert {test}, {stmt.msg}', ctx)
 
+    def _visit_effect(self, stmt: EffectStmt, ctx: _IndentCtx):
+        expr = self._visit_expr(stmt.expr, ctx)
+        self._add_line(f'{expr}', ctx)
+
     def _visit_return(self, stmt: Return, ctx: _IndentCtx):
         s = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'return {s}', ctx)
@@ -247,15 +251,19 @@ class _FormatterInstance(BaseVisitor):
             arg_str = f'{str(arg.name)}: {self._format_type(arg.ty)}'
             arg_strs.append(arg_str)
 
+        # TODO: do this better
+        props = dict(func.ctx)
+        props['free_vars'] = [var.base for var in func.free_vars]
+
         arg_str = ', '.join(arg_strs)
-        self._format_decorator(func.ctx, ctx)
+        self._format_decorator(props, ctx)
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx.indent())
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: _IndentCtx) -> str:
         return super()._visit_expr(e, ctx)
-    
+
     # override for typing hint
     def _visit_statement(self, stmt: Stmt, ctx: _IndentCtx) -> None:
         return super()._visit_statement(stmt, ctx)
