@@ -117,7 +117,7 @@ class _Interpreter(ReduceVisitor):
         elif isinstance(arg, tuple | list):
             raise NotImplementedError()
         else:
-            raise NotImplementedError(f'unknown argument type {arg}')
+            return arg
 
     def _lookup(self, name: NamedId):
         if name not in self.env:
@@ -465,6 +465,12 @@ class _Interpreter(ReduceVisitor):
                 del self.env[phi.rhs]
 
     def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
+        props = {}
+        for k, v in stmt.props.items():
+            if isinstance(v, NamedId):
+                props[k] = self._lookup(v)
+            else:
+                props[k] = v
         ctx = determine_ctx(ctx, stmt.props)
         if not self._is_python_ctx(ctx):
             raise NotImplementedError(f'unsupported context {ctx}')
