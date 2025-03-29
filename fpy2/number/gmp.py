@@ -11,14 +11,11 @@ import gmpy2 as gmp
 from typing import Any, Callable
 
 from .number import Float
+from .real import RealFloat
 from .round import RoundingMode
 
 def _bool_to_sign(b: bool):
     return '-' if b else '+'
-
-def _to_mpfr(x: Float):
-    fmt = f'{_bool_to_sign(x.s)}{hex(x.c)}p{x.exp}'
-    return gmp.mpfr(fmt, precision=x.p, base=16)
 
 def _round_odd(x: gmp.mpfr, inexact: bool):
     """Applies the round-to-odd fix up."""
@@ -42,6 +39,10 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
             c += 1
         return Float(s=s, c=c, exp=exp)
 
+def float_to_mpfr(x: RealFloat | Float):
+    fmt = f'{_bool_to_sign(x.s)}{hex(x.c)}p{x.exp}'
+    return gmp.mpfr(fmt, precision=x.p, base=16)
+
 def mpfr_constant(x, prec: int):
     """
     Converts `x` into an MPFR type such that it may be safely re-rounded
@@ -61,7 +62,7 @@ def mpfr_constant(x, prec: int):
         return _round_odd(y, y.rc != 0)
 
 def _mpfr_1ary(gmp_fn: Callable[[Any], Any], x: Float, prec: int):
-    xf = _to_mpfr(x)
+    xf = float_to_mpfr(x)
     with gmp.context(
         precision=prec+2,
         emin=gmp.get_emin_min(),
@@ -77,8 +78,8 @@ def _mpfr_1ary(gmp_fn: Callable[[Any], Any], x: Float, prec: int):
 
 def _mpfr_2ary(gmp_fn: Callable[[Any, Any], Any], x: Float, y: Float, prec: int):
     """Applies a 2-argument MPFR function with expected ternary."""
-    xf = _to_mpfr(x)
-    yf = _to_mpfr(y)
+    xf = float_to_mpfr(x)
+    yf = float_to_mpfr(y)
     with gmp.context(
         precision=prec+2,
         emin=gmp.get_emin_min(),
@@ -94,9 +95,9 @@ def _mpfr_2ary(gmp_fn: Callable[[Any, Any], Any], x: Float, y: Float, prec: int)
 
 def _mpfr_3ary(gmp_fn: Callable[[Any, Any, Any], Any], x: Float, y: Float, z: Float, prec: int):
     """Applies a 3-argument MPFR function with expected ternary."""
-    xf = _to_mpfr(x)
-    yf = _to_mpfr(y)
-    zf = _to_mpfr(z)
+    xf = float_to_mpfr(x)
+    yf = float_to_mpfr(y)
+    zf = float_to_mpfr(z)
     with gmp.context(
         precision=prec+2,
         emin=gmp.get_emin_min(),

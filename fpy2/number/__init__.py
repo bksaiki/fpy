@@ -15,7 +15,7 @@ from .mps import MPSContext
 from .round import RoundingMode, RoundingDirection
 
 # Miscellaneous
-from .native import default_float_convert  # must go after `number` and `real`
+from .native import default_float_convert, default_str_convert
 
 
 RM: TypeAlias = RoundingMode

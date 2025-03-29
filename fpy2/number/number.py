@@ -6,7 +6,7 @@ from typing import Optional, Self
 
 from ..utils import default_repr, Ordering, rcomparable
 from .context import Context
-from .globals import get_current_float_converter
+from .globals import get_current_float_converter, get_current_str_converter
 from .real import RealFloat
 
 
@@ -128,6 +128,10 @@ class Float:
             + ', ctx=' + repr(self.ctx)
             + ')'
         )
+
+    def __str__(self):
+        fn = get_current_str_converter()
+        return fn(self)
 
     def __eq__(self, other):
         ord = self.compare(other)
