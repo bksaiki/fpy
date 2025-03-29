@@ -5,11 +5,11 @@ This module defines the rounding context type.
 from abc import ABC, abstractmethod
 from typing import Optional, TypeAlias, Union
 
-from . import number as fl
+from . import number
 from . import real
 
 # avoids circular dependency issues (useful for type checking)
-Float: TypeAlias = 'fl.Float'
+Float: TypeAlias = 'number.Float'
 RealFloat: TypeAlias = 'real.RealFloat'
 
 class Context(ABC):
@@ -65,7 +65,7 @@ class Context(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def round(self, x: Float) -> Float:
+    def round(self, x) -> Float:
         """Rounds any digital number according to this context."""
         raise NotImplementedError('virtual method')
 
