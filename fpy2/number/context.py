@@ -5,7 +5,7 @@ This module defines the rounding context type.
 from abc import ABC, abstractmethod
 from typing import Optional, TypeAlias, Union
 
-from . import float as fl
+from . import number as fl
 from . import real
 
 # avoids circular dependency issues (useful for type checking)

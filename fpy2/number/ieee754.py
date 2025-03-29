@@ -8,7 +8,7 @@ from enum import IntEnum
 from ..utils import default_repr, bitmask
 
 from .context import EncodableContext
-from .float import Float
+from .number import Float
 from .mpb import MPBContext
 from .real import RealFloat
 from .round import RoundingMode

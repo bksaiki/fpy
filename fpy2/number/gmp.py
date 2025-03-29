@@ -10,7 +10,7 @@ import gmpy2 as gmp
 
 from typing import Any, Callable
 
-from .float import Float
+from .number import Float
 from .round import RoundingMode
 
 def _bool_to_sign(b: bool):

@@ -8,7 +8,7 @@ from fractions import Fraction
 from ..utils import default_repr
 
 from .context import Context
-from .float import Float
+from .number import Float
 from .real import RealFloat
 from .round import RoundingMode
 from .gmp import mpfr_constant

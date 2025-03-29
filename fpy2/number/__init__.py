@@ -3,7 +3,7 @@ import math
 from typing import TypeAlias
 
 # Numbers
-from .float import Float, set_default_float_converter, get_default_float_converter
+from .number import Float, set_default_float_converter, get_default_float_converter
 from .real import RealFloat
 
 # Contexts

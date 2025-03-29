@@ -9,7 +9,7 @@ from fractions import Fraction
 from ..utils import default_repr, bitmask
 
 from .context import OrdinalContext
-from .float import Float
+from .number import Float
 from .mp import MPContext
 from .real import RealFloat
 from .round import RoundingMode
