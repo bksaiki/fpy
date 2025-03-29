@@ -188,7 +188,7 @@ class RealFloat(numbers.Rational):
         else:
             # adding non-zero values
 
-            # compute the smallest exponent
+            # compute the smallest exponent and normalize
             exp = min(self.exp, other.exp)
 
             # normalize significands relative to `exp`
@@ -197,7 +197,7 @@ class RealFloat(numbers.Rational):
 
             # apply signs
             m1 = -c1 if self.s else c1
-            m2 = -c2 if self.s else c2
+            m2 = -c2 if other.s else c2
 
             # add/subtract
             m = m1 + m2
@@ -323,22 +323,18 @@ class RealFloat(numbers.Rational):
         raise NotImplementedError('modulus cannot be implemented exactly')
 
     @staticmethod
-    def zero(s: bool = False):
+    def from_int(x: int):
         """
-        Creates a new `RealFloat` value representing zero.
+        Creates a new `RealFloat` value from a Python `int`.
 
-        The sign may be specified with `s`.
+        This conversion is exact.
         """
-        return RealFloat(s=s, exp=0, c=0)
+        if not isinstance(x, int):
+            raise TypeError(f'expected int, got {type(x)}')
 
-    @staticmethod
-    def one(s: bool = False):
-        """
-        Creates a new `RealFloat` value representing one.
-
-        The sign may be specified with `s`.
-        """
-        return RealFloat(s=s, exp=0, c=1)
+        s = x < 0
+        c = abs(x)
+        return RealFloat(s=s, exp=0, c=c)
 
     @staticmethod
     def from_float(x: float):
@@ -380,6 +376,35 @@ class RealFloat(numbers.Rational):
             exp = EXPMIN + (ebits - 1)
             c = (1 << (P - 1)) | mbits
             return RealFloat(s=s, exp=exp, c=c)
+
+    @staticmethod
+    def zero(s: bool = False):
+        """
+        Creates a new `RealFloat` value representing zero.
+
+        The sign may be specified with `s`.
+        """
+        return RealFloat(s=s, exp=0, c=0)
+
+    @staticmethod
+    def one(s: bool = False):
+        """
+        Creates a new `RealFloat` value representing one.
+
+        The sign may be specified with `s`.
+        """
+        return RealFloat(s=s, exp=0, c=1)
+
+    @staticmethod
+    def power_of_2(exp: int, s: bool = False):
+        """
+        Creates a new `RealFloat` value representing `2**exp`.
+
+        The sign may be specified with `s`.
+        """
+        if not isinstance(exp, int):
+            raise TypeError(f'expected integer exponent, got {type(exp)}')
+        return RealFloat(s=s, exp=exp, c=1)
 
 
     @property
