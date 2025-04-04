@@ -41,7 +41,7 @@ def _apply_3ary(func: MPFR_3ary, x: Float, y: Float, z: Float, ctx: Context):
 # General operations
 
 def acos(x: Float, ctx: Context):
-    """Computes `acos(x)` rounded under `ctx`."""
+    """Computes the inverse cosine of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -49,7 +49,7 @@ def acos(x: Float, ctx: Context):
     return _apply_1ary(mpfr_acos, x, ctx)
 
 def acosh(x: Float, ctx: Context):
-    """Computes `acosh(x)` rounded under `ctx`."""
+    """Computes the inverse hyperbolic cosine of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -67,7 +67,7 @@ def add(x: Float, y: Float, ctx: Context):
     return _apply_2ary(mpfr_add, x, y, ctx)
 
 def asin(x: Float, ctx: Context):
-    """Computes `asin(x)` rounded under `ctx`."""
+    """Computes the inverse sine of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -75,7 +75,7 @@ def asin(x: Float, ctx: Context):
     return _apply_1ary(mpfr_asin, x, ctx)
 
 def asinh(x: Float, ctx: Context):
-    """Computes `asinh(x)` rounded under `ctx`."""
+    """Computes the inverse hyperbolic sine of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -83,7 +83,7 @@ def asinh(x: Float, ctx: Context):
     return _apply_1ary(mpfr_asinh, x, ctx)
 
 def atan(x: Float, ctx: Context):
-    """Computes `atan(x)` rounded under `ctx`."""
+    """Computes the inverse tangent of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -91,7 +91,10 @@ def atan(x: Float, ctx: Context):
     return _apply_1ary(mpfr_atan, x, ctx)
 
 def atan2(y: Float, x: Float, ctx: Context):
-    """Computes `atan2(y, x)` rounded under `ctx`."""
+    """
+    Computes `atan(y / x)` taking into account the correct quadrant
+    that the point `(x, y)` resides in. The result is rounded under `ctx`.
+    """
     if not isinstance(y, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for x={y}')
     if not isinstance(x, Float):
@@ -101,7 +104,7 @@ def atan2(y: Float, x: Float, ctx: Context):
     return _apply_2ary(mpfr_atan2, y, x, ctx)
 
 def atanh(x: Float, ctx: Context):
-    """Computes `atanh(x)` rounded under `ctx`."""
+    """Computes the inverse hyperbolic tangent of `x` under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -109,7 +112,7 @@ def atanh(x: Float, ctx: Context):
     return _apply_1ary(mpfr_atanh, x, ctx)
 
 def cbrt(x: Float, ctx: Context):
-    """Computes `cbrt(x)` rounded under `ctx`."""
+    """Computes the cube root of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -117,7 +120,7 @@ def cbrt(x: Float, ctx: Context):
     return _apply_1ary(mpfr_cbrt, x, ctx)
 
 def copysign(x: Float, y: Float, ctx: Context):
-    """Computes `copysign(x, y)` rounded under `ctx`."""
+    """Returns `|x| * sign(y)` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(y, Float):
@@ -127,7 +130,7 @@ def copysign(x: Float, y: Float, ctx: Context):
     return _apply_2ary(mpfr_copysign, x, y, ctx)
 
 def cos(x: Float, ctx: Context):
-    """Computes `cos(x)` rounded under `ctx`."""
+    """Computes the cosine of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -135,7 +138,7 @@ def cos(x: Float, ctx: Context):
     return _apply_1ary(mpfr_cos, x, ctx)
 
 def cosh(x: Float, ctx: Context):
-    """Computes `cosh(x)` rounded under `ctx`."""
+    """Computes the hyperbolic cosine `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -153,7 +156,7 @@ def div(x: Float, y: Float, ctx: Context):
     return _apply_2ary(mpfr_div, x, y, ctx)
 
 def erf(x: Float, ctx: Context):
-    """Computes `erf(x)` rounded under `ctx`."""
+    """Computes the error function of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -161,7 +164,7 @@ def erf(x: Float, ctx: Context):
     return _apply_1ary(mpfr_erf, x, ctx)
 
 def erfc(x: Float, ctx: Context):
-    """Computes `erfc(x)` rounded under `ctx`."""
+    """Computes `1 - erf(x)` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -169,7 +172,7 @@ def erfc(x: Float, ctx: Context):
     return _apply_1ary(mpfr_erfc, x, ctx)
 
 def exp(x: Float, ctx: Context):
-    """Computes `exp(x)` rounded under `ctx`."""
+    """Computes `e ** x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -177,7 +180,7 @@ def exp(x: Float, ctx: Context):
     return _apply_1ary(mpfr_exp, x, ctx)
 
 def exp2(x: Float, ctx: Context):
-    """Computes `exp2(x)` rounded under `ctx`."""
+    """Computes `2 ** x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -185,7 +188,7 @@ def exp2(x: Float, ctx: Context):
     return _apply_1ary(mpfr_exp2, x, ctx)
 
 def exp10(x: Float, ctx: Context):
-    """Computes `exp10(x)` rounded under `ctx`."""
+    """Computes `10 *** x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -193,7 +196,7 @@ def exp10(x: Float, ctx: Context):
     return _apply_1ary(mpfr_exp10, x, ctx)
 
 def expm1(x: Float, ctx: Context):
-    """Computes `expm1(x)` rounded under `ctx`."""
+    """Computes `exp(x) - 1` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -201,7 +204,7 @@ def expm1(x: Float, ctx: Context):
     return _apply_1ary(mpfr_expm1, x, ctx)
 
 def fabs(x: Float, ctx: Context):
-    """Computes `fabs(x)` rounded under `ctx`."""
+    """Computes `|x|` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -209,7 +212,7 @@ def fabs(x: Float, ctx: Context):
     return _apply_1ary(mpfr_fabs, x, ctx)
 
 def fdim(x: Float, y: Float, ctx: Context):
-    """Computes `fdim(x, y)` rounded under `ctx`."""
+    """Computes `max(x - y, 0)` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(y, Float):
@@ -231,7 +234,12 @@ def fma(x: Float, y: Float, z: Float, ctx: Context):
     return _apply_3ary(mpfr_fma, x, y, z, ctx)
 
 def fmod(x: Float, y: Float, ctx: Context):
-    """Computes `fmod(x, y)` rounded under `ctx`."""
+    """
+    Computes the remainder of `x / y` rounded under this context.
+
+    The remainder has the same sign as `x`; it is exactly `x - iquot * y`,
+    where `iquot` is the `x / y` with its fractional part truncated.
+    """
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(y, Float):
@@ -241,7 +249,7 @@ def fmod(x: Float, y: Float, ctx: Context):
     return _apply_2ary(mpfr_fmod, x, y, ctx)
 
 def fmax(x: Float, y: Float, ctx: Context):
-    """Computes `fmax(x, y)` rounded under `ctx`."""
+    """Computes `max(x, y)` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(y, Float):
@@ -251,7 +259,7 @@ def fmax(x: Float, y: Float, ctx: Context):
     return _apply_2ary(mpfr_fmax, x, y, ctx)
 
 def fmin(x: Float, y: Float, ctx: Context):
-    """Computes `fmin(x, y)` rounded under `ctx`."""
+    """Computes `min(x, y)` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(y, Float):
@@ -271,7 +279,7 @@ def hypot(x: Float, y: Float, ctx: Context):
     return _apply_2ary(mpfr_hypot, x, y, ctx)
 
 def lgamma(x: Float, ctx: Context):
-    """Computes `lgamma(x)` rounded under `ctx`."""
+    """Computes the log-gamma of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -354,7 +362,7 @@ def remainder(x: Float, y: Float, ctx: Context):
     return _apply_2ary(mpfr_remainder, x, y, ctx)
 
 def sin(x: Float, ctx: Context):
-    """Computes `sin(x)` rounded under `ctx`."""
+    """Computes the sine of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -362,7 +370,7 @@ def sin(x: Float, ctx: Context):
     return _apply_1ary(mpfr_sin, x, ctx)
 
 def sinh(x: Float, ctx: Context):
-    """Computes `sinh(x)` rounded under `ctx`."""
+    """Computes the hyperbolic sine of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -370,7 +378,7 @@ def sinh(x: Float, ctx: Context):
     return _apply_1ary(mpfr_sinh, x, ctx)
 
 def sqrt(x: Float, ctx: Context):
-    """Computes `sqrt(x)` rounded under `ctx`."""
+    """Computes square-root of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -388,7 +396,7 @@ def sub(x: Float, y: Float, ctx: Context):
     return _apply_2ary(mpfr_sub, x, y, ctx)
 
 def tan(x: Float, ctx: Context):
-    """Computes `tan(x)` rounded under `ctx`."""
+    """Computes the tangent of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -396,7 +404,7 @@ def tan(x: Float, ctx: Context):
     return _apply_1ary(mpfr_tan, x, ctx)
 
 def tanh(x: Float, ctx: Context):
-    """Computes `tanh(x)` rounded under `ctx`."""
+    """Computes the hyperbolic tangent of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
@@ -404,7 +412,7 @@ def tanh(x: Float, ctx: Context):
     return _apply_1ary(mpfr_tanh, x, ctx)
 
 def tgamma(x: Float, ctx: Context):
-    """Computes `tgamma(x)` rounded under `ctx`."""
+    """Computes gamma of `x` rounded under `ctx`."""
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
