@@ -1,6 +1,6 @@
 """Common utilities for the FPy infrastructure."""
 
-from .bits import bitmask, float_to_bits
+from .bits import bitmask, float_to_bits, bits_to_float
 from .compare import CompareOp
 from .defaults import default_repr, rcomparable
 from .error import FPySyntaxError, raise_type_error

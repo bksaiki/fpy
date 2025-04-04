@@ -23,7 +23,6 @@ from .syntax_check import SyntaxCheck
 
 from ..passes import SSA, VerifyIR
 from ..runtime import Function, ForeignEnv
-from ..utils import NamedId
 
 P = ParamSpec('P')
 R = TypeVar('R')

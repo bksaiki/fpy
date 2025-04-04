@@ -4,10 +4,11 @@ This module defines the floating-point number type `Float`.
 
 from typing import Optional, Self
 
-from .real import RealFloat
+from ..utils import Ordering, rcomparable
 from .context import Context
+from .globals import get_current_float_converter, get_current_str_converter
+from .real import RealFloat
 
-from ..utils import default_repr, Ordering, rcomparable
 
 @rcomparable(RealFloat)
 class Float:
@@ -128,6 +129,10 @@ class Float:
             + ')'
         )
 
+    def __str__(self):
+        fn = get_current_str_converter()
+        return fn(self)
+
     def __eq__(self, other):
         ord = self.compare(other)
         return ord is not None and ord == Ordering.EQUAL
@@ -147,6 +152,15 @@ class Float:
     def __ge__(self, other):
         ord = self.compare(other)
         return ord is not None and ord != Ordering.LESS
+
+    def __float__(self):
+        """
+        Casts this value to a native Python float.
+
+        If the value is not representable, a `ValueError` is raised.
+        """
+        fn = get_current_float_converter()
+        return fn(self)
 
     @property
     def base(self):

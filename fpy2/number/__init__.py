@@ -1,7 +1,7 @@
 from typing import TypeAlias
 
 # Numbers
-from .float import Float
+from .number import Float
 from .real import RealFloat
 
 # Contexts
@@ -13,6 +13,9 @@ from .mps import MPSContext
 
 # Rounding
 from .round import RoundingMode, RoundingDirection
+
+# Miscellaneous
+from .native import default_float_convert, default_str_convert
 
 
 RM: TypeAlias = RoundingMode

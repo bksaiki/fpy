@@ -7,8 +7,9 @@ import numbers
 
 from typing import Optional, Self
 
-from .round import RoundingMode, RoundingDirection
 from ..utils import bitmask, default_repr, float_to_bits, Ordering
+from .globals import get_current_float_converter, get_current_str_converter
+from .round import RoundingMode, RoundingDirection
 
 @default_repr
 class RealFloat(numbers.Rational):
@@ -139,6 +140,10 @@ class RealFloat(numbers.Rational):
             self.interval_closed = x.interval_closed
         else:
             self.interval_closed = type(self).interval_closed
+
+    def __str__(self):
+        fn = get_current_str_converter()
+        return fn(self)
 
     def __eq__(self, other):
         if not isinstance(other, RealFloat):
@@ -321,6 +326,15 @@ class RealFloat(numbers.Rational):
 
     def __rmod__(self, other):
         raise NotImplementedError('modulus cannot be implemented exactly')
+
+    def __float__(self):
+        """
+        Casts this value to a native Python float.
+
+        If the value is not representable, a `ValueError` is raised.
+        """
+        fn = get_current_float_converter()
+        return fn(self)
 
     @staticmethod
     def from_int(x: int):

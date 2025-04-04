@@ -8,7 +8,7 @@ from enum import IntEnum
 from ..utils import default_repr, bitmask
 
 from .context import EncodableContext
-from .float import Float
+from .number import Float
 from .mpb import MPBContext
 from .real import RealFloat
 from .round import RoundingMode
@@ -67,6 +67,11 @@ class IEEEContext(EncodableContext):
         self.nbits = nbits
         self.rm = rm
         self._mpb_ctx = _ieee_to_mpb(es, nbits, rm)
+
+    def __eq__(self, other):
+        if not isinstance(other, IEEEContext):
+            return False
+        return self.es == other.es and self.nbits == other.nbits and self.rm == other.rm
 
     @property
     def pmax(self):
@@ -146,6 +151,9 @@ class IEEEContext(EncodableContext):
         x = self._mpb_ctx.normalize(x)
         x.ctx = self
         return x
+
+    def round_params(self):
+        return self._mpb_ctx.round_params()
 
     def round(self, x):
         rounded = self._mpb_ctx.round(x)

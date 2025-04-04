@@ -8,10 +8,10 @@ from fractions import Fraction
 from ..utils import default_repr
 
 from .context import Context
-from .float import Float
+from .number import Float
 from .real import RealFloat
 from .round import RoundingMode
-from .utils import from_mpfr
+from .gmp import mpfr_constant
 
 @default_repr
 class MPContext(Context):
@@ -108,6 +108,9 @@ class MPContext(Context):
         # step 3. round value based on rounding parameters
         return x.round(max_p=self.pmax, rm=self.rm)
 
+    def round_params(self):
+        return (self.pmax, None)
+
     def round(self, x) -> Float:
         match x:
             case Float() | RealFloat():
@@ -115,12 +118,12 @@ class MPContext(Context):
             case int():
                 xr = RealFloat(c=x)
             case float() | str():
-                xr = from_mpfr(x, self.pmax)
+                xr = mpfr_constant(x, self.pmax)
             case Fraction():
                 if x.denominator == 1:
                     xr = RealFloat(c=int(x))
                 else:
-                    xr = from_mpfr(x, self.pmax)
+                    xr = mpfr_constant(x, self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 

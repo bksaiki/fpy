@@ -10,11 +10,11 @@ from typing import Optional
 from ..utils import default_repr
 
 from .context import SizedContext
-from .float import Float
+from .number import Float
 from .mps import MPSContext
 from .real import RealFloat
 from .round import RoundingMode, RoundingDirection
-from .utils import from_mpfr
+from .gmp import mpfr_constant
 
 
 @default_repr
@@ -157,6 +157,9 @@ class MPBContext(SizedContext):
         x.ctx = self
         return x
 
+    def round_params(self):
+        return self._mps_ctx.round_params()
+
     def _is_overflowing(self, x: RealFloat) -> bool:
         """Checks if `x` is overflowing."""
         if x.s:
@@ -223,12 +226,12 @@ class MPBContext(SizedContext):
             case int():
                 xr = RealFloat(c=x)
             case float() | str():
-                xr = from_mpfr(x, self.pmax)
+                xr = mpfr_constant(x, self.pmax)
             case Fraction():
                 if x.denominator == 1:
                     xr = RealFloat(c=int(x))
                 else:
-                    xr = from_mpfr(x, self.pmax)
+                    xr = mpfr_constant(x, self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 

@@ -3,6 +3,14 @@ This module defines the rounding context type.
 """
 
 from abc import ABC, abstractmethod
+from typing import Optional, TypeAlias, Union
+
+from . import number
+from . import real
+
+# avoids circular dependency issues (useful for type checking)
+Float: TypeAlias = 'number.Float'
+RealFloat: TypeAlias = 'real.RealFloat'
 
 class Context(ABC):
     """
@@ -23,12 +31,12 @@ class Context(ABC):
     """
 
     @abstractmethod
-    def is_representable(self, x) -> bool:
+    def is_representable(self, x: Union[Float, RealFloat]) -> bool:
         """Returns if `x` is representable under this context."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def is_canonical(self, x) -> bool:
+    def is_canonical(self, x: Float) -> bool:
         """
         Returns if `x` is canonical under this context.
 
@@ -40,12 +48,24 @@ class Context(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def normalize(self, x):
+    def normalize(self, x: Float) -> Float:
         """Returns the canonical form of `x` under this context."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def round(self, x):
+    def round_params(self) -> tuple[Optional[int], Optional[int]]:
+        """
+        Returns the rounding parameters `(max_p, min_n)` used
+        for rounding under this context. Either `max_p` or `min_n`
+        may be `None` but never both.
+
+        These parameters also determine the amount of precision for
+        intermediate round-to-odd operations (provided by MPFR / `gmpy2`).
+        """
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
+    def round(self, x) -> Float:
         """Rounds any digital number according to this context."""
         raise NotImplementedError('virtual method')
 
@@ -60,7 +80,7 @@ class OrdinalContext(Context):
     """
 
     @abstractmethod
-    def to_ordinal(self, x, infval: bool = False) -> int:
+    def to_ordinal(self, x: Float, infval: bool = False) -> int:
         """
         Maps a digital number to an ordinal number.
 
@@ -71,10 +91,10 @@ class OrdinalContext(Context):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def from_ordinal(self, x: int, infval: bool = False):
+    def from_ordinal(self, x: int, infval: bool = False) -> Float:
         """
         Maps an ordinal number to a digital number.
-        
+
         When `infval=True`, infinities are mapped to the next (or previous)
         logical ordinal value after +/-MAX_VAL. This option is only
         valid when the context has a maximum value.
@@ -82,7 +102,7 @@ class OrdinalContext(Context):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def minval(self, s: bool = False):
+    def minval(self, s: bool = False) -> Float:
         """
         Returns the (signed) representable value with the minimum magnitude
         under this context.
@@ -101,7 +121,7 @@ class SizedContext(OrdinalContext):
     """
 
     @abstractmethod
-    def maxval(self, s: bool = False):
+    def maxval(self, s: bool = False) -> Float:
         """
         Returns the (signed) representable value with the maximum magnitude
         under this context.
@@ -118,7 +138,7 @@ class EncodableContext(SizedContext):
     """
 
     @abstractmethod
-    def encode(self, x) -> int:
+    def encode(self, x: Float) -> int:
         """
         Encodes a digital number constructed under this context as a bitstring.
         This operation is context dependent.
@@ -126,7 +146,7 @@ class EncodableContext(SizedContext):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def decode(self, x: int):
+    def decode(self, x: int) -> Float:
         """
         Decodes a bitstring as a a digital number constructed under this context.
         This operation is context dependent.
