@@ -8,12 +8,12 @@ from .number import Context, Float
 from .number.gmp import *
 from .number.round import RoundingMode
 
-MPFR_1ary: TypeAlias = Callable[[Float, int], Float]
-MPFR_2ary: TypeAlias = Callable[[Float, Float, int], Float]
-MPFR_3ary: TypeAlias = Callable[[Float, Float, Float, int], Float]
+_MPFR_1ary: TypeAlias = Callable[[Float, int], Float]
+_MPFR_2ary: TypeAlias = Callable[[Float, Float, int], Float]
+_MPFR_3ary: TypeAlias = Callable[[Float, Float, Float, int], Float]
 
 
-def _apply_1ary(func: MPFR_1ary, x: Float, ctx: Context):
+def _apply_1ary(func: _MPFR_1ary, x: Float, ctx: Context):
     p, n = ctx.round_params()
     if p is None:
         raise NotImplementedError(f'p={p}, n={n}')
@@ -21,7 +21,7 @@ def _apply_1ary(func: MPFR_1ary, x: Float, ctx: Context):
         r = func(x, p)       # compute with round-to-odd (safe at p digits)
         return ctx.round(r)  # re-round under desired rounding mode
 
-def _apply_2ary(func: MPFR_2ary, x: Float, y: Float, ctx: Context):
+def _apply_2ary(func: _MPFR_2ary, x: Float, y: Float, ctx: Context):
     p, n = ctx.round_params()
     if p is None:
         raise NotImplementedError(f'p={p}, n={n}')
@@ -29,7 +29,7 @@ def _apply_2ary(func: MPFR_2ary, x: Float, y: Float, ctx: Context):
         r = func(x, y, p)    # compute with round-to-odd (safe at p digits)
         return ctx.round(r)  # re-round under desired rounding mode
 
-def _apply_3ary(func: MPFR_3ary, x: Float, y: Float, z: Float, ctx: Context):
+def _apply_3ary(func: _MPFR_3ary, x: Float, y: Float, z: Float, ctx: Context):
     p, n = ctx.round_params()
     if p is None:
         raise NotImplementedError(f'p={p}, n={n}')
