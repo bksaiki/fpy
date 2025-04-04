@@ -88,8 +88,39 @@ class MathNoExceptTestCase(unittest.TestCase):
                 for rm in _rms:
                     ctx = ctx_base.with_rm(rm)
                     for _ in range(num_inputs):
-                        # sample point and evaluate
+                        # sample point
                         i = random.randint(0, 1 << ctx.nbits - 1)
                         x = ctx.decode(i)
+                        # evaluate
                         op(x, ctx)
 
+
+    def test_fuzz_binary(self, num_inputs: int = 256):
+        for op in _binary_ops:
+            for ctx_base in _ctxs:
+                for rm in _rms:
+                    ctx = ctx_base.with_rm(rm)
+                    for _ in range(num_inputs):
+                        # sample point
+                        i = random.randint(0, 1 << ctx.nbits - 1)
+                        j = random.randint(0, 1 << ctx.nbits - 1)
+                        x = ctx.decode(i)
+                        y = ctx.decode(j)
+                        # evaluate
+                        op(x, y, ctx)
+
+    def test_fuzz_ternary(self, num_inputs: int = 256):
+        for op in _ternary_ops:
+            for ctx_base in _ctxs:
+                for rm in _rms:
+                    ctx = ctx_base.with_rm(rm)
+                    for _ in range(num_inputs):
+                        # sample point
+                        i = random.randint(0, 1 << ctx.nbits - 1)
+                        j = random.randint(0, 1 << ctx.nbits - 1)
+                        k = random.randint(0, 1 << ctx.nbits - 1)
+                        x = ctx.decode(i)
+                        y = ctx.decode(j)
+                        z = ctx.decode(k)
+                        # evaluate
+                        op(x, y, z, ctx)

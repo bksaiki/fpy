@@ -22,11 +22,37 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
     if x.is_nan():
         return Float(s=s, isnan=True)
     elif x.is_infinite():
-        return Float(s=s, isinf=True)
-    elif x.is_zero():
+        # check for inexactness => only occurs when MPFR overflows
+        # TODO: awkward to use interval information for an infinity
         if inexact:
-            raise ValueError(f'zero is unexpectedly inexact x={x}, inexact={inexact}')
-        return Float(s=s)
+            interval_size = 0
+            interval_down = not s
+            interval_closed = False
+            return Float(
+                s=s,
+                isinf=True,
+                interval_size=interval_size,
+                interval_down=interval_down,
+                interval_closed=interval_closed
+            )
+        else:
+             return Float(s=s, isinf=True)
+    elif x.is_zero():
+        # check for inexactness => only occurs when MPFR overflows
+        # TODO: size of the rounding envelope?
+        if inexact:
+            interval_size = 0
+            interval_down = not s
+            interval_closed = False
+            return Float(
+                s=s,
+                isinf=True,
+                interval_size=interval_size,
+                interval_down=interval_down,
+                interval_closed=interval_closed
+            )
+        else:
+            return Float(s=s)
     else:
         # extract mantissa and exponent
         m_, exp_ = x.as_mantissa_exp()
@@ -37,6 +63,20 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
         if c % 2 == 0 and inexact:
             c += 1
         return Float(s=s, c=c, exp=exp)
+
+def _gmp_neg(x):
+    return -x
+
+def _gmp_abs(x):
+    return abs(x)
+
+def _gmp_pow(x, y):
+    return x ** y
+
+def _gmp_lgamma(x):
+    y, _ = gmp.lgamma(x)
+    return y
+
 
 def float_to_mpfr(x: RealFloat | Float):
     if isinstance(x, Float) and x.is_nar():
@@ -59,8 +99,8 @@ def mpfr_constant(x, prec: int):
         precision=prec+2,
         emin=gmp.get_emin_min(),
         emax=gmp.get_emax_max(),
-        trap_underflow=True,
-        trap_overflow=True,
+        trap_underflow=False,
+        trap_overflow=False,
         trap_inexact=False,
         trap_divzero=False,
         round=gmp.RoundToZero,
@@ -74,8 +114,8 @@ def _mpfr_1ary(gmp_fn: Callable[[Any], Any], x: Float, prec: int):
         precision=prec+2,
         emin=gmp.get_emin_min(),
         emax=gmp.get_emax_max(),
-        trap_underflow=True,
-        trap_overflow=True,
+        trap_underflow=False,
+        trap_overflow=False,
         trap_inexact=False,
         trap_divzero=False,
         round=gmp.RoundToZero,
@@ -91,8 +131,8 @@ def _mpfr_2ary(gmp_fn: Callable[[Any, Any], Any], x: Float, y: Float, prec: int)
         precision=prec+2,
         emin=gmp.get_emin_min(),
         emax=gmp.get_emax_max(),
-        trap_underflow=True,
-        trap_overflow=True,
+        trap_underflow=False,
+        trap_overflow=False,
         trap_inexact=False,
         trap_divzero=False,
         round=gmp.RoundToZero,
@@ -262,7 +302,7 @@ def mpfr_fabs(x: Float, prec: int):
     This is the same as computing `abs(x)` exactly and
     then rounding the result to the desired.
     """
-    return _mpfr_1ary(gmp.fabs, x, prec)
+    return _mpfr_1ary(_gmp_abs, x, prec)
 
 def mpfr_fdim(x: Float, y: Float, prec: int):
     """
@@ -329,7 +369,7 @@ def mpfr_lgamma(x: Float, prec: int):
     Computes `lgamma(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
-    return _mpfr_1ary(gmp.lgamma, x, prec)
+    return _mpfr_1ary(_gmp_lgamma, x, prec)
 
 def mpfr_log(x: Float, prec: int):
     """
@@ -371,14 +411,14 @@ def mpfr_neg(x: Float, prec: int):
     Computes `-x` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
-    return _mpfr_1ary(gmp.neg, x, prec)
+    return _mpfr_1ary(_gmp_neg, x, prec)
 
 def mpfr_pow(x: Float, y: Float, prec: int):
     """
     Computes `x ** y` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
-    return _mpfr_2ary(gmp.pow, x, y, prec)
+    return _mpfr_2ary(_gmp_pow, x, y, prec)
 
 def mpfr_remainder(x: Float, y: Float, prec: int):
     """
