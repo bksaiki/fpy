@@ -233,21 +233,6 @@ def fma(x: Float, y: Float, z: Float, ctx: Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_3ary(mpfr_fma, x, y, z, ctx)
 
-def fmod(x: Float, y: Float, ctx: Context):
-    """
-    Computes the remainder of `x / y` rounded under this context.
-
-    The remainder has the same sign as `x`; it is exactly `x - iquot * y`,
-    where `iquot` is the `x / y` with its fractional part truncated.
-    """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    if not isinstance(y, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for x={y}')
-    if not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return _apply_2ary(mpfr_fmod, x, y, ctx)
-
 def fmax(x: Float, y: Float, ctx: Context):
     """Computes `max(x, y)` rounded under `ctx`."""
     if not isinstance(x, Float):
@@ -267,6 +252,21 @@ def fmin(x: Float, y: Float, ctx: Context):
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_2ary(mpfr_fmin, x, y, ctx)
+
+def fmod(x: Float, y: Float, ctx: Context):
+    """
+    Computes the remainder of `x / y` rounded under this context.
+
+    The remainder has the same sign as `x`; it is exactly `x - iquot * y`,
+    where `iquot` is the `x / y` with its fractional part truncated.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(y, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for x={y}')
+    if not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_2ary(mpfr_fmod, x, y, ctx)
 
 def hypot(x: Float, y: Float, ctx: Context):
     """Computes `sqrt(x * x + y * y)` rounded under `ctx`."""

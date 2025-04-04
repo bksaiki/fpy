@@ -39,8 +39,16 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
         return Float(s=s, c=c, exp=exp)
 
 def float_to_mpfr(x: RealFloat | Float):
-    fmt = f'{_bool_to_sign(x.s)}{hex(x.c)}p{x.exp}'
-    return gmp.mpfr(fmt, precision=x.p, base=16)
+    if isinstance(x, Float) and x.is_nar():
+        if x.isnan:
+            s = '-' if x.s else '+'
+            return gmp.mpfr(f'{s}nan')
+        else: # x.isinf
+            s = '-' if x.s else '+'
+            return gmp.mpfr(f'{s}inf')
+    else:
+        fmt = f'{_bool_to_sign(x.s)}{hex(x.c)}p{x.exp}'
+        return gmp.mpfr(fmt, precision=x.p, base=16)
 
 def mpfr_constant(x, prec: int):
     """
