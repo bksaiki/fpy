@@ -3,7 +3,9 @@ This module defines the rounding context type.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, TypeAlias, Union
+from typing import Optional, TypeAlias, Self, Union
+
+from .round import RoundingMode
 
 from . import number
 from . import real
@@ -29,6 +31,11 @@ class Context(ABC):
     when in isolation. The characteristics of the rounding operation are
     summarized by this type.
     """
+
+    @abstractmethod
+    def with_rm(self, rm: RoundingMode) -> Self:
+        """Returns `self` but with rounding mode `rm`."""
+        raise NotImplementedError('virtual method')
 
     @abstractmethod
     def is_representable(self, x: Union[Float, RealFloat]) -> bool:

@@ -128,6 +128,9 @@ class MPBContext(SizedContext):
         """
         return self._mps_ctx.nmin
 
+    def with_rm(self, rm: RoundingMode):
+        return MPBContext(self.pmax, self.emin, self.pos_maxval, rm, neg_maxval=self.neg_maxval)
+
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):
             raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')

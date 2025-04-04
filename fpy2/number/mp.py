@@ -41,6 +41,9 @@ class MPContext(Context):
         self.pmax = pmax
         self.rm = rm
 
+    def with_rm(self, rm: RoundingMode):
+        return MPContext(self.pmax, rm)
+
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):
             raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')

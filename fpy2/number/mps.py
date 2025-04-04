@@ -70,6 +70,9 @@ class MPSContext(OrdinalContext):
         """
         return self.expmin - 1
 
+    def with_rm(self, rm: RoundingMode):
+        return MPSContext(self.pmax, self.emin, rm)
+
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):
             raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')

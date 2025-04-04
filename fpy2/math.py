@@ -409,3 +409,27 @@ def tgamma(x: Float, ctx: Context):
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_1ary(mpfr_tgamma, x, ctx)
+
+#############################################################################
+# Round-to-integer operations
+
+# def ceil(x: Float, ctx: Context):
+#     """
+#     Computes the nearest integer greater than or equal to `x`
+#     representable under `ctx`.
+#     """
+#     if not isinstance(x, Float):
+#         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+#     if not isinstance(ctx, Context):
+#         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+#     return ctx.round_integer(x)
+
+# def floor(x: Float, ctx: Context):
+
+
+
+# # ceil
+# # floor
+# # trunc
+# # round
+# # nearbyint

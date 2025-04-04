@@ -115,6 +115,9 @@ class IEEEContext(EncodableContext):
         """The exponent "bias" as defined by the IEEE 754 standard."""
         return self.emax
 
+    def with_rm(self, rm: RoundingMode):
+        return IEEEContext(self.es, self.nbits, rm)
+
     def is_zero(self, x: Float):
         """Returns if `x` is a zero number."""
         return x.is_zero()
