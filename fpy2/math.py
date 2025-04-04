@@ -6,6 +6,7 @@ from typing import Callable, TypeAlias
 
 from .number import Context, Float
 from .number.gmp import *
+from .number.round import RoundingMode
 
 MPFR_1ary: TypeAlias = Callable[[Float, int], Float]
 MPFR_2ary: TypeAlias = Callable[[Float, Float, int], Float]
@@ -413,23 +414,68 @@ def tgamma(x: Float, ctx: Context):
 #############################################################################
 # Round-to-integer operations
 
-# def ceil(x: Float, ctx: Context):
-#     """
-#     Computes the nearest integer greater than or equal to `x`
-#     representable under `ctx`.
-#     """
-#     if not isinstance(x, Float):
-#         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-#     if not isinstance(ctx, Context):
-#         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-#     return ctx.round_integer(x)
+def ceil(x: Float, ctx: Context):
+    """
+    Computes the smallest integer greater than or equal to `x`
+    that is representable under `ctx`.
 
-# def floor(x: Float, ctx: Context):
+    If the context supports overflow, the result may be infinite.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+    return ctx.with_rm(RoundingMode.RTP).round_integer(x)
 
+def floor(x: Float, ctx: Context):
+    """
+    Computes the largest integer less than or equal to `x`
+    that is representable under `ctx`.
 
+    If the context supports overflow, the result may be infinite.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+    return ctx.with_rm(RoundingMode.RTN).round_integer(x)
 
-# # ceil
-# # floor
-# # trunc
-# # round
-# # nearbyint
+def trunc(x: Float, ctx: Context):
+    """
+    Computes the integer with the largest magnitude whose
+    magnitude is less than or equal to the magntidue of `x`
+    that is representable under `ctx`.
+
+    If the context supports overflow, the result may be infinite.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+    return ctx.with_rm(RoundingMode.RTZ).round_integer(x)
+
+def nearbyint(x: Float, ctx: Context):
+    """
+    Computes the nearest integer to `x`, preferring the even
+    one in case of ties; the result is representable under `ctx`.
+
+    If the context supports overflow, the result may be infinite.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+    return ctx.with_rm(RoundingMode.RNE).round_integer(x)
+
+def round(x: Float, ctx: Context):
+    """
+    Rounds `x` to a representable integer according to
+    the rounding mode of this context.
+
+    If the context supports overflow, the result may be infinite.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+    return ctx.round_integer(x)
