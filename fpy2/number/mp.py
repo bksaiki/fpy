@@ -4,6 +4,7 @@ that is, multi-precision floating-point numbers. Hence, "MP."
 """
 
 from fractions import Fraction
+from typing import Optional
 
 from ..utils import default_repr
 
@@ -89,8 +90,12 @@ class MPContext(Context):
             xr = x._real.normalize(self.pmax, None)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
-    def _round_float(self, x: RealFloat | Float):
-        """Like `self.round()` but for only `RealFloat` and `Float` inputs"""
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+        """
+        Like `self.round()` but for only `RealFloat` and `Float` inputs.
+
+        Optionally specify `n` as the least absolute digit position.
+        """
         # step 1. handle special values
         if isinstance(x, Float):
             if x.isnan:
@@ -106,12 +111,12 @@ class MPContext(Context):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        return x.round(max_p=self.pmax, rm=self.rm)
+        return x.round(max_p=self.pmax, min_n=n, rm=self.rm)
 
     def round_params(self):
         return (self.pmax, None)
 
-    def round(self, x) -> Float:
+    def _round_at(self, x, n: Optional[int]) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x
@@ -127,5 +132,10 @@ class MPContext(Context):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float(xr)
+        return self._round_float_at(xr, n)
 
+    def round(self, x) -> Float:
+        return self._round_at(x, None)
+
+    def round_at(self, x, n: int) -> Float:
+        return self._round_at(x, n)

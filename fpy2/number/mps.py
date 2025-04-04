@@ -5,6 +5,7 @@ numbers with subnormals. Hence, "MP-S."
 """
 
 from fractions import Fraction
+from typing import Optional
 
 from ..utils import default_repr, bitmask
 
@@ -126,8 +127,13 @@ class MPSContext(OrdinalContext):
     def round_params(self):
         return (self.pmax, self.nmin)
 
-    def _round_float(self, x: RealFloat | Float):
-        """Like `self.round()` but for only `RealFloat` and `Float` inputs"""
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+        """
+        Like `self.round()` but for only `RealFloat` and `Float` inputs.
+
+        Optionally specify `n` as the least absolute digit position.
+        Only overrides rounding behavior when `n > self.nmin`.
+        """
         # step 1. handle special values
         if isinstance(x, Float):
             if x.isnan:
@@ -142,10 +148,15 @@ class MPSContext(OrdinalContext):
             # exactly zero
             return Float(ctx=self)
 
-        # step 3. round value based on rounding parameters
-        return x.round(self.pmax, self.nmin, self.rm)
+        # step 3. select rounding parameter `n`
+        if n is None or n < self.nmin:
+            # no rounding parameter
+            n = self.nmin
 
-    def round(self, x):
+        # step 3. round value based on rounding parameters
+        return x.round(self.pmax, n, self.rm)
+
+    def _round_at(self, x, n: Optional[int]) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x
@@ -161,7 +172,13 @@ class MPSContext(OrdinalContext):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float(xr)
+        return self._round_float_at(xr, n)
+
+    def round(self, x) -> Float:
+        return self._round_at(x, None)
+
+    def round_at(self, x, n: int) -> Float:
+        return self._round_at(x, n)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):

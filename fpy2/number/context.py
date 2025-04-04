@@ -69,6 +69,36 @@ class Context(ABC):
         """Rounds any digital number according to this context."""
         raise NotImplementedError('virtual method')
 
+    @abstractmethod
+    def round_at(self, x, n: int) -> Float:
+        """
+        Rounding any digital number of a representable value with
+        an unnormalized exponent of at minimum `n + 1`.
+
+        Rounding is done by the following rules:
+         - if `x` is representable and has an unnormalized exponent
+           of at minimum `n + 1`, then `self.round_n(x, n) == x`
+         - if `x` is between two representable values `i1 < x < i2`
+           where both `i1` and `i2` have unnormalized exponents of at
+           minimum `n + 1`,  then the context information determines
+           which value is returned.
+        """
+        raise NotImplementedError('virtual method')
+
+    def round_integer(self, x) -> Float:
+        """
+        Rounds any digital number to an integer according to this context.
+
+        Rounding is done by the following rules:
+         - if `x` is a representable integer, then `self.round_integer(x) == x`
+         - if `x` is between two representable integers `i1 < x < i2`,
+          then the context information determines which integer
+          is returned.
+
+        This is equivalent to `self.round_at(x, -1)`.
+        """
+        return self.round_at(x, -1)
+
 
 class OrdinalContext(Context):
     """

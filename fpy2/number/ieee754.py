@@ -160,6 +160,11 @@ class IEEEContext(EncodableContext):
         rounded.ctx = self
         return rounded
 
+    def round_at(self, x, n: int) -> Float:
+        rounded = self._mpb_ctx.round_at(x, n)
+        rounded.ctx = self
+        return rounded
+
     def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
