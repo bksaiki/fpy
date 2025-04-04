@@ -3,7 +3,6 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Optional, Self, Sequence
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location

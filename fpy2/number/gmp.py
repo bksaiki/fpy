@@ -12,7 +12,6 @@ from typing import Any, Callable
 
 from .number import Float
 from .real import RealFloat
-from .round import RoundingMode
 
 def _bool_to_sign(b: bool):
     return '-' if b else '+'

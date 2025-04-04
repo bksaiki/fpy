@@ -4,7 +4,7 @@ This module defines the floating-point number type `Float`.
 
 from typing import Optional, Self
 
-from ..utils import default_repr, Ordering, rcomparable
+from ..utils import Ordering, rcomparable
 from .context import Context
 from .globals import get_current_float_converter, get_current_str_converter
 from .real import RealFloat
