@@ -18,7 +18,6 @@ class RoundTestCase(unittest.TestCase):
             (0, 0b101010, 3, 2, 3, 2), # 0b101010 * 2 ** 0, max_p=3, min_n=2 => p=3, n=2
             (0, 0b101010, 3, 5, 3, 5), # 0b101010 * 2 ** 0, max_p=3, min_n=5 => p=3, n=5
             (0, 0b10, 3, 3, 3, 3), # 0b10 * 2 ** 0, max_p=3, min_n=3 => p=3, n=3
-            
         ]
 
         for exp, c, max_p, min_n, expect_p, expect_n in inputs:

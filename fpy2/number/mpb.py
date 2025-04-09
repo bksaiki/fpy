@@ -128,6 +128,9 @@ class MPBContext(SizedContext):
         """
         return self._mps_ctx.nmin
 
+    def with_rm(self, rm: RoundingMode):
+        return MPBContext(self.pmax, self.emin, self.pos_maxval, rm, neg_maxval=self.neg_maxval)
+
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):
             raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
@@ -186,8 +189,13 @@ class MPBContext(SizedContext):
             case _:
                 raise RuntimeError(f'unrechable {direction}')
 
-    def _round_float(self, x: RealFloat | Float):
-        """Like `self.round()` but for only `RealFloat` and `Float` inputs"""
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+        """
+        Like `self.round()` but for only `RealFloat` and `Float` inputs.
+
+        Optionally specify `n` as the least absolute digit position.
+        Only overrides rounding behavior when `n > self.nmin`.
+        """
         # step 1. handle special values
         if isinstance(x, Float):
             if x.isnan:
@@ -202,10 +210,15 @@ class MPBContext(SizedContext):
             # exactly zero
             return Float(ctx=self)
 
-        # step 3. round value based on rounding parameters
-        rounded = x.round(self.pmax, self.nmin, self.rm)
+        # step 3. select rounding parameter `n`
+        if n is None or n < self.nmin:
+            # no rounding parameter
+            n = self.nmin
 
-        # step 4. check for overflow
+        # step 4. round value based on rounding parameters
+        rounded = x.round(self.pmax, n, self.rm)
+
+        # step 5. check for overflow
         if self._is_overflowing(rounded):
             # overflowing => check which way to round
             if self._overflow_to_infinity(rounded):
@@ -216,10 +229,10 @@ class MPBContext(SizedContext):
                 max_val = self.maxval(rounded.s)
                 return Float(x=max_val, ctx=self)
 
-        # step 5. return rounded result
+        # step 6. return rounded result
         return Float(x=rounded, ctx=self)
 
-    def round(self, x):
+    def _round_at(self, x, n: Optional[int]) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x
@@ -235,7 +248,13 @@ class MPBContext(SizedContext):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float(xr)
+        return self._round_float_at(xr, n)
+
+    def round(self, x) -> Float:
+        return self._round_at(x, None)
+
+    def round_at(self, x, n: int) -> Float:
+        return self._round_at(x, n)
 
     def to_ordinal(self, x: Float, infval = False):
         if not isinstance(x, Float) or not self.is_representable(x):
