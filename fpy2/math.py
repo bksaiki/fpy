@@ -464,19 +464,6 @@ def trunc(x: Float, ctx: Context):
 
 def nearbyint(x: Float, ctx: Context):
     """
-    Computes the nearest integer to `x`, preferring the even
-    one in case of ties; the result is representable under `ctx`.
-
-    If the context supports overflow, the result may be infinite.
-    """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    if not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RNE).round_integer(x)
-
-def round(x: Float, ctx: Context):
-    """
     Rounds `x` to a representable integer according to
     the rounding mode of this context.
 
@@ -487,3 +474,16 @@ def round(x: Float, ctx: Context):
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
     return ctx.round_integer(x)
+
+def round(x: Float, ctx: Context):
+    """
+    Rounds `x` to the nearest representable integer,
+    rounding tiews away from zero in halfway cases.
+
+    If the context supports overflow, the result may be infinite.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+    return ctx.with_rm(RoundingMode.RNA).round_integer(x)

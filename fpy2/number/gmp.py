@@ -39,18 +39,10 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
              return Float(s=s, isinf=True)
     elif x.is_zero():
         # check for inexactness => only occurs when MPFR overflows
-        # TODO: size of the rounding envelope?
+        # TODO: generate a reasonable inexact value
         if inexact:
-            interval_size = 0
-            interval_down = not s
-            interval_closed = False
-            return Float(
-                s=s,
-                isinf=True,
-                interval_size=interval_size,
-                interval_down=interval_down,
-                interval_closed=interval_closed
-            )
+            exp = gmp.get_emin_min() - 1
+            return Float(s=s, exp=exp, c=1)
         else:
             return Float(s=s)
     else:
@@ -79,6 +71,9 @@ def _gmp_lgamma(x):
 
 
 def float_to_mpfr(x: RealFloat | Float):
+    """
+    Converts `x` into an MPFR type exactly.
+    """
     if isinstance(x, Float) and x.is_nar():
         if x.isnan:
             s = '-' if x.s else '+'
@@ -89,6 +84,15 @@ def float_to_mpfr(x: RealFloat | Float):
     else:
         fmt = f'{_bool_to_sign(x.s)}{hex(x.c)}p{x.exp}'
         return gmp.mpfr(fmt, precision=x.p, base=16)
+
+def mpfr_to_float(x):
+    """
+    Converts `x` into Float type exactly.
+
+    The precision of the result is the same as the precision of `x`.
+    """
+    return _round_odd(x, False)
+
 
 def mpfr_constant(x, prec: int):
     """

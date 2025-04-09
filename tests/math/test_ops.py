@@ -8,6 +8,7 @@ _unary_ops = [
     acos,
     acosh,
     asin,
+    asinh,
     atan,
     atanh,
     cbrt,
