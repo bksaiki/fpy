@@ -6,6 +6,7 @@ from .real import RealFloat
 
 # Contexts
 from .context import Context, OrdinalContext, SizedContext, EncodableContext
+from .ext import ExtContext, ExtNanKind
 from .ieee754 import IEEEContext
 from .mp import MPContext
 from .mpb import MPBContext

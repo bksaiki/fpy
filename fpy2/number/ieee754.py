@@ -58,10 +58,17 @@ class IEEEContext(EncodableContext):
     """this context as an `MPBContext`"""
 
     def __init__(self, es: int, nbits: int, rm: RoundingMode):
+        if not isinstance(es, int):
+            raise TypeError(f'Expected \'int\', got \'{type(es)}\' for es={es}')
+        if not isinstance(nbits, int):
+            raise TypeError(f'Expected \'int\', got \'{type(nbits)}\' for nbits={nbits}')
+        if not isinstance(rm, RoundingMode):
+            raise TypeError(f'Expected \'RoundingMode\', got \'{type(rm)}\' for rm={rm}')
+
         if es < 2:
-            raise ValueError(f'Invalid es={es}, must be at least 2')
+            raise ValueError(f'Invalid es={es}, must be an integer >= 2')
         if nbits < es + 2:
-            raise ValueError(f'Invalid nbits={nbits}, must be at least es+2={es + 2}')
+            raise ValueError(f'Invalid nbits={nbits}, must be an integer >= es+2={es + 2}')
 
         self.es = es
         self.nbits = nbits
