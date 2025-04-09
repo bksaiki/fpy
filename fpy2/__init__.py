@@ -26,6 +26,7 @@ from .number import (
     SizedContext,
     EncodableContext,
     # concrete context types
+    ExtContext,
     MPContext,
     MPSContext,
     MPBContext,
@@ -34,6 +35,8 @@ from .number import (
     RoundingMode,
     RoundingDirection,
     RM,
+    # miscellaneous
+    ExtNanKind
 )
 
 from .decorator import fpy, pattern
