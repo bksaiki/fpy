@@ -21,6 +21,17 @@ def _gmp_lgamma(x):
     y, _ = gmp.lgamma(x)
     return y
 
+def _gmp_fdim(x, y):
+    if gmp.is_nan(x) or gmp.is_nan(y):
+        # C reference: if either argument is NaN, NaN is returned
+        return gmp.nan()
+    elif x > y:
+        # if `x > y`, returns `x - y`
+        return gmp.sub(x, y)
+    else:
+        # otherwise, returns +0
+        return gmp.zero()
+
 
 _unary_ops = {
     acos : gmp.acos,
@@ -58,24 +69,24 @@ _unary_ops = {
     round : gmp.round_away
 }
 
-# _binary_ops = {
-#     add : gmp.add,
-#     atan2 : gmp.atan2,
-#     copysign : gmp.copysign,
-#     div : gmp.div,
-#     fdim : gmp.fdim,
-#     fmax,
-#     fmin,
-#     fmod,
-#     hypot,
-#     mul,
-#     pow,
-#     remainder
-# }
+_binary_ops = {
+    add : gmp.add,
+    atan2 : gmp.atan2,
+    copysign : gmp.copy_sign,
+    div : gmp.div,
+    fdim : _gmp_fdim,
+    fmax: gmp.maxnum,
+    fmin: gmp.minnum,
+    fmod: gmp.fmod,
+    hypot: gmp.hypot,
+    mul : gmp.mul,
+    pow : _gmp_pow,
+    remainder : gmp.remainder
+}
 
-# _ternary_ops = [
-#     fma
-# ]
+_ternary_ops = {
+    fma : gmp.fma
+}
 
 _rms = [
     RM.RNE,
@@ -146,14 +157,64 @@ class MPFREquivTestCase(unittest.TestCase):
                         i = random.randint(0, 1 << ctx.nbits - 1)
                         x = ctx.decode(i)
                         # evaluate operation
-                        y = op(x, ctx)
+                        fl = op(x, ctx)
                         # evaluate equivalent operation
                         r = _mpfr_apply(mpfr, (x,), ctx)
                         ref = ctx.round(r)
                         # sanity check: ref should be exact
                         assert not ref.inexact
                         # check that they are the same
-                        if y.isnan:
-                            self.assertTrue(y.isnan, f'op={op}, rm={rm}, x={x}, y={y}, ref={ref}')
+                        if fl.isnan:
+                            self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}')
                         else:
-                            self.assertEqual(y, ref, f'op={op}, rm={rm}, x={x}, y={y}, ref={ref}')
+                            self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}')
+
+    def test_fuzz_binary(self, num_inputs: int = 256):
+        for op, mpfr in _binary_ops.items():
+            for ctx_base in _ctxs:
+                for rm in _rms:
+                    ctx = ctx_base.with_rm(rm)
+                    for _ in range(num_inputs):
+                        # sample point
+                        i = random.randint(0, 1 << ctx.nbits - 1)
+                        j = random.randint(0, 1 << ctx.nbits - 1)
+                        x = ctx.decode(i)
+                        y = ctx.decode(j)
+                        # evaluate operation
+                        fl = op(x, y, ctx)
+                        # evaluate equivalent operation
+                        r = _mpfr_apply(mpfr, (x, y), ctx)
+                        ref = ctx.round(r)
+                        # sanity check: ref should be exact
+                        assert not ref.inexact
+                        # check that they are the same
+                        if fl.isnan:
+                            self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}')
+                        else:
+                            self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}')
+
+    def test_fuzz_ternary(self, num_inputs: int = 256):
+        for op, mpfr in _ternary_ops.items():
+            for ctx_base in _ctxs:
+                for rm in _rms:
+                    ctx = ctx_base.with_rm(rm)
+                    for _ in range(num_inputs):
+                        # sample point
+                        i = random.randint(0, 1 << ctx.nbits - 1)
+                        j = random.randint(0, 1 << ctx.nbits - 1)
+                        k = random.randint(0, 1 << ctx.nbits - 1)
+                        x = ctx.decode(i)
+                        y = ctx.decode(j)
+                        z = ctx.decode(k)
+                        # evaluate operation
+                        fl = op(x, y, z, ctx)
+                        # evaluate equivalent operation
+                        r = _mpfr_apply(mpfr, (x, y, z), ctx)
+                        ref = ctx.round(r)
+                        # sanity check: ref should be exact
+                        assert not ref.inexact
+                        # check that they are the same
+                        if fl.isnan:
+                            self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}')
+                        else:
+                            self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}')
