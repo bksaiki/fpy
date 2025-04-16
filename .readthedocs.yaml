@@ -13,3 +13,11 @@ build:
 # Build documentation with Sphinx
 sphinx:
    configuration: docs/source/conf.py
+
+# Install dependencies
+python:
+  install:
+    - method: pip
+      path: .
+      extra_requirements:
+        - dev
