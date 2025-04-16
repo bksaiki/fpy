@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy", "ruff", "build", "twine"]
+dev = ["mypy", "ruff", "build", "twine", "sphinx", "sphinx-rtd-theme"]
 
 [project.urls]
 Homepage = "https://github.com/bksaiki/fpy"
