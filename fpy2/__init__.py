@@ -1,6 +1,4 @@
 """
-The FPy library.
-
 FPy is a library for simulating numerical programs
 with many different number systems.
 
@@ -9,11 +7,15 @@ The language has a runtime that can simulate programs
 under different number systems and compilers to other languages.
 
 The numbers library supports many different number types including:
+
  - multiprecision floating point (`MPContext`)
  - multiprecision floatingpoint with subnormalization (`MPSContext`)
  - bounded, multiprecision floating point (`MPBContext`)
  - IEEE 754 floating point (`IEEEContext`)
+
 These number systems guarantee correct rounding via MPFR.
+
+
 """
 
 from .frontend import fpy
@@ -21,7 +23,7 @@ from .frontend import fpy
 from .backend import (
     Backend,
     FPCoreCompiler,
-    FPYCompiler
+    FPYCompiler,
 )
 
 from .number import (
@@ -41,7 +43,7 @@ from .number import (
     # rounding utilities
     RoundingMode,
     RoundingDirection,
-    RM
+    RM,
 )
 
 from .runtime import (
@@ -53,12 +55,12 @@ from .runtime import (
     set_default_interpreter,
     get_default_interpreter,
     FunctionProfiler,
-    ExprProfiler
+    ExprProfiler,
 )
 
 from .utils import (
     fraction,
     digits_to_fraction as digits,
     decnum_to_fraction as decnum,
-    hexnum_to_fraction as hexnum
+    hexnum_to_fraction as hexnum,
 )
