@@ -352,6 +352,36 @@ class Float:
             raise ValueError(f'cannot normalize without a context: self={self}')
         return self.ctx.normalize(self)
 
+    def round(self, ctx: Context):
+        """
+        Rounds this number under the given context.
+
+        This method is equivalent to `ctx.round(self)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round(self)
+
+    def round_at(self, ctx: Context, n: int) -> 'Float':
+        """
+        Rounds this number at the given position.
+
+        This method is equivalent to `self.ctx.round_at(self, n)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round_at(self, n)
+
+    def round_integer(self, ctx: Context) -> 'Float':
+        """
+        Rounds this number to the nearest integer.
+
+        This method is equivalent to `self.ctx.round_integer(self)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round_integer(self)
+
     def compare(self, other: Self | RealFloat) -> Optional[Ordering]:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
