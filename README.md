@@ -36,6 +36,11 @@ development and installs a copy of the `fpy2` package.
 If you checkout a different commit or branch, you will
 need to reinstall FPy to overwrite the previous version.
 
+To uninstall FPy, run:
+```bash
+pip uninstall fpy2
+```
+
 ## Development
 
 Developers of FPy should read this section since
