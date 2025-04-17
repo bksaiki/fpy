@@ -163,6 +163,54 @@ class Float:
         fn = get_current_float_converter()
         return fn(self)
 
+    @staticmethod
+    def from_real(x: RealFloat, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts a `RealFloat` number to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, RealFloat):
+            raise TypeError(f'expected RealFloat, got {type(x)}')
+
+        f = Float(x=x, ctx=ctx)
+        if ctx is None:
+            return f
+        else:
+            if not f.is_representable():
+                raise ValueError(f'{x} is not representable under {ctx}')
+            return f.normalize()
+
+    @staticmethod
+    def from_int(x: int, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts an integer to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, int):
+            raise TypeError(f'expected int, got {type(x)}')
+
+        return Float.from_real(RealFloat.from_int(x), ctx)
+
+    @staticmethod
+    def from_float(x: float, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts a native Python float to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, float):
+            raise TypeError(f'expected int, got {type(x)}')
+
+        return Float.from_real(RealFloat.from_float(x), ctx)
+
     @property
     def base(self):
         """Integer base of this number. Always 2."""
@@ -303,6 +351,36 @@ class Float:
         if self.ctx is None:
             raise ValueError(f'cannot normalize without a context: self={self}')
         return self.ctx.normalize(self)
+
+    def round(self, ctx: Context):
+        """
+        Rounds this number under the given context.
+
+        This method is equivalent to `ctx.round(self)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round(self)
+
+    def round_at(self, ctx: Context, n: int) -> 'Float':
+        """
+        Rounds this number at the given position.
+
+        This method is equivalent to `self.ctx.round_at(self, n)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round_at(self, n)
+
+    def round_integer(self, ctx: Context) -> 'Float':
+        """
+        Rounds this number to the nearest integer.
+
+        This method is equivalent to `self.ctx.round_integer(self)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round_integer(self)
 
     def compare(self, other: Self | RealFloat) -> Optional[Ordering]:
         """

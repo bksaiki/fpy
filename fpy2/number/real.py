@@ -919,6 +919,19 @@ class RealFloat(numbers.Rational):
 
         return kept, half_bit, lower_bits
 
+    def round_at_exact(self, n: int):
+        """
+        Like `self.round_at()` except that the result must be exact.
+        Raises a `ValueError` if the result is not exact.
+
+        See `self.round_at()` for more information.
+        """
+
+        kept, lost = self.split(n)
+        if not lost.is_zero():
+            raise ValueError(f'rounding off digits: n={n}, x={self}')
+        return kept
+
 
     def round(
         self,
@@ -957,3 +970,22 @@ class RealFloat(numbers.Rational):
         # step 3. finalize the rounding operation
         return self._round_finalize(kept, half_bit, lower_bits, p, rm)
 
+    def round_exact(
+        self,
+        max_p: Optional[int] = None,
+        min_n: Optional[int] = None
+    ):
+        """
+        Like `self.round()` except the result must be exact.
+        Raises a `ValueError` if the result is not exact.
+
+        See `self.round()` for more information.
+        """
+        if max_p is None and min_n is None:
+            raise ValueError(f'must specify {max_p} or {min_n}')
+
+        # step 1. compute rounding parameters
+        _, n = self._round_params(max_p, min_n)
+
+        # step 2. split the number at the rounding position
+        return self.round_at_exact(n)
