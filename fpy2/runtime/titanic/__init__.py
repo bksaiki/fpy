@@ -1,1 +1,1 @@
-from .interpreter import TitanicInterpreter
+from ...interpret.titanic import TitanicInterpreter

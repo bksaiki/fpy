@@ -5,7 +5,7 @@ from statistics import geometric_mean
 from typing import Optional, Sequence
 
 from fpy2 import *
-from fpy2.runtime.sampling import sample_function
+from fpy2.sample import sample_function
 from fpy2.runtime.real.rival_manager import PrecisionLimitExceeded
 from titanfp.arithmetic.ieee754 import ieee_ctx
 

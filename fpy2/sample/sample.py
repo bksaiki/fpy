@@ -8,10 +8,9 @@ from titanfp.arithmetic.evalctx import determine_ctx
 from titanfp.arithmetic import ieee754
 
 from .table import RangeTable
-from ..titanic import TitanicInterpreter
-from ..function import Function
-from ..env import ForeignEnv
-from ...ir import *
+from ..interpret import TitanicInterpreter
+from ..runtime import Function, ForeignEnv
+from ..ir import *
 
 _DEFAULT_FUEL = 32
 

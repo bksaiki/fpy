@@ -1,1 +1,1 @@
-from .interpreter import PythonInterpreter
+from ...interpret.native import PythonInterpreter
