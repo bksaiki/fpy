@@ -1,26 +1,18 @@
 # Makefile for running tests and linting
 
-help:
-	@echo "FPy Make targets"
-	@echo ""
-	@echo "Testing"
-	@echo "  make tests        Run all tests"
-	@echo "  make infratest     Run infrastructure testing"
-	@echo "  make unittest      Run unit tests"
-	@echo "  make lint          Run linters"
-	@echo ""
-	@echo "Install / Build"
-	@echo "  make build         Build the fpy2 package"
-	@echo "  make install       Install the fpy2 package"
-	@echo "  make install-dev   Install the fpy2 package in development mode"
-	@echo ""
-	@echo "Miscellaneous"
-	@echo "  make help          Show this help message"
-	@echo
+default: help;
 
 build:
 	@echo "Building fpy2..."
 	python3 -m build
+
+docs:
+	@echo "Building documentation..."
+	make html -C docs/
+
+clean-docs:
+	@echo "Cleaning documentation..."
+	make clean -C docs/
 
 install:
 	@echo "Installing fpy2..."
@@ -50,4 +42,27 @@ unittest:
 	@echo "Running unit tests..."
 	python3 -m unittest -v 
 
-.PHONY: infratest unittest tests
+help:
+	@echo "FPy Make targets"
+	@echo ""
+	@echo "Testing"
+	@echo "  make tests        Run all tests"
+	@echo "  make infratest     Run infrastructure testing"
+	@echo "  make unittest      Run unit tests"
+	@echo "  make lint          Run linters"
+	@echo ""
+	@echo "Install / Build"
+	@echo "  make build         Build the fpy2 package"
+	@echo "  make install       Install the fpy2 package"
+	@echo "  make install-dev   Install the fpy2 package in development mode"
+	@echo ""
+	@echo "Documentation"
+	@echo ""
+	@echo "  make docs          Build the documentation"
+	@echo "  make clean-docs    Clean the HTML documentation"
+	@echo ""
+	@echo "Miscellaneous"
+	@echo "  make help          Show this help message"
+	@echo
+
+.PHONY: docs tests

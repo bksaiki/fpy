@@ -20,14 +20,6 @@ fpy2.frontend.decorator module
    :show-inheritance:
    :undoc-members:
 
-fpy2.frontend.definition module
--------------------------------
-
-.. automodule:: fpy2.frontend.definition
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
 fpy2.frontend.formatter module
 ------------------------------
 
@@ -48,14 +40,6 @@ fpy2.frontend.fpyast module
 ---------------------------
 
 .. automodule:: fpy2.frontend.fpyast
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-fpy2.frontend.live\_vars module
--------------------------------
-
-.. automodule:: fpy2.frontend.live_vars
    :members:
    :show-inheritance:
    :undoc-members:
