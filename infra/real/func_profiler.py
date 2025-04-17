@@ -1,7 +1,7 @@
 from typing import Optional
 
 from fpy2 import *
-from fpy2.runtime.sampling import sample_function
+from fpy2.sample import sample_function
 
 from .common import disabled_tests, select_interpreter
 from .config import Config, ReferenceMode

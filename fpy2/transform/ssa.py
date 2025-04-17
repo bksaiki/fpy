@@ -2,8 +2,8 @@
 Static Single Assignment (SSA) transformation pass.
 """
 
-from .reaching_defs import ReachingDefs, Reach
-from .verify import VerifyIR
+from ..analysis.reaching_defs import ReachingDefs, Reach
+from ..analysis.verify import VerifyIR
 from ..ir import *
 from ..utils import Gensym
 

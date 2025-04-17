@@ -12,12 +12,15 @@ from titanfp.arithmetic.ieee754 import Float, IEEECtx, ieee_ctx
 from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.digital import Digital
 
-from .interval import RealInterval
-from .rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
+from ..runtime.real.interval import RealInterval
+from ..runtime.real.rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
 
-from ..common import ExprTraceEntry
-from ..function import Interpreter, Function, FunctionReturnException
-from ...ir import *
+from ..runtime.trace import ExprTraceEntry
+from ..runtime.function import Function
+from ..ir import *
+
+from .interpreter import Interpreter, FunctionReturnException
+
 
 ScalarVal: TypeAlias = str | bool | RealInterval
 """Type of scalar values in FPy programs."""

@@ -16,13 +16,12 @@ from typing import (
 )
 
 from .codegen import IRCodegen
-from .definition import DefinitionAnalysis
-from .live_vars import LiveVarAnalysis
 from .parser import Parser
 from .syntax_check import SyntaxCheck
 
-from ..passes import SSA, VerifyIR
+from ..analysis import VerifyIR
 from ..runtime import Function, ForeignEnv
+from ..transform import SSA
 
 P = ParamSpec('P')
 R = TypeVar('R')
@@ -103,8 +102,6 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     ast.free_vars = SyntaxCheck.analyze(ast, free_vars=free_vars)
 
     # analyze and lower to the IR
-    DefinitionAnalysis.analyze(ast)
-    LiveVarAnalysis.analyze(ast)
     ir = IRCodegen.lower(ast)
     ir = SSA.apply(ir)
     VerifyIR.check(ir)

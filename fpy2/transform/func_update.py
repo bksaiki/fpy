@@ -4,9 +4,9 @@ Transformation pass to rewrite in-place tuple mutation as functional updates.
 
 from typing import Optional
 
-from .define_use import DefineUse
+from ..analysis.define_use import DefineUse
 from .ssa import SSA
-from .verify import VerifyIR
+from ..analysis.verify import VerifyIR
 from ..ir import *
 
 class _FuncUpdateInstance(DefaultTransformVisitor):

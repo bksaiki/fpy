@@ -7,7 +7,17 @@ import numbers
 
 from typing import Optional, Self
 
-from ..utils import bitmask, default_repr, float_to_bits, Ordering
+from ..utils import (
+    bitmask,
+    default_repr,
+    float_to_bits,
+    Ordering,
+    FP64_NBITS,
+    FP64_ES,
+    FP64_M,
+    FP64_EXPMIN
+)
+
 from .globals import get_current_float_converter, get_current_str_converter
 from .round import RoundingMode, RoundingDirection
 
@@ -361,20 +371,11 @@ class RealFloat(numbers.Rational):
         if not isinstance(x, float):
             raise TypeError(f'expected float, got {type(x)}')
 
-        # IEEE 754 constants
-        NBITS = 64                   # size of the representation
-        ES = 11                      # size of the exponent field
-        P = NBITS - ES               # precision
-        M = P - 1                    # mantissa size
-        EMAX = (1 << (ES - 1)) - 1   # maximum (normalized) exponent
-        EMIN = 1 - EMAX              # minimum (normalized) exponent
-        EXPMIN = EMIN - P + 1        # minimum (unnormalized) exponent
-
         # convert to bits
         b = float_to_bits(x)
-        sbits = b >> (NBITS - 1)
-        ebits = (b >> M) & bitmask(ES)
-        mbits = b & bitmask(M)
+        sbits = b >> (FP64_NBITS - 1)
+        ebits = (b >> FP64_M) & bitmask(FP64_ES)
+        mbits = b & bitmask(FP64_M)
 
         # sign
         s = sbits != 0
@@ -382,14 +383,14 @@ class RealFloat(numbers.Rational):
         # case split on exponent
         if ebits == 0:
             # zero / subnormal
-            return RealFloat(s=s, exp=EXPMIN, c=mbits)
-        elif ebits == bitmask(ES):
+            return RealFloat(s=s, exp=FP64_EXPMIN, c=mbits)
+        elif ebits == bitmask(FP64_ES):
             # infinity / NaN
             raise ValueError(f'expected finite float, got x={x}')
         else:
             # normal
-            exp = EXPMIN + (ebits - 1)
-            c = (1 << (P - 1)) | mbits
+            exp = FP64_EXPMIN + (ebits - 1)
+            c = (1 << FP64_M) | mbits
             return RealFloat(s=s, exp=exp, c=c)
 
     @staticmethod

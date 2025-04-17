@@ -12,10 +12,13 @@ from titanfp.titanic.ndarray import NDArray
 from titanfp.titanic.ops import OP
 import titanfp.titanic.gmpmath as gmpmath
 
-from ..common import ExprTraceEntry
-from ..env import ForeignEnv
-from ..function import Interpreter, Function, FunctionReturnException
-from ...ir import *
+from ..runtime.trace import ExprTraceEntry
+from ..runtime.env import ForeignEnv
+from ..runtime.function import Function
+from ..ir import *
+
+from .interpreter import Interpreter, FunctionReturnException
+
 
 ScalarVal: TypeAlias = bool | Digital
 """Type of scalar values in FPy programs."""

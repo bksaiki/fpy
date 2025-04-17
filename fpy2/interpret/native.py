@@ -12,9 +12,12 @@ from titanfp.arithmetic.ieee754 import Float, IEEECtx, ieee_ctx
 from titanfp.titanic.digital import Digital
 from titanfp.titanic.ops import RM
 
-from ..function import Interpreter, Function, FunctionReturnException
-from ..env import ForeignEnv
-from ...ir import *
+from ..runtime.function import Function
+from ..runtime.env import ForeignEnv
+from ..ir import *
+
+from .interpreter import Interpreter, FunctionReturnException
+
 
 def _safe_div(x: float, y: float):
     if y == 0:

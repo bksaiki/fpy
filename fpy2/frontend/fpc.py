@@ -8,12 +8,11 @@ import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
 
 from .codegen import IRCodegen
-from .definition import DefinitionAnalysis
 from .fpyast import *
-from .live_vars import LiveVarAnalysis
 from .syntax_check import SyntaxCheck
 
-from ..passes import SSA, VerifyIR
+from ..analysis import VerifyIR
+from ..transform import SSA
 from ..utils import Gensym, pythonize_id
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
@@ -709,8 +708,6 @@ def fpcore_to_fpy(
 
     # analyze and lower to the IR
     SyntaxCheck.analyze(ast, ignore_unknown=ignore_unknown)
-    DefinitionAnalysis.analyze(ast)
-    LiveVarAnalysis.analyze(ast)
     ir = IRCodegen.lower(ast)
     ir = SSA.apply(ir)
     VerifyIR.check(ir)

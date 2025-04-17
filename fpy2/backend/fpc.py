@@ -4,9 +4,10 @@ from typing import Optional
 
 import titanfp.fpbench.fpcast as fpc 
 
+from ..analysis import DefineUse
 from ..runtime import Function
-from ..passes import *
 from ..ir import *
+from ..transform import ForBundling, FuncUpdate, SimplifyIf, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend
