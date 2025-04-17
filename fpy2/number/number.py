@@ -163,6 +163,54 @@ class Float:
         fn = get_current_float_converter()
         return fn(self)
 
+    @staticmethod
+    def from_real(x: RealFloat, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts a `RealFloat` number to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, RealFloat):
+            raise TypeError(f'expected RealFloat, got {type(x)}')
+
+        f = Float(x=x, ctx=ctx)
+        if ctx is None:
+            return f
+        else:
+            if not f.is_representable():
+                raise ValueError(f'{x} is not representable under {ctx}')
+            return f.normalize()
+
+    @staticmethod
+    def from_int(x: int, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts an integer to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, int):
+            raise TypeError(f'expected int, got {type(x)}')
+
+        return Float.from_real(RealFloat.from_int(x), ctx)
+
+    @staticmethod
+    def from_float(x: float, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts a native Python float to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, float):
+            raise TypeError(f'expected int, got {type(x)}')
+
+        return Float.from_real(RealFloat.from_float(x), ctx)
+
     @property
     def base(self):
         """Integer base of this number. Always 2."""
