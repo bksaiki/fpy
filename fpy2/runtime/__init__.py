@@ -6,9 +6,7 @@ from .function import (
     set_default_interpreter
 )
 
-from .native import PythonInterpreter
-from .real import RealInterpreter
-from .titanic import TitanicInterpreter
+from ..interpret import TitanicInterpreter
 
 from .profile import ExprProfiler, FunctionProfiler
 

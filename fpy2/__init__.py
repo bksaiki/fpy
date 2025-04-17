@@ -44,12 +44,15 @@ from .backend import (
     FPYCompiler,
 )
 
-from .runtime import (
-    Function,
-    Interpreter,
+from .interpret import (
     PythonInterpreter,
     RealInterpreter,
     TitanicInterpreter,
+)
+
+from .runtime import (
+    Function,
+    Interpreter,
     set_default_interpreter,
     get_default_interpreter,
     FunctionProfiler,
