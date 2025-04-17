@@ -13,7 +13,8 @@ Requirements:
  - Python 3.11 or later
 
 The following instructions assume a `bash`-like shell.
-Create a virtual environment if one does not exist:
+If you do not have a Python virtual environment,
+create one using
 ```bash
 python3 -m venv .env/
 ```
@@ -35,6 +36,24 @@ development and installs a copy of the `fpy2` package.
 
 ## Development
 
+Developers of FPy should read this section since
+installing FPy is actually different.
+
+Requirements:
+ - Python 3.11 or later
+ - `make`
+
+### Installation
+
+If you do not have a Python virtual environment,
+create one using
+```bash
+python3 -m venv .env/
+```
+and activate it using using
+```bash
+source .env/bin/activate
+```
 To install an instance of FPy for development, run:
 ```bash
 pip install -e .[dev]
@@ -44,11 +63,7 @@ or with `make`, run
 make install-dev
 ```
 
-## Testing
-
-Requirements:
- - Python 3.11 or later
- - `make`
+### Testing
 
 There are a number of tests that can be run through
 the `Makefile` including
