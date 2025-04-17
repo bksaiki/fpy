@@ -8,7 +8,7 @@ from typing import Any, Optional
 from titanfp.arithmetic.evalctx import EvalCtx
 
 from ..ir import Expr
-from ..runtime import Function
+from ..runtime import Function, set_default_function_call
 from ..runtime.trace import ExprTraceEntry
 
 
@@ -51,3 +51,17 @@ def set_default_interpreter(rt: Interpreter):
     if not isinstance(rt, Interpreter):
         raise TypeError(f'expected BaseInterpreter, got {rt}')
     _default_interpreter = rt
+
+###########################################################
+# Default function call
+
+def _default_function_call(fn: Function, *args, ctx: Optional[EvalCtx] = None):
+    """Default function call."""
+    if fn.runtime is None:
+        rt = get_default_interpreter()
+    else:
+        rt = fn.runtime
+    return rt.eval(fn, args, ctx)
+
+
+set_default_function_call(_default_function_call)
