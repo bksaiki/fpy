@@ -1,15 +1,18 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 from types import FunctionType
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.arithmetic.evalctx import EvalCtx
 
-from .common import ExprTraceEntry
 from .env import ForeignEnv
-from ..ir import FunctionDef, Expr
+from ..ir import FunctionDef
 from ..frontend.fpc import fpcore_to_fpy
+
+# avoids circular dependency issues (useful for type checking)
+if TYPE_CHECKING:
+    from ..interpret import Interpreter
+
 
 class Function:
     """
@@ -41,8 +44,8 @@ class Function:
         return f'{self.__class__.__name__}(ir={self.ir}, ...)'
 
     def __call__(self, *args, ctx: Optional[EvalCtx] = None):
-        rt = get_default_interpreter() if self.runtime is None else self.runtime
-        return rt.eval(self, args, ctx=ctx)
+        fn = get_default_function_call()
+        return fn(self, *args, ctx=ctx)
 
     def format(self):
         return self.ir.format()
@@ -82,41 +85,21 @@ class Function:
         return Function(self.ir, self.env, runtime=rt, func=self._func)
 
 
-class Interpreter(ABC):
-    """Abstract base class for FPy interpreters."""
+###########################################################
+# Default function call
 
-    @abstractmethod
-    def eval(self, func: Function, args, ctx: Optional[EvalCtx] = None):
-        raise NotImplementedError('virtual method')
+_default_function_call: Optional[Callable] = None
 
-    @abstractmethod
-    def eval_with_trace(self, func: Function, args, ctx: Optional[EvalCtx] = None) -> tuple[Any, list[ExprTraceEntry]]:
-        raise NotImplementedError('virtual method')
+def get_default_function_call() -> Callable:
+    """Get the default function call."""
+    global _default_function_call
+    if _default_function_call is None:
+        raise RuntimeError('no default function call available')
+    return _default_function_call
 
-    @abstractmethod
-    def eval_expr(self, expr: Expr, env: dict, ctx: EvalCtx):
-        raise NotADirectoryError('virtual method')
-
-
-_default_interpreter: Optional[Interpreter] = None
-
-def get_default_interpreter() -> Interpreter:
-    """Get the default FPy interpreter."""
-    global _default_interpreter
-    if _default_interpreter is None:
-        raise RuntimeError('no default interpreter available')
-    return _default_interpreter
-
-def set_default_interpreter(rt: Interpreter):
-    """Sets the default FPy interpreter"""
-    global _default_interpreter
-    if not isinstance(rt, Interpreter):
-        raise TypeError(f'expected BaseInterpreter, got {rt}')
-    _default_interpreter = rt
-
-
-class FunctionReturnException(Exception):
-    """Raised when a function returns a value."""
-
-    def __init__(self, value):
-        self.value = value
+def set_default_function_call(func: Callable):
+    """Sets the default function call"""
+    global _default_function_call
+    if not callable(func):
+        raise TypeError(f'expected callable, got {func}')
+    _default_function_call = func

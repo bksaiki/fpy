@@ -9,13 +9,13 @@ from typing import Any, Literal, Optional
 from titanfp.arithmetic.ieee754 import Float, IEEECtx
 from titanfp.arithmetic.mpmf import MPMF
 
-from ..common import ExprTraceEntry
-from ..function import Function, Interpreter, get_default_interpreter
-from ..metric import ordinal_error
-from ...interpret.real import RealInterpreter
-from ..real.rival_manager import PrecisionLimitExceeded
+from ..ir import Expr
+from ..interpret import Interpreter, RealInterpreter, get_default_interpreter
+from ..runtime import Function
+from ..runtime.trace import ExprTraceEntry
+from ..runtime.metric import ordinal_error
+from ..runtime.real import PrecisionLimitExceeded
 
-from ...ir import Expr
 
 Verbosity = Literal["minimal", "standard", "detailed"]
 

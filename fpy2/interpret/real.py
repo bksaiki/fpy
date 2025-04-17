@@ -15,9 +15,12 @@ from titanfp.titanic.digital import Digital
 from ..runtime.real.interval import RealInterval
 from ..runtime.real.rival_manager import RivalManager, InsufficientPrecisionError, PrecisionLimitExceeded
 
-from ..runtime.common import ExprTraceEntry
-from ..runtime.function import Interpreter, Function, FunctionReturnException
+from ..runtime.trace import ExprTraceEntry
+from ..runtime.function import Function
 from ..ir import *
+
+from .interpreter import Interpreter, FunctionReturnException
+
 
 ScalarVal: TypeAlias = str | bool | RealInterval
 """Type of scalar values in FPy programs."""
