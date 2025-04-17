@@ -4,6 +4,7 @@ help:
 	@echo "FPy Make targets"
 	@echo ""
 	@echo "Testing"
+	@echo "  make tests        Run all tests"
 	@echo "  make infratest     Run infrastructure testing"
 	@echo "  make unittest      Run unit tests"
 	@echo "  make lint          Run linters"
@@ -34,6 +35,12 @@ lint:
 	mypy fpy2
 	ruff check fpy2
 
+tests: 
+	@echo "Running all tests..."
+	$(MAKE) lint
+	$(MAKE) infratest
+	$(MAKE) unittest
+
 infratest:
 	@echo "Running infrastructure tests..."
 	python3 -m tests.unit
@@ -43,4 +50,4 @@ unittest:
 	@echo "Running unit tests..."
 	python3 -m unittest -v 
 
-.PHONY: infratest unittest
+.PHONY: infratest unittest tests

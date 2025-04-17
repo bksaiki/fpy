@@ -91,11 +91,9 @@ class NaryOpKind(Enum):
 class Ast(ABC):
     """FPy AST: abstract base class for all AST nodes."""
     loc: Optional[Location]
-    attribs: dict[str, Any]
 
     def __init__(self, loc: Optional[Location]):
         self.loc = loc
-        self.attribs = {}
 
     def __repr__(self):
         name = self.__class__.__name__
