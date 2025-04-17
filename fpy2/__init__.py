@@ -14,17 +14,7 @@ The numbers library supports many different number types including:
  - IEEE 754 floating point (`IEEEContext`)
 
 These number systems guarantee correct rounding via MPFR.
-
-
 """
-
-from .frontend import fpy
-
-from .backend import (
-    Backend,
-    FPCoreCompiler,
-    FPYCompiler,
-)
 
 from .number import (
     # number types
@@ -44,6 +34,14 @@ from .number import (
     RoundingMode,
     RoundingDirection,
     RM,
+)
+
+from .frontend import fpy
+
+from .backend import (
+    Backend,
+    FPCoreCompiler,
+    FPYCompiler,
 )
 
 from .runtime import (

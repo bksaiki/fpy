@@ -1,11 +1,11 @@
-FPy2
+fpy2
 ==================
 
 .. automodule:: fpy2
    :members:
-   :undoc-members:
    :imported-members:
    :show-inheritance:
+   :undoc-members:
 
 .. toctree::
    :maxdepth: 2

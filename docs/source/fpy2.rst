@@ -1,3 +1,5 @@
+:orphan:
+
 fpy2 package
 ============
 
@@ -23,14 +25,6 @@ fpy2.math module
 ----------------
 
 .. automodule:: fpy2.math
-   :members:
-   :show-inheritance:
-   :undoc-members:
-
-Module contents
----------------
-
-.. automodule:: fpy2
    :members:
    :show-inheritance:
    :undoc-members:
