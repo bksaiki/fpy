@@ -11,7 +11,8 @@ from .codegen import IRCodegen
 from .fpyast import *
 from .syntax_check import SyntaxCheck
 
-from ..passes import SSA, VerifyIR
+from ..analysis import VerifyIR
+from ..transform import SSA
 from ..utils import Gensym, pythonize_id
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr

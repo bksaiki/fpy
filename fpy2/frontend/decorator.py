@@ -19,8 +19,9 @@ from .codegen import IRCodegen
 from .parser import Parser
 from .syntax_check import SyntaxCheck
 
-from ..passes import SSA, VerifyIR
+from ..analysis import VerifyIR
 from ..runtime import Function, ForeignEnv
+from ..transform import SSA
 
 P = ParamSpec('P')
 R = TypeVar('R')
