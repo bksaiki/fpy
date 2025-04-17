@@ -55,7 +55,7 @@ class Var(ValueExpr):
         super().__init__()
         self.name = name
 
-class Bool(ValueError):
+class Bool(ValueExpr):
     """FPy node: boolean constant"""
     val: bool
 
