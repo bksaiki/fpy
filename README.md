@@ -33,6 +33,8 @@ make install
 ```
 Note that this will not install the necessary dependencies for
 development and installs a copy of the `fpy2` package.
+If you checkout a different commit or branch, you will
+need to reinstall FPy to overwrite the previous version.
 
 ## Development
 
