@@ -2,8 +2,8 @@
 
 from typing import Optional
 
-from .define_use import DefineUse
-from .verify import VerifyIR
+from ..analysis.define_use import DefineUse
+from ..analysis.verify import VerifyIR
 
 from ..ir import *
 from ..utils import Gensym
