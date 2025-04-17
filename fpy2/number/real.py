@@ -18,6 +18,7 @@ class RealFloat(numbers.Rational):
 
     This type encodes a base-2 number in unnormalized scientific notation:
     `(-1)^s * 2^exp * c` where:
+
      - `s` is the sign;
      - `exp` is the absolute position of the least-significant bit (LSB),
        also called the unnormalized exponent; and
@@ -534,7 +535,9 @@ class RealFloat(numbers.Rational):
         return fbits == 0
 
     def bit(self, n: int) -> bool:
-        """Returns the value of the digit at the `n`th position as a boolean."""
+        """
+        Returns the value of the digit at the `n`-th position as a boolean.
+        """
         if not isinstance(n, int):
             raise ValueError('expected an integer', n)
 

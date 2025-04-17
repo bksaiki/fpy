@@ -23,6 +23,7 @@ class Context(ABC):
 
     1. a mathematically-correct operation over real numbers,
     interpreting digital numbers as real numbers;
+
     2. a rounding operation to limit the number significant digits
     and decide how the "lost" digits will affect the final output.
 
@@ -83,12 +84,14 @@ class Context(ABC):
         an unnormalized exponent of at minimum `n + 1`.
 
         Rounding is done by the following rules:
-         - if `x` is representable and has an unnormalized exponent
-           of at minimum `n + 1`, then `self.round_n(x, n) == x`
-         - if `x` is between two representable values `i1 < x < i2`
-           where both `i1` and `i2` have unnormalized exponents of at
-           minimum `n + 1`,  then the context information determines
-           which value is returned.
+
+        - if `x` is representable and has an unnormalized exponent
+          of at minimum `n + 1`, then `self.round_n(x, n) == x`
+        - if `x` is between two representable values `i1 < x < i2`
+          where both `i1` and `i2` have unnormalized exponents of at
+          minimum `n + 1`,  then the context information determines
+          which value is returned.
+
         """
         raise NotImplementedError('virtual method')
 
@@ -97,8 +100,9 @@ class Context(ABC):
         Rounds any digital number to an integer according to this context.
 
         Rounding is done by the following rules:
-         - if `x` is a representable integer, then `self.round_integer(x) == x`
-         - if `x` is between two representable integers `i1 < x < i2`,
+
+        - if `x` is a representable integer, then `self.round_integer(x) == x`
+        - if `x` is between two representable integers `i1 < x < i2`,
           then the context information determines which integer
           is returned.
 

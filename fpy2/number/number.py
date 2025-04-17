@@ -15,12 +15,13 @@ class Float:
     """
     The basic floating-point number extended with infinities and NaN.
 
-    This type encodes a base-2 number in unnormalized scientific notation:
-    `(-1)^s * 2^exp * c` where:
-     - `s` is the sign;
-     - `exp` is the absolute position of the least-significant bit (LSB),
-       also called the unnormalized exponent; and
-     - `c` is the integer significand.
+    This type encodes a base-2 number in unnormalized scientific
+    notation `(-1)^s * 2^exp * c` where:
+
+    - `s` is the sign;
+    - `exp` is the absolute position of the least-significant bit (LSB),
+      also called the unnormalized exponent; and
+    - `c` is the integer significand.
 
     There are no constraints on the values of `exp` and `c`.
     Unlike `RealFloat`, this number can encode infinity and NaN.

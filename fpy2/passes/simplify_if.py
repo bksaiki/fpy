@@ -75,28 +75,33 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         return Block(stmts), None
 
 
+#
+# This transformation rewrites a block of the form:
+# ```
+# if <cond>
+#     S1 ...
+# else:
+#     S2 ...
+# S3 ...
+# ```
+# to an equivalent block using if expressions:
+# ```
+# t = <cond>
+# S1 ...
+# S2 ...
+# x_i = x_{i, S1} if t else x_{i, S2}
+# S3 ...
+# ```
+# where `x_i` is a phi node merging `phi(x_{i, S1}` and `x_{i, S2})`
+# that is associated with the if-statement and `t` is a free variable.
+
 class SimplifyIf:
     """
-    Control flow simplifification: transform if statements to if expressions.
+    Control flow simplifification:
 
-    This transformation rewrites a block of the form:
-    ```
-    if <cond>
-        S1 ...
-    else:
-        S2 ...
-    S3 ...
-    ```
-    to an equivalent block using if expressions:
-    ```
-    t = <cond>
-    S1 ...
-    S2 ...
-    x_i = x_{i, S1} if t else x_{i, S2}
-    S3 ...
-    ```
-    where `x_i = phi(x_{i, S1}, x_{i, S2})` is a phi node associated
-    with the if-statement and `t` is a free variable.
+    Transforms if statements into if expressions.
+    The inner block is hoisted into the outer block and each
+    phi variable is made explicit with an if expression.
     """
 
     @staticmethod

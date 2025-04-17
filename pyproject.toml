@@ -22,11 +22,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy", "ruff", "build", "twine"]
+dev = ["mypy", "ruff", "build", "twine", "sphinx", "sphinx-rtd-theme"]
 
 [project.urls]
 Homepage = "https://github.com/bksaiki/fpy"
 Issues = "https://github.com/bksaiki/fpy/issues"
+Documentation = "https://fpy.readthedocs.io/"
 
 [tool.setuptools.packages.find]
 include = ["fpy2*"]

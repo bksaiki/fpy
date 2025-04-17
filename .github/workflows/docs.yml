@@ -1,0 +1,25 @@
+name: Documentation generation
+
+on: [push]
+
+env:
+  SPHINXOPTS: "-W"
+
+jobs:
+  mypy:
+    name: "Generate documentation"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip
+      - name: Install fpy2
+        run: pip install -e .[dev]
+      - name: "Create empty directories"
+        run: mkdir docs/source/_static
+      - name: "Generate documentation"
+        run: make html -C docs/ 

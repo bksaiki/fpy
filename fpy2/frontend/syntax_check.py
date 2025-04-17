@@ -308,14 +308,15 @@ class SyntaxCheck:
 
     Rules enforced:
 
+    Variables:
     - any variables must be defined before it is used;
 
-    - `return` statement:
-      - all functions must have exactly one return statement,
-      - return statement must be at the end of the function definiton;
+    Return statements:
+     - all functions must have exactly one return statement,
+     - must be at the end of the function definiton;
 
-    - `if` statement:
-      - any variable must be defined along both branches when
+    If statements
+     - any variable must be defined along both branches when
         used after the `if` statement
     """
 
