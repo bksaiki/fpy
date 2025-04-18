@@ -29,18 +29,15 @@ _nary_rev_table = { v: k for k, v in _nary_table.items() }
 class _FPyCompilerInstance(ReduceVisitor):
     """Compilation instance from FPy to FPCore"""
     func: FunctionDef
-    env: dict[NamedId, NamedId]
 
     def __init__(self, func: FunctionDef):
         self.func = func
-        self.env = {}
 
     def compile(self) -> ast.FunctionDef:
         return self._visit_function(self.func, None)
 
     def _visit_var(self, e: Var, ctx: None):
-        name = self.env.get(e.name, e.name)
-        return ast.Var(name, None)
+        return ast.Var(e.name, None)
 
     def _visit_bool(self, e: Bool, ctx: None):
         return ast.Bool(e.val, None)
@@ -142,31 +139,19 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_var_assign(self, stmt: VarAssign, ctx: None):
         # TODO: typing annotation
         e = self._visit_expr(stmt.expr, None)
-        if isinstance(stmt.var, NamedId):
-            if stmt.var in self.env:
-                name = self.env[stmt.var]
-            else:
-                name = stmt.var
-                self.env[stmt.var] = name
-            return ast.VarAssign(name, e, None, None)
-        else:
-            return ast.VarAssign(stmt.var, e, None, None)
+        return ast.VarAssign(stmt.var, e, None, None)
 
     def _visit_tuple_binding(self, vars: TupleBinding):
         new_vars: list[Id | ast.TupleBinding] = []
         for name in vars:
-            if isinstance(name, NamedId):
-                if name in self.env:
-                    name = self.env[name]
-                else:
-                    self.env[name] = name
-                new_vars.append(name)
-            elif isinstance(name, Id):
-                new_vars.append(name)
-            elif isinstance(name, TupleBinding):
-                new_vars.append(self._visit_tuple_binding(name))
-            else:
-                raise NotImplementedError('unexpected tuple identifier', name)
+            match name:
+                case Id():
+                    new_vars.append(name)
+                case TupleBinding():
+                    bind = self._visit_tuple_binding(name)
+                    new_vars.append(bind)
+                case _:
+                    raise NotImplementedError('unexpected tuple identifier', name)
         return ast.TupleBinding(new_vars, None)
 
     def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
@@ -175,40 +160,23 @@ class _FPyCompilerInstance(ReduceVisitor):
         return ast.TupleAssign(binding, expr, None)
 
     def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
-        var = self.env.get(stmt.var, stmt.var)
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
-        return ast.RefAssign(var, slices, value, None)
+        return ast.RefAssign(stmt.var, slices, value, None)
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
-        # setting `phi.name` to be the canonical name
-        for phi in stmt.phis:
-            name = self.env.get(phi.lhs, phi.lhs)
-            self.env[phi.rhs] = name
-            self.env[phi.name] = name
+        # check that phis are empty
+        if stmt.phis != []:
+            raise ValueError(f'expected no phis in statement: {stmt}')
 
         cond = self._visit_expr(stmt.cond, None)
         body = self._visit_block(stmt.body, None)
         return ast.IfStmt(cond, body, None, None)
 
     def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
-        # setting `phi.name` to be the canonical name
-        for phi in stmt.phis:
-            if phi.lhs in self.env:
-                # `phi.lhs` is already in scope
-                name = self.env.get(phi.lhs, phi.lhs)
-                self.env[phi.rhs] = name
-                self.env[phi.name] = name
-            elif phi.rhs in self.env:
-                # `phi.rhs` is already in scope
-                name = self.env.get(phi.rhs, phi.rhs)
-                self.env[phi.lhs] = name
-                self.env[phi.name] = name
-            else:
-                # definitions on both paths
-                name = self.env.get(phi.name, phi.name)
-                self.env[phi.lhs] = name
-                self.env[phi.rhs] = name
+        # check that phis are empty
+        if stmt.phis != []:
+            raise ValueError(f'expected no phis in statement: {stmt}')
 
         cond = self._visit_expr(stmt.cond, None)
         ift = self._visit_block(stmt.ift, None)
@@ -216,22 +184,18 @@ class _FPyCompilerInstance(ReduceVisitor):
         return ast.IfStmt(cond, ift, iff, None)
 
     def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):
-        # setting `phi.name` to be the canonical name
-        for phi in stmt.phis:
-            name = self.env.get(phi.lhs, phi.lhs)
-            self.env[phi.rhs] = name
-            self.env[phi.name] = name
+        # check that phis are empty
+        if stmt.phis != []:
+            raise ValueError(f'expected no phis in statement: {stmt}')
 
         cond = self._visit_expr(stmt.cond, None)
         body = self._visit_block(stmt.body, None)
         return ast.WhileStmt(cond, body, None)
 
     def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
-        # setting `phi.name` to be the canonical name
-        for phi in stmt.phis:
-            name = self.env.get(phi.lhs, phi.lhs)
-            self.env[phi.rhs] = name
-            self.env[phi.name] = name
+        # check that phis are empty
+        if stmt.phis != []:
+            raise ValueError(f'expected no phis in statement: {stmt}')
 
         iterable = self._visit_expr(stmt.iterable, None)
         body = self._visit_block(stmt.body, None)
@@ -276,8 +240,6 @@ class _FPyCompilerInstance(ReduceVisitor):
         args: list[ast.Argument] = []
         for arg in func.args:
             # TODO: translate typing annotation
-            if isinstance(arg.name, NamedId):
-                self.env[arg.name] = arg.name
             args.append(ast.Argument(arg.name, None, None))
 
         body = self._visit_block(func.body, None)
