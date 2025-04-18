@@ -46,7 +46,7 @@ help:
 	@echo "FPy Make targets"
 	@echo ""
 	@echo "Testing"
-	@echo "  make tests        Run all tests"
+	@echo "  make tests         Run all tests"
 	@echo "  make infratest     Run infrastructure testing"
 	@echo "  make unittest      Run unit tests"
 	@echo "  make lint          Run linters"
