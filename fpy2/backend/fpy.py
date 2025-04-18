@@ -16,6 +16,8 @@ from ..frontend.codegen import (
 from ..frontend.syntax_check import SyntaxCheck
 
 from ..runtime import Function
+from ..transform import UnSSA
+
 from .backend import Backend
 
 # reverse operator tables
@@ -296,7 +298,8 @@ class FPYCompiler(Backend):
     """Compiler from FPy IR to FPy"""
 
     def compile(self, func: Function):
-        ast = _FPyCompilerInstance(func.ir).compile()
+        ir = UnSSA.apply(func.ir)
+        ast = _FPyCompilerInstance(ir).compile()
         SyntaxCheck.analyze(ast)
         return ast
 
