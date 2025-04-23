@@ -94,6 +94,22 @@ class _UnSSAInstance(DefaultTransformVisitor):
         name = self.env.get(e.name, e.name)
         return Var(name)
 
+    def _visit_comp_expr(self, e: CompExpr, ctx: None):
+        new_vars: list[Id] = []
+        for var in e.vars:
+            match var:
+                case NamedId():
+                    renamed = self.env.get(var, var)
+                    new_vars.append(renamed)
+                case UnderscoreId():
+                    new_vars.append(var)
+                case _:
+                    raise RuntimeError(f'unexpected {var}')
+
+        iterables = [self._visit_expr(iter, ctx) for iter in e.iterables]
+        elt = self._visit_expr(e.elt, ctx)
+        return CompExpr(new_vars, iterables, elt)
+
     def _visit_var_assign(self, stmt: VarAssign, ctx: None):
         if isinstance(stmt.var, NamedId):
             var: Id = self.env.get(stmt.var, stmt.var)
@@ -104,14 +120,35 @@ class _UnSSAInstance(DefaultTransformVisitor):
         s = VarAssign(var, stmt.ty, e)
         return s, None
 
-    # def _visit_tuple_binding(self, vars: TupleBinding):
-    #     raise NotImplementedError(vars)
+    def _visit_tuple_binding(self, vars: TupleBinding):
+        new_vars: list[Id | TupleBinding] = []
+        for name in vars:
+            match name:
+                case NamedId():
+                    renamed = self.env.get(name, name)
+                    new_vars.append(renamed)
+                case UnderscoreId():
+                    new_vars.append(name)
+                case TupleBinding():
+                    elts = self._visit_tuple_binding(name)
+                    new_vars.append(elts)
+                case _:
+                    raise RuntimeError(f'unexpected {name}')
 
-    # def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
-    #     bindings = self._visit_tuple_binding(stmt.binding)
-    #     expr = self._visit_expr(stmt.expr, ctx)
-    #     s = TupleAssign(bindings, expr, None)
-    #     return s, None
+        return TupleBinding(new_vars)
+
+    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
+        bindings = self._visit_tuple_binding(stmt.binding)
+        expr = self._visit_expr(stmt.expr, ctx)
+        s = TupleAssign(bindings, stmt.ty, expr)
+        return s, None
+
+    def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
+        var = self.env.get(stmt.var, stmt.var)
+        slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
+        expr = self._visit_expr(stmt.expr, ctx)
+        s = RefAssign(var, slices, expr)
+        return s, None
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
