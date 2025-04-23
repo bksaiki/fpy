@@ -4,13 +4,17 @@ Frontend:
    - preconditions with statements
  - parser:
    - fix ISSUE#1
-   - use variables in the defining namespace
  - language:
    - support for zip()
    - support for vector addition/multiplication
 
 Middle-end:
  - do we really need a separate AST / IR?
+ - passes:
+  - copy propagation
+  - eliminate unneeded phi variables
+  - dead code elimination
+  - variable renaming
 
 Backend:
  - fpc:
