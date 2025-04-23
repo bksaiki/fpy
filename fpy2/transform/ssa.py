@@ -288,12 +288,6 @@ class _SSAInstance(DefaultTransformVisitor):
         s = ReturnStmt(self._visit_expr(stmt.expr, ctx))
         return s, ctx
 
-    def _visit_phis(self, phis: list[PhiNode], lctx: _Ctx, rctx: _Ctx):
-        raise NotImplementedError
-
-    def _visit_loop_phis(self, phis: list[PhiNode], lctx: _Ctx, rctx: Optional[_Ctx]):
-        raise NotImplementedError
-
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
         ctx = ctx.copy()
         for var in func.free_vars:

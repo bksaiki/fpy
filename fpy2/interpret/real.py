@@ -529,12 +529,6 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-    def _visit_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
-        raise NotImplementedError('do not call directly')
-
-    def _visit_loop_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
-        raise NotImplementedError('do not call directly')
-
     def _visit_function(self, func: FuncDef, ctx: EvalCtx):
         raise NotImplementedError('do not call directly')
     

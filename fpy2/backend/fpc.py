@@ -422,12 +422,6 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_return(self, stmt, ctx) -> fpc.Expr:
         return self._visit_expr(stmt.expr, ctx)
 
-    def _visit_phis(self, phis, lctx, rctx):
-        raise NotImplementedError('do not call directly')
-
-    def _visit_loop_phis(self, phis, lctx, rctx):
-        raise NotImplementedError('do not call directly')
-
     def _visit_block(self, block, ctx: Optional[fpc.Expr]):
         if ctx is None:
             e = self._visit_statement(block.stmts[-1], None)

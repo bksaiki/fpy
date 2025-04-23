@@ -155,12 +155,6 @@ class _LiveVars(ReduceVisitor):
     def _visit_return(self, stmt: ReturnStmt, ctx: _RetType) -> _RetType:
         return self._visit_expr(stmt.expr, None)
 
-    def _visit_phis(self, phis: list[PhiNode], lctx: None, rctx: None) -> _RetType:
-        raise NotImplementedError('do not call directly')
-
-    def _visit_loop_phis(self, phis: list[PhiNode], lctx: None, rctx: None) -> _RetType:
-        raise NotImplementedError('do not call directly')
-
     def _visit_block(self, block: StmtBlock, ctx: _RetType) -> _RetType:
         fvs = ctx.copy()
         for stmt in reversed(block.stmts):

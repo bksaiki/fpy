@@ -151,17 +151,17 @@ class BaseVisitor(ABC):
     #######################################################
     # Phi node
 
-    @abstractmethod
     def _visit_phis(self, phis: list[PhiNode], lctx: Any, rctx: Any):
         """
         Visitor method for a `list` of `PhiNode` nodes for non-loop nodes.
 
         This method is called at the join point of a control flow graph
         when _both_ branches have already been visited.
-        """
-        raise NotImplementedError('virtual method')
 
-    @abstractmethod
+        Implementors of `Visitor` do not have to implement this method.
+        """
+        raise NotImplementedError('must be overriden')
+
     def _visit_loop_phis(self, phis: list[PhiNode], lctx: Any, rctx: Optional[Any]):
         """
         Visitor method for a `list` of `PhiNode` nodes for loop nodes.
@@ -169,8 +169,10 @@ class BaseVisitor(ABC):
         For loop nodes, this method is called twice:
         - once before visiting the loop body / condition (`rctx` is `None`)
         - once after visiting the loop body
+
+        Implementors of `Visitor` do not have to implement this method.
         """
-        raise NotImplementedError('virtual method')
+        raise NotImplementedError('must be overriden')
 
     #######################################################
     # Block
@@ -373,12 +375,6 @@ class DefaultVisitor(Visitor):
     def _visit_return(self, stmt: ReturnStmt, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_phis(self, phis, lctx, rctx):
-        pass
-
-    def _visit_loop_phis(self, phi, lctx, rctx):
-        pass
-
     def _visit_block(self, block: StmtBlock, ctx: Any):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
@@ -557,12 +553,12 @@ class DefaultTransformVisitor(TransformVisitor):
     # Phi node
 
     def _visit_phis(self, phis: list[PhiNode], lctx: Any, rctx: Any):
-        phis = [PhiNode(phi.name, phi.lhs, phi.rhs, phi.ty) for phi in phis]
-        return phis, lctx # merge function just selects `lctx`
+        # does nothing, just copies the phis
+        return [PhiNode(phi.name, phi.lhs, phi.rhs, phi.ty) for phi in phis]
 
     def _visit_loop_phis(self, phis: list[PhiNode], lctx: Any, rctx: Optional[Any]):
-        phis = [PhiNode(phi.name, phi.lhs, phi.rhs, phi.ty) for phi in phis]
-        return phis, lctx # merge function just selects `lctx`
+        # does nothing, just copies the phis
+        return [PhiNode(phi.name, phi.lhs, phi.rhs, phi.ty) for phi in phis]
 
     #######################################################
     # Block

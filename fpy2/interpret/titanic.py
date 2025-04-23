@@ -583,14 +583,7 @@ class _Interpreter(ReduceVisitor):
         if self.enable_trace:
             entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
             self.trace.append(entry)
-
         return val
-
-    def _visit_phis(self, phis, lctx, rctx):
-        raise NotImplementedError('do not call directly')
-
-    def _visit_loop_phis(self, phis, lctx, rctx):
-        raise NotImplementedError('do not call directly')
 
     def _visit_block(self, block: StmtBlock, ctx: EvalCtx):
         for stmt in block.stmts:

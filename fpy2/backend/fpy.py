@@ -217,12 +217,6 @@ class _FPyCompilerInstance(ReduceVisitor):
         e = self._visit_expr(stmt.expr, None)
         return ast.ReturnStmt(e, None)
 
-    def _visit_phis(self, phis: list[PhiNode], lctx: None, rctx: None):
-        raise NotImplementedError('do not call')
-
-    def _visit_loop_phis(self, phis: list[PhiNode], lctx: None, rctx: None):
-        raise NotImplementedError('do not call')
-
     def _visit_block(self, block: StmtBlock, ctx: None):
         stmts = [self._visit_statement(s, None) for s in block.stmts]
         return ast.StmtBlock(stmts)
