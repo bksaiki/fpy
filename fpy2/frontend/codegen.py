@@ -161,7 +161,7 @@ class _IRCodegenInstance(AstVisitor):
         elt = self._visit_expr(e.elt, ctx)
         return ir.CompExpr(list(e.vars), iterables, elt)
 
-    def _visit_ref_expr(self, e: TupleRef, ctx: None):
+    def _visit_tuple_ref(self, e: TupleRef, ctx: None):
         value = self._visit_expr(e.value, ctx)
         slices = [self._visit_expr(s, ctx) for s in e.slices]
         return ir.TupleRef(value, *slices)
@@ -172,7 +172,7 @@ class _IRCodegenInstance(AstVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return ir.IfExpr(cond, ift, iff)
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: None):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         expr = self._visit_expr(stmt.expr, ctx)
         return ir.VarAssign(stmt.var, ir.AnyType(), expr)
 
@@ -187,17 +187,17 @@ class _IRCodegenInstance(AstVisitor):
                 raise NotImplementedError('unexpected tuple identifier', name)
         return ir.TupleBinding(new_vars)
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: None):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
         return ir.TupleAssign(binding, ir.AnyType(), expr)
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
         return ir.RefAssign(stmt.var, slices, value)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
         ift = self._visit_block(stmt.ift, ctx)
         if stmt.iff is None:
@@ -206,7 +206,7 @@ class _IRCodegenInstance(AstVisitor):
             iff = self._visit_block(stmt.iff, ctx)
             return ir.IfStmt(cond, ift, iff, [])
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):
+    def _visit_while(self, stmt: WhileStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
         body = self._visit_block(stmt.body, ctx)
         return ir.WhileStmt(cond, body, [])

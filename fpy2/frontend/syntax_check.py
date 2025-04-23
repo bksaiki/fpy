@@ -168,7 +168,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(e.elt, (env, False))
         return env
 
-    def _visit_ref_expr(self, e: TupleRef, ctx: _Ctx):
+    def _visit_tuple_ref(self, e: TupleRef, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(e.value, ctx)
         for s in e.slices:
@@ -182,7 +182,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(e.iff, ctx)
         return env
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: _Ctx):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.expr, ctx)
         if isinstance(stmt.var, NamedId):
@@ -203,11 +203,11 @@ class SyntaxCheckInstance(AstVisitor):
                     raise NotImplementedError('unreachable', elt)
         return env
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: _Ctx):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _Ctx):
         self._visit_expr(stmt.expr, ctx)
         return self._visit_tuple_binding(stmt.binding, ctx)
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: _Ctx):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _Ctx):
         env, _ = ctx
         self._mark_use(stmt.var, env)
         for s in stmt.slices:
@@ -215,7 +215,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(stmt.expr, ctx)
         return env
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _Ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
         self._visit_expr(stmt.cond, ctx)
         ift_env = self._visit_block(stmt.ift, ctx)
         if stmt.iff is None:
@@ -226,7 +226,7 @@ class SyntaxCheckInstance(AstVisitor):
             iff_env = self._visit_block(stmt.iff, ctx)
             return ift_env.merge(iff_env)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _Ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         env, _ = ctx
         body_env = self._visit_block(stmt.body, ctx)
         env = env.merge(body_env)
