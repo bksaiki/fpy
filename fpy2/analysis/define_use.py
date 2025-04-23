@@ -4,11 +4,11 @@ from ..ir import *
 
 class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""
-    func: FunctionDef
+    func: FuncDef
     uses: dict[NamedId, set[Var | PhiNode]]
     done: bool
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         self.func = func
         self.uses = {}
         self.done = False
@@ -33,12 +33,12 @@ class _DefineUseInstance(DefaultVisitor):
                 self.uses[var] = set()
         self._visit_expr(e.elt, ctx)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: None):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: None):
         self._visit_expr(stmt.expr, ctx)
         if isinstance(stmt.var, NamedId):
             self.uses[stmt.var] = set()
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: None):
         self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
             self.uses[var] = set()
@@ -80,7 +80,7 @@ class _DefineUseInstance(DefaultVisitor):
         for phi in stmt.phis:
             self.uses[phi.rhs].add(phi)
 
-    def _visit_function(self, func: FunctionDef, ctx):
+    def _visit_function(self, func: FuncDef, ctx):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 self.uses[arg.name] = set()
@@ -101,5 +101,5 @@ class DefineUse:
     analysis_name = 'define_use'
 
     @staticmethod
-    def analyze(func: FunctionDef):
+    def analyze(func: FuncDef):
         return _DefineUseInstance(func).analyze()

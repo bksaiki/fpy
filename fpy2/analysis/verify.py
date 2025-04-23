@@ -10,10 +10,10 @@ class InvalidIRError(Exception):
 # TODO: type check
 class _VerifyPassInstance(DefaultVisitor):
     """Single instance of the `VerifyPass`."""
-    func: FunctionDef
+    func: FuncDef
     types: dict[NamedId, IRType]
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         self.func = func
         self.types = {}
 
@@ -41,7 +41,7 @@ class _VerifyPassInstance(DefaultVisitor):
                     raise InvalidIRError('unreachable', var)
         self._visit_expr(e.elt, ctx)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: _CtxType):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: _CtxType):
         self._visit_expr(stmt.expr, ctx)
         match stmt.var:
             case NamedId():
@@ -55,7 +55,7 @@ class _VerifyPassInstance(DefaultVisitor):
                 raise InvalidIRError('unreachable', stmt.var)
         return ctx
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: _CtxType):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: _CtxType):
         self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
             if var in self.types:
@@ -64,7 +64,7 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx.add(var)
         return ctx
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: _CtxType):
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: _CtxType):
         if stmt.var not in ctx:
             raise InvalidIRError(f'undefined variable {stmt.var}')
         for s in stmt.slices:
@@ -187,18 +187,18 @@ class _VerifyPassInstance(DefaultVisitor):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_block(self, block: Block, ctx: _CtxType):
+    def _visit_block(self, block: StmtBlock, ctx: _CtxType):
         for stmt in block.stmts:
             if not isinstance(stmt, Stmt):
                 raise InvalidIRError(f'expected a statement {stmt}')
-            elif isinstance(stmt, Return):
+            elif isinstance(stmt, ReturnStmt):
                 self._visit_return(stmt, ctx)
                 ctx = set()
             else:
                 ctx = self._visit_statement(stmt, ctx.copy())
         return ctx
 
-    def _visit_function(self, func: FunctionDef, ctx: _CtxType):
+    def _visit_function(self, func: FuncDef, ctx: _CtxType):
         for var in func.free_vars:
             self.types[var] = AnyType()
             ctx.add(var)
@@ -224,5 +224,5 @@ class VerifyIR:
     """
 
     @staticmethod
-    def check(func: FunctionDef):
+    def check(func: FuncDef):
         _VerifyPassInstance(func).check()

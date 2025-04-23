@@ -28,9 +28,9 @@ _nary_rev_table = { v: k for k, v in _nary_table.items() }
 
 class _FPyCompilerInstance(ReduceVisitor):
     """Compilation instance from FPy to FPCore"""
-    func: FunctionDef
+    func: FuncDef
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         self.func = func
 
     def compile(self) -> ast.FuncDef:
@@ -39,7 +39,7 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_var(self, e: Var, ctx: None):
         return ast.Var(e.name, None)
 
-    def _visit_bool(self, e: Bool, ctx: None):
+    def _visit_bool(self, e: BoolVal, ctx: None):
         return ast.BoolVal(e.val, None)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
@@ -136,7 +136,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         iff = self._visit_expr(e.iff, None)
         return ast.IfExpr(cond, ift, iff, None)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: None):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: None):
         # TODO: typing annotation
         e = self._visit_expr(stmt.expr, None)
         return ast.SimpleAssign(stmt.var, e, None, None)
@@ -154,12 +154,12 @@ class _FPyCompilerInstance(ReduceVisitor):
                     raise NotImplementedError('unexpected tuple identifier', name)
         return ast.TupleBinding(new_vars, None)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
         return ast.TupleUnpack(binding, expr, None)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
         return ast.IndexAssign(stmt.var, slices, value, None)
@@ -213,7 +213,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         e = self._visit_expr(stmt.expr, None)
         return ast.EffectStmt(e, None)
 
-    def _visit_return(self, stmt: Return, ctx: None):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None):
         e = self._visit_expr(stmt.expr, None)
         return ast.ReturnStmt(e, None)
 
@@ -223,7 +223,7 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_loop_phis(self, phis: list[PhiNode], lctx: None, rctx: None):
         raise NotImplementedError('do not call')
 
-    def _visit_block(self, block: Block, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None):
         stmts = [self._visit_statement(s, None) for s in block.stmts]
         return ast.StmtBlock(stmts)
 
@@ -236,7 +236,7 @@ class _FPyCompilerInstance(ReduceVisitor):
                 new_props[k] = v
         return new_props
 
-    def _visit_function(self, func: FunctionDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None):
         args: list[ast.Argument] = []
         for arg in func.args:
             # TODO: translate typing annotation

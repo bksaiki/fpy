@@ -86,14 +86,14 @@ class _IRCodegenInstance(AstVisitor):
     def __init__(self, func: FuncDef):
         self.func = func
 
-    def lower(self) -> ir.FunctionDef:
+    def lower(self) -> ir.FuncDef:
         return self._visit_function(self.func, None)
 
     def _visit_var(self, e: Var, ctx: None):
         return ir.Var(e.name)
 
     def _visit_bool(self, e: BoolVal, ctx: None):
-        return ir.Bool(e.val)
+        return ir.BoolVal(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ir.Decnum(e.val)
@@ -174,7 +174,7 @@ class _IRCodegenInstance(AstVisitor):
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         expr = self._visit_expr(stmt.expr, ctx)
-        return ir.VarAssign(stmt.var, ir.AnyType(), expr)
+        return ir.SimpleAssign(stmt.var, ir.AnyType(), expr)
 
     def _visit_tuple_binding(self, vars: TupleBinding):
         new_vars: list[Id | ir.TupleBinding] = []
@@ -190,12 +190,12 @@ class _IRCodegenInstance(AstVisitor):
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
-        return ir.TupleAssign(binding, ir.AnyType(), expr)
+        return ir.TupleUnpack(binding, ir.AnyType(), expr)
 
     def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
-        return ir.RefAssign(stmt.var, slices, value)
+        return ir.IndexAssign(stmt.var, slices, value)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -230,10 +230,10 @@ class _IRCodegenInstance(AstVisitor):
         return ir.EffectStmt(expr)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None):
-        return ir.Return(self._visit_expr(stmt.expr, ctx))
+        return ir.ReturnStmt(self._visit_expr(stmt.expr, ctx))
 
     def _visit_block(self, block: StmtBlock, ctx: None):
-        return ir.Block([self._visit_statement(stmt, ctx) for stmt in block.stmts])
+        return ir.StmtBlock([self._visit_statement(stmt, ctx) for stmt in block.stmts])
 
     def _visit_props(self, props: dict[str, Any]):
         new_props: dict[str, Any] = {}
@@ -266,7 +266,7 @@ class _IRCodegenInstance(AstVisitor):
         # return type
         ty = ir.AnyType()
 
-        return ir.FunctionDef(func.name, args, e, ty, func.ctx, func.free_vars)
+        return ir.FuncDef(func.name, args, e, ty, func.ctx, func.free_vars)
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: None) -> ir.Expr:
@@ -281,5 +281,5 @@ class IRCodegen:
     """Lowers a FPy AST to FPy IR."""
 
     @staticmethod
-    def lower(f: FuncDef) -> ir.FunctionDef:
+    def lower(f: FuncDef) -> ir.FuncDef:
         return _IRCodegenInstance(f).lower()

@@ -150,11 +150,11 @@ class _Interpreter(ReduceVisitor):
             raise NotImplementedError(f'unknown argument type {arg}')
 
     def eval(self,
-        func: FunctionDef,
+        func: FuncDef,
         args: Sequence[Any],
         ctx: Optional[EvalCtx] = None,
     ):
-        if not isinstance(func, FunctionDef):
+        if not isinstance(func, FuncDef):
             raise TypeError(f'Expected Function, got {type(func)}')
 
         # check arity
@@ -211,7 +211,7 @@ class _Interpreter(ReduceVisitor):
     def _visit_var(self, e: Var, ctx: EvalCtx):
         return e.name
 
-    def _visit_bool(self, e: Bool, ctx: Any):
+    def _visit_bool(self, e: BoolVal, ctx: Any):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
@@ -413,7 +413,7 @@ class _Interpreter(ReduceVisitor):
             case _:
                 raise NotImplementedError(f'unreachable {val}')
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: EvalCtx):
         match stmt.var:
             case NamedId():
                 # only `SourceId` comes from the parser
@@ -481,15 +481,15 @@ class _Interpreter(ReduceVisitor):
     def _visit_effect(self, stmt, ctx):
         raise NotImplementedError
 
-    def _visit_return(self, stmt: Return, ctx: EvalCtx) -> bool | float:
+    def _visit_return(self, stmt: ReturnStmt, ctx: EvalCtx) -> bool | float:
         # since we are returning we actually want a value
         self.rival.set_precision(ctx.p)
         val = self._eval_rival(stmt.expr, ctx)
         return self._force_value(val, ctx)
 
-    def _visit_block(self, block: Block, ctx: EvalCtx):
+    def _visit_block(self, block: StmtBlock, ctx: EvalCtx):
         for stmt in block.stmts:
-            if isinstance(stmt, Return):
+            if isinstance(stmt, ReturnStmt):
                 v = self._visit_return(stmt, ctx)
                 raise FunctionReturnException(v)
             else:
@@ -506,10 +506,10 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: EvalCtx):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: EvalCtx):
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: EvalCtx):
         raise NotImplementedError
 
     def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx):
@@ -535,7 +535,7 @@ class _Interpreter(ReduceVisitor):
     def _visit_loop_phis(self, phis: list[PhiNode], lctx: EvalCtx, rctx: EvalCtx):
         raise NotImplementedError('do not call directly')
 
-    def _visit_function(self, func: FunctionDef, ctx: EvalCtx):
+    def _visit_function(self, func: FuncDef, ctx: EvalCtx):
         raise NotImplementedError('do not call directly')
     
     # override for typing

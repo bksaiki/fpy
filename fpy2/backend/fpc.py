@@ -89,10 +89,10 @@ def _size0_expr(x: str):
 
 class FPCoreCompileInstance(ReduceVisitor):
     """Compilation instance from FPy to FPCore"""
-    func: FunctionDef
+    func: FuncDef
     gensym: Gensym
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         uses = DefineUse().analyze(func)
         self.func = func
         self.gensym = Gensym(reserved=uses.keys())
@@ -144,7 +144,7 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_var(self, e, ctx) -> fpc.Expr:
         return fpc.Var(str(e.name))
 
-    def _visit_bool(self, e: Bool, ctx: None):
+    def _visit_bool(self, e: BoolVal, ctx: None):
         return fpc.Constant('TRUE' if e.val else 'FALSE')
 
     def _visit_decnum(self, e, ctx) -> fpc.Expr:
@@ -365,17 +365,17 @@ class FPCoreCompileInstance(ReduceVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return fpc.If(cond, ift, iff)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: fpc.Expr):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: fpc.Expr):
         bindings = [(str(stmt.var), self._visit_expr(stmt.expr, None))]
         return fpc.Let(bindings, ctx)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: fpc.Expr):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: fpc.Expr):
         tuple_id = str(self.gensym.fresh('t'))
         tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
         destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
         return fpc.Let([tuple_bind] + destruct_bindings, ctx)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: fpc.Expr):
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
     def _visit_if1_stmt(self, stmt, ctx):
@@ -437,7 +437,7 @@ class FPCoreCompileInstance(ReduceVisitor):
             stmts = block.stmts
 
         for stmt in reversed(stmts):
-            if isinstance(stmt, Return):
+            if isinstance(stmt, ReturnStmt):
                 raise FPCoreCompileError('return statements must be at the end of blocks')
             e = self._visit_statement(stmt, e)
 

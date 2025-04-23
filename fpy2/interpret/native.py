@@ -129,7 +129,7 @@ class _Interpreter(ReduceVisitor):
 
     def eval(
         self,
-        func: FunctionDef,
+        func: FuncDef,
         args: Sequence[Any],
         ctx: Optional[EvalCtx] = None
     ):
@@ -177,7 +177,7 @@ class _Interpreter(ReduceVisitor):
     def _visit_var(self, e: Var, ctx: EvalCtx):
         return self._lookup(e.name)
 
-    def _visit_bool(self, e: Bool, ctx: EvalCtx):
+    def _visit_bool(self, e: BoolVal, ctx: EvalCtx):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
@@ -369,7 +369,7 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: EvalCtx):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: EvalCtx):
         val = self._visit_expr(stmt.expr, ctx)
         match stmt.var:
             case NamedId():
@@ -393,13 +393,13 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError('unknown tuple element', elt)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: EvalCtx):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: EvalCtx):
         val = self._visit_expr(stmt.expr, ctx)
         if not isinstance(val, tuple):
             raise TypeError(f'expected a tuple, got {val}')
         self._unpack_tuple(stmt.binding, val, ctx)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: EvalCtx):
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: EvalCtx):
         raise NotImplementedError
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
@@ -491,7 +491,7 @@ class _Interpreter(ReduceVisitor):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_return(self, stmt: Return, ctx: EvalCtx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: EvalCtx):
         return self._visit_expr(stmt.expr, ctx)
 
     def _visit_phis(self, phis, lctx, rctx):
@@ -500,14 +500,14 @@ class _Interpreter(ReduceVisitor):
     def _visit_loop_phis(self, phis, lctx, rctx):
         raise NotImplementedError('do not call directly')
 
-    def _visit_block(self, block: Block, ctx: EvalCtx):
+    def _visit_block(self, block: StmtBlock, ctx: EvalCtx):
         for stmt in block.stmts:
-            if isinstance(stmt, Return):
+            if isinstance(stmt, ReturnStmt):
                 x = self._visit_return(stmt, ctx)
                 raise FunctionReturnException(x)
             self._visit_statement(stmt, ctx)
 
-    def _visit_function(self, func: FunctionDef, ctx: EvalCtx):
+    def _visit_function(self, func: FuncDef, ctx: EvalCtx):
         raise NotImplementedError('do not call directly')
 
 

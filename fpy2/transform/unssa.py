@@ -6,10 +6,10 @@ from ..ir import *
 
 class _SSAUnifyInstance(DefaultVisitor):
     """Compues the canonical variable for each SSA variable."""
-    func: FunctionDef
+    func: FuncDef
     unionfind: dict[NamedId, NamedId]
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         super().__init__()
         self.func = func
         self.unionfind = {}
@@ -79,15 +79,15 @@ class _UnSSAInstance(DefaultTransformVisitor):
 
     Uses the canonical variable map to replace all phi nodes
     """
-    func: FunctionDef
+    func: FuncDef
     env: dict[NamedId, NamedId]
 
-    def __init__(self, func: FunctionDef, env: dict[NamedId, NamedId]):
+    def __init__(self, func: FuncDef, env: dict[NamedId, NamedId]):
         super().__init__()
         self.func = func
         self.env = env
 
-    def apply(self) -> FunctionDef:
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
     def _visit_var(self, e: Var, ctx: None):
@@ -110,14 +110,14 @@ class _UnSSAInstance(DefaultTransformVisitor):
         elt = self._visit_expr(e.elt, ctx)
         return CompExpr(new_vars, iterables, elt)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: None):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: None):
         if isinstance(stmt.var, NamedId):
             var: Id = self.env.get(stmt.var, stmt.var)
         else:
             var = stmt.var
 
         e = self._visit_expr(stmt.expr, ctx)
-        s = VarAssign(var, stmt.ty, e)
+        s = SimpleAssign(var, stmt.ty, e)
         return s, None
 
     def _visit_tuple_binding(self, vars: TupleBinding):
@@ -137,17 +137,17 @@ class _UnSSAInstance(DefaultTransformVisitor):
 
         return TupleBinding(new_vars)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: None):
         bindings = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
-        s = TupleAssign(bindings, stmt.ty, expr)
+        s = TupleUnpack(bindings, stmt.ty, expr)
         return s, None
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: None):
         var = self.env.get(stmt.var, stmt.var)
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        s = RefAssign(var, slices, expr)
+        s = IndexAssign(var, slices, expr)
         return s, None
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
@@ -191,6 +191,6 @@ class UnSSA:
     """
 
     @staticmethod
-    def apply(func: FunctionDef) -> FunctionDef:
+    def apply(func: FuncDef) -> FuncDef:
         canon = _SSAUnifyInstance(func).apply()
         return _UnSSAInstance(func, canon).apply()
