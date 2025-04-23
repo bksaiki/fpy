@@ -146,9 +146,9 @@ class _FPCore2FPy:
     def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
         match e.value:
             case 'TRUE':
-                return Bool(True, None)
+                return BoolVal(True, None)
             case 'FALSE':
-                return Bool(False, None)
+                return BoolVal(False, None)
             case _:
                 return Constant(str(e.value), None)
 
@@ -243,7 +243,7 @@ class _FPCore2FPy:
     def _visit_ref(self, e: fpc.Ref, ctx: _Ctx) -> Expr:
         value = self._visit(e.children[0], ctx)
         slices = [self._visit(e, ctx) for e in e.children[1:]]
-        return RefExpr(value, slices, None)
+        return TupleRef(value, slices, None)
 
     def _visit_if(self, e: fpc.If, ctx: _Ctx) -> Expr:
         # create new blocks
@@ -257,11 +257,11 @@ class _FPCore2FPy:
 
         # emit temporary to bind result of branches
         t = self.gensym.fresh('t')
-        ift_ctx.stmts.append(VarAssign(t, ift_expr, None, None))
-        iff_ctx.stmts.append(VarAssign(t, iff_expr, None, None))
+        ift_ctx.stmts.append(SimpleAssign(t, ift_expr, None, None))
+        iff_ctx.stmts.append(SimpleAssign(t, iff_expr, None, None))
 
         # create if statement and bind it
-        if_stmt = IfStmt(cond_expr, Block(ift_ctx.stmts), Block(iff_ctx.stmts), None)
+        if_stmt = IfStmt(cond_expr, StmtBlock(ift_ctx.stmts), StmtBlock(iff_ctx.stmts), None)
         ctx.stmts.append(if_stmt)
 
         return Var(t, None)
@@ -277,7 +277,7 @@ class _FPCore2FPy:
             # bind value to variable
             t = self.gensym.fresh(var)
             env = { **env, var: t }
-            stmt = VarAssign(t, v_e, None, None)
+            stmt = SimpleAssign(t, v_e, None, None)
             ctx.stmts.append(stmt)
 
         return self._visit(e.body, _Ctx(env=env, stmts=ctx.stmts))
@@ -291,7 +291,7 @@ class _FPCore2FPy:
             # bind value to variable
             t = self.gensym.fresh(var)
             env = { **env, var: t }
-            stmt = VarAssign(t, init_e, None, None)
+            stmt = SimpleAssign(t, init_e, None, None)
             ctx.stmts.append(stmt)
 
         # compile condition
@@ -304,11 +304,11 @@ class _FPCore2FPy:
         for var, _, update in e.while_bindings:
             # compile value and update loop variable
             update_e = self._visit(update, update_ctx)
-            stmt = VarAssign(env[var], update_e, None, None)
+            stmt = SimpleAssign(env[var], update_e, None, None)
             stmts.append(stmt)
 
         # append while statement
-        while_stmt = WhileStmt(cond_e, Block(stmts), None)
+        while_stmt = WhileStmt(cond_e, StmtBlock(stmts), None)
         ctx.stmts.append(while_stmt)
 
         # compile body
@@ -324,7 +324,7 @@ class _FPCore2FPy:
             # bind value to variable
             t = self.gensym.fresh(var)
             env = { **env, var: t }
-            stmt = VarAssign(t, init_e, None, None)
+            stmt = SimpleAssign(t, init_e, None, None)
             ctx.stmts.append(stmt)
 
         # compile condition
@@ -341,18 +341,18 @@ class _FPCore2FPy:
             # bind value to temporary
             t = self.gensym.fresh('t')
             loop_env = { **loop_env, var: t }
-            stmt = VarAssign(t, update_e, None, None)
+            stmt = SimpleAssign(t, update_e, None, None)
             stmts.append(stmt)
 
         # rebind temporaries
         for var, _, _ in e.while_bindings:
             v = env[var]
             t = loop_env[var]
-            stmt = VarAssign(v, Var(t, None), None, None)
+            stmt = SimpleAssign(v, Var(t, None), None, None)
             stmts.append(stmt)
 
         # append while statement
-        while_stmt = WhileStmt(cond_e, Block(stmts), None)
+        while_stmt = WhileStmt(cond_e, StmtBlock(stmts), None)
         ctx.stmts.append(while_stmt)
 
         # compile body
@@ -372,7 +372,7 @@ class _FPCore2FPy:
             n = range_vars[0]
             inner_stmts: list[Stmt] = []
             e = UnaryOp(UnaryOpKind.RANGE, Var(n, None), None)
-            stmt = ForStmt(t, e, Block(inner_stmts), None)
+            stmt = ForStmt(t, e, StmtBlock(inner_stmts), None)
             stmts.append(stmt)
             return self._make_tensor_body(iter_vars[1:], range_vars[1:], inner_stmts)
 
@@ -395,7 +395,7 @@ class _FPCore2FPy:
         bound_vars: list[NamedId] = []
         for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
-            stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
+            stmt: Stmt = SimpleAssign(t, self._visit(val, ctx), None, None)
             ctx.stmts.append(stmt)
             bound_vars.append(t)
 
@@ -407,14 +407,14 @@ class _FPCore2FPy:
             init_e = self._visit(init, init_ctx)
             # bind value to variable
             t = self.gensym.fresh(var)
-            stmt = VarAssign(t, init_e, None, None)
+            stmt = SimpleAssign(t, init_e, None, None)
             ctx.stmts.append(stmt)
             init_env[var] = t
 
         # initialize tensor
         tuple_id = self.gensym.fresh('t')
         zeroed = _zeros([Var(var, None) for var in bound_vars])
-        stmt = VarAssign(tuple_id, zeroed, None, None)
+        stmt = SimpleAssign(tuple_id, zeroed, None, None)
         ctx.stmts.append(stmt)
 
         # initial iteration variables
@@ -431,7 +431,7 @@ class _FPCore2FPy:
 
         # set tensor element
         body_e = self._visit(e.body, loop_ctx)
-        stmt = RefAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
+        stmt = IndexAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
         loop_stmts.append(stmt)
 
         # compile loop updates
@@ -440,7 +440,7 @@ class _FPCore2FPy:
             update_e = self._visit(update, loop_ctx)
             # bind value to temporary
             t = loop_ctx.env[var]
-            stmt = VarAssign(t, update_e, None, None)
+            stmt = SimpleAssign(t, update_e, None, None)
             loop_stmts.append(stmt)
 
         return Var(tuple_id, None)
@@ -460,14 +460,14 @@ class _FPCore2FPy:
         bound_vars: list[NamedId] = []
         for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
-            stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
+            stmt: Stmt = SimpleAssign(t, self._visit(val, ctx), None, None)
             ctx.stmts.append(stmt)
             bound_vars.append(t)
 
         # initialize tensor
         tuple_id = self.gensym.fresh('t')
         zeroed = _zeros([Var(var, None) for var in bound_vars])
-        stmt = VarAssign(tuple_id, zeroed, None, None)
+        stmt = SimpleAssign(tuple_id, zeroed, None, None)
         ctx.stmts.append(stmt)
 
         # initial iteration variables
@@ -484,7 +484,7 @@ class _FPCore2FPy:
 
         # set tensor element
         body_e = self._visit(e.body, loop_ctx)
-        stmt = RefAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
+        stmt = IndexAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
         loop_stmts.append(stmt)
 
         return Var(tuple_id, None)
@@ -511,7 +511,7 @@ class _FPCore2FPy:
         bound_vars: list[NamedId] = []
         for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
-            stmt: Stmt = VarAssign(t, self._visit(val, ctx), None, None)
+            stmt: Stmt = SimpleAssign(t, self._visit(val, ctx), None, None)
             ctx.stmts.append(stmt)
             bound_vars.append(t)
 
@@ -523,7 +523,7 @@ class _FPCore2FPy:
             init_e = self._visit(init, init_ctx)
             # bind value to variable
             t = self.gensym.fresh(var)
-            stmt = VarAssign(t, init_e, None, None)
+            stmt = SimpleAssign(t, init_e, None, None)
             ctx.stmts.append(stmt)
             init_env[var] = t
 
@@ -544,7 +544,7 @@ class _FPCore2FPy:
             for var, _, update in e.while_bindings:
                 t = loop_env[var]
                 update_e = self._visit(update, loop_ctx)
-                stmt = VarAssign(t, update_e, None, None)
+                stmt = SimpleAssign(t, update_e, None, None)
                 loop_stmts.append(stmt)
         else:
             # temporary update variables
@@ -552,7 +552,7 @@ class _FPCore2FPy:
             for var, _, update in e.while_bindings:
                 update_e = self._visit(update, loop_ctx)
                 update_var = self.gensym.fresh(var)
-                stmt = VarAssign(update_var, update_e, None, None)
+                stmt = SimpleAssign(update_var, update_e, None, None)
                 loop_stmts.append(stmt)
                 update_env[var] = update_var
 
@@ -560,7 +560,7 @@ class _FPCore2FPy:
             for var, _, _ in e.while_bindings:
                 x = init_env[var]
                 t = update_env[var]
-                stmt = VarAssign(x, Var(t, None), None, None)
+                stmt = SimpleAssign(x, Var(t, None), None, None)
                 loop_stmts.append(stmt)
 
         body_ctx = _Ctx(env=init_env, stmts=ctx.stmts)
@@ -576,7 +576,7 @@ class _FPCore2FPy:
 
         # bind value to temporary
         t = self.gensym.fresh('t')
-        block = Block(val_ctx.stmts + [VarAssign(t, val, None, None)])
+        block = StmtBlock(val_ctx.stmts + [SimpleAssign(t, val, None, None)])
         stmt = ContextStmt(None, props, block, None)
         ctx.stmts.append(stmt)
         return Var(t, None)
@@ -673,7 +673,7 @@ class _FPCore2FPy:
                         dim_ids.append(UnderscoreId())
 
                 shape_e = UnaryOp(UnaryOpKind.SHAPE, Var(t, None), None)
-                stmt = TupleAssign(TupleBinding(dim_ids, None), shape_e, None)
+                stmt = TupleUnpack(TupleBinding(dim_ids, None), shape_e, None)
                 ctx.stmts.append(stmt)
                 for dim, dim_id in zip(shape, dim_ids):
                     if isinstance(dim, str):
@@ -685,16 +685,16 @@ class _FPCore2FPy:
 
         # compile function body
         e = self._visit(f.e, ctx)
-        block = Block(ctx.stmts + [Return(e, None)])
+        block = StmtBlock(ctx.stmts + [ReturnStmt(e, None)])
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
-        ast = FunctionDef(name, args, block, None)
+        ast = FuncDef(name, args, block, None)
         ast.ctx = props
         return ast
 
-    def convert(self) -> FunctionDef:
+    def convert(self) -> FuncDef:
         ast = self._visit_function(self.core)
-        if not isinstance(ast, FunctionDef):
+        if not isinstance(ast, FuncDef):
             raise TypeError(f'should have produced a FunctionDef {ast}')
         return ast
 

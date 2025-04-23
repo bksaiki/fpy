@@ -229,7 +229,7 @@ class Parser:
         loc = self._parse_location(e)
         match e.value:
             case bool():
-                return Bool(e.value, loc)
+                return BoolVal(e.value, loc)
             case int():
                 return Integer(e.value, loc)
             case float():
@@ -238,7 +238,7 @@ class Parser:
                 else:
                     return Decnum(str(e.value), loc)
             case str():
-                return String(e.value, loc)
+                return StringVal(e.value, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
 
@@ -247,7 +247,7 @@ class Parser:
         if len(e.args) != 1:
             raise FPyParserError(loc, 'FPy `hexfloat` expects one argument', e)
         arg = self._parse_expr(e.args[0])
-        if not isinstance(arg, String):
+        if not isinstance(arg, StringVal):
             raise FPyParserError(loc, 'FPy `hexfloat` expects a string', e)
         return Hexnum(arg.val, loc)
 
@@ -380,7 +380,7 @@ class Parser:
     def _parse_subscript(self, e: ast.Subscript):
         value = self._parse_expr(e.value)
         slices = self._parse_slice(e.slice, e)
-        while isinstance(value, RefExpr):
+        while isinstance(value, TupleRef):
             v_value, v_slices = value.value, value.slices
             value = v_value
             slices = v_slices + slices
@@ -452,7 +452,7 @@ class Parser:
                 return CompExpr(vars, iterables, elt, loc)
             case ast.Subscript():
                 value, slices = self._parse_subscript(e)
-                return RefExpr(value, slices, loc)
+                return TupleRef(value, slices, loc)
             case ast.IfExp():
                 cond = self._parse_expr(e.test)
                 ift = self._parse_expr(e.body)
@@ -556,7 +556,7 @@ class Parser:
 
         value = self._parse_expr(stmt.value)
         e = BinaryOp(op, Var(ident, loc), value, loc)
-        return VarAssign(ident, e, None, loc)
+        return SimpleAssign(ident, e, None, loc)
 
     def _parse_statement(self, stmt: ast.stmt) -> Stmt:
         """Parse a Python statement."""
@@ -575,7 +575,7 @@ class Parser:
                 ident = self._parse_id(stmt.target)
                 ty = self._parse_type_annotation(stmt.annotation)
                 value = self._parse_expr(stmt.value)
-                return VarAssign(ident, value, ty, loc)
+                return SimpleAssign(ident, value, ty, loc)
             case ast.Assign():
                 if len(stmt.targets) != 1:
                     raise FPyParserError(loc, 'FPy only supports single assignment', stmt)
@@ -584,17 +584,17 @@ class Parser:
                     case ast.Name():
                         ident = self._parse_id(target)
                         value = self._parse_expr(stmt.value)
-                        return VarAssign(ident, value, None, loc)
+                        return SimpleAssign(ident, value, None, loc)
                     case ast.Tuple():
                         binding = self._parse_tuple_target(target, stmt)
                         value = self._parse_expr(stmt.value)
-                        return TupleAssign(binding, value, loc)
+                        return TupleUnpack(binding, value, loc)
                     case ast.Subscript():
                         var, slices = self._parse_subscript(target)
                         if not isinstance(var, Var):
                             raise FPyParserError(loc, 'FPy expects a variable', target, stmt)
                         value = self._parse_expr(stmt.value)
-                        return RefAssign(var.name, slices, value, loc)
+                        return IndexAssign(var.name, slices, value, loc)
                     case _:
                         raise FPyParserError(loc, 'Unexpected binding type', stmt)
             case ast.If():
@@ -625,7 +625,7 @@ class Parser:
                 if stmt.value is None:
                     raise FPyParserError(loc, 'Return statement must have value', stmt)
                 e = self._parse_expr(stmt.value)
-                return Return(e, loc)
+                return ReturnStmt(e, loc)
             case ast.With():
                 if len(stmt.items) != 1:
                     raise FPyParserError(loc, 'FPy only supports with statements with a single item', stmt)
@@ -647,7 +647,7 @@ class Parser:
 
     def _parse_statements(self, stmts: list[ast.stmt]):
         """Parse a list of Python statements."""
-        return Block([self._parse_statement(s) for s in stmts])
+        return StmtBlock([self._parse_statement(s) for s in stmts])
 
     def _parse_arguments(self, pos_args: list[ast.arg]):
         args: list[Argument] = []
@@ -671,8 +671,8 @@ class Parser:
         loc = self._parse_location(f)
         args = self._parse_arguments(f.args.args)
         expr = self._parse_expr(f.body)
-        block = Block([Return(expr, expr.loc)])
-        return FunctionDef('pre', args, block, loc)
+        block = StmtBlock([ReturnStmt(expr, expr.loc)])
+        return FuncDef('pre', args, block, loc)
 
     def _parse_function(self, f: ast.FunctionDef):
         """Parse a Python function definition."""
@@ -697,7 +697,7 @@ class Parser:
         block = self._parse_statements(body)
 
         # return AST and decorator list
-        return FunctionDef(f.name, args, block, loc), f.decorator_list
+        return FuncDef(f.name, args, block, loc), f.decorator_list
 
     def _eval(
         self,

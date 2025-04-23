@@ -42,14 +42,14 @@ _Ctx = tuple[_Env, bool]
 
 class SyntaxCheckInstance(AstVisitor):
     """Single-use instance of syntax checking"""
-    func: FunctionDef
+    func: FuncDef
     free_vars: set[str]
     ignore_unknown: bool
 
     free_var_args: set[NamedId]
     rets: set[Stmt]
 
-    def __init__(self, func: FunctionDef, free_vars: set[str], ignore_unknown: bool):
+    def __init__(self, func: FuncDef, free_vars: set[str], ignore_unknown: bool):
         self.func = func
         self.free_vars = free_vars
         self.ignore_unknown = ignore_unknown
@@ -87,7 +87,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._mark_use(e.name, env)
         return env
 
-    def _visit_bool(self, e: Bool, ctx: _Ctx):
+    def _visit_bool(self, e: BoolVal, ctx: _Ctx):
         env, _ = ctx
         return env
 
@@ -168,7 +168,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(e.elt, (env, False))
         return env
 
-    def _visit_ref_expr(self, e: RefExpr, ctx: _Ctx):
+    def _visit_ref_expr(self, e: TupleRef, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(e.value, ctx)
         for s in e.slices:
@@ -182,7 +182,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(e.iff, ctx)
         return env
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: _Ctx):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.expr, ctx)
         if isinstance(stmt.var, NamedId):
@@ -203,11 +203,11 @@ class SyntaxCheckInstance(AstVisitor):
                     raise NotImplementedError('unreachable', elt)
         return env
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: _Ctx):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: _Ctx):
         self._visit_expr(stmt.expr, ctx)
         return self._visit_tuple_binding(stmt.binding, ctx)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: _Ctx):
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: _Ctx):
         env, _ = ctx
         self._mark_use(stmt.var, env)
         for s in stmt.slices:
@@ -260,14 +260,14 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(stmt.expr, ctx)
         return env
 
-    def _visit_return(self, stmt: Return, ctx: _Ctx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx):
         return self._visit_expr(stmt.expr, ctx)
 
-    def _visit_block(self, block: Block, ctx: _Ctx):
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         env, is_top = ctx
         for i, stmt in enumerate(block.stmts):
             match stmt:
-                case Return():
+                case ReturnStmt():
                     if not is_top:
                         raise FPySyntaxError('return statement must be at the top-level')
                     if i != len(block.stmts) - 1:
@@ -281,7 +281,7 @@ class SyntaxCheckInstance(AstVisitor):
 
         return env
 
-    def _visit_function(self, func: FunctionDef, ctx: _Ctx):
+    def _visit_function(self, func: FuncDef, ctx: _Ctx):
         env, _ = ctx
         for var in self.free_vars:
             env = env.extend(NamedId(var))
@@ -322,7 +322,7 @@ class SyntaxCheck:
 
     @staticmethod
     def analyze(
-        func: FunctionDef,
+        func: FuncDef,
         *,
         free_vars: Optional[set[str]] = None,
         ignore_unknown: bool = False
@@ -333,7 +333,7 @@ class SyntaxCheck:
         Returns the subset of `free_vars` that are relevant to FPy.
         """
 
-        if not isinstance(func, FunctionDef):
+        if not isinstance(func, FuncDef):
             raise TypeError(f'expected a Function, got {func}')
         if free_vars is None:
             free_vars = set()

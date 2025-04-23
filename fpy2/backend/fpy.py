@@ -33,14 +33,14 @@ class _FPyCompilerInstance(ReduceVisitor):
     def __init__(self, func: FunctionDef):
         self.func = func
 
-    def compile(self) -> ast.FunctionDef:
+    def compile(self) -> ast.FuncDef:
         return self._visit_function(self.func, None)
 
     def _visit_var(self, e: Var, ctx: None):
         return ast.Var(e.name, None)
 
     def _visit_bool(self, e: Bool, ctx: None):
-        return ast.Bool(e.val, None)
+        return ast.BoolVal(e.val, None)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ast.Decnum(e.val, None)
@@ -120,7 +120,7 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_tuple_ref(self, e: TupleRef, ctx: None):
         slices = [self._visit_expr(s, None) for s in e.slices]
         value = self._visit_expr(e.value, None)
-        return ast.RefExpr(value, slices, None)
+        return ast.TupleRef(value, slices, None)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: None):
         raise NotImplementedError('do not call')
@@ -139,7 +139,7 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_var_assign(self, stmt: VarAssign, ctx: None):
         # TODO: typing annotation
         e = self._visit_expr(stmt.expr, None)
-        return ast.VarAssign(stmt.var, e, None, None)
+        return ast.SimpleAssign(stmt.var, e, None, None)
 
     def _visit_tuple_binding(self, vars: TupleBinding):
         new_vars: list[Id | ast.TupleBinding] = []
@@ -157,12 +157,12 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
-        return ast.TupleAssign(binding, expr, None)
+        return ast.TupleUnpack(binding, expr, None)
 
     def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
-        return ast.RefAssign(stmt.var, slices, value, None)
+        return ast.IndexAssign(stmt.var, slices, value, None)
 
     def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
         # check that phis are empty
@@ -215,7 +215,7 @@ class _FPyCompilerInstance(ReduceVisitor):
 
     def _visit_return(self, stmt: Return, ctx: None):
         e = self._visit_expr(stmt.expr, None)
-        return ast.Return(e, None)
+        return ast.ReturnStmt(e, None)
 
     def _visit_phis(self, phis: list[PhiNode], lctx: None, rctx: None):
         raise NotImplementedError('do not call')
@@ -225,7 +225,7 @@ class _FPyCompilerInstance(ReduceVisitor):
 
     def _visit_block(self, block: Block, ctx: None):
         stmts = [self._visit_statement(s, None) for s in block.stmts]
-        return ast.Block(stmts)
+        return ast.StmtBlock(stmts)
 
     def _visit_props(self, props: dict[str, Any]):
         new_props: dict[str, Any] = {}
@@ -243,7 +243,7 @@ class _FPyCompilerInstance(ReduceVisitor):
             args.append(ast.Argument(arg.name, None, None))
 
         body = self._visit_block(func.body, None)
-        stx = ast.FunctionDef(func.name, args, body, None)
+        stx = ast.FuncDef(func.name, args, body, None)
         stx.ctx = self._visit_props(func.ctx)
         return stx
 

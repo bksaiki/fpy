@@ -81,9 +81,9 @@ _nary_table: dict[NaryOpKind, type[ir.NaryExpr]] = {
 
 class _IRCodegenInstance(AstVisitor):
     """Single-use instance of lowering an AST to an IR."""
-    func: FunctionDef
+    func: FuncDef
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         self.func = func
 
     def lower(self) -> ir.FunctionDef:
@@ -92,7 +92,7 @@ class _IRCodegenInstance(AstVisitor):
     def _visit_var(self, e: Var, ctx: None):
         return ir.Var(e.name)
 
-    def _visit_bool(self, e: Bool, ctx: None):
+    def _visit_bool(self, e: BoolVal, ctx: None):
         return ir.Bool(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
@@ -161,7 +161,7 @@ class _IRCodegenInstance(AstVisitor):
         elt = self._visit_expr(e.elt, ctx)
         return ir.CompExpr(list(e.vars), iterables, elt)
 
-    def _visit_ref_expr(self, e: RefExpr, ctx: None):
+    def _visit_ref_expr(self, e: TupleRef, ctx: None):
         value = self._visit_expr(e.value, ctx)
         slices = [self._visit_expr(s, ctx) for s in e.slices]
         return ir.TupleRef(value, *slices)
@@ -172,7 +172,7 @@ class _IRCodegenInstance(AstVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return ir.IfExpr(cond, ift, iff)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: None):
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: None):
         expr = self._visit_expr(stmt.expr, ctx)
         return ir.VarAssign(stmt.var, ir.AnyType(), expr)
 
@@ -187,12 +187,12 @@ class _IRCodegenInstance(AstVisitor):
                 raise NotImplementedError('unexpected tuple identifier', name)
         return ir.TupleBinding(new_vars)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
         return ir.TupleAssign(binding, ir.AnyType(), expr)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
         return ir.RefAssign(stmt.var, slices, value)
@@ -229,10 +229,10 @@ class _IRCodegenInstance(AstVisitor):
         expr = self._visit_expr(stmt.expr, ctx)
         return ir.EffectStmt(expr)
 
-    def _visit_return(self, stmt: Return, ctx: None):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None):
         return ir.Return(self._visit_expr(stmt.expr, ctx))
 
-    def _visit_block(self, block: Block, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None):
         return ir.Block([self._visit_statement(stmt, ctx) for stmt in block.stmts])
 
     def _visit_props(self, props: dict[str, Any]):
@@ -244,7 +244,7 @@ class _IRCodegenInstance(AstVisitor):
                 new_props[k] = v
         return new_props
 
-    def _visit_function(self, func: FunctionDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None):
         # translate arguments
         args: list[ir.Argument] = []
         for arg in func.args:
@@ -255,7 +255,7 @@ class _IRCodegenInstance(AstVisitor):
         # translate properties
         props: dict[str, Any] = {}
         for name, val in func.ctx.items():
-            if isinstance(val, FunctionDef):
+            if isinstance(val, FuncDef):
                 props[name] = self._visit_function(val, ctx)
             else:
                 props[name] = val
@@ -281,5 +281,5 @@ class IRCodegen:
     """Lowers a FPy AST to FPy IR."""
 
     @staticmethod
-    def lower(f: FunctionDef) -> ir.FunctionDef:
+    def lower(f: FuncDef) -> ir.FunctionDef:
         return _IRCodegenInstance(f).lower()

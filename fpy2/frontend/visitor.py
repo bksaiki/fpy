@@ -18,7 +18,7 @@ class AstVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_bool(self, e: Bool, ctx: Any) -> Any:
+    def _visit_bool(self, e: BoolVal, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
@@ -78,7 +78,7 @@ class AstVisitor(ABC):
         raise NotImplementedError('virtual method')
     
     @abstractmethod
-    def _visit_ref_expr(self, e: RefExpr, ctx: Any) -> Any:
+    def _visit_ref_expr(self, e: TupleRef, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
@@ -89,15 +89,15 @@ class AstVisitor(ABC):
     # Statements
 
     @abstractmethod
-    def _visit_var_assign(self, stmt: VarAssign, ctx: Any) -> Any:
+    def _visit_var_assign(self, stmt: SimpleAssign, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: Any) -> Any:
+    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: Any) -> Any:
+    def _visit_ref_assign(self, stmt: IndexAssign, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
@@ -125,7 +125,7 @@ class AstVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_return(self, stmt: Return, ctx: Any) -> Any:
+    def _visit_return(self, stmt: ReturnStmt, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
 
@@ -133,14 +133,14 @@ class AstVisitor(ABC):
     # Block
 
     @abstractmethod
-    def _visit_block(self, block: Block, ctx: Any) -> Any:
+    def _visit_block(self, block: StmtBlock, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     #######################################################
     # Function
 
     @abstractmethod
-    def _visit_function(self, func: FunctionDef, ctx: Any) -> Any:
+    def _visit_function(self, func: FuncDef, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     #######################################################
@@ -151,7 +151,7 @@ class AstVisitor(ABC):
         match e:
             case Var():
                 return self._visit_var(e, ctx)
-            case Bool():
+            case BoolVal():
                 return self._visit_bool(e, ctx)
             case Decnum():
                 return self._visit_decnum(e, ctx)
@@ -181,7 +181,7 @@ class AstVisitor(ABC):
                 return self._visit_tuple_expr(e, ctx)
             case CompExpr():
                 return self._visit_comp_expr(e, ctx)
-            case RefExpr():
+            case TupleRef():
                 return self._visit_ref_expr(e, ctx)
             case IfExpr():
                 return self._visit_if_expr(e, ctx)
@@ -191,11 +191,11 @@ class AstVisitor(ABC):
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         """Dispatch to the appropriate visit method for a statement."""
         match stmt:
-            case VarAssign():
+            case SimpleAssign():
                 return self._visit_var_assign(stmt, ctx)
-            case TupleAssign():
+            case TupleUnpack():
                 return self._visit_tuple_assign(stmt, ctx)
-            case RefAssign():
+            case IndexAssign():
                 return self._visit_ref_assign(stmt, ctx)
             case IfStmt():
                 return self._visit_if_stmt(stmt, ctx)
@@ -209,7 +209,7 @@ class AstVisitor(ABC):
                 return self._visit_assert(stmt, ctx)
             case EffectStmt():
                 return self._visit_effect(stmt, ctx)
-            case Return():
+            case ReturnStmt():
                 return self._visit_return(stmt, ctx)
             case _:
                 raise NotImplementedError(f'unreachable: {stmt}')
