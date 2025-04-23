@@ -29,23 +29,23 @@ class _ReachingDefsInstance(DefaultVisitor):
         self._visit_function(self.func, None)
         return self.reaches
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: _StmtCtx) -> _RetType:
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         defs_out = { *defs_in, stmt.var } if isinstance(stmt.var, NamedId) else defs_in
         kill_out = kill_in | (defs_in & { stmt.var })
         return defs_out, kill_out
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: _StmtCtx) -> _RetType:
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         gen = set(stmt.binding.names())
         defs_out = defs_in | gen
         kill_out = kill_in | (defs_in & gen)
         return defs_out, kill_out
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: _StmtCtx) -> _RetType:
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _StmtCtx) -> _RetType:
         return ctx
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _StmtCtx) -> _RetType:
+    def _visit_if1(self, stmt: If1Stmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         _, block_kill = self._visit_block(stmt.body, defs_in)
 
@@ -53,7 +53,7 @@ class _ReachingDefsInstance(DefaultVisitor):
         kill_out = kill_in | (defs_in & block_kill)
         return defs_out, kill_out
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _StmtCtx) -> _RetType:
+    def _visit_if(self, stmt: IfStmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         ift_defs, ift_kill = self._visit_block(stmt.ift, defs_in)
         iff_defs, iff_kill = self._visit_block(stmt.iff, defs_in)
@@ -62,7 +62,7 @@ class _ReachingDefsInstance(DefaultVisitor):
         kill_out = kill_in | (defs_in & (ift_kill | iff_kill))
         return defs_out, kill_out
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _StmtCtx) -> _RetType:
+    def _visit_while(self, stmt: WhileStmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         _, block_kill = self._visit_block(stmt.body, defs_in)
 
@@ -70,7 +70,7 @@ class _ReachingDefsInstance(DefaultVisitor):
         kill_out = kill_in | (defs_in & block_kill)
         return defs_out, kill_out
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _StmtCtx) -> _RetType:
+    def _visit_for(self, stmt: ForStmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         defs = { *defs_in, stmt.var } if isinstance(stmt.var, NamedId) else defs_in
         _, block_kill = self._visit_block(stmt.body, defs)

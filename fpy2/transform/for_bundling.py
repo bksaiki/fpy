@@ -41,9 +41,9 @@ class _ForBundlingInstance(DefaultTransformVisitor):
     # - violates SSA invariant
     #
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: None):  
+    def _visit_for(self, stmt: ForStmt, ctx: None):  
         if len(stmt.phis) <= 1:
-            stmt, _ = super()._visit_for_stmt(stmt, None)
+            stmt, _ = super()._visit_for(stmt, None)
             return StmtBlock([stmt])
         else:
             # create a new phi variable
@@ -81,7 +81,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             if isinstance(stmt, ForStmt):
-                b = self._visit_for_stmt(stmt, None)
+                b = self._visit_for(stmt, None)
                 stmts.extend(b.stmts)
             else:
                 stmt, _ = self._visit_statement(stmt, None)

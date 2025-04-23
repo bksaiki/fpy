@@ -369,7 +369,7 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: EvalCtx):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: EvalCtx):
         val = self._visit_expr(stmt.expr, ctx)
         match stmt.var:
             case NamedId():
@@ -393,16 +393,16 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError('unknown tuple element', elt)
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: EvalCtx):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: EvalCtx):
         val = self._visit_expr(stmt.expr, ctx)
         if not isinstance(val, tuple):
             raise TypeError(f'expected a tuple, got {val}')
         self._unpack_tuple(stmt.binding, val, ctx)
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: EvalCtx):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: EvalCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
@@ -416,7 +416,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.lhs]
                 del self.env[phi.lhs]
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
+    def _visit_if(self, stmt: IfStmt, ctx: EvalCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
@@ -431,7 +431,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx):
+    def _visit_while(self, stmt: WhileStmt, ctx: EvalCtx):
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]
@@ -450,7 +450,7 @@ class _Interpreter(ReduceVisitor):
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx):
+    def _visit_for(self, stmt: ForStmt, ctx: EvalCtx):
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]

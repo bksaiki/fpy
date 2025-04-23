@@ -43,30 +43,30 @@ class _SSAUnifyInstance(DefaultVisitor):
             self.unionfind[y] = x
 
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
-        super()._visit_if1_stmt(stmt, ctx)
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+        super()._visit_if1(stmt, ctx)
         # canonical variable is the incoming variable
         for phi in stmt.phis:
             self._union(phi.lhs, phi.rhs)
             self._union(phi.lhs, phi.name)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
-        super()._visit_if_stmt(stmt, ctx)
+    def _visit_if(self, stmt: IfStmt, ctx: None):
+        super()._visit_if(stmt, ctx)
         # canonical variable is in the ift branch
         # TODO: we should prioritize the incoming variable instead!
         for phi in stmt.phis:
             self._union(phi.lhs, phi.rhs)
             self._union(phi.lhs, phi.name)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):
-        super()._visit_while_stmt(stmt, ctx)
+    def _visit_while(self, stmt: WhileStmt, ctx: None):
+        super()._visit_while(stmt, ctx)
         # canonical variable is the incoming variable
         for phi in stmt.phis:
             self._union(phi.lhs, phi.rhs)
             self._union(phi.lhs, phi.name)
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
-        super()._visit_for_stmt(stmt, ctx)
+    def _visit_for(self, stmt: ForStmt, ctx: None):
+        super()._visit_for(stmt, ctx)
         # canonical variable is the incoming variable
         for phi in stmt.phis:
             self._union(phi.lhs, phi.rhs)
@@ -110,7 +110,7 @@ class _UnSSAInstance(DefaultTransformVisitor):
         elt = self._visit_expr(e.elt, ctx)
         return CompExpr(new_vars, iterables, elt)
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: None):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         if isinstance(stmt.var, NamedId):
             var: Id = self.env.get(stmt.var, stmt.var)
         else:
@@ -137,39 +137,39 @@ class _UnSSAInstance(DefaultTransformVisitor):
 
         return TupleBinding(new_vars)
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: None):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
         bindings = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
         s = TupleUnpack(bindings, stmt.ty, expr)
         return s, None
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         var = self.env.get(stmt.var, stmt.var)
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         s = IndexAssign(var, slices, expr)
         return s, None
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
         s = If1Stmt(cond, body, [])
         return s, None
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
         ift, _ = self._visit_block(stmt.ift, ctx)
         iff, _ = self._visit_block(stmt.iff, ctx)
         s = IfStmt(cond, ift, iff, [])
         return s, None
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):
+    def _visit_while(self, stmt: WhileStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
         s = WhileStmt(cond, body, [])
         return s, None
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
+    def _visit_for(self, stmt: ForStmt, ctx: None):
         if isinstance(stmt.var, NamedId):
             var: Id = self.env.get(stmt.var, stmt.var)
         else:

@@ -19,7 +19,7 @@ class _FuncUpdateInstance(DefaultTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         e = TupleSet(Var(stmt.var), slices, expr)

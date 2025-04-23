@@ -41,7 +41,7 @@ class _VerifyPassInstance(DefaultVisitor):
                     raise InvalidIRError('unreachable', var)
         self._visit_expr(e.elt, ctx)
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: _CtxType):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _CtxType):
         self._visit_expr(stmt.expr, ctx)
         match stmt.var:
             case NamedId():
@@ -55,7 +55,7 @@ class _VerifyPassInstance(DefaultVisitor):
                 raise InvalidIRError('unreachable', stmt.var)
         return ctx
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: _CtxType):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _CtxType):
         self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
             if var in self.types:
@@ -64,7 +64,7 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx.add(var)
         return ctx
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: _CtxType):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _CtxType):
         if stmt.var not in ctx:
             raise InvalidIRError(f'undefined variable {stmt.var}')
         for s in stmt.slices:
@@ -72,7 +72,7 @@ class _VerifyPassInstance(DefaultVisitor):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _CtxType):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _CtxType):
         self._visit_expr(stmt.cond, ctx)
         body_ctx = self._visit_block(stmt.body, ctx.copy())
         # check validty of phi nodes and update context
@@ -91,7 +91,7 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx -= { orig, new }
         return ctx
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _CtxType):
+    def _visit_if(self, stmt: IfStmt, ctx: _CtxType):
         self._visit_expr(stmt.cond, ctx)
         ift_ctx = self._visit_block(stmt.ift, ctx.copy())
         iff_ctx = self._visit_block(stmt.iff, ctx.copy())
@@ -111,7 +111,7 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx -= { ift_name, iff_name }
         return ctx
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _CtxType):
+    def _visit_while(self, stmt: WhileStmt, ctx: _CtxType):
         # check (partial) validity of phi variables and update context
         for phi in stmt.phis:
             name, orig = phi.name, phi.lhs
@@ -135,7 +135,7 @@ class _VerifyPassInstance(DefaultVisitor):
             ctx -= { new }
         return ctx
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _CtxType):
+    def _visit_for(self, stmt: ForStmt, ctx: _CtxType):
         # check iterable expression
         self._visit_expr(stmt.iterable, ctx)
         # bind the loop variable

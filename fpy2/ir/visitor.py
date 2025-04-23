@@ -94,37 +94,37 @@ class BaseVisitor(ABC):
     # Statements
 
     @abstractmethod
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: Any):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         """Visitor method for `VarAssign` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: Any):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         """Visitor method for `TupleAssign` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: Any):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
         """Visitor method for `RefAssign` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: Any):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         """Visitor method for `If1Stmt` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: Any):
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
         """Visitor method for `IfStmt` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: Any):
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
         """Visitor method for `WhileStmt` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: Any):
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
         """Visitor method for `ForStmt` nodes."""
         raise NotImplementedError('virtual method')
 
@@ -233,19 +233,19 @@ class BaseVisitor(ABC):
         """Dynamic dispatch for all statements."""
         match stmt:
             case SimpleAssign():
-                return self._visit_var_assign(stmt, ctx)
+                return self._visit_simple_assign(stmt, ctx)
             case TupleUnpack():
-                return self._visit_tuple_assign(stmt, ctx)
+                return self._visit_tuple_unpack(stmt, ctx)
             case IndexAssign():
-                return self._visit_ref_assign(stmt, ctx)
+                return self._visit_index_assign(stmt, ctx)
             case If1Stmt():
-                return self._visit_if1_stmt(stmt, ctx)
+                return self._visit_if1(stmt, ctx)
             case IfStmt():
-                return self._visit_if_stmt(stmt, ctx)
+                return self._visit_if(stmt, ctx)
             case WhileStmt():
-                return self._visit_while_stmt(stmt, ctx)
+                return self._visit_while(stmt, ctx)
             case ForStmt():
-                return self._visit_for_stmt(stmt, ctx)
+                return self._visit_for(stmt, ctx)
             case ContextStmt():
                 return self._visit_context(stmt, ctx)
             case AssertStmt():
@@ -333,31 +333,31 @@ class DefaultVisitor(Visitor):
         self._visit_expr(e.ift, ctx)
         self._visit_expr(e.iff, ctx)
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: Any):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: Any):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: Any):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
         for s in stmt.slices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: Any):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: Any):
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: Any):
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: Any):
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
         self._visit_expr(stmt.iterable, ctx)
         self._visit_block(stmt.body, ctx)
 
@@ -473,7 +473,7 @@ class DefaultTransformVisitor(TransformVisitor):
     #######################################################
     # Statements
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: Any):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         val = self._visit_expr(stmt.expr, ctx)
         s = SimpleAssign(stmt.var, stmt.ty, val)
         return s, ctx
@@ -489,26 +489,26 @@ class DefaultTransformVisitor(TransformVisitor):
                 raise NotImplementedError('unexpected tuple element', elt)
         return TupleBinding(new_vars)
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: Any):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         vars = self._copy_tuple_binding(stmt.binding)
         val = self._visit_expr(stmt.expr, ctx)
         s = TupleUnpack(vars, stmt.ty, val)
         return s, ctx
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: Any):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         s = IndexAssign(stmt.var, slices, expr)
         return s, ctx
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: Any):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         cond = self._visit_expr(stmt.cond, ctx)
         body, rctx = self._visit_block(stmt.body, ctx)
         phis, ctx = self._visit_phis(stmt.phis, ctx, rctx)
         s = If1Stmt(cond, body, phis)
         return s, ctx
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: Any):
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
         cond = self._visit_expr(stmt.cond, ctx)
         ift, lctx = self._visit_block(stmt.ift, ctx)
         iff, rctx = self._visit_block(stmt.iff, ctx)
@@ -516,7 +516,7 @@ class DefaultTransformVisitor(TransformVisitor):
         s = IfStmt(cond, ift, iff, phis)
         return s, ctx
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: Any):
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
         init_phis, init_ctx = self._visit_loop_phis(stmt.phis, ctx, None)
         cond = self._visit_expr(stmt.cond, init_ctx)
         body, rctx = self._visit_block(stmt.body, init_ctx)
@@ -525,7 +525,7 @@ class DefaultTransformVisitor(TransformVisitor):
         s = WhileStmt(cond, body, phis)
         return s, ctx
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: Any):
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
         iterable = self._visit_expr(stmt.iterable, ctx)
         init_phis, init_ctx = self._visit_loop_phis(stmt.phis, ctx, None)
         body, rctx = self._visit_block(stmt.body, init_ctx)

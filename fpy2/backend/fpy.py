@@ -136,7 +136,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         iff = self._visit_expr(e.iff, None)
         return ast.IfExpr(cond, ift, iff, None)
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: None):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         # TODO: typing annotation
         e = self._visit_expr(stmt.expr, None)
         return ast.SimpleAssign(stmt.var, e, None, None)
@@ -154,17 +154,17 @@ class _FPyCompilerInstance(ReduceVisitor):
                     raise NotImplementedError('unexpected tuple identifier', name)
         return ast.TupleBinding(new_vars, None)
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: None):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
         return ast.TupleUnpack(binding, expr, None)
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
         return ast.IndexAssign(stmt.var, slices, value, None)
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
         # check that phis are empty
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
@@ -173,7 +173,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, None)
         return ast.IfStmt(cond, body, None, None)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None):
         # check that phis are empty
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
@@ -183,7 +183,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         iff = self._visit_block(stmt.iff, None)
         return ast.IfStmt(cond, ift, iff, None)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):
+    def _visit_while(self, stmt: WhileStmt, ctx: None):
         # check that phis are empty
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
@@ -192,7 +192,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, None)
         return ast.WhileStmt(cond, body, None)
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
+    def _visit_for(self, stmt: ForStmt, ctx: None):
         # check that phis are empty
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')

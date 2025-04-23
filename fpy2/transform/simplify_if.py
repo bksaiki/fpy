@@ -20,7 +20,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
     def apply(self):
         return self._visit_function(self.func, None)
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
         stmts: list[Stmt] = []
         # compile condition
         cond = self._visit_expr(stmt.cond, ctx)
@@ -38,7 +38,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
             stmts.append(SimpleAssign(phi.name, AnyType(), ife))
         return StmtBlock(stmts)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None):
         stmts: list[Stmt] = []
         # compile condition
         cond = self._visit_expr(stmt.cond, ctx)
@@ -64,10 +64,10 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         for stmt in block.stmts:
             match stmt:
                 case If1Stmt():
-                    if1_block = self._visit_if1_stmt(stmt, ctx)
+                    if1_block = self._visit_if1(stmt, ctx)
                     stmts.extend(if1_block.stmts)
                 case IfStmt():
-                    if_block = self._visit_if_stmt(stmt, ctx)
+                    if_block = self._visit_if(stmt, ctx)
                     stmts.extend(if_block.stmts)
                 case _:
                     stmt, _ = self._visit_statement(stmt, ctx)

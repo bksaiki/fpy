@@ -141,7 +141,7 @@ class _FormatterInstance(BaseVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'{ift} if {cond} else {iff}'
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: _IndentCtx):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _IndentCtx):
         val = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'{str(stmt.var)}: {self._format_type(stmt.ty)} = {val}', ctx)
 
@@ -158,24 +158,24 @@ class _FormatterInstance(BaseVisitor):
                     raise NotImplementedError('unreachable', var)
         return ', '.join(ss)
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: _IndentCtx):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _IndentCtx):
         val = self._visit_expr(stmt.expr, ctx)
         vars = self._visit_tuple_binding(stmt.binding)
         self._add_line(f'{vars} = {val} : {self._format_type(stmt.ty)}', ctx)
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: _IndentCtx):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _IndentCtx):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         ref_str = ''.join(f'[{slice}]' for slice in slices)
         self._add_line(f'{str(stmt.var)}{ref_str} = {expr}', ctx)
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _IndentCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _IndentCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'if {cond}:', ctx)
         self._visit_block(stmt.body, ctx.indent())
         self._visit_phis(stmt.phis, ctx, ctx)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _IndentCtx):
+    def _visit_if(self, stmt: IfStmt, ctx: _IndentCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'if {cond}:', ctx)
         self._visit_block(stmt.ift, ctx.indent())
@@ -183,13 +183,13 @@ class _FormatterInstance(BaseVisitor):
         self._visit_block(stmt.iff, ctx.indent())
         self._visit_phis(stmt.phis, ctx, ctx)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _IndentCtx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _IndentCtx):
         self._visit_loop_phis(stmt.phis, ctx, None)
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'while {cond}:', ctx)
         self._visit_block(stmt.body, ctx.indent())
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _IndentCtx):
+    def _visit_for(self, stmt: ForStmt, ctx: _IndentCtx):
         iterable = self._visit_expr(stmt.iterable, ctx)
         self._visit_loop_phis(stmt.phis, ctx, None)
         self._add_line(f'for {str(stmt.var)} in {iterable}:', ctx)

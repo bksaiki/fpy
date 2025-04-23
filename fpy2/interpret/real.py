@@ -413,7 +413,7 @@ class _Interpreter(ReduceVisitor):
             case _:
                 raise NotImplementedError(f'unreachable {val}')
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: EvalCtx):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: EvalCtx):
         match stmt.var:
             case NamedId():
                 # only `SourceId` comes from the parser
@@ -449,7 +449,7 @@ class _Interpreter(ReduceVisitor):
                 raise TypeError(f'expected a boolean, got {val}')
             return val
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: EvalCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: EvalCtx):
         if self._visit_cond(stmt.cond, ctx):
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
@@ -458,7 +458,7 @@ class _Interpreter(ReduceVisitor):
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.lhs]
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: EvalCtx):
+    def _visit_if(self, stmt: IfStmt, ctx: EvalCtx):
         if self._visit_cond(stmt.cond, ctx):
             self._visit_block(stmt.ift, ctx)
             for phi in stmt.phis:
@@ -495,7 +495,7 @@ class _Interpreter(ReduceVisitor):
             else:
                 self._visit_statement(stmt, ctx)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: EvalCtx) -> None:
+    def _visit_while(self, stmt: WhileStmt, ctx: EvalCtx) -> None:
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]
@@ -506,13 +506,13 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: EvalCtx):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: EvalCtx):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: EvalCtx):
         raise NotImplementedError
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: EvalCtx):
+    def _visit_for(self, stmt: ForStmt, ctx: EvalCtx):
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]

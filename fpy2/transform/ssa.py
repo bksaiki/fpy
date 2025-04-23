@@ -52,7 +52,7 @@ class _SSAInstance(DefaultTransformVisitor):
         elt = self._visit_expr(e.elt, ctx)
         return CompExpr(vars, iterables, elt)
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: _Ctx):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         # visit the expression
         e = self._visit_expr(stmt.expr, ctx)
 
@@ -87,18 +87,18 @@ class _SSAInstance(DefaultTransformVisitor):
                     raise NotImplementedError('unexpected tuple identifier', name)
         return TupleBinding(new_vars), ctx
 
-    def _visit_tuple_assign(self, e: TupleUnpack, ctx: _Ctx):
+    def _visit_tuple_unpack(self, e: TupleUnpack, ctx: _Ctx):
         expr = self._visit_expr(e.expr, ctx)
         binding, ctx = self._visit_tuple_binding(e.binding, ctx)
         return TupleUnpack(binding, e.ty, expr), ctx
 
-    def _visit_ref_assign(self, stmt, ctx: _Ctx):
+    def _visit_index_assign(self, stmt, ctx: _Ctx):
         var = ctx[stmt.var]
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         return IndexAssign(var, slices, expr), ctx
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _Ctx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
         # visit condition
         cond = self._visit_expr(stmt.cond, ctx)
         body, body_ctx = self._visit_block(stmt.body, ctx)
@@ -131,7 +131,7 @@ class _SSAInstance(DefaultTransformVisitor):
         s = If1Stmt(cond, body, new_phis)
         return s, new_ctx
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _Ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
         # visit condition and branches
         cond = self._visit_expr(stmt.cond, ctx)
         ift, ift_ctx = self._visit_block(stmt.ift, ctx)
@@ -165,7 +165,7 @@ class _SSAInstance(DefaultTransformVisitor):
         s = IfStmt(cond, ift, iff, new_phis)
         return s, new_ctx
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _Ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         # compute variables requiring phi node
         reach = self.reaches[stmt.body]
         updated = ctx.keys() & reach.kill_out
@@ -216,7 +216,7 @@ class _SSAInstance(DefaultTransformVisitor):
         s = WhileStmt(cond, body, new_phis)
         return s, new_ctx
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _Ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         # visit iterable
         iterable = self._visit_expr(stmt.iterable, ctx)
 

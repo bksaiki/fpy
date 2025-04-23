@@ -54,9 +54,9 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     #  - violates SSA invariant
     #  - need to substitute for any a_1, ..., z_1 in the condition
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):  
+    def _visit_while(self, stmt: WhileStmt, ctx: None):  
         if len(stmt.phis) <= 1:
-            stmt, _ = super()._visit_while_stmt(stmt, None)
+            stmt, _ = super()._visit_while(stmt, None)
             return StmtBlock([stmt])
         else:
             # create a new phi variable
@@ -96,7 +96,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             if isinstance(stmt, WhileStmt):
-                b = self._visit_while_stmt(stmt, None)
+                b = self._visit_while(stmt, None)
                 stmts.extend(b.stmts)
             else:
                 stmt, _ = self._visit_statement(stmt, None)

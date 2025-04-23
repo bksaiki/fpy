@@ -101,42 +101,42 @@ class _LiveVars(ReduceVisitor):
         fvs.update(self._visit_expr(e.iff, ctx))
         return fvs
 
-    def _visit_var_assign(self, stmt: SimpleAssign, ctx: _RetType) -> _RetType:
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _RetType) -> _RetType:
         fvs = ctx | self._visit_expr(stmt.expr, None)
         if isinstance(stmt.var, NamedId):
             fvs.discard(stmt.var)
         return fvs
 
-    def _visit_tuple_assign(self, stmt: TupleUnpack, ctx: _RetType) -> _RetType:
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _RetType) -> _RetType:
         fvs = ctx | self._visit_expr(stmt.expr, None)
         for var in stmt.binding.names():
             if isinstance(var, NamedId):
                 fvs.discard(var)
         return fvs
 
-    def _visit_ref_assign(self, stmt: IndexAssign, ctx: _RetType) -> _RetType:
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _RetType) -> _RetType:
         fvs = ctx | self._visit_expr(stmt.expr, None)
         for slice in stmt.slices:
             fvs.update(self._visit_expr(slice, None))
         fvs.add(stmt.var)
         return fvs
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _RetType) -> _RetType:
+    def _visit_if1(self, stmt: If1Stmt, ctx: _RetType) -> _RetType:
         ift_fvs = self._visit_block(stmt.body, ctx)
         cond_fvs = self._visit_expr(stmt.cond, None)
         return ctx | ift_fvs | cond_fvs
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _RetType) -> _RetType:
+    def _visit_if(self, stmt: IfStmt, ctx: _RetType) -> _RetType:
         ift_fvs = self._visit_block(stmt.ift, ctx)
         iff_fvs = self._visit_block(stmt.iff, ctx)
         cond_fvs = self._visit_expr(stmt.cond, None)
         return ift_fvs | iff_fvs | cond_fvs
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _RetType) -> _RetType:
+    def _visit_while(self, stmt: WhileStmt, ctx: _RetType) -> _RetType:
         ctx = ctx | self._visit_block(stmt.body, ctx)
         return ctx | self._visit_expr(stmt.cond, None)
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _RetType) -> _RetType:
+    def _visit_for(self, stmt: ForStmt, ctx: _RetType) -> _RetType:
         body_fvs = self._visit_block(stmt.body, ctx)
         if isinstance(stmt.var, NamedId):
             body_fvs -= { stmt.var }
