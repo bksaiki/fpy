@@ -36,9 +36,9 @@ class _FormatterInstance(BaseVisitor):
                 self.fmt = self._visit_expr(self.ir, ctx)
             case Stmt():
                 self._visit_statement(self.ir, ctx)
-            case Block():
+            case StmtBlock():
                 self._visit_block(self.ir, ctx)
-            case FunctionDef():
+            case FuncDef():
                 self._visit_function(self.ir, ctx)
             case _:
                 raise NotImplementedError('unsupported IR node', self.ir)
@@ -59,7 +59,7 @@ class _FormatterInstance(BaseVisitor):
     def _visit_var(self, e: Var, ctx: _IndentCtx):
         return str(e.name)
 
-    def _visit_bool(self, e: Bool, ctx: Any):
+    def _visit_bool(self, e: BoolVal, ctx: Any):
         return str(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: _IndentCtx):
@@ -141,7 +141,7 @@ class _FormatterInstance(BaseVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'{ift} if {cond} else {iff}'
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: _IndentCtx):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _IndentCtx):
         val = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'{str(stmt.var)}: {self._format_type(stmt.ty)} = {val}', ctx)
 
@@ -158,24 +158,24 @@ class _FormatterInstance(BaseVisitor):
                     raise NotImplementedError('unreachable', var)
         return ', '.join(ss)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: _IndentCtx):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _IndentCtx):
         val = self._visit_expr(stmt.expr, ctx)
         vars = self._visit_tuple_binding(stmt.binding)
         self._add_line(f'{vars} = {val} : {self._format_type(stmt.ty)}', ctx)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: _IndentCtx):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _IndentCtx):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         ref_str = ''.join(f'[{slice}]' for slice in slices)
         self._add_line(f'{str(stmt.var)}{ref_str} = {expr}', ctx)
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _IndentCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _IndentCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'if {cond}:', ctx)
         self._visit_block(stmt.body, ctx.indent())
         self._visit_phis(stmt.phis, ctx, ctx)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _IndentCtx):
+    def _visit_if(self, stmt: IfStmt, ctx: _IndentCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'if {cond}:', ctx)
         self._visit_block(stmt.ift, ctx.indent())
@@ -183,13 +183,13 @@ class _FormatterInstance(BaseVisitor):
         self._visit_block(stmt.iff, ctx.indent())
         self._visit_phis(stmt.phis, ctx, ctx)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _IndentCtx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _IndentCtx):
         self._visit_loop_phis(stmt.phis, ctx, None)
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'while {cond}:', ctx)
         self._visit_block(stmt.body, ctx.indent())
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _IndentCtx):
+    def _visit_for(self, stmt: ForStmt, ctx: _IndentCtx):
         iterable = self._visit_expr(stmt.iterable, ctx)
         self._visit_loop_phis(stmt.phis, ctx, None)
         self._add_line(f'for {str(stmt.var)} in {iterable}:', ctx)
@@ -212,7 +212,7 @@ class _FormatterInstance(BaseVisitor):
         expr = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'{expr}', ctx)
 
-    def _visit_return(self, stmt: Return, ctx: _IndentCtx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: _IndentCtx):
         s = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'return {s}', ctx)
 
@@ -228,7 +228,7 @@ class _FormatterInstance(BaseVisitor):
             e = f'phi({str(phi.lhs)}, {str(phi.rhs)})'
             self._add_line(f'{decl} = {e}', lctx)
 
-    def _visit_block(self, block: Block, ctx: _IndentCtx):
+    def _visit_block(self, block: StmtBlock, ctx: _IndentCtx):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
@@ -245,7 +245,7 @@ class _FormatterInstance(BaseVisitor):
                 self._add_line(f'{k}={v},', ctx.indent())
             self._add_line(')', ctx)
 
-    def _visit_function(self, func: FunctionDef, ctx: _IndentCtx):
+    def _visit_function(self, func: FuncDef, ctx: _IndentCtx):
         arg_strs: list[str] = []
         for arg in func.args:
             arg_str = f'{str(arg.name)}: {self._format_type(arg.ty)}'

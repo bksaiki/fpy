@@ -165,15 +165,21 @@ class Var(ValueExpr):
         super().__init__(loc)
         self.name = name
 
-class Bool(ValueExpr):
-    """FPy AST: boolean"""
+class BoolVal(ValueExpr):
+    """FPy AST: boolean value"""
     val: bool
 
     def __init__(self, val: bool, loc: Optional[Location]):
         super().__init__(loc)
         self.val = val
 
-class String(ValueExpr):
+class RealVal(ValueExpr):
+    """FPy AST: real value"""
+
+    def __init__(self, loc: Optional[Location]):
+        super().__init__(loc)
+
+class StringVal(ValueExpr):
     """FPy AST: string"""
     val: str
 
@@ -181,7 +187,7 @@ class String(ValueExpr):
         super().__init__(loc)
         self.val = val
 
-class Decnum(ValueExpr):
+class Decnum(RealVal):
     """FPy AST: decimal number"""
     val: str
 
@@ -189,7 +195,7 @@ class Decnum(ValueExpr):
         super().__init__(loc)
         self.val = val   
 
-class Hexnum(ValueExpr):
+class Hexnum(RealVal):
     """FPy AST: hexadecimal number"""
     val: str
 
@@ -197,7 +203,7 @@ class Hexnum(ValueExpr):
         super().__init__(loc)
         self.val = val
 
-class Integer(ValueExpr):
+class Integer(RealVal):
     """FPy AST: integer"""
     val: int
 
@@ -205,7 +211,7 @@ class Integer(ValueExpr):
         super().__init__(loc)
         self.val = val
 
-class Rational(ValueExpr):
+class Rational(RealVal):
     """FPy AST: rational number"""
     p: int
     q: int
@@ -215,7 +221,7 @@ class Rational(ValueExpr):
         self.p = p
         self.q = q
 
-class Digits(ValueExpr):
+class Digits(RealVal):
     """FPy AST: scientific notation"""
     m: int
     e: int
@@ -227,7 +233,7 @@ class Digits(ValueExpr):
         self.e = e
         self.b = b
 
-class Constant(ValueExpr):
+class Constant(RealVal):
     """FPy AST: constant expression"""
     val: str
 
@@ -364,7 +370,7 @@ class CompExpr(Expr):
         self.iterables = list(iterables)
         self.elt = elt
 
-class RefExpr(Expr):
+class TupleRef(Expr):
     """FPy AST: tuple indexing expression"""
     value: Expr
     slices: list[Expr]
@@ -392,7 +398,7 @@ class IfExpr(Expr):
         self.ift = ift
         self.iff = iff
 
-class Block(Ast):
+class StmtBlock(Ast):
     """FPy AST: list of statements"""
     stmts: list[Stmt]
 
@@ -416,7 +422,7 @@ class Block(Ast):
         super().__init__(loc)
         self.stmts = stmts
 
-class VarAssign(Stmt):
+class SimpleAssign(Stmt):
     """FPy AST: variable assignment"""
     var: Id
     expr: Expr
@@ -462,8 +468,8 @@ class TupleBinding(Ast):
                 raise NotImplementedError('unexpected tuple identifier', v)
         return ids
 
-class TupleAssign(Stmt):
-    """FPy AST: tuple assignment"""
+class TupleUnpack(Stmt):
+    """FPy AST: unpacking / destructing a tuple"""
     binding: TupleBinding
     expr: Expr
 
@@ -477,7 +483,7 @@ class TupleAssign(Stmt):
         self.binding = vars
         self.expr = expr
 
-class RefAssign(Stmt):
+class IndexAssign(Stmt):
     """FPy AST: assignment to tuple indexing"""
     var: NamedId
     slices: list[Expr]
@@ -498,14 +504,14 @@ class RefAssign(Stmt):
 class IfStmt(Stmt):
     """FPy AST: if statement"""
     cond: Expr
-    ift: Block
-    iff: Optional[Block]
+    ift: StmtBlock
+    iff: Optional[StmtBlock]
 
     def __init__(
         self,
         cond: Expr,
-        ift: Block,
-        iff: Optional[Block],
+        ift: StmtBlock,
+        iff: Optional[StmtBlock],
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -516,12 +522,12 @@ class IfStmt(Stmt):
 class WhileStmt(Stmt):
     """FPy AST: while statement"""
     cond: Expr
-    body: Block
+    body: StmtBlock
 
     def __init__(
         self,
         cond: Expr,
-        body: Block,
+        body: StmtBlock,
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -532,13 +538,13 @@ class ForStmt(Stmt):
     """FPy AST: for statement"""
     var: Id
     iterable: Expr
-    body: Block
+    body: StmtBlock
 
     def __init__(
         self,
         var: Id,
         iterable: Expr,
-        body: Block,
+        body: StmtBlock,
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -550,13 +556,13 @@ class ContextStmt(Stmt):
     """FPy AST: with statement"""
     name: Optional[Id]
     props: dict[str, Any]
-    body: Block
+    body: StmtBlock
 
     def __init__(
         self,
         name: Optional[Id],
         props: dict[str, Any],
-        body: Block,
+        body: StmtBlock,
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -591,7 +597,7 @@ class EffectStmt(Stmt):
         super().__init__(loc)
         self.expr = expr
 
-class Return(Stmt):
+class ReturnStmt(Stmt):
     """FPy AST: return statement"""
     expr: Expr
 
@@ -618,11 +624,11 @@ class Argument(Ast):
         self.name = name
         self.type = type
 
-class FunctionDef(Ast):
+class FuncDef(Ast):
     """FPy AST: function definition"""
     name: str
     args: list[Argument]
-    body: Block
+    body: StmtBlock
     ctx: dict[str, Any]
     free_vars: set[NamedId]
 
@@ -630,7 +636,7 @@ class FunctionDef(Ast):
         self,
         name: str,
         args: Sequence[Argument],
-        body: Block,
+        body: StmtBlock,
         loc: Optional[Location]
     ):
         super().__init__(loc)

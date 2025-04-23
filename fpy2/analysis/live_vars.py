@@ -8,17 +8,17 @@ _RetType: TypeAlias = set[NamedId]
 
 class _LiveVars(ReduceVisitor):
     """Single-instance of the live variable analysis."""
-    e: FunctionDef | Block | Stmt | Expr
+    e: FuncDef | StmtBlock | Stmt | Expr
 
-    def __init__(self, e: FunctionDef | Block | Stmt | Expr):
+    def __init__(self, e: FuncDef | StmtBlock | Stmt | Expr):
         self.e = e
 
     def analyze(self):
         """Runs live-variable analysis on `self.e`."""
         match self.e:
-            case FunctionDef():
+            case FuncDef():
                 return self._visit_function(self.e, None)
-            case Block():
+            case StmtBlock():
                 return self._visit_block(self.e, set())
             case Stmt():
                 return self._visit_statement(self.e, set())
@@ -30,7 +30,7 @@ class _LiveVars(ReduceVisitor):
     def _visit_var(self, e: Var, ctx: None) -> _RetType:
         return { e.name }
 
-    def _visit_bool(self, e: Bool, ctx: None) -> _RetType:
+    def _visit_bool(self, e: BoolVal, ctx: None) -> _RetType:
         return set()
 
     def _visit_decnum(self, e: Decnum, ctx: None) -> _RetType:
@@ -101,42 +101,42 @@ class _LiveVars(ReduceVisitor):
         fvs.update(self._visit_expr(e.iff, ctx))
         return fvs
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: _RetType) -> _RetType:
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _RetType) -> _RetType:
         fvs = ctx | self._visit_expr(stmt.expr, None)
         if isinstance(stmt.var, NamedId):
             fvs.discard(stmt.var)
         return fvs
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: _RetType) -> _RetType:
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _RetType) -> _RetType:
         fvs = ctx | self._visit_expr(stmt.expr, None)
         for var in stmt.binding.names():
             if isinstance(var, NamedId):
                 fvs.discard(var)
         return fvs
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: _RetType) -> _RetType:
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _RetType) -> _RetType:
         fvs = ctx | self._visit_expr(stmt.expr, None)
         for slice in stmt.slices:
             fvs.update(self._visit_expr(slice, None))
         fvs.add(stmt.var)
         return fvs
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _RetType) -> _RetType:
+    def _visit_if1(self, stmt: If1Stmt, ctx: _RetType) -> _RetType:
         ift_fvs = self._visit_block(stmt.body, ctx)
         cond_fvs = self._visit_expr(stmt.cond, None)
         return ctx | ift_fvs | cond_fvs
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _RetType) -> _RetType:
+    def _visit_if(self, stmt: IfStmt, ctx: _RetType) -> _RetType:
         ift_fvs = self._visit_block(stmt.ift, ctx)
         iff_fvs = self._visit_block(stmt.iff, ctx)
         cond_fvs = self._visit_expr(stmt.cond, None)
         return ift_fvs | iff_fvs | cond_fvs
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _RetType) -> _RetType:
+    def _visit_while(self, stmt: WhileStmt, ctx: _RetType) -> _RetType:
         ctx = ctx | self._visit_block(stmt.body, ctx)
         return ctx | self._visit_expr(stmt.cond, None)
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _RetType) -> _RetType:
+    def _visit_for(self, stmt: ForStmt, ctx: _RetType) -> _RetType:
         body_fvs = self._visit_block(stmt.body, ctx)
         if isinstance(stmt.var, NamedId):
             body_fvs -= { stmt.var }
@@ -152,24 +152,18 @@ class _LiveVars(ReduceVisitor):
     def _visit_effect(self, stmt: EffectStmt, ctx: _RetType) -> _RetType:
         return ctx | self._visit_expr(stmt.expr, None)
 
-    def _visit_return(self, stmt: Return, ctx: _RetType) -> _RetType:
+    def _visit_return(self, stmt: ReturnStmt, ctx: _RetType) -> _RetType:
         return self._visit_expr(stmt.expr, None)
 
-    def _visit_phis(self, phis: list[PhiNode], lctx: None, rctx: None) -> _RetType:
-        raise NotImplementedError('do not call directly')
-
-    def _visit_loop_phis(self, phis: list[PhiNode], lctx: None, rctx: None) -> _RetType:
-        raise NotImplementedError('do not call directly')
-
-    def _visit_block(self, block: Block, ctx: _RetType) -> _RetType:
+    def _visit_block(self, block: StmtBlock, ctx: _RetType) -> _RetType:
         fvs = ctx.copy()
         for stmt in reversed(block.stmts):
-            if isinstance(stmt, Return):
+            if isinstance(stmt, ReturnStmt):
                 fvs = set()
             fvs = self._visit_statement(stmt, fvs)
         return fvs
 
-    def _visit_function(self, func: FunctionDef, ctx: None) -> _RetType:
+    def _visit_function(self, func: FuncDef, ctx: None) -> _RetType:
         fvs = self._visit_block(func.body, set())
         for arg in func.args:
             if isinstance(arg, NamedId):
@@ -189,8 +183,8 @@ class LiveVars:
     """Live variable analysis for the FPy AST."""
 
     @staticmethod
-    def analyze(e: FunctionDef | Block | Stmt | Expr):
+    def analyze(e: FuncDef | StmtBlock | Stmt | Expr):
         """Analyze the live variables in a function."""
-        if not isinstance(e, (FunctionDef, Block, Stmt, Expr)):
+        if not isinstance(e, (FuncDef, StmtBlock, Stmt, Expr)):
             raise TypeError(f'Expected FunctionDef, Block, Stmt or Expr, got {type(e)}')
         return _LiveVars(e).analyze()

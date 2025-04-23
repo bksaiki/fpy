@@ -163,10 +163,10 @@ class RangeTable:
         return Interval(_NEG_INF, _POS_INF, False, False)
 
     @staticmethod
-    def from_condition(cond: FunctionDef):
+    def from_condition(cond: FuncDef):
         """Creates a range table from an expression."""
         stmts = cond.body.stmts
-        if len(stmts) != 1 or not isinstance(stmts[0], Return):
+        if len(stmts) != 1 or not isinstance(stmts[0], ReturnStmt):
             raise ValueError(f'precondition must be a single return statement {cond.format()}')
         return _parse_expr(stmts[0].expr)
 
@@ -217,7 +217,7 @@ class RangeTable:
         return merged
 
 
-def _parse_number(e: RealExpr) -> Fraction | float:
+def _parse_number(e: RealVal) -> Fraction | float:
     """Parses a real expression into a fraction."""
     match e:
         case Decnum() | Integer():
@@ -264,14 +264,14 @@ def _parse_cmp(op: CompareOp, lhs: Expr, rhs: Expr):
             return RangeTable.unsound()
         case (_, Var()):
             return _parse_cmp(op.invert(), rhs, lhs)
-        case (Var(), RealExpr()):
+        case (Var(), RealVal()):
             try:
                 n = _parse_number(rhs)
                 return _parse_cmp2(op, lhs.name, n)
             except RangeTableParseError:
                 return RangeTable.unsound()
         case (Var(), Neg()):
-            if not isinstance(rhs.children[0], RealExpr):
+            if not isinstance(rhs.children[0], RealVal):
                 # unsupported
                 return RangeTable.unsound()
             try:
@@ -280,7 +280,7 @@ def _parse_cmp(op: CompareOp, lhs: Expr, rhs: Expr):
             except RangeTableParseError:
                 return RangeTable.unsound()
         case (Var(), Add()):
-            if not isinstance(rhs.children[0], RealExpr) or not isinstance(rhs.children[1], RealExpr):
+            if not isinstance(rhs.children[0], RealVal) or not isinstance(rhs.children[1], RealVal):
                 # unsupported
                 return RangeTable.unsound()
             try:
@@ -290,7 +290,7 @@ def _parse_cmp(op: CompareOp, lhs: Expr, rhs: Expr):
             except RangeTableParseError:
                 return RangeTable.unsound()
         case (Var(), Sub()):
-            if not isinstance(rhs.children[0], RealExpr) or not isinstance(rhs.children[1], RealExpr):
+            if not isinstance(rhs.children[0], RealVal) or not isinstance(rhs.children[1], RealVal):
                 # unsupported
                 return RangeTable.unsound()
             try:
@@ -300,7 +300,7 @@ def _parse_cmp(op: CompareOp, lhs: Expr, rhs: Expr):
             except RangeTableParseError:
                 return RangeTable.unsound()
         case (Var(), Mul()):
-            if not isinstance(rhs.children[0], RealExpr) or not isinstance(rhs.children[1], RealExpr):
+            if not isinstance(rhs.children[0], RealVal) or not isinstance(rhs.children[1], RealVal):
                 # unsupported
                 return RangeTable.unsound()
             try:
@@ -316,7 +316,7 @@ def _parse_cmp(op: CompareOp, lhs: Expr, rhs: Expr):
 def _parse_expr(e: Expr) -> RangeTable:
     """Parses a range expression."""
     match e:
-        case Bool():
+        case BoolVal():
             if e.val:
                 return RangeTable()
             else:

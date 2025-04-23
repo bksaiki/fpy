@@ -6,7 +6,7 @@ from titanfp.fpbench.fpcast import FPCore
 from titanfp.arithmetic.evalctx import EvalCtx
 
 from .env import ForeignEnv
-from ..ir import FunctionDef
+from ..ir import FuncDef
 from ..frontend.fpc import fpcore_to_fpy
 
 # avoids circular dependency issues (useful for type checking)
@@ -21,7 +21,7 @@ class Function:
     This object is created by the `@fpy` decorator and represents
     a function in the FPy runtime.
     """
-    ir: FunctionDef
+    ir: FuncDef
     env: ForeignEnv
     runtime: Optional['Interpreter']
 
@@ -30,7 +30,7 @@ class Function:
 
     def __init__(
         self,
-        ir: FunctionDef,
+        ir: FuncDef,
         env: ForeignEnv,
         runtime: Optional['Interpreter'] = None,
         func: Optional[FunctionType] = None

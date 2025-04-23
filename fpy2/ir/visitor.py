@@ -17,7 +17,7 @@ class BaseVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_bool(self, e: Bool, ctx: Any) -> Any:
+    def _visit_bool(self, e: BoolVal, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
@@ -94,37 +94,37 @@ class BaseVisitor(ABC):
     # Statements
 
     @abstractmethod
-    def _visit_var_assign(self, stmt: VarAssign, ctx: Any):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         """Visitor method for `VarAssign` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: Any):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         """Visitor method for `TupleAssign` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: Any):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
         """Visitor method for `RefAssign` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: Any):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         """Visitor method for `If1Stmt` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: Any):
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
         """Visitor method for `IfStmt` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: Any):
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
         """Visitor method for `WhileStmt` nodes."""
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: Any):
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
         """Visitor method for `ForStmt` nodes."""
         raise NotImplementedError('virtual method')
 
@@ -144,24 +144,24 @@ class BaseVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_return(self, stmt: Return, ctx: Any):
+    def _visit_return(self, stmt: ReturnStmt, ctx: Any):
         """Visitor method for `Return` nodes."""
         raise NotImplementedError('virtual method')
 
     #######################################################
     # Phi node
 
-    @abstractmethod
     def _visit_phis(self, phis: list[PhiNode], lctx: Any, rctx: Any):
         """
         Visitor method for a `list` of `PhiNode` nodes for non-loop nodes.
 
         This method is called at the join point of a control flow graph
         when _both_ branches have already been visited.
-        """
-        raise NotImplementedError('virtual method')
 
-    @abstractmethod
+        Implementors of `Visitor` do not have to implement this method.
+        """
+        raise NotImplementedError('must be overriden')
+
     def _visit_loop_phis(self, phis: list[PhiNode], lctx: Any, rctx: Optional[Any]):
         """
         Visitor method for a `list` of `PhiNode` nodes for loop nodes.
@@ -169,14 +169,16 @@ class BaseVisitor(ABC):
         For loop nodes, this method is called twice:
         - once before visiting the loop body / condition (`rctx` is `None`)
         - once after visiting the loop body
+
+        Implementors of `Visitor` do not have to implement this method.
         """
-        raise NotImplementedError('virtual method')
+        raise NotImplementedError('must be overriden')
 
     #######################################################
     # Block
 
     @abstractmethod
-    def _visit_block(self, block: Block, ctx: Any):
+    def _visit_block(self, block: StmtBlock, ctx: Any):
         """Visitor method for a list of `Stmt` nodes."""
         raise NotImplementedError('virtual method')
 
@@ -184,7 +186,7 @@ class BaseVisitor(ABC):
     # Functions
 
     @abstractmethod
-    def _visit_function(self, func: FunctionDef, ctx: Any):
+    def _visit_function(self, func: FuncDef, ctx: Any):
         """Visitor for `fpyast.Function`."""
         raise NotImplementedError('virtual method')
 
@@ -196,7 +198,7 @@ class BaseVisitor(ABC):
         match e:
             case Var():
                 return self._visit_var(e, ctx)
-            case Bool():
+            case BoolVal():
                 return self._visit_bool(e, ctx)
             case Decnum():
                 return self._visit_decnum(e, ctx)
@@ -232,27 +234,27 @@ class BaseVisitor(ABC):
     def _visit_statement(self, stmt: Stmt, ctx: Any):
         """Dynamic dispatch for all statements."""
         match stmt:
-            case VarAssign():
-                return self._visit_var_assign(stmt, ctx)
-            case TupleAssign():
-                return self._visit_tuple_assign(stmt, ctx)
-            case RefAssign():
-                return self._visit_ref_assign(stmt, ctx)
+            case SimpleAssign():
+                return self._visit_simple_assign(stmt, ctx)
+            case TupleUnpack():
+                return self._visit_tuple_unpack(stmt, ctx)
+            case IndexAssign():
+                return self._visit_index_assign(stmt, ctx)
             case If1Stmt():
-                return self._visit_if1_stmt(stmt, ctx)
+                return self._visit_if1(stmt, ctx)
             case IfStmt():
-                return self._visit_if_stmt(stmt, ctx)
+                return self._visit_if(stmt, ctx)
             case WhileStmt():
-                return self._visit_while_stmt(stmt, ctx)
+                return self._visit_while(stmt, ctx)
             case ForStmt():
-                return self._visit_for_stmt(stmt, ctx)
+                return self._visit_for(stmt, ctx)
             case ContextStmt():
                 return self._visit_context(stmt, ctx)
             case AssertStmt():
                 return self._visit_assert(stmt, ctx)
             case EffectStmt():
                 return self._visit_effect(stmt, ctx)
-            case Return():
+            case ReturnStmt():
                 return self._visit_return(stmt, ctx)
             case _:
                 raise NotImplementedError('no visitor method for', stmt)
@@ -275,7 +277,7 @@ class DefaultVisitor(Visitor):
     def _visit_var(self, e: Var, ctx: Any):
         pass
 
-    def _visit_bool(self, e: Bool, ctx: Any):
+    def _visit_bool(self, e: BoolVal, ctx: Any):
         pass
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
@@ -333,31 +335,31 @@ class DefaultVisitor(Visitor):
         self._visit_expr(e.ift, ctx)
         self._visit_expr(e.iff, ctx)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: Any):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: Any):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: Any):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
         for s in stmt.slices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: Any):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: Any):
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: Any):
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: Any):
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
         self._visit_expr(stmt.iterable, ctx)
         self._visit_block(stmt.body, ctx)
 
@@ -370,20 +372,14 @@ class DefaultVisitor(Visitor):
     def _visit_effect(self, stmt: EffectStmt, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_return(self, stmt: Return, ctx: Any):
+    def _visit_return(self, stmt: ReturnStmt, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_phis(self, phis, lctx, rctx):
-        pass
-
-    def _visit_loop_phis(self, phi, lctx, rctx):
-        pass
-
-    def _visit_block(self, block: Block, ctx: Any):
+    def _visit_block(self, block: StmtBlock, ctx: Any):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
-    def _visit_function(self, func: FunctionDef, ctx: Any):
+    def _visit_function(self, func: FuncDef, ctx: Any):
         self._visit_block(func.body, ctx)
 
 
@@ -396,8 +392,8 @@ class DefaultTransformVisitor(TransformVisitor):
     def _visit_var(self, e: Var, ctx: Any):
         return Var(e.name)
 
-    def _visit_bool(self, e: Bool, ctx: Any):
-        return Bool(e.val)
+    def _visit_bool(self, e: BoolVal, ctx: Any):
+        return BoolVal(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
         return Decnum(e.val)
@@ -473,9 +469,9 @@ class DefaultTransformVisitor(TransformVisitor):
     #######################################################
     # Statements
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: Any):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         val = self._visit_expr(stmt.expr, ctx)
-        s = VarAssign(stmt.var, stmt.ty, val)
+        s = SimpleAssign(stmt.var, stmt.ty, val)
         return s, ctx
 
     def _copy_tuple_binding(self, binding: TupleBinding):
@@ -489,26 +485,26 @@ class DefaultTransformVisitor(TransformVisitor):
                 raise NotImplementedError('unexpected tuple element', elt)
         return TupleBinding(new_vars)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: Any):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         vars = self._copy_tuple_binding(stmt.binding)
         val = self._visit_expr(stmt.expr, ctx)
-        s = TupleAssign(vars, stmt.ty, val)
+        s = TupleUnpack(vars, stmt.ty, val)
         return s, ctx
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: Any):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        s = RefAssign(stmt.var, slices, expr)
+        s = IndexAssign(stmt.var, slices, expr)
         return s, ctx
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: Any):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         cond = self._visit_expr(stmt.cond, ctx)
         body, rctx = self._visit_block(stmt.body, ctx)
         phis, ctx = self._visit_phis(stmt.phis, ctx, rctx)
         s = If1Stmt(cond, body, phis)
         return s, ctx
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: Any):
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
         cond = self._visit_expr(stmt.cond, ctx)
         ift, lctx = self._visit_block(stmt.ift, ctx)
         iff, rctx = self._visit_block(stmt.iff, ctx)
@@ -516,7 +512,7 @@ class DefaultTransformVisitor(TransformVisitor):
         s = IfStmt(cond, ift, iff, phis)
         return s, ctx
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: Any):
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
         init_phis, init_ctx = self._visit_loop_phis(stmt.phis, ctx, None)
         cond = self._visit_expr(stmt.cond, init_ctx)
         body, rctx = self._visit_block(stmt.body, init_ctx)
@@ -525,7 +521,7 @@ class DefaultTransformVisitor(TransformVisitor):
         s = WhileStmt(cond, body, phis)
         return s, ctx
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: Any):
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
         iterable = self._visit_expr(stmt.iterable, ctx)
         init_phis, init_ctx = self._visit_loop_phis(stmt.phis, ctx, None)
         body, rctx = self._visit_block(stmt.body, init_ctx)
@@ -549,37 +545,39 @@ class DefaultTransformVisitor(TransformVisitor):
         s = EffectStmt(expr)
         return s, ctx
 
-    def _visit_return(self, stmt: Return, ctx: Any):
-        s = Return(self._visit_expr(stmt.expr, ctx))
+    def _visit_return(self, stmt: ReturnStmt, ctx: Any):
+        s = ReturnStmt(self._visit_expr(stmt.expr, ctx))
         return s, ctx
 
     #######################################################
     # Phi node
 
     def _visit_phis(self, phis: list[PhiNode], lctx: Any, rctx: Any):
+        # does nothing, just copies the phis
         phis = [PhiNode(phi.name, phi.lhs, phi.rhs, phi.ty) for phi in phis]
-        return phis, lctx # merge function just selects `lctx`
+        return phis, lctx
 
     def _visit_loop_phis(self, phis: list[PhiNode], lctx: Any, rctx: Optional[Any]):
+        # does nothing, just copies the phis
         phis = [PhiNode(phi.name, phi.lhs, phi.rhs, phi.ty) for phi in phis]
-        return phis, lctx # merge function just selects `lctx`
+        return phis, lctx
 
     #######################################################
     # Block
 
-    def _visit_block(self, block: Block, ctx: Any):
+    def _visit_block(self, block: StmtBlock, ctx: Any):
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             stmt, ctx = self._visit_statement(stmt, ctx)
             stmts.append(stmt)
-        return Block(stmts), ctx
+        return StmtBlock(stmts), ctx
 
     #######################################################
     # Function
 
-    def _visit_function(self, func: FunctionDef, ctx: Any):
+    def _visit_function(self, func: FuncDef, ctx: Any):
         body, _ = self._visit_block(func.body, ctx)
-        return FunctionDef(func.name, func.args, body, func.ty, func.ctx, func.free_vars)
+        return FuncDef(func.name, func.args, body, func.ty, func.ctx, func.free_vars)
 
     #######################################################
     # Dynamic dispatch

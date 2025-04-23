@@ -155,7 +155,7 @@ def sample_function(
     if 'pre' not in fun.ir.ctx or ignore_pre:
         table = RangeTable()
     else:
-        pre: FunctionDef = fun.ir.ctx['pre']
+        pre: FuncDef = fun.ir.ctx['pre']
         table = RangeTable.from_condition(pre)
 
     # add unmentioned variables

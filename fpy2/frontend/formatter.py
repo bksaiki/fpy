@@ -22,9 +22,9 @@ class _FormatterInstance(AstVisitor):
                 self.fmt = self._visit_expr(self.ast, 0)
             case Stmt():
                 self._visit_statement(self.ast, 0)
-            case Block():
+            case StmtBlock():
                 self._visit_block(self.ast, 0)
-            case FunctionDef():
+            case FuncDef():
                 self._visit_function(self.ast, 0)
             case _:
                 raise NotImplementedError('unsupported AST node', self.ast)
@@ -36,7 +36,7 @@ class _FormatterInstance(AstVisitor):
     def _visit_var(self, e: Var, ctx: _Ctx) -> str:
         return str(e.name)
 
-    def _visit_bool(self, e: Bool, ctx: _Ctx):
+    def _visit_bool(self, e: BoolVal, ctx: _Ctx):
         return str(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
@@ -123,7 +123,7 @@ class _FormatterInstance(AstVisitor):
         s = ' '.join(f'for {str(var)} in {iterable}' for var, iterable in zip(e.vars, iterables))
         return f'[{elt} {s}]'
 
-    def _visit_ref_expr(self, e: RefExpr, ctx: _Ctx):
+    def _visit_tuple_ref(self, e: TupleRef, ctx: _Ctx):
         value = self._visit_expr(e.value, ctx)
         slices = [self._visit_expr(slice, ctx) for slice in e.slices]
         ref_str = ''.join(f'[{slice}]' for slice in slices)
@@ -135,7 +135,7 @@ class _FormatterInstance(AstVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'({ift} if {cond} else {iff})'
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: _Ctx):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'{str(stmt.var)} = {val}', ctx)
 
@@ -152,18 +152,18 @@ class _FormatterInstance(AstVisitor):
                     raise NotImplementedError('unreachable', var)
         return ', '.join(ss)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: _Ctx):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
         vars = self._visit_tuple_binding(stmt.binding)
         self._add_line(f'{vars} = {val}', ctx)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: _Ctx):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _Ctx):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         val = self._visit_expr(stmt.expr, ctx)
         ref_str = ''.join(f'[{slice}]' for slice in slices)
         self._add_line(f'{str(stmt.var)}{ref_str} = {val}', ctx)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _Ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'if {cond}:', ctx)
         self._visit_block(stmt.ift, ctx + 1)
@@ -171,7 +171,7 @@ class _FormatterInstance(AstVisitor):
             self._add_line('else:', ctx)
             self._visit_block(stmt.iff, ctx + 1)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _Ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'while {cond}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
@@ -198,11 +198,11 @@ class _FormatterInstance(AstVisitor):
         expr = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'{expr}', ctx)
 
-    def _visit_return(self, stmt: Return, ctx: _Ctx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx):
         s = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'return {s}', ctx)
 
-    def _visit_block(self, block: Block, ctx: _Ctx):
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
@@ -227,7 +227,7 @@ class _FormatterInstance(AstVisitor):
                 self._add_line(f'{k}={v},', ctx + 1)
             self._add_line(')', ctx)
 
-    def _visit_function(self, func: FunctionDef, ctx: _Ctx):
+    def _visit_function(self, func: FuncDef, ctx: _Ctx):
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)

@@ -11,21 +11,21 @@ _Ctx = dict[NamedId, NamedId]
 
 class _SSAInstance(DefaultTransformVisitor):
     """Single-use instance of an SSA pass."""
-    func: FunctionDef
+    func: FuncDef
     gensym: Gensym
-    reaches: dict[Block, Reach]
+    reaches: dict[StmtBlock, Reach]
 
     def __init__(
         self,
-        func: FunctionDef,
-        reaches: dict[Block, Reach]
+        func: FuncDef,
+        reaches: dict[StmtBlock, Reach]
     ):
         super().__init__()
         self.func = func
         self.gensym = Gensym()
         self.reaches = reaches
 
-    def apply(self) -> FunctionDef:
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})
 
     def _visit_var(self, e: Var, ctx: _Ctx):
@@ -52,7 +52,7 @@ class _SSAInstance(DefaultTransformVisitor):
         elt = self._visit_expr(e.elt, ctx)
         return CompExpr(vars, iterables, elt)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: _Ctx):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         # visit the expression
         e = self._visit_expr(stmt.expr, ctx)
 
@@ -61,9 +61,9 @@ class _SSAInstance(DefaultTransformVisitor):
             case NamedId():
                 t = self.gensym.refresh(stmt.var)
                 ctx = { **ctx, stmt.var: t }
-                s =  VarAssign(t, stmt.ty, e)
+                s =  SimpleAssign(t, stmt.ty, e)
             case UnderscoreId():
-                s = VarAssign(stmt.var, stmt.ty, e)
+                s = SimpleAssign(stmt.var, stmt.ty, e)
             case _:
                 raise NotImplementedError('unreachable', stmt.var)
 
@@ -87,18 +87,18 @@ class _SSAInstance(DefaultTransformVisitor):
                     raise NotImplementedError('unexpected tuple identifier', name)
         return TupleBinding(new_vars), ctx
 
-    def _visit_tuple_assign(self, e: TupleAssign, ctx: _Ctx):
+    def _visit_tuple_unpack(self, e: TupleUnpack, ctx: _Ctx):
         expr = self._visit_expr(e.expr, ctx)
         binding, ctx = self._visit_tuple_binding(e.binding, ctx)
-        return TupleAssign(binding, e.ty, expr), ctx
+        return TupleUnpack(binding, e.ty, expr), ctx
 
-    def _visit_ref_assign(self, stmt, ctx: _Ctx):
+    def _visit_index_assign(self, stmt, ctx: _Ctx):
         var = ctx[stmt.var]
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        return RefAssign(var, slices, expr), ctx
+        return IndexAssign(var, slices, expr), ctx
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _Ctx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
         # visit condition
         cond = self._visit_expr(stmt.cond, ctx)
         body, body_ctx = self._visit_block(stmt.body, ctx)
@@ -131,7 +131,7 @@ class _SSAInstance(DefaultTransformVisitor):
         s = If1Stmt(cond, body, new_phis)
         return s, new_ctx
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _Ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
         # visit condition and branches
         cond = self._visit_expr(stmt.cond, ctx)
         ift, ift_ctx = self._visit_block(stmt.ift, ctx)
@@ -165,7 +165,7 @@ class _SSAInstance(DefaultTransformVisitor):
         s = IfStmt(cond, ift, iff, new_phis)
         return s, new_ctx
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _Ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         # compute variables requiring phi node
         reach = self.reaches[stmt.body]
         updated = ctx.keys() & reach.kill_out
@@ -216,7 +216,7 @@ class _SSAInstance(DefaultTransformVisitor):
         s = WhileStmt(cond, body, new_phis)
         return s, new_ctx
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _Ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         # visit iterable
         iterable = self._visit_expr(stmt.iterable, ctx)
 
@@ -284,17 +284,11 @@ class _SSAInstance(DefaultTransformVisitor):
         body, body_ctx = self._visit_block(stmt.body, ctx)
         return ContextStmt(stmt.name, stmt.props, body), body_ctx
 
-    def _visit_return(self, stmt: Return, ctx):
-        s = Return(self._visit_expr(stmt.expr, ctx))
+    def _visit_return(self, stmt: ReturnStmt, ctx):
+        s = ReturnStmt(self._visit_expr(stmt.expr, ctx))
         return s, ctx
 
-    def _visit_phis(self, phis: list[PhiNode], lctx: _Ctx, rctx: _Ctx):
-        raise NotImplementedError
-
-    def _visit_loop_phis(self, phis: list[PhiNode], lctx: _Ctx, rctx: Optional[_Ctx]):
-        raise NotImplementedError
-
-    def _visit_function(self, func: FunctionDef, ctx: _Ctx):
+    def _visit_function(self, func: FuncDef, ctx: _Ctx):
         ctx = ctx.copy()
         for var in func.free_vars:
             self.gensym.reserve(var)
@@ -306,14 +300,14 @@ class _SSAInstance(DefaultTransformVisitor):
                 ctx[arg.name] = arg.name
 
         body, _ = self._visit_block(func.body, ctx)
-        return FunctionDef(func.name, func.args, body, func.ty, func.ctx, func.free_vars)
+        return FuncDef(func.name, func.args, body, func.ty, func.ctx, func.free_vars)
 
     # override to get typing hint
     def _visit_statement(self, stmt: Stmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:
         return super()._visit_statement(stmt, ctx)
 
     # override to get typing hint
-    def _visit_block(self, block: Block, ctx: _Ctx) -> tuple[Block, _Ctx]:
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx) -> tuple[StmtBlock, _Ctx]:
         return super()._visit_block(block, ctx)
 
 class SSA:
@@ -327,7 +321,7 @@ class SSA:
     """
 
     @staticmethod
-    def apply(func: FunctionDef) -> FunctionDef:
+    def apply(func: FuncDef) -> FuncDef:
         reaches = ReachingDefs.analyze(func)
         func = _SSAInstance(func, reaches).apply()
         VerifyIR.check(func)

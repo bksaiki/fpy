@@ -8,7 +8,7 @@ from typing import Any, Optional, Self, Sequence
 from .types import IRType
 from ..utils import CompareOp, Id, NamedId, UnderscoreId
 
-class IR:
+class IR(object):
     """FPy IR: base class for all IR nodes."""
 
     def __repr__(self):
@@ -33,8 +33,8 @@ class Stmt(IR):
     def __init__(self):
         super().__init__()
 
-class Block(IR):
-    """FPy IR: block statement"""
+class StmtBlock(IR):
+    """FPy IR: statement block"""
     stmts: list[Stmt]
 
     def __init__(self, stmts: list[Stmt]):
@@ -55,21 +55,21 @@ class Var(ValueExpr):
         super().__init__()
         self.name = name
 
-class Bool(ValueExpr):
-    """FPy node: boolean constant"""
+class BoolVal(ValueExpr):
+    """FPy node: boolean value"""
     val: bool
 
     def __init__(self, val: bool):
         super().__init__()
         self.val = val
 
-class RealExpr(ValueExpr):
+class RealVal(ValueExpr):
     """FPy node: abstract real number"""
 
     def __init__(self):
         super().__init__()
 
-class Decnum(RealExpr):
+class Decnum(RealVal):
     """FPy node: decimal number"""
     val: str
 
@@ -77,7 +77,7 @@ class Decnum(RealExpr):
         super().__init__()
         self.val = val
 
-class Hexnum(RealExpr):
+class Hexnum(RealVal):
     """FPy node: hexadecimal number"""
     val: str
 
@@ -85,7 +85,7 @@ class Hexnum(RealExpr):
         super().__init__()
         self.val = val
 
-class Integer(RealExpr):
+class Integer(RealVal):
     """FPy node: numerical constant (integer)"""
     val: int
 
@@ -93,7 +93,7 @@ class Integer(RealExpr):
         super().__init__()
         self.val = val
 
-class Rational(RealExpr):
+class Rational(RealVal):
     """FPy node: numerical constant (rational)"""
     p: int
     q: int
@@ -103,7 +103,7 @@ class Rational(RealExpr):
         self.p = p
         self.q = q
 
-class Constant(RealExpr):
+class Constant(RealVal):
     """FPy node: numerical constant (symbolic)"""
     val: str
 
@@ -111,7 +111,7 @@ class Constant(RealExpr):
         super().__init__()
         self.val = val
 
-class Digits(RealExpr):
+class Digits(RealVal):
     """FPy node: numerical constant in scientific notation"""
     m: int
     e: int
@@ -496,7 +496,7 @@ class IfExpr(Expr):
         self.ift = ift
         self.iff = iff
 
-class VarAssign(Stmt):
+class SimpleAssign(Stmt):
     """FPy node: assignment to a single variable"""
     var: Id
     ty: IRType
@@ -532,8 +532,8 @@ class TupleBinding(IR):
                 raise NotImplementedError('unexpected tuple identifier', v)
         return ids
 
-class TupleAssign(Stmt):
-    """FPy node: assignment to a tuple"""
+class TupleUnpack(Stmt):
+    """FPy node: unpacking / destructing a tuple"""
     binding: TupleBinding
     ty: IRType
     expr: Expr
@@ -544,7 +544,7 @@ class TupleAssign(Stmt):
         self.ty = ty
         self.expr = expr
 
-class RefAssign(Stmt):
+class IndexAssign(Stmt):
     """FPy node: assignment to a tuple element"""
     var: NamedId
     slices: list[Expr]
@@ -580,10 +580,10 @@ class If1Stmt(Stmt):
     - `phi.name` is the SSA name of the variable after the block
     """
     cond: Expr
-    body: Block
+    body: StmtBlock
     phis: list[PhiNode]
 
-    def __init__(self, cond: Expr, body: Block, phis: list[PhiNode]):
+    def __init__(self, cond: Expr, body: StmtBlock, phis: list[PhiNode]):
         super().__init__()
         self.cond = cond
         self.body = body
@@ -599,11 +599,11 @@ class IfStmt(Stmt):
     - `phi.name` is the SSA name of the variable after the block
     """
     cond: Expr
-    ift: Block
-    iff: Block
+    ift: StmtBlock
+    iff: StmtBlock
     phis: list[PhiNode]
 
-    def __init__(self, cond: Expr, ift: Block, iff: Block, phis: list[PhiNode]):
+    def __init__(self, cond: Expr, ift: StmtBlock, iff: StmtBlock, phis: list[PhiNode]):
         super().__init__()
         self.cond = cond
         self.ift = ift
@@ -620,10 +620,10 @@ class WhileStmt(Stmt):
     - `phi.name` is the SSA name of the variable after the block
     """
     cond: Expr
-    body: Block
+    body: StmtBlock
     phis: list[PhiNode]
 
-    def __init__(self, cond: Expr, body: Block, phis: list[PhiNode]):
+    def __init__(self, cond: Expr, body: StmtBlock, phis: list[PhiNode]):
         super().__init__()
         self.cond = cond
         self.body = body
@@ -642,10 +642,10 @@ class ForStmt(Stmt):
     var: Id
     ty: IRType
     iterable: Expr
-    body: Block
+    body: StmtBlock
     phis: list[PhiNode]
 
-    def __init__(self, var: Id, ty: IRType, iterable: Expr, body: Block, phis: list[PhiNode]):
+    def __init__(self, var: Id, ty: IRType, iterable: Expr, body: StmtBlock, phis: list[PhiNode]):
         super().__init__()
         self.var = var
         self.ty = ty
@@ -657,9 +657,9 @@ class ContextStmt(Stmt):
     """FPy IR: context statement"""
     name: Optional[Id]
     props: dict[str, Any]
-    body: Block
+    body: StmtBlock
 
-    def __init__(self, name: Optional[Id], props: dict[str, Any], body: Block):
+    def __init__(self, name: Optional[Id], props: dict[str, Any], body: StmtBlock):
         super().__init__()
         self.name = name
         self.props = props.copy()
@@ -683,7 +683,7 @@ class EffectStmt(Stmt):
         super().__init__()
         self.expr = expr
 
-class Return(Stmt):
+class ReturnStmt(Stmt):
     """FPy IR: return statement"""
     expr: Expr
 
@@ -701,11 +701,11 @@ class Argument(IR):
         self.name = name
         self.ty = ty
 
-class FunctionDef(IR):
+class FuncDef(IR):
     """FPy IR: function"""
     name: str
     args: list[Argument]
-    body: Block
+    body: StmtBlock
     ty: IRType
     ctx: dict[str, Any]
     free_vars: set[NamedId]
@@ -713,7 +713,7 @@ class FunctionDef(IR):
     def __init__(self,
         name: str,
         args: list[Argument],
-        body: Block,
+        body: StmtBlock,
         ty: IRType,
         ctx: dict[str, Any],
         free_vars: set[NamedId],

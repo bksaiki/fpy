@@ -11,19 +11,19 @@ from ..ir import *
 
 class _FuncUpdateInstance(DefaultTransformVisitor):
     """Single-use instance of the FuncUpdate pass."""
-    func: FunctionDef
+    func: FuncDef
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         self.func = func
 
-    def apply(self) -> FunctionDef:
+    def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         e = TupleSet(Var(stmt.var), slices, expr)
-        return VarAssign(stmt.var, AnyType(), e), None
+        return SimpleAssign(stmt.var, AnyType(), e), None
 
 class FuncUpdate:
     """
@@ -35,7 +35,7 @@ class FuncUpdate:
     """
 
     @staticmethod
-    def apply(func: FunctionDef, names: Optional[set[str]] = None) -> FunctionDef:
+    def apply(func: FuncDef, names: Optional[set[str]] = None) -> FuncDef:
         if names is None:
             uses = DefineUse.analyze(func)
             names = set(uses.keys())

@@ -10,24 +10,24 @@ from ..utils import Gensym
 
 class _SimplifyIfInstance(DefaultTransformVisitor):
     """Single-use instance of the SimplifyIf pass."""
-    func: FunctionDef
+    func: FuncDef
     gensym: Gensym
 
-    def __init__(self, func: FunctionDef, names: set[NamedId]):
+    def __init__(self, func: FuncDef, names: set[NamedId]):
         self.func = func
         self.gensym = Gensym(reserved=names)
 
     def apply(self):
         return self._visit_function(self.func, None)
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
         stmts: list[Stmt] = []
         # compile condition
         cond = self._visit_expr(stmt.cond, ctx)
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            stmts.append(VarAssign(t, BoolType(), cond))
+            stmts.append(SimpleAssign(t, BoolType(), cond))
             cond = Var(t)
         # inline body
         body, _ = self._visit_block(stmt.body, ctx)
@@ -35,17 +35,17 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         # convert phi nodes into if expressions
         for phi in stmt.phis:
             ife = IfExpr(cond, Var(phi.rhs), Var(phi.lhs))
-            stmts.append(VarAssign(phi.name, AnyType(), ife))
-        return Block(stmts)
+            stmts.append(SimpleAssign(phi.name, AnyType(), ife))
+        return StmtBlock(stmts)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None):
         stmts: list[Stmt] = []
         # compile condition
         cond = self._visit_expr(stmt.cond, ctx)
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            stmts.append(VarAssign(t, BoolType(), cond))
+            stmts.append(SimpleAssign(t, BoolType(), cond))
             cond = Var(t)
         # inline if-true block
         ift, _ = self._visit_block(stmt.ift, ctx)
@@ -56,23 +56,23 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         # convert phi nodes into if expressions
         for phi in stmt.phis:
             ife = IfExpr(cond, Var(phi.lhs), Var(phi.rhs))
-            stmts.append(VarAssign(phi.name, AnyType(), ife))
-        return Block(stmts)
+            stmts.append(SimpleAssign(phi.name, AnyType(), ife))
+        return StmtBlock(stmts)
 
-    def _visit_block(self, block: Block, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None):
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             match stmt:
                 case If1Stmt():
-                    if1_block = self._visit_if1_stmt(stmt, ctx)
+                    if1_block = self._visit_if1(stmt, ctx)
                     stmts.extend(if1_block.stmts)
                 case IfStmt():
-                    if_block = self._visit_if_stmt(stmt, ctx)
+                    if_block = self._visit_if(stmt, ctx)
                     stmts.extend(if_block.stmts)
                 case _:
                     stmt, _ = self._visit_statement(stmt, ctx)
                     stmts.append(stmt)
-        return Block(stmts), None
+        return StmtBlock(stmts), None
 
 
 #
@@ -105,7 +105,7 @@ class SimplifyIf:
     """
 
     @staticmethod
-    def apply(func: FunctionDef, names: Optional[set[NamedId]] = None):
+    def apply(func: FuncDef, names: Optional[set[NamedId]] = None):
         if names is None:
             uses = DefineUse.analyze(func)
             names = (uses.keys())

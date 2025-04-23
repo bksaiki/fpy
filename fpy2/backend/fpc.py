@@ -89,10 +89,10 @@ def _size0_expr(x: str):
 
 class FPCoreCompileInstance(ReduceVisitor):
     """Compilation instance from FPy to FPCore"""
-    func: FunctionDef
+    func: FuncDef
     gensym: Gensym
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         uses = DefineUse().analyze(func)
         self.func = func
         self.gensym = Gensym(reserved=uses.keys())
@@ -144,7 +144,7 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_var(self, e, ctx) -> fpc.Expr:
         return fpc.Var(str(e.name))
 
-    def _visit_bool(self, e: Bool, ctx: None):
+    def _visit_bool(self, e: BoolVal, ctx: None):
         return fpc.Constant('TRUE' if e.val else 'FALSE')
 
     def _visit_decnum(self, e, ctx) -> fpc.Expr:
@@ -365,26 +365,26 @@ class FPCoreCompileInstance(ReduceVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return fpc.If(cond, ift, iff)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: fpc.Expr):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: fpc.Expr):
         bindings = [(str(stmt.var), self._visit_expr(stmt.expr, None))]
         return fpc.Let(bindings, ctx)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: fpc.Expr):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: fpc.Expr):
         tuple_id = str(self.gensym.fresh('t'))
         tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
         destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
         return fpc.Let([tuple_bind] + destruct_bindings, ctx)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: fpc.Expr):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_if1_stmt(self, stmt, ctx):
+    def _visit_if1(self, stmt, ctx):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_if_stmt(self, stmt, ctx):
+    def _visit_if(self, stmt, ctx):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_while_stmt(self, stmt, ctx: fpc.Expr):
+    def _visit_while(self, stmt, ctx: fpc.Expr):
         if len(stmt.phis) != 1:
             raise FPCoreCompileError('while loops must have exactly one phi node')
         phi = stmt.phis[0]
@@ -393,7 +393,7 @@ class FPCoreCompileInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, fpc.Var(update))
         return fpc.While(cond, [(name, fpc.Var(init), body)], ctx)
 
-    def _visit_for_stmt(self, stmt, ctx):
+    def _visit_for(self, stmt, ctx):
         if len(stmt.phis) != 1:
             raise FPCoreCompileError('for loops must have exactly one phi node')
         # phi nodes
@@ -422,12 +422,6 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_return(self, stmt, ctx) -> fpc.Expr:
         return self._visit_expr(stmt.expr, ctx)
 
-    def _visit_phis(self, phis, lctx, rctx):
-        raise NotImplementedError('do not call directly')
-
-    def _visit_loop_phis(self, phis, lctx, rctx):
-        raise NotImplementedError('do not call directly')
-
     def _visit_block(self, block, ctx: Optional[fpc.Expr]):
         if ctx is None:
             e = self._visit_statement(block.stmts[-1], None)
@@ -437,7 +431,7 @@ class FPCoreCompileInstance(ReduceVisitor):
             stmts = block.stmts
 
         for stmt in reversed(stmts):
-            if isinstance(stmt, Return):
+            if isinstance(stmt, ReturnStmt):
                 raise FPCoreCompileError('return statements must be at the end of blocks')
             e = self._visit_statement(stmt, e)
 

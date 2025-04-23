@@ -28,19 +28,19 @@ _nary_rev_table = { v: k for k, v in _nary_table.items() }
 
 class _FPyCompilerInstance(ReduceVisitor):
     """Compilation instance from FPy to FPCore"""
-    func: FunctionDef
+    func: FuncDef
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         self.func = func
 
-    def compile(self) -> ast.FunctionDef:
+    def compile(self) -> ast.FuncDef:
         return self._visit_function(self.func, None)
 
     def _visit_var(self, e: Var, ctx: None):
         return ast.Var(e.name, None)
 
-    def _visit_bool(self, e: Bool, ctx: None):
-        return ast.Bool(e.val, None)
+    def _visit_bool(self, e: BoolVal, ctx: None):
+        return ast.BoolVal(e.val, None)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ast.Decnum(e.val, None)
@@ -120,7 +120,7 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_tuple_ref(self, e: TupleRef, ctx: None):
         slices = [self._visit_expr(s, None) for s in e.slices]
         value = self._visit_expr(e.value, None)
-        return ast.RefExpr(value, slices, None)
+        return ast.TupleRef(value, slices, None)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: None):
         raise NotImplementedError('do not call')
@@ -136,10 +136,10 @@ class _FPyCompilerInstance(ReduceVisitor):
         iff = self._visit_expr(e.iff, None)
         return ast.IfExpr(cond, ift, iff, None)
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: None):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         # TODO: typing annotation
         e = self._visit_expr(stmt.expr, None)
-        return ast.VarAssign(stmt.var, e, None, None)
+        return ast.SimpleAssign(stmt.var, e, None, None)
 
     def _visit_tuple_binding(self, vars: TupleBinding):
         new_vars: list[Id | ast.TupleBinding] = []
@@ -154,17 +154,17 @@ class _FPyCompilerInstance(ReduceVisitor):
                     raise NotImplementedError('unexpected tuple identifier', name)
         return ast.TupleBinding(new_vars, None)
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: None):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
-        return ast.TupleAssign(binding, expr, None)
+        return ast.TupleUnpack(binding, expr, None)
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: None):
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         value = self._visit_expr(stmt.expr, ctx)
-        return ast.RefAssign(stmt.var, slices, value, None)
+        return ast.IndexAssign(stmt.var, slices, value, None)
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
         # check that phis are empty
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
@@ -173,7 +173,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, None)
         return ast.IfStmt(cond, body, None, None)
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None):
         # check that phis are empty
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
@@ -183,7 +183,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         iff = self._visit_block(stmt.iff, None)
         return ast.IfStmt(cond, ift, iff, None)
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: None):
+    def _visit_while(self, stmt: WhileStmt, ctx: None):
         # check that phis are empty
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
@@ -192,7 +192,7 @@ class _FPyCompilerInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, None)
         return ast.WhileStmt(cond, body, None)
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
+    def _visit_for(self, stmt: ForStmt, ctx: None):
         # check that phis are empty
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
@@ -213,19 +213,13 @@ class _FPyCompilerInstance(ReduceVisitor):
         e = self._visit_expr(stmt.expr, None)
         return ast.EffectStmt(e, None)
 
-    def _visit_return(self, stmt: Return, ctx: None):
+    def _visit_return(self, stmt: ReturnStmt, ctx: None):
         e = self._visit_expr(stmt.expr, None)
-        return ast.Return(e, None)
+        return ast.ReturnStmt(e, None)
 
-    def _visit_phis(self, phis: list[PhiNode], lctx: None, rctx: None):
-        raise NotImplementedError('do not call')
-
-    def _visit_loop_phis(self, phis: list[PhiNode], lctx: None, rctx: None):
-        raise NotImplementedError('do not call')
-
-    def _visit_block(self, block: Block, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None):
         stmts = [self._visit_statement(s, None) for s in block.stmts]
-        return ast.Block(stmts)
+        return ast.StmtBlock(stmts)
 
     def _visit_props(self, props: dict[str, Any]):
         new_props: dict[str, Any] = {}
@@ -236,14 +230,14 @@ class _FPyCompilerInstance(ReduceVisitor):
                 new_props[k] = v
         return new_props
 
-    def _visit_function(self, func: FunctionDef, ctx: None):
+    def _visit_function(self, func: FuncDef, ctx: None):
         args: list[ast.Argument] = []
         for arg in func.args:
             # TODO: translate typing annotation
             args.append(ast.Argument(arg.name, None, None))
 
         body = self._visit_block(func.body, None)
-        stx = ast.FunctionDef(func.name, args, body, None)
+        stx = ast.FuncDef(func.name, args, body, None)
         stx.ctx = self._visit_props(func.ctx)
         return stx
 

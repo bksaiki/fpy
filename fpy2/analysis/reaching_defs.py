@@ -18,10 +18,10 @@ _RetType = tuple[set[NamedId], set[NamedId]]
 
 class _ReachingDefsInstance(DefaultVisitor):
     """Single-use instance of the reaching definitions analysis."""
-    func: FunctionDef
-    reaches: dict[Block, Reach]
+    func: FuncDef
+    reaches: dict[StmtBlock, Reach]
 
-    def __init__(self, func: FunctionDef):
+    def __init__(self, func: FuncDef):
         self.func = func
         self.reaches = {}
 
@@ -29,23 +29,23 @@ class _ReachingDefsInstance(DefaultVisitor):
         self._visit_function(self.func, None)
         return self.reaches
 
-    def _visit_var_assign(self, stmt: VarAssign, ctx: _StmtCtx) -> _RetType:
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         defs_out = { *defs_in, stmt.var } if isinstance(stmt.var, NamedId) else defs_in
         kill_out = kill_in | (defs_in & { stmt.var })
         return defs_out, kill_out
 
-    def _visit_tuple_assign(self, stmt: TupleAssign, ctx: _StmtCtx) -> _RetType:
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         gen = set(stmt.binding.names())
         defs_out = defs_in | gen
         kill_out = kill_in | (defs_in & gen)
         return defs_out, kill_out
 
-    def _visit_ref_assign(self, stmt: RefAssign, ctx: _StmtCtx) -> _RetType:
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _StmtCtx) -> _RetType:
         return ctx
 
-    def _visit_if1_stmt(self, stmt: If1Stmt, ctx: _StmtCtx) -> _RetType:
+    def _visit_if1(self, stmt: If1Stmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         _, block_kill = self._visit_block(stmt.body, defs_in)
 
@@ -53,7 +53,7 @@ class _ReachingDefsInstance(DefaultVisitor):
         kill_out = kill_in | (defs_in & block_kill)
         return defs_out, kill_out
 
-    def _visit_if_stmt(self, stmt: IfStmt, ctx: _StmtCtx) -> _RetType:
+    def _visit_if(self, stmt: IfStmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         ift_defs, ift_kill = self._visit_block(stmt.ift, defs_in)
         iff_defs, iff_kill = self._visit_block(stmt.iff, defs_in)
@@ -62,7 +62,7 @@ class _ReachingDefsInstance(DefaultVisitor):
         kill_out = kill_in | (defs_in & (ift_kill | iff_kill))
         return defs_out, kill_out
 
-    def _visit_while_stmt(self, stmt: WhileStmt, ctx: _StmtCtx) -> _RetType:
+    def _visit_while(self, stmt: WhileStmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         _, block_kill = self._visit_block(stmt.body, defs_in)
 
@@ -70,7 +70,7 @@ class _ReachingDefsInstance(DefaultVisitor):
         kill_out = kill_in | (defs_in & block_kill)
         return defs_out, kill_out
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _StmtCtx) -> _RetType:
+    def _visit_for(self, stmt: ForStmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
         defs = { *defs_in, stmt.var } if isinstance(stmt.var, NamedId) else defs_in
         _, block_kill = self._visit_block(stmt.body, defs)
@@ -94,10 +94,10 @@ class _ReachingDefsInstance(DefaultVisitor):
     def _visit_effect(self, stmt: EffectStmt, ctx: _StmtCtx) -> _RetType:
         return ctx
 
-    def _visit_return(self, stmt: Return, ctx: _StmtCtx) -> _RetType:
+    def _visit_return(self, stmt: ReturnStmt, ctx: _StmtCtx) -> _RetType:
         return ctx
 
-    def _visit_block(self, block: Block, ctx: _BlockCtx):
+    def _visit_block(self, block: StmtBlock, ctx: _BlockCtx):
         reach_in = ctx.copy()
 
         defs: set[NamedId] = reach_in.copy()
@@ -109,7 +109,7 @@ class _ReachingDefsInstance(DefaultVisitor):
         self.reaches[block] = Reach(reach_in, reach_out, kill)
         return defs, kill
 
-    def _visit_function(self, func: FunctionDef, _: None):
+    def _visit_function(self, func: FuncDef, _: None):
         ctx: set[NamedId] = set()
         for arg in func.args:
             if isinstance(arg.name, NamedId):
@@ -128,5 +128,5 @@ class ReachingDefs:
     analysis_name = 'reaching_defs'
 
     @staticmethod
-    def analyze(func: FunctionDef) -> dict[Block, Reach]:
+    def analyze(func: FuncDef) -> dict[StmtBlock, Reach]:
         return _ReachingDefsInstance(func).analyze()
