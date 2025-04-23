@@ -10,7 +10,6 @@ from ..utils import Gensym
 _Ctx = dict[NamedId, NamedId]
 
 class _SSAInstance(DefaultTransformVisitor):
-    # class _SSAInstance(DefaultTransformVisitor):
     """Single-use instance of an SSA pass."""
     func: FunctionDef
     gensym: Gensym
@@ -21,6 +20,7 @@ class _SSAInstance(DefaultTransformVisitor):
         func: FunctionDef,
         reaches: dict[Block, Reach]
     ):
+        super().__init__()
         self.func = func
         self.gensym = Gensym()
         self.reaches = reaches
