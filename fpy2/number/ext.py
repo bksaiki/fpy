@@ -188,12 +188,21 @@ class ExtContext(EncodableContext):
 
         Raises `ValueError` if the value is not representable.
         """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = Float(s=s, ctx=self)
         if not self.is_representable(x):
             raise ValueError(f'not representable in this context: s={s}')
         return x
 
-    def minval(self, s = False) -> Float:
+    def minval(self, s: bool = False) -> Float:
+        """
+        Returns the smallest non-zero value with sign `s` under this context.
+
+        Raises `ValueError` if the value is not representable.
+        """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         minval = self._mpb_ctx.minval(s)
         minval.ctx = self
         if not self.is_representable(minval):
@@ -201,6 +210,13 @@ class ExtContext(EncodableContext):
         return minval
 
     def min_subnormal(self, s = False) -> Float:
+        """
+        Returns the smallest subnormal value with sign `s` under this context.
+
+        Raises `ValueError` if the value is not representable.
+        """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         minval = self._mpb_ctx.min_subnormal(s)
         minval.ctx = self
         if not self.is_representable(minval):
@@ -208,6 +224,13 @@ class ExtContext(EncodableContext):
         return minval
 
     def max_subnormal(self, s = False) -> Float:
+        """
+        Returns the largest subnormal value with sign `s` under this context.
+
+        Raises `ValueError` if the value is not representable.
+        """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         maxval = self._mpb_ctx.max_subnormal(s)
         maxval.ctx = self
         if not self.is_representable(maxval):
@@ -215,6 +238,13 @@ class ExtContext(EncodableContext):
         return maxval
 
     def min_normal(self, s = False) -> Float:
+        """
+        Returns the smallest normal value with sign `s` under this context.
+
+        Raises `ValueError` if the value is not representable.
+        """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         minval = self._mpb_ctx.min_normal(s)
         minval.ctx = self
         if not self.is_representable(minval):
@@ -222,6 +252,13 @@ class ExtContext(EncodableContext):
         return minval
 
     def max_normal(self, s = False) -> Float:
+        """
+        Returns the largest normal value with sign `s` under this context.
+
+        Raises `ValueError` if the value is not representable.
+        """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         maxval = self._mpb_ctx.max_normal(s)
         maxval.ctx = self
         if not self.is_representable(maxval):
@@ -229,13 +266,26 @@ class ExtContext(EncodableContext):
         return maxval
 
     def maxval(self, s = False) -> Float:
+        """
+        Returns the largest value with sign `s` under this context.
+
+        Raises `ValueError` if the value is not representable.
+        """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         maxval = self._mpb_ctx.maxval(s)
         maxval.ctx = self
         if not self.is_representable(maxval):
             raise ValueError(f'not representable in this context: s={s}')
         return maxval
 
-    def infval(self, s = False):
+    def infval(self, s: bool = False):
+        """
+        Returns the first non-representable value larger
+        than `maxval` with sign `s`.
+        """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         return self._mpb_ctx.infval(s)
 
     def encode(self, x: Float) -> int:
