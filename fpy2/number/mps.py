@@ -234,22 +234,37 @@ class MPSContext(OrdinalContext):
                 return Float(s=s, c=c, exp=exp, ctx=self)
 
 
-    def zero(self, s = False) -> Float:
+    def zero(self, s: bool = False) -> Float:
+        """Returns a signed 0 under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         return Float(s=s, c=0, exp=self.expmin, ctx=self)
 
-    def minval(self, s = False) -> Float:
+    def minval(self, s: bool = False) -> Float:
+        """Returns the smallest non-zero value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         return Float(s=s, c=1, exp=self.expmin, ctx=self)
 
-    def min_subnormal(self, s = False) -> Float:
+    def min_subnormal(self, s: bool = False) -> Float:
+        """Returns the smallest subnormal value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         return self.minval(s)
 
-    def max_subnormal(self, s = False) -> Float:
+    def max_subnormal(self, s: bool = False) -> Float:
+        """Returns the largest subnormal value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         c = bitmask(self.pmax - 1)
         exp = self.expmin
         return Float(s=s, c=c, exp=exp, ctx=self)
 
-    def min_normal(self, s = False) -> Float:
+    def min_normal(self, s: bool = False) -> Float:
+        """Returns the smallest normal value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         c = 1 << (self.pmax - 1)
-        exp = self.expmin
+        exp = self.emin
         return Float(s=s, c=c, exp=exp, ctx=self)
 
