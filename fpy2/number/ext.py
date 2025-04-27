@@ -210,12 +210,182 @@ class ExtContext(EncodableContext):
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        raise NotImplementedError(x)
+
+        # sign bit
+        sbit = 1 if x.s else 0
+
+        # case split by class
+        if x.isnan:
+            # NaN: placement of NaN depends on NaN / Inf encoding
+            match self.nan_kind:
+                case ExtNanKind.IEEE_754:
+                    if self.enable_inf:
+                        # usual IEEE 754 encoding: NaN => +qNaN(0)
+                        ebits = bitmask(self.es)
+                        mbits = 1 << (self.m - 1)
+                    else:
+                        # no infinity, NaN => +NaN(0)
+                        ebits = bitmask(self.es)
+                        mbits = 0
+                case ExtNanKind.MAX_VAL:
+                    # NaN is the maximum encoding
+                    ebits = bitmask(self.es)
+                    mbits = bitmask(self.m)
+                case ExtNanKind.NEG_ZERO:
+                    # NaN replaces -0
+                    ebits = 0
+                    mbits = 0
+                case _:
+                    raise RuntimeError(f'unexpected NaN kind {self.nan_kind}')
+        elif x.isinf:
+            # Inf: placement of Inf depends on NaN encoding
+            match self.nan_kind:
+                case ExtNanKind.IEEE_754:
+                    if self.enable_inf:
+                        # usual IEEE 754 encoding
+                        ebits = bitmask(self.es)
+                        mbits = 0
+                case ExtNanKind.MAX_VAL:
+                    # Inf one before the maximum encoding
+                    if self.pmax == 1:
+                        # Inf is in the previous binade
+                        ebits = bitmask(self.es) - 1
+                        mbits = 1
+                    else:
+                        # Inf is in the last binade
+                        ebits = bitmask(self.es)
+                        mbits = bitmask(self.m) - 1
+                case ExtNanKind.NEG_ZERO:
+                    # Inf is the maximum encoding
+                    ebits = bitmask(self.es)
+                    mbits = bitmask(self.m)
+                case _:
+                    raise RuntimeError(f'unexpected NaN kind {self.nan_kind}')
+        elif x.is_zero():
+            # zero
+            ebits = 0
+            mbits = 0
+        elif x.e <= self.emin:
+            # subnormal
+            ebits = 0
+            mbits = x.c << (x.exp - self.expmin)  # normalize so that exp=self.expmin
+        else:
+            # normal
+            c = x.c << (self.pmax - x.p) # normalize so that p=self.pmax
+            ebits = x.e - self.emin + 1
+            mbits = c & bitmask(self.pmax - 1)
+
+        # encode the value
+        return (sbit << (self.nbits - 1)) | (ebits << self.m) | mbits
+
 
     def decode(self, x: int) -> Float:
         if not isinstance(x, int) and x >= 0 and x < 2 ** self.nbits:
             raise TypeError(f'Expected integer x={x} on [0, 2 ** {self.nbits})')
-        raise NotImplementedError(x)
+
+        # masks
+        emask = bitmask(self.es)
+        mmask = bitmask(self.m)
+
+        # extract bits
+        sbit = x >> (self.nbits - 1)
+        ebits = (x >> self.m) & emask
+        mbits = x & mmask
+
+        # sign bit
+        s = sbit != 0
+
+        # case split on NaN encoding
+        match self.nan_kind:
+            case ExtNanKind.IEEE_754:
+                # IEEE 754 style decoding
+                if ebits == 0:
+                    # subnormal / zero
+                    c = mbits
+                    return Float(s=s, c=c, exp=self.expmin, ctx=self)
+                elif ebits == bitmask(self.es):
+                    # infinite / NaN
+                    if self.enable_inf and mbits == 0:
+                        # infinite (when enabled)
+                        return Float(s=s, isinf=True, ctx=self)
+                    else:
+                        # otherwise NaN
+                        return Float(s=s, isnan=True, ctx=self)
+                else:
+                    # normal number
+                    c = (1 << self.m) | mbits
+                    exp = self.expmin + (ebits - 1)
+                    return Float(s=s, c=c, exp=exp, ctx=self)
+
+            case ExtNanKind.MAX_VAL:
+                # NaN is the maximum encoding
+                # if it exists, then Inf is in the previous encoding
+
+                # easier to consider ebits | mbits together
+                ord_bits = (ebits << self.m) | mbits
+
+                # special values
+                nan_bits = (1 << (self.nbits - 1))
+                inf_bits  = nan_bits - 1
+
+                # check if `ord_bits` is a special value
+                if ord_bits == nan_bits:
+                    # NaN
+                    return Float(s=s, isnan=True, ctx=self)
+                elif self.enable_inf and ord_bits == inf_bits:
+                    # Inf
+                    return Float(s=s, isinf=True, ctx=self)
+                else:
+                    # real number
+                    if ebits == 0:
+                        # subnormal / zero
+                        c = mbits
+                        return Float(s=s, c=c, exp=self.expmin, ctx=self)
+                    else:
+                        # normal number
+                        c = (1 << self.m) | mbits
+                        exp = self.expmin + (ebits - 1)
+                        return Float(s=s, c=c, exp=exp, ctx=self)
+
+            case ExtNanKind.NEG_ZERO | ExtNanKind.NONE:
+                # NaN replaces -0 (or no NaN)
+                # if it exists, then Inf is the maximum encoding
+
+                # easier to consider ebits | mbits together
+                ord_bits = (ebits << self.m) | mbits
+
+                # special value
+                inf_bits = bitmask(self.nbits)
+
+                # check if `ord_bits` is a special value
+                if self.enable_inf and ord_bits == inf_bits:
+                    # Inf
+                    return Float(s=s, isinf=True, ctx=self)
+                else:
+                    # real number
+                    if ebits == 0:
+                        # subnormal / zero (or NaN)
+                        if mbits == 0:
+                            # zero (or NaN)
+                            if s and self.nan_kind == ExtNanKind.NEG_ZERO:
+                                # NaN
+                                return Float(s=s, isnan=True, ctx=self)
+                            else:
+                                # zero
+                                return Float(s=s, c=0, exp=self.expmin, ctx=self)
+                        else:
+                            # subnormal
+                            c = mbits
+                            return Float(s=s, c=c, exp=self.expmin, ctx=self)
+                    else:
+                        # normal number
+                        c = (1 << self.m) | mbits
+                        exp = self.expmin + (ebits - 1)
+                        return Float(s=s, c=c, exp=exp, ctx=self)
+
+            case _:
+                # this should never happen
+                raise RuntimeError(f'unexpected NaN kind {self.nan_kind}')
 
 
 def _format_is_valid(
