@@ -200,12 +200,43 @@ class ExtContext(EncodableContext):
             raise ValueError(f'not representable in this context: s={s}')
         return minval
 
+    def min_subnormal(self, s = False) -> Float:
+        minval = self._mpb_ctx.min_subnormal(s)
+        minval.ctx = self
+        if not self.is_representable(minval):
+            raise ValueError(f'not representable in this context: s={s}')
+        return minval
+
+    def max_subnormal(self, s = False) -> Float:
+        maxval = self._mpb_ctx.max_subnormal(s)
+        maxval.ctx = self
+        if not self.is_representable(maxval):
+            raise ValueError(f'not representable in this context: s={s}')
+        return maxval
+
+    def min_normal(self, s = False) -> Float:
+        minval = self._mpb_ctx.min_normal(s)
+        minval.ctx = self
+        if not self.is_representable(minval):
+            raise ValueError(f'not representable in this context: s={s}')
+        return minval
+
+    def max_normal(self, s = False) -> Float:
+        maxval = self._mpb_ctx.max_normal(s)
+        maxval.ctx = self
+        if not self.is_representable(maxval):
+            raise ValueError(f'not representable in this context: s={s}')
+        return maxval
+
     def maxval(self, s = False) -> Float:
         maxval = self._mpb_ctx.maxval(s)
         maxval.ctx = self
         if not self.is_representable(maxval):
             raise ValueError(f'not representable in this context: s={s}')
         return maxval
+
+    def infval(self, s = False):
+        return self._mpb_ctx.infval(s)
 
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
