@@ -233,7 +233,23 @@ class MPSContext(OrdinalContext):
                 exp = self.expmin + (eord - 1)
                 return Float(s=s, c=c, exp=exp, ctx=self)
 
+
+    def zero(self, s = False) -> Float:
+        return Float(s=s, c=0, exp=self.expmin, ctx=self)
+
     def minval(self, s = False) -> Float:
         return Float(s=s, c=1, exp=self.expmin, ctx=self)
 
+    def min_subnormal(self, s = False) -> Float:
+        return self.minval(s)
+
+    def max_subnormal(self, s = False) -> Float:
+        c = bitmask(self.pmax - 1)
+        exp = self.expmin
+        return Float(s=s, c=c, exp=exp, ctx=self)
+
+    def min_normal(self, s = False) -> Float:
+        c = 1 << (self.pmax - 1)
+        exp = self.expmin
+        return Float(s=s, c=c, exp=exp, ctx=self)
 
