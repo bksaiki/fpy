@@ -96,44 +96,126 @@ class ExtContext(EncodableContext):
         self.rm = rm
         self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm)
 
+    @property
+    def pmax(self):
+        """Maximum allowable precision."""
+        return self._mpb_ctx.pmax
+
+    @property
+    def emax(self):
+        """Maximum normalized exponent."""
+        return self._mpb_ctx.emax
+
+    @property
+    def emin(self):
+        """Minimum normalized exponent."""
+        return self._mpb_ctx.emin
+
+    @property
+    def expmax(self):
+        """Maximum unnormalized exponent."""
+        return self._mpb_ctx.expmax
+
+    @property
+    def expmin(self):
+        """Minimum unnormalized exponent."""
+        return self._mpb_ctx.expmin
+
+    @property
+    def nmin(self):
+        """
+        First unrepresentable digit for every value in the representation.
+        """
+        return self._mpb_ctx.nmin
+
+    @property
+    def m(self):
+        """Size of the mantissa field."""
+        return self.pmax - 1
+
+    @property
+    def ebias(self):
+        """The exponent "bias" when encoding / decoding values."""
+        return self.emax - self.eoffset
+
     def with_rm(self, rm):
-        raise NotImplementedError
+        return ExtContext(self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset, rm)
 
     def is_representable(self, x: RealFloat | Float) -> bool:
-        raise NotImplementedError
+        if not isinstance(x, RealFloat | Float):
+            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        if x.is_zero() and x.s and self.nan_kind == ExtNanKind.NEG_ZERO:
+            # -0 is not representable in this context
+            return False
+        return self._mpb_ctx.is_representable(x)
 
     def is_canonical(self, x: Float) -> bool:
-        raise NotImplementedError
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mpb_ctx.is_canonical(x)
 
     def normalize(self, x: Float) -> Float:
-        raise NotImplementedError
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        x = self._mpb_ctx.normalize(x)
+        x.ctx = self
+        return x
 
     def round_params(self):
-        raise NotImplementedError
+        return self._mpb_ctx.round_params()
 
     def round(self, x):
-        raise NotImplementedError
+        rounded = self._mpb_ctx.round(x)
+        rounded.ctx = self
+        return rounded
 
     def round_at(self, x, n):
-        raise NotImplementedError
+        rounded = self._mpb_ctx.round_at(x, n)
+        rounded.ctx = self
+        return rounded
 
     def to_ordinal(self, x: Float, infval = False) -> int:
-        raise NotImplementedError
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mpb_ctx.to_ordinal(x, infval=infval)
 
     def from_ordinal(self, x: int, infval = False) -> Float:
-        raise NotImplementedError
+        return self._mpb_ctx.from_ordinal(x, infval=infval)
+
+    def zero(self, s: bool = False):
+        """
+        Returns a signed 0 under this context.
+
+        Raises `ValueError` if the value is not representable.
+        """
+        x = Float(s=s, ctx=self)
+        if not self.is_representable(x):
+            raise ValueError(f'not representable in this context: s={s}')
+        return x
 
     def minval(self, s = False) -> Float:
-        raise NotImplementedError
+        minval = self._mpb_ctx.minval(s)
+        minval.ctx = self
+        if not self.is_representable(minval):
+            raise ValueError(f'not representable in this context: s={s}')
+        return minval
 
     def maxval(self, s = False) -> Float:
-        raise NotImplementedError
+        maxval = self._mpb_ctx.maxval(s)
+        maxval.ctx = self
+        if not self.is_representable(maxval):
+            raise ValueError(f'not representable in this context: s={s}')
+        return maxval
 
     def encode(self, x: Float) -> int:
-        raise NotImplementedError
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        raise NotImplementedError(x)
 
     def decode(self, x: int) -> Float:
-        raise NotImplementedError
+        if not isinstance(x, int) and x >= 0 and x < 2 ** self.nbits:
+            raise TypeError(f'Expected integer x={x} on [0, 2 ** {self.nbits})')
+        raise NotImplementedError(x)
 
 
 def _format_is_valid(
@@ -197,7 +279,7 @@ def _ext_to_mpb(
     """Converts between `ExtContext` and `MPBContext` parameters."""
     # IEEE 754 derived parameters
     p = nbits - es
-    emax_0 = (1 << (es - 1)) - 1
+    emax_0 = 0 if es == 0 else (1 << (es - 1)) - 1
     emin_0 = 1 - emax_0
 
     # apply exponent offset to compute final exponent parameters
