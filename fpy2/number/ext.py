@@ -437,6 +437,8 @@ def _format_is_valid(
         case _:
             raise RuntimeError(f'unexpected NaN kind{nan_kind}')
 
+    return True
+
 
 def _ext_to_mpb(
     es: int,
