@@ -13,31 +13,6 @@ from .mpb import MPBContext
 from .real import RealFloat
 from .round import RoundingMode
 
-def _ieee_to_mpb(es: int, nbits: int, rm: RoundingMode):
-    """Converts IEEEContext parameters to MPBContext parameters"""
-    # IEEE 754 derived parameters
-    p = nbits - es
-    emax = (1 << (es - 1)) - 1
-    emin = 1 - emax
-    expmax = emax - p + 1
-    # +MAX_VAL
-    maxval = RealFloat(c=bitmask(p), exp=expmax)
-    # MPBContext
-    return MPBContext(p, emin, maxval, rm)
-
-class IEEEClass(IntEnum):
-    """10 group classification of IEEE 754 values """
-    SIGNALING_NAN = 0
-    QUIET_NAN = 1
-    NEGATIVE_INFINITY = 2
-    NEGATIVE_NORMAL = 3
-    NEGATIVE_SUBNORMAL = 4
-    NEGATIVE_ZERO = 5
-    POSITIVE_ZERO = 6
-    POSITIVE_SUBNORMAL = 7
-    POSITIVE_NORMAL = 8
-    POSITIVE_INFINITY = 9
-
 
 @default_repr
 class IEEEContext(EncodableContext):
@@ -263,7 +238,7 @@ class IEEEContext(EncodableContext):
             return Float(s=s, c=c, exp=exp, ctx=self)
 
 
-    def classify(self, x: Float) -> IEEEClass:
+    def classify(self, x: Float) -> 'IEEEClass':
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
@@ -290,3 +265,30 @@ class IEEEContext(EncodableContext):
                 return IEEEClass.NEGATIVE_NORMAL
             else:
                 return IEEEClass.POSITIVE_NORMAL
+
+
+
+class IEEEClass(IntEnum):
+    """10 group classification of IEEE 754 values """
+    SIGNALING_NAN = 0
+    QUIET_NAN = 1
+    NEGATIVE_INFINITY = 2
+    NEGATIVE_NORMAL = 3
+    NEGATIVE_SUBNORMAL = 4
+    NEGATIVE_ZERO = 5
+    POSITIVE_ZERO = 6
+    POSITIVE_SUBNORMAL = 7
+    POSITIVE_NORMAL = 8
+    POSITIVE_INFINITY = 9
+
+def _ieee_to_mpb(es: int, nbits: int, rm: RoundingMode):
+    """Converts IEEEContext parameters to MPBContext parameters"""
+    # IEEE 754 derived parameters
+    p = nbits - es
+    emax = (1 << (es - 1)) - 1
+    emin = 1 - emax
+    expmax = emax - p + 1
+    # +MAX_VAL
+    maxval = RealFloat(c=bitmask(p), exp=expmax)
+    # MPBContext
+    return MPBContext(p, emin, maxval, rm)
