@@ -532,13 +532,14 @@ def _ext_to_mpb(
     """Converts between `ExtContext` and `MPBContext` parameters."""
     # IEEE 754 derived parameters
     p = nbits - es
-    emax_0 = 0 if es == 0 else (1 << (es - 1)) - 1
+    emax_0 = 0 if es == 0 else bitmask(es - 1)
     emin_0 = 1 - emax_0
 
     # apply exponent offset to compute final exponent parameters
     emax = emax_0 + eoffset
     emin = emin_0 + eoffset
     expmax = emax - p + 1
+    expmin = emin - p + 1
 
     # compute the maximum value
     # the maximum value is encoding-dependent since depending
@@ -596,4 +597,9 @@ def _ext_to_mpb(
         case _:
             raise RuntimeError(f'unexpected NaN kind {nan_kind}')
 
+    # for es == 0, the exponent may be too low
+    # we should normalize and ensure the exponent is in range
+    maxval = maxval.normalize(p, expmin - 1)
+
+    # create the related MPB context
     return MPBContext(p, emin, maxval, rm)

@@ -37,6 +37,5 @@ def default_str_convert(x: RealFloat | Float) -> str:
     else:
         return str(float_to_mpfr(x))
 
-
 set_current_float_converter(default_float_convert)
 set_current_str_converter(default_str_convert)
