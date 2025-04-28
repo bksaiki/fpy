@@ -18,6 +18,8 @@ from .round import RoundingMode, RoundingDirection
 # Miscellaneous
 from .native import default_float_convert, default_str_convert
 
+###########################################################
+# Type aliases
 
 RM: TypeAlias = RoundingMode
 """alias for `RoundingMode`"""

@@ -1,20 +1,18 @@
 import unittest
 import random
 
-from fpy2 import Float, IEEEContext, RM
+from fpy2 import Float, IEEEContext, RM, FP64
 
 class DecodeTestCase(unittest.TestCase):
     """Testing `IEEEContext.decode()`"""
 
     def test_native(self, num_encodings: int = 10_000):
-        # rounding context for native Python floats
-        fp64 = IEEEContext(11, 64, RM.RNE)
         # sample 10_000 random encodings
         random.seed(1)
-        encodings = [random.randint(0, (1 << fp64.nbits) - 1) for _ in range(num_encodings)]
+        encodings = [random.randint(0, (1 << FP64.nbits) - 1) for _ in range(num_encodings)]
         # run decode
         for i in encodings:
-            x = fp64.decode(i)
+            x = FP64.decode(i)
             self.assertIsInstance(x, Float, f'i={i}, x={x}')
 
     def test_small(self, es_max: int = 6, nbits_max: int = 8):
@@ -31,24 +29,22 @@ class EncodeTestCase(unittest.TestCase):
     """Testing `IEEEContext.encode()`"""
 
     def test_native(self, num_encodings: int = 10_000):
-        # rounding context for native Python floats
-        fp64 = IEEEContext(11, 64, RM.RNE)
         # sample 10_000 random floating-point values
         random.seed(1)
         xs: list[Float] = []
         for _ in range(num_encodings):
             s = random.choice([False, True])
-            exp = random.randint(fp64.expmin, fp64.expmax)
-            c = random.randint(0, (1 << fp64.pmax) - 1)
-            x = Float(s, exp, c, ctx=fp64)
-            assert fp64.is_representable(x)
+            exp = random.randint(FP64.expmin, FP64.expmax)
+            c = random.randint(0, (1 << FP64.pmax) - 1)
+            x = Float(s, exp, c, ctx=FP64)
+            assert FP64.is_representable(x)
             xs.append(x)
         # run encoding
         for x in xs:
-            i = fp64.encode(x)
+            i = FP64.encode(x)
             self.assertIsInstance(i, int, f'x={x}, i={i}')
             self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
-            self.assertLess(i, 1 << fp64.nbits, f'x={x}, i={i}')
+            self.assertLess(i, 1 << FP64.nbits, f'x={x}, i={i}')
 
     def test_small(self, es_max: int = 6, nbits_max: int = 8):
         # iterate over possible contexts
@@ -72,18 +68,16 @@ class EncodeRoundTripTestCase(unittest.TestCase):
     """Ensure `IEEEContext.decode()` and `IEEEContext.encode()` roundtrips."""
 
     def test_native(self, num_encodings: int = 10_000):
-        # rounding context for native Python floats
-        fp64 = IEEEContext(11, 64, RM.RNE)
         # sample 10_000 random encodings
         random.seed(1)
-        encodings = [random.randint(0, (1 << fp64.nbits) - 1) for _ in range(num_encodings)]
+        encodings = [random.randint(0, (1 << FP64.nbits) - 1) for _ in range(num_encodings)]
         # run decode
         for i in encodings:
-            x = fp64.decode(i)
-            j = fp64.encode(x)
+            x = FP64.decode(i)
+            j = FP64.encode(x)
             if x.isnan:
                 # mapped to +/-qNaN(0)
-                y = fp64.decode(j)
+                y = FP64.decode(j)
                 self.assertTrue(y.isnan, f'i={i}, j={j}, y={y}')
             else:
                 self.assertEqual(i, j, f'i={i}, j={j}')
