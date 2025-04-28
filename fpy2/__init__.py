@@ -35,8 +35,10 @@ from .number import (
     RoundingMode,
     RoundingDirection,
     RM,
-    # miscellaneous
-    ExtNanKind
+    # encoding utilities
+    ExtNanKind,
+    # type aliases
+    FP256, FP128, FP64, FP32, FP16
 )
 
 from .decorator import fpy, pattern
