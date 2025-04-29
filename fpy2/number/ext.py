@@ -290,7 +290,7 @@ class ExtContext(EncodableContext):
 
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x!r}')
 
         # sign bit
         sbit = 1 if x.s else 0
