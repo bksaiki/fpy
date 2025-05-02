@@ -1,5 +1,5 @@
 """
-This module defines pattern matching facilities for FPy IR.
+This module defines pattern matching facilities for FPy AST.
 """
 
 from fractions import Fraction

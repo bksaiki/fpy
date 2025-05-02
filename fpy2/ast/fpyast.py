@@ -443,12 +443,12 @@ class Call(Expr):
     def __init__(
         self,
         op: str,
-        args: list[Expr],
+        args: Sequence[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
         self.op = op
-        self.args = args
+        self.args = list(args)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Call):
@@ -465,13 +465,13 @@ class Compare(Expr):
 
     def __init__(
         self,
-        ops: list[CompareOp],
-        args: list[Expr],
+        ops: Sequence[CompareOp],
+        args: Sequence[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.ops = ops
-        self.args = args
+        self.ops = list(ops)
+        self.args = list(args)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Compare):
