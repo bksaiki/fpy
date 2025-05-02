@@ -34,7 +34,7 @@ class Function:
     _ir: Optional[fpyir.FuncDef]
     """possibly cached IR of the function"""
 
-    _func: Optional[FunctionType]
+    _func: Optional[Callable]
     """original native function"""
 
     def __init__(
@@ -42,7 +42,7 @@ class Function:
         ast: fpyast.FuncDef,
         env: ForeignEnv,
         runtime: Optional['Interpreter'] = None,
-        func: Optional[FunctionType] = None
+        func: Optional[Callable] = None
     ):
         self.ast = ast
         self.env = env
@@ -89,10 +89,13 @@ class Function:
 
     def with_rt(self, rt: 'Interpreter'):
         if not isinstance(rt, Interpreter):
-            raise TypeError(f'expected BaseInterpreter, got {rt}')
-        if not isinstance(self._func, FunctionType):
-            raise TypeError(f'expected FunctionType, got {self._func}')
+            raise TypeError(f'expected \'BaseInterpreter\', got {rt}')
         return Function(self.ast, self.env, runtime=rt, func=self._func)
+
+    def with_ast(self, ast: fpyast.FuncDef):
+        if not isinstance(ast, fpyast.FuncDef):
+            raise TypeError(f'expected \'FuncDef\', got {ast}')
+        return Function(ast, self.env, runtime=self.runtime, func=self._func)
 
     def to_ir(self):
         """Returns the IR of the function."""
