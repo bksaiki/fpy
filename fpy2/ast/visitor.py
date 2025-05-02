@@ -263,6 +263,10 @@ class DefaultAstVisitor(AstVisitor):
         for c in e.args:
             self._visit_expr(c, ctx)
 
+    def _visit_call(self, e: Call, ctx: None):
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         for c in e.args:
             self._visit_expr(c, ctx)
