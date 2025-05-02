@@ -55,3 +55,7 @@ class Subst:
                 raise ValueError(f'unioning substitutions with different values for {k}: {new_subst.env[k]} != {v}')
             new_subst.env[k] = v
         return new_subst
+
+    def vars(self):
+        """Returns the domain of the substitution."""
+        return set(self.env.keys())
