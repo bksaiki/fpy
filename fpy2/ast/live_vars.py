@@ -1,10 +1,10 @@
 """Live variable analysis for the FPy AST."""
 
-from ..ast import *
+from . import *
 
 _LiveSet = set[NamedId]
 
-class LiveVarAnalysisInstance(AstVisitor):
+class LiveVarsInstance(AstVisitor):
     """Single-use live variable analyzer"""
 
     func: FuncDef
@@ -175,7 +175,7 @@ class LiveVarAnalysisInstance(AstVisitor):
         return super()._visit_statement(stmt, ctx)
 
 
-class LiveVarAnalysis:
+class LiveVars:
     """Live variable analysis for the FPy AST."""
 
     @staticmethod
@@ -183,4 +183,4 @@ class LiveVarAnalysis:
         """Analyze the live variables in a function."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a Function, got {func}')
-        return LiveVarAnalysisInstance(func).analyze()
+        return LiveVarsInstance(func).analyze()

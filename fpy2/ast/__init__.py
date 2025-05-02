@@ -7,4 +7,8 @@ from .formatter import Formatter
 from .fpyast import set_default_formatter
 from .visitor import AstVisitor, DefaultAstVisitor
 
+from .define_use import DefineUse
+from .live_vars import LiveVars
+from .syntax_check import SyntaxCheck
+
 set_default_formatter(Formatter())

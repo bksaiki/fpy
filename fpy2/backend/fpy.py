@@ -7,13 +7,14 @@ Useful for source-to-source transformations.
 from ..ir import *
 
 from ..ast import fpyast as ast
+from ..ast.syntax_check import SyntaxCheck
+
 from ..ir.codegen import (
     _unary_table,
     _binary_table,
     _ternary_table,
     _nary_table
 )
-from ..frontend.syntax_check import SyntaxCheck
 
 from ..runtime import Function
 from ..transform import UnSSA

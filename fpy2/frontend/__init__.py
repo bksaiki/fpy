@@ -7,4 +7,3 @@ for the FPy language.
 
 from .fpc import fpcore_to_fpy
 from .parser import Parser
-from .syntax_check import SyntaxCheck

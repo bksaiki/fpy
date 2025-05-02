@@ -15,7 +15,8 @@ from typing import (
     TypeVar
 )
 
-from .frontend import Parser, SyntaxCheck
+from .ast import SyntaxCheck
+from .frontend import Parser
 from .runtime import Function, ForeignEnv
 
 P = ParamSpec('P')
