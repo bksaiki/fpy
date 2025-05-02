@@ -8,7 +8,7 @@ import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
 
 from .codegen import IRCodegen
-from .fpyast import *
+from ..ast.fpyast import *
 from .syntax_check import SyntaxCheck
 
 from ..analysis import VerifyIR

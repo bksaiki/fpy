@@ -7,7 +7,7 @@ import ast
 from typing import cast, Mapping
 from types import FunctionType
 
-from .fpyast import *
+from ..ast.fpyast import *
 from ..utils import NamedId, UnderscoreId, SourceId
 
 def _ipow(expr: Expr, n: int, loc: Location):

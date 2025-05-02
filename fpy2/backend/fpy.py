@@ -6,7 +6,7 @@ Useful for source-to-source transformations.
 
 from ..ir import *
 
-from ..frontend import fpyast as ast
+from ..ast import fpyast as ast
 from ..frontend.codegen import (
     _unary_table,
     _binary_table,

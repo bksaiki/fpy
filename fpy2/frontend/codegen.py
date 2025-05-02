@@ -3,8 +3,8 @@ This module does intermediate code generation, compiling
 the abstract syntax tree (AST) to the intermediate representation (IR).
 """
 
-from .fpyast import *
-from .visitor import AstVisitor
+from ..ast.fpyast import *
+from ..ast import AstVisitor
 
 from .. import ir
 
