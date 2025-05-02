@@ -15,8 +15,9 @@ from typing import (
     TypeVar
 )
 
-from .ast import SyntaxCheck
+from .ast import SyntaxCheck, EffectStmt
 from .frontend import Parser
+from .rewrite import Pattern, ExprPattern, StmtPattern
 from .runtime import Function, ForeignEnv
 
 P = ParamSpec('P')
@@ -61,7 +62,15 @@ def pattern(func: Callable[P, R]):
     FPy is a stricter subset of Python, so this decorator will reject
     any function that is not valid in FPy.
     """
-    return _apply_decorator(func, {}, decorator=pattern, is_pattern=True)
+    fn = _apply_decorator(func, {}, decorator=pattern, is_pattern=True)
+
+    # check which pattern it is
+    # TODO: should there be separate decorators?
+    stmts = fn.ast.body.stmts
+    if len(stmts) == 1 and isinstance(stmts[0], EffectStmt):
+        return ExprPattern(fn.ast)
+    else:
+        return StmtPattern(fn.ast)
 
 ###########################################################
 # Utilities

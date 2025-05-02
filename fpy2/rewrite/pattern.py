@@ -69,7 +69,8 @@ class StmtPattern(Pattern):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)}')
 
         # set of targets (LHS of assignments)
-        def_use = DefineUse.analyze(func.body)
+        # TODO: which analysis should be run?
+        def_use = DefineUse.analyze(func)
         targets = set(def_use.keys())
 
         self.block = func.body
