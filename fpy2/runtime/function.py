@@ -7,8 +7,10 @@ from titanfp.arithmetic.evalctx import EvalCtx
 
 from .. import ir as fpyir
 from .. import ast as fpyast
+
 from ..analysis import VerifyIR
-from ..frontend import fpcore_to_fpy, IRCodegen
+from ..frontend import fpcore_to_fpy
+from ..ir import IRCodegen
 from ..transform import SSA
 
 from .env import ForeignEnv
@@ -45,6 +47,7 @@ class Function:
         self.ast = ast
         self.env = env
         self.runtime = runtime
+        self._ir = None
         self._func = func
 
     def __repr__(self):

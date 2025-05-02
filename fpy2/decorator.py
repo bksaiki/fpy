@@ -15,13 +15,8 @@ from typing import (
     TypeVar
 )
 
-from .codegen import IRCodegen
-from .parser import Parser
-from .syntax_check import SyntaxCheck
-
-from ..analysis import VerifyIR
-from ..runtime import Function, ForeignEnv
-from ..transform import SSA
+from .frontend import Parser, SyntaxCheck
+from .runtime import Function, ForeignEnv
 
 P = ParamSpec('P')
 R = TypeVar('R')

@@ -5,7 +5,7 @@ def test_compile_fpy():
     comp = FPYCompiler()
     for core in tests + examples:
         assert isinstance(core, Function)
-        ast = comp.compile(core)
+        ast = comp.compile(core.to_ir())
         print(ast.format())
 
 if __name__ == '__main__':

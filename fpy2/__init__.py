@@ -36,7 +36,7 @@ from .number import (
     RM,
 )
 
-from .frontend import fpy
+from .decorator import fpy
 
 from .backend import (
     Backend,

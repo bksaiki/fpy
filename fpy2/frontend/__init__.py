@@ -5,7 +5,6 @@ This module contains a parser, syntax checker, and type checking
 for the FPy language.
 """
 
-from .codegen import IRCodegen
-from .decorator import fpy
 from .fpc import fpcore_to_fpy
+from .parser import Parser
 from .syntax_check import SyntaxCheck
