@@ -212,7 +212,7 @@ class _IRCodegenInstance(AstVisitor):
         body = self._visit_block(stmt.body, ctx)
         return ir.WhileStmt(cond, body, [])
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
+    def _visit_for(self, stmt: ForStmt, ctx: None):
         iterable = self._visit_expr(stmt.iterable, ctx)
         body = self._visit_block(stmt.body, ctx)
         return ir.ForStmt(stmt.var, AnyType(), iterable, body, [])

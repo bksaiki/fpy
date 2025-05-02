@@ -250,7 +250,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(stmt.cond, (env, False))
         return env
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _Ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.iterable, ctx)
         if isinstance(stmt.var, NamedId):
