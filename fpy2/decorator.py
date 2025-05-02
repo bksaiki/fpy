@@ -21,6 +21,9 @@ from .runtime import Function, ForeignEnv
 P = ParamSpec('P')
 R = TypeVar('R')
 
+###########################################################
+# @fpy decorator
+
 @overload
 def fpy(func: Callable[P, R]) -> Callable[P, R]:
     ...
@@ -46,6 +49,22 @@ def fpy(
     else:
         return _apply_decorator(func, kwargs)
 
+
+###########################################################
+# @pattern decorator
+
+def pattern(func: Callable[P, R]):
+    """
+    Decorator to parse a Python function into an FPy pattern.
+    Constructs an FPy `Pattern` from a Python function.
+    FPy is a stricter subset of Python, so this decorator will reject
+    any function that is not valid in FPy.
+    """
+    return _apply_decorator(func, {}, decorator=pattern, is_pattern=True)
+
+###########################################################
+# Utilities
+
 def _function_env(func: Callable) -> ForeignEnv:
     globs = func.__globals__
     built_ins = {
@@ -64,7 +83,13 @@ def _function_env(func: Callable) -> ForeignEnv:
 
     return ForeignEnv(globs, nonlocals, built_ins)
 
-def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
+def _apply_decorator(
+    func: Callable[P, R],
+    kwargs: dict[str, Any],
+    *,
+    decorator: Callable = fpy,
+    is_pattern: bool = False
+):
     # read the original source the function
     src_name = inspect.getabsfile(func)
     _, start_line = inspect.getsourcelines(func)
@@ -82,7 +107,7 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     # try to reparse the @fpy decorator
     dec_ast = parser.find_decorator(
         decorator_list,
-        fpy,
+        decorator,
         globals=func.__globals__,
         locals=cvars.nonlocals
     )
@@ -93,8 +118,17 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     # add context information
     ast.ctx = { **kwargs, **props }
 
-    # syntax checking (and compute relevant free vars)
-    ast.free_vars = SyntaxCheck.analyze(ast, free_vars=free_vars)
+    # syntax checkng (and compute relevant free vars)
+    if is_pattern:
+        ast.free_vars = SyntaxCheck.analyze(
+            ast,
+            free_vars=free_vars,
+            ignore_unknown=True,
+            ignore_noreturn=True,
+            allow_wildcard=True
+        )
+    else:
+        ast.free_vars = SyntaxCheck.analyze(ast, free_vars=free_vars)
 
     # wrap the IR in a Function
     return Function(ast, env)
