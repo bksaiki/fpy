@@ -1,0 +1,424 @@
+"""
+This module defines pattern matching facilities for FPy IR.
+"""
+
+from fractions import Fraction
+
+from ..ast import *
+from ..runtime import Function
+from ..utils import (
+    default_repr,
+    decnum_to_fraction,
+    digits_to_fraction,
+    hexnum_to_fraction,
+    sliding_window
+)
+
+from .pattern import Pattern, ExprPattern, StmtPattern
+from .subst import Subst
+
+class _MatchFailure(Exception):
+    """
+    Exception raised when a match fails.
+    """
+    def __init__(self, msg: str):
+        super().__init__(msg)
+        self.msg = msg
+
+class LocatedMatch:
+    """Result of a pattern match."""
+    pattern: Pattern
+    subst: Subst
+
+    def __init__(self, pattern: Pattern, subst: Subst):
+        self.pattern = pattern
+        self.subst = subst
+
+@default_repr
+class ExprMatch(LocatedMatch):
+    """Result of pattern matching on an expression."""
+    expr: Expr
+
+    def __init__(self, pattern: Pattern, subst: Subst, expr: Expr):
+        super().__init__(pattern, subst)
+        self.expr = expr
+
+@default_repr
+class StmtMatch(LocatedMatch):
+    """Result of a pattern match: a location and a substitution."""
+    block: StmtBlock
+    idx: int
+
+    def __init__(self, pattern: Pattern, subst: Subst, block: StmtBlock, idx: int):
+        super().__init__(pattern, subst)
+        self.block = block
+        self.idx = idx
+
+
+class _MatcherInst(AstVisitor):
+    """
+    FPy pattern matching instance for a pattern and sub-program.
+
+    Unlike `_MatcherEngine`, the matcher attempts to matching
+    starting at the top of the program slice.
+    """
+    pattern: Pattern
+    ast: StmtBlock | Expr
+    subst: Subst
+
+    def __init__(self, pattern: Pattern, ast: StmtBlock | Expr):
+        self.pattern = pattern
+        self.ast = ast
+        self.subst = Subst()
+
+    def match(self):
+        """
+        Attempts to match the pattern against the program slice.
+        Produces a `LocatedMatch` either `ExprMatch` or `StatementMatch`
+        depending on the kind of pattern.
+        """
+        try:
+            match self.pattern:
+                case ExprPattern():
+                    if not isinstance(self.ast, Expr):
+                        raise TypeError(f'Expected \'Expr\', got {type(self.ast)} for {self.ast}')    
+                    self._visit_expr(self.ast, self.pattern.expr)
+                    return ExprMatch(self.pattern, self.subst, self.ast)
+                case StmtPattern():
+                    if not isinstance(self.ast, StmtBlock):
+                        raise TypeError(f'Expected \'StmtBlock\', got {type(self.ast)} for {self.ast}')
+                    self._visit_block(self.ast, self.pattern.block)
+                    return StmtMatch(self.pattern, self.subst, self.ast, 0)
+                case _:
+                    raise RuntimeError(f'unreachable case: {self.pattern}')
+        except _MatchFailure as _:
+            # match failed
+            return None
+
+    def _bind_expr(self, name: NamedId, e: Expr):
+        # check if pattern is already bound
+        if name in self.subst:
+            # check if the current binding is the same as `e`
+            bound = self.subst[name]
+            if e != bound:
+                raise _MatchFailure(f'conflicting bindings for {name}: {bound} != {e}')
+        else:
+            # insert a new binding
+            self.subst[name] = e
+
+    def _visit_target(self, name: Id, pat: Id):
+        """
+        Visit the left-hand side of an assignment.
+        The left-hand side is an `Id` while in an expression it is a `Var`.
+        """
+        match pat, name:
+            case NamedId(), NamedId():
+                # pattern variable
+                self._bind_expr(pat, Var(name, None))
+            case NamedId(), UnderscoreId():
+                raise NotImplementedError(pat, name)
+            case _:
+                pass
+
+    def _visit_var(self, e: Var, pat: Var):
+        raise RuntimeError('do not call')
+
+    def _visit_bool(self, e: BoolVal, pat: BoolVal):
+        if e.val != pat.val:
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+    def _visit_decnum(self, e: Decnum, pat: Decnum):
+        # this is a semantic match, not a syntactic match!
+        if decnum_to_fraction(e.val) != decnum_to_fraction(pat.val):
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+    def _visit_hexnum(self, e: Hexnum, pat: Hexnum):
+        # this is a semantic match, not a syntactic match!
+        if hexnum_to_fraction(e.val) != hexnum_to_fraction(pat.val):
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+    def _visit_integer(self, e: Integer, pat: Integer):
+        if e.val != pat.val:
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+    def _visit_rational(self, e: Rational, pat: Rational):
+        # this is a semantic match, not a syntactic match!
+        if Fraction(e.p, e.q) != Fraction(pat.p, pat.q):
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+    def _visit_constant(self, e: Constant, pat: Constant):
+        if e.val != pat.val:
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+    def _visit_digits(self, e: Digits, pat: Digits):
+        # this is a semantic match, not a syntactic match!
+        f1 = digits_to_fraction(e.m, e.e, e.b)
+        f2 = digits_to_fraction(e.m, e.e, e.b)
+        if f1 != f2:
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+    def _visit_unaryop(self, e: UnaryOp, pat: UnaryOp):
+        if e.op != pat.op:
+            raise _MatchFailure(f'matching {pat} against {e}')
+        self._visit_expr(e.arg, pat.arg)
+
+    def _visit_binaryop(self, e: BinaryOp, pat: BinaryOp):
+        if e.op != pat.op:
+            raise _MatchFailure(f'matching {pat} against {e}')
+        self._visit_expr(e.left, pat.left)
+        self._visit_expr(e.right, pat.right)
+
+    def _visit_ternaryop(self, e: TernaryOp, pat: TernaryOp):
+        if e.op != pat.op:
+            raise _MatchFailure(f'matching {pat} against {e}')
+        self._visit_expr(e.arg0, pat.arg0)
+        self._visit_expr(e.arg1, pat.arg1)
+        self._visit_expr(e.arg2, pat.arg2)
+
+    def _visit_naryop(self, e: NaryOp, pat: NaryOp):
+        if e.op != pat.op:
+            raise _MatchFailure(f'matching {pat} against {e}')
+        for c1, c2 in zip(e.args, pat.args):
+            self._visit_expr(c1, c2)
+
+    def _visit_call(self, e: Call, pat: Call):
+        if e.op != pat.op or len(e.args) != len(pat.args):
+            raise _MatchFailure(f'matching {pat} against {e}')
+        for c1, c2 in zip(e.args, pat.args):
+            self._visit_expr(c1, c2)
+
+    def _visit_compare(self, e: Compare, pat: Compare):
+        # TODO: is matching on a subset of operations valid?
+        # check if the operation sequence is the same
+        if len(e.args) != len(pat.args) or e.ops != pat.ops:
+            raise _MatchFailure(f'matching {pat} against {e}')
+        # check if args are the same
+        for c1, c2 in zip(e.args, pat.args):
+            self._visit_expr(c1, c2)
+
+    def _visit_tuple_expr(self, e: TupleExpr, pat: TupleExpr):
+        # check if #elements are the same
+        if len(e.args) != len(pat.args):
+            raise _MatchFailure(f'matching {pat} against {e}')
+        # check if elements are the same
+        for c1, c2 in zip(e.args, pat.args):
+            self._visit_expr(c1, c2)
+
+    def _visit_tuple_ref(self, e: TupleRef, pat: TupleRef):
+        if len(e.slices) != len(pat.slices):
+            raise _MatchFailure(f'matching {pat} against {e}')
+        self._visit_expr(e.value, pat.value)
+        for s1, s2 in zip(e.slices, pat.slices):
+            self._visit_expr(s1, s2)
+
+    def _visit_comp_expr(self, e: CompExpr, pat: CompExpr):
+        if len(e.iterables) != len(pat.iterables):
+            raise _MatchFailure(f'matching {pat} against {e}')
+        for name, pname in zip(e.vars, pat.vars):
+            match name, pname:
+                case UnderscoreId(), _:
+                    pass
+                case NamedId(), Id():
+                    self._visit_target(name, pname)
+                case _, _:
+                    raise _MatchFailure(f'matching {pat} against {e}')
+        for it, pit in zip(e.iterables, pat.iterables):
+            self._visit_expr(it, pit)
+        self._visit_expr(e.elt, pat.elt)
+
+    def _visit_if_expr(self, e: IfExpr, pat: IfExpr):
+        self._visit_expr(e.cond, pat.cond)
+        self._visit_expr(e.ift, pat.ift)
+        self._visit_expr(e.iff, pat.iff)
+
+    def _visit_simple_assign(self, stmt: SimpleAssign, pat: SimpleAssign):
+        self._visit_target(stmt.var, pat.var)
+        self._visit_expr(stmt.expr, pat.expr)
+
+    def _visit_tuple_binding(self, binding: TupleBinding, pat: TupleBinding):
+        if len(binding.elts) != len(pat.elts):
+            raise _MatchFailure(f'matching {pat} against {binding}')
+        for elt, p in zip(binding.elts, pat.elts):
+            match elt, p:
+                case UnderscoreId(), _:
+                    # ignore
+                    pass
+                case NamedId(), Id():
+                    # pattern variable
+                    self._visit_target(elt, p)
+                case TupleBinding(), TupleBinding():
+                    # pattern variable
+                    self._visit_tuple_binding(elt, p)
+                case _:
+                    raise _MatchFailure(f'matching {p} against {elt}')
+
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, pat: TupleUnpack):
+        self._visit_tuple_binding(stmt.binding, pat.binding)
+        self._visit_expr(stmt.expr, pat.expr)
+
+    def _visit_index_assign(self, stmt: IndexAssign, pat: IndexAssign):
+        self._visit_target(stmt.var, pat.var)
+        for e, p in zip(stmt.slices, pat.slices):
+            self._visit_expr(e, p)
+        self._visit_expr(stmt.expr, pat.expr)
+
+    def _visit_if(self, stmt: IfStmt, pat: IfStmt):
+        self._visit_expr(stmt.cond, pat.cond)
+        self._visit_block(stmt.ift, pat.ift)
+        match stmt.iff, pat.iff:
+            case None, None:
+                pass
+            case StmtBlock(), StmtBlock():
+                self._visit_block(stmt.iff, pat.iff)
+            case _, _:
+                raise _MatchFailure(f'matching {pat} against {stmt}')
+
+    def _visit_while(self, stmt: WhileStmt, pat: WhileStmt):
+        self._visit_expr(stmt.cond, pat.cond)
+        self._visit_block(stmt.body, pat.body)
+
+    def _visit_for(self, stmt: ForStmt, pat: ForStmt):
+        self._visit_expr(stmt.iterable, pat.iterable)
+        self._visit_target(stmt.var, pat.var)
+        self._visit_block(stmt.body, pat.body)
+
+    def _visit_context(self, stmt: ContextStmt, pat: ContextStmt):
+        # TODO: match context names
+        if stmt.props != pat.props:
+            raise _MatchFailure(f'matching {pat} against {stmt}')
+        self._visit_block(stmt.body, pat.body)
+
+    def _visit_assert(self, stmt: AssertStmt, pat: AssertStmt):
+        self._visit_expr(stmt.test, pat.test)
+
+    def _visit_effect(self, stmt: EffectStmt, pat: EffectStmt):
+        self._visit_expr(stmt.expr, pat.expr)
+
+    def _visit_return(self, stmt: ReturnStmt, pat: ReturnStmt):
+        self._visit_expr(stmt.expr, pat.expr)
+
+    def _visit_block(self, block: StmtBlock, pat: StmtBlock):
+        # check length of block
+        if len(block.stmts) != len(pat.stmts):
+            raise _MatchFailure(f'matching {pat} against {block}')
+
+        # check if statements are the same
+        for s1, s2 in zip(block.stmts, pat.stmts):
+            self._visit_statement(s1, s2)
+
+    def _visit_function(self, func: FuncDef, pat: FuncDef):
+        raise RuntimeError('do not call')
+
+    def _visit_expr(self, e: Expr, pat: Expr):
+        match pat:
+            case Var():
+                # pattern variable
+                self._bind_expr(pat.name, e)
+            case _:
+                # check if expressions are the same type
+                if type(e) is not type(pat):
+                    raise _MatchFailure(f'matching {type(pat)} against {type(e)}')
+                return super()._visit_expr(e, pat)
+
+    def _visit_statement(self, stmt: Stmt, pat: Stmt):
+        # check if statements are the same type
+        if type(stmt) is not type(pat):
+            raise _MatchFailure(f'matching {type(pat)} against {type(stmt)}')
+        return super()._visit_statement(stmt, pat)
+
+
+class _ExprMatcherEngine(DefaultAstVisitor):
+    """FPy pattern matching for expression patterns"""
+    pattern: ExprPattern
+    func: FuncDef
+    matches: list[ExprMatch]
+
+    def __init__(self, pattern: ExprPattern, func: FuncDef):
+        self.pattern = pattern
+        self.func = func
+        self.matches = []
+
+    def run(self) -> list[ExprMatch]:
+        self._visit_function(self.func, None)
+        return self.matches
+
+    def _visit_expr(self, e: Expr, ctx: None):
+        m = _MatcherInst(self.pattern, e)
+        pmatch = m.match()
+        if pmatch is not None:
+            if not isinstance(pmatch, ExprMatch):
+                raise TypeError(f'Expected \'ExprMatch\', got {type(pmatch)} for {pmatch}')
+            self.matches.append(pmatch)
+        super()._visit_expr(e, ctx)
+
+class _StmtMatcherEngine(DefaultAstVisitor):
+    """FPy pattern matching for statement patterns"""
+    pattern: StmtPattern
+    func: FuncDef
+    matches: list[StmtMatch]
+
+    def __init__(self, pattern: StmtPattern, func: FuncDef):
+        self.pattern = pattern
+        self.func = func
+        self.matches = []
+
+    def run(self) -> list[StmtMatch]:
+        self._visit_function(self.func, None)
+        return self.matches
+
+    def _visit_block(self, block: StmtBlock, ctx: None):
+        # pattern is a statement block of length k
+        # match on subsets of the statement block of length k
+        pattern_block = self.pattern.block
+        for i, stmts in enumerate(sliding_window(block.stmts, len(pattern_block.stmts))):
+            # check if the pattern matches
+            m = _MatcherInst(self.pattern, StmtBlock(stmts))
+            pmatch = m.match()
+            if pmatch is not None:
+                if not isinstance(pmatch, StmtMatch):
+                    raise TypeError(f'Expected \'StmtMatch\', got {type(pmatch)} for {pmatch}')
+                # adjust statement index and add to matches
+                pmatch.idx = i
+                self.matches.append(pmatch)
+        super()._visit_block(block, ctx)
+
+
+class Matcher:
+    """
+    FPy pattern matcher.
+
+    Matches each instance of `self.pattern` for a program
+    and returns the list of subsitutions for each match.
+    """
+
+    pattern: Pattern
+
+    def __init__(self, pattern: Pattern):
+        if not isinstance(pattern, Pattern):
+            raise TypeError(f'Expected \'Pattern\', got {type(pattern)}')
+        self.pattern = pattern
+
+    def match(self, func: Function):
+        """
+        Pattern matches recursively over the function.
+        For each match, returns the substitution (and its location).
+        """
+        if not isinstance(func, Function):
+            raise TypeError(f'Expected \'Function\', got {type(func)}')
+        match self.pattern:
+            case ExprPattern():
+                return _ExprMatcherEngine(self.pattern, func.ast).run()
+            case StmtPattern():
+                return _StmtMatcherEngine(self.pattern, func.ast).run()
+            case _:
+                raise RuntimeError(f'unreachable case: {self.pattern}')
+
+    def match_exact(self, e: StmtBlock | Expr):
+        """
+        Pattern matches exactly over the function.
+        Returns the substitution or `None` if no match is found.
+        """
+        if not isinstance(e, StmtBlock | Expr):
+            raise TypeError(f'Expected \'StmtBlock\' or \'Expr\', got {type(e)}')
+        m = _MatcherInst(self.pattern, e)
+        return m.match()

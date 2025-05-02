@@ -123,6 +123,12 @@ class AnyTypeAnn(TypeAnn):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, AnyTypeAnn)
+
+    def __hash__(self) -> int:
+        return hash(())
+
 class ScalarTypeAnn(TypeAnn):
     """FPy AST: scalar type annotation"""
     kind: ScalarType
@@ -130,6 +136,12 @@ class ScalarTypeAnn(TypeAnn):
     def __init__(self, kind: ScalarType, loc: Optional[Location]):
         super().__init__(loc)
         self.kind = kind
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, ScalarTypeAnn) and self.kind == other.kind
+
+    def __hash__(self) -> int:
+        return hash(self.kind)
 
 class TupleTypeAnn(TypeAnn):
     """FPy AST: tuple type annotation"""
