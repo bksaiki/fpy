@@ -410,7 +410,8 @@ class DefaultAstTransformVisitor(AstVisitor):
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         expr = self._visit_expr(stmt.expr, ctx)
-        return SimpleAssign(stmt.var, expr, stmt.ann, stmt.loc)
+        s = SimpleAssign(stmt.var, expr, stmt.ann, stmt.loc)
+        return s, ctx
 
     def _visit_tuple_binding(self, binding: TupleBinding):
         new_vars: list[Id | TupleBinding] = []
@@ -427,55 +428,75 @@ class DefaultAstTransformVisitor(AstVisitor):
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
-        return TupleUnpack(binding, expr, stmt.loc)
+        s = TupleUnpack(binding, expr, stmt.loc)
+        return s, ctx
 
     def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        return IndexAssign(stmt.var, slices, expr, stmt.loc)
+        s = IndexAssign(stmt.var, slices, expr, stmt.loc)
+        return s, ctx
 
     def _visit_if(self, stmt: IfStmt, ctx: Any):
         cond = self._visit_expr(stmt.cond, ctx)
-        ift = self._visit_block(stmt.ift, ctx)
+        ift, _ = self._visit_block(stmt.ift, ctx)
         if stmt.iff is None:
-            return IfStmt(cond, ift, None, stmt.loc)
+            s = IfStmt(cond, ift, None, stmt.loc)
         else:
-            iff = self._visit_block(stmt.iff, ctx)
-            return IfStmt(cond, ift, iff, stmt.loc)
+            iff, _ = self._visit_block(stmt.iff, ctx)
+            s = IfStmt(cond, ift, iff, stmt.loc)
+        return s, ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any):
         cond = self._visit_expr(stmt.cond, ctx)
-        body = self._visit_block(stmt.body, ctx)
-        return WhileStmt(cond, body, stmt.loc)
+        body, _ = self._visit_block(stmt.body, ctx)
+        s = WhileStmt(cond, body, stmt.loc)
+        return s, ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: Any):
         iterable = self._visit_expr(stmt.iterable, ctx)
-        body = self._visit_block(stmt.body, ctx)
-        return ForStmt(stmt.var, iterable, body, stmt.loc)
+        body, _ = self._visit_block(stmt.body, ctx)
+        s = ForStmt(stmt.var, iterable, body, stmt.loc)
+        return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
-        body = self._visit_block(stmt.body, ctx)
-        return ContextStmt(stmt.name, stmt.props, body, stmt.loc)
+        body, _ = self._visit_block(stmt.body, ctx)
+        s = ContextStmt(stmt.name, stmt.props, body, stmt.loc)
+        return s, ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
         test = self._visit_expr(stmt.test, ctx)
-        return AssertStmt(test, stmt.msg, stmt.loc)
+        s = AssertStmt(test, stmt.msg, stmt.loc)
+        return s, ctx
 
     def _visit_effect(self, stmt: EffectStmt, ctx: Any):
         expr = self._visit_expr(stmt.expr, ctx)
-        return EffectStmt(expr, stmt.loc)
+        s = EffectStmt(expr, stmt.loc)
+        return s, ctx
 
     def _visit_return(self, stmt: ReturnStmt, ctx: Any):
         expr = self._visit_expr(stmt.expr, ctx)
-        return ReturnStmt(expr, stmt.loc)
+        s = ReturnStmt(expr, stmt.loc)
+        return s, ctx
 
     def _visit_block(self, block: StmtBlock, ctx: Any):
-        stmts = [self._visit_statement(stmt, ctx) for stmt in block.stmts]
-        return StmtBlock(stmts)
+        stmts: list[Stmt] = []
+        for stmt in block.stmts:
+            s, ctx = self._visit_statement(stmt, ctx)
+            stmts.append(s)
+        return StmtBlock(stmts), ctx
 
     def _visit_function(self, func: FuncDef, ctx: Any):
         args: list[Argument] = []
         for arg in func.args:
             args.append(Argument(arg.name, arg.type, arg.loc))
-        body = self._visit_block(func.body, ctx)
+        body, _ = self._visit_block(func.body, ctx)
         return FuncDef(func.name, args, body, func.loc)
+
+    # override for typing hint
+    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
+        return super()._visit_expr(e, ctx)
+
+    # override for typing hint
+    def _visit_statement(self, stmt: Stmt, ctx: Any) -> tuple[Stmt, Any]:
+        return super()._visit_statement(stmt, ctx)

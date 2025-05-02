@@ -71,7 +71,8 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
 
     def run(self):
         # apply substitution
-        return self._visit_block(self.pattern.block, dict())
+        block, _ = self._visit_block(self.pattern.block, None)
+        return block
 
     def _visit_target(self, name: NamedId):
         if name in self.pmatch.subst:
@@ -102,34 +103,80 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         ident = self._visit_id(stmt.var)
         expr = self._visit_expr(stmt.expr, None)
-        return SimpleAssign(ident, expr, stmt.ann, stmt.loc)
+        s =  SimpleAssign(ident, expr, stmt.ann, None)
+        return s, None
+
+    def _visit_tuple_binding(self, binding: TupleBinding):
+        new_vars: list[Id | TupleBinding] = []
+        for elt in binding.elts:
+            match elt:
+                case Id():
+                    new_vars.append(self._visit_id(elt))
+                case TupleBinding():
+                    new_vars.append(self._visit_tuple_binding(elt))
+                case _:
+                    raise RuntimeError(f'unreachable case: {elt}')
+        return TupleBinding(new_vars, None)
 
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
-        raise NotImplementedError(stmt)
+        binding = self._visit_tuple_binding(stmt.binding)
+        expr = self._visit_expr(stmt.expr, None)
+        s = TupleUnpack(binding, expr, None)
+        return s, None
 
     def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
-        raise NotImplementedError(stmt)
+        var = self._visit_id(stmt.var)
+        slices = [self._visit_expr(s, None) for s in stmt.slices]
+        expr = self._visit_expr(stmt.expr, None)
+        s = IndexAssign(var, slices, expr, None)
+        return s, None
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
-        raise NotImplementedError(stmt)
+        cond = self._visit_expr(stmt.cond, None)
+        ift, _ = self._visit_block(stmt.ift, None)
+        if stmt.iff is None:
+            s = IfStmt(cond, ift, None, None)
+        else:
+            iff, _ = self._visit_block(stmt.iff, None)
+            s = IfStmt(cond, ift, iff, None)
+        return s, None
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        raise NotImplementedError(stmt)
+        cond = self._visit_expr(stmt.cond, None)
+        body, _ = self._visit_block(stmt.body, None)
+        s = WhileStmt(cond, body, None)
+        return s, None
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        raise NotImplementedError(stmt)
+        var = self._visit_id(stmt.var)
+        iterable = self._visit_expr(stmt.iterable, None)
+        body, _ = self._visit_block(stmt.body, None)
+        s = ForStmt(var, iterable, body, None)
+        return s, None
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        raise NotImplementedError(stmt)
+        body, _ = self._visit_block(stmt.body, None)
+        if stmt.name is None:
+            s = ContextStmt(None, stmt.props, body, None)
+        else:
+            name = self._visit_id(stmt.name)
+            s = ContextStmt(name, stmt.props, body, None)
+            return s, None
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
-        raise NotImplementedError(stmt)
+        test = self._visit_expr(stmt.test, None)
+        s = AssertStmt(test, stmt.msg, None)
+        return s, None
 
     def _visit_effect(self, stmt: EffectStmt, ctx: None):
-        raise NotImplementedError(stmt)
+        expr = self._visit_expr(stmt.expr, None)
+        s = EffectStmt(expr, None)
+        return s, None
 
-    def _visit_return(self, stmt, ctx):
-        raise NotImplementedError(stmt)
+    def _visit_return(self, stmt: ReturnStmt, ctx: None):
+        expr = self._visit_expr(stmt.expr, None)
+        s = ReturnStmt(expr, None)
+        return s, None
 
 
 class Applier:
