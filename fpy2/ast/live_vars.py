@@ -7,14 +7,20 @@ _LiveSet = set[NamedId]
 class LiveVarsInstance(AstVisitor):
     """Single-use live variable analyzer"""
 
-    func: FuncDef
+    ast: FuncDef | Expr
 
-    def __init__(self, func: FuncDef):
+    def __init__(self, ast: FuncDef | Expr):
         super().__init__()
-        self.func = func
+        self.ast = ast
 
     def analyze(self):
-        return self._visit_function(self.func, set())
+        match self.ast:
+            case FuncDef():
+                return self._visit_function(self.ast, set())
+            case Expr():
+                return self._visit_expr(self.ast, None)
+            case _:
+                raise RuntimeError(f'unreachable case: {self.ast}')
 
     def _visit_var(self, e: Var, ctx: None) -> _LiveSet:
         return { e.name }
@@ -164,7 +170,11 @@ class LiveVarsInstance(AstVisitor):
         return live
 
     def _visit_function(self, func: FuncDef, ctx: _LiveSet):
-        return self._visit_block(func.body, ctx)
+        live =  self._visit_block(func.body, ctx)
+        for arg in func.args:
+            if isinstance(arg.name, NamedId):
+                live -= { arg.name }
+        return live
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: None) -> _LiveSet:
@@ -179,8 +189,8 @@ class LiveVars:
     """Live variable analysis for the FPy AST."""
 
     @staticmethod
-    def analyze(func: FuncDef):
+    def analyze(ast: FuncDef | Expr):
         """Analyze the live variables in a function."""
-        if not isinstance(func, FuncDef):
-            raise TypeError(f'expected a Function, got {func}')
-        return LiveVarsInstance(func).analyze()
+        if not isinstance(ast, FuncDef | Expr):
+            raise TypeError(f'expected a \'Function\' or \'Expr\', got {ast}')
+        return LiveVarsInstance(ast).analyze()

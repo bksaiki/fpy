@@ -4,7 +4,7 @@ This module defines a pattern of the FPy AST.
 
 from abc import ABC, abstractmethod
 
-from ..ast import Expr, FuncDef, EffectStmt, StmtBlock
+from ..ast import Expr, FuncDef, EffectStmt, StmtBlock, LiveVars, DefineUse
 from ..utils import NamedId, default_repr
 
 
@@ -31,6 +31,9 @@ class ExprPattern(Pattern):
     expr: Expr
     """syntax of the underlying pattern"""
 
+    _vars: set[NamedId]
+    """set of pattern variables"""
+
     def __init__(self, func: FuncDef):
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
@@ -40,11 +43,11 @@ class ExprPattern(Pattern):
             raise TypeError(f'Expected a effectful statement, got {stmts[0]}')
 
         self.expr = stmts[0].expr
-
+        self._vars = LiveVars.analyze(self.expr)
 
     def vars(self) -> set[NamedId]:
         """Returns the set of pattern variables."""
-        raise NotImplementedError
+        return self._vars
 
     def format(self) -> str:
         """Returns a string representation of the pattern."""
@@ -58,14 +61,23 @@ class StmtPattern(Pattern):
     block: StmtBlock
     """syntax of the underlying pattern"""
 
-    def __init__(self, syntax: FuncDef):
-        if not isinstance(syntax, FuncDef):
-            raise TypeError(f'Expected \'FuncDef\', got {type(syntax)}')
-        self.block = syntax.body
+    _vars: set[NamedId]
+    """set of pattern variables"""
+
+    def __init__(self, func: FuncDef):
+        if not isinstance(func, FuncDef):
+            raise TypeError(f'Expected \'FuncDef\', got {type(func)}')
+
+        # set of targets (LHS of assignments)
+        def_use = DefineUse.analyze(func.body)
+        targets = set(def_use.keys())
+
+        self.block = func.body
+        self._vars = LiveVars.analyze(func) | targets
 
     def vars(self) -> set[NamedId]:
         """Returns the set of pattern variables."""
-        raise NotImplementedError
+        return self._vars
 
     def format(self) -> str:
         """Returns a string representation of the pattern."""

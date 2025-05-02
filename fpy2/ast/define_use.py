@@ -6,15 +6,21 @@ from .visitor import DefaultAstVisitor
 
 class _DefineUseInstance(DefaultAstVisitor):
     """Per-IR instance of definition-use analysis"""
-    func: FuncDef
+    ast: FuncDef | StmtBlock
     uses: dict[NamedId, set[Var]]
 
-    def __init__(self, func: FuncDef):
-        self.func = func
+    def __init__(self, ast: FuncDef | StmtBlock):
+        self.ast = ast
         self.uses = {}
 
     def analyze(self):
-        self._visit_function(self.func, None)
+        match self.ast:
+            case FuncDef():
+                self._visit_function(self.ast, None)
+            case StmtBlock():
+                self._visit_block(self.ast, None)
+            case _:
+                raise RuntimeError(f'unreachable case: {self.ast}')
         return self.uses
 
     def _visit_var(self, e: Var, ctx: None):
@@ -72,7 +78,7 @@ class DefineUse:
     """
 
     @staticmethod
-    def analyze(func: FuncDef):
-        if not isinstance(func, FuncDef):
-            raise TypeError("func must be a FuncDef")
-        return _DefineUseInstance(func).analyze()
+    def analyze(ast: FuncDef | StmtBlock):
+        if not isinstance(ast, FuncDef | StmtBlock):
+            raise TypeError(f'Expected \'FuncDef\' or \'StmtBlock\', got {type(ast)} for {ast}')
+        return _DefineUseInstance(ast).analyze()
