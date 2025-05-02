@@ -1,5 +1,8 @@
 # Makefile for running tests and linting
 
+UNITTEST_PATTERN ?= ''
+
+
 default: help;
 
 build:
@@ -40,7 +43,7 @@ infratest:
 
 unittest:
 	@echo "Running unit tests..."
-	python3 -m unittest -v 
+	python3 -m unittest -v -k $(UNITTEST_PATTERN)
 
 help:
 	@echo "FPy Make targets"

@@ -158,7 +158,7 @@ class Rewrite:
 
         ast, _, times_applied = self._engine.apply(func.ast, occurence)
         if times_applied == 0:
-            raise RewriteError(f'could not apply rewrite rule: {self.lhs} => {self.rhs}')
+            raise RewriteError(f'could not apply rewrite rule: {self.lhs.format()} => {self.rhs.format()}')
         return func.with_ast(ast)
 
 

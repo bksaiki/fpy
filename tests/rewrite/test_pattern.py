@@ -59,3 +59,19 @@ class ParseExampleTestCase(unittest.TestCase):
                 y += x
 
         self.assertIsInstance(expand_sum_bad, Pattern)
+
+
+    def test_while_unroll(self):
+        @pattern
+        def unroll_while_l(t, e):
+            while t > 0:
+                t = e
+
+        @pattern
+        def unroll_while_r(t, e):
+            t = e
+            while t > 0:
+                t = e
+
+        self.assertIsInstance(unroll_while_l, Pattern)
+        self.assertIsInstance(unroll_while_r, Pattern)

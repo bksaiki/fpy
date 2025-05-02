@@ -128,7 +128,6 @@ def unroll_while_r(t, e):
 
 rw_unroll_while = Rewrite(unroll_while_l, unroll_while_r)
 
-
 @fpy
 def k(N):
     x = N
@@ -143,6 +142,65 @@ def k1(N):
     while x > 0:
         x -= x / 2
     return x
+
+@pattern
+def ift_pattern_l(t, f):
+    if True:
+        x = t
+    else:
+        x = f
+
+@pattern
+def ift_pattern_r(t, f):
+    x = t
+
+@fpy
+def ift_test():
+    if True:
+        x = 1
+    else:
+        x = 2
+    return x
+
+rw_ift = Rewrite(ift_pattern_l, ift_pattern_r)
+
+@fpy
+def ift_test1():
+    x = 1
+    return x
+
+@pattern
+def if_not_pattern_l(c, t, f):
+    if not c:
+        x = t
+    else:
+        x = f
+
+@pattern
+def if_not_pattern_r(c, t, f):
+    if c:
+        x = f
+    else:
+        x = t
+
+rw_if_not = Rewrite(if_not_pattern_l, if_not_pattern_r)
+
+@fpy
+def if_not_test(c):
+    if not c > 0:
+        x = 1
+    else:
+        x = 2
+    return x
+
+@fpy
+def if_not_test1(c):
+    if c > 0:
+        x = 2
+    else:
+        x = 1
+    return x
+
 
 
 class RewriteTestCase(unittest.TestCase):
@@ -207,3 +265,19 @@ class RewriteTestCase(unittest.TestCase):
         k_rw = rw_unroll_while.apply(k)
         self.assertIsInstance(k_rw, Function)
         self.assertAstEqual(k_rw.ast.body, k1.ast.body)
+
+    def test_if_test1(self):
+        assert isinstance(ift_test, Function)
+        assert isinstance(ift_test1, Function)
+
+        ift_rw = rw_ift.apply(ift_test)
+        self.assertIsInstance(ift_rw, Function)
+        self.assertAstEqual(ift_rw.ast.body, ift_test1.ast.body)
+
+    def test_if_test2(self):
+        assert isinstance(if_not_test, Function)
+        assert isinstance(if_not_test1, Function)
+
+        ift_rw = rw_if_not.apply(if_not_test)
+        self.assertIsInstance(ift_rw, Function)
+        self.assertAstEqual(ift_rw.ast.body, if_not_test1.ast.body)
