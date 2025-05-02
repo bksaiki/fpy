@@ -101,10 +101,5 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     # syntax checking (and compute relevant free vars)
     ast.free_vars = SyntaxCheck.analyze(ast, free_vars=free_vars)
 
-    # analyze and lower to the IR
-    ir = IRCodegen.lower(ast)
-    ir = SSA.apply(ir)
-    VerifyIR.check(ir)
-
     # wrap the IR in a Function
-    return Function(ir, env)
+    return Function(ast, env)

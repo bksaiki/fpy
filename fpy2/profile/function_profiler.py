@@ -101,8 +101,9 @@ class FunctionProfiler:
             interpreter = self.interpreter
 
         # select the reference function
-        if 'spec' in func.ir.ctx and isinstance(func.ir.ctx['spec'], Function):
-            ref_fn = func.ir.ctx['spec']
+        ir = func.to_ir()
+        if 'spec' in ir.ctx and isinstance(ir.ctx['spec'], Function):
+            ref_fn = ir.ctx['spec']
         else:
             ref_fn = func
 

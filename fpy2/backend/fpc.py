@@ -466,13 +466,11 @@ class FPCoreCompileInstance(ReduceVisitor):
 class FPCoreCompiler(Backend):
     """Compiler from FPy IR to FPCore"""
 
-    def compile(self, func: Function) -> fpc.FPCore:
-        ir = func.ir
-
+    def compile(self, func: FuncDef) -> fpc.FPCore:
         # normalization passes
-        ir = FuncUpdate.apply(ir)
-        ir = ForBundling.apply(ir)
-        ir = WhileBundling.apply(ir)
-        ir = SimplifyIf.apply(ir)
-
-        return FPCoreCompileInstance(ir).compile()
+        func = FuncUpdate.apply(func)
+        func = ForBundling.apply(func)
+        func = WhileBundling.apply(func)
+        func = SimplifyIf.apply(func)
+        # compile
+        return FPCoreCompileInstance(func).compile()

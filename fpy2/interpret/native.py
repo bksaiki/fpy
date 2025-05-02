@@ -524,7 +524,7 @@ class PythonInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
         rt = _Interpreter(func.env)
-        return rt.eval(func.ir, args, ctx)
+        return rt.eval(func.to_ir(), args, ctx)
 
     def eval_with_trace(self, func: Function, args: Sequence[Any], ctx = None):
         raise NotImplementedError('not implemented')

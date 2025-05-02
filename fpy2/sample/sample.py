@@ -4,13 +4,16 @@ This module defines sampling methods.
 
 import random
 
+from typing import Optional
 from titanfp.arithmetic.evalctx import determine_ctx
 from titanfp.arithmetic import ieee754
 
-from .table import RangeTable
+from ..ast import AnyTypeAnn, ScalarTypeAnn, ScalarType
 from ..interpret import TitanicInterpreter
+from ..ir import FuncDef
 from ..runtime import Function, ForeignEnv
-from ..ir import *
+
+from .table import RangeTable
 
 _DEFAULT_FUEL = 32
 
@@ -85,8 +88,8 @@ def _sample_rejection_one(
         hi = ieee754.Float(negative=False, isinf=True, ctx=ctx)
         rt = TitanicInterpreter()
 
-        assert 'pre' in fun.ir.ctx, 'missing precondition'
-        pre = Function(fun.ir.ctx['pre'], ForeignEnv.empty())
+        assert 'pre' in fun.ast.ctx, 'missing precondition'
+        pre = Function(fun.ast.ctx['pre'], ForeignEnv.empty())
 
         start_fuel = fuel
         while fuel > 0:
@@ -140,7 +143,7 @@ def sample_function(
 
     # compute the context
     default_ctx = ieee754.ieee_ctx(11, 64)
-    ctx = determine_ctx(default_ctx, fun.ir.ctx)
+    ctx = determine_ctx(default_ctx, fun.ast.ctx)
 
     # TODO: other sampling methods
     if not isinstance(ctx, ieee754.IEEECtx):
@@ -148,14 +151,20 @@ def sample_function(
 
     # TODO: extend to other types
     for arg in fun.args:
-        if not isinstance(arg.ty, AnyType | RealType):
-            raise ValueError(f"expected Real, got {arg.ty}")
+        match arg.type:
+            case AnyTypeAnn():
+                pass
+            case ScalarTypeAnn(kind=ScalarType.REAL):
+                pass
+            case _:
+                raise ValueError(f"expected Real, got {arg.type}")
 
     # process precondition
-    if 'pre' not in fun.ir.ctx or ignore_pre:
+    ir = fun.to_ir()
+    if 'pre' not in ir.ctx or ignore_pre:
         table = RangeTable()
     else:
-        pre: FuncDef = fun.ir.ctx['pre']
+        pre: FuncDef = ir.ctx['pre']
         table = RangeTable.from_condition(pre)
 
     # add unmentioned variables

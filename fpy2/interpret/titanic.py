@@ -314,7 +314,7 @@ class _Interpreter(ReduceVisitor):
         if isinstance(fn, Function):
             # calling FPy function
             rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
-            return rt.eval(fn.ir, args, ctx)
+            return rt.eval(fn.to_ir(), args, ctx)
         elif callable(fn):
             # calling foreign function
             return fn(*args)
@@ -626,11 +626,11 @@ class TitanicInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
         rt = _Interpreter(func.env, override_ctx=self.ctx)
-        return rt.eval(func.ir, args, ctx)
+        return rt.eval(func.to_ir(), args, ctx)
 
     def eval_with_trace(self, func: Function, args: Sequence[Any], ctx = None):
         rt = _Interpreter(func.env, override_ctx=self.ctx, enable_trace=True)
-        result = rt.eval(func.ir, args, ctx)
+        result = rt.eval(func.to_ir(), args, ctx)
         return result, rt.trace
 
     def eval_expr(self, expr: Expr, env: _Env, ctx: EvalCtx):
