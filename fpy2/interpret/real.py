@@ -564,7 +564,7 @@ class RealInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
         rt = _Interpreter(self.rival, False)
-        return rt.eval(func.ir, args, ctx)
+        return rt.eval(func.to_ir(), args, ctx)
 
     def eval_expr(self, expr, env, ctx):
         raise NotImplementedError
@@ -578,6 +578,6 @@ class RealInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
         rt = _Interpreter(self.rival, True)
-        result = rt.eval(func.ir, args, ctx)
+        result = rt.eval(func.to_ir(), args, ctx)
         return (result, rt.expr_trace)
 

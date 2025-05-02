@@ -4,7 +4,7 @@ FPy backend abstraction.
 
 from abc import ABC, abstractmethod
 
-from ..runtime import Function
+from ..ir import FuncDef
 
 
 class Backend(ABC):
@@ -13,6 +13,6 @@ class Backend(ABC):
     """
 
     @abstractmethod
-    def compile(self, func: Function):
+    def compile(self, func: FuncDef):
         """Compiles `func` to the backend's target language."""
         raise NotImplementedError('virtual method')

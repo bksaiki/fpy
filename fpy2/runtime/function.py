@@ -5,9 +5,15 @@ from types import FunctionType
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.arithmetic.evalctx import EvalCtx
 
+from .. import ir as fpyir
+from .. import ast as fpyast
+
+from ..analysis import VerifyIR
+from ..frontend import fpcore_to_fpy
+from ..ir import IRCodegen
+from ..transform import SSA
+
 from .env import ForeignEnv
-from ..ir import FuncDef
-from ..frontend.fpc import fpcore_to_fpy
 
 # avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:
@@ -21,42 +27,46 @@ class Function:
     This object is created by the `@fpy` decorator and represents
     a function in the FPy runtime.
     """
-    ir: FuncDef
+    ast: fpyast.FuncDef
     env: ForeignEnv
     runtime: Optional['Interpreter']
 
-    _func: Optional[FunctionType]
+    _ir: Optional[fpyir.FuncDef]
+    """possibly cached IR of the function"""
+
+    _func: Optional[Callable]
     """original native function"""
 
     def __init__(
         self,
-        ir: FuncDef,
+        ast: fpyast.FuncDef,
         env: ForeignEnv,
         runtime: Optional['Interpreter'] = None,
-        func: Optional[FunctionType] = None
+        func: Optional[Callable] = None
     ):
-        self.ir = ir
+        self.ast = ast
         self.env = env
         self.runtime = runtime
+        self._ir = None
         self._func = func
 
     def __repr__(self):
-        return f'{self.__class__.__name__}(ir={self.ir}, ...)'
+        return f'{self.__class__.__name__}(ast={self.ast}, ...)'
 
     def __call__(self, *args, ctx: Optional[EvalCtx] = None):
         fn = get_default_function_call()
         return fn(self, *args, ctx=ctx)
 
     def format(self):
-        return self.ir.format()
+        return self.ast.format()
 
     @property
     def args(self):
-        return self.ir.args
+        return self.ast.args
 
     @property
     def name(self):
-        return self.ir.name
+        return self.ast.name
 
     @staticmethod
     def from_fpcore(
@@ -79,10 +89,26 @@ class Function:
 
     def with_rt(self, rt: 'Interpreter'):
         if not isinstance(rt, Interpreter):
-            raise TypeError(f'expected BaseInterpreter, got {rt}')
-        if not isinstance(self._func, FunctionType):
-            raise TypeError(f'expected FunctionType, got {self._func}')
-        return Function(self.ir, self.env, runtime=rt, func=self._func)
+            raise TypeError(f'expected \'BaseInterpreter\', got {rt}')
+        return Function(self.ast, self.env, runtime=rt, func=self._func)
+
+    def with_ast(self, ast: fpyast.FuncDef):
+        if not isinstance(ast, fpyast.FuncDef):
+            raise TypeError(f'expected \'FuncDef\', got {ast}')
+        return Function(ast, self.env, runtime=self.runtime, func=self._func)
+
+    def to_ir(self):
+        """Returns the IR of the function."""
+        # check if the IR is already cached
+        if self._ir is None:
+            # lower the AST to IR
+            ir = IRCodegen().lower(self.ast)
+            ir = SSA.apply(ir)
+            VerifyIR().check(ir)
+            # cache the IR
+            self._ir = ir
+
+        return self._ir
 
 
 ###########################################################

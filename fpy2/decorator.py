@@ -15,13 +15,8 @@ from typing import (
     TypeVar
 )
 
-from .codegen import IRCodegen
-from .parser import Parser
-from .syntax_check import SyntaxCheck
-
-from ..analysis import VerifyIR
-from ..runtime import Function, ForeignEnv
-from ..transform import SSA
+from .frontend import Parser, SyntaxCheck
+from .runtime import Function, ForeignEnv
 
 P = ParamSpec('P')
 R = TypeVar('R')
@@ -101,10 +96,5 @@ def _apply_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     # syntax checking (and compute relevant free vars)
     ast.free_vars = SyntaxCheck.analyze(ast, free_vars=free_vars)
 
-    # analyze and lower to the IR
-    ir = IRCodegen.lower(ast)
-    ir = SSA.apply(ir)
-    VerifyIR.check(ir)
-
     # wrap the IR in a Function
-    return Function(ir, env)
+    return Function(ast, env)

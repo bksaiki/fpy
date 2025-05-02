@@ -7,12 +7,9 @@ from typing import TypeAlias
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
 
-from .codegen import IRCodegen
-from .fpyast import *
+from ..ast.fpyast import *
 from .syntax_check import SyntaxCheck
 
-from ..analysis import VerifyIR
-from ..transform import SSA
 from ..utils import Gensym, pythonize_id
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
@@ -704,12 +701,4 @@ def fpcore_to_fpy(
     default_name: str = 'f',
     ignore_unknown: bool = False
 ):
-    ast = _FPCore2FPy(core, default_name).convert()
-
-    # analyze and lower to the IR
-    SyntaxCheck.analyze(ast, ignore_unknown=ignore_unknown)
-    ir = IRCodegen.lower(ast)
-    ir = SSA.apply(ir)
-    VerifyIR.check(ir)
-
-    return ir
+    return _FPCore2FPy(core, default_name).convert()

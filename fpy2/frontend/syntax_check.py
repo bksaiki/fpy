@@ -2,8 +2,8 @@
 
 from typing import Optional, Self
 
-from .fpyast import *
-from .visitor import AstVisitor
+from ..ast.fpyast import *
+from ..ast.visitor import AstVisitor
 
 from ..utils import FPySyntaxError
 

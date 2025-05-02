@@ -6,8 +6,8 @@ Useful for source-to-source transformations.
 
 from ..ir import *
 
-from ..frontend import fpyast as ast
-from ..frontend.codegen import (
+from ..ast import fpyast as ast
+from ..ir.codegen import (
     _unary_table,
     _binary_table,
     _ternary_table,
@@ -253,9 +253,12 @@ class _FPyCompilerInstance(ReduceVisitor):
 class FPYCompiler(Backend):
     """Compiler from FPy IR to FPy"""
 
-    def compile(self, func: Function):
-        ir = UnSSA.apply(func.ir)
-        ast = _FPyCompilerInstance(ir).compile()
+    def compile(self, func: FuncDef):
+        if not isinstance(func, FuncDef):
+            raise TypeError(f'expected \'FuncDef\', got {func}')
+
+        func = UnSSA.apply(func)
+        ast = _FPyCompilerInstance(func).compile()
         SyntaxCheck.analyze(ast)
         return ast
 

@@ -5,9 +5,6 @@ This module contains a parser, syntax checker, and type checking
 for the FPy language.
 """
 
-from . import fpyast as fpyast
-
-from .decorator import fpy
-from .formatter import Formatter
-
-fpyast.set_default_formatter(Formatter())
+from .fpc import fpcore_to_fpy
+from .parser import Parser
+from .syntax_check import SyntaxCheck

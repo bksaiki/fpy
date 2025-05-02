@@ -5,5 +5,5 @@ def test_compile_fpc():
     comp = FPCoreCompiler()
     for core in tests + examples:
         assert isinstance(core, Function)
-        fpc = comp.compile(core)
+        fpc = comp.compile(core.to_ir())
         print(fpc)

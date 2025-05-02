@@ -3,10 +3,11 @@ This module does intermediate code generation, compiling
 the abstract syntax tree (AST) to the intermediate representation (IR).
 """
 
-from .fpyast import *
-from .visitor import AstVisitor
+from ..ast.fpyast import *
+from ..ast import AstVisitor
 
-from .. import ir
+from . import ir
+from .types import *
 
 _unary_table: dict[UnaryOpKind, type[ir.UnaryExpr]] = {
     UnaryOpKind.NEG: ir.Neg,
@@ -174,7 +175,7 @@ class _IRCodegenInstance(AstVisitor):
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         expr = self._visit_expr(stmt.expr, ctx)
-        return ir.SimpleAssign(stmt.var, ir.AnyType(), expr)
+        return ir.SimpleAssign(stmt.var, AnyType(), expr)
 
     def _visit_tuple_binding(self, vars: TupleBinding):
         new_vars: list[Id | ir.TupleBinding] = []
@@ -190,7 +191,7 @@ class _IRCodegenInstance(AstVisitor):
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding)
         expr = self._visit_expr(stmt.expr, ctx)
-        return ir.TupleUnpack(binding, ir.AnyType(), expr)
+        return ir.TupleUnpack(binding, AnyType(), expr)
 
     def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
@@ -214,7 +215,7 @@ class _IRCodegenInstance(AstVisitor):
     def _visit_for_stmt(self, stmt: ForStmt, ctx: None):
         iterable = self._visit_expr(stmt.iterable, ctx)
         body = self._visit_block(stmt.body, ctx)
-        return ir.ForStmt(stmt.var, ir.AnyType(), iterable, body, [])
+        return ir.ForStmt(stmt.var, AnyType(), iterable, body, [])
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         props = self._visit_props(stmt.props)
@@ -249,7 +250,7 @@ class _IRCodegenInstance(AstVisitor):
         args: list[ir.Argument] = []
         for arg in func.args:
             # TODO: use type annotation
-            ty = ir.AnyType()
+            ty = AnyType()
             args.append(ir.Argument(arg.name, ty))
 
         # translate properties
@@ -264,7 +265,7 @@ class _IRCodegenInstance(AstVisitor):
         e = self._visit_block(func.body, ctx)
 
         # return type
-        ty = ir.AnyType()
+        ty = AnyType()
 
         return ir.FuncDef(func.name, args, e, ty, func.ctx, func.free_vars)
 
