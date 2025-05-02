@@ -4,12 +4,15 @@ Frontend:
    - preconditions with statements
  - parser:
    - fix ISSUE#1
+   - underscore arguments to function
+   - f-string
  - language:
    - support for zip()
    - support for vector addition/multiplication
 
 Middle-end:
  - do we really need a separate AST / IR?
+ - String IR node
  - passes:
   - copy propagation
   - eliminate unneeded phi variables
