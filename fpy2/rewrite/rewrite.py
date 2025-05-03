@@ -67,23 +67,28 @@ class _RewriteEngine(DefaultAstTransformVisitor):
             if num_times == 1:
                 return self.applier
             else:
-                apat = self.applier.pattern
+                pattern = self.applier.pattern
                 for _ in range(1, num_times):
-                    match apat:
+                    match pattern:
                         case ExprPattern():
-                            # TODO: do we need to recompute the variables
+                            # run the matcher on the applier pattern
+                            # this is a hacky way to emulate taint
                             repeat_opt = _RewriteContext(0, 1, is_nested=True)
-                            apat.expr = self._visit_expr(apat.expr, repeat_opt)
+                            expr = self._visit_expr(pattern.expr, repeat_opt)
+                            # TODO: this is a bit messy
+                            ast = pattern.to_ast()
+                            ast.body.stmts[0] = EffectStmt(expr, None)
+                            pattern = ExprPattern(ast)
                         case StmtPattern():
-                            # TODO: do we need to recompute the variables
                             repeat_opt = _RewriteContext(0, 1, is_nested=True)
-                            block, _ = self._visit_block(apat.block, repeat_opt)
-                            apat.block = block
+                            block, _ = self._visit_block(pattern.block, repeat_opt)
+                            # TODO: this is a bit messy
+                            ast = pattern.to_ast()
+                            ast.body = block
+                            pattern = StmtPattern(ast)
                         case _:
-                            raise RuntimeError(f'unreachable case: {apat}')
-                    print('iter', apat.format())
-                    print()
-                return Applier(apat)
+                            raise RuntimeError(f'unreachable case: {pattern}')
+                return Applier(pattern)
 
     def _visit_expr(self, e: Expr, ctx: _RewriteContext):
         e = super()._visit_expr(e, ctx)
@@ -113,8 +118,6 @@ class _RewriteEngine(DefaultAstTransformVisitor):
                 # termination guaranteed by finitely-sized iterator
                 while True:
                     stmts = next(iterator)
-                    print('test', StmtBlock(stmts).format())
-                    print()
                     pmatch = self.matcher.match_exact(StmtBlock(stmts))
                     if pmatch:
                         if not isinstance(pmatch, StmtMatch):
@@ -123,9 +126,6 @@ class _RewriteEngine(DefaultAstTransformVisitor):
                             # apply the substitution
                             applier = self._nested_applier(1 if ctx.is_nested else ctx.repeat)
                             rw = applier.apply(pmatch)
-                            print('re: ', 1 if ctx.is_nested else ctx.repeat)
-                            print('ap: ', applier.pattern.format())
-                            print()
                             if not isinstance(rw, StmtBlock):
                                 raise TypeError(f'Substitution produced \'StmtBlock\', got {type(rw)} for {rw}')
                             new_block.stmts.extend(rw.stmts)
@@ -137,8 +137,6 @@ class _RewriteEngine(DefaultAstTransformVisitor):
                     else:
                         # rewrite does not apply
                         new_block.stmts.append(stmts[0])
-                    print('new block', new_block.format())
-                    print()
             except StopIteration:
                 # end of the block to check
                 # we are missing the last N - 1 statements

@@ -29,6 +29,9 @@ class ExprPattern(Pattern):
     """Expression pattern"""
 
     expr: Expr
+    """expression of the underlying pattern"""
+
+    _func: FuncDef
     """syntax of the underlying pattern"""
 
     _vars: set[NamedId]
@@ -43,15 +46,19 @@ class ExprPattern(Pattern):
             raise TypeError(f'Expected a effectful statement, got {stmts[0]}')
 
         self.expr = stmts[0].expr
+        self._func = func
         self._vars = LiveVars.analyze(self.expr)
 
     def vars(self) -> set[NamedId]:
         """Returns the set of pattern variables."""
-        return self._vars
+        return set(self._vars)
 
     def format(self) -> str:
         """Returns a string representation of the pattern."""
         return '@pattern\n' + self.expr.format()
+
+    def to_ast(self) -> FuncDef:
+        return self._func
 
 
 @default_repr
@@ -59,6 +66,9 @@ class StmtPattern(Pattern):
     """Statement pattern"""
 
     block: StmtBlock
+    """syntax of the underlying pattern"""
+
+    _func: FuncDef
     """syntax of the underlying pattern"""
 
     _vars: set[NamedId]
@@ -74,6 +84,7 @@ class StmtPattern(Pattern):
         targets = set(def_use.keys())
 
         self.block = func.body
+        self._func = func
         self._vars = LiveVars.analyze(func) | targets
 
     def vars(self) -> set[NamedId]:
@@ -83,3 +94,6 @@ class StmtPattern(Pattern):
     def format(self) -> str:
         """Returns a string representation of the pattern."""
         return '@pattern\n' + self.block.format()
+
+    def to_ast(self):
+        return self._func

@@ -143,6 +143,27 @@ def k1(N):
         x -= x / 2
     return x
 
+@fpy
+def k2(N):
+    x = N
+    x -= x / 2
+    x -= x / 2
+    while x > 0:
+        x -= x / 2
+    return x
+
+@fpy
+def k3(N):
+    x = N
+    x -= x / 2
+    x -= x / 2
+    x -= x / 2
+    x -= x / 2
+    x -= x / 2
+    while x > 0:
+        x -= x / 2
+    return x
+
 @pattern
 def ift_pattern_l(t, f):
     if True:
@@ -265,6 +286,22 @@ class RewriteTestCase(unittest.TestCase):
         k_rw = rw_unroll_while.apply(k)
         self.assertIsInstance(k_rw, Function)
         self.assertAstEqual(k_rw.ast.body, k1.ast.body)
+
+    def test_unroll_while_example2(self):
+        assert isinstance(k, Function)
+        assert isinstance(k2, Function)
+
+        k_rw = rw_unroll_while.apply(k, repeat=2)
+        self.assertIsInstance(k_rw, Function)
+        self.assertAstEqual(k_rw.ast.body, k2.ast.body)
+
+    def test_unroll_while_example2(self):
+        assert isinstance(k, Function)
+        assert isinstance(k3, Function)
+
+        k_rw = rw_unroll_while.apply(k, repeat=5)
+        self.assertIsInstance(k_rw, Function)
+        self.assertAstEqual(k_rw.ast.body, k3.ast.body)
 
     def test_if_test1(self):
         assert isinstance(ift_test, Function)
