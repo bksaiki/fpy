@@ -2,6 +2,8 @@
 This module defines a rewrite rule.
 """
 
+from dataclasses import dataclass
+
 from ..ast import *
 from ..runtime import Function
 from ..utils import default_repr, sliding_window
@@ -9,6 +11,26 @@ from ..utils import default_repr, sliding_window
 from .applier import Applier
 from .matcher import Matcher, ExprMatch, StmtMatch
 from .pattern import Pattern, ExprPattern, StmtPattern
+
+@default_repr
+class _RewriteContext:
+    """Static options"""
+    occurence: int | None
+    repeat: int
+    is_nested: bool
+    """Counters"""
+    times_matched: int
+
+    def __init__(self, occurence: int | None, repeat: int, *, is_nested: bool = False):
+        self.occurence = occurence
+        self.repeat = repeat
+        self.is_nested = is_nested
+        self.times_matched = 0
+
+    @staticmethod
+    def default() -> '_RewriteContext':
+        return _RewriteContext(occurence=0, repeat=1)
+
 
 
 class _RewriteEngine(DefaultAstTransformVisitor):
@@ -19,44 +41,69 @@ class _RewriteEngine(DefaultAstTransformVisitor):
     applier: Applier
     """rewrite rule applier"""
 
-    times_matched: int
-    """number of times the rewrite rule was matched"""
     times_applied: int
     """number of times the rewrite rule was applied"""
 
     def __init__(self, lhs: Pattern, rhs: Pattern):
         self.matcher = Matcher(lhs)
         self.applier = Applier(rhs)
-        self.times_matched = 0
+
         self.times_applied = 0
 
-    def apply(self, func: FuncDef, occurence: int | None = None):
+    def apply(
+        self,
+        func: FuncDef, *,
+        occurence: int | None = None,
+        repeat: int = 1
+    ):
         # reset counters
-        self.times_matched = 0
         self.times_applied = 0
         # apply the rewrite rule
-        ast = self._visit_function(func, occurence)
-        return ast, self.times_matched, self.times_applied
+        options = _RewriteContext(occurence, repeat)
+        ast = self._visit_function(func, options)
+        return ast, self.times_applied
 
-    def _visit_expr(self, e: Expr, occurence: int | None):
-        e = super()._visit_expr(e, occurence)
+    def _nested_applier(self, num_times: int):
+            if num_times == 1:
+                return self.applier
+            else:
+                apat = self.applier.pattern
+                for _ in range(1, num_times):
+                    match apat:
+                        case ExprPattern():
+                            # TODO: do we need to recompute the variables
+                            repeat_opt = _RewriteContext(0, 1, is_nested=True)
+                            apat.expr = self._visit_expr(apat.expr, repeat_opt)
+                        case StmtPattern():
+                            # TODO: do we need to recompute the variables
+                            repeat_opt = _RewriteContext(0, 1, is_nested=True)
+                            block, _ = self._visit_block(apat.block, repeat_opt)
+                            apat.block = block
+                        case _:
+                            raise RuntimeError(f'unreachable case: {apat}')
+                    print('iter', apat.format())
+                    print()
+                return Applier(apat)
+
+    def _visit_expr(self, e: Expr, ctx: _RewriteContext):
+        e = super()._visit_expr(e, ctx)
         if isinstance(self.matcher.pattern, ExprPattern):
             # check if rewrite applies here
             pmatch = self.matcher.match_exact(e)
             if pmatch:
                 if not isinstance(pmatch, ExprMatch):
                     raise TypeError(f'Matcher produced \'ExprMatch\', got {type(pmatch)} for {pmatch}')
-                if occurence is None or self.times_matched == occurence:
+                if ctx.occurence is None or ctx.times_matched == ctx.occurence:
                     e = self.applier.apply(pmatch)
                     if not isinstance(e, Expr):
                         raise TypeError(f'Substitution produced \'Expr\', got {type(e)} for {e}')
                     self.times_applied += 1
-                self.times_matched += 1
+                ctx.times_matched += 1
         return e
 
-    def _visit_block(self, block: StmtBlock, occurence: int | None):
+    def _visit_block(self, block: StmtBlock, ctx: _RewriteContext):
         pattern = self.matcher.pattern
-        block, _ = super()._visit_block(block, occurence)
+        block, _ = super()._visit_block(block, ctx)
         if isinstance(pattern, StmtPattern):
             # check if rewrite applies here
             pattern_size = len(pattern.block.stmts)
@@ -66,13 +113,19 @@ class _RewriteEngine(DefaultAstTransformVisitor):
                 # termination guaranteed by finitely-sized iterator
                 while True:
                     stmts = next(iterator)
+                    print('test', StmtBlock(stmts).format())
+                    print()
                     pmatch = self.matcher.match_exact(StmtBlock(stmts))
                     if pmatch:
                         if not isinstance(pmatch, StmtMatch):
                             raise TypeError(f'Matcher produced \'StmtMatch\', got {type(pmatch)} for {pmatch}')
-                        if occurence is None or self.times_matched == occurence:
+                        if ctx.occurence is None or ctx.times_matched == ctx.occurence:
                             # apply the substitution
-                            rw = self.applier.apply(pmatch)
+                            applier = self._nested_applier(1 if ctx.is_nested else ctx.repeat)
+                            rw = applier.apply(pmatch)
+                            print('re: ', 1 if ctx.is_nested else ctx.repeat)
+                            print('ap: ', applier.pattern.format())
+                            print()
                             if not isinstance(rw, StmtBlock):
                                 raise TypeError(f'Substitution produced \'StmtBlock\', got {type(rw)} for {rw}')
                             new_block.stmts.extend(rw.stmts)
@@ -80,11 +133,12 @@ class _RewriteEngine(DefaultAstTransformVisitor):
                             # skip rest of the block
                             for _ in range(pattern_size - 1):
                                 next(iterator)
-                        else:
-                            self.times_matched += 1
+                        ctx.times_matched += 1
                     else:
                         # rewrite does not apply
                         new_block.stmts.append(stmts[0])
+                    print('new block', new_block.format())
+                    print()
             except StopIteration:
                 # end of the block to check
                 # we are missing the last N - 1 statements
@@ -94,11 +148,11 @@ class _RewriteEngine(DefaultAstTransformVisitor):
                     end_stmts = block.stmts[-(pattern_size - 1):]
                     assert len(end_stmts) == pattern_size - 1
                     # add the last N - 1 statements
-                    new_block.stmts.extend(block.stmts[-(pattern_size - 1):])
-            return new_block, occurence
+                    new_block.stmts.extend(end_stmts)
+            return new_block, None
         else:
             # pattern does not apply
-            return block, occurence
+            return block, None
 
 
 class RewriteError(Exception):
@@ -141,22 +195,28 @@ class Rewrite:
         self.name = name
         self._engine = _RewriteEngine(lhs, rhs)
 
-    def apply(self, func: Function, occurence: int = 0):
+    def apply(self, func: Function, *, occurence: int = 0, repeat: int = 1):
         """
         Applies the rewrite rule to the given pattern.
-        Optionally, specify which match occurence, in traversal order,
-        to apply the rewrite rule to. By default, the first match is used.
+
+        Optionally specify:
+        - `occurence`: which match occurence, in traversal order, to rewrite
+        - `repeat`: how many times to apply the rewrite rule once a match occurs
 
         Raises `ValueError` if the rewrite rule does not apply.
         """
         if not isinstance(func, Function):
-            raise TypeError(f'Expected \'Function\', got {type(func)}')
+            raise TypeError(f'Expected \'Function\', got {type(func)} for {func}')
         if not isinstance(occurence, int):
-            raise TypeError(f'Expected \'int\', got {type(occurence)}')
+            raise TypeError(f'Expected \'int\', got {type(occurence)} for {occurence}')
+        if not isinstance(repeat, int):
+            raise TypeError(f'Expected \'int\', got {type(repeat)} for {repeat}')
         if occurence < 0:
             raise ValueError(f'Expected non-negative integer, got {occurence}')
+        if repeat < 1:
+            raise ValueError(f'Expected positive integer, got {repeat}')
 
-        ast, _, times_applied = self._engine.apply(func.ast, occurence)
+        ast, times_applied = self._engine.apply(func.ast, occurence=occurence, repeat=repeat)
         if times_applied == 0:
             raise RewriteError(f'could not apply rewrite rule: {self.lhs.format()} => {self.rhs.format()}')
         return func.with_ast(ast)
@@ -171,7 +231,7 @@ class Rewrite:
         if not isinstance(func, Function):
             raise TypeError(f'Expected \'Function\', got {type(func)}')
 
-        ast, _, times_applied = self._engine.apply(func.ast)
+        ast, times_applied = self._engine.apply(func.ast)
         if times_applied == 0:
             raise RewriteError(f'could not apply rewrite rule: {self.lhs} => {self.rhs}')
         return func.with_ast(ast)

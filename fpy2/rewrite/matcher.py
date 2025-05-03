@@ -304,6 +304,8 @@ class _MatcherInst(AstVisitor):
 
         # check if statements are the same
         for s1, s2 in zip(block.stmts, pat.stmts):
+            if type(s1) is not type(s2):
+                raise _MatchFailure(f'matching {pat} against {s1}')
             self._visit_statement(s1, s2)
 
     def _visit_function(self, func: FuncDef, pat: FuncDef):
