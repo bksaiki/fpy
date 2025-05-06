@@ -2,8 +2,8 @@
 
 from typing import Optional, Self
 
-from ..ast.fpyast import *
-from ..ast.visitor import AstVisitor
+from .fpyast import *
+from .visitor import AstVisitor
 
 from ..utils import FPySyntaxError
 
@@ -45,24 +45,36 @@ class SyntaxCheckInstance(AstVisitor):
     func: FuncDef
     free_vars: set[str]
     ignore_unknown: bool
+    ignore_noreturn: bool
+    allow_wildcard: bool
 
     free_var_args: set[NamedId]
     rets: set[Stmt]
 
-    def __init__(self, func: FuncDef, free_vars: set[str], ignore_unknown: bool):
+    def __init__(
+        self,
+        func: FuncDef,
+        free_vars: set[str],
+        ignore_unknown: bool,
+        ignore_noreturn: bool,
+        allow_wildcard: bool
+    ):
         self.func = func
         self.free_vars = free_vars
         self.ignore_unknown = ignore_unknown
+        self.ignore_noreturn = ignore_noreturn
+        self.allow_wildcard = allow_wildcard
 
         self.free_var_args = set()
         self.rets = set()
 
     def analyze(self):
         self._visit_function(self.func, (_Env(), False))
-        if len(self.rets) == 0:
-            raise FPySyntaxError('function has no return statement')
-        elif len(self.rets) > 1:
-            raise FPySyntaxError('function has multiple return statements')
+        if not self.ignore_noreturn:
+            if len(self.rets) == 0:
+                raise FPySyntaxError('function has no return statement')
+            elif len(self.rets) > 1:
+                raise FPySyntaxError('function has multiple return statements')
         return self.free_var_args
 
     def _mark_use(
@@ -82,9 +94,14 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_var(self, e: Var, ctx: _Ctx):
         env, _ = ctx
-        if not isinstance(e.name, NamedId):
-            raise FPySyntaxError(f'expected a NamedId, got {e.name}')
-        self._mark_use(e.name, env)
+        match e.name:
+            case NamedId():
+                self._mark_use(e.name, env)
+            case UnderscoreId():
+                if not self.allow_wildcard:
+                    raise FPySyntaxError('wildcard `_` not allowed in this context')
+            case _:
+                raise FPySyntaxError(f'expected a NamedId, got {e.name}')
         return env
 
     def _visit_bool(self, e: BoolVal, ctx: _Ctx):
@@ -233,7 +250,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(stmt.cond, (env, False))
         return env
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _Ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.iterable, ctx)
         if isinstance(stmt.var, NamedId):
@@ -325,7 +342,9 @@ class SyntaxCheck:
         func: FuncDef,
         *,
         free_vars: Optional[set[str]] = None,
-        ignore_unknown: bool = False
+        ignore_unknown: bool = False,
+        ignore_noreturn: bool = False,
+        allow_wildcard: bool = False
     ):
         """
         Analyzes the function for syntax errors.
@@ -338,5 +357,5 @@ class SyntaxCheck:
         if free_vars is None:
             free_vars = set()
 
-        inst = SyntaxCheckInstance(func, free_vars, ignore_unknown)
+        inst = SyntaxCheckInstance(func, free_vars, ignore_unknown, ignore_noreturn, allow_wildcard)
         return inst.analyze()

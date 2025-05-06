@@ -8,7 +8,7 @@ import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
 
 from ..ast.fpyast import *
-from .syntax_check import SyntaxCheck
+from ..ast.syntax_check import SyntaxCheck
 
 from ..utils import Gensym, pythonize_id
 
@@ -701,4 +701,6 @@ def fpcore_to_fpy(
     default_name: str = 'f',
     ignore_unknown: bool = False
 ):
-    return _FPCore2FPy(core, default_name).convert()
+    ast = _FPCore2FPy(core, default_name).convert()
+    SyntaxCheck.analyze(ast, ignore_unknown=ignore_unknown)
+    return ast

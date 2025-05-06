@@ -3,11 +3,11 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
-from enum import Enum
+from enum import IntEnum
 from typing import Any, Optional, Self, Sequence
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location
 
-class UnaryOpKind(Enum):
+class UnaryOpKind(IntEnum):
     # unary operators
     NEG = 0
     NOT = 1
@@ -57,7 +57,7 @@ class UnaryOpKind(Enum):
     def __str__(self):
         return self.name.lower()
 
-class BinaryOpKind(Enum):
+class BinaryOpKind(IntEnum):
     # binary operators
     ADD = 0
     SUB = 1
@@ -79,11 +79,11 @@ class BinaryOpKind(Enum):
     def __str__(self):
         return self.name.lower()
 
-class TernaryOpKind(Enum):
+class TernaryOpKind(IntEnum):
     # ternary operators
     FMA = 0
 
-class NaryOpKind(Enum):
+class NaryOpKind(IntEnum):
     # boolean operations
     AND = 1
     OR = 2
@@ -112,7 +112,7 @@ class TypeAnn(Ast):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
-class ScalarType(Enum):
+class ScalarType(IntEnum):
     ANY = 0
     REAL = 1
     BOOL = 2
@@ -123,6 +123,12 @@ class AnyTypeAnn(TypeAnn):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, AnyTypeAnn)
+
+    def __hash__(self) -> int:
+        return hash(())
+
 class ScalarTypeAnn(TypeAnn):
     """FPy AST: scalar type annotation"""
     kind: ScalarType
@@ -131,6 +137,12 @@ class ScalarTypeAnn(TypeAnn):
         super().__init__(loc)
         self.kind = kind
 
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, ScalarTypeAnn) and self.kind == other.kind
+
+    def __hash__(self) -> int:
+        return hash(self.kind)
+
 class TupleTypeAnn(TypeAnn):
     """FPy AST: tuple type annotation"""
     elts: list[TypeAnn]
@@ -138,6 +150,14 @@ class TupleTypeAnn(TypeAnn):
     def __init__(self, elts: list[TypeAnn], loc: Optional[Location]):
         super().__init__(loc)
         self.elts = elts
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TupleTypeAnn):
+            return False
+        return self.elts == other.elts
+
+    def __hash__(self) -> int:
+        return hash(tuple(self.elts))
 
 class Expr(Ast):
     """FPy AST: expression"""
@@ -165,6 +185,14 @@ class Var(ValueExpr):
         super().__init__(loc)
         self.name = name
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Var):
+            return False
+        return self.name == other.name
+    
+    def __hash__(self) -> int:
+        return hash(self.name)
+
 class BoolVal(ValueExpr):
     """FPy AST: boolean value"""
     val: bool
@@ -172,6 +200,14 @@ class BoolVal(ValueExpr):
     def __init__(self, val: bool, loc: Optional[Location]):
         super().__init__(loc)
         self.val = val
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BoolVal):
+            return False
+        return self.val == other.val
+    
+    def __hash__(self) -> int:
+        return hash(self.val)
 
 class RealVal(ValueExpr):
     """FPy AST: real value"""
@@ -187,13 +223,29 @@ class StringVal(ValueExpr):
         super().__init__(loc)
         self.val = val
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, StringVal):
+            return False
+        return self.val == other.val
+
+    def __hash__(self) -> int:
+        return hash(self.val)
+
 class Decnum(RealVal):
     """FPy AST: decimal number"""
     val: str
 
     def __init__(self, val: str, loc: Optional[Location]):
         super().__init__(loc)
-        self.val = val   
+        self.val = val
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Decnum):
+            return False
+        return self.val == other.val
+
+    def __hash__(self) -> int:
+        return hash(self.val)
 
 class Hexnum(RealVal):
     """FPy AST: hexadecimal number"""
@@ -203,6 +255,14 @@ class Hexnum(RealVal):
         super().__init__(loc)
         self.val = val
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Hexnum):
+            return False
+        return self.val == other.val
+
+    def __hash__(self) -> int:
+        return hash(self.val)
+
 class Integer(RealVal):
     """FPy AST: integer"""
     val: int
@@ -210,6 +270,15 @@ class Integer(RealVal):
     def __init__(self, val: int, loc: Optional[Location]):
         super().__init__(loc)
         self.val = val
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Integer):
+            return False
+        return self.val == other.val
+
+    def __hash__(self) -> int:
+        return hash(self.val)
+
 
 class Rational(RealVal):
     """FPy AST: rational number"""
@@ -220,6 +289,14 @@ class Rational(RealVal):
         super().__init__(loc)
         self.p = p
         self.q = q
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Rational):
+            return False
+        return self.p == other.p and self.q == other.q
+
+    def __hash__(self) -> int:
+        return hash((self.p, self.q))
 
 class Digits(RealVal):
     """FPy AST: scientific notation"""
@@ -232,6 +309,14 @@ class Digits(RealVal):
         self.m = m
         self.e = e
         self.b = b
+    
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Digits):
+            return False
+        return self.m == other.m and self.e == other.e and self.b == other.b
+    
+    def __hash__(self) -> int:
+        return hash((self.m, self.e, self.b))
 
 class Constant(RealVal):
     """FPy AST: constant expression"""
@@ -240,6 +325,14 @@ class Constant(RealVal):
     def __init__(self, val: str, loc: Optional[Location]):
         super().__init__(loc)
         self.val = val
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Constant):
+            return False
+        return self.val == other.val
+
+    def __hash__(self) -> int:
+        return hash(self.val)
 
 class UnaryOp(Expr):
     """FPy AST: unary operation"""
@@ -255,6 +348,14 @@ class UnaryOp(Expr):
         super().__init__(loc)
         self.op = op
         self.arg = arg
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, UnaryOp):
+            return False
+        return self.op == other.op and self.arg == other.arg
+    
+    def __hash__(self) -> int:
+        return hash((self.op, self.arg))
 
 class BinaryOp(Expr):
     """FPy AST: binary operation"""
@@ -273,6 +374,14 @@ class BinaryOp(Expr):
         self.op = op
         self.left = left
         self.right = right
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BinaryOp):
+            return False
+        return self.op == other.op and self.left == other.left and self.right == other.right
+
+    def __hash__(self) -> int:
+        return hash((self.op, self.left, self.right))
 
 class TernaryOp(Expr):
     """FPy AST: ternary operation"""
@@ -295,6 +404,14 @@ class TernaryOp(Expr):
         self.arg1 = arg1
         self.arg2 = arg2
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TernaryOp):
+            return False
+        return self.op == other.op and self.arg0 == other.arg0 and self.arg1 == other.arg1 and self.arg2 == other.arg2
+    
+    def __hash__(self) -> int:
+        return hash((self.op, self.arg0, self.arg1, self.arg2))
+
 class NaryOp(Expr):
     """FPy AST: n-ary operation"""
     op: NaryOpKind
@@ -310,6 +427,14 @@ class NaryOp(Expr):
         self.op = op
         self.args = args
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, NaryOp):
+            return False
+        return self.op == other.op and self.args == other.args
+    
+    def __hash__(self) -> int:
+        return hash((self.op, tuple(self.args)))
+
 class Call(Expr):
     """FPy AST: function call"""
     op: str
@@ -318,12 +443,20 @@ class Call(Expr):
     def __init__(
         self,
         op: str,
-        args: list[Expr],
+        args: Sequence[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
         self.op = op
-        self.args = args
+        self.args = list(args)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Call):
+            return False
+        return self.op == other.op and self.args == other.args
+
+    def __hash__(self) -> int:
+        return hash((self.op, tuple(self.args)))
 
 class Compare(Expr):
     """FPy AST: comparison chain"""
@@ -332,13 +465,21 @@ class Compare(Expr):
 
     def __init__(
         self,
-        ops: list[CompareOp],
-        args: list[Expr],
+        ops: Sequence[CompareOp],
+        args: Sequence[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.ops = ops
-        self.args = args
+        self.ops = list(ops)
+        self.args = list(args)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Compare):
+            return False
+        return self.ops == other.ops and self.args == other.args
+
+    def __hash__(self) -> int:
+        return hash((tuple(self.ops), tuple(self.args)))
 
 class TupleExpr(Expr):
     """FPy AST: tuple expression"""
@@ -351,6 +492,14 @@ class TupleExpr(Expr):
     ):
         super().__init__(loc)
         self.args = args
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TupleExpr):
+            return False
+        return self.args == other.args
+
+    def __hash__(self) -> int:
+        return hash(tuple(self.args))
 
 class CompExpr(Expr):
     """FPy AST: comprehension expression"""
@@ -370,6 +519,14 @@ class CompExpr(Expr):
         self.iterables = list(iterables)
         self.elt = elt
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CompExpr):
+            return False
+        return self.vars == other.vars and self.iterables == other.iterables and self.elt == other.elt
+    
+    def __hash__(self) -> int:
+        return hash((tuple(self.vars), tuple(self.iterables), self.elt))
+
 class TupleRef(Expr):
     """FPy AST: tuple indexing expression"""
     value: Expr
@@ -379,6 +536,14 @@ class TupleRef(Expr):
         super().__init__(loc)
         self.value = value
         self.slices = list(slices)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TupleRef):
+            return False
+        return self.value == other.value and self.slices == other.slices
+
+    def __hash__(self) -> int:
+        return hash((self.value, tuple(self.slices)))
 
 class IfExpr(Expr):
     """FPy AST: if expression"""
@@ -397,6 +562,14 @@ class IfExpr(Expr):
         self.cond = cond
         self.ift = ift
         self.iff = iff
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, IfExpr):
+            return False
+        return self.cond == other.cond and self.ift == other.ift and self.iff == other.iff
+
+    def __hash__(self) -> int:
+        return hash((self.cond, self.ift, self.iff))
 
 class StmtBlock(Ast):
     """FPy AST: list of statements"""
@@ -422,6 +595,14 @@ class StmtBlock(Ast):
         super().__init__(loc)
         self.stmts = stmts
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, StmtBlock):
+            return False
+        return self.stmts == other.stmts
+
+    def __hash__(self) -> int:
+        return hash(tuple(self.stmts))
+
 class SimpleAssign(Stmt):
     """FPy AST: variable assignment"""
     var: Id
@@ -440,6 +621,14 @@ class SimpleAssign(Stmt):
         self.expr = expr
         self.ann = ann
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SimpleAssign):
+            return False
+        return self.var == other.var and self.expr == other.expr and self.ann == other.ann
+    
+    def __hash__(self) -> int:
+        return hash((self.var, self.expr, self.ann))
+
 class TupleBinding(Ast):
     """FPy AST: tuple binding"""
     elts: list[Id | Self]
@@ -454,6 +643,14 @@ class TupleBinding(Ast):
 
     def __iter__(self):
         return iter(self.elts)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TupleBinding):
+            return False
+        return self.elts == other.elts
+
+    def __hash__(self) -> int:
+        return hash(tuple(self.elts))
 
     def names(self) -> set[NamedId]:
         ids: set[NamedId] = set()
@@ -483,6 +680,14 @@ class TupleUnpack(Stmt):
         self.binding = vars
         self.expr = expr
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TupleUnpack):
+            return False
+        return self.binding == other.binding and self.expr == other.expr
+
+    def __hash__(self) -> int:
+        return hash((self.binding, self.expr))
+
 class IndexAssign(Stmt):
     """FPy AST: assignment to tuple indexing"""
     var: NamedId
@@ -500,6 +705,14 @@ class IndexAssign(Stmt):
         self.var = var
         self.slices = list(slices)
         self.expr = expr
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, IndexAssign):
+            return False
+        return self.var == other.var and self.slices == other.slices and self.expr == other.expr
+
+    def __hash__(self) -> int:
+        return hash((self.var, tuple(self.slices), self.expr))
 
 class IfStmt(Stmt):
     """FPy AST: if statement"""
@@ -519,6 +732,14 @@ class IfStmt(Stmt):
         self.ift = ift
         self.iff = iff
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, IfStmt):
+            return False
+        return self.cond == other.cond and self.ift == other.ift and self.iff == other.iff
+
+    def __hash__(self) -> int:
+        return hash((self.cond, self.ift, self.iff))
+
 class WhileStmt(Stmt):
     """FPy AST: while statement"""
     cond: Expr
@@ -533,6 +754,14 @@ class WhileStmt(Stmt):
         super().__init__(loc)
         self.cond = cond
         self.body = body
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, WhileStmt):
+            return False
+        return self.cond == other.cond and self.body == other.body
+
+    def __hash__(self) -> int:
+        return hash((self.cond, self.body))
 
 class ForStmt(Stmt):
     """FPy AST: for statement"""
@@ -552,6 +781,14 @@ class ForStmt(Stmt):
         self.iterable = iterable
         self.body = body
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ForStmt):
+            return False
+        return self.var == other.var and self.iterable == other.iterable and self.body == other.body
+
+    def __hash__(self) -> int:
+        return hash((self.var, self.iterable, self.body))
+
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
     name: Optional[Id]
@@ -570,6 +807,14 @@ class ContextStmt(Stmt):
         self.name = name
         self.body = body
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ContextStmt):
+            return False
+        return self.name == other.name and self.props == other.props and self.body == other.body
+    
+    def __hash__(self) -> int:
+        return hash((self.name, tuple(self.props.items()), self.body))
+
 class AssertStmt(Stmt):
     """FPy AST: assert statement"""
     test: Expr
@@ -585,6 +830,14 @@ class AssertStmt(Stmt):
         self.test = test
         self.msg = msg
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AssertStmt):
+            return False
+        return self.test == other.test and self.msg == other.msg
+
+    def __hash__(self) -> int:
+        return hash((self.test, self.msg))
+
 class EffectStmt(Stmt):
     """FPy AST: an expression without a result"""
     expr: Expr
@@ -597,6 +850,14 @@ class EffectStmt(Stmt):
         super().__init__(loc)
         self.expr = expr
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, EffectStmt):
+            return False
+        return self.expr == other.expr
+
+    def __hash__(self) -> int:
+        return hash(self.expr)
+
 class ReturnStmt(Stmt):
     """FPy AST: return statement"""
     expr: Expr
@@ -608,6 +869,14 @@ class ReturnStmt(Stmt):
     ):
         super().__init__(loc)
         self.expr = expr
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ReturnStmt):
+            return False
+        return self.expr == other.expr
+
+    def __hash__(self) -> int:
+        return hash(self.expr)
 
 class Argument(Ast):
     """FPy AST: function argument"""
@@ -623,6 +892,14 @@ class Argument(Ast):
         super().__init__(loc)
         self.name = name
         self.type = type
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Argument):
+            return False
+        return self.name == other.name and self.type == other.type
+
+    def __hash__(self) -> int:
+        return hash((self.name, self.type))
 
 class FuncDef(Ast):
     """FPy AST: function definition"""
@@ -645,6 +922,15 @@ class FuncDef(Ast):
         self.body = body
         self.ctx = {}
         self.free_vars = set()
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, FuncDef):
+            return False
+        return self.name == other.name and self.args == other.args and self.body == other.body
+
+    def __hash__(self) -> int:
+        return hash((self.name, tuple(self.args), self.body))
+
 
 class BaseFormatter:
     """Abstract base class for AST formatters."""

@@ -176,7 +176,7 @@ class _FormatterInstance(AstVisitor):
         self._add_line(f'while {cond}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: _Ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         iterable = self._visit_expr(stmt.iterable, ctx)
         self._add_line(f'for {str(stmt.var)} in {iterable}:', ctx)
         self._visit_block(stmt.body, ctx + 1)

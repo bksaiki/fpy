@@ -36,7 +36,7 @@ from .number import (
     RM,
 )
 
-from .decorator import fpy
+from .decorator import fpy, pattern
 
 from .backend import (
     Backend,

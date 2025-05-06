@@ -26,6 +26,12 @@ class UnderscoreId(Id):
     def __str__(self):
         return '_'
 
+    def __eq__(self, other):
+        return isinstance(other, UnderscoreId)
+
+    def __hash__(self):
+        return hash(())
+
 class NamedId(Id):
     """
     Named identifier.

@@ -109,7 +109,7 @@ class AstVisitor(ABC):
         raise NotImplementedError('virtual method')
 
     @abstractmethod
-    def _visit_for_stmt(self, stmt: ForStmt, ctx: Any) -> Any:
+    def _visit_for(self, stmt: ForStmt, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
@@ -202,7 +202,7 @@ class AstVisitor(ABC):
             case WhileStmt():
                 return self._visit_while(stmt, ctx)
             case ForStmt():
-                return self._visit_for_stmt(stmt, ctx)
+                return self._visit_for(stmt, ctx)
             case ContextStmt():
                 return self._visit_context(stmt, ctx)
             case AssertStmt():
@@ -213,3 +213,290 @@ class AstVisitor(ABC):
                 return self._visit_return(stmt, ctx)
             case _:
                 raise NotImplementedError(f'unreachable: {stmt}')
+
+#####################################################################
+# Default visitor
+
+class DefaultAstVisitor(AstVisitor):
+    """Default visitor: visits all nodes without doing anything."""
+
+    def _visit_var(self, e: Var, ctx: Any):
+        pass
+
+    def _visit_bool(self, e: BoolVal, ctx: Any):
+        pass
+
+    def _visit_decnum(self, e: Decnum, ctx: Any):
+        pass
+
+    def _visit_hexnum(self, e: Hexnum, ctx: Any):
+        pass
+
+    def _visit_integer(self, e: Integer, ctx: Any):
+        pass
+
+    def _visit_rational(self, e: Rational, ctx: Any):
+        pass
+
+    def _visit_constant(self, e: Constant, ctx: Any):
+        pass
+
+    def _visit_digits(self, e: Digits, ctx: Any):
+        pass
+
+    def _visit_unaryop(self, e: UnaryOp, ctx: Any):
+        self._visit_expr(e.arg, ctx)
+
+    def _visit_binaryop(self, e: BinaryOp, ctx: Any):
+        self._visit_expr(e.left, ctx)
+        self._visit_expr(e.right, ctx)
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx: Any):
+        self._visit_expr(e.arg0, ctx)
+        self._visit_expr(e.arg1, ctx)
+        self._visit_expr(e.arg2, ctx)
+
+    def _visit_naryop(self, e: NaryOp, ctx: Any):
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+
+    def _visit_compare(self, e: Compare, ctx: Any):
+        for c in e.args:
+            self._visit_expr(c, ctx)
+
+    def _visit_call(self, e: Call, ctx: None):
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
+        for c in e.args:
+            self._visit_expr(c, ctx)
+
+    def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
+        self._visit_expr(e.value, ctx)
+        for s in e.slices:
+            self._visit_expr(s, ctx)
+
+    def _visit_comp_expr(self, e: CompExpr, ctx: Any):
+        for iterable in e.iterables:
+            self._visit_expr(iterable, ctx)
+        self._visit_expr(e.elt, ctx)
+
+    def _visit_if_expr(self, e: IfExpr, ctx: Any):
+        self._visit_expr(e.cond, ctx)
+        self._visit_expr(e.ift, ctx)
+        self._visit_expr(e.iff, ctx)
+
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
+        self._visit_expr(stmt.expr, ctx)
+
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
+        self._visit_expr(stmt.expr, ctx)
+
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
+        for s in stmt.slices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(stmt.expr, ctx)
+
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.ift, ctx)
+        if stmt.iff is not None:
+            self._visit_block(stmt.iff, ctx)
+
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.body, ctx)
+
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
+        self._visit_expr(stmt.iterable, ctx)
+        self._visit_block(stmt.body, ctx)
+
+    def _visit_context(self, stmt: ContextStmt, ctx: Any):
+        self._visit_block(stmt.body, ctx)
+
+    def _visit_assert(self, stmt: AssertStmt, ctx: Any):
+        self._visit_expr(stmt.test, ctx)
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: Any):
+        self._visit_expr(stmt.expr, ctx)
+
+    def _visit_return(self, stmt: ReturnStmt, ctx: Any):
+        self._visit_expr(stmt.expr, ctx)
+
+    def _visit_block(self, block: StmtBlock, ctx: Any):
+        for stmt in block.stmts:
+            self._visit_statement(stmt, ctx)
+
+    def _visit_function(self, func: FuncDef, ctx: Any):
+        self._visit_block(func.body, ctx)
+
+#####################################################################
+# Default transform visitor
+
+class DefaultAstTransformVisitor(AstVisitor):
+    """Default visitor: visits all nodes without doing anything."""
+
+    def _visit_var(self, e: Var, ctx: Any):
+        return Var(e.name, e.loc)
+
+    def _visit_bool(self, e: BoolVal, ctx: Any):
+        return BoolVal(e.val, e.loc)
+
+    def _visit_decnum(self, e: Decnum, ctx: Any):
+        return Decnum(e.val, e.loc)
+
+    def _visit_hexnum(self, e: Hexnum, ctx: Any):
+        return Hexnum(e.val, e.loc)
+
+    def _visit_integer(self, e: Integer, ctx: Any):
+        return Integer(e.val, e.loc)
+
+    def _visit_rational(self, e: Rational, ctx: Any):
+        return Rational(e.p, e.q, e.loc)
+
+    def _visit_constant(self, e: Constant, ctx: Any):
+        return Constant(e.val, e.loc)
+
+    def _visit_digits(self, e: Digits, ctx: Any):
+        return Digits(e.m, e.e, e.b, e.loc)
+
+    def _visit_unaryop(self, e: UnaryOp, ctx: Any):
+        arg = self._visit_expr(e.arg, ctx)
+        return UnaryOp(e.op, arg, e.loc)
+
+    def _visit_binaryop(self, e: BinaryOp, ctx: Any):
+        left = self._visit_expr(e.left, ctx)
+        right = self._visit_expr(e.right, ctx)
+        return BinaryOp(e.op, left, right, e.loc)
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx: Any):
+        arg0 = self._visit_expr(e.arg0, ctx)
+        arg1 = self._visit_expr(e.arg1, ctx)
+        arg2 = self._visit_expr(e.arg2, ctx)
+        return TernaryOp(e.op, arg0, arg1, arg2, e.loc)
+
+    def _visit_naryop(self, e: NaryOp, ctx: Any):
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        return NaryOp(e.op, args, e.loc)
+
+    def _visit_compare(self, e: Compare, ctx: Any):
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        return Compare(e.ops, args, e.loc)
+
+    def _visit_call(self, e: Call, ctx: None):
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        return Call(e.op, args, e.loc)
+
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        return TupleExpr(args, e.loc)
+
+    def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
+        value = self._visit_expr(e.value, ctx)
+        slices = [self._visit_expr(s, ctx) for s in e.slices]
+        return TupleRef(value, slices, e.loc)
+
+    def _visit_comp_expr(self, e: CompExpr, ctx: Any):
+        iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
+        elt = self._visit_expr(e.elt, ctx)
+        return CompExpr(e.vars, iterables, elt, e.loc)
+
+    def _visit_if_expr(self, e: IfExpr, ctx: Any):
+        cond = self._visit_expr(e.cond, ctx)
+        ift = self._visit_expr(e.ift, ctx)
+        iff = self._visit_expr(e.iff, ctx)
+        return IfExpr(cond, ift, iff, e.loc)
+
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
+        expr = self._visit_expr(stmt.expr, ctx)
+        s = SimpleAssign(stmt.var, expr, stmt.ann, stmt.loc)
+        return s, ctx
+
+    def _visit_tuple_binding(self, binding: TupleBinding):
+        new_vars: list[Id | TupleBinding] = []
+        for var in binding:
+            match var:
+                case Id():
+                    new_vars.append(var)
+                case TupleBinding():
+                    new_vars.append(self._visit_tuple_binding(var))
+                case _:
+                    raise NotImplementedError(f'unreachable {var}')
+        return new_vars
+
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
+        binding = self._visit_tuple_binding(stmt.binding)
+        expr = self._visit_expr(stmt.expr, ctx)
+        s = TupleUnpack(binding, expr, stmt.loc)
+        return s, ctx
+
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
+        slices = [self._visit_expr(s, ctx) for s in stmt.slices]
+        expr = self._visit_expr(stmt.expr, ctx)
+        s = IndexAssign(stmt.var, slices, expr, stmt.loc)
+        return s, ctx
+
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
+        cond = self._visit_expr(stmt.cond, ctx)
+        ift, _ = self._visit_block(stmt.ift, ctx)
+        if stmt.iff is None:
+            s = IfStmt(cond, ift, None, stmt.loc)
+        else:
+            iff, _ = self._visit_block(stmt.iff, ctx)
+            s = IfStmt(cond, ift, iff, stmt.loc)
+        return s, ctx
+
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
+        cond = self._visit_expr(stmt.cond, ctx)
+        body, _ = self._visit_block(stmt.body, ctx)
+        s = WhileStmt(cond, body, stmt.loc)
+        return s, ctx
+
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
+        iterable = self._visit_expr(stmt.iterable, ctx)
+        body, _ = self._visit_block(stmt.body, ctx)
+        s = ForStmt(stmt.var, iterable, body, stmt.loc)
+        return s, ctx
+
+    def _visit_context(self, stmt: ContextStmt, ctx: Any):
+        body, _ = self._visit_block(stmt.body, ctx)
+        s = ContextStmt(stmt.name, stmt.props, body, stmt.loc)
+        return s, ctx
+
+    def _visit_assert(self, stmt: AssertStmt, ctx: Any):
+        test = self._visit_expr(stmt.test, ctx)
+        s = AssertStmt(test, stmt.msg, stmt.loc)
+        return s, ctx
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: Any):
+        expr = self._visit_expr(stmt.expr, ctx)
+        s = EffectStmt(expr, stmt.loc)
+        return s, ctx
+
+    def _visit_return(self, stmt: ReturnStmt, ctx: Any):
+        expr = self._visit_expr(stmt.expr, ctx)
+        s = ReturnStmt(expr, stmt.loc)
+        return s, ctx
+
+    def _visit_block(self, block: StmtBlock, ctx: Any):
+        stmts: list[Stmt] = []
+        for stmt in block.stmts:
+            s, ctx = self._visit_statement(stmt, ctx)
+            stmts.append(s)
+        return StmtBlock(stmts), ctx
+
+    def _visit_function(self, func: FuncDef, ctx: Any):
+        args: list[Argument] = []
+        for arg in func.args:
+            args.append(Argument(arg.name, arg.type, arg.loc))
+        body, _ = self._visit_block(func.body, ctx)
+        return FuncDef(func.name, args, body, func.loc)
+
+    # override for typing hint
+    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
+        return super()._visit_expr(e, ctx)
+
+    # override for typing hint
+    def _visit_statement(self, stmt: Stmt, ctx: Any) -> tuple[Stmt, Any]:
+        return super()._visit_statement(stmt, ctx)
