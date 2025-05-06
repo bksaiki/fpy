@@ -169,17 +169,56 @@ class FPCoreCompileInstance(ReduceVisitor):
         args = [self._visit_expr(c, ctx) for c in e.children]
         return fpc.UnknownOperator(e.name, *args)
 
+    def _visit_range(self, e: Range, ctx) -> fpc.Expr:
+        # expand range expression
+        tuple_id = 'i' # only identifier in scope => no need for uniqueness
+        size = self._visit_expr(e.children[0], ctx)
+        return fpc.Tensor([(tuple_id, size)], fpc.Var(tuple_id))
+
+    def _visit_size(self, e: Size, ctx) -> fpc.Expr:
+        tup = self._visit_expr(e.children[0], ctx)
+        idx = self._visit_expr(e.children[1], ctx)
+        return fpc.Size(tup, idx)
+
+    def _visit_dim(self, e: Dim, ctx) -> fpc.Expr:
+        tup = self._visit_expr(e.children[0], ctx)
+        return fpc.Dim(tup)
+
+    def _visit_shape(self, e: Shape, ctx) -> fpc.Expr:
+        # expand into a for loop
+        #  (let ([t <tuple>])
+        #    (tensor ([i (dim t)])
+        #      (size t i)])))
+        tuple_id = 't' # only identifier in scope => no need for uniqueness
+        iter_id = 'i' # only identifier in scope => no need for uniqueness
+        tup = self._visit_expr(e.children[0], ctx)
+        return fpc.Let(
+            [(tuple_id, tup)],
+            fpc.Tensor(
+                [(iter_id, fpc.Dim(fpc.Var(tuple_id)))],
+                fpc.Size(fpc.Var(tuple_id), fpc.Var(iter_id))
+            )
+        )
+
     def _visit_nary_expr(self, e, ctx) -> fpc.Expr:
-        if e.name == Range.name:
-            # expand range expression
-            tuple_id = 'i' # only identifier in scope => no need for uniqueness
-            size = self._visit_expr(e.children[0], ctx)
-            return fpc.Tensor([(tuple_id, size)], fpc.Var(tuple_id))
-        else:
-            cls = _op_table.get(e.name)
-            if cls is None:
-                raise NotImplementedError('no FPCore operator for', e.name)
-            return cls(*[self._visit_expr(c, ctx) for c in e.children])
+        match e:
+            case Range():
+                # range expression
+                return self._visit_range(e, ctx)
+            case Dim():
+                # dim expression
+                return self._visit_dim(e, ctx)
+            case Size():
+                # size expression
+                return self._visit_size(e, ctx)
+            case Shape():
+                # shape expression
+                return self._visit_shape(e, ctx)
+            case _:
+                cls = _op_table.get(e.name)
+                if cls is None:
+                    raise NotImplementedError('no FPCore operator for', e.name)
+                return cls(*[self._visit_expr(c, ctx) for c in e.children])
 
     def _visit_compare(self, e: Compare, ctx: None) -> fpc.Expr:
         assert e.ops != [], 'should not be empty'
