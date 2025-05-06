@@ -714,17 +714,40 @@ class IndexAssign(Stmt):
     def __hash__(self) -> int:
         return hash((self.var, tuple(self.slices), self.expr))
 
+class If1Stmt(Stmt):
+    """FPy AST: if statement with one branch"""
+    cond: Expr
+    body: StmtBlock
+
+    def __init__(
+        self,
+        cond: Expr,
+        body: StmtBlock,
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.cond = cond
+        self.body = body
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, If1Stmt):
+            return False
+        return self.cond == other.cond and self.body == other.body
+
+    def __hash__(self) -> int:
+        return hash((self.cond, self.body))
+
 class IfStmt(Stmt):
-    """FPy AST: if statement"""
+    """FPy AST: if statement (with two branhces)"""
     cond: Expr
     ift: StmtBlock
-    iff: Optional[StmtBlock]
+    iff: StmtBlock
 
     def __init__(
         self,
         cond: Expr,
         ift: StmtBlock,
-        iff: Optional[StmtBlock],
+        iff: StmtBlock,
         loc: Optional[Location]
     ):
         super().__init__(loc)

@@ -256,16 +256,14 @@ class _MatcherInst(AstVisitor):
             self._visit_expr(e, p)
         self._visit_expr(stmt.expr, pat.expr)
 
+    def _visit_if1(self, stmt: If1Stmt, pat: IfStmt):
+        self._visit_expr(stmt.cond, pat.cond)
+        self._visit_block(stmt.body, pat.ift)
+
     def _visit_if(self, stmt: IfStmt, pat: IfStmt):
         self._visit_expr(stmt.cond, pat.cond)
         self._visit_block(stmt.ift, pat.ift)
-        match stmt.iff, pat.iff:
-            case None, None:
-                pass
-            case StmtBlock(), StmtBlock():
-                self._visit_block(stmt.iff, pat.iff)
-            case _, _:
-                raise _MatchFailure(f'matching {pat} against {stmt}')
+        self._visit_block(stmt.iff, pat.iff)
 
     def _visit_while(self, stmt: WhileStmt, pat: WhileStmt):
         self._visit_expr(stmt.cond, pat.cond)

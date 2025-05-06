@@ -601,7 +601,7 @@ class Parser:
                 cond = self._parse_expr(stmt.test)
                 ift = self._parse_statements(stmt.body)
                 if stmt.orelse == []:
-                    return IfStmt(cond, ift, None, loc)
+                    return If1Stmt(cond, ift, loc)
                 else:
                     iff = self._parse_statements(stmt.orelse)
                     return IfStmt(cond, ift, iff, loc)

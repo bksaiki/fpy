@@ -163,13 +163,17 @@ class _FormatterInstance(AstVisitor):
         ref_str = ''.join(f'[{slice}]' for slice in slices)
         self._add_line(f'{str(stmt.var)}{ref_str} = {val}', ctx)
 
+    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
+        cond = self._visit_expr(stmt.cond, ctx)
+        self._add_line(f'if {cond}:', ctx)
+        self._visit_block(stmt.body, ctx + 1)
+
     def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
         cond = self._visit_expr(stmt.cond, ctx)
         self._add_line(f'if {cond}:', ctx)
         self._visit_block(stmt.ift, ctx + 1)
-        if stmt.iff:
-            self._add_line('else:', ctx)
-            self._visit_block(stmt.iff, ctx + 1)
+        self._add_line('else:', ctx)
+        self._visit_block(stmt.iff, ctx + 1)
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         cond = self._visit_expr(stmt.cond, ctx)

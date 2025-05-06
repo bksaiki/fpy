@@ -76,7 +76,7 @@ class AstVisitor(ABC):
     @abstractmethod
     def _visit_comp_expr(self, e: CompExpr, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
-    
+
     @abstractmethod
     def _visit_tuple_ref(self, e: TupleRef, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
@@ -98,6 +98,10 @@ class AstVisitor(ABC):
 
     @abstractmethod
     def _visit_index_assign(self, stmt: IndexAssign, ctx: Any) -> Any:
+        raise NotImplementedError('virtual method')
+
+    @abstractmethod
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any) -> Any:
         raise NotImplementedError('virtual method')
 
     @abstractmethod
@@ -197,6 +201,8 @@ class AstVisitor(ABC):
                 return self._visit_tuple_unpack(stmt, ctx)
             case IndexAssign():
                 return self._visit_index_assign(stmt, ctx)
+            case If1Stmt():
+                return self._visit_if1(stmt, ctx)
             case IfStmt():
                 return self._visit_if(stmt, ctx)
             case WhileStmt():
@@ -298,11 +304,14 @@ class DefaultAstVisitor(AstVisitor):
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
 
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.body, ctx)
+
     def _visit_if(self, stmt: IfStmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
-        if stmt.iff is not None:
-            self._visit_block(stmt.iff, ctx)
+        self._visit_block(stmt.iff, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
@@ -437,14 +446,17 @@ class DefaultAstTransformVisitor(AstVisitor):
         s = IndexAssign(stmt.var, slices, expr, stmt.loc)
         return s, ctx
 
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
+        cond = self._visit_expr(stmt.cond, ctx)
+        body, _ = self._visit_block(stmt.body, ctx)
+        s = If1Stmt(cond, body, stmt.loc)
+        return s, ctx
+
     def _visit_if(self, stmt: IfStmt, ctx: Any):
         cond = self._visit_expr(stmt.cond, ctx)
         ift, _ = self._visit_block(stmt.ift, ctx)
-        if stmt.iff is None:
-            s = IfStmt(cond, ift, None, stmt.loc)
-        else:
-            iff, _ = self._visit_block(stmt.iff, ctx)
-            s = IfStmt(cond, ift, iff, stmt.loc)
+        iff, _ = self._visit_block(stmt.iff, ctx)
+        s = IfStmt(cond, ift, iff, stmt.loc)
         return s, ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any):
