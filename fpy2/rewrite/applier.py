@@ -100,6 +100,12 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
             # variable is free in the pattern
             return Var(self.free[e.name], None)
 
+    def _visit_comp_expr(self, e: CompExpr, ctx: None):
+        vars = [self._visit_id(v) for v in e.vars]
+        iterables = [self._visit_expr(e, None) for e in e.iterables]
+        elt = self._visit_expr(e.elt, None)
+        return CompExpr(vars, iterables, elt, None)
+
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         ident = self._visit_id(stmt.var)
         expr = self._visit_expr(stmt.expr, None)

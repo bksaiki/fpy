@@ -215,13 +215,7 @@ class _MatcherInst(AstVisitor):
         if len(e.iterables) != len(pat.iterables):
             raise _MatchFailure(f'matching {pat} against {e}')
         for name, pname in zip(e.vars, pat.vars):
-            match name, pname:
-                case UnderscoreId(), _:
-                    pass
-                case NamedId(), Id():
-                    self._visit_target(name, pname)
-                case _, _:
-                    raise _MatchFailure(f'matching {pat} against {e}')
+            self._visit_target(name, pname)
         for it, pit in zip(e.iterables, pat.iterables):
             self._visit_expr(it, pit)
         self._visit_expr(e.elt, pat.elt)
