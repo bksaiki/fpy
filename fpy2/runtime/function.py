@@ -53,6 +53,9 @@ class Function:
     def __repr__(self):
         return f'{self.__class__.__name__}(ast={self.ast}, ...)'
 
+    def __str__(self):
+        return 'Function(\n' + self.ast.format() + '\n)'
+
     def __call__(self, *args, ctx: Optional[EvalCtx] = None):
         fn = get_default_function_call()
         return fn(self, *args, ctx=ctx)
