@@ -429,6 +429,8 @@ class Parser:
                 elif name in _nary_table:
                     args = [self._parse_expr(arg) for arg in e.args]
                     return NaryOp(_nary_table[name], args, loc)
+                elif name == 'len':
+                    return BinaryOp(BinaryOpKind.SIZE, self._parse_expr(e.args[0]), Integer(0, loc), loc)
                 elif name == 'rational':
                     return self._parse_rational(e)
                 elif name == 'hexfloat':

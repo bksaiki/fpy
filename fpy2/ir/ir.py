@@ -405,7 +405,7 @@ class Cast(UnaryExpr):
 # Tensor operators
 
 class Shape(UnaryExpr):
-    """FPy node: range constructor"""
+    """FPy node: tensor shape"""
     name: str = 'shape'
 
 class Range(UnaryExpr):
