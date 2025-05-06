@@ -46,11 +46,14 @@ class _DefineUseInstance(DefaultAstVisitor):
         for var in stmt.binding.names():
             self.uses[var] = set()
 
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.body, ctx)
+
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
-        if stmt.iff is not None:
-            self._visit_block(stmt.iff, ctx)
+        self._visit_block(stmt.iff, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)

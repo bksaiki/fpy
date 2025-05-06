@@ -405,7 +405,7 @@ class Cast(UnaryExpr):
 # Tensor operators
 
 class Shape(UnaryExpr):
-    """FPy node: range constructor"""
+    """FPy node: tensor shape"""
     name: str = 'shape'
 
 class Range(UnaryExpr):
@@ -731,7 +731,7 @@ class BaseFormatter:
 
     @abstractmethod
     def format(self, ast: IR) -> str:
-        raise NotImplementedError('virtual method')
+        ...
 
 _default_formatter: Optional[BaseFormatter] = None
 

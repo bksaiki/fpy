@@ -15,118 +15,122 @@ class AstVisitor(ABC):
 
     @abstractmethod
     def _visit_var(self, e: Var, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_bool(self, e: BoolVal, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_decnum(self, e: Decnum, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_hexnum(self, e: Hexnum, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_integer(self, e: Integer, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_rational(self, e: Rational, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_digits(self, e: Digits, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_constant(self, e: Constant, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_unaryop(self, e: UnaryOp, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_binaryop(self, e: BinaryOp, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_ternaryop(self, e: TernaryOp, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_naryop(self, e: NaryOp, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_compare(self, e: Compare, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_call(self, e: Call, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_comp_expr(self, e: CompExpr, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
-    
+        ...
+
     @abstractmethod
     def _visit_tuple_ref(self, e: TupleRef, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_if_expr(self, e: IfExpr, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     #######################################################
     # Statements
 
     @abstractmethod
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_index_assign(self, stmt: IndexAssign, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
+
+    @abstractmethod
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any) -> Any:
+        ...
 
     @abstractmethod
     def _visit_if(self, stmt: IfStmt, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_while(self, stmt: WhileStmt, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_for(self, stmt: ForStmt, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_context(self, stmt: ContextStmt, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_assert(self, stmt: AssertStmt, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_effect(self, stmt: EffectStmt, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_return(self, stmt: ReturnStmt, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
 
     #######################################################
@@ -134,14 +138,14 @@ class AstVisitor(ABC):
 
     @abstractmethod
     def _visit_block(self, block: StmtBlock, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     #######################################################
     # Function
 
     @abstractmethod
     def _visit_function(self, func: FuncDef, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     #######################################################
     # Dynamic dispatch
@@ -197,6 +201,8 @@ class AstVisitor(ABC):
                 return self._visit_tuple_unpack(stmt, ctx)
             case IndexAssign():
                 return self._visit_index_assign(stmt, ctx)
+            case If1Stmt():
+                return self._visit_if1(stmt, ctx)
             case IfStmt():
                 return self._visit_if(stmt, ctx)
             case WhileStmt():
@@ -298,11 +304,14 @@ class DefaultAstVisitor(AstVisitor):
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
 
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.body, ctx)
+
     def _visit_if(self, stmt: IfStmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
-        if stmt.iff is not None:
-            self._visit_block(stmt.iff, ctx)
+        self._visit_block(stmt.iff, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any):
         self._visit_expr(stmt.cond, ctx)
@@ -437,14 +446,17 @@ class DefaultAstTransformVisitor(AstVisitor):
         s = IndexAssign(stmt.var, slices, expr, stmt.loc)
         return s, ctx
 
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
+        cond = self._visit_expr(stmt.cond, ctx)
+        body, _ = self._visit_block(stmt.body, ctx)
+        s = If1Stmt(cond, body, stmt.loc)
+        return s, ctx
+
     def _visit_if(self, stmt: IfStmt, ctx: Any):
         cond = self._visit_expr(stmt.cond, ctx)
         ift, _ = self._visit_block(stmt.ift, ctx)
-        if stmt.iff is None:
-            s = IfStmt(cond, ift, None, stmt.loc)
-        else:
-            iff, _ = self._visit_block(stmt.iff, ctx)
-            s = IfStmt(cond, ift, iff, stmt.loc)
+        iff, _ = self._visit_block(stmt.iff, ctx)
+        s = IfStmt(cond, ift, iff, stmt.loc)
         return s, ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any):

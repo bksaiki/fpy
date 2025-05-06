@@ -15,4 +15,4 @@ class Backend(ABC):
     @abstractmethod
     def compile(self, func: FuncDef):
         """Compiles `func` to the backend's target language."""
-        raise NotImplementedError('virtual method')
+        ...

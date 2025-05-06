@@ -198,14 +198,16 @@ class _IRCodegenInstance(AstVisitor):
         value = self._visit_expr(stmt.expr, ctx)
         return ir.IndexAssign(stmt.var, slices, value)
 
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+        cond = self._visit_expr(stmt.cond, ctx)
+        ift = self._visit_block(stmt.body, ctx)
+        return ir.If1Stmt(cond, ift, [])
+
     def _visit_if(self, stmt: IfStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
         ift = self._visit_block(stmt.ift, ctx)
-        if stmt.iff is None:
-            return ir.If1Stmt(cond, ift, [])
-        else:
-            iff = self._visit_block(stmt.iff, ctx)
-            return ir.IfStmt(cond, ift, iff, [])
+        iff = self._visit_block(stmt.iff, ctx)
+        return ir.IfStmt(cond, ift, iff, [])
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)

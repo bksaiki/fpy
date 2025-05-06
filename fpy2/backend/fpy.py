@@ -172,7 +172,7 @@ class _FPyCompilerInstance(ReduceVisitor):
 
         cond = self._visit_expr(stmt.cond, None)
         body = self._visit_block(stmt.body, None)
-        return ast.IfStmt(cond, body, None, None)
+        return ast.If1Stmt(cond, body, None)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         # check that phis are empty

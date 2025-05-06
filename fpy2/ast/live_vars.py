@@ -122,16 +122,18 @@ class LiveVarsInstance(AstVisitor):
         live.add(stmt.var)
         return live
 
-    def _visit_if(self, stmt: IfStmt, live: _LiveSet) -> _LiveSet:
+    def _visit_if1(self, stmt: If1Stmt, live: _LiveSet) -> _LiveSet:
         live = set(live)
-        if stmt.iff is None:
-            live |= self._visit_block(stmt.ift, live)
-        else:
-            ift_live = self._visit_block(stmt.ift, live)
-            iff_live = self._visit_block(stmt.iff, live)
-            live = ift_live | iff_live
+        live |= self._visit_block(stmt.body, live)
         live |= self._visit_expr(stmt.cond, None)
         return live
+
+    def _visit_if(self, stmt: IfStmt, live: _LiveSet) -> _LiveSet:
+        live = set(live)
+        ift_live = self._visit_block(stmt.ift, live)
+        iff_live = self._visit_block(stmt.iff, live)
+        cond_live = self._visit_expr(stmt.cond, None)
+        return (ift_live | iff_live) | cond_live
 
     def _visit_while(self, stmt: WhileStmt, live: _LiveSet) -> _LiveSet:
         live = set(live)

@@ -232,16 +232,17 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(stmt.expr, ctx)
         return env
 
+    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
+        env, _ = ctx
+        self._visit_expr(stmt.cond, ctx)
+        ift_env = self._visit_block(stmt.body, ctx)
+        return env.merge(ift_env)
+
     def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
         self._visit_expr(stmt.cond, ctx)
         ift_env = self._visit_block(stmt.ift, ctx)
-        if stmt.iff is None:
-            # 1-armed if statement
-            env, _ = ctx
-            return ift_env.merge(env)
-        else:
-            iff_env = self._visit_block(stmt.iff, ctx)
-            return ift_env.merge(iff_env)
+        iff_env = self._visit_block(stmt.iff, ctx)
+        return ift_env.merge(iff_env)
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         env, _ = ctx

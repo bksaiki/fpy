@@ -5,7 +5,8 @@ This module contains the AST for FPy programs.
 from abc import ABC, abstractmethod
 from enum import IntEnum
 from typing import Any, Optional, Self, Sequence
-from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location
+from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location, default_repr
+
 
 class UnaryOpKind(IntEnum):
     # unary operators
@@ -88,17 +89,18 @@ class NaryOpKind(IntEnum):
     AND = 1
     OR = 2
 
+@default_repr
 class Ast(ABC):
     """FPy AST: abstract base class for all AST nodes."""
-    loc: Optional[Location]
+    _loc: Optional[Location]
 
     def __init__(self, loc: Optional[Location]):
-        self.loc = loc
+        self._loc = loc
 
-    def __repr__(self):
-        name = self.__class__.__name__
-        items = ', '.join(f'{k}={repr(v)}' for k, v in self.__dict__.items())
-        return f'{name}({items})'
+    @property
+    def loc(self):
+        """Get the location of the AST node."""
+        return self._loc
 
     def format(self) -> str:
         """Format the AST node as a string."""
@@ -714,17 +716,40 @@ class IndexAssign(Stmt):
     def __hash__(self) -> int:
         return hash((self.var, tuple(self.slices), self.expr))
 
+class If1Stmt(Stmt):
+    """FPy AST: if statement with one branch"""
+    cond: Expr
+    body: StmtBlock
+
+    def __init__(
+        self,
+        cond: Expr,
+        body: StmtBlock,
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.cond = cond
+        self.body = body
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, If1Stmt):
+            return False
+        return self.cond == other.cond and self.body == other.body
+
+    def __hash__(self) -> int:
+        return hash((self.cond, self.body))
+
 class IfStmt(Stmt):
-    """FPy AST: if statement"""
+    """FPy AST: if statement (with two branhces)"""
     cond: Expr
     ift: StmtBlock
-    iff: Optional[StmtBlock]
+    iff: StmtBlock
 
     def __init__(
         self,
         cond: Expr,
         ift: StmtBlock,
-        iff: Optional[StmtBlock],
+        iff: StmtBlock,
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -937,7 +962,7 @@ class BaseFormatter:
 
     @abstractmethod
     def format(self, ast: Ast) -> str:
-        raise NotImplementedError('virtual method')
+        ...
 
 _default_formatter: Optional[BaseFormatter] = None
 

@@ -284,13 +284,38 @@ class _Interpreter(ReduceVisitor):
             args.append(val)
         return any(args)
 
+    def _apply_shape(self, e: Shape, ctx: EvalCtx):
+        v = self._visit_expr(e.children[0], ctx)
+        if not isinstance(v, NDArray):
+            raise TypeError(f'expected a tensor, got {v}')
+        return NDArray([MPMF(x, ctx) for x in v.shape])
+
     def _apply_range(self, e: Range, ctx: EvalCtx):
         stop = self._visit_expr(e.children[0], ctx)
         if not isinstance(stop, Digital):
             raise TypeError(f'expected a real number argument, got {stop}')
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
-        return NDArray([MPMF(i, ctx) for i in range(int(stop))])
+        return NDArray([MPMF._round_to_context(Digital(negative=i < 0, c=abs(i)), ctx) for i in range(int(stop))])
+
+    def _apply_dim(self, e: Dim, ctx: EvalCtx):
+        v = self._visit_expr(e.children[0], ctx)
+        if not isinstance(v, NDArray):
+            raise TypeError(f'expected a tensor, got {v}')
+        x = Digital(c=len(v.shape))
+        return MPMF._round_to_context(x, ctx)
+
+    def _apply_size(self, e: Size, ctx: EvalCtx):
+        v = self._visit_expr(e.children[0], ctx)
+        if not isinstance(v, NDArray):
+            raise TypeError(f'expected a tensor, got {v}')
+        dim = self._visit_expr(e.children[1], ctx)
+        if not isinstance(dim, Digital):
+            raise TypeError(f'expected a real number argument, got {dim}')
+        if not dim.is_integer():
+            raise TypeError(f'expected an integer argument, got {dim}')
+        x = Digital(c=v.shape[int(dim)])
+        return MPMF._round_to_context(x, ctx)
 
     def _visit_nary_expr(self, e: NaryExpr, ctx: EvalCtx):
         if e.name in _method_table:
@@ -303,8 +328,14 @@ class _Interpreter(ReduceVisitor):
             return self._apply_and(e, ctx)
         elif isinstance(e, Or):
             return self._apply_or(e, ctx)
+        elif isinstance(e, Shape):
+            return self._apply_shape(e, ctx)
         elif isinstance(e, Range):
             return self._apply_range(e, ctx)
+        elif isinstance(e, Dim):
+            return self._apply_dim(e, ctx)
+        elif isinstance(e, Size):
+            return self._apply_size(e, ctx)
         else:
             raise NotImplementedError('unknown n-ary expression', e)
 
