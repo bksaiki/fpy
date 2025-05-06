@@ -159,7 +159,7 @@ class LiveVarsInstance(AstVisitor):
     def _visit_context(self, stmt: ContextStmt, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live = self._visit_block(stmt.body, live)
-        if stmt.name is not None and isinstance(stmt.name, NamedId):
+        if isinstance(stmt.name, NamedId):
             live -= { stmt.name }
         live |= self._visit_expr(stmt.ctx, None)
         return live

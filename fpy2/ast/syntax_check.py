@@ -271,7 +271,7 @@ class SyntaxCheckInstance(AstVisitor):
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env, is_top = ctx
         self._visit_expr(stmt.ctx, ctx)
-        if stmt.name is not None and isinstance(stmt.name, NamedId):
+        if isinstance(stmt.name, NamedId):
             env = env.extend(stmt.name)
         return self._visit_block(stmt.body, (env, is_top))
 
