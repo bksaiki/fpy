@@ -26,16 +26,16 @@ def default_str_convert(x: RealFloat | Float) -> str:
     if isinstance(x, Float):
         if x.isnan:
             s = '-' if x.s else '+'
-            return f'{s}nan'
+            return f'{Float.__name__}(\'{s}nan\')'
         elif x.isinf:
             s = '-' if x.s else '+'
-            return f'{s}inf'
+            return f'{Float.__name__}(\'{s}inf\')'
 
     if x.is_zero():
         s = '-' if x.s else '+'
-        return '0.0'
+        return f'{Float.__name__}(0.0)'
     else:
-        return str(float_to_mpfr(x))
+        return f'{Float.__name__}(\'{str(float_to_mpfr(x))}\')'
 
 
 set_current_float_converter(default_float_convert)
