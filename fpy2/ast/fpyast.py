@@ -960,7 +960,7 @@ class BaseFormatter:
 
     @abstractmethod
     def format(self, ast: Ast) -> str:
-        raise NotImplementedError('virtual method')
+        ...
 
 _default_formatter: Optional[BaseFormatter] = None
 

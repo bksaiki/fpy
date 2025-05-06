@@ -17,15 +17,15 @@ class Interpreter(ABC):
 
     @abstractmethod
     def eval(self, func: Function, args, ctx: Optional[EvalCtx] = None):
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def eval_with_trace(self, func: Function, args, ctx: Optional[EvalCtx] = None) -> tuple[Any, list[ExprTraceEntry]]:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def eval_expr(self, expr: Expr, env: dict, ctx: EvalCtx):
-        raise NotADirectoryError('virtual method')
+        ...
 
 class FunctionReturnException(Exception):
     """Raised when a function returns a value."""

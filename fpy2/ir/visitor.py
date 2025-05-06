@@ -14,81 +14,81 @@ class BaseVisitor(ABC):
     @abstractmethod
     def _visit_var(self, e: Var, ctx: Any):
         """Visitor method for `Var` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_bool(self, e: BoolVal, ctx: Any) -> Any:
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_decnum(self, e: Decnum, ctx: Any):
         """Visitor method for `Decnum` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_hexnum(self, e: Hexnum, ctx: Any):
         """Visitor method for `Hexnum` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_integer(self, e: Integer, ctx: Any):
         """Visitor method for `Integer` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_rational(self, e: Rational, ctx: Any):
         """Visitor method for `Rational` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_constant(self, e: Constant, ctx: Any):
         """Visitor method for `Constant` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_digits(self, e: Digits, ctx: Any):
         """Visitor method for `Digits` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_unknown(self, e: UnknownCall, ctx: Any):
         """Visitor method for `UnknownCall` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_nary_expr(self, e: NaryExpr, ctx: Any):
         """Visitor method for `NaryExpr` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_compare(self, e: Compare, ctx: Any):
         """Visitor method for `Compare` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         """Visitor method for `TupleExpr` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
         """Visitor method for `RefExpr` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_tuple_set(self, e: TupleSet, ctx: Any):
         """Visitor method for `TupleSet` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
         """Visitor method for `CompExpr` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_if_expr(self, e: IfExpr, ctx: Any):
         """Visitor method for `IfExpr` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     #######################################################
     # Statements
@@ -96,57 +96,57 @@ class BaseVisitor(ABC):
     @abstractmethod
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         """Visitor method for `VarAssign` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         """Visitor method for `TupleAssign` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
         """Visitor method for `RefAssign` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         """Visitor method for `If1Stmt` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_if(self, stmt: IfStmt, ctx: Any):
         """Visitor method for `IfStmt` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_while(self, stmt: WhileStmt, ctx: Any):
         """Visitor method for `WhileStmt` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_for(self, stmt: ForStmt, ctx: Any):
         """Visitor method for `ForStmt` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
         """Visitor method for `ContextStmt` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
         """Visitor method for `AssertStmt` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_effect(self, stmt: EffectStmt, ctx: Any):
         """Visitor method for `EffectStmt` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     @abstractmethod
     def _visit_return(self, stmt: ReturnStmt, ctx: Any):
         """Visitor method for `Return` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     #######################################################
     # Phi node
@@ -180,7 +180,7 @@ class BaseVisitor(ABC):
     @abstractmethod
     def _visit_block(self, block: StmtBlock, ctx: Any):
         """Visitor method for a list of `Stmt` nodes."""
-        raise NotImplementedError('virtual method')
+        ...
 
     #######################################################
     # Functions
@@ -188,7 +188,7 @@ class BaseVisitor(ABC):
     @abstractmethod
     def _visit_function(self, func: FuncDef, ctx: Any):
         """Visitor for `fpyast.Function`."""
-        raise NotImplementedError('virtual method')
+        ...
 
     #######################################################
     # Dynamic dispatch

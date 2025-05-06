@@ -13,7 +13,7 @@ class Interval(ABC):
     @abstractmethod
     def union(self, other: Self):
         """Union of two intervals."""
-        raise NotImplementedError('virtual method')
+        ...
 
 @default_repr
 class BoolInterval(Interval):
