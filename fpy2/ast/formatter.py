@@ -1,5 +1,7 @@
 """Pretty printing of FPy ASTs"""
 
+import ast as pyast
+
 from pprint import pformat
 
 from .fpyast import *
@@ -135,6 +137,17 @@ class _FormatterInstance(AstVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'({ift} if {cond} else {iff})'
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
+        ctor_str = pyast.unparse(e.ctor)
+        arg_strs: list[str] = []
+        for arg in e.args:
+            match arg:
+                case ForeignVal():
+                    arg_strs.append(pyast.unparse(arg.val))
+                case _:
+                    arg_strs.append(self._visit_expr(arg, ctx))
+        return f'{ctor_str}({", ".join(arg_strs)})'
+
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'{str(stmt.var)} = {val}', ctx)
@@ -187,8 +200,8 @@ class _FormatterInstance(AstVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         # TODO: format data
-        props = ', '.join(f'{k}={pformat(v)}' for k, v in stmt.props.items())
-        self._add_line(f'with Context({props}):', ctx)
+        context = self._visit_expr(stmt.ctx, ctx)
+        self._add_line(f'with {context}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):

@@ -101,6 +101,13 @@ class LiveVarsInstance(AstVisitor):
         iff_live = self._visit_expr(e.iff, ctx)
         return cond_live | ift_live | iff_live
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: None) -> _LiveSet:
+        live: set[NamedId] = set()
+        for arg in e.args:
+            if isinstance(arg, NamedId):
+                live.add(arg)
+        return live
+
     def _visit_simple_assign(self, stmt: SimpleAssign, live: _LiveSet) -> _LiveSet:
         live = set(live)
         if isinstance(stmt.var, NamedId):
@@ -154,6 +161,7 @@ class LiveVarsInstance(AstVisitor):
         live = self._visit_block(stmt.body, live)
         if stmt.name is not None and isinstance(stmt.name, NamedId):
             live -= { stmt.name }
+        live |= self._visit_expr(stmt.ctx, None)
         return live
 
     def _visit_assert(self, stmt: AssertStmt, live: _LiveSet) -> _LiveSet:

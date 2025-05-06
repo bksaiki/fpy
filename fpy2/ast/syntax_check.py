@@ -2,10 +2,11 @@
 
 from typing import Optional, Self
 
+from ..utils import FPySyntaxError
+
 from .fpyast import *
 from .visitor import AstVisitor
-
-from ..utils import FPySyntaxError
+from .live_vars import LiveVars
 
 class _Env:
     """Bound variables in the current scope."""
@@ -199,6 +200,14 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(e.iff, ctx)
         return env
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
+        # check that context is not data-dependent
+        for arg in e.args:
+            if not isinstance(arg, ForeignVal):
+                for free in LiveVars.analyze(arg):
+                    if free not in self.free_vars:
+                        raise FPySyntaxError('context is data-dependent')
+
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.expr, ctx)
@@ -261,10 +270,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env, is_top = ctx
-        print(stmt.ctx)
-        for _, v in stmt.props.items():
-            if isinstance(v, NamedId):
-                self._mark_use(v, env)
+        self._visit_expr(stmt.ctx, ctx)
         if stmt.name is not None and isinstance(stmt.name, NamedId):
             env = env.extend(stmt.name)
         return self._visit_block(stmt.body, (env, is_top))
