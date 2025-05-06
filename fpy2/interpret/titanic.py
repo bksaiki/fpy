@@ -234,11 +234,9 @@ class _Interpreter(ReduceVisitor):
             args.append(val)
 
         # compute the result
-        print(list(map(float, args)))
         ctx = self._eval_ctx(ctx)
         try:
             result = fn(*args, ctx=ctx)
-            print(result)
         except gmpmath.SignedOverflow as e:
             # we overflowed beyond MPFR's limits, generate a large value and round it
             exp = ctx.emax + 1
