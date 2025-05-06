@@ -261,6 +261,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env, is_top = ctx
+        print(stmt.ctx)
         for _, v in stmt.props.items():
             if isinstance(v, NamedId):
                 self._mark_use(v, env)
