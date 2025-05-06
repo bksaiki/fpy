@@ -386,7 +386,16 @@ class Parser:
             slices = v_slices + slices
         return (value, slices)
 
-    def _parse_expr(self, e: ast.expr) -> Expr:
+    def _is_foreign_val(self, e: ast.expr):
+        match e:
+            case ast.Name() | ast.Constant():
+                return True
+            case ast.Attribute():
+                return self._is_foreign_val(e.value)
+            case _:
+                return False
+
+    def _parse_expr(self, e: ast.expr, *, allow_foreign: bool = False) -> Expr:
         """Parse a Python expression."""
         loc = self._parse_location(e)
         match e:
@@ -461,7 +470,11 @@ class Parser:
                 iff = self._parse_expr(e.orelse)
                 return IfExpr(cond, ift, iff, loc)
             case _:
-                raise NotImplementedError('expression is unsupported in FPy', e)
+                if not allow_foreign:
+                    raise FPyParserError(loc, 'expression is unsupported in FPy', e)
+                if not self._is_foreign_val(e):
+                    raise FPyParserError(loc, 'expression is not a valid foreign value', e)
+                return ForeignVal(e, loc)
 
     def _parse_tuple_target(self, target: ast.expr, st: ast.stmt):
         loc = self._parse_location(target)
@@ -517,21 +530,39 @@ class Parser:
         e = item.context_expr
         loc = self._parse_location(e)
         match e:
+            case ast.Name():
+                name = self._parse_id(e)
+                return Var(name, loc)
             case ast.Call():
-                call_name = self._parse_call(e)
-                if call_name != 'Context':
-                    raise FPyParserError(loc, 'FPy with statements only expect `Context`', e)
-                if e.args != []:
-                    raise FPyParserError(loc, 'FPy with statements do not expect arguments', e)
-                # TODO: what data is allowed?
-                props: dict[str, Any] = {}
-                for kwd in e.keywords:
-                    if kwd.arg is None:
-                        raise FPyParserError(loc, '`Context` only takes keyword arguments', e)
-                    props[kwd.arg] = self._parse_contextdata(kwd.value)
-                return props
+                func = e.func
+                pos_args: list[Expr] = []
+                for arg in e.args:
+                    match arg:
+                        case ast.Starred():
+                            raise FPyParserError(loc, 'FPy does not support starred arguments', arg, e)
+                        case _:
+                            pos_args.append(self._parse_expr(arg, allow_foreign=True))
+                if e.keywords != []:
+                    raise FPyParserError(loc, 'FPy does not support keyword arguments', e)
+                return ContextExpr(func, pos_args, loc)
             case _:
-                raise FPyParserError(loc, 'FPy expects an identifier', e, item)
+                raise FPyParserError(loc, 'FPy expects a valid context expression', e, item)
+        # match e:
+        #     case ast.Call():
+        #         call_name = self._parse_call(e)
+        #         if call_name != 'Context':
+        #             raise FPyParserError(loc, 'FPy with statements only expect `Context`', e)
+        #         if e.args != []:
+        #             raise FPyParserError(loc, 'FPy with statements do not expect arguments', e)
+        #         # TODO: what data is allowed?
+        #         props: dict[str, Any] = {}
+        #         for kwd in e.keywords:
+        #             if kwd.arg is None:
+        #                 raise FPyParserError(loc, '`Context` only takes keyword arguments', e)
+        #             props[kwd.arg] = self._parse_contextdata(kwd.value)
+        #         return props
+        #     case _:
+        #         raise FPyParserError(loc, 'FPy expects an identifier', e, item)
 
     def _parse_augassign(self, stmt: ast.AugAssign):
         loc = self._parse_location(stmt)
@@ -633,9 +664,9 @@ class Parser:
                     raise FPyParserError(loc, 'FPy only supports with statements with a single item', stmt)
                 item = stmt.items[0]
                 name = self._parse_contextname(item)
-                props = self._parse_contextexpr(item)
+                ctx = self._parse_contextexpr(item)
                 block = self._parse_statements(stmt.body)
-                return ContextStmt(name, props, block, loc)
+                return ContextStmt(name, ctx, block, loc)
             case ast.Assert():
                 test = self._parse_expr(stmt.test)
                 if stmt.msg is not None:
@@ -645,7 +676,7 @@ class Parser:
                 e = self._parse_expr(stmt.value)
                 return EffectStmt(e, loc)
             case _:
-                raise NotImplementedError('statement is unsupported in FPy', ast.dump(stmt))
+                raise FPyParserError(loc, 'statement is unsupported in FPy', stmt)
 
     def _parse_statements(self, stmts: list[ast.stmt]):
         """Parse a list of Python statements."""

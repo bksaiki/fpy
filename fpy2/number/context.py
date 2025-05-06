@@ -33,6 +33,12 @@ class Context(ABC):
     summarized by this type.
     """
 
+    def __enter__(self) -> None:
+        raise RuntimeError('do not call directly')
+
+    def __exit__(self, *args) -> None:
+        raise RuntimeError('do not call directly')
+
     @abstractmethod
     def with_rm(self, rm: RoundingMode) -> Self:
         """Returns `self` but with rounding mode `rm`."""
