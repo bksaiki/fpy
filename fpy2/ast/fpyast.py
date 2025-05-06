@@ -895,13 +895,13 @@ class ForStmt(Stmt):
 
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
-    name: Optional[Id]
+    name: Id
     ctx: ContextExpr | Var
     body: StmtBlock
 
     def __init__(
         self,
-        name: Optional[Id],
+        name: Id,
         ctx: ContextExpr | Var,
         body: StmtBlock,
         loc: Optional[Location]

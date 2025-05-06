@@ -199,9 +199,8 @@ class _FormatterInstance(AstVisitor):
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
-        # TODO: format data
         context = self._visit_expr(stmt.ctx, ctx)
-        self._add_line(f'with {context}:', ctx)
+        self._add_line(f'with {context} as {str(stmt.name)}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):

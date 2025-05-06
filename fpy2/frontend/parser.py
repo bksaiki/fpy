@@ -519,7 +519,7 @@ class Parser:
         var = item.optional_vars
         match var:
             case None:
-                return None
+                return UnderscoreId()
             case ast.Name():
                 return var.id
             case _:
