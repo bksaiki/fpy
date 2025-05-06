@@ -592,7 +592,7 @@ class IfExpr(Expr):
         return hash((self.cond, self.ift, self.iff))
 
 
-class ContextExpr(Ast):
+class ContextExpr(Expr):
     """FPy AST: context constructor"""
     ctor: pyast.expr
     args: list[Expr]

@@ -33,7 +33,7 @@ class Context(ABC):
     summarized by this type.
     """
 
-    def __enter__(self) -> None:
+    def __enter__(self) -> Self:
         raise RuntimeError('do not call directly')
 
     def __exit__(self, *args) -> None:

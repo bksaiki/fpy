@@ -225,6 +225,20 @@ class _MatcherInst(AstVisitor):
         self._visit_expr(e.ift, pat.ift)
         self._visit_expr(e.iff, pat.iff)
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: ContextExpr):
+        if len(e.args) != len(ctx.args):
+            raise _MatchFailure(f'matching {ctx} against {e}')
+        for c1, c2 in zip(e.args, ctx.args):
+            match c1, c2:
+                case ForeignVal(), ForeignVal():
+                    if c1 != c2:
+                        raise _MatchFailure(f'matching {ctx} against {e}')
+                case (ForeignVal(), _) | (_, ForeignVal()):
+                    raise _MatchFailure(f'matching {ctx} against {e}')
+                case _, _:
+                    # check if args are the same
+                    self._visit_expr(c1, c2)
+
     def _visit_simple_assign(self, stmt: SimpleAssign, pat: SimpleAssign):
         self._visit_target(stmt.var, pat.var)
         self._visit_expr(stmt.expr, pat.expr)
@@ -275,9 +289,7 @@ class _MatcherInst(AstVisitor):
         self._visit_block(stmt.body, pat.body)
 
     def _visit_context(self, stmt: ContextStmt, pat: ContextStmt):
-        # TODO: match context names
-        if stmt.props != pat.props:
-            raise _MatchFailure(f'matching {pat} against {stmt}')
+        self._visit_expr(stmt.ctx, pat.ctx)
         self._visit_block(stmt.body, pat.body)
 
     def _visit_assert(self, stmt: AssertStmt, pat: AssertStmt):
