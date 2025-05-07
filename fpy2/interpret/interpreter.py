@@ -5,9 +5,8 @@ Defines the abstract base class for FPy interpreters.
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from titanfp.arithmetic.evalctx import EvalCtx
-
 from ..ir import Expr
+from ..number import Context
 from ..runtime import Function, set_default_function_call
 from ..runtime.trace import ExprTraceEntry
 
@@ -16,15 +15,15 @@ class Interpreter(ABC):
     """Abstract base class for FPy interpreters."""
 
     @abstractmethod
-    def eval(self, func: Function, args, ctx: Optional[EvalCtx] = None):
+    def eval(self, func: Function, args, ctx: Optional[Context] = None):
         ...
 
     @abstractmethod
-    def eval_with_trace(self, func: Function, args, ctx: Optional[EvalCtx] = None) -> tuple[Any, list[ExprTraceEntry]]:
+    def eval_with_trace(self, func: Function, args, ctx: Optional[Context] = None) -> tuple[Any, list[ExprTraceEntry]]:
         ...
 
     @abstractmethod
-    def eval_expr(self, expr: Expr, env: dict, ctx: EvalCtx):
+    def eval_expr(self, expr: Expr, env: dict, ctx: Context):
         ...
 
 class FunctionReturnException(Exception):
@@ -55,7 +54,7 @@ def set_default_interpreter(rt: Interpreter):
 ###########################################################
 # Default function call
 
-def _default_function_call(fn: Function, *args, ctx: Optional[EvalCtx] = None):
+def _default_function_call(fn: Function, *args, ctx: Optional[Context] = None):
     """Default function call."""
     if fn.runtime is None:
         rt = get_default_interpreter()
