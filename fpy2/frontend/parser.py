@@ -395,6 +395,24 @@ class Parser:
             case _:
                 return False
 
+    def _parse_foreign_attribute(self, e: ast.expr):
+        loc = self._parse_location(e)
+        match e:
+            case ast.Attribute():
+                match e.value:
+                    case ast.Attribute():
+                        val = self._parse_foreign_attribute(e.value)
+                        return ForeignAttribute(val.name, [NamedId(e.attr)] + val.attrs, loc)
+                    case ast.Name():
+                        name = self._parse_id(e.value)
+                        if isinstance(name, UnderscoreId):
+                            raise FPyParserError(loc, 'FPy foreign attribute must begin with a named identifier', e)
+                        return ForeignAttribute(name, [NamedId(e.attr)], loc)
+                    case _:
+                        raise FPyParserError(loc, 'FPy foreign attribute must begin with an identifier', e)
+            case _:
+                raise FPyParserError(loc, 'Not a valid foreign attribute', e)
+
     def _parse_expr(self, e: ast.expr, *, allow_foreign: bool = False) -> Expr:
         """Parse a Python expression."""
         loc = self._parse_location(e)
@@ -472,9 +490,7 @@ class Parser:
             case _:
                 if not allow_foreign:
                     raise FPyParserError(loc, 'expression is unsupported in FPy', e)
-                if not self._is_foreign_val(e):
-                    raise FPyParserError(loc, 'expression is not a valid foreign value', e)
-                return ForeignVal(e, loc)
+                return self._parse_foreign_attribute(e)
 
     def _parse_tuple_target(self, target: ast.expr, st: ast.stmt):
         loc = self._parse_location(target)
@@ -534,7 +550,18 @@ class Parser:
                 name = self._parse_id(e)
                 return Var(name, loc)
             case ast.Call():
-                func = e.func
+                # parse constructor
+                match e.func:
+                    case ast.Name():
+                        name = self._parse_id(e.func)
+                        if isinstance(name, UnderscoreId):
+                            raise FPyParserError(loc, 'Context constructor must be a named identifier or foreign attribute', e)
+                        ctor = Var(name, loc)
+                    case ast.Attribute():
+                        ctor = self._parse_foreign_attribute(e.func)
+                    case _:
+                        raise FPyParserError(loc, 'Context constructor must be a named identifier or foreign attribute', e)
+                # parse positional arguments
                 pos_args: list[Expr] = []
                 for arg in e.args:
                     match arg:
@@ -542,9 +569,10 @@ class Parser:
                             raise FPyParserError(loc, 'FPy does not support starred arguments', arg, e)
                         case _:
                             pos_args.append(self._parse_expr(arg, allow_foreign=True))
+                # parse keyword arguments
                 if e.keywords != []:
                     raise FPyParserError(loc, 'FPy does not support keyword arguments', e)
-                return ContextExpr(func, pos_args, loc)
+                return ContextExpr(ctor, pos_args, loc)
             case _:
                 raise FPyParserError(loc, 'FPy expects a valid context expression', e, item)
         # match e:

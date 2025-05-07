@@ -230,10 +230,10 @@ class _MatcherInst(AstVisitor):
             raise _MatchFailure(f'matching {ctx} against {e}')
         for c1, c2 in zip(e.args, ctx.args):
             match c1, c2:
-                case ForeignVal(), ForeignVal():
+                case ForeignAttribute(), ForeignAttribute():
                     if c1 != c2:
                         raise _MatchFailure(f'matching {ctx} against {e}')
-                case (ForeignVal(), _) | (_, ForeignVal()):
+                case (ForeignAttribute(), _) | (_, ForeignAttribute()):
                     raise _MatchFailure(f'matching {ctx} against {e}')
                 case _, _:
                     # check if args are the same
