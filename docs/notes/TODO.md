@@ -9,6 +9,8 @@ Frontend:
  - language:
    - support for zip()
    - support for vector addition/multiplication
+ - formatter:
+   - use IndentCtx
 
 Middle-end:
  - do we really need a separate AST / IR?

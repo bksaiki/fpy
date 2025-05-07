@@ -233,11 +233,13 @@ class _MatcherInst(AstVisitor):
                 case ForeignAttribute(), ForeignAttribute():
                     if c1 != c2:
                         raise _MatchFailure(f'matching {ctx} against {e}')
+                case Expr(), Expr():
+                    # check if args are the same
+                    self._visit_expr(c1, c2)
                 case (ForeignAttribute(), _) | (_, ForeignAttribute()):
                     raise _MatchFailure(f'matching {ctx} against {e}')
                 case _, _:
-                    # check if args are the same
-                    self._visit_expr(c1, c2)
+                    raise RuntimeError(f'unreachable case: {c1} vs {c2}')
 
     def _visit_simple_assign(self, stmt: SimpleAssign, pat: SimpleAssign):
         self._visit_target(stmt.var, pat.var)

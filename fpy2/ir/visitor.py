@@ -90,6 +90,11 @@ class BaseVisitor(ABC):
         """Visitor method for `IfExpr` nodes."""
         ...
 
+    @abstractmethod
+    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        """Visitor method for `ContextExpr` nodes."""
+        ...
+
     #######################################################
     # Statements
 
@@ -228,6 +233,8 @@ class BaseVisitor(ABC):
                 return self._visit_comp_expr(e, ctx)
             case IfExpr():
                 return self._visit_if_expr(e, ctx)
+            case ContextExpr():
+                return self._visit_context_expr(e, ctx)
             case _:
                 raise NotImplementedError('no visitor method for', e)
 
