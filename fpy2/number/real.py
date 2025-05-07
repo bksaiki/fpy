@@ -340,12 +340,33 @@ class RealFloat(numbers.Rational):
 
     def __float__(self):
         """
-        Casts this value to a native Python float.
+        Casts this value exactly to a native Python float.
 
         If the value is not representable, a `ValueError` is raised.
         """
         fn = get_current_float_converter()
         return fn(self)
+
+    def __int__(self):
+        """
+        Casts this value exactly to a native Python int.
+
+        If the value is not representable, a `ValueError` is raised.
+        """
+        if not self.is_integer():
+            raise ValueError(f'cannot convert to int: {self}')
+
+        # special case: 0
+        if self.c == 0:
+            return 0
+
+        if self.exp >= 0:
+            # `self.c` consists of integer digits
+            return self.c << self.exp
+        else:
+            # `self.c` consists of fractional digits
+            # but safe to just shift them off
+            return self.c >> -self.exp
 
     @staticmethod
     def from_int(x: int):

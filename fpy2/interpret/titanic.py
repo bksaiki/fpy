@@ -2,25 +2,24 @@
 FPy runtime backed by the Titanic library.
 """
 
+from fractions import Fraction
 from typing import Any, Callable, Optional, Sequence, TypeAlias
 
-from titanfp.arithmetic.evalctx import EvalCtx, determine_ctx
-from titanfp.arithmetic.ieee754 import ieee_ctx
-from titanfp.arithmetic.mpmf import MPMF
-from titanfp.titanic.digital import Digital
 from titanfp.titanic.ndarray import NDArray
-from titanfp.titanic.ops import OP
-import titanfp.titanic.gmpmath as gmpmath
 
+from .. import math
+
+from ..number import Context, Float, IEEEContext, RM
+from ..number.gmp import mpfr_constant
 from ..runtime.trace import ExprTraceEntry
 from ..runtime.env import ForeignEnv
 from ..runtime.function import Function
 from ..ir import *
+from ..utils import decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
 
 from .interpreter import Interpreter, FunctionReturnException
 
-
-ScalarVal: TypeAlias = bool | Digital
+ScalarVal: TypeAlias = bool | Float
 """Type of scalar values in FPy programs."""
 TensorVal: TypeAlias = NDArray
 """Type of tensor values in FPy programs."""
@@ -30,74 +29,89 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
-def _isinf(x: MPMF) -> bool:
+def _isfinite(x: Float, _: Context) -> bool:
+    return x.is_finite()
+
+def _isinf(x: Float, _: Context) -> bool:
     return x.isinf
 
-def _isnan(x: MPMF) -> bool:
+def _isnan(x: Float, _: Context) -> bool:
     return x.isnan
 
+def _isnormal(x: Float, _: Context) -> bool:
+    # TODO: should all Floats have this property?
+    return True
+
+def _signbit(x: Float, _: Context) -> bool:
+    # TODO: should all Floats have this property?
+    return x.s
+
 _method_table: dict[str, Callable[..., Any]] = {
-    '+': MPMF.add,
-    '-': MPMF.sub,
-    '*': MPMF.mul,
-    '/': MPMF.div,
-    'fabs': MPMF.fabs,
-    'sqrt': MPMF.sqrt,
-    'fma': MPMF.fma,
-    'neg': MPMF.neg,
-    'copysign': MPMF.copysign,
-    'fdim': MPMF.fdim,
-    'fmax': MPMF.fmax,
-    'fmin': MPMF.fmin,
-    'fmod': MPMF.fmod,
-    'remainder': MPMF.remainder,
-    'hypot': MPMF.hypot,
-    'cbrt': MPMF.cbrt,
-    'ceil': MPMF.ceil,
-    'floor': MPMF.floor,
-    'nearbyint': MPMF.nearbyint,
-    'round': MPMF.round,
-    'trunc': MPMF.trunc,
-    'acos': MPMF.acos,
-    'asin': MPMF.asin,
-    'atan': MPMF.atan,
-    'atan2': MPMF.atan2,
-    'cos': MPMF.cos,
-    'sin': MPMF.sin,
-    'tan': MPMF.tan,
-    'acosh': MPMF.acosh,
-    'asinh': MPMF.asinh,
-    'atanh': MPMF.atanh,
-    'cosh': MPMF.cosh,
-    'sinh': MPMF.sinh,
-    'tanh': MPMF.tanh,
-    'exp': MPMF.exp_,
-    'exp2': MPMF.exp2,
-    'expm1': MPMF.expm1,
-    'log': MPMF.log,
-    'log10': MPMF.log10,
-    'log1p': MPMF.log1p,
-    'log2': MPMF.log2,
-    'pow': MPMF.pow,
-    'erf': MPMF.erf,
-    'erfc': MPMF.erfc,
-    'lgamma': MPMF.lgamma,
-    'tgamma': MPMF.tgamma,
-    'isfinite': MPMF.isfinite,
+    '+': math.add,
+    '-': math.sub,
+    '*': math.mul,
+    '/': math.div,
+    'fabs': math.fabs,
+    'sqrt': math.sqrt,
+    'fma': math.fma,
+    'neg': math.neg,
+    'copysign': math.copysign,
+    'fdim': math.fdim,
+    'fmax': math.fmax,
+    'fmin': math.fmin,
+    'fmod': math.fmod,
+    'remainder': math.remainder,
+    'hypot': math.hypot,
+    'cbrt': math.cbrt,
+    'ceil': math.ceil,
+    'floor': math.floor,
+    'nearbyint': math.nearbyint,
+    'round': math.round,
+    'trunc': math.trunc,
+    'acos': math.acos,
+    'asin': math.asin,
+    'atan': math.atan,
+    'atan2': math.atan2,
+    'cos': math.cos,
+    'sin': math.sin,
+    'tan': math.tan,
+    'acosh': math.acosh,
+    'asinh': math.asinh,
+    'atanh': math.atanh,
+    'cosh': math.cosh,
+    'sinh': math.sinh,
+    'tanh': math.tanh,
+    'exp': math.exp,
+    'exp2': math.exp2,
+    'expm1': math.expm1,
+    'log': math.log,
+    'log10': math.log10,
+    'log1p': math.log1p,
+    'log2': math.log2,
+    'pow': math.pow,
+    'erf': math.erf,
+    'erfc': math.erfc,
+    'lgamma': math.lgamma,
+    'tgamma': math.tgamma,
+    'isfinite': _isfinite,
     'isinf': _isinf,
     'isnan': _isnan,
-    'isnormal': MPMF.isnormal,
-    'signbit': MPMF.signbit,
+    'isnormal': _isnormal,
+    'signbit': _signbit,
 }
 
 _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
+
+_PY_CTX = IEEEContext(11, 64, RM.RNE)
+"""the native Python floating-point context"""
+
 
 class _Interpreter(ReduceVisitor):
     """Single-use interpreter for a function"""
 
     foreign: ForeignEnv
     """foreign environment"""
-    override_ctx: Optional[EvalCtx]
+    override_ctx: Optional[Context]
     """optional overriding context"""
     env: _Env
     """Environment mapping variable names to values"""
@@ -110,7 +124,7 @@ class _Interpreter(ReduceVisitor):
         self, 
         foreign: ForeignEnv,
         *,
-        override_ctx: Optional[EvalCtx] = None,
+        override_ctx: Optional[Context] = None,
         env: Optional[_Env] = None,
         enable_trace: bool = False
     ):
@@ -123,28 +137,31 @@ class _Interpreter(ReduceVisitor):
         self.trace = []
         self.enable_trace = enable_trace
 
-    def _eval_ctx(self, ctx: EvalCtx):
+    def _eval_ctx(self, ctx: Context):
         if self.override_ctx is None:
             return ctx
         else:
             return self.override_ctx
 
     # TODO: what are the semantics of arguments
-    def _arg_to_mpmf(self, arg: Any, ctx: EvalCtx):
-        if isinstance(arg, int | float):
-            return MPMF(x=arg, ctx=ctx)
-        elif isinstance(arg, Digital):
-            return MPMF(x=arg, ctx=ctx)
-        elif isinstance(arg, tuple | list):
-            return NDArray([self._arg_to_mpmf(x, ctx) for x in arg])
-        else:
-            return arg
+    def _arg_to_mpmf(self, arg: Any, ctx: Context):
+        match arg:
+            case int():
+                return Float.from_int(arg, ctx=ctx)
+            case float():
+                return Float.from_float(arg, ctx=ctx)
+            case Float():
+                return arg.round(ctx)
+            case tuple() | list():
+                return NDArray([self._arg_to_mpmf(x, ctx) for x in arg])
+            case _:
+                return arg
 
     def eval(
         self,
         func: FuncDef,
         args: Sequence[Any],
-        ctx: Optional[EvalCtx] = None
+        ctx: Optional[Context] = None
     ):
         # check arity
         args = tuple(args)
@@ -153,8 +170,11 @@ class _Interpreter(ReduceVisitor):
 
         # determine context if `None` is specified
         if ctx is None:
-            ctx = ieee_ctx(11, 64)
-        ctx = determine_ctx(ctx, func.ctx)
+            ctx = _PY_CTX
+
+        # possibly override the context
+        ctx = self._eval_ctx(ctx)
+        assert isinstance(ctx, Context)
 
         # process arguments and add to environment
         for val, arg in zip(args, func.args):
@@ -165,7 +185,7 @@ class _Interpreter(ReduceVisitor):
                         self.env[arg.name] = x
                 case RealType():
                     x = self._arg_to_mpmf(val, ctx)
-                    if not isinstance(x, Digital):
+                    if not isinstance(x, Float):
                         raise NotImplementedError(f'argument is a scalar, got data {val}')
                     if isinstance(arg.name, NamedId):
                         self.env[arg.name] = x
@@ -189,82 +209,62 @@ class _Interpreter(ReduceVisitor):
             raise RuntimeError(f'unbound variable {name}')
         return self.env[name]
 
-    def _visit_var(self, e: Var, ctx: EvalCtx):
+    def _visit_var(self, e: Var, ctx: Context):
         return self._lookup(e.name)
 
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return e.val
 
-    def _visit_decnum(self, e: Decnum, ctx: EvalCtx):
-        ctx = self._eval_ctx(ctx)
-        return MPMF(x=e.val, ctx=ctx)
+    def _visit_decnum(self, e: Decnum, ctx: Context):
+        x = decnum_to_fraction(e.val)
+        return ctx.round(x)
 
-    def _visit_integer(self, e: Integer, ctx: EvalCtx):
-        ctx = self._eval_ctx(ctx)
-        x = Digital(m=e.val, exp=0, inexact=False)
-        return MPMF._round_to_context(x, ctx=ctx)
+    def _visit_integer(self, e: Integer, ctx: Context):
+        return ctx.round(e.val)
 
-    def _visit_hexnum(self, e: Hexnum, ctx: EvalCtx):
-        return MPMF(x=e.val, ctx=ctx)
+    def _visit_hexnum(self, e: Hexnum, ctx: Context):
+        x = hexnum_to_fraction(e.val)
+        return ctx.round(x)
 
-    def _visit_rational(self, e: Rational, ctx: EvalCtx):
-        ctx = self._eval_ctx(ctx)
-        p = Digital(m=e.p, exp=0, inexact=False)
-        q = Digital(m=e.q, exp=0, inexact=False)
-        x = gmpmath.compute(OP.div, p, q, prec=ctx.p)
-        return MPMF._round_to_context(x, ctx=ctx)
+    def _visit_rational(self, e: Rational, ctx: Context):
+        x = Fraction(e.p, e.q)
+        return ctx.round(x)
 
-    def _visit_constant(self, e: Constant, ctx: EvalCtx):
-        ctx = self._eval_ctx(ctx)
-        x = gmpmath.compute_constant(e.val, prec=ctx.p)
-        return MPMF._round_to_context(x, ctx=ctx)
+    def _visit_constant(self, e: Constant, ctx: Context):
+        prec, _ = ctx.round_params()
+        assert isinstance(prec, int) # TODO: not every context produces has a known precision
+        x = mpfr_constant(e.val, prec=prec)
+        return ctx.round(x)
 
-    def _visit_digits(self, e: Digits, ctx: EvalCtx):
-        ctx = self._eval_ctx(ctx)
-        x = gmpmath.compute_digits(e.m, e.e, e.b, prec=ctx.p)
-        return MPMF._round_to_context(x, ctx)
+    def _visit_digits(self, e: Digits, ctx: Context):
+        x = digits_to_fraction(e.m, e.e, e.b)
+        return ctx.round(x)
 
-    def _apply_method(self, e: NaryExpr, ctx: EvalCtx):
+    def _apply_method(self, e: NaryExpr, ctx: Context):
         fn = _method_table[e.name]
-        args: list[Digital] = []
+        args: list[Float] = []
         for arg in e.children:
             val = self._visit_expr(arg, ctx)
-            if not isinstance(val, Digital):
+            if not isinstance(val, Float):
                 raise TypeError(f'expected a real number argument for {e.name}, got {val}')
             args.append(val)
 
         # compute the result
-        ctx = self._eval_ctx(ctx)
-        try:
-            result = fn(*args, ctx=ctx)
-        except gmpmath.SignedOverflow as err:
-            # we overflowed beyond MPFR's limits, generate a large value and round it
-            exp = ctx.emax + 1
-            x = Digital(negative=err.sign, c=1, exp=exp)
-            result = MPMF._round_to_context(x, ctx=ctx)
-        except gmpmath.SignedUnderflow as e:
-            # we underflowed beyond MPFR's limits, generate a small value and round it
-            ctx = self._eval_ctx(ctx)
-            exp = ctx.emin - ctx.p - 1
-            x = Digital(negative=e.sign, c=1, exp=exp)
-            result = MPMF._round_to_context(x, ctx=ctx)
+        return fn(*args, ctx=ctx)
 
-        return result
-
-    def _apply_cast(self, e: Cast, ctx: EvalCtx):
+    def _apply_cast(self, e: Cast, ctx: Context):
         x = self._visit_expr(e.children[0], ctx)
-        if not isinstance(x, Digital):
+        if not isinstance(x, Float):
             raise TypeError(f'expected a real number argument, got {x}')
-        ctx = self._eval_ctx(ctx)
-        return MPMF._round_to_context(x, ctx)
+        return ctx.round(x)
 
-    def _apply_not(self, e: Not, ctx: EvalCtx):
+    def _apply_not(self, e: Not, ctx: Context):
         arg = self._visit_expr(e.children[0], ctx)
         if not isinstance(arg, bool):
             raise TypeError(f'expected a boolean argument, got {arg}')
         return not arg
 
-    def _apply_and(self, e: And, ctx: EvalCtx):
+    def _apply_and(self, e: And, ctx: Context):
         args: list[bool] = []
         for arg in e.children:
             val = self._visit_expr(arg, ctx)
@@ -273,7 +273,7 @@ class _Interpreter(ReduceVisitor):
             args.append(val)
         return all(args)
 
-    def _apply_or(self, e: Or, ctx: EvalCtx):
+    def _apply_or(self, e: Or, ctx: Context):
         args: list[bool] = []
         for arg in e.children:
             val = self._visit_expr(arg, ctx)
@@ -282,40 +282,42 @@ class _Interpreter(ReduceVisitor):
             args.append(val)
         return any(args)
 
-    def _apply_shape(self, e: Shape, ctx: EvalCtx):
+    def _apply_shape(self, e: Shape, ctx: Context):
         v = self._visit_expr(e.children[0], ctx)
         if not isinstance(v, NDArray):
             raise TypeError(f'expected a tensor, got {v}')
-        return NDArray([MPMF(x, ctx) for x in v.shape])
+        return NDArray([ctx.round(x) for x in v.shape])
 
-    def _apply_range(self, e: Range, ctx: EvalCtx):
+    def _apply_range(self, e: Range, ctx: Context):
         stop = self._visit_expr(e.children[0], ctx)
-        if not isinstance(stop, Digital):
+        if not isinstance(stop, Float):
             raise TypeError(f'expected a real number argument, got {stop}')
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
-        return NDArray([MPMF._round_to_context(Digital(negative=i < 0, c=abs(i)), ctx) for i in range(int(stop))])
 
-    def _apply_dim(self, e: Dim, ctx: EvalCtx):
+        elts: list[Float] = []
+        for i in range(int(stop)):
+            elts.append(Float.from_int(i, ctx=ctx))
+        return NDArray(elts)
+
+    def _apply_dim(self, e: Dim, ctx: Context):
         v = self._visit_expr(e.children[0], ctx)
         if not isinstance(v, NDArray):
             raise TypeError(f'expected a tensor, got {v}')
-        x = Digital(c=len(v.shape))
-        return MPMF._round_to_context(x, ctx)
+        return Float.from_int(len(v.shape), ctx=ctx)
 
-    def _apply_size(self, e: Size, ctx: EvalCtx):
+    def _apply_size(self, e: Size, ctx: Context):
         v = self._visit_expr(e.children[0], ctx)
         if not isinstance(v, NDArray):
             raise TypeError(f'expected a tensor, got {v}')
         dim = self._visit_expr(e.children[1], ctx)
-        if not isinstance(dim, Digital):
+        if not isinstance(dim, Float):
             raise TypeError(f'expected a real number argument, got {dim}')
         if not dim.is_integer():
             raise TypeError(f'expected an integer argument, got {dim}')
-        x = Digital(c=v.shape[int(dim)])
-        return MPMF._round_to_context(x, ctx)
+        return Float.from_int(v.shape[int(dim)], ctx=ctx)
 
-    def _visit_nary_expr(self, e: NaryExpr, ctx: EvalCtx):
+    def _visit_nary_expr(self, e: NaryExpr, ctx: Context):
         if e.name in _method_table:
             return self._apply_method(e, ctx)
         elif isinstance(e, Cast):
@@ -337,7 +339,7 @@ class _Interpreter(ReduceVisitor):
         else:
             raise NotImplementedError('unknown n-ary expression', e)
 
-    def _visit_unknown(self, e: UnknownCall, ctx: EvalCtx):
+    def _visit_unknown(self, e: UnknownCall, ctx: Context):
         args = [self._visit_expr(arg, ctx) for arg in e.children]
         fn = self.foreign[e.name]
         if isinstance(fn, Function):
@@ -367,7 +369,7 @@ class _Interpreter(ReduceVisitor):
             case _:
                 raise NotImplementedError('unknown comparison operator', op)
 
-    def _visit_compare(self, e: Compare, ctx: EvalCtx):
+    def _visit_compare(self, e: Compare, ctx: Context):
         lhs = self._visit_expr(e.children[0], ctx)
         for op, arg in zip(e.ops, e.children[1:]):
             rhs = self._visit_expr(arg, ctx)
@@ -376,10 +378,10 @@ class _Interpreter(ReduceVisitor):
             lhs = rhs
         return True
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: EvalCtx):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
         return NDArray([self._visit_expr(x, ctx) for x in e.children])
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: EvalCtx):
+    def _visit_tuple_ref(self, e: TupleRef, ctx: Context):
         value = self._visit_expr(e.value, ctx)
         if not isinstance(value, NDArray):
             raise TypeError(f'expected a tensor, got {value}')
@@ -387,7 +389,7 @@ class _Interpreter(ReduceVisitor):
         slices: list[int] = []
         for s in e.slices:
             val = self._visit_expr(s, ctx)
-            if not isinstance(val, Digital):
+            if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
@@ -395,7 +397,7 @@ class _Interpreter(ReduceVisitor):
 
         return value[slices]
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: EvalCtx):
+    def _visit_tuple_set(self, e: TupleSet, ctx: Context):
         value = self._visit_expr(e.array, ctx)
         if not isinstance(value, NDArray):
             raise TypeError(f'expected a tensor, got {value}')
@@ -404,7 +406,7 @@ class _Interpreter(ReduceVisitor):
         slices: list[int] = []
         for s in e.slices:
             val = self._visit_expr(s, ctx)
-            if not isinstance(val, Digital):
+            if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
@@ -418,7 +420,7 @@ class _Interpreter(ReduceVisitor):
         self,
         bindings: list[tuple[Id, Expr]],
         elt: Expr,
-        ctx: EvalCtx,
+        ctx: Context,
         elts: list[Any]
     ):
         if bindings == []:
@@ -433,7 +435,7 @@ class _Interpreter(ReduceVisitor):
                     self.env[var] = val
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: EvalCtx):
+    def _visit_comp_expr(self, e: CompExpr, ctx: Context):
         # evaluate comprehension
         elts: list[Any] = []
         bindings = [(var, iterable) for var, iterable in zip(e.vars, e.iterables)]
@@ -446,16 +448,16 @@ class _Interpreter(ReduceVisitor):
 
         return NDArray(elts)
 
-    def _visit_if_expr(self, e: IfExpr, ctx: EvalCtx):
+    def _visit_if_expr(self, e: IfExpr, ctx: Context):
         cond = self._visit_expr(e.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: EvalCtx):
+    def _visit_context_expr(self, e: ContextExpr, ctx: Context):
         raise RuntimeError('do not call directly')
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: EvalCtx) -> None:
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)
         if self.enable_trace:
             entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
@@ -469,7 +471,7 @@ class _Interpreter(ReduceVisitor):
             case _:
                 raise NotImplementedError('unknown variable', stmt.var)
 
-    def _unpack_tuple(self, binding: TupleBinding, val: NDArray, ctx: EvalCtx) -> None:
+    def _unpack_tuple(self, binding: TupleBinding, val: NDArray, ctx: Context) -> None:
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
         for elt, v in zip(binding.elts, val):
@@ -483,7 +485,7 @@ class _Interpreter(ReduceVisitor):
                 case _:
                     raise NotImplementedError('unknown tuple element', elt)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: EvalCtx) -> None:
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)
         if not isinstance(val, NDArray):
             raise TypeError(f'expected a tuple, got {val}')
@@ -494,7 +496,7 @@ class _Interpreter(ReduceVisitor):
 
         self._unpack_tuple(stmt.binding, val, ctx)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: EvalCtx) -> None:
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: Context) -> None:
         # lookup array
         array = self._lookup(stmt.var)
 
@@ -512,7 +514,7 @@ class _Interpreter(ReduceVisitor):
         val = self._visit_expr(stmt.expr, ctx)
         array[slices] = val
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: EvalCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Context):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
@@ -524,7 +526,7 @@ class _Interpreter(ReduceVisitor):
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.lhs]
 
-    def _visit_if(self, stmt: IfStmt, ctx: EvalCtx) -> None:
+    def _visit_if(self, stmt: IfStmt, ctx: Context) -> None:
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
@@ -542,7 +544,7 @@ class _Interpreter(ReduceVisitor):
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.rhs]
 
-    def _visit_while(self, stmt: WhileStmt, ctx: EvalCtx) -> None:
+    def _visit_while(self, stmt: WhileStmt, ctx: Context) -> None:
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]
@@ -570,7 +572,7 @@ class _Interpreter(ReduceVisitor):
                 self.trace.append(entry)
 
 
-    def _visit_for(self, stmt: ForStmt, ctx: EvalCtx) -> None:
+    def _visit_for(self, stmt: ForStmt, ctx: Context) -> None:
         for phi in stmt.phis:
             self.env[phi.name] = self.env[phi.lhs]
             del self.env[phi.lhs]
@@ -587,7 +589,7 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-    def _visit_context(self, stmt: ContextStmt, ctx: EvalCtx):
+    def _visit_context(self, stmt: ContextStmt, ctx: Context):
         props = {}
         for k, v in stmt.props.items():
             if isinstance(v, NamedId):
@@ -598,7 +600,7 @@ class _Interpreter(ReduceVisitor):
         ctx = determine_ctx(ctx, props)
         return self._visit_block(stmt.body, ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: EvalCtx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: Context):
         test = self._visit_expr(stmt.test, ctx)
         if not isinstance(test, bool):
             raise TypeError(f'expected a boolean, got {test}')
@@ -606,29 +608,29 @@ class _Interpreter(ReduceVisitor):
             raise AssertionError(stmt.msg)
         return ctx
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: EvalCtx):
+    def _visit_effect(self, stmt: EffectStmt, ctx: Context):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: EvalCtx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: Context):
         val = self._visit_expr(stmt.expr, ctx)
         if self.enable_trace:
             entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
             self.trace.append(entry)
         return val
 
-    def _visit_block(self, block: StmtBlock, ctx: EvalCtx):
+    def _visit_block(self, block: StmtBlock, ctx: Context):
         for stmt in block.stmts:
             if isinstance(stmt, ReturnStmt):
                 x = self._visit_return(stmt, ctx)
                 raise FunctionReturnException(x)
             self._visit_statement(stmt, ctx)
 
-    def _visit_function(self, func: FuncDef, ctx: EvalCtx):
+    def _visit_function(self, func: FuncDef, ctx: Context):
         raise NotImplementedError('do not call directly')
 
     # override typing hint
-    def _visit_statement(self, stmt, ctx: EvalCtx) -> None:
+    def _visit_statement(self, stmt, ctx: Context) -> None:
         return super()._visit_statement(stmt, ctx)
 
 
@@ -637,23 +639,23 @@ class TitanicInterpreter(Interpreter):
     Standard interpreter for FPy programs.
 
     Programs are evaluated using the Titanic backend (`titanfp`).
-    Booleans are Python `bool` values, real numbers are Titanic `MPMF` values,
+    Booleans are Python `bool` values, real numbers are Titanic `Float` values,
     and tensors are Titanic `NDArray` values.
 
     All operations are correctly-rounded.
     """
 
-    ctx: Optional[EvalCtx] = None
+    ctx: Optional[Context] = None
     """optionaly overriding context"""
 
-    def __init__(self, ctx: Optional[EvalCtx] = None):
+    def __init__(self, ctx: Optional[Context] = None):
         self.ctx = ctx
 
     def eval(
         self,
         func: Function,
         args: Sequence[Any],
-        ctx: Optional[EvalCtx] = None
+        ctx: Optional[Context] = None
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
@@ -665,6 +667,6 @@ class TitanicInterpreter(Interpreter):
         result = rt.eval(func.to_ir(), args, ctx)
         return result, rt.trace
 
-    def eval_expr(self, expr: Expr, env: _Env, ctx: EvalCtx):
+    def eval_expr(self, expr: Expr, env: _Env, ctx: Context):
         rt = _Interpreter(ForeignEnv.empty(), override_ctx=self.ctx, env=env)
         return rt._visit_expr(expr, ctx)
