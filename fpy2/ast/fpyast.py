@@ -197,21 +197,26 @@ class Var(ValueExpr):
     def __hash__(self) -> int:
         return hash(self.name)
 
-class ForeignVal(ValueExpr):
-    """FPy AST: native Python value"""
-    val: pyast.expr
+class ForeignAttribute(ValueExpr):
+    """
+    FPy AST: attribute of a foreign object, e.g., `x.y`
+    Attributes may be nested, e.g., `x.y.z`.
+    """
+    name: NamedId
+    attrs: list[NamedId]
 
-    def __init__(self, val: pyast.expr, loc: Optional[Location]):
+    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
         super().__init__(loc)
-        self.val = val
+        self.name = name
+        self.attrs = list(attrs)
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ForeignVal):
+        if not isinstance(other, ForeignAttribute):
             return False
-        return self.val == other.val
+        return self.name == other.name and self.attrs == other.attrs
 
     def __hash__(self) -> int:
-        return hash(self.val)
+        return hash((self.name, tuple(self.attrs)))
 
 class BoolVal(ValueExpr):
     """FPy AST: boolean value"""
@@ -594,12 +599,12 @@ class IfExpr(Expr):
 
 class ContextExpr(Expr):
     """FPy AST: context constructor"""
-    ctor: pyast.expr
+    ctor: Var | ForeignAttribute
     args: list[Expr]
 
     def __init__(
         self,
-        ctor: pyast.expr,
+        ctor: Var | ForeignAttribute,
         args: Sequence[Expr],
         loc: Optional[Location]
     ):

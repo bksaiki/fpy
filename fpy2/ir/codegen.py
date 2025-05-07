@@ -219,6 +219,9 @@ class _IRCodegenInstance(AstVisitor):
         body = self._visit_block(stmt.body, ctx)
         return ir.ForStmt(stmt.var, AnyType(), iterable, body, [])
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: None):
+        raise NotImplementedError('do not call')
+
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         props = self._visit_props(stmt.props)
         block = self._visit_block(stmt.body, ctx)

@@ -574,7 +574,7 @@ class _FPCore2FPy:
         # bind value to temporary
         t = self.gensym.fresh('t')
         block = StmtBlock(val_ctx.stmts + [SimpleAssign(t, val, None, None)])
-        stmt = ContextStmt(None, props, block, None)
+        stmt = ContextStmt(UnderscoreId, props, block, None)
         ctx.stmts.append(stmt)
         return Var(t, None)
 

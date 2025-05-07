@@ -200,13 +200,28 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(e.iff, ctx)
         return env
 
+    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: _Ctx):
+        env, _ = ctx
+        self._mark_use(e.name, env)
+
     def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
+        # check the constructor
+        match e.ctor:
+            case ForeignAttribute():
+                self._visit_foreign_attr(e.ctor, ctx)
+            case Var():
+                self._visit_var(e.ctor, ctx)
+            case _:
+                raise RuntimeError('unreachable', e.ctor)
         # check that context is not data-dependent
         for arg in e.args:
-            if not isinstance(arg, ForeignVal):
-                for free in LiveVars.analyze(arg):
-                    if free not in self.free_vars:
-                        raise FPySyntaxError('context is data-dependent')
+            match arg:
+                case ForeignAttribute():
+                    self._visit_foreign_attr(arg, ctx)
+                case _:
+                    for free in LiveVars.analyze(arg):
+                        if free not in self.free_vars:
+                            raise FPySyntaxError('context is data-dependent')
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         env, _ = ctx

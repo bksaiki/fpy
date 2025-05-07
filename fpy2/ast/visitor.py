@@ -301,7 +301,7 @@ class DefaultAstVisitor(AstVisitor):
 
     def _visit_context_expr(self, e: ContextExpr, ctx: Any):
         for arg in e.args:
-            if not isinstance(arg, ForeignVal):
+            if not isinstance(arg, ForeignAttribute):
                 self._visit_expr(arg, ctx)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
@@ -433,8 +433,8 @@ class DefaultAstTransformVisitor(AstVisitor):
         args: list[Expr] = []
         for arg in e.args:
             match arg:
-                case ForeignVal():
-                    args.append(ForeignVal(arg.val, arg.loc))
+                case ForeignAttribute():
+                    args.append(ForeignAttribute(arg.name, arg.attrs, arg.loc))
                 case _:
                     args.append(self._visit_expr(arg, ctx))
         return ContextExpr(e.ctor, args, e.loc)
