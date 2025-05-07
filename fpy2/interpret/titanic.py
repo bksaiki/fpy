@@ -454,9 +454,6 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: Context):
-        raise RuntimeError('do not call directly')
-
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)
         if self.enable_trace:
@@ -504,7 +501,7 @@ class _Interpreter(ReduceVisitor):
         slices: list[int] = []
         for s in stmt.slices:
             val = self._visit_expr(s, ctx)
-            if not isinstance(val, Digital):
+            if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
@@ -589,15 +586,48 @@ class _Interpreter(ReduceVisitor):
                 self.env[phi.name] = self.env[phi.rhs]
                 del self.env[phi.rhs]
 
-    def _visit_context(self, stmt: ContextStmt, ctx: Context):
-        props = {}
-        for k, v in stmt.props.items():
-            if isinstance(v, NamedId):
-                props[k] = self._lookup(v)
+    def _visit_foreign_attr(self, e: ForeignAttribute):
+        # lookup the root value (should be captured)
+        val = self._lookup(e.name)
+        # walk the attribute chain
+        for attr_id in e.attrs:
+            # need to manually lookup the attribute
+            attr = str(attr_id)
+            if isinstance(val, dict):
+                if attr not in val:
+                    raise RuntimeError(f'unknown attribute {attr} for {val}')
+                val = val[attr]
+            elif hasattr(val, attr):
+                val = getattr(val, attr)
             else:
-                props[k] = v
+                raise RuntimeError(f'unknown attribute {attr} for {val}')
+        return val
 
-        ctx = determine_ctx(ctx, props)
+    def _visit_context_expr(self, e: ContextExpr, ctx: Context):
+        match e.ctor:
+            case ForeignAttribute():
+                ctor = self._visit_foreign_attr(e.ctor)
+            case Var():
+                ctor = self._visit_var(e.ctor, ctx)
+
+        args: list[Any] = []
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    args.append(self._visit_foreign_attr(arg))
+                case _:
+                    v = self._visit_expr(arg, ctx)
+                    if isinstance(v, Float) and v.is_integer():
+                        # HACK: keeps things as specific as possible
+                        args.append(int(v))
+                    else:
+                        args.append(v)
+        return ctor(*args)
+
+    def _visit_context(self, stmt: ContextStmt, ctx: Context):
+        ctx = self._visit_expr(stmt.ctx, ctx)
+        if not isinstance(ctx, Context):
+            raise RuntimeError(f'Expected a \'Context\', got {ctx}')
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Context):
