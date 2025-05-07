@@ -237,10 +237,10 @@ class _Interpreter(ReduceVisitor):
         ctx = self._eval_ctx(ctx)
         try:
             result = fn(*args, ctx=ctx)
-        except gmpmath.SignedOverflow as e:
+        except gmpmath.SignedOverflow as err:
             # we overflowed beyond MPFR's limits, generate a large value and round it
             exp = ctx.emax + 1
-            x = Digital(negative=e.sign, c=1, exp=exp)
+            x = Digital(negative=err.sign, c=1, exp=exp)
             result = MPMF._round_to_context(x, ctx=ctx)
         except gmpmath.SignedUnderflow as e:
             # we underflowed beyond MPFR's limits, generate a small value and round it
@@ -451,6 +451,9 @@ class _Interpreter(ReduceVisitor):
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
+
+    def _visit_context_expr(self, e: ContextExpr, ctx: EvalCtx):
+        raise RuntimeError('do not call directly')
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: EvalCtx) -> None:
         val = self._visit_expr(stmt.expr, ctx)
