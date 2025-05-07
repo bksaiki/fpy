@@ -693,13 +693,13 @@ class ForStmt(Stmt):
 class ContextStmt(Stmt):
     """FPy IR: context statement"""
     name: Id
-    ctx: ContextExpr
+    ctx: Var | ContextExpr
     body: StmtBlock
 
-    def __init__(self, name: Id, props: dict[str, Any], body: StmtBlock):
+    def __init__(self, name: Id, ctx: Var | ContextExpr, body: StmtBlock):
         super().__init__()
         self.name = name
-        self.props = props.copy()
+        self.ctx = ctx
         self.body = body
 
 class AssertStmt(Stmt):

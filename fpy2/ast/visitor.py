@@ -430,6 +430,14 @@ class DefaultAstTransformVisitor(AstVisitor):
         return IfExpr(cond, ift, iff, e.loc)
 
     def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        match e.ctor:
+            case Var():
+                ctor = self._visit_var(e.ctor, ctx)
+            case ForeignAttribute():
+                ctor = ForeignAttribute(e.ctor.name, e.ctor.attrs, e.loc)
+            case _:
+                raise RuntimeError('unreachable', e.ctor)
+
         args: list[Expr | ForeignAttribute] = []
         for arg in e.args:
             match arg:
@@ -437,7 +445,8 @@ class DefaultAstTransformVisitor(AstVisitor):
                     args.append(ForeignAttribute(arg.name, arg.attrs, arg.loc))
                 case _:
                     args.append(self._visit_expr(arg, ctx))
-        return ContextExpr(e.ctor, args, e.loc)
+
+        return ContextExpr(ctor, args, e.loc)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         expr = self._visit_expr(stmt.expr, ctx)

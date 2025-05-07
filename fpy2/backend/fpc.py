@@ -447,6 +447,9 @@ class FPCoreCompileInstance(ReduceVisitor):
         while_binding = (name, fpc.Var(init), body)
         return fpc.Let([(tuple_id, iterable)], fpc.For([dim_binding], [while_binding], ctx))
 
+    def _visit_context_expr(self, e: ContextExpr, ctx):
+        raise NotImplementedError(e)
+
     def _visit_context(self, stmt, ctx):
         body = self._visit_block(stmt.body, ctx)
         return fpc.Ctx(stmt.props, body)

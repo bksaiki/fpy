@@ -220,12 +220,31 @@ class _IRCodegenInstance(AstVisitor):
         return ir.ForStmt(stmt.var, AnyType(), iterable, body, [])
 
     def _visit_context_expr(self, e: ContextExpr, ctx: None):
-        raise NotImplementedError('do not call')
+        match e.ctor:
+            case Var():
+                ctor = self._visit_var(e.ctor, ctx)
+            case ForeignAttribute():
+                ctor = ir.ForeignAttribute(e.ctor.name, e.ctor.attrs)
+
+        args: list[ir.Expr | ir.ForeignAttribute] = []
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    args.append(ir.ForeignAttribute(arg.name, arg.attrs))
+                case _:
+                    args.append(self._visit_expr(arg, ctx))
+        return ir.ContextExpr(ctor, args)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        props = self._visit_props(stmt.props)
+        match stmt.ctx:
+            case Var():
+                context = self._visit_var(stmt.ctx, ctx)
+            case ContextExpr():
+                context = self._visit_context_expr(stmt.ctx, ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.ctx)
         block = self._visit_block(stmt.body, ctx)
-        return ir.ContextStmt(stmt.name, props, block)
+        return ir.ContextStmt(stmt.name, context, block)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
         test = self._visit_expr(stmt.test, ctx)
