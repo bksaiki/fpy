@@ -202,9 +202,35 @@ class _FPyCompilerInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, None)
         return ast.ForStmt(stmt.var, iterable, body, None)
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        match e.ctor:
+            case Var():
+                ctor = self._visit_var(e.ctor, ctx)
+            case ForeignAttribute():
+                ctor = ast.ForeignAttribute(e.ctor.name, e.ctor.attrs, None)
+            case _:
+                raise RuntimeError('unreachable', e.ctor)
+
+        args: list[ast.Expr | ast.ForeignAttribute] = []
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    args.append(ast.ForeignAttribute(arg.name, arg.attrs, None))
+                case _:
+                    args.append(self._visit_expr(arg, ctx))
+
+        return ast.ContextExpr(ctor, args, None)
+
     def _visit_context(self, stmt: ContextStmt, ctx: None):
+        match stmt.ctx:
+            case Var():
+                context = self._visit_var(stmt.ctx, ctx)
+            case ContextExpr():
+                context = self._visit_context_expr(stmt.ctx, ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.ctx)
         body = self._visit_block(stmt.body, None)
-        return ast.ContextStmt(stmt.name, dict(stmt.props), body, None)
+        return ast.ContextStmt(stmt.name, context, body, None)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
         e = self._visit_expr(stmt.test, None)

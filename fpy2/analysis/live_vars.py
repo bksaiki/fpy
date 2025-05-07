@@ -143,8 +143,40 @@ class _LiveVars(ReduceVisitor):
         ctx = ctx | body_fvs
         return ctx | self._visit_expr(stmt.iterable, None)
 
+    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: None) -> _RetType:
+        return { e.name }
+
+    def _visit_context_expr(self, e: ContextExpr, ctx: None) -> _RetType:
+        match e.ctor:
+            case Var():
+                fvs = self._visit_var(e.ctor, None)
+            case ForeignAttribute():
+                fvs = self._visit_foreign_attr(e.ctor, None)
+            case _:
+                raise RuntimeError(f'unreachable {e.ctor}')
+
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    fvs |= self._visit_foreign_attr(arg, None)
+                case _:
+                    fvs |= self._visit_expr(arg, None)
+
+        return fvs
+
     def _visit_context(self, stmt: ContextStmt, ctx: _RetType) -> _RetType:
-        return ctx | self._visit_block(stmt.body, ctx)
+        body_fvs = self._visit_block(stmt.body, ctx)
+        if isinstance(stmt.name, NamedId):
+            body_fvs -= { stmt.name }
+        ctx = ctx | body_fvs
+        match stmt.ctx:
+            case Var():
+                ctx |= self._visit_var(stmt.ctx, None)
+            case ContextExpr():
+                ctx |= self._visit_context_expr(stmt.ctx, None)
+            case _:
+                raise RuntimeError(f'unreachable {stmt.ctx}')
+        return ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _RetType) -> _RetType:
         return ctx | self._visit_expr(stmt.test, None)

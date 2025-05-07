@@ -342,6 +342,11 @@ class DefaultVisitor(Visitor):
         self._visit_expr(e.ift, ctx)
         self._visit_expr(e.iff, ctx)
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        for arg in e.args:
+            if not isinstance(arg, ForeignAttribute):
+                self._visit_expr(arg, ctx)
+
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
@@ -371,6 +376,7 @@ class DefaultVisitor(Visitor):
         self._visit_block(stmt.body, ctx)
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
+        self._visit_expr(stmt.ctx, ctx)
         self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
@@ -473,6 +479,24 @@ class DefaultTransformVisitor(TransformVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return IfExpr(cond, ift, iff)
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        match e.ctor:
+            case Var():
+                ctor = self._visit_var(e.ctor, ctx)
+            case ForeignAttribute():
+                ctor = ForeignAttribute(e.ctor.name, e.ctor.attrs)
+            case _:
+                raise RuntimeError('unreachable', e)
+
+        args: list[Expr | ForeignAttribute] = []
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    args.append(ForeignAttribute(arg.name, arg.attrs))
+                case _:
+                    args.append(self._visit_expr(arg, ctx))
+        return ContextExpr(ctor, args)
+
     #######################################################
     # Statements
 
@@ -538,8 +562,15 @@ class DefaultTransformVisitor(TransformVisitor):
         return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
+        match stmt.ctx:
+            case Var():
+                context = self._visit_var(stmt.ctx, ctx)
+            case ContextExpr():
+                context = self._visit_context_expr(stmt.ctx, ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.ctx)
         body, ctx = self._visit_block(stmt.body, ctx)
-        s = ContextStmt(stmt.name, stmt.props.copy(), body)
+        s = ContextStmt(stmt.name, context, body)
         return s, ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
