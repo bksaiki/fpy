@@ -430,7 +430,7 @@ class DefaultAstTransformVisitor(AstVisitor):
         return IfExpr(cond, ift, iff, e.loc)
 
     def _visit_context_expr(self, e: ContextExpr, ctx: Any):
-        args: list[Expr] = []
+        args: list[Expr | ForeignAttribute] = []
         for arg in e.args:
             match arg:
                 case ForeignAttribute():

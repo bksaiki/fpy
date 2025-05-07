@@ -197,27 +197,6 @@ class Var(ValueExpr):
     def __hash__(self) -> int:
         return hash(self.name)
 
-class ForeignAttribute(ValueExpr):
-    """
-    FPy AST: attribute of a foreign object, e.g., `x.y`
-    Attributes may be nested, e.g., `x.y.z`.
-    """
-    name: NamedId
-    attrs: list[NamedId]
-
-    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
-        super().__init__(loc)
-        self.name = name
-        self.attrs = list(attrs)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ForeignAttribute):
-            return False
-        return self.name == other.name and self.attrs == other.attrs
-
-    def __hash__(self) -> int:
-        return hash((self.name, tuple(self.attrs)))
-
 class BoolVal(ValueExpr):
     """FPy AST: boolean value"""
     val: bool
@@ -596,16 +575,37 @@ class IfExpr(Expr):
     def __hash__(self) -> int:
         return hash((self.cond, self.ift, self.iff))
 
+class ForeignAttribute(Ast):
+    """
+    FPy AST: attribute of a foreign object, e.g., `x.y`
+    Attributes may be nested, e.g., `x.y.z`.
+    """
+    name: NamedId
+    attrs: list[NamedId]
+
+    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
+        super().__init__(loc)
+        self.name = name
+        self.attrs = list(attrs)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ForeignAttribute):
+            return False
+        return self.name == other.name and self.attrs == other.attrs
+
+    def __hash__(self) -> int:
+        return hash((self.name, tuple(self.attrs)))
+
 
 class ContextExpr(Expr):
     """FPy AST: context constructor"""
     ctor: Var | ForeignAttribute
-    args: list[Expr]
+    args: list[Expr | ForeignAttribute]
 
     def __init__(
         self,
         ctor: Var | ForeignAttribute,
-        args: Sequence[Expr],
+        args: Sequence[Expr | ForeignAttribute],
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -619,6 +619,7 @@ class ContextExpr(Expr):
 
     def __hash__(self) -> int:
         return hash((self.ctor, tuple(self.args)))
+
 
 class ContextAttribute(Ast):
     """FPy AST: context attribute"""
