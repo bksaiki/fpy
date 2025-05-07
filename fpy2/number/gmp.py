@@ -155,7 +155,7 @@ def mpfr_constant(x: str, prec: int):
             y = _constant_exprs[x]()
             return _round_odd(y, y.rc != 0)
         except KeyError as e:
-            raise ValueError('unknown constant {}'.format(repr(e.args[0])))
+            raise ValueError(f'unknown constant {e.args[0]!r}') from None
 
 def _mpfr_1ary(gmp_fn: Callable[[Any], Any], x: Float, prec: int):
     xf = float_to_mpfr(x)

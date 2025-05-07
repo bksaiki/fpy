@@ -628,6 +628,7 @@ class _Interpreter(ReduceVisitor):
         ctx = self._visit_expr(stmt.ctx, ctx)
         if not isinstance(ctx, Context):
             raise RuntimeError(f'Expected a \'Context\', got {ctx}')
+        ctx = self._eval_ctx(ctx)
         return self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Context):
