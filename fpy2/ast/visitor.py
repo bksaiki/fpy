@@ -446,7 +446,15 @@ class DefaultAstTransformVisitor(AstVisitor):
                 case _:
                     args.append(self._visit_expr(arg, ctx))
 
-        return ContextExpr(ctor, args, e.loc)
+        kwargs: list[tuple[str, Expr | ForeignAttribute]] = []
+        for name, arg in e.kwargs:
+            match arg:
+                case ForeignAttribute():
+                    kwargs.append((name, ForeignAttribute(arg.name, arg.attrs, arg.loc)))
+                case _:
+                    kwargs.append((name, self._visit_expr(arg, ctx)))
+
+        return ContextExpr(ctor, args, kwargs, e.loc)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         expr = self._visit_expr(stmt.expr, ctx)

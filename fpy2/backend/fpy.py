@@ -219,7 +219,8 @@ class _FPyCompilerInstance(ReduceVisitor):
                 case _:
                     args.append(self._visit_expr(arg, ctx))
 
-        return ast.ContextExpr(ctor, args, None)
+        # TODO: kwargs
+        return ast.ContextExpr(ctor, args, dict(), None)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         match stmt.ctx:
@@ -286,6 +287,7 @@ class FPYCompiler(Backend):
 
         func = UnSSA.apply(func)
         ast = _FPyCompilerInstance(func).compile()
-        SyntaxCheck.analyze(ast)
+        free_vars = set([str(v) for v in func.free_vars])
+        SyntaxCheck.analyze(ast, free_vars=free_vars)
         return ast
 

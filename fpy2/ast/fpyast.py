@@ -6,7 +6,7 @@ import ast as pyast
 
 from abc import ABC, abstractmethod
 from enum import IntEnum
-from typing import Any, Optional, Self, Sequence
+from typing import Any, Optional, Self, Sequence, Mapping
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location, default_repr
 
 
@@ -601,24 +601,27 @@ class ContextExpr(Expr):
     """FPy AST: context constructor"""
     ctor: Var | ForeignAttribute
     args: list[Expr | ForeignAttribute]
+    kwargs: list[tuple[str, Expr | ForeignAttribute]]
 
     def __init__(
         self,
         ctor: Var | ForeignAttribute,
         args: Sequence[Expr | ForeignAttribute],
+        kwargs: Sequence[tuple[str, Expr | ForeignAttribute]],
         loc: Optional[Location]
     ):
         super().__init__(loc)
         self.ctor = ctor
         self.args = list(args)
+        self.kwargs = list(kwargs)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ContextExpr):
             return False
-        return self.ctor == other.ctor and self.args == other.args
+        return self.ctor == other.ctor and self.args == other.args and self.kwargs == other.kwargs
 
     def __hash__(self) -> int:
-        return hash((self.ctor, tuple(self.args)))
+        return hash((self.ctor, tuple(self.args), tuple(self.kwargs)))
 
 
 class ContextAttribute(Ast):

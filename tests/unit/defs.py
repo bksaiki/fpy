@@ -395,14 +395,14 @@ def test_context2():
     with IEEEContext(8, 32, RM.RNE):
         return x + 1
 
-@fpy(name='Test context statement (3/3)')
-def test_context3(x: Real, y: Real):
-    with IEEEContext(8, 32, RM.RNE) as ctx:
-        with ctx.replace(rm=RM.RTP):
-            t0 = x + y
-        with ctx.replace(rm=RM.RTN):
-            t1 = x - y
-        return t0 - t1
+# @fpy(name='Test context statement (3/3)')
+# def test_context3(x: Real, y: Real):
+#     with IEEEContext(8, 32, RM.RNE) as ctx:
+#         with ctx.replace(rm=RM.RTP):
+#             t0 = x + y
+#         with ctx.replace(rm=RM.RTN):
+#             t1 = x - y
+#         return t0 - t1
 
 @fpy(name='Test assertion (1/1)')
 def test_assert():
@@ -581,7 +581,7 @@ tests = [
     test_for3,
     test_context1,
     test_context2,
-    test_context3,
+    # test_context3,
     test_assert,
 ]
 

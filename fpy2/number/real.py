@@ -89,6 +89,8 @@ class RealFloat(numbers.Rational):
         if c is not None:
             if m is not None:
                 raise ValueError(f'cannot specify both c={c} and m={m}')
+            if c < 0:
+                raise ValueError(f'c={c} must be non-negative')
             self.c = c
             if s is not None:
                 self.s = s

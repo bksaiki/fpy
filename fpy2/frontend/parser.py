@@ -570,9 +570,13 @@ class Parser:
                         case _:
                             pos_args.append(self._parse_expr(arg, allow_foreign=True))
                 # parse keyword arguments
-                if e.keywords != []:
-                    raise FPyParserError(loc, 'FPy does not support keyword arguments', e)
-                return ContextExpr(ctor, pos_args, loc)
+                kw_args: list[tuple[str, Expr]] = []
+                for kwd in e.keywords:
+                    if kwd.arg is None:
+                        raise FPyParserError(loc, 'FPy does not support unnamed keyword arguments', kwd, e)
+                    v = self._parse_expr(kwd.value, allow_foreign=True)
+                    kw_args.append((kwd.arg, v))
+                return ContextExpr(ctor, pos_args, kw_args, loc)
             case _:
                 raise FPyParserError(loc, 'FPy expects a valid context expression', e, item)
         # match e:

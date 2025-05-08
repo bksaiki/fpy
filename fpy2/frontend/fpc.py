@@ -9,8 +9,10 @@ from titanfp.fpbench.fpcparser import data_as_expr
 
 from ..ast.fpyast import *
 from ..ast.syntax_check import SyntaxCheck
-
 from ..utils import Gensym, pythonize_id
+
+from .fpc_context import FPCoreContext, NoSuchContextError
+
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 
@@ -83,19 +85,27 @@ def _zeros(ns: list[Expr]) -> Expr:
     args = [UnaryOp(UnaryOpKind.RANGE, n, None) for n in ns]
     return CompExpr(vars, args, Integer(0, None), None)
 
+# TODO: clean this up
 class _Ctx:
     env: dict[str, NamedId]
+    props: dict[str, Any]
     stmts: list[Stmt]
 
     def __init__(
         self,
         env: Optional[dict[str, NamedId]] = None,
+        props: Optional[dict[str, Any]] = None,
         stmts: Optional[list[Stmt]] = None
     ):
         if env is None:
             self.env = {}
         else:
             self.env = env
+
+        if props is None:
+            self.props = {}
+        else:
+            self.props = props
 
         if stmts is None:
             self.stmts = []
@@ -269,7 +279,7 @@ class _FPCore2FPy:
 
         for var, val in e.let_bindings:
             # compile value
-            val_ctx = _Ctx(env=env, stmts=ctx.stmts) if is_star else ctx
+            val_ctx = _Ctx(env=env, props=ctx.props, stmts=ctx.stmts) if is_star else ctx
             v_e = self._visit(val, val_ctx)
             # bind value to variable
             t = self.gensym.fresh(var)
@@ -277,13 +287,13 @@ class _FPCore2FPy:
             stmt = SimpleAssign(t, v_e, None, None)
             ctx.stmts.append(stmt)
 
-        return self._visit(e.body, _Ctx(env=env, stmts=ctx.stmts))
+        return self._visit(e.body, _Ctx(env=env, props=ctx.props, stmts=ctx.stmts))
 
     def _visit_whilestar(self, e: fpc.WhileStar, ctx: _Ctx) -> Expr:
         env = ctx.env
         for var, init, _ in e.while_bindings:
             # compile value
-            init_ctx = _Ctx(env=env, stmts=ctx.stmts)
+            init_ctx = _Ctx(env=env, props=ctx.props, stmts=ctx.stmts)
             init_e = self._visit(init, init_ctx)
             # bind value to variable
             t = self.gensym.fresh(var)
@@ -292,12 +302,12 @@ class _FPCore2FPy:
             ctx.stmts.append(stmt)
 
         # compile condition
-        cond_ctx = _Ctx(env=env, stmts=ctx.stmts)
+        cond_ctx = _Ctx(env=env, props=ctx.props, stmts=ctx.stmts)
         cond_e = self._visit(e.cond, cond_ctx)
 
         # create loop body
         stmts: list[Stmt] = []
-        update_ctx = _Ctx(env=env, stmts=stmts)
+        update_ctx = _Ctx(env=env, props=ctx.props, stmts=stmts)
         for var, _, update in e.while_bindings:
             # compile value and update loop variable
             update_e = self._visit(update, update_ctx)
@@ -309,7 +319,7 @@ class _FPCore2FPy:
         ctx.stmts.append(while_stmt)
 
         # compile body
-        body_ctx = _Ctx(env=env, stmts=ctx.stmts)
+        body_ctx = _Ctx(env=env, props=ctx.props, stmts=ctx.stmts)
         return self._visit(e.body, body_ctx)
 
     def _visit_while(self, e: fpc.While, ctx: _Ctx) -> Expr:
@@ -325,7 +335,7 @@ class _FPCore2FPy:
             ctx.stmts.append(stmt)
 
         # compile condition
-        cond_ctx = _Ctx(env=env, stmts=ctx.stmts)
+        cond_ctx = _Ctx(env=env, props=ctx.props, stmts=ctx.stmts)
         cond_e = self._visit(e.cond, cond_ctx)
 
         # create loop body
@@ -353,7 +363,7 @@ class _FPCore2FPy:
         ctx.stmts.append(while_stmt)
 
         # compile body
-        body_ctx = _Ctx(env=env, stmts=ctx.stmts)
+        body_ctx = _Ctx(env=env, props=ctx.props, stmts=ctx.stmts)
         return self._visit(e.body, body_ctx)
 
     def _make_tensor_body(
@@ -398,7 +408,7 @@ class _FPCore2FPy:
 
         # initialize loop variables
         init_env = ctx.env.copy()
-        init_ctx = _Ctx(env=ctx.env, stmts=ctx.stmts)
+        init_ctx = _Ctx(env=ctx.env, props=ctx.props, stmts=ctx.stmts)
         for var, init, _ in e.while_bindings:
             # compile value
             init_e = self._visit(init, init_ctx)
@@ -424,7 +434,7 @@ class _FPCore2FPy:
 
         # generate for loops
         loop_stmts = self._make_tensor_body(iter_vars, bound_vars, ctx.stmts)
-        loop_ctx = _Ctx(env=loop_env, stmts=loop_stmts)
+        loop_ctx = _Ctx(env=loop_env, props=ctx.props, stmts=loop_stmts)
 
         # set tensor element
         body_e = self._visit(e.body, loop_ctx)
@@ -477,7 +487,7 @@ class _FPCore2FPy:
 
         # generate for loops
         loop_stmts = self._make_tensor_body(iter_vars, bound_vars, ctx.stmts)
-        loop_ctx = _Ctx(env=loop_env, stmts=loop_stmts)
+        loop_ctx = _Ctx(env=loop_env, props=ctx.props, stmts=loop_stmts)
 
         # set tensor element
         body_e = self._visit(e.body, loop_ctx)
@@ -516,7 +526,7 @@ class _FPCore2FPy:
         init_env = ctx.env.copy()
         for var, init, _ in e.while_bindings:
             # compile value
-            init_ctx = _Ctx(init_env if is_star else ctx.env, ctx.stmts)
+            init_ctx = _Ctx(init_env if is_star else ctx.env, props=ctx.props, stmts=ctx.stmts)
             init_e = self._visit(init, init_ctx)
             # bind value to variable
             t = self.gensym.fresh(var)
@@ -534,7 +544,7 @@ class _FPCore2FPy:
         # generate for loops
         loop_env = init_env.copy()
         loop_stmts = self._make_tensor_body(iter_vars, bound_vars, ctx.stmts)
-        loop_ctx = _Ctx(env=loop_env, stmts=loop_stmts)
+        loop_ctx = _Ctx(env=loop_env, props=ctx.props, stmts=loop_stmts)
 
         if is_star:
             # update loop variables
@@ -560,7 +570,7 @@ class _FPCore2FPy:
                 stmt = SimpleAssign(x, Var(t, None), None, None)
                 loop_stmts.append(stmt)
 
-        body_ctx = _Ctx(env=init_env, stmts=ctx.stmts)
+        body_ctx = _Ctx(env=init_env, props=ctx.props, stmts=ctx.stmts)
         return self._visit(e.body, body_ctx)
 
     def _visit_ctx(self, e: fpc.Ctx, ctx: _Ctx) -> Expr:
@@ -568,8 +578,16 @@ class _FPCore2FPy:
         val_ctx = ctx.without_stmts()
         val = self._visit(e.body, val_ctx)
 
-        # compile properties
-        props = self._visit_props(e.props, _Ctx(env=ctx.env))
+        # compile properties to a context
+        props = self._visit_props(e.props, ctx)
+        fpc_ctx = FPCoreContext(**props)
+
+        try:
+            fpy_ctx = fpc_ctx.to_context()
+            print(fpy_ctx)
+        except NoSuchContextError:
+            print(f'{fpc_ctx!r}')
+
 
         # bind value to temporary
         t = self.gensym.fresh('t')
@@ -638,7 +656,7 @@ class _FPCore2FPy:
                 raise NotImplementedError(repr(data))
 
     def _visit_props(self, props: dict[str, fpc.Data], ctx: _Ctx):
-        new_props: dict[str, Any] = {}
+        new_props = dict(ctx.props)
         for k, v in props.items():
             match k:
                 case 'pre' | 'spec' | 'alt':
@@ -679,7 +697,8 @@ class _FPCore2FPy:
                         ctx.env[dim] = dim_id
 
         # compile 
-        props = self._visit_props(f.props, _Ctx(env=ctx.env))
+        props = self._visit_props(f.props, ctx)
+        ctx.props = props
 
         # compile function body
         e = self._visit(f.e, ctx)
