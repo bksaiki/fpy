@@ -33,6 +33,12 @@ class Context(ABC):
     summarized by this type.
     """
 
+    def __enter__(self) -> Self:
+        raise RuntimeError('do not call directly')
+
+    def __exit__(self, *args) -> None:
+        raise RuntimeError('do not call directly')
+
     @abstractmethod
     def with_rm(self, rm: RoundingMode) -> Self:
         """Returns `self` but with rounding mode `rm`."""
@@ -40,7 +46,12 @@ class Context(ABC):
 
     @abstractmethod
     def is_representable(self, x: Union[Float, RealFloat]) -> bool:
-        """Returns if `x` is representable under this context."""
+        """
+        Returns if `x` is representable under this context.
+
+        Representable is not the same as canonical,
+        but every canonical value must be representable.
+        """
         ...
 
     @abstractmethod

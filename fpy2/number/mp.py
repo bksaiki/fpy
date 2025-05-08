@@ -6,13 +6,13 @@ that is, multi-precision floating-point numbers. Hence, "MP."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import default_repr, bitmask
 
 from .context import Context
 from .number import Float
 from .real import RealFloat
 from .round import RoundingMode
-from .gmp import mpfr_constant
+from .gmp import mpfr_value
 
 @default_repr
 class MPContext(Context):
@@ -55,9 +55,15 @@ class MPContext(Context):
         elif x.is_zero():
             # special values and zeros are valid
             return True
+        elif x.p <= self.pmax:
+            # precision is within bounds:
+            return True
         else:
-            # non-zero value
-            return x.p <= self.pmax
+            # precision is possibly out of bounds
+            # check if the value can be normalized with fewer digits
+            p_over = x.p - self.pmax
+            c_lost = x.c & bitmask(p_over) # bits that would be lost via normalization
+            return c_lost == 0
 
     def is_canonical(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.is_representable(x):
@@ -126,12 +132,12 @@ class MPContext(Context):
             case int():
                 xr = RealFloat(c=x)
             case float() | str():
-                xr = mpfr_constant(x, self.pmax)
+                xr = mpfr_value(x, self.pmax)
             case Fraction():
                 if x.denominator == 1:
                     xr = RealFloat(c=int(x))
                 else:
-                    xr = mpfr_constant(x, self.pmax)
+                    xr = mpfr_value(x, self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 

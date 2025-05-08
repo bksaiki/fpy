@@ -58,6 +58,11 @@ class IEEEContext(EncodableContext):
     """this context as an `MPBContext`"""
 
     def __init__(self, es: int, nbits: int, rm: RoundingMode):
+        if not isinstance(es, int):
+            raise TypeError(f'Expected integer es={es}, got {type(es)} for {es}')
+        if not isinstance(nbits, int):
+            raise TypeError(f'Expected integer nbits={nbits}, got {type(nbits)} for {nbits}')
+
         if es < 2:
             raise ValueError(f'Invalid es={es}, must be at least 2')
         if nbits < es + 2:
@@ -211,13 +216,40 @@ class IEEEContext(EncodableContext):
             mbits = 0
         elif x.e <= self.emin:
             # subnormal
+            # should be identical to the subnormal case of self.to_ordinal()
+
+            # need to ensure that exp=self.expmin
+            offset = x.exp - self.expmin
+            if offset > 0:
+                # need to increase precision of `c`
+                c = x.c << offset
+            elif offset < 0:
+                # need to decrease precision of `c`
+                c = x.c >> -offset
+            else:
+                # no change
+                c = x.c
+
             ebits = 0
-            mbits = x.c << (x.exp - self.expmin)  # normalize so that exp=self.expmin
+            mbits = c
         else:
             # normal
-            c = x.c << (self.pmax - x.p) # normalize so that p=self.pmax
+            # should be identical to the subnormal case of self.to_ordinal()
+
+            # normalize so that p=self.pmax
+            offset = x.p - self.pmax
+            if offset > 0:
+                # too much precision
+                c = x.c >> offset
+            elif offset < 0:
+                # too little precision
+                c = x.c << -offset
+            else:
+                # no change
+                c = x.c
+
             ebits = x.e - self.emin + 1
-            mbits = c & bitmask(self.pmax - 1)
+            mbits = c & bitmask(self.m)
 
         return (sbit << (self.nbits - 1)) | (ebits << self.m) | mbits
 

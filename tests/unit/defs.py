@@ -1,4 +1,4 @@
-from fpy2 import fpy
+from fpy2 import fpy, IEEEContext, RM
 from fpy2.typing import *
 
 ### Simple tests
@@ -386,21 +386,21 @@ def test_for3():
 
 @fpy(name='Test context statement (1/3)')
 def test_context1():
-    with Context():
+    with IEEEContext(8, 32, RM.RNE):
         return 0
 
 @fpy(name='Test context statement (2/3)')
 def test_context2():
     x = 1
-    with Context(precision='binary32'):
+    with IEEEContext(8, 32, RM.RNE):
         return x + 1
 
 @fpy(name='Test context statement (3/3)')
 def test_context3(x: Real, y: Real):
-    with Context(precision='binary32'):
-        with Context(round='toPositive'):
+    with IEEEContext(8, 32, RM.RNE) as ctx:
+        with ctx.replace(rm=RM.RTP):
             t0 = x + y
-        with Context(round='toNegative'):
+        with ctx.replace(rm=RM.RTN):
             t1 = x - y
         return t0 - t1
 

@@ -27,17 +27,17 @@ R = TypeVar('R')
 # @fpy decorator
 
 @overload
-def fpy(func: Callable[P, R]) -> Callable[P, R]:
+def fpy(func: Callable[P, R]) -> Function:
     ...
 
 @overload
-def fpy(**kwargs) -> Callable[[Callable[P, R]], Callable[P, R]]:
+def fpy(**kwargs) -> Callable[[Callable[P, R]], Function]:
     ...
 
 def fpy(
     func: Optional[Callable[P, R]] = None,
     **kwargs
-) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
+):
     """
     Decorator to parse a Python function into FPy.
 
