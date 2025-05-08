@@ -6,7 +6,7 @@ that is, multi-precision floating-point numbers. Hence, "MP."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import default_repr, bitmask
 
 from .context import Context
 from .number import Float
@@ -55,9 +55,15 @@ class MPContext(Context):
         elif x.is_zero():
             # special values and zeros are valid
             return True
+        elif x.p <= self.pmax:
+            # precision is within bounds:
+            return True
         else:
-            # non-zero value
-            return x.p <= self.pmax
+            # precision is possibly out of bounds
+            # check if the value can be normalized with fewer digits
+            p_over = x.p - self.pmax
+            c_lost = x.c & bitmask(p_over) # bits that would be lost via normalization
+            return c_lost == 0
 
     def is_canonical(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.is_representable(x):

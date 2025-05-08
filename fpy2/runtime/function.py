@@ -1,15 +1,14 @@
 """FPy functions are the result of `@fpy` decorators."""
 
 from typing import Callable, Optional, TYPE_CHECKING
-from types import FunctionType
 from titanfp.fpbench.fpcast import FPCore
-from titanfp.arithmetic.evalctx import EvalCtx
 
 from .. import ir as fpyir
 from .. import ast as fpyast
 
 from ..analysis import VerifyIR
 from ..frontend import fpcore_to_fpy
+from ..number import Context
 from ..ir import IRCodegen
 from ..transform import SSA
 
@@ -56,7 +55,7 @@ class Function:
     def __str__(self):
         return 'Function(\n' + self.ast.format() + '\n)'
 
-    def __call__(self, *args, ctx: Optional[EvalCtx] = None):
+    def __call__(self, *args, ctx: Optional[Context] = None):
         fn = get_default_function_call()
         return fn(self, *args, ctx=ctx)
 

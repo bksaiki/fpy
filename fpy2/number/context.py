@@ -46,7 +46,12 @@ class Context(ABC):
 
     @abstractmethod
     def is_representable(self, x: Union[Float, RealFloat]) -> bool:
-        """Returns if `x` is representable under this context."""
+        """
+        Returns if `x` is representable under this context.
+
+        Representable is not the same as canonical,
+        but every canonical value must be representable.
+        """
         ...
 
     @abstractmethod
