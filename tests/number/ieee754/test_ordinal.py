@@ -21,7 +21,7 @@ class ToOrdinalTestCase(unittest.TestCase):
         for _ in range(num_encodings):
             s = random.choice([False, True])
             exp = random.randint(fp64.expmin, fp64.expmax)
-            c = random.randint(0, (1 << fp64.pmax) - 1)
+            c = random.randint(0, 1 << fp64.pmax)
             x = Float(s, exp, c, ctx=fp64)
             assert fp64.is_representable(x)
             xs.append(x)
@@ -40,7 +40,7 @@ class ToOrdinalTestCase(unittest.TestCase):
                 # for ctx, encode all possible values
                 for s in (True, False):
                     for exp in range(ctx.expmin, ctx.expmax):
-                        for c in range(0, 1 << ctx.pmax - 1):
+                        for c in range(0, 1 << ctx.pmax):
                             x = Float(s, exp, c, ctx=ctx)
                             assert ctx.is_representable(x)
 
@@ -99,7 +99,7 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
         for _ in range(num_encodings):
             s = random.choice([False, True])
             exp = random.randint(fp64.expmin, fp64.expmax)
-            c = random.randint(0, (1 << fp64.pmax) - 1)
+            c = random.randint(0, 1 << fp64.pmax)
             x = Float(s, exp, c, ctx=fp64)
             assert fp64.is_representable(x)
             xs.append(x)
@@ -118,7 +118,7 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
                 # for ctx, encode all possible values
                 for s in (True, False):
                     for exp in range(ctx.expmin, ctx.expmax):
-                        for c in range(0, 1 << ctx.pmax - 1):
+                        for c in range(0, 1 << ctx.pmax):
                             x = Float(s, exp, c, ctx=ctx)
                             assert ctx.is_representable(x)
 

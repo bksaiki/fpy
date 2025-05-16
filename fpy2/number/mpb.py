@@ -303,12 +303,69 @@ class MPBContext(SizedContext):
             # must be a finite number
             return self._mps_ctx.from_ordinal(x)
 
-    def minval(self, s = False) -> Float:
-        return self._mps_ctx.minval(s=s)
+    def zero(self, s: bool = False) -> Float:
+        """Returns a signed 0 under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        x = self._mps_ctx.zero(s=s)
+        x.ctx = self
+        return x
 
-    def maxval(self, s = False) -> Float:
+    def minval(self, s = False) -> Float:
+        """Returns the smallest non-zero value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        x = self._mps_ctx.minval(s=s)
+        x.ctx = self
+        return x
+
+    def min_subnormal(self, s = False) -> Float:
+        """Returns the smallest subnormal value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        x = self._mps_ctx.min_subnormal(s=s)
+        x.ctx = self
+        return x
+
+    def max_subnormal(self, s = False) -> Float:
+        """Returns the largest subnormal value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        x = self._mps_ctx.max_subnormal(s=s)
+        x.ctx = self
+        return x
+
+    def min_normal(self, s = False) -> Float:
+        """Returns the smallest normal value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        x = self._mps_ctx.min_normal(s=s)
+        x.ctx = self
+        return x
+
+    def max_normal(self, s: bool = False) -> Float:
+        """Returns the largest normal value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         if s:
             return Float(x=self.neg_maxval, ctx=self)
         else:
             return Float(x=self.pos_maxval, ctx=self)
 
+    def maxval(self, s: bool = False) -> Float:
+        """Returns the largest value with sign `s` under this context."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        return self.max_normal(s=s)
+
+    def infval(self, s: bool = False) -> RealFloat:
+        """
+        Returns the first non-representable value larger
+        than `maxval` with sign `s`.
+        """
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        if s:
+            return self.neg_maxval.next_away()
+        else:
+            return self.pos_maxval.next_away()

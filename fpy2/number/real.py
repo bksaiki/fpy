@@ -581,7 +581,8 @@ class RealFloat(numbers.Rational):
         # test if exponent is below `n`
         if n is not None and exp <= n:
             # too small, so adjust accordingly
-            adjust = n - exp + 1
+            expmin = n + 1
+            adjust = expmin - exp
             shift -= adjust
             exp += adjust
 
