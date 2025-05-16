@@ -276,7 +276,7 @@ class ExtContext(EncodableContext):
         maxval = self._mpb_ctx.maxval(s)
         maxval.ctx = self
         if not self.is_representable(maxval):
-            raise ValueError(f'not representable in this context: s={s}')
+            raise ValueError(f'Not representable in this context: s={s}')
         return maxval
 
     def infval(self, s: bool = False):
@@ -289,8 +289,10 @@ class ExtContext(EncodableContext):
         return self._mpb_ctx.infval(s)
 
     def encode(self, x: Float) -> int:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x!r}')
+        if not self.is_representable(x):
+            raise ValueError(f'not representable under this context: x={x!r}, ctx={self!r}')
 
         # sign bit
         sbit = 1 if x.s else 0
@@ -364,7 +366,7 @@ class ExtContext(EncodableContext):
         if not isinstance(x, int) and x >= 0 and x < 2 ** self.nbits:
             raise TypeError(f'Expected integer x={x} on [0, 2 ** {self.nbits})')
 
-        # masks
+        # bitmasks
         emask = bitmask(self.es)
         mmask = bitmask(self.m)
 
@@ -380,11 +382,11 @@ class ExtContext(EncodableContext):
         match self.nan_kind:
             case ExtNanKind.IEEE_754:
                 # IEEE 754 style decoding
-                if ebits == 0:
+                if ebits == 0: # all zeros
                     # subnormal / zero
                     c = mbits
                     return Float(s=s, c=c, exp=self.expmin, ctx=self)
-                elif ebits == bitmask(self.es):
+                elif ebits == emask: # all ones
                     # infinite / NaN
                     if self.enable_inf and mbits == 0:
                         # infinite (when enabled)
@@ -406,7 +408,7 @@ class ExtContext(EncodableContext):
                 ord_bits = (ebits << self.m) | mbits
 
                 # special values
-                nan_bits = (1 << (self.nbits - 1))
+                nan_bits = bitmask(self.nbits - 1) # all ones [E | M]
                 inf_bits  = nan_bits - 1
 
                 # check if `ord_bits` is a special value
@@ -436,7 +438,7 @@ class ExtContext(EncodableContext):
                 ord_bits = (ebits << self.m) | mbits
 
                 # special value
-                inf_bits = bitmask(self.nbits)
+                inf_bits = bitmask(self.nbits - 1) # all ones [E | M]
 
                 # check if `ord_bits` is a special value
                 if self.enable_inf and ord_bits == inf_bits:
@@ -589,7 +591,7 @@ def _ext_to_mpb(
                 # Inf is the maximum encoding, so the maximum value is
                 # the "previous" encoding before infinity
                 c = bitmask(p) - 1
-                maxval = RealFloat(c=c, exp=expmax)
+                maxval = RealFloat(c=c, exp=expmax+1)
             else:
                 # the maximum value is the maximum encoding
                 maxval = RealFloat(c=bitmask(p), exp=expmax+1)
