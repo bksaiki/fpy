@@ -53,8 +53,8 @@ class EncodeTestCase(unittest.TestCase):
                 ctx = IEEEContext(es, nbits, RM.RNE)
                 # for ctx, encode all possible values
                 for s in (True, False):
-                    for exp in range(ctx.expmin, ctx.expmax + 1):
-                        for c in range(0, 1 << ctx.pmax - 1):
+                    for exp in range(ctx.expmin, ctx.expmax):
+                        for c in range(0, 1 << ctx.pmax):
                             x = Float(s, exp, c, ctx=ctx)
                             assert ctx.is_representable(x)
 
