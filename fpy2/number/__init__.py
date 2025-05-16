@@ -87,7 +87,7 @@ with round nearest, ties-to-even rounding mode.
 See Graphcore's FP8 proposal for more information: https://arxiv.org/pdf/2206.02915.
 """
 
-MX_E5M8 = IEEEContext(5, 8, RM.RNE)
+MX_E5M2 = IEEEContext(5, 8, RM.RNE)
 """
 Alias for the FP8 format with 5 bits of exponent in
 the Open Compute Project (OCP) Microscaling Formats (MX) specification

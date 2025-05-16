@@ -4,7 +4,7 @@ from fpy2 import FP128, FP32, FP64, FP16
 
 
 class TestIEEE754Params(unittest.TestCase):
-    """Test IEEE754 parameters for different floating-point formats."""
+    """Test IEEE-754 floating-point parameters."""
 
     def test_fp128_params(self):
         self.assertEqual(FP128.nbits, 128)
