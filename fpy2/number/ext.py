@@ -31,9 +31,10 @@ class ExtContext(EncodableContext):
     Rounding context for the "extended" floating-point format
     as described in Brett Saiki's blog post. These formats extend
     the usual IEEE 754 format with three addition parameters:
-     - are infinities enabled?
-     - how are NaNs encoded?
-     - should the exponent be shifted?
+
+    - are infinities enabled?
+    - how are NaNs encoded?
+    - should the exponent be shifted?
 
     See https://uwplse.org/2025/02/17/Small-Floats.html for details.
     """
@@ -319,6 +320,7 @@ class ExtContext(EncodableContext):
                     ebits = 0
                     mbits = 0
                 case _:
+                    # ExtNanKind.NONE => no NaN so impossible
                     raise RuntimeError(f'unexpected NaN kind {self.nan_kind}')
         elif x.isinf:
             # Inf: placement of Inf depends on NaN encoding
@@ -338,7 +340,7 @@ class ExtContext(EncodableContext):
                         # Inf is in the last binade
                         ebits = bitmask(self.es)
                         mbits = bitmask(self.m) - 1
-                case ExtNanKind.NEG_ZERO:
+                case ExtNanKind.NEG_ZERO | ExtNanKind.NONE:
                     # Inf is the maximum encoding
                     ebits = bitmask(self.es)
                     mbits = bitmask(self.m)

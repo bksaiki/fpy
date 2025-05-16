@@ -1,10 +1,8 @@
 import unittest
-import random
 
 from fpy2 import (
     ExtContext,
     Float,
-    RM,
     S1E5M2, S1E4M3,
     MX_E5M8, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7
@@ -27,7 +25,7 @@ class DecodeTestCase(unittest.TestCase):
             for i in range(1 << ctx.nbits):
                 x = ctx.decode(i)
                 self.assertIsInstance(x, Float, f'i={i}, x={x}')
-
+                self.assertTrue(x.is_representable(), f'i={i}, x={x}')
 
 class EncodeTestCase(unittest.TestCase):
     """Testing `ExtContext.encode()`"""
