@@ -105,19 +105,19 @@ class FPCoreContext:
         """
         Converts the FPCore context to a context in this library.
         """
-        prec_str = self.props.get('precision', 'binary64')
-        rnd_str = self.props.get('round', 'nearestEven')
+        prec = self.props.get('precision', 'binary64')
+        rnd = self.props.get('round', 'nearestEven')
         try:
-            match prec_str:
+            match prec:
                 # IEEE 754 shorthands
                 case 'binary128':
-                    return IEEEContext(15, 128, _cvt_round_mode(rnd_str))
+                    return IEEEContext(15, 128, _cvt_round_mode(rnd))
                 case 'binary64':
-                    return IEEEContext(11, 64, _cvt_round_mode(rnd_str))
+                    return IEEEContext(11, 64, _cvt_round_mode(rnd))
                 case 'binary32':
-                    return IEEEContext(8, 32, _cvt_round_mode(rnd_str))
+                    return IEEEContext(8, 32, _cvt_round_mode(rnd))
                 case 'binary16':
-                    return IEEEContext(5, 16, _cvt_round_mode(rnd_str))
+                    return IEEEContext(5, 16, _cvt_round_mode(rnd))
                 case _:
                     raise NoSuchContextError(self)
         except ValueError:

@@ -29,8 +29,11 @@ Backend:
     - detect multi-variable for loops
 
 Misc:
-  - Rational contains a Fraction
-  - decnum and hexnum conversion to Fraction
+ - Rational contains a Fraction
+ - decnum and hexnum conversion to Fraction
+
+Interpreters:
+ - integrate FPCoreContext into other interpreters
 
 Numbers:
   - hashing by numerical equality (except NaN!)

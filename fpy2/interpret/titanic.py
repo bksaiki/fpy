@@ -9,6 +9,7 @@ from titanfp.titanic.ndarray import NDArray
 
 from .. import math
 
+from ..frontend import FPCoreContext
 from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
 from ..runtime.trace import ExprTraceEntry
@@ -137,11 +138,17 @@ class _Interpreter(ReduceVisitor):
         self.trace = []
         self.enable_trace = enable_trace
 
-    def _eval_ctx(self, ctx: Context):
-        if self.override_ctx is None:
-            return ctx
-        else:
+    def _eval_ctx(self, ctx: Context | FPCoreContext):
+        if self.override_ctx is not None:
             return self.override_ctx
+
+        match ctx:
+            case Context():
+                return ctx
+            case FPCoreContext():
+                return ctx.to_context()
+            case _:
+                raise TypeError(f'Expected `Context` or `FPCoreContext`, got {ctx}')
 
     # TODO: what are the semantics of arguments
     def _arg_to_mpmf(self, arg: Any, ctx: Context):
@@ -626,8 +633,6 @@ class _Interpreter(ReduceVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
         ctx = self._visit_expr(stmt.ctx, ctx)
-        if not isinstance(ctx, Context):
-            raise RuntimeError(f'Expected a \'Context\', got {ctx}')
         ctx = self._eval_ctx(ctx)
         return self._visit_block(stmt.body, ctx)
 
