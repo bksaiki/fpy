@@ -219,8 +219,18 @@ class _FPyCompilerInstance(ReduceVisitor):
                 case _:
                     args.append(self._visit_expr(arg, ctx))
 
+        kwargs: list[tuple[str, ast.Expr | ast.ForeignAttribute]] = []
+        for k, v in e.kwargs:
+            match v:
+                case ForeignAttribute():
+                    kwargs.append((k, ast.ForeignAttribute(v.name, v.attrs, None)))
+                case StringVal():
+                    kwargs.append((k, ast.StringVal(v.val, None)))
+                case _:
+                    kwargs.append((k, self._visit_expr(v, ctx)))
+
         # TODO: kwargs
-        return ast.ContextExpr(ctor, args, dict(), None)
+        return ast.ContextExpr(ctor, args, kwargs, None)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         match stmt.ctx:

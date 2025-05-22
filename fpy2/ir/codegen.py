@@ -233,7 +233,18 @@ class _IRCodegenInstance(AstVisitor):
                     args.append(ir.ForeignAttribute(arg.name, arg.attrs))
                 case _:
                     args.append(self._visit_expr(arg, ctx))
-        return ir.ContextExpr(ctor, args)
+
+        kwargs: list[tuple[str, ir.Expr | ir.ForeignAttribute]] = []
+        for k, v in e.kwargs:
+            match v:
+                case ForeignAttribute():
+                    kwargs.append((k, ir.ForeignAttribute(v.name, v.attrs)))
+                case StringVal():
+                    kwargs.append((k, ir.StringVal(v.val)))
+                case _:
+                    kwargs.append((k, self._visit_expr(v, ctx)))
+
+        return ir.ContextExpr(ctor, args, kwargs)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         match stmt.ctx:

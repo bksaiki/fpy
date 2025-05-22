@@ -60,6 +60,14 @@ class BoolVal(ValueExpr):
         super().__init__()
         self.val = val
 
+class StringVal(ValueExpr):
+    """FPy node: string value"""
+    val: str
+
+    def __init__(self, val: str):
+        super().__init__()
+        self.val = val
+
 class RealVal(ValueExpr):
     """FPy node: abstract real number"""
 
@@ -518,19 +526,26 @@ class ContextExpr(Expr):
     """FPy AST: context constructor"""
     ctor: Var | ForeignAttribute
     args: list[Expr | ForeignAttribute]
+    kwargs: list[tuple[str, Expr | ForeignAttribute]]
 
-    def __init__(self, ctor: Var | ForeignAttribute, args: Sequence[Expr | ForeignAttribute]):
+    def __init__(
+        self,
+        ctor: Var | ForeignAttribute,
+        args: Sequence[Expr | ForeignAttribute],
+        kwargs: Sequence[tuple[str, Expr | ForeignAttribute]],
+    ):
         super().__init__()
         self.ctor = ctor
         self.args = list(args)
+        self.kwargs = list(kwargs)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ContextExpr):
             return False
-        return self.ctor == other.ctor and self.args == other.args
+        return self.ctor == other.ctor and self.args == other.args and self.kwargs == other.kwargs
 
     def __hash__(self) -> int:
-        return hash((self.ctor, tuple(self.args)))
+        return hash((self.ctor, tuple(self.args), tuple(self.kwargs)))
 
 
 class SimpleAssign(Stmt):

@@ -495,7 +495,18 @@ class DefaultTransformVisitor(TransformVisitor):
                     args.append(ForeignAttribute(arg.name, arg.attrs))
                 case _:
                     args.append(self._visit_expr(arg, ctx))
-        return ContextExpr(ctor, args)
+
+        kwargs: list[tuple[str, Expr | ForeignAttribute]] = []
+        for k, v in e.kwargs:
+            match v:
+                case ForeignAttribute():
+                    kwargs.append((k, ForeignAttribute(v.name, v.attrs)))
+                case StringVal():
+                    kwargs.append((k, StringVal(v.val)))
+                case _:
+                    kwargs.append((k, self._visit_expr(v, ctx)))
+
+        return ContextExpr(ctor, args, kwargs)
 
     #######################################################
     # Statements

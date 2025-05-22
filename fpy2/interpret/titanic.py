@@ -629,12 +629,26 @@ class _Interpreter(ReduceVisitor):
                         args.append(int(v))
                     else:
                         args.append(v)
-        return ctor(*args)
+
+        kwargs: dict[str, Any] = {}
+        for k, v in e.kwargs:
+            match v:
+                case ForeignAttribute():
+                    kwargs[k] = self._visit_foreign_attr(v)
+                case StringVal():
+                    kwargs[k] = str(v.val)
+                case _:
+                    v = self._visit_expr(v, ctx)
+                    if isinstance(v, Float) and v.is_integer():
+                        kwargs[k] = int(v)
+                    else:
+                        kwargs[k] = v
+
+        return ctor(*args, **kwargs)
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
         ctx = self._visit_expr(stmt.ctx, ctx)
-        ctx = self._eval_ctx(ctx)
-        return self._visit_block(stmt.body, ctx)
+        return self._visit_block(stmt.body, self._eval_ctx(ctx))
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Context):
         test = self._visit_expr(stmt.test, ctx)
