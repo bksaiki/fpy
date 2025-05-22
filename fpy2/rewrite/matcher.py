@@ -127,6 +127,10 @@ class _MatcherInst(AstVisitor):
         if e.val != pat.val:
             raise _MatchFailure(f'matching {pat} against {e}')
 
+    def _visit_foreign(self, e: ForeignVal, pat: ForeignVal):
+        if e.val != pat.val:
+            raise _MatchFailure(f'matching {pat} against {e}')
+
     def _visit_context_val(self, e: ContextVal, pat: ContextVal):
         # TODO: does this even make sense?
         raise _MatchFailure(f'matching {pat} against {e}')

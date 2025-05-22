@@ -96,6 +96,9 @@ class _IRCodegenInstance(AstVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None):
         return ir.BoolVal(e.val)
 
+    def _visit_foreign(self, e: ForeignVal, ctx: None):
+        raise NotImplementedError
+
     def _visit_context_val(self, e: ContextVal, ctx: None):
         return ir.ContextVal(e.val)
 

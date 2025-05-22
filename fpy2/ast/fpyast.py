@@ -220,6 +220,22 @@ class RealVal(ValueExpr):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
+class ForeignVal(ValueExpr):
+    """FPy AST: native Python value"""
+    val: Any
+
+    def __init__(self, val: Any, loc: Optional[Location]):
+        super().__init__(loc)
+        self.val = val
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ForeignVal):
+            return False
+        return self.val == other.val
+
+    def __hash__(self) -> int:
+        return hash(self.val)
+
 class StringVal(ValueExpr):
     """FPy AST: string"""
     val: str

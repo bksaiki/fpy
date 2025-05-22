@@ -109,6 +109,10 @@ class SyntaxCheckInstance(AstVisitor):
         env, _ = ctx
         return env
 
+    def _visit_foreign(self, e: ForeignVal, ctx: _Ctx):
+        env, _ = ctx
+        return env
+
     def _visit_context_val(self, e, ctx):
         env, _ = ctx
         return env
