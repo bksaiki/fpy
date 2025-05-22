@@ -148,6 +148,9 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None):
         return fpc.Constant('TRUE' if e.val else 'FALSE')
 
+    def _visit_foreign(self, e: ForeignVal, ctx) -> fpc.Expr:
+        raise FPCoreCompileError('unsupported value', e.val)
+
     def _visit_context_val(self, e: ContextVal, ctx) -> fpc.Expr:
         match e.val:
             case FPCoreContext():

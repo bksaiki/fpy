@@ -62,6 +62,14 @@ class BoolVal(ValueExpr):
         super().__init__()
         self.val = val
 
+class ForeignVal(ValueExpr):
+    """FPy node: native Python value"""
+    val: Any
+
+    def __init__(self, val: Any):
+        super().__init__()
+        self.val = val
+
 class ContextVal(ValueExpr):
     """FPy node: context value"""
     val: Context | FPCoreContext

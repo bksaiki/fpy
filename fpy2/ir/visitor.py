@@ -21,6 +21,11 @@ class BaseVisitor(ABC):
         ...
 
     @abstractmethod
+    def _visit_foreign(self, e: ForeignVal, ctx: Any) -> Any:
+        """Visitor method for `ForeignVal` nodes."""
+        ...
+
+    @abstractmethod
     def _visit_context_val(self, e: ContextVal, ctx: Any):
         """Visitor method for `ContextVal` nodes."""
         ...
@@ -210,6 +215,8 @@ class BaseVisitor(ABC):
                 return self._visit_var(e, ctx)
             case BoolVal():
                 return self._visit_bool(e, ctx)
+            case ForeignVal():
+                return self._visit_foreign(e, ctx)
             case ContextVal():
                 return self._visit_context_val(e, ctx)
             case Decnum():
@@ -288,10 +295,14 @@ class TransformVisitor(BaseVisitor):
 
 class DefaultVisitor(Visitor):
     """Default visitor: visits all nodes without doing anything."""
+
     def _visit_var(self, e: Var, ctx: Any):
         pass
 
     def _visit_bool(self, e: BoolVal, ctx: Any):
+        pass
+
+    def _visit_foreign(self, e: ForeignVal, ctx: Any):
         pass
 
     def _visit_context_val(self, e: ContextVal, ctx: Any):
@@ -417,6 +428,9 @@ class DefaultTransformVisitor(TransformVisitor):
 
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return BoolVal(e.val)
+
+    def _visit_foreign(self, e: ForeignVal, ctx: Any):
+        return ForeignVal(e.val)
 
     def _visit_context_val(self, e: ContextVal, ctx: Any):
         return ContextVal(e.val)

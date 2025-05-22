@@ -33,6 +33,9 @@ class _LiveVars(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None) -> _RetType:
         return set()
 
+    def _visit_foreign(self, e: ForeignVal, ctx: None) -> _RetType:
+        return set()
+
     def _visit_context_val(self, e: ContextVal, ctx: None) -> _RetType:
         return set()
 

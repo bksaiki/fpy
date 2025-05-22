@@ -43,6 +43,9 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None):
         return ast.BoolVal(e.val, None)
 
+    def _visit_foreign(self, e: ForeignVal, ctx: None):
+        return ast.ForeignVal(e.val, None)
+
     def _visit_context_val(self, e: ContextVal, ctx: None):
         return ast.ContextVal(e.val, None)
 
