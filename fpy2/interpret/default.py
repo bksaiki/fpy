@@ -687,13 +687,14 @@ class _Interpreter(ReduceVisitor):
         return super()._visit_statement(stmt, ctx)
 
 
-class TitanicInterpreter(Interpreter):
+class DefaultInterpreter(Interpreter):
     """
     Standard interpreter for FPy programs.
 
-    Programs are evaluated using the Titanic backend (`titanfp`).
-    Booleans are Python `bool` values, real numbers are Titanic `Float` values,
-    and tensors are Titanic `NDArray` values.
+    Values:
+     - booleans are Python `bool` values,
+     - real numbers are FPy `float` values,
+     - tensors are Titanic `NDArray` values.
 
     All operations are correctly-rounded.
     """

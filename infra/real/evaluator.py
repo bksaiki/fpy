@@ -110,9 +110,9 @@ def run_eval_real(config: Config):
     rt = RealInterpreter()
 
     # baseline interpreter
-    rt_1k = TitanicInterpreter(ctx=ieee_ctx(19, 1024))
-    rt_2k = TitanicInterpreter(ctx=ieee_ctx(19, 2048))
-    rt_4k = TitanicInterpreter(ctx=ieee_ctx(19, 4096))
+    rt_1k = DefaultInterpreter(ctx=ieee_ctx(19, 1024))
+    rt_2k = DefaultInterpreter(ctx=ieee_ctx(19, 2048))
+    rt_4k = DefaultInterpreter(ctx=ieee_ctx(19, 4096))
     base_rts = [rt_1k, rt_2k, rt_4k]
 
     # load benchmarks

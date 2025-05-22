@@ -9,7 +9,7 @@ from titanfp.arithmetic.evalctx import determine_ctx
 from titanfp.arithmetic import ieee754
 
 from ..ast import AnyTypeAnn, ScalarTypeAnn, ScalarType
-from ..interpret import TitanicInterpreter
+from ..interpret import DefaultInterpreter
 from ..ir import FuncDef
 from ..runtime import Function, ForeignEnv
 
@@ -86,7 +86,7 @@ def _sample_rejection_one(
     else:
         lo = ieee754.Float(negative=True, isinf=True, ctx=ctx)
         hi = ieee754.Float(negative=False, isinf=True, ctx=ctx)
-        rt = TitanicInterpreter()
+        rt = DefaultInterpreter()
 
         assert 'pre' in fun.ast.ctx, 'missing precondition'
         pre = Function(fun.ast.ctx['pre'], ForeignEnv.empty())

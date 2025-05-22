@@ -4,6 +4,6 @@ from .interpreter import Interpreter, get_default_interpreter, set_default_inter
 
 from .native import PythonInterpreter
 from .real import RealInterpreter
-from .titanic import TitanicInterpreter
+from .default import DefaultInterpreter
 
-set_default_interpreter(TitanicInterpreter())
+set_default_interpreter(DefaultInterpreter())

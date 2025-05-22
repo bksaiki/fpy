@@ -1,4 +1,4 @@
-from fpy2 import RealInterpreter, TitanicInterpreter
+from fpy2 import RealInterpreter, DefaultInterpreter
 from titanfp.arithmetic.ieee754 import ieee_ctx
 
 from .config import ReferenceMode
@@ -29,13 +29,13 @@ def select_interpreter(mode: ReferenceMode):
             return RealInterpreter()
         case ReferenceMode.FLOAT_1K:
             ctx = ieee_ctx(19, 1024)
-            return TitanicInterpreter(ctx=ctx)
+            return DefaultInterpreter(ctx=ctx)
         case ReferenceMode.FLOAT_2K:
             ctx = ieee_ctx(19, 2048)
-            return TitanicInterpreter(ctx=ctx)
+            return DefaultInterpreter(ctx=ctx)
         case ReferenceMode.FLOAT_4K:
             ctx = ieee_ctx(19, 4096)
-            return TitanicInterpreter(ctx=ctx)
+            return DefaultInterpreter(ctx=ctx)
         case _:
             raise NotImplementedError(mode)
 

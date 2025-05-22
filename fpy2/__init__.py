@@ -58,7 +58,7 @@ from .interpret import (
     Interpreter,
     PythonInterpreter,
     RealInterpreter,
-    TitanicInterpreter,
+    DefaultInterpreter,
     set_default_interpreter,
     get_default_interpreter,
 )
