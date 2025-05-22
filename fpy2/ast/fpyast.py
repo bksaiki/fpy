@@ -2,11 +2,12 @@
 This module contains the AST for FPy programs.
 """
 
-import ast as pyast
-
 from abc import ABC, abstractmethod
 from enum import IntEnum
-from typing import Any, Optional, Self, Sequence, Mapping
+from typing import Any, Optional, Self, Sequence
+
+from ..fpc_context import FPCoreContext
+from ..number import Context
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location, default_repr
 
 
@@ -229,6 +230,22 @@ class StringVal(ValueExpr):
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, StringVal):
+            return False
+        return self.val == other.val
+
+    def __hash__(self) -> int:
+        return hash(self.val)
+
+class ContextVal(ValueExpr):
+    """FPy AST: context value"""
+    val: Context | FPCoreContext
+
+    def __init__(self, val: Context | FPCoreContext, loc: Optional[Location]):
+        super().__init__(loc)
+        self.val = val
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ContextVal):
             return False
         return self.val == other.val
 
@@ -905,13 +922,13 @@ class ForStmt(Stmt):
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
     name: Id
-    ctx: ContextExpr | Var
+    ctx: ContextExpr | ContextVal | Var
     body: StmtBlock
 
     def __init__(
         self,
         name: Id,
-        ctx: ContextExpr | Var,
+        ctx: ContextExpr | ContextVal | Var,
         body: StmtBlock,
         loc: Optional[Location]
     ):

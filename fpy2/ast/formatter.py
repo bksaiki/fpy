@@ -41,6 +41,9 @@ class _FormatterInstance(AstVisitor):
     def _visit_bool(self, e: BoolVal, ctx: _Ctx):
         return str(e.val)
 
+    def _visit_context_val(self, e: ContextVal, ctx):
+        return repr(e.val)
+
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
         return e.val
 

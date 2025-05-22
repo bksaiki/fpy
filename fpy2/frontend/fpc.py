@@ -581,18 +581,17 @@ class _FPCore2FPy:
         props = self._visit_props(e.props, ctx)
         fpc_ctx = FPCoreContext(**props)
 
+        # try to convert to a native FPy context
         try:
-            fpy_ctx = fpc_ctx.to_context()
-            print(fpy_ctx)
+            ctx_val = ContextVal(fpc_ctx.to_context(), None)
         except NoSuchContextError:
-            print(f'{fpc_ctx!r}')
-
+            ctx_val = ContextVal(fpc_ctx, None)
 
         # bind value to temporary
         t = self.gensym.fresh('t')
         block = StmtBlock(val_ctx.stmts + [SimpleAssign(t, val, None, None)])
         # TODO: need to generate an FPy context
-        stmt = ContextStmt(UnderscoreId(), props, block, None)
+        stmt = ContextStmt(UnderscoreId(), ctx_val, block, None)
         ctx.stmts.append(stmt)
         return Var(t, None)
 
