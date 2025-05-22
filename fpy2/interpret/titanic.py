@@ -9,7 +9,7 @@ from titanfp.titanic.ndarray import NDArray
 
 from .. import math
 
-from ..frontend import FPCoreContext
+from ..fpc_context import FPCoreContext
 from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
 from ..runtime.trace import ExprTraceEntry

@@ -44,7 +44,7 @@ from .number import (
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7
 )
 
-from .frontend import FPCoreContext
+from .fpc_context import FPCoreContext, NoSuchContextError
 
 from .decorator import fpy, pattern
 

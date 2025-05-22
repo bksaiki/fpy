@@ -4,8 +4,8 @@ Runtime utilities for integrating with FPCore from Titanic.
 
 from typing import Any
 
-from ..number import Context, IEEEContext, RM
-from ..utils import default_repr
+from .number import Context, IEEEContext, RM
+from .utils import default_repr
 
 
 def _cvt_round_mode(mode: str):
