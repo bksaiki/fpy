@@ -220,6 +220,9 @@ class _Interpreter(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return e.val
 
+    def _visit_context_val(self, e: ContextVal, ctx: Any):
+        return e.val
+
     def _visit_decnum(self, e: Decnum, ctx: Context):
         return str(e.val)
 

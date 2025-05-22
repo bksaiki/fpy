@@ -179,6 +179,9 @@ class _Interpreter(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: Context):
         return e.val
 
+    def _visit_context_val(self, e: ContextVal, ctx: Context):
+        return e.val
+
     def _visit_decnum(self, e: Decnum, ctx: Context):
         return float(e.val)
 

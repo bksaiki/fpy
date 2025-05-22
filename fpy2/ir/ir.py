@@ -5,9 +5,11 @@ This module contains the intermediate representation (IR).
 from abc import abstractmethod
 from typing import Any, Optional, Self, Sequence
 
-from .types import IRType
+from ..fpc_context import FPCoreContext
+from ..number import Context
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, default_repr
 
+from .types import IRType
 
 @default_repr
 class IR(object):
@@ -57,6 +59,14 @@ class BoolVal(ValueExpr):
     val: bool
 
     def __init__(self, val: bool):
+        super().__init__()
+        self.val = val
+
+class ContextVal(ValueExpr):
+    """FPy node: context value"""
+    val: Context | FPCoreContext
+
+    def __init__(self, val: Context | FPCoreContext):
         super().__init__()
         self.val = val
 
@@ -708,10 +718,10 @@ class ForStmt(Stmt):
 class ContextStmt(Stmt):
     """FPy IR: context statement"""
     name: Id
-    ctx: Var | ContextExpr
+    ctx: ContextExpr | ContextVal | Var
     body: StmtBlock
 
-    def __init__(self, name: Id, ctx: Var | ContextExpr, body: StmtBlock):
+    def __init__(self, name: Id, ctx: ContextExpr | ContextVal | Var, body: StmtBlock):
         super().__init__()
         self.name = name
         self.ctx = ctx
