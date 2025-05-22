@@ -16,6 +16,12 @@
      - `MPSContext` - floating-point with finite precision and a minimum exponent
      - `MPBContext` - floating-point with finite precision, minimum exponent, and maximum value
      - `IEEEContext` - IEEE 754 floating-point
+     - `ExtContext` - Extended-parameter floating-point
+ - Frontend
+   - explicit context syntax
+   - legacy FPCore-like context syntax
+   - foreign values
+   - pattern matching and rewrite system
 
 ## [0.0.2] - 2025-03-20
 ### Features
