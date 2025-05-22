@@ -7,23 +7,34 @@ from typing import Any
 from .number import Context, IEEEContext, RM
 from .utils import default_repr
 
+_round_mode = {
+    'nearestEven': RM.RNE,
+    'nearestAway': RM.RNA,
+    'toPositive': RM.RTP,
+    'toNegative': RM.RTN,
+    'toZero': RM.RTZ,
+    'awayZero': RM.RAZ,
+}
 
-def _cvt_round_mode(mode: str):
-    match mode:
-        case 'nearestEven':
-            return RM.RNE
-        case 'nearestAway':
-            return RM.RNA
-        case 'toPositive':
-            return RM.RTP
-        case 'toNegative':
-            return RM.RTN
-        case 'toZero':
-            return RM.RTZ
-        case 'awayZero':
-            return RM.RAZ
-        case _:
-            raise ValueError(f'Unknown rounding mode: {mode}')
+_invert_round_mode = {
+    RM.RNE: 'nearestEven',
+    RM.RNA: 'nearestAway',
+    RM.RTP: 'toPositive',
+    RM.RTN: 'toNegative',
+    RM.RTZ: 'toZero',
+    RM.RAZ: 'awayZero',
+}
+
+def _round_mode_to_fpy(mode: str):
+    if mode not in _round_mode:
+        raise ValueError(f'Unknown rounding mode: {mode}')
+    return _round_mode[mode]
+
+def _round_mode_from_fpc(mode: RM):
+    if mode not in _invert_round_mode:
+        raise ValueError(f'Unknown rounding mode: {mode}')
+    return _invert_round_mode[mode]
+
 
 class NoSuchContextError(Exception):
     """
@@ -42,7 +53,6 @@ class NoSuchContextError(Exception):
         return f'No such context: {self.ctx}'
 
 
-@default_repr
 class FPCoreContext:
     """
     FPCore rounding context.
@@ -69,6 +79,8 @@ class FPCoreContext:
         """
         self.props = kwargs
 
+    def __repr__(self):
+        return self.__class__.__name__ + '(' + ', '.join(f'{k}={v!r}' for k, v in self.props.items()) + ')'
 
     def __enter__(self) -> 'FPCoreContext':
         raise RuntimeError('do not call')
@@ -98,7 +110,23 @@ class FPCoreContext:
         """
         if not isinstance(ctx, Context):
             raise TypeError(f'Expected \'Context\' for ctx={ctx}, got {type(ctx)}')
-        raise NotImplementedError
+
+        match ctx:
+            case IEEEContext():
+                rm = _round_mode_from_fpc(ctx.rm)
+                match (ctx.es, ctx.nbits):
+                    case (15, 128):
+                        return FPCoreContext(precision='binary128', round=rm)
+                    case (11, 64):
+                        return FPCoreContext(precision='binary64', round=rm)
+                    case (8, 32):
+                        return FPCoreContext(precision='binary32', round=rm)
+                    case (5, 16):
+                        return FPCoreContext(precision='binary16', round=rm)
+                    case _:
+                        return FPCoreContext(precision=['float', ctx.es, ctx.nbits], round=rm)
+            case _:
+                raise RuntimeError(f'Cannot convert to an FPCore context {type(ctx)}')
 
 
     def to_context(self) -> Context:
@@ -108,16 +136,20 @@ class FPCoreContext:
         prec = self.props.get('precision', 'binary64')
         rnd = self.props.get('round', 'nearestEven')
         try:
+            print(prec)
             match prec:
+                # IEEE 754 long form
+                case ['float', es, nbits]:
+                    return IEEEContext(int(es), int(nbits), _round_mode_to_fpy(rnd))
                 # IEEE 754 shorthands
                 case 'binary128':
-                    return IEEEContext(15, 128, _cvt_round_mode(rnd))
+                    return IEEEContext(15, 128, _round_mode_to_fpy(rnd))
                 case 'binary64':
-                    return IEEEContext(11, 64, _cvt_round_mode(rnd))
+                    return IEEEContext(11, 64, _round_mode_to_fpy(rnd))
                 case 'binary32':
-                    return IEEEContext(8, 32, _cvt_round_mode(rnd))
+                    return IEEEContext(8, 32, _round_mode_to_fpy(rnd))
                 case 'binary16':
-                    return IEEEContext(5, 16, _cvt_round_mode(rnd))
+                    return IEEEContext(5, 16, _round_mode_to_fpy(rnd))
                 case _:
                     raise NoSuchContextError(self)
         except ValueError:
