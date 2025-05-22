@@ -131,10 +131,6 @@ class _MatcherInst(AstVisitor):
         if e.val != pat.val:
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_context_val(self, e: ContextVal, pat: ContextVal):
-        # TODO: does this even make sense?
-        raise _MatchFailure(f'matching {pat} against {e}')
-
     def _visit_decnum(self, e: Decnum, pat: Decnum):
         # this is a semantic match, not a syntactic match!
         if decnum_to_fraction(e.val) != decnum_to_fraction(pat.val):

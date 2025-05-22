@@ -225,9 +225,6 @@ class _Interpreter(ReduceVisitor):
     def _visit_foreign(self, e: ForeignVal, ctx: None):
         return e.val
 
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
-        return e.val
-
     def _visit_decnum(self, e: Decnum, ctx: Context):
         x = decnum_to_fraction(e.val)
         return ctx.round(x)
@@ -641,8 +638,6 @@ class _Interpreter(ReduceVisitor):
             match v:
                 case ForeignAttribute():
                     kwargs[k] = self._visit_foreign_attr(v)
-                case StringVal():
-                    kwargs[k] = str(v.val)
                 case _:
                     v = self._visit_expr(v, ctx)
                     if isinstance(v, Float) and v.is_integer():

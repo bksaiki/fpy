@@ -31,9 +31,6 @@ class LiveVarsInstance(AstVisitor):
     def _visit_foreign(self, e: ForeignVal, ctx: None):
         return set()
 
-    def _visit_context_val(self, e: ContextVal, ctx: None):
-        return set()
-
     def _visit_decnum(self, e: Decnum, ctx: None) -> _LiveSet:
         return set()
 

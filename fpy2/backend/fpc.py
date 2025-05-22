@@ -151,15 +151,6 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_foreign(self, e: ForeignVal, ctx) -> fpc.Expr:
         raise FPCoreCompileError('unsupported value', e.val)
 
-    def _visit_context_val(self, e: ContextVal, ctx) -> fpc.Expr:
-        match e.val:
-            case FPCoreContext():
-                return e.val
-            case Context():
-                FPCoreContext.from_context(e.val)
-            case _:
-                raise FPCoreCompileError('unsupported context value', e.val)
-
     def _visit_decnum(self, e, ctx) -> fpc.Expr:
         return fpc.Decnum(e.val)
 

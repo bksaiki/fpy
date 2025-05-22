@@ -46,9 +46,6 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_foreign(self, e: ForeignVal, ctx: None):
         return ast.ForeignVal(e.val, None)
 
-    def _visit_context_val(self, e: ContextVal, ctx: None):
-        return ast.ContextVal(e.val, None)
-
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ast.Decnum(e.val, None)
 
@@ -230,8 +227,6 @@ class _FPyCompilerInstance(ReduceVisitor):
             match v:
                 case ForeignAttribute():
                     kwargs.append((k, ast.ForeignAttribute(v.name, v.attrs, None)))
-                case StringVal():
-                    kwargs.append((k, ast.StringVal(v.val, None)))
                 case _:
                     kwargs.append((k, self._visit_expr(v, ctx)))
 

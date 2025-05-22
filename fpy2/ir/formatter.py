@@ -65,9 +65,6 @@ class _FormatterInstance(BaseVisitor):
     def _visit_foreign(self, e: ForeignVal, ctx: Any):
         return repr(e.val)
 
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
-        return repr(e.val)
-
     def _visit_decnum(self, e: Decnum, ctx: _IndentCtx):
         return e.val
 

@@ -238,7 +238,7 @@ class Parser:
                 else:
                     return Decnum(str(e.value), loc)
             case str():
-                return StringVal(e.value, loc)
+                return ForeignVal(e.value, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
 
@@ -247,7 +247,7 @@ class Parser:
         if len(e.args) != 1:
             raise FPyParserError(loc, 'FPy `hexfloat` expects one argument', e)
         arg = self._parse_expr(e.args[0])
-        if not isinstance(arg, StringVal):
+        if not isinstance(arg, ForeignVal):
             raise FPyParserError(loc, 'FPy `hexfloat` expects a string', e)
         return Hexnum(arg.val, loc)
 

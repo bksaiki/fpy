@@ -26,11 +26,6 @@ class BaseVisitor(ABC):
         ...
 
     @abstractmethod
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
-        """Visitor method for `ContextVal` nodes."""
-        ...
-
-    @abstractmethod
     def _visit_decnum(self, e: Decnum, ctx: Any):
         """Visitor method for `Decnum` nodes."""
         ...
@@ -217,8 +212,6 @@ class BaseVisitor(ABC):
                 return self._visit_bool(e, ctx)
             case ForeignVal():
                 return self._visit_foreign(e, ctx)
-            case ContextVal():
-                return self._visit_context_val(e, ctx)
             case Decnum():
                 return self._visit_decnum(e, ctx)
             case Hexnum():
@@ -303,9 +296,6 @@ class DefaultVisitor(Visitor):
         pass
 
     def _visit_foreign(self, e: ForeignVal, ctx: Any):
-        pass
-
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
         pass
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
@@ -432,9 +422,6 @@ class DefaultTransformVisitor(TransformVisitor):
     def _visit_foreign(self, e: ForeignVal, ctx: Any):
         return ForeignVal(e.val)
 
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
-        return ContextVal(e.val)
-
     def _visit_decnum(self, e: Decnum, ctx: Any):
         return Decnum(e.val)
 
@@ -528,8 +515,6 @@ class DefaultTransformVisitor(TransformVisitor):
             match v:
                 case ForeignAttribute():
                     kwargs.append((k, ForeignAttribute(v.name, v.attrs)))
-                case StringVal():
-                    kwargs.append((k, StringVal(v.val)))
                 case _:
                     kwargs.append((k, self._visit_expr(v, ctx)))
 

@@ -70,22 +70,6 @@ class ForeignVal(ValueExpr):
         super().__init__()
         self.val = val
 
-class ContextVal(ValueExpr):
-    """FPy node: context value"""
-    val: Context | FPCoreContext
-
-    def __init__(self, val: Context | FPCoreContext):
-        super().__init__()
-        self.val = val
-
-class StringVal(ValueExpr):
-    """FPy node: string value"""
-    val: str
-
-    def __init__(self, val: str):
-        super().__init__()
-        self.val = val
-
 class RealVal(ValueExpr):
     """FPy node: abstract real number"""
 
@@ -726,10 +710,10 @@ class ForStmt(Stmt):
 class ContextStmt(Stmt):
     """FPy IR: context statement"""
     name: Id
-    ctx: ContextExpr | ContextVal | Var
+    ctx: ContextExpr | Var | ForeignVal
     body: StmtBlock
 
-    def __init__(self, name: Id, ctx: ContextExpr | ContextVal | Var, body: StmtBlock):
+    def __init__(self, name: Id, ctx: ContextExpr | Var | ForeignVal, body: StmtBlock):
         super().__init__()
         self.name = name
         self.ctx = ctx

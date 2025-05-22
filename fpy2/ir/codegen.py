@@ -99,9 +99,6 @@ class _IRCodegenInstance(AstVisitor):
     def _visit_foreign(self, e: ForeignVal, ctx: None):
         raise NotImplementedError
 
-    def _visit_context_val(self, e: ContextVal, ctx: None):
-        return ir.ContextVal(e.val)
-
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ir.Decnum(e.val)
 
@@ -245,8 +242,6 @@ class _IRCodegenInstance(AstVisitor):
             match v:
                 case ForeignAttribute():
                     kwargs.append((k, ir.ForeignAttribute(v.name, v.attrs)))
-                case StringVal():
-                    kwargs.append((k, ir.StringVal(v.val)))
                 case _:
                     kwargs.append((k, self._visit_expr(v, ctx)))
 

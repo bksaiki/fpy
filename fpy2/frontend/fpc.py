@@ -583,9 +583,9 @@ class _FPCore2FPy:
 
         # try to convert to a native FPy context
         try:
-            ctx_val = ContextVal(fpc_ctx.to_context(), None)
+            ctx_val = ForeignVal(fpc_ctx.to_context(), None)
         except NoSuchContextError:
-            ctx_val = ContextVal(fpc_ctx, None)
+            ctx_val = ForeignVal(fpc_ctx, None)
 
         # bind value to temporary
         t = self.gensym.fresh('t')
