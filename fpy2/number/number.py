@@ -156,12 +156,22 @@ class Float:
 
     def __float__(self):
         """
-        Casts this value to a native Python float.
+        Casts this value exactly to a native Python float.
 
         If the value is not representable, a `ValueError` is raised.
         """
         fn = get_current_float_converter()
         return fn(self)
+
+    def __int__(self):
+        """
+        Casts this value exactly to a native Python integer.
+
+        If the value is not representable, a `ValueError` is raised.
+        """
+        if not self.is_integer():
+            raise ValueError(f'{self} is not an integer')
+        return int(self._real)
 
     @staticmethod
     def from_real(x: RealFloat, ctx: Optional[Context] = None) -> 'Float':

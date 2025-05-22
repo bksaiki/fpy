@@ -5,8 +5,9 @@ from typing import Optional
 import titanfp.fpbench.fpcast as fpc 
 
 from ..analysis import DefineUse
-from ..runtime import Function
+from ..fpc_context import FPCoreContext
 from ..ir import *
+from ..number import Context
 from ..transform import ForBundling, FuncUpdate, SimplifyIf, WhileBundling
 from ..utils import Gensym
 
@@ -146,6 +147,15 @@ class FPCoreCompileInstance(ReduceVisitor):
 
     def _visit_bool(self, e: BoolVal, ctx: None):
         return fpc.Constant('TRUE' if e.val else 'FALSE')
+
+    def _visit_context_val(self, e: ContextVal, ctx) -> fpc.Expr:
+        match e.val:
+            case FPCoreContext():
+                return e.val
+            case Context():
+                FPCoreContext.from_context(e.val)
+            case _:
+                raise FPCoreCompileError('unsupported context value', e.val)
 
     def _visit_decnum(self, e, ctx) -> fpc.Expr:
         return fpc.Decnum(e.val)
@@ -447,9 +457,13 @@ class FPCoreCompileInstance(ReduceVisitor):
         while_binding = (name, fpc.Var(init), body)
         return fpc.Let([(tuple_id, iterable)], fpc.For([dim_binding], [while_binding], ctx))
 
+    def _visit_context_expr(self, e: ContextExpr, ctx):
+        raise NotImplementedError(e)
+
     def _visit_context(self, stmt, ctx):
         body = self._visit_block(stmt.body, ctx)
-        return fpc.Ctx(stmt.props, body)
+        # TODO: fix
+        return fpc.Ctx({}, body)
 
     def _visit_assert(self, stmt, ctx):
         # strip the assertion

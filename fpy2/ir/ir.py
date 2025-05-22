@@ -5,16 +5,15 @@ This module contains the intermediate representation (IR).
 from abc import abstractmethod
 from typing import Any, Optional, Self, Sequence
 
-from .types import IRType
-from ..utils import CompareOp, Id, NamedId, UnderscoreId
+from ..fpc_context import FPCoreContext
+from ..number import Context
+from ..utils import CompareOp, Id, NamedId, UnderscoreId, default_repr
 
+from .types import IRType
+
+@default_repr
 class IR(object):
     """FPy IR: base class for all IR nodes."""
-
-    def __repr__(self):
-        name = self.__class__.__name__
-        items = ', '.join(f'{k}={repr(v)}' for k, v in self.__dict__.items())
-        return f'{name}({items})'
 
     def format(self) -> str:
         """Format the AST node as a string."""
@@ -60,6 +59,22 @@ class BoolVal(ValueExpr):
     val: bool
 
     def __init__(self, val: bool):
+        super().__init__()
+        self.val = val
+
+class ContextVal(ValueExpr):
+    """FPy node: context value"""
+    val: Context | FPCoreContext
+
+    def __init__(self, val: Context | FPCoreContext):
+        super().__init__()
+        self.val = val
+
+class StringVal(ValueExpr):
+    """FPy node: string value"""
+    val: str
+
+    def __init__(self, val: str):
         super().__init__()
         self.val = val
 
@@ -496,6 +511,53 @@ class IfExpr(Expr):
         self.ift = ift
         self.iff = iff
 
+class ForeignAttribute(IR):
+    """
+    FPy IR: attribute of a foreign object, e.g., `x.y`
+    Attributes may be nested, e.g., `x.y.z`.
+    """
+    name: NamedId
+    attrs: list[NamedId]
+
+    def __init__(self, name: NamedId, attrs: Sequence[NamedId]):
+        super().__init__()
+        self.name = name
+        self.attrs = list(attrs)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ForeignAttribute):
+            return False
+        return self.name == other.name and self.attrs == other.attrs
+
+    def __hash__(self) -> int:
+        return hash((self.name, tuple(self.attrs)))
+
+class ContextExpr(Expr):
+    """FPy AST: context constructor"""
+    ctor: Var | ForeignAttribute
+    args: list[Expr | ForeignAttribute]
+    kwargs: list[tuple[str, Expr | ForeignAttribute]]
+
+    def __init__(
+        self,
+        ctor: Var | ForeignAttribute,
+        args: Sequence[Expr | ForeignAttribute],
+        kwargs: Sequence[tuple[str, Expr | ForeignAttribute]],
+    ):
+        super().__init__()
+        self.ctor = ctor
+        self.args = list(args)
+        self.kwargs = list(kwargs)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ContextExpr):
+            return False
+        return self.ctor == other.ctor and self.args == other.args and self.kwargs == other.kwargs
+
+    def __hash__(self) -> int:
+        return hash((self.ctor, tuple(self.args), tuple(self.kwargs)))
+
+
 class SimpleAssign(Stmt):
     """FPy node: assignment to a single variable"""
     var: Id
@@ -655,14 +717,14 @@ class ForStmt(Stmt):
 
 class ContextStmt(Stmt):
     """FPy IR: context statement"""
-    name: Optional[Id]
-    props: dict[str, Any]
+    name: Id
+    ctx: ContextExpr | ContextVal | Var
     body: StmtBlock
 
-    def __init__(self, name: Optional[Id], props: dict[str, Any], body: StmtBlock):
+    def __init__(self, name: Id, ctx: ContextExpr | ContextVal | Var, body: StmtBlock):
         super().__init__()
         self.name = name
-        self.props = props.copy()
+        self.ctx = ctx
         self.body = body
 
 class AssertStmt(Stmt):

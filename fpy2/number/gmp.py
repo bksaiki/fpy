@@ -94,7 +94,7 @@ def mpfr_to_float(x):
     return _round_odd(x, False)
 
 
-def mpfr_constant(x, prec: int):
+def mpfr_value(x, prec: int):
     """
     Converts `x` into an MPFR type such that it may be safely re-rounded
     accurately to `prec` digits of precision.
@@ -111,6 +111,51 @@ def mpfr_constant(x, prec: int):
     ):
         y = gmp.mpfr(x)
         return _round_odd(y, y.rc != 0)
+
+# From `titanfp` package
+# TODO: some of these are unsafe
+# TODO: should these be indexed by string or enum?
+_constant_exprs = {
+    'E' : lambda : gmp.exp(1),
+    'LOG2E' : lambda: gmp.log2(gmp.exp(1)), # TODO: may be inaccurate
+    'LOG10E' : lambda: gmp.log10(gmp.exp(1)), # TODO: may be inaccurate
+    'LN2' : gmp.const_log2,
+    'LN10' : lambda: gmp.log(10),
+    'PI' : gmp.const_pi,
+    'PI_2' : lambda: gmp.const_pi() / 2, # division by 2 is exact
+    'PI_4' : lambda: gmp.const_pi() / 4, # division by 4 is exact
+    'M_1_PI' : lambda: 1 / gmp.const_pi(), # TODO: may be inaccurate
+    'M_2_PI' : lambda: 2 / gmp.const_pi(), # TODO: may be inaccurate
+    'M_2_SQRTPI' : lambda: 2 / gmp.sqrt(gmp.const_pi()), # TODO: may be inaccurate
+    'SQRT2': lambda: gmp.sqrt(2),
+    'SQRT1_2': lambda: gmp.sqrt(gmp.div(gmp.mpfr(1), gmp.mpfr(2))),
+    'INFINITY': gmp.inf,
+    'NAN': gmp.nan,
+}
+
+def mpfr_constant(x: str, prec: int):
+    """
+    Converts `x` into an MPFR type such that it may be safely re-rounded
+    accurately to `prec` digits of precision.
+    """
+    if not isinstance(x, str):
+        raise TypeError(f'Expected a string, got {type(x)}')
+
+    with gmp.context(
+        precision=prec+2,
+        emin=gmp.get_emin_min(),
+        emax=gmp.get_emax_max(),
+        trap_underflow=False,
+        trap_overflow=False,
+        trap_inexact=False,
+        trap_divzero=False,
+        round=gmp.RoundToZero,
+    ):
+        try:
+            y = _constant_exprs[x]()
+            return _round_odd(y, y.rc != 0)
+        except KeyError as e:
+            raise ValueError(f'unknown constant {e.args[0]!r}') from None
 
 def _mpfr_1ary(gmp_fn: Callable[[Any], Any], x: Float, prec: int):
     xf = float_to_mpfr(x)

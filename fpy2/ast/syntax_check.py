@@ -2,10 +2,11 @@
 
 from typing import Optional, Self
 
+from ..utils import FPySyntaxError
+
 from .fpyast import *
 from .visitor import AstVisitor
-
-from ..utils import FPySyntaxError
+from .live_vars import LiveVars
 
 class _Env:
     """Bound variables in the current scope."""
@@ -108,6 +109,10 @@ class SyntaxCheckInstance(AstVisitor):
         env, _ = ctx
         return env
 
+    def _visit_context_val(self, e, ctx):
+        env, _ = ctx
+        return env
+
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
         env, _ = ctx
         return env
@@ -199,6 +204,29 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(e.iff, ctx)
         return env
 
+    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: _Ctx):
+        env, _ = ctx
+        self._mark_use(e.name, env)
+
+    def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
+        # check the constructor
+        match e.ctor:
+            case ForeignAttribute():
+                self._visit_foreign_attr(e.ctor, ctx)
+            case Var():
+                self._visit_var(e.ctor, ctx)
+            case _:
+                raise RuntimeError('unreachable', e.ctor)
+        # check that context is not data-dependent
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    self._visit_foreign_attr(arg, ctx)
+                case _:
+                    for free in LiveVars.analyze(arg):
+                        if free not in self.free_vars:
+                            raise FPySyntaxError('context is data-dependent')
+
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.expr, ctx)
@@ -261,10 +289,8 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env, is_top = ctx
-        for _, v in stmt.props.items():
-            if isinstance(v, NamedId):
-                self._mark_use(v, env)
-        if stmt.name is not None and isinstance(stmt.name, NamedId):
+        self._visit_expr(stmt.ctx, ctx)
+        if isinstance(stmt.name, NamedId):
             env = env.extend(stmt.name)
         return self._visit_block(stmt.body, (env, is_top))
 

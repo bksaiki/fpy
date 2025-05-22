@@ -127,6 +127,10 @@ class _MatcherInst(AstVisitor):
         if e.val != pat.val:
             raise _MatchFailure(f'matching {pat} against {e}')
 
+    def _visit_context_val(self, e: ContextVal, pat: ContextVal):
+        # TODO: does this even make sense?
+        raise _MatchFailure(f'matching {pat} against {e}')
+
     def _visit_decnum(self, e: Decnum, pat: Decnum):
         # this is a semantic match, not a syntactic match!
         if decnum_to_fraction(e.val) != decnum_to_fraction(pat.val):
@@ -225,6 +229,22 @@ class _MatcherInst(AstVisitor):
         self._visit_expr(e.ift, pat.ift)
         self._visit_expr(e.iff, pat.iff)
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: ContextExpr):
+        if len(e.args) != len(ctx.args):
+            raise _MatchFailure(f'matching {ctx} against {e}')
+        for c1, c2 in zip(e.args, ctx.args):
+            match c1, c2:
+                case ForeignAttribute(), ForeignAttribute():
+                    if c1 != c2:
+                        raise _MatchFailure(f'matching {ctx} against {e}')
+                case Expr(), Expr():
+                    # check if args are the same
+                    self._visit_expr(c1, c2)
+                case (ForeignAttribute(), _) | (_, ForeignAttribute()):
+                    raise _MatchFailure(f'matching {ctx} against {e}')
+                case _, _:
+                    raise RuntimeError(f'unreachable case: {c1} vs {c2}')
+
     def _visit_simple_assign(self, stmt: SimpleAssign, pat: SimpleAssign):
         self._visit_target(stmt.var, pat.var)
         self._visit_expr(stmt.expr, pat.expr)
@@ -275,9 +295,7 @@ class _MatcherInst(AstVisitor):
         self._visit_block(stmt.body, pat.body)
 
     def _visit_context(self, stmt: ContextStmt, pat: ContextStmt):
-        # TODO: match context names
-        if stmt.props != pat.props:
-            raise _MatchFailure(f'matching {pat} against {stmt}')
+        self._visit_expr(stmt.ctx, pat.ctx)
         self._visit_block(stmt.body, pat.body)
 
     def _visit_assert(self, stmt: AssertStmt, pat: AssertStmt):

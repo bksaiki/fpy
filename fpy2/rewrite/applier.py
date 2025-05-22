@@ -161,12 +161,19 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
         return s, None
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
+        match stmt.ctx:
+            case ContextExpr():
+                context = self._visit_context_expr(stmt.ctx, None)
+            case Var():
+                context = self._visit_var(stmt.ctx, None)
+            case _:
+                raise RuntimeError(f'unreachable case: {stmt.ctx}')
         body, _ = self._visit_block(stmt.body, None)
         if stmt.name is None:
-            s = ContextStmt(None, stmt.props, body, None)
+            s = ContextStmt(None, context, body, None)
         else:
             name = self._visit_id(stmt.name)
-            s = ContextStmt(name, stmt.props, body, None)
+            s = ContextStmt(name, context, body, None)
             return s, None
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):

@@ -280,9 +280,18 @@ class _SSAInstance(DefaultTransformVisitor):
         return s, new_ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
-        # TODO: what to do about `stmt.name`
+        ctx = ctx.copy()
+        if isinstance(stmt.name, NamedId):
+            t = self.gensym.refresh(stmt.name)
+            ctx[stmt.name] = t
+
+        context = self._visit_expr(stmt.ctx, ctx)
+        # sanity check
+        if not isinstance(context, Var | ContextExpr):
+            raise RuntimeError(f'context {stmt.ctx} must be a Var | ContextExpr')
+
         body, body_ctx = self._visit_block(stmt.body, ctx)
-        return ContextStmt(stmt.name, stmt.props, body), body_ctx
+        return ContextStmt(stmt.name, context, body), body_ctx
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         s = ReturnStmt(self._visit_expr(stmt.expr, ctx))

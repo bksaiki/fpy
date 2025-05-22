@@ -1,5 +1,7 @@
 """Pretty printing of FPy ASTs"""
 
+import ast as pyast
+
 from pprint import pformat
 
 from .fpyast import *
@@ -38,6 +40,9 @@ class _FormatterInstance(AstVisitor):
 
     def _visit_bool(self, e: BoolVal, ctx: _Ctx):
         return str(e.val)
+
+    def _visit_context_val(self, e: ContextVal, ctx):
+        return repr(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
         return e.val
@@ -135,6 +140,28 @@ class _FormatterInstance(AstVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'({ift} if {cond} else {iff})'
 
+    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: _Ctx):
+        attr_strs = [str(attr) for attr in e.attrs]
+        return f'{e.name}.' + '.'.join(attr_strs)
+
+    def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
+        match e.ctor:
+            case ForeignAttribute():
+                ctor_str = self._visit_foreign_attr(e.ctor, ctx)
+            case Var():
+                ctor_str = self._visit_var(e.ctor, ctx)
+
+        arg_strs: list[str] = []
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    attr = self._visit_foreign_attr(arg, ctx)
+                    arg_strs.append(attr)
+                case _:
+                    arg_strs.append(self._visit_expr(arg, ctx))
+
+        return f'{ctor_str}({", ".join(arg_strs)})'
+
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'{str(stmt.var)} = {val}', ctx)
@@ -186,9 +213,8 @@ class _FormatterInstance(AstVisitor):
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
-        # TODO: format data
-        props = ', '.join(f'{k}={pformat(v)}' for k, v in stmt.props.items())
-        self._add_line(f'with Context({props}):', ctx)
+        context = self._visit_expr(stmt.ctx, ctx)
+        self._add_line(f'with {context} as {str(stmt.name)}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):

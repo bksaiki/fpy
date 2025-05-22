@@ -28,6 +28,9 @@ class LiveVarsInstance(AstVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None) -> _LiveSet:
         return set()
 
+    def _visit_context_val(self, e: ContextVal, ctx: None):
+        return set()
+
     def _visit_decnum(self, e: Decnum, ctx: None) -> _LiveSet:
         return set()
 
@@ -101,6 +104,13 @@ class LiveVarsInstance(AstVisitor):
         iff_live = self._visit_expr(e.iff, ctx)
         return cond_live | ift_live | iff_live
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: None) -> _LiveSet:
+        live: set[NamedId] = set()
+        for arg in e.args:
+            if isinstance(arg, NamedId):
+                live.add(arg)
+        return live
+
     def _visit_simple_assign(self, stmt: SimpleAssign, live: _LiveSet) -> _LiveSet:
         live = set(live)
         if isinstance(stmt.var, NamedId):
@@ -152,8 +162,9 @@ class LiveVarsInstance(AstVisitor):
     def _visit_context(self, stmt: ContextStmt, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live = self._visit_block(stmt.body, live)
-        if stmt.name is not None and isinstance(stmt.name, NamedId):
+        if isinstance(stmt.name, NamedId):
             live -= { stmt.name }
+        live |= self._visit_expr(stmt.ctx, None)
         return live
 
     def _visit_assert(self, stmt: AssertStmt, live: _LiveSet) -> _LiveSet:

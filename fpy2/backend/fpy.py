@@ -43,6 +43,9 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None):
         return ast.BoolVal(e.val, None)
 
+    def _visit_context_val(self, e: ContextVal, ctx: None):
+        return ast.ContextVal(e.val, None)
+
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ast.Decnum(e.val, None)
 
@@ -202,9 +205,46 @@ class _FPyCompilerInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, None)
         return ast.ForStmt(stmt.var, iterable, body, None)
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        match e.ctor:
+            case Var():
+                ctor = self._visit_var(e.ctor, ctx)
+            case ForeignAttribute():
+                ctor = ast.ForeignAttribute(e.ctor.name, e.ctor.attrs, None)
+            case _:
+                raise RuntimeError('unreachable', e.ctor)
+
+        args: list[ast.Expr | ast.ForeignAttribute] = []
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    args.append(ast.ForeignAttribute(arg.name, arg.attrs, None))
+                case _:
+                    args.append(self._visit_expr(arg, ctx))
+
+        kwargs: list[tuple[str, ast.Expr | ast.ForeignAttribute]] = []
+        for k, v in e.kwargs:
+            match v:
+                case ForeignAttribute():
+                    kwargs.append((k, ast.ForeignAttribute(v.name, v.attrs, None)))
+                case StringVal():
+                    kwargs.append((k, ast.StringVal(v.val, None)))
+                case _:
+                    kwargs.append((k, self._visit_expr(v, ctx)))
+
+        # TODO: kwargs
+        return ast.ContextExpr(ctor, args, kwargs, None)
+
     def _visit_context(self, stmt: ContextStmt, ctx: None):
+        match stmt.ctx:
+            case Var():
+                context = self._visit_var(stmt.ctx, ctx)
+            case ContextExpr():
+                context = self._visit_context_expr(stmt.ctx, ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.ctx)
         body = self._visit_block(stmt.body, None)
-        return ast.ContextStmt(stmt.name, dict(stmt.props), body, None)
+        return ast.ContextStmt(stmt.name, context, body, None)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
         e = self._visit_expr(stmt.test, None)
@@ -260,6 +300,7 @@ class FPYCompiler(Backend):
 
         func = UnSSA.apply(func)
         ast = _FPyCompilerInstance(func).compile()
-        SyntaxCheck.analyze(ast)
+        free_vars = set([str(v) for v in func.free_vars])
+        SyntaxCheck.analyze(ast, free_vars=free_vars)
         return ast
 

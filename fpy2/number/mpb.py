@@ -14,7 +14,7 @@ from .number import Float
 from .mps import MPSContext
 from .real import RealFloat
 from .round import RoundingMode, RoundingDirection
-from .gmp import mpfr_constant
+from .gmp import mpfr_value
 
 
 @default_repr
@@ -237,14 +237,14 @@ class MPBContext(SizedContext):
             case Float() | RealFloat():
                 xr = x
             case int():
-                xr = RealFloat(c=x)
+                xr = RealFloat.from_int(x)
             case float() | str():
-                xr = mpfr_constant(x, self.pmax)
+                xr = mpfr_value(x, self.pmax)
             case Fraction():
                 if x.denominator == 1:
-                    xr = RealFloat(c=int(x))
+                    xr = RealFloat.from_int(int(x))
                 else:
-                    xr = mpfr_constant(x, self.pmax)
+                    xr = mpfr_value(x, self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 

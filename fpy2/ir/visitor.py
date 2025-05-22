@@ -21,6 +21,11 @@ class BaseVisitor(ABC):
         ...
 
     @abstractmethod
+    def _visit_context_val(self, e: ContextVal, ctx: Any):
+        """Visitor method for `ContextVal` nodes."""
+        ...
+
+    @abstractmethod
     def _visit_decnum(self, e: Decnum, ctx: Any):
         """Visitor method for `Decnum` nodes."""
         ...
@@ -88,6 +93,11 @@ class BaseVisitor(ABC):
     @abstractmethod
     def _visit_if_expr(self, e: IfExpr, ctx: Any):
         """Visitor method for `IfExpr` nodes."""
+        ...
+
+    @abstractmethod
+    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        """Visitor method for `ContextExpr` nodes."""
         ...
 
     #######################################################
@@ -200,6 +210,8 @@ class BaseVisitor(ABC):
                 return self._visit_var(e, ctx)
             case BoolVal():
                 return self._visit_bool(e, ctx)
+            case ContextVal():
+                return self._visit_context_val(e, ctx)
             case Decnum():
                 return self._visit_decnum(e, ctx)
             case Hexnum():
@@ -228,6 +240,8 @@ class BaseVisitor(ABC):
                 return self._visit_comp_expr(e, ctx)
             case IfExpr():
                 return self._visit_if_expr(e, ctx)
+            case ContextExpr():
+                return self._visit_context_expr(e, ctx)
             case _:
                 raise NotImplementedError('no visitor method for', e)
 
@@ -278,6 +292,9 @@ class DefaultVisitor(Visitor):
         pass
 
     def _visit_bool(self, e: BoolVal, ctx: Any):
+        pass
+
+    def _visit_context_val(self, e: ContextVal, ctx: Any):
         pass
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
@@ -335,6 +352,11 @@ class DefaultVisitor(Visitor):
         self._visit_expr(e.ift, ctx)
         self._visit_expr(e.iff, ctx)
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        for arg in e.args:
+            if not isinstance(arg, ForeignAttribute):
+                self._visit_expr(arg, ctx)
+
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
@@ -364,6 +386,7 @@ class DefaultVisitor(Visitor):
         self._visit_block(stmt.body, ctx)
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
+        self._visit_expr(stmt.ctx, ctx)
         self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
@@ -394,6 +417,9 @@ class DefaultTransformVisitor(TransformVisitor):
 
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return BoolVal(e.val)
+
+    def _visit_context_val(self, e: ContextVal, ctx: Any):
+        return ContextVal(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
         return Decnum(e.val)
@@ -466,6 +492,35 @@ class DefaultTransformVisitor(TransformVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return IfExpr(cond, ift, iff)
 
+    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+        match e.ctor:
+            case Var():
+                ctor = self._visit_var(e.ctor, ctx)
+            case ForeignAttribute():
+                ctor = ForeignAttribute(e.ctor.name, e.ctor.attrs)
+            case _:
+                raise RuntimeError('unreachable', e)
+
+        args: list[Expr | ForeignAttribute] = []
+        for arg in e.args:
+            match arg:
+                case ForeignAttribute():
+                    args.append(ForeignAttribute(arg.name, arg.attrs))
+                case _:
+                    args.append(self._visit_expr(arg, ctx))
+
+        kwargs: list[tuple[str, Expr | ForeignAttribute]] = []
+        for k, v in e.kwargs:
+            match v:
+                case ForeignAttribute():
+                    kwargs.append((k, ForeignAttribute(v.name, v.attrs)))
+                case StringVal():
+                    kwargs.append((k, StringVal(v.val)))
+                case _:
+                    kwargs.append((k, self._visit_expr(v, ctx)))
+
+        return ContextExpr(ctor, args, kwargs)
+
     #######################################################
     # Statements
 
@@ -531,8 +586,15 @@ class DefaultTransformVisitor(TransformVisitor):
         return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
+        match stmt.ctx:
+            case Var():
+                context = self._visit_var(stmt.ctx, ctx)
+            case ContextExpr():
+                context = self._visit_context_expr(stmt.ctx, ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.ctx)
         body, ctx = self._visit_block(stmt.body, ctx)
-        s = ContextStmt(stmt.name, stmt.props.copy(), body)
+        s = ContextStmt(stmt.name, context, body)
         return s, ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
