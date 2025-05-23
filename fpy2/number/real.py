@@ -54,3 +54,77 @@ class RealContext(Context):
 
     def round_at(self, x, n):
         raise RuntimeError('cannot round at a specific position in real context')
+
+
+def real_neg(x: Float) -> Float:
+    """
+    Negate a real number, exactly.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    return Float(s=not x.s, x=x, ctx=RealContext())
+
+def real_abs(x: Float) -> Float:
+    """
+    Absolute value of a real number, exactly.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    return Float(s=False, x=x, ctx=RealContext())
+
+def real_add(x: Float, y: Float) -> Float:
+    """
+    Add two real numbers, exactly.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(y, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for y={y}')
+
+    if x.isnan or y.isnan:
+        # either is NaN
+        return Float(isnan=True, ctx=RealContext())
+    elif x.isinf:
+        # x is Inf
+        if y.isinf:
+            # y is also Inf
+            if x.s == y.s:
+                return Float(s=x.s, isinf=True, ctx=RealContext())
+            else:
+                return Float(isnan=True, ctx=RealContext())
+        else:
+            # y is not Inf
+            return Float(s=x.s, isinf=True, ctx=RealContext())
+    elif y.isinf:
+        return Float(s=y.s, isinf=True, ctx=RealContext())
+    else:
+        # both are finite
+        r = x.as_real() + y.as_real()
+        return Float(x=r, ctx=RealContext())
+
+def real_sub(x: Float, y: Float) -> Float:
+    return real_add(x, real_neg(y))
+
+def real_mul(x: Float, y: Float) -> Float:
+    """
+    Multiply two real numbers, exactly.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(y, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for y={y}')
+
+    if x.isnan or y.isnan:
+        # either is NaN
+        return Float(isnan=True, ctx=RealContext())
+    elif x.isinf or y.isinf:
+        # either is Inf
+        # TODO: multiply by zero
+        if x.s == y.s:
+            return Float(s=x.s, isinf=True, ctx=RealContext())
+        else:
+            return Float(isnan=True, ctx=RealContext())
+    else:
+        # both are finite
+        r = x.as_real() * y.as_real()
+        return Float(x=r, ctx=RealContext())
