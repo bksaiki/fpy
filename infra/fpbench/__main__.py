@@ -28,9 +28,8 @@ def _fpcore_name(core: FPCore, default_name: str):
 def _write_cores(cores: list[FPCore], f):
     for i, core in enumerate(cores):
         name = _fpcore_name(core, f'f{i}')
-        func = Function.from_fpcore(core, default_name=name)
-        ast = FPYCompiler().compile(func.to_ir())
-        print(ast.format(), file=f)
+        func = Function.from_fpcore(core, default_name=name, ignore_unknown=True)
+        print(func.format(), file=f)
         print('', file=f)
 
 # parse command line arguments

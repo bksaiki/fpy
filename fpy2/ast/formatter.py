@@ -42,7 +42,16 @@ class _FormatterInstance(AstVisitor):
         return str(e.val)
 
     def _visit_foreign(self, e: ForeignVal, ctx: _Ctx):
-        return repr(e.val)
+        match e.val:
+            case FPCoreContext():
+                # TODO: currently pruning unsupported attributes
+                props: dict[str, Any] = {}
+                for k, v in e.val.props.items():
+                    if k == 'precision' or k == 'round':
+                        props[k] = v
+                return FPCoreContext(**props)
+            case _:
+                return repr(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
         return e.val
