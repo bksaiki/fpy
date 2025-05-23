@@ -261,7 +261,7 @@ class _FormatterInstance(AstVisitor):
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)
-        self._format_decorator(func.ctx, arg_str, ctx)
+        self._format_decorator(func.metadata, arg_str, ctx)
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)
 

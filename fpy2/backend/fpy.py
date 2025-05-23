@@ -288,7 +288,7 @@ class _FPyCompilerInstance(ReduceVisitor):
 
         body = self._visit_block(func.body, None)
         stx = ast.FuncDef(func.name, args, body, None)
-        stx.ctx = self._visit_props(func.ctx)
+        stx.metadata = self._visit_props(func.metadata)
         return stx
 
     # override for typing hint:

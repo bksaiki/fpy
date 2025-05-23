@@ -128,7 +128,7 @@ def _apply_decorator(
     props = parser.parse_decorator(dec_ast)
 
     # add context information
-    ast.ctx = { **kwargs, **props }
+    ast.metadata = { **kwargs, **props }
 
     # syntax checkng (and compute relevant free vars)
     if is_pattern:

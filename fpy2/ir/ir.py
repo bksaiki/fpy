@@ -761,7 +761,7 @@ class FuncDef(IR):
     args: list[Argument]
     body: StmtBlock
     ty: IRType
-    ctx: dict[str, Any]
+    metadata: dict[str, Any]
     free_vars: set[NamedId]
 
     def __init__(self,
@@ -777,7 +777,7 @@ class FuncDef(IR):
         self.args = args
         self.body = body
         self.ty = ty
-        self.ctx = ctx.copy()
+        self.metadata = ctx.copy()
         self.free_vars = free_vars.copy()
 
 class BaseFormatter:

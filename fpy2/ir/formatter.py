@@ -276,7 +276,7 @@ class _FormatterInstance(BaseVisitor):
             arg_strs.append(arg_str)
 
         # TODO: do this better
-        props = dict(func.ctx)
+        props = dict(func.metadata)
         props['free_vars'] = [var.base for var in func.free_vars]
 
         arg_str = ', '.join(arg_strs)
