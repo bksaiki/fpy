@@ -424,7 +424,7 @@ def dpN(xs: tuple[Real, ...], ys: tuple[Real, ...]) -> Real:
     sum = 0.0
     with RealContext():
         for i in range(len(xs)):
-            sum = xs[i] * ys[i]
+            sum += xs[i] * ys[i]
     return round(sum)
 
 @fpy(
@@ -602,6 +602,8 @@ tests = [
 
 # Examples
 examples = [
+    fma_ctx,
+    # dpN,
     nmse3_1,
     instCurrent,
     azimuth,
