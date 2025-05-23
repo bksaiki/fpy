@@ -117,13 +117,22 @@ def real_mul(x: Float, y: Float) -> Float:
     if x.isnan or y.isnan:
         # either is NaN
         return Float(isnan=True, ctx=RealContext())
-    elif x.isinf or y.isinf:
-        # either is Inf
-        # TODO: multiply by zero
-        if x.s == y.s:
-            return Float(s=x.s, isinf=True, ctx=RealContext())
-        else:
+    elif x.isinf:
+        # x is Inf
+        if y.is_zero():
+            # Inf * 0 = NaN
             return Float(isnan=True, ctx=RealContext())
+        else:
+            # Inf * y = Inf
+            return Float(s=x.s != y.s, isinf=True, ctx=RealContext())
+    elif y.isinf:
+        # y is Inf
+        if x.is_zero():
+            # 0 * Inf = NaN
+            return Float(isnan=True, ctx=RealContext())
+        else:
+            # x * Inf = Inf
+            return Float(s=x.s != y.s, isinf=True, ctx=RealContext())
     else:
         # both are finite
         r = x.as_real() * y.as_real()
