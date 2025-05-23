@@ -1,4 +1,4 @@
-from fpy2 import fpy, IEEEContext, RM
+from fpy2 import fpy, IEEEContext, RM, RealContext
 from fpy2.typing import *
 
 ### Simple tests
@@ -411,6 +411,21 @@ def test_assert():
 
 
 ### Examples
+
+@fpy
+def fma_ctx(x: Real, y: Real, z: Real) -> Real:
+    with RealContext():
+        prod = x * y
+    return prod + z
+
+@fpy
+def dpN(xs: tuple[Real, ...], ys: tuple[Real, ...]) -> Real:
+    assert len(xs) == len(ys)
+    sum = 0.0
+    with RealContext():
+        for i in range(len(xs)):
+            sum = xs[i] * ys[i]
+    return round(sum)
 
 @fpy(
     name='NMSE example 3.1',
