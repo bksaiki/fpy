@@ -10,6 +10,7 @@ from .ieee754 import IEEEContext
 from .mp import MPContext
 from .mpb import MPBContext
 from .mps import MPSContext
+from .real import RealContext
 
 # Rounding
 from .round import RoundingMode, RoundingDirection

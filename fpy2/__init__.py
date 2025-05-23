@@ -31,6 +31,7 @@ from .number import (
     MPSContext,
     MPBContext,
     IEEEContext,
+    RealContext,
     # rounding utilities
     RoundingMode,
     RoundingDirection, RM,
