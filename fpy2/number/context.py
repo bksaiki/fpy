@@ -8,11 +8,10 @@ from typing import Optional, TypeAlias, Self, Union
 from .round import RoundingMode
 
 from . import number
-from . import real
 
 # avoids circular dependency issues (useful for type checking)
 Float: TypeAlias = 'number.Float'
-RealFloat: TypeAlias = 'real.RealFloat'
+RealFloat: TypeAlias = 'number.RealFloat'
 
 class Context(ABC):
     """
@@ -74,9 +73,13 @@ class Context(ABC):
     @abstractmethod
     def round_params(self) -> tuple[Optional[int], Optional[int]]:
         """
-        Returns the rounding parameters `(max_p, min_n)` used
-        for rounding under this context. Either `max_p` or `min_n`
-        may be `None` but never both.
+        Returns the rounding parameters `(max_p, min_n)` used for rounding
+        under this context.
+
+        - (p, None) => floating-point style rounding
+        - (p, n) => floating-point style rounding with subnormalization
+        - (None, n) => fixed-point style rounding
+        - (None, None) => real computation; no rounding
 
         These parameters also determine the amount of precision for
         intermediate round-to-odd operations (provided by MPFR / `gmpy2`).

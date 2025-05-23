@@ -6,6 +6,11 @@ from typing import Callable, TypeAlias
 
 from .number import Context, Float
 from .number.gmp import *
+from .number.real import (
+    RealContext,
+    real_add, real_sub, real_mul, real_neg, real_abs,
+    real_ceil, real_floor, real_trunc, real_round
+)
 from .number.round import RoundingMode
 
 _MPFR_1ary: TypeAlias = Callable[[Float, int], Float]
@@ -15,27 +20,57 @@ _MPFR_3ary: TypeAlias = Callable[[Float, Float, Float, int], Float]
 
 def _apply_1ary(func: _MPFR_1ary, x: Float, ctx: Context):
     p, n = ctx.round_params()
-    if p is None:
-        raise NotImplementedError(f'p={p}, n={n}')
-    else:
-        r = func(x, p)       # compute with round-to-odd (safe at p digits)
-        return ctx.round(r)  # re-round under desired rounding mode
+    match p, n:
+        case int(), _:
+            # floating-point style rounding
+            r = func(x, p)       # compute with round-to-odd (safe at p digits)
+            return ctx.round(r)  # re-round under desired rounding mode
+        case _, int():
+            # fixed-point style rounding
+            raise NotImplementedError(f'p={p}, n={n}, func={func}')
+        case _, _:
+            # real computation; no rounding
+            if func == mpfr_fabs:
+                return real_abs(x)
+            elif func == mpfr_neg:
+                return real_neg(x)
+            else:
+                raise NotImplementedError(f'p={p}, n={n}, func={func}')
 
 def _apply_2ary(func: _MPFR_2ary, x: Float, y: Float, ctx: Context):
     p, n = ctx.round_params()
-    if p is None:
-        raise NotImplementedError(f'p={p}, n={n}')
-    else:
-        r = func(x, y, p)    # compute with round-to-odd (safe at p digits)
-        return ctx.round(r)  # re-round under desired rounding mode
+    match p, n:
+        case int(), _:
+            # floating-point style rounding
+            r = func(x, y, p)       # compute with round-to-odd (safe at p digits)
+            return ctx.round(r)  # re-round under desired rounding mode
+        case _, int():
+            # fixed-point style rounding
+            raise NotImplementedError(f'p={p}, n={n}, func={func}')
+        case _, _:
+            # real computation; no rounding
+            if func == mpfr_add:
+                return real_add(x, y)
+            elif func == mpfr_sub:
+                return real_sub(x, y)
+            elif func == mpfr_mul:
+                return real_mul(x, y)
+            else:
+                raise NotImplementedError(f'p={p}, n={n}, func={func}')
 
 def _apply_3ary(func: _MPFR_3ary, x: Float, y: Float, z: Float, ctx: Context):
     p, n = ctx.round_params()
-    if p is None:
-        raise NotImplementedError(f'p={p}, n={n}')
-    else:
-        r = func(x, y, z, p) # compute with round-to-odd (safe at p digits)
-        return ctx.round(r)  # re-round under desired rounding mode
+    match p, n:
+        case int(), _:
+            # floating-point style rounding
+            r = func(x, y, z, p)       # compute with round-to-odd (safe at p digits)
+            return ctx.round(r)  # re-round under desired rounding mode
+        case _, int():
+            # fixed-point style rounding
+            raise NotImplementedError(f'p={p}, n={n}, func={func}')
+        case _, _:
+            # real computation; no rounding
+            raise NotImplementedError(f'p={p}, n={n}, func={func}')
 
 ################################################################################
 # General operations
@@ -433,7 +468,12 @@ def ceil(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RTP).round_integer(x)
+    match ctx:
+        case RealContext():
+            # use rounding primitives
+            return real_ceil(x)
+        case _:
+            return ctx.with_rm(RoundingMode.RTP).round_integer(x)
 
 def floor(x: Float, ctx: Context):
     """
@@ -446,12 +486,17 @@ def floor(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RTN).round_integer(x)
+    match ctx:
+        case RealContext():
+            # use rounding primitives
+            return real_floor(x)
+        case _:
+            return ctx.with_rm(RoundingMode.RTN).round_integer(x)
 
 def trunc(x: Float, ctx: Context):
     """
     Computes the integer with the largest magnitude whose
-    magnitude is less than or equal to the magntidue of `x`
+    magnitude is less than or equal to the magnitude of `x`
     that is representable under `ctx`.
 
     If the context supports overflow, the result may be infinite.
@@ -460,7 +505,12 @@ def trunc(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RTZ).round_integer(x)
+    match ctx:
+        case RealContext():
+            # use rounding primitives
+            return real_trunc(x)
+        case _:
+            return ctx.with_rm(RoundingMode.RTZ).round_integer(x)
 
 def nearbyint(x: Float, ctx: Context):
     """
@@ -473,12 +523,16 @@ def nearbyint(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.round_integer(x)
+    match ctx:
+        case RealContext():
+            raise RuntimeError('nearbyint() not supported in RealContext')
+        case _:
+            return ctx.round_integer(x)
 
 def round(x: Float, ctx: Context):
     """
     Rounds `x` to the nearest representable integer,
-    rounding tiews away from zero in halfway cases.
+    rounding ties away from zero in halfway cases.
 
     If the context supports overflow, the result may be infinite.
     """
@@ -486,4 +540,9 @@ def round(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RNA).round_integer(x)
+    match ctx:
+        case RealContext():
+            # use rounding primitives
+            return real_round(x)
+        case _:
+            return ctx.with_rm(RoundingMode.RNA).round_integer(x)

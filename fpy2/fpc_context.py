@@ -4,7 +4,7 @@ Runtime utilities for integrating with FPCore from Titanic.
 
 from typing import Any
 
-from .number import Context, IEEEContext, RM
+from .number import Context, IEEEContext, RealContext, RM
 from .utils import default_repr
 
 _round_mode = {
@@ -125,6 +125,8 @@ class FPCoreContext:
                         return FPCoreContext(precision='binary16', round=rm)
                     case _:
                         return FPCoreContext(precision=['float', ctx.es, ctx.nbits], round=rm)
+            case RealContext():
+                return FPCoreContext(precision='real')
             case _:
                 raise RuntimeError(f'Cannot convert to an FPCore context {type(ctx)}')
 
@@ -149,6 +151,9 @@ class FPCoreContext:
                     return IEEEContext(8, 32, _round_mode_to_fpy(rnd))
                 case 'binary16':
                     return IEEEContext(5, 16, _round_mode_to_fpy(rnd))
+                # real context
+                case 'real':
+                    return RealContext()
                 case _:
                     raise NoSuchContextError(self)
         except ValueError:

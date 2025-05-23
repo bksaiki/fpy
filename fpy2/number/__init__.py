@@ -1,8 +1,7 @@
 from typing import TypeAlias
 
 # Numbers
-from .number import Float
-from .real import RealFloat
+from .number import RealFloat, Float
 
 # Contexts
 from .context import Context, OrdinalContext, SizedContext, EncodableContext
@@ -11,6 +10,7 @@ from .ieee754 import IEEEContext
 from .mp import MPContext
 from .mpb import MPBContext
 from .mps import MPSContext
+from .real import RealContext
 
 # Rounding
 from .round import RoundingMode, RoundingDirection

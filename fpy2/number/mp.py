@@ -9,8 +9,7 @@ from typing import Optional
 from ..utils import default_repr, bitmask
 
 from .context import Context
-from .number import Float
-from .real import RealFloat
+from .number import RealFloat, Float
 from .round import RoundingMode
 from .gmp import mpfr_value
 
