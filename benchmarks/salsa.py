@@ -78,20 +78,21 @@ def lead_lag(y: Real, yd: Real):
     cc1 = 0.0
     # point
     dc = -1280.0
-    
-    while t < 5.0:
-        yc = y - yd
-        if yc < -1.0:
-            yc = -1.0
-        if 1.0 < yc:
-            yc = 1.0
 
+    # system variables
+    xc = 0.0 # discrete-time controller state
+    yc = 0.0 # bounded output tracking error
+    u = 0.0 # mechanical input
+
+    while t < 5.0:
+        yc = max(-1, min(y - yd, 1))
         xc0 = ac00 * xc0 + ac01 * xc1 + bc0 * yc
         xc1 = ac10 * xc0 + ac11 * xc1 + bc1 * yc
         u = cc0 * xc0 + cc1 * xc1 + dc * yc
         t += 0.1
 
-    return ((xc0, xc1), yc, u)
+    return (xc0, xc1), yc, u
+
 
 @fpy(cite=['salsa-fmics15'])
 def runge_kutta_4(h, yn, c):
@@ -142,3 +143,80 @@ def trapeze(u):
             gxa = gxb
 
     return r
+
+@fpy(cite=['salsa-fmics15'])
+def rocket_trajectory(N: int, dt: Real):
+    """
+    Compute the trajectory of a rocket around the earth.
+
+    Inputs: `N` number of steps, `dt` time step
+    """
+    G = 6.67428*10e-11 # gravity
+    Mt = 5.9736*10e24 # mass of the earth
+    R = 6.4*10e6 # radius of the earth
+    mf = 150_000 # mass of the rocket
+    A = 140 # gas mass ejected per second
+
+    r = 0.0
+    D = R + 4.0*10e5 # distance between rocket and the center of the earth
+    v_l=0.7*sqrt(G*Mt * D) # release rate of the rocket
+
+    # position of the satellite
+    u1 = 0.0
+    u2 = 0.0
+    u3 = 0.0
+    u4 = 0.0
+
+    # position of the rocket
+    w1 = 0.0
+    w2 = 0.0
+    w3 = 0.0
+    w4 = 0.0
+
+    # position of the rocket in the space
+    x = 0.0
+    y = 0.0
+
+    # time that has passed
+    t = 0.0
+
+    # run the simulation
+    for i in range(N):
+        if mf > 0.0:
+            up1=u2*dt+u1
+            up3=u4*dt+u3
+            wp1=w2*dt+w1
+            wp3=w4*dt+w3
+            up2=-G*Mt/(u1*u1)*dt+u1*u4*u4*dt+u2
+            up4=-2.0*u2*u4/u1*dt+u4
+            wp2=-G*Mt/(w1*w1)*dt+w1*w4*w4*dt+(A*w2)/(mf-A*t)*dt+w2
+            wp4=-2.0*w2*w4/w1*dt+A*w4/(mf-A*t)*dt+w4
+            mpf= mf - A * t
+            t += dt
+        else:
+            up1=u2*dt+u1
+            up3=u4*dt+u3
+            wp1=w2*dt+w1
+            wp3=w4*dt+w3
+            up2=-G*Mt/(u1*u1)*dt+u1*u4*u4*dt+u2
+            up4=-2.0*u2*u4/u1*dt+u4
+            wp2=-G*Mt/(w1*w1)*dt+w1*w4*w4*dt+w2
+            wp4=-2.0*w2*w4/w1*dt+w4
+            mpf=mf
+            t=t+dt
+
+        c = 1.0-(wp3*up3*0.5)
+        s=up3-(up3*up3*up3)/0.166666667
+        x=wp1*c
+        y=wp1*s
+        u1=up1
+        u2=up2
+        u3=up3
+        u4=up4
+        w1=wp1
+        w2=wp2
+        w3=wp3
+        w4=wp4
+        mf=mpf
+
+    return (x, y)
