@@ -6,8 +6,7 @@ from ..utils import bits_to_float
 from .gmp import float_to_mpfr
 from .globals import set_current_float_converter, set_current_str_converter
 from .ieee754 import IEEEContext
-from .number import Float
-from .real import RealFloat
+from .number import RealFloat, Float
 from .round import RoundingMode
 
 _FP64 = IEEEContext(11, 64, RoundingMode.RNE)

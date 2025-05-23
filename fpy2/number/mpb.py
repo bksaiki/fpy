@@ -10,9 +10,8 @@ from typing import Optional
 from ..utils import default_repr
 
 from .context import SizedContext
-from .number import Float
+from .number import RealFloat, Float
 from .mps import MPSContext
-from .real import RealFloat
 from .round import RoundingMode, RoundingDirection
 from .gmp import mpfr_value
 

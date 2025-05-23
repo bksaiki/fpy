@@ -3,13 +3,12 @@ Global variables for the `fpy2.number` module.
 """
 
 from . import number
-from . import real
 
 from typing import Callable, Optional, TypeAlias, Union
 
 # avoids circular dependency issues (useful for type checking)
 Float: TypeAlias = 'number.Float'
-RealFloat: TypeAlias = 'real.RealFloat'
+RealFloat: TypeAlias = 'number.RealFloat'
 
 # type of `Float` (or `RealFloat`) to `float` conversions
 _FloatCvt: TypeAlias = Callable[[Union[Float, RealFloat]], float]

@@ -5,9 +5,8 @@ from ..utils import default_repr, enum_repr, bitmask
 from enum import IntEnum
 
 from .context import EncodableContext
-from .number import Float
+from .number import RealFloat, Float
 from .mpb import MPBContext
-from .real import RealFloat
 from .round import RoundingMode
 
 @enum_repr

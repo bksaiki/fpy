@@ -8,11 +8,10 @@ from typing import Optional, TypeAlias, Self, Union
 from .round import RoundingMode
 
 from . import number
-from . import real
 
 # avoids circular dependency issues (useful for type checking)
 Float: TypeAlias = 'number.Float'
-RealFloat: TypeAlias = 'real.RealFloat'
+RealFloat: TypeAlias = 'number.RealFloat'
 
 class Context(ABC):
     """

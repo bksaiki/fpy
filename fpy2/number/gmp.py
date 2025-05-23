@@ -10,8 +10,7 @@ import gmpy2 as gmp
 
 from typing import Any, Callable
 
-from .number import Float
-from .real import RealFloat
+from .number import RealFloat, Float
 
 def _bool_to_sign(b: bool):
     return '-' if b else '+'
