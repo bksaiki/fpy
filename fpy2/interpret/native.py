@@ -9,7 +9,7 @@ from typing import Any, Callable, Optional, Sequence, TypeAlias
 
 from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
-from ..runtime.function import Function
+from ..function import Function
 from ..runtime.env import ForeignEnv
 from ..ir import *
 from ..utils import digits_to_fraction
@@ -179,7 +179,7 @@ class _Interpreter(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: Context):
         return e.val
 
-    def _visit_context_val(self, e: ContextVal, ctx: Context):
+    def _visit_foreign(self, e: ForeignVal, ctx: None):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: Context):

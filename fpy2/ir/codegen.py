@@ -96,8 +96,8 @@ class _IRCodegenInstance(AstVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None):
         return ir.BoolVal(e.val)
 
-    def _visit_context_val(self, e: ContextVal, ctx: None):
-        return ir.ContextVal(e.val)
+    def _visit_foreign(self, e: ForeignVal, ctx: None):
+        raise NotImplementedError
 
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ir.Decnum(e.val)
@@ -242,8 +242,6 @@ class _IRCodegenInstance(AstVisitor):
             match v:
                 case ForeignAttribute():
                     kwargs.append((k, ir.ForeignAttribute(v.name, v.attrs)))
-                case StringVal():
-                    kwargs.append((k, ir.StringVal(v.val)))
                 case _:
                     kwargs.append((k, self._visit_expr(v, ctx)))
 
@@ -255,6 +253,8 @@ class _IRCodegenInstance(AstVisitor):
                 context = self._visit_var(stmt.ctx, ctx)
             case ContextExpr():
                 context = self._visit_context_expr(stmt.ctx, ctx)
+            case ForeignVal():
+                context = ir.ForeignVal(stmt.ctx.val)
             case _:
                 raise RuntimeError('unreachable', stmt.ctx)
         block = self._visit_block(stmt.body, ctx)

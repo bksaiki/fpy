@@ -287,8 +287,8 @@ class _SSAInstance(DefaultTransformVisitor):
 
         context = self._visit_expr(stmt.ctx, ctx)
         # sanity check
-        if not isinstance(context, Var | ContextExpr):
-            raise RuntimeError(f'context {stmt.ctx} must be a Var | ContextExpr')
+        if not isinstance(context, Var | ContextExpr | ForeignVal):
+            raise RuntimeError(f'context {stmt.ctx} must be a Var | ContextExpr | ForeignVal')
 
         body, body_ctx = self._visit_block(stmt.body, ctx)
         return ContextStmt(stmt.name, context, body), body_ctx

@@ -2,9 +2,12 @@
 This module defines rounding utilities.
 """
 
-from enum import IntEnum
+from enum import Enum
 
-class RoundingDirection(IntEnum):
+from ..utils import enum_repr
+
+@enum_repr
+class RoundingDirection(Enum):
     """Rounding directions for finite-precision operations."""
     RTZ = 0
     """rounding towards zero"""
@@ -15,8 +18,8 @@ class RoundingDirection(IntEnum):
     RTO = 3
     """rounding towards odd"""
 
-
-class RoundingMode(IntEnum):
+@enum_repr
+class RoundingMode(Enum):
     """Rounding modes for finite-precision operations."""
     RNE = 0
     """round to nearest, ties to even"""

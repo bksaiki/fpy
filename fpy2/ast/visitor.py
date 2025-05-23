@@ -22,7 +22,7 @@ class AstVisitor(ABC):
         ...
 
     @abstractmethod
-    def _visit_context_val(self, e: ContextVal, ctx: Any) -> Any:
+    def _visit_foreign(self, e: ForeignVal, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -165,8 +165,8 @@ class AstVisitor(ABC):
                 return self._visit_var(e, ctx)
             case BoolVal():
                 return self._visit_bool(e, ctx)
-            case ContextVal():
-                return self._visit_context_val(e, ctx)
+            case ForeignVal():
+                return self._visit_foreign(e, ctx)
             case Decnum():
                 return self._visit_decnum(e, ctx)
             case Hexnum():
@@ -244,7 +244,7 @@ class DefaultAstVisitor(AstVisitor):
     def _visit_bool(self, e: BoolVal, ctx: Any):
         pass
 
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
+    def _visit_foreign(self, e: ForeignVal, ctx: Any):
         pass
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
@@ -373,8 +373,8 @@ class DefaultAstTransformVisitor(AstVisitor):
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return BoolVal(e.val, e.loc)
 
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
-        return ContextVal(e.val, e.loc)
+    def _visit_foreign(self, e: ForeignVal, ctx: Any):
+        return ForeignVal(e.val, e.loc)
 
     def _visit_decnum(self, e: Decnum, ctx: Any):
         return Decnum(e.val, e.loc)

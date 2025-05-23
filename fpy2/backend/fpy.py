@@ -8,6 +8,8 @@ from ..ir import *
 
 from ..ast import fpyast as ast
 from ..ast.syntax_check import SyntaxCheck
+from ..function import Function
+from ..transform import UnSSA
 
 from ..ir.codegen import (
     _unary_table,
@@ -16,10 +18,8 @@ from ..ir.codegen import (
     _nary_table
 )
 
-from ..runtime import Function
-from ..transform import UnSSA
-
 from .backend import Backend
+
 
 # reverse operator tables
 _unary_rev_table = { v: k for k, v in _unary_table.items() }
@@ -43,8 +43,8 @@ class _FPyCompilerInstance(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None):
         return ast.BoolVal(e.val, None)
 
-    def _visit_context_val(self, e: ContextVal, ctx: None):
-        return ast.ContextVal(e.val, None)
+    def _visit_foreign(self, e: ForeignVal, ctx: None):
+        return ast.ForeignVal(e.val, None)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
         return ast.Decnum(e.val, None)
@@ -227,8 +227,6 @@ class _FPyCompilerInstance(ReduceVisitor):
             match v:
                 case ForeignAttribute():
                     kwargs.append((k, ast.ForeignAttribute(v.name, v.attrs, None)))
-                case StringVal():
-                    kwargs.append((k, ast.StringVal(v.val, None)))
                 case _:
                     kwargs.append((k, self._visit_expr(v, ctx)))
 
@@ -241,6 +239,8 @@ class _FPyCompilerInstance(ReduceVisitor):
                 context = self._visit_var(stmt.ctx, ctx)
             case ContextExpr():
                 context = self._visit_context_expr(stmt.ctx, ctx)
+            case ForeignVal():
+                context = ast.ForeignVal(stmt.ctx.val, None)
             case _:
                 raise RuntimeError('unreachable', stmt.ctx)
         body = self._visit_block(stmt.body, None)

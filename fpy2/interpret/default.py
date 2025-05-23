@@ -14,7 +14,7 @@ from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
 from ..runtime.trace import ExprTraceEntry
 from ..runtime.env import ForeignEnv
-from ..runtime.function import Function
+from ..function import Function
 from ..ir import *
 from ..utils import decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
 
@@ -222,7 +222,7 @@ class _Interpreter(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return e.val
 
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
+    def _visit_foreign(self, e: ForeignVal, ctx: None):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: Context):
@@ -638,8 +638,6 @@ class _Interpreter(ReduceVisitor):
             match v:
                 case ForeignAttribute():
                     kwargs[k] = self._visit_foreign_attr(v)
-                case StringVal():
-                    kwargs[k] = str(v.val)
                 case _:
                     v = self._visit_expr(v, ctx)
                     if isinstance(v, Float) and v.is_integer():
@@ -687,13 +685,14 @@ class _Interpreter(ReduceVisitor):
         return super()._visit_statement(stmt, ctx)
 
 
-class TitanicInterpreter(Interpreter):
+class DefaultInterpreter(Interpreter):
     """
     Standard interpreter for FPy programs.
 
-    Programs are evaluated using the Titanic backend (`titanfp`).
-    Booleans are Python `bool` values, real numbers are Titanic `Float` values,
-    and tensors are Titanic `NDArray` values.
+    Values:
+     - booleans are Python `bool` values,
+     - real numbers are FPy `float` values,
+     - tensors are Titanic `NDArray` values.
 
     All operations are correctly-rounded.
     """

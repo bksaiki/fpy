@@ -58,12 +58,12 @@ from .interpret import (
     Interpreter,
     PythonInterpreter,
     RealInterpreter,
-    TitanicInterpreter,
+    DefaultInterpreter,
     set_default_interpreter,
     get_default_interpreter,
 )
 
-from .runtime import Function
+from .function import Function
 
 from .utils import (
     fraction,

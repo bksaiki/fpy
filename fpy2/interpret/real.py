@@ -14,7 +14,7 @@ from ..runtime.real.rival_manager import RivalManager, InsufficientPrecisionErro
 
 from ..number import Context, Float, IEEEContext, RM
 from ..runtime.trace import ExprTraceEntry
-from ..runtime.function import Function
+from ..function import Function
 from ..ir import *
 
 from .interpreter import Interpreter, FunctionReturnException
@@ -220,7 +220,7 @@ class _Interpreter(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return e.val
 
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
+    def _visit_foreign(self, e: ForeignVal, ctx: None):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: Context):

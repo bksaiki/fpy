@@ -17,8 +17,10 @@ from typing import (
 
 from .ast import SyntaxCheck, EffectStmt
 from .frontend import Parser
-from .rewrite import Pattern, ExprPattern, StmtPattern
-from .runtime import Function, ForeignEnv
+from .function import Function
+from .rewrite import ExprPattern, StmtPattern
+from .runtime import ForeignEnv
+
 
 P = ParamSpec('P')
 R = TypeVar('R')

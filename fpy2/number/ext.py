@@ -1,6 +1,6 @@
 
 
-from ..utils import default_repr, bitmask
+from ..utils import default_repr, enum_repr, bitmask
 
 from enum import IntEnum
 
@@ -10,7 +10,7 @@ from .mpb import MPBContext
 from .real import RealFloat
 from .round import RoundingMode
 
-
+@enum_repr
 class ExtNanKind(IntEnum):
     """
     Describes how NaN values are encoded for `ExtContext` rounding contexts.

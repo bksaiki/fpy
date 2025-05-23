@@ -148,14 +148,8 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_bool(self, e: BoolVal, ctx: None):
         return fpc.Constant('TRUE' if e.val else 'FALSE')
 
-    def _visit_context_val(self, e: ContextVal, ctx) -> fpc.Expr:
-        match e.val:
-            case FPCoreContext():
-                return e.val
-            case Context():
-                FPCoreContext.from_context(e.val)
-            case _:
-                raise FPCoreCompileError('unsupported context value', e.val)
+    def _visit_foreign(self, e: ForeignVal, ctx) -> fpc.Expr:
+        raise FPCoreCompileError('unsupported value', e.val)
 
     def _visit_decnum(self, e, ctx) -> fpc.Expr:
         return fpc.Decnum(e.val)
@@ -457,15 +451,31 @@ class FPCoreCompileInstance(ReduceVisitor):
         while_binding = (name, fpc.Var(init), body)
         return fpc.Let([(tuple_id, iterable)], fpc.For([dim_binding], [while_binding], ctx))
 
-    def _visit_context_expr(self, e: ContextExpr, ctx):
-        raise NotImplementedError(e)
+    def _visit_context_expr(self, e: ContextExpr, ctx: None):
+        raise RuntimeError('do not call')
 
     def _visit_context(self, stmt, ctx):
         body = self._visit_block(stmt.body, ctx)
-        # TODO: fix
-        return fpc.Ctx({}, body)
+        # extract a context value
+        match stmt.ctx:
+            case ContextExpr() | Var():
+                raise FPCoreCompileError('Context expressions must be pre-computed', stmt.ctx)
+            case ForeignVal():
+                val = stmt.ctx.val
+            case _:
+                raise RuntimeError('unreachable', stmt.ctx)
 
-    def _visit_assert(self, stmt, ctx):
+        # convert to properties
+        match val:
+            case Context():
+                props = FPCoreContext.from_context(val).props
+            case FPCoreContext():
+                props = val.props
+            case _:
+                raise FPCoreCompileError('Expected `Context` or `FPCoreContext`', val)
+        return fpc.Ctx(props, body)
+
+    def _visit_assert(self, stmt: AssertStmt, ctx):
         # strip the assertion
         return ctx
 

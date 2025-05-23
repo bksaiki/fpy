@@ -220,32 +220,16 @@ class RealVal(ValueExpr):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
-class StringVal(ValueExpr):
-    """FPy AST: string"""
-    val: str
+class ForeignVal(ValueExpr):
+    """FPy AST: native Python value"""
+    val: Any
 
-    def __init__(self, val: str, loc: Optional[Location]):
+    def __init__(self, val: Any, loc: Optional[Location]):
         super().__init__(loc)
         self.val = val
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, StringVal):
-            return False
-        return self.val == other.val
-
-    def __hash__(self) -> int:
-        return hash(self.val)
-
-class ContextVal(ValueExpr):
-    """FPy AST: context value"""
-    val: Context | FPCoreContext
-
-    def __init__(self, val: Context | FPCoreContext, loc: Optional[Location]):
-        super().__init__(loc)
-        self.val = val
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ContextVal):
+        if not isinstance(other, ForeignVal):
             return False
         return self.val == other.val
 
@@ -922,13 +906,13 @@ class ForStmt(Stmt):
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
     name: Id
-    ctx: ContextExpr | ContextVal | Var
+    ctx: ContextExpr | Var | ForeignVal
     body: StmtBlock
 
     def __init__(
         self,
         name: Id,
-        ctx: ContextExpr | ContextVal | Var,
+        ctx: ContextExpr | Var | ForeignVal,
         body: StmtBlock,
         loc: Optional[Location]
     ):

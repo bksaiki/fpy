@@ -62,19 +62,11 @@ class BoolVal(ValueExpr):
         super().__init__()
         self.val = val
 
-class ContextVal(ValueExpr):
-    """FPy node: context value"""
-    val: Context | FPCoreContext
+class ForeignVal(ValueExpr):
+    """FPy node: native Python value"""
+    val: Any
 
-    def __init__(self, val: Context | FPCoreContext):
-        super().__init__()
-        self.val = val
-
-class StringVal(ValueExpr):
-    """FPy node: string value"""
-    val: str
-
-    def __init__(self, val: str):
+    def __init__(self, val: Any):
         super().__init__()
         self.val = val
 
@@ -718,10 +710,10 @@ class ForStmt(Stmt):
 class ContextStmt(Stmt):
     """FPy IR: context statement"""
     name: Id
-    ctx: ContextExpr | ContextVal | Var
+    ctx: ContextExpr | Var | ForeignVal
     body: StmtBlock
 
-    def __init__(self, name: Id, ctx: ContextExpr | ContextVal | Var, body: StmtBlock):
+    def __init__(self, name: Id, ctx: ContextExpr | Var | ForeignVal, body: StmtBlock):
         super().__init__()
         self.name = name
         self.ctx = ctx

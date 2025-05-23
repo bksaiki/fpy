@@ -62,7 +62,7 @@ class _FormatterInstance(BaseVisitor):
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return str(e.val)
 
-    def _visit_context_val(self, e: ContextVal, ctx: Any):
+    def _visit_foreign(self, e: ForeignVal, ctx: Any):
         return repr(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: _IndentCtx):
