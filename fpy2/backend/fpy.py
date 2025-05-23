@@ -8,6 +8,8 @@ from ..ir import *
 
 from ..ast import fpyast as ast
 from ..ast.syntax_check import SyntaxCheck
+from ..function import Function
+from ..transform import UnSSA
 
 from ..ir.codegen import (
     _unary_table,
@@ -16,10 +18,8 @@ from ..ir.codegen import (
     _nary_table
 )
 
-from ..runtime import Function
-from ..transform import UnSSA
-
 from .backend import Backend
+
 
 # reverse operator tables
 _unary_rev_table = { v: k for k, v in _unary_table.items() }

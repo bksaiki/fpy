@@ -3,7 +3,6 @@
 from .fpyast import *
 from .visitor import DefaultAstVisitor
 
-
 class _DefineUseInstance(DefaultAstVisitor):
     """Per-IR instance of definition-use analysis"""
     ast: FuncDef | StmtBlock

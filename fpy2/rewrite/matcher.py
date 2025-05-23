@@ -5,7 +5,7 @@ This module defines pattern matching facilities for FPy AST.
 from fractions import Fraction
 
 from ..ast import *
-from ..runtime import Function
+from ..function import Function
 from ..utils import (
     default_repr,
     decnum_to_fraction,

@@ -2,10 +2,8 @@
 This module defines a rewrite rule.
 """
 
-from dataclasses import dataclass
-
 from ..ast import *
-from ..runtime import Function
+from ..function import Function
 from ..utils import default_repr, sliding_window
 
 from .applier import Applier

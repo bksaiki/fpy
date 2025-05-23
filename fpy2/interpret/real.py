@@ -14,7 +14,7 @@ from ..runtime.real.rival_manager import RivalManager, InsufficientPrecisionErro
 
 from ..number import Context, Float, IEEEContext, RM
 from ..runtime.trace import ExprTraceEntry
-from ..runtime.function import Function
+from ..function import Function
 from ..ir import *
 
 from .interpreter import Interpreter, FunctionReturnException

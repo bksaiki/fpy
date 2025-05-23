@@ -5,9 +5,9 @@ Defines the abstract base class for FPy interpreters.
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
+from ..function import Function, set_default_function_call
 from ..ir import Expr
 from ..number import Context
-from ..runtime import Function, set_default_function_call
 from ..runtime.trace import ExprTraceEntry
 
 

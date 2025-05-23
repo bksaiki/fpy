@@ -3,20 +3,21 @@
 from typing import Callable, Optional, TYPE_CHECKING
 from titanfp.fpbench.fpcast import FPCore
 
-from .. import ir as fpyir
-from .. import ast as fpyast
+from . import ir as fpyir
+from . import ast as fpyast
 
-from ..analysis import VerifyIR
-from ..frontend import fpcore_to_fpy
-from ..number import Context
-from ..ir import IRCodegen
-from ..transform import SSA
+from .ast import ContextInline
+from .analysis import VerifyIR
+from .frontend import fpcore_to_fpy
+from .number import Context
+from .ir import IRCodegen
+from .transform import SSA
 
-from .env import ForeignEnv
+from .runtime.env import ForeignEnv
 
 # avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:
-    from ..interpret import Interpreter
+    from .interpret import Interpreter
 
 
 class Function:
@@ -103,6 +104,8 @@ class Function:
         """Returns the IR of the function."""
         # check if the IR is already cached
         if self._ir is None:
+            # apply AST passes to normalize the AST
+            # ast = ContextInline.apply(self.ast, self.env)
             # lower the AST to IR
             ir = IRCodegen().lower(self.ast)
             ir = SSA.apply(ir)

@@ -63,7 +63,7 @@ from .interpret import (
     get_default_interpreter,
 )
 
-from .runtime import Function
+from .function import Function
 
 from .utils import (
     fraction,

@@ -14,7 +14,7 @@ from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
 from ..runtime.trace import ExprTraceEntry
 from ..runtime.env import ForeignEnv
-from ..runtime.function import Function
+from ..function import Function
 from ..ir import *
 from ..utils import decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
 

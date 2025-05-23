@@ -9,9 +9,9 @@ from typing import Any, Literal, Optional
 from titanfp.arithmetic.ieee754 import Float, IEEECtx
 from titanfp.arithmetic.mpmf import MPMF
 
+from ..function import Function
 from ..ir import Expr
 from ..interpret import Interpreter, RealInterpreter, get_default_interpreter
-from ..runtime import Function
 from ..runtime.trace import ExprTraceEntry
 from ..runtime.metric import ordinal_error
 from ..runtime.real import PrecisionLimitExceeded
