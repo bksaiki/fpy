@@ -29,7 +29,7 @@ def _write_cores(cores: list[FPCore], f):
     for i, core in enumerate(cores):
         name = _fpcore_name(core, f'f{i}')
         func = Function.from_fpcore(core, default_name=name)
-        ast = FPYCompiler().compile(func)
+        ast = FPYCompiler().compile(func.to_ir())
         print(ast.format(), file=f)
         print('', file=f)
 
@@ -63,7 +63,7 @@ if output_path is None:
 else:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
-        print('from fpy2 import fpy', file=f)
+        print('from fpy2 import *', file=f)
         print('from fpy2.typing import *', file=f)
         print('', file=f)
         _write_cores(cores, f)

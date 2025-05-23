@@ -1,6 +1,7 @@
 Frontend:
  - fpc2fpy:
    - clean up names
+   - preconditions
    - preconditions with statements
  - parser:
    - fix ISSUE#1

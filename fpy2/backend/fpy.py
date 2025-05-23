@@ -240,7 +240,16 @@ class _FPyCompilerInstance(ReduceVisitor):
             case ContextExpr():
                 context = self._visit_context_expr(stmt.ctx, ctx)
             case ForeignVal():
-                context = ast.ForeignVal(stmt.ctx.val, None)
+                val = stmt.ctx.val
+                if isinstance(val, FPCoreContext):
+                    # TODO: how to represent arbitray FPCore metadata
+                    # current solution is to prune things we don't know how to handle
+                    props: dict[str, Any] = {}
+                    for k, v in val.props.items():
+                        if k == 'precision' or k == 'round':
+                            props[k] = v
+                    val = FPCoreContext(**props)
+                context = ast.ForeignVal(val, None)
             case _:
                 raise RuntimeError('unreachable', stmt.ctx)
         body = self._visit_block(stmt.body, None)
