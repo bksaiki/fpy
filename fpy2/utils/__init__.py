@@ -2,7 +2,7 @@
 
 from .bits import bitmask, float_to_bits, bits_to_float
 from .compare import CompareOp
-from .defaults import default_repr, rcomparable
+from .decorator import default_repr, rcomparable, enum_repr
 from .error import FPySyntaxError, raise_type_error
 
 from .float_params import (

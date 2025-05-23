@@ -2,6 +2,8 @@
 Decorators implementing some default behavior.
 """
 
+from enum import Enum
+
 ###########################################################
 # Default __repr__ decorator
 
@@ -85,3 +87,19 @@ def rcomparable(cls):
         return this_cls
 
     return wrap
+
+############################################################
+# Default __repr__ for enum values
+
+def __default_enum_repr__(x: Enum):
+    """
+    Default __repr__ implementation for enum values.
+    """
+    return f'{x.__class__.__name__}.{x.name}'
+
+def enum_repr(cls):
+    """
+    Default __repr__ implementation for enum values.
+    """
+    cls.__repr__ = __default_enum_repr__
+    return cls
