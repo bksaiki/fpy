@@ -114,19 +114,31 @@ def runge_kutta_4(h, yn, c):
 
 @fpy(cite=['salsa-fmics15'])
 def trapeze(u):
+    """
+    Trapezoidal rule for numerical integration.
+
+    Computing the integral of
+
+    g(x) = u / ((((((0.7 * x) * x) * x) - ((0.6*x) * x))+(0.9*x))-0.2)
+
+    where `u` is a user defined parameter.
+    """
+
     a = 0.25
     b = 5000
     n = 25
     r = 0
-    xa = 0.25
+    xa = a
     h = (b - a) / n
 
     while xa < 5000.0:
         xb = xa + h
         if xb > 5000:
             xb = 5000.0
-        gxa = (u / ((((((0.7 * xa) * xa) * xa) - ((0.6*xa) * xa))+(0.9*xa))-0.2))
-        gxb = (u / ((((((0.7 * xb) * xb) * xb) - ((0.6*xb)* xb))+(0.9*xb))-0.2))
-        r += (((gxb + gxa) * 0.5) * h)
-        xa += h
+            gxa = (u / ((((((0.7 * xa) * xa) * xa) - ((0.6*xa) * xa))+(0.9*xa))-0.2))
+            gxb = (u / ((((((0.7 * xb) * xb) * xb) - ((0.6*xb)* xb))+(0.9*xb))-0.2))
+            r += (((gxb + gxa) * 0.5) * h)
+            xa += h
+            gxa = gxb
+
     return r
