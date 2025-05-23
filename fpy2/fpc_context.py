@@ -136,7 +136,6 @@ class FPCoreContext:
         prec = self.props.get('precision', 'binary64')
         rnd = self.props.get('round', 'nearestEven')
         try:
-            print(prec)
             match prec:
                 # IEEE 754 long form
                 case ['float', es, nbits]:
