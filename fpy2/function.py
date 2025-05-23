@@ -105,9 +105,9 @@ class Function:
         # check if the IR is already cached
         if self._ir is None:
             # apply AST passes to normalize the AST
-            # ast = ContextInline.apply(self.ast, self.env)
+            ast = ContextInline.apply(self.ast, self.env)
             # lower the AST to IR
-            ir = IRCodegen().lower(self.ast)
+            ir = IRCodegen().lower(ast)
             ir = SSA.apply(ir)
             VerifyIR().check(ir)
             # cache the IR

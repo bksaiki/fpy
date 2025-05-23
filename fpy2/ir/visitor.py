@@ -590,6 +590,8 @@ class DefaultTransformVisitor(TransformVisitor):
                 context = self._visit_var(stmt.ctx, ctx)
             case ContextExpr():
                 context = self._visit_context_expr(stmt.ctx, ctx)
+            case ForeignVal():
+                context = ForeignVal(stmt.ctx.val)
             case _:
                 raise RuntimeError('unreachable', stmt.ctx)
         body, ctx = self._visit_block(stmt.body, ctx)

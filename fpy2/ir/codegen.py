@@ -253,6 +253,8 @@ class _IRCodegenInstance(AstVisitor):
                 context = self._visit_var(stmt.ctx, ctx)
             case ContextExpr():
                 context = self._visit_context_expr(stmt.ctx, ctx)
+            case ForeignVal():
+                context = ir.ForeignVal(stmt.ctx.val)
             case _:
                 raise RuntimeError('unreachable', stmt.ctx)
         block = self._visit_block(stmt.body, ctx)

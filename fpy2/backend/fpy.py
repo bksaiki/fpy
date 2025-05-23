@@ -239,6 +239,8 @@ class _FPyCompilerInstance(ReduceVisitor):
                 context = self._visit_var(stmt.ctx, ctx)
             case ContextExpr():
                 context = self._visit_context_expr(stmt.ctx, ctx)
+            case ForeignVal():
+                context = ast.ForeignVal(stmt.ctx.val, None)
             case _:
                 raise RuntimeError('unreachable', stmt.ctx)
         body = self._visit_block(stmt.body, None)
