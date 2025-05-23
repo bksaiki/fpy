@@ -128,3 +128,65 @@ def real_mul(x: Float, y: Float) -> Float:
         # both are finite
         r = x.as_real() * y.as_real()
         return Float(x=r, ctx=RealContext())
+
+def real_ceil(x: Float) -> Float:
+    """
+    Round a real number up to the nearest integer.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    
+    if x.is_nar():
+        # special value
+        return Float(x=x, ctx=RealContext())
+    else:
+        # finite value
+        r = x.as_real().round(None, -1, RoundingMode.RTP)
+        return Float(x=r, ctx=RealContext())
+
+def real_floor(x: Float) -> Float:
+    """
+    Round a real number down to the nearest integer.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    
+    if x.is_nar():
+        # special value
+        return Float(x=x, ctx=RealContext())
+    else:
+        # finite value
+        r = x.as_real().round(None, -1, RoundingMode.RTN)
+        return Float(x=r, ctx=RealContext())
+
+def real_trunc(x: Float) -> Float:
+    """
+    Rounds a real number towards the nearest integer
+    with smaller or equal magnitude to `x`.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    
+    if x.is_nar():
+        # special value
+        return Float(x=x, ctx=RealContext())
+    else:
+        # finite value
+        r = x.as_real().round(None, -1, RoundingMode.RTZ)
+        return Float(x=r, ctx=RealContext())
+
+def real_round(x: Float) -> Float:
+    """
+    Round a real number to the nearest integer,
+    rounding ties away from zero in halfway cases.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    
+    if x.is_nar():
+        # special value
+        return Float(x=x, ctx=RealContext())
+    else:
+        # finite value
+        r = x.as_real().round(None, -1, RoundingMode.RNA)
+        return Float(x=r, ctx=RealContext())

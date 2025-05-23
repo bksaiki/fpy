@@ -6,7 +6,11 @@ from typing import Callable, TypeAlias
 
 from .number import Context, Float
 from .number.gmp import *
-from .number.real import real_add, real_sub, real_mul, real_neg, real_abs
+from .number.real import (
+    RealContext,
+    real_add, real_sub, real_mul, real_neg, real_abs,
+    real_ceil, real_floor, real_trunc, real_round
+)
 from .number.round import RoundingMode
 
 _MPFR_1ary: TypeAlias = Callable[[Float, int], Float]
@@ -464,7 +468,12 @@ def ceil(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RTP).round_integer(x)
+    match ctx:
+        case RealContext():
+            # use rounding primitives
+            return real_ceil(x)
+        case _:
+            return ctx.with_rm(RoundingMode.RTP).round_integer(x)
 
 def floor(x: Float, ctx: Context):
     """
@@ -477,12 +486,17 @@ def floor(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RTN).round_integer(x)
+    match ctx:
+        case RealContext():
+            # use rounding primitives
+            return real_floor(x)
+        case _:
+            return ctx.with_rm(RoundingMode.RTN).round_integer(x)
 
 def trunc(x: Float, ctx: Context):
     """
     Computes the integer with the largest magnitude whose
-    magnitude is less than or equal to the magntidue of `x`
+    magnitude is less than or equal to the magnitude of `x`
     that is representable under `ctx`.
 
     If the context supports overflow, the result may be infinite.
@@ -491,7 +505,12 @@ def trunc(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RTZ).round_integer(x)
+    match ctx:
+        case RealContext():
+            # use rounding primitives
+            return real_trunc(x)
+        case _:
+            return ctx.with_rm(RoundingMode.RTZ).round_integer(x)
 
 def nearbyint(x: Float, ctx: Context):
     """
@@ -504,12 +523,16 @@ def nearbyint(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.round_integer(x)
+    match ctx:
+        case RealContext():
+            raise RuntimeError('nearbyint() not supported in RealContext')
+        case _:
+            return ctx.round_integer(x)
 
 def round(x: Float, ctx: Context):
     """
     Rounds `x` to the nearest representable integer,
-    rounding tiews away from zero in halfway cases.
+    rounding ties away from zero in halfway cases.
 
     If the context supports overflow, the result may be infinite.
     """
@@ -517,4 +540,9 @@ def round(x: Float, ctx: Context):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
     if not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
-    return ctx.with_rm(RoundingMode.RNA).round_integer(x)
+    match ctx:
+        case RealContext():
+            # use rounding primitives
+            return real_round(x)
+        case _:
+            return ctx.with_rm(RoundingMode.RNA).round_integer(x)
