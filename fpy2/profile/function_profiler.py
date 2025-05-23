@@ -102,8 +102,8 @@ class FunctionProfiler:
 
         # select the reference function
         ir = func.to_ir()
-        if 'spec' in ir.ctx and isinstance(ir.ctx['spec'], Function):
-            ref_fn = ir.ctx['spec']
+        if 'spec' in ir.metadata and isinstance(ir.metadata['spec'], Function):
+            ref_fn = ir.metadata['spec']
         else:
             ref_fn = func
 

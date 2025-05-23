@@ -42,7 +42,16 @@ class _FormatterInstance(AstVisitor):
         return str(e.val)
 
     def _visit_foreign(self, e: ForeignVal, ctx: _Ctx):
-        return repr(e.val)
+        match e.val:
+            case FPCoreContext():
+                # TODO: currently pruning unsupported attributes
+                props: dict[str, Any] = {}
+                for k, v in e.val.props.items():
+                    if k == 'precision' or k == 'round':
+                        props[k] = v
+                return FPCoreContext(**props)
+            case _:
+                return repr(e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
         return e.val
@@ -261,7 +270,7 @@ class _FormatterInstance(AstVisitor):
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)
-        self._format_decorator(func.ctx, arg_str, ctx)
+        self._format_decorator(func.metadata, arg_str, ctx)
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)
 

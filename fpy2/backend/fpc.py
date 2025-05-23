@@ -505,13 +505,13 @@ class FPCoreCompileInstance(ReduceVisitor):
         body = self._visit_block(func.body, ctx)
         # TODO: parse data
         ident = func.name
-        name = func.ctx.get('name', None)
-        pre = func.ctx.get('pre', None)
-        spec = func.ctx.get('spec', None)
+        name = func.metadata.get('name', None)
+        pre = func.metadata.get('pre', None)
+        spec = func.metadata.get('spec', None)
         return fpc.FPCore(
             inputs=args,
             e=body,
-            props=func.ctx.copy(),
+            props=func.metadata.copy(),
             ident=ident,
             name=name,
             pre=pre,

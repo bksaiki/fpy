@@ -89,8 +89,8 @@ def _sample_rejection_one(
         hi = ieee754.Float(negative=False, isinf=True, ctx=ctx)
         rt = DefaultInterpreter()
 
-        assert 'pre' in fun.ast.ctx, 'missing precondition'
-        pre = Function(fun.ast.ctx['pre'], ForeignEnv.empty())
+        assert 'pre' in fun.ast.metadata, 'missing precondition'
+        pre = Function(fun.ast.metadata['pre'], ForeignEnv.empty())
 
         start_fuel = fuel
         while fuel > 0:
@@ -144,7 +144,7 @@ def sample_function(
 
     # compute the context
     default_ctx = ieee754.ieee_ctx(11, 64)
-    ctx = determine_ctx(default_ctx, fun.ast.ctx)
+    ctx = determine_ctx(default_ctx, fun.ast.metadata)
 
     # TODO: other sampling methods
     if not isinstance(ctx, ieee754.IEEECtx):
@@ -162,10 +162,10 @@ def sample_function(
 
     # process precondition
     ir = fun.to_ir()
-    if 'pre' not in ir.ctx or ignore_pre:
+    if 'pre' not in ir.metadata or ignore_pre:
         table = RangeTable()
     else:
-        pre: FuncDef = ir.ctx['pre']
+        pre: FuncDef = ir.metadata['pre']
         table = RangeTable.from_condition(pre)
 
     # add unmentioned variables

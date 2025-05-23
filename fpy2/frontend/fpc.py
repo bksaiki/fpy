@@ -704,7 +704,7 @@ class _FPCore2FPy:
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
         ast = FuncDef(name, args, block, None)
-        ast.ctx = props
+        ast.metadata = props
         return ast
 
     def convert(self) -> FuncDef:

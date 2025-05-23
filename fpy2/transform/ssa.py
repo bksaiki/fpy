@@ -309,7 +309,7 @@ class _SSAInstance(DefaultTransformVisitor):
                 ctx[arg.name] = arg.name
 
         body, _ = self._visit_block(func.body, ctx)
-        return FuncDef(func.name, func.args, body, func.ty, func.ctx, func.free_vars)
+        return FuncDef(func.name, func.args, body, func.ty, func.metadata, func.free_vars)
 
     # override to get typing hint
     def _visit_statement(self, stmt: Stmt, ctx: _Ctx) -> tuple[Stmt, _Ctx]:

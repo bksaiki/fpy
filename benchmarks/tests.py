@@ -1,4 +1,4 @@
-from fpy2 import fpy
+from fpy2 import *
 from fpy2.typing import *
 
 @fpy(precision='binary32')
@@ -1364,1106 +1364,1106 @@ def f339(arg1):
 @fpy(precision='binary32')
 def f340():
     if 1.0 < 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f341(arg1):
     if arg1 < 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f342(arg1):
     if 1.0 < arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f343(arg1):
     if arg1 < arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f344(arg1, arg2):
     if arg1 < arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f345(arg1, arg2):
     if arg2 < arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f346():
     if 1.0 > 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f347(arg1):
     if arg1 > 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f348(arg1):
     if 1.0 > arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f349(arg1):
     if arg1 > arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f350(arg1, arg2):
     if arg1 > arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f351(arg1, arg2):
     if arg2 > arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f352():
     if 1.0 <= 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f353(arg1):
     if arg1 <= 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f354(arg1):
     if 1.0 <= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f355(arg1):
     if arg1 <= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f356(arg1, arg2):
     if arg1 <= arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f357(arg1, arg2):
     if arg2 <= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f358():
     if 1.0 >= 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f359(arg1):
     if arg1 >= 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f360(arg1):
     if 1.0 >= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f361(arg1):
     if arg1 >= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f362(arg1, arg2):
     if arg1 >= arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f363(arg1, arg2):
     if arg2 >= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f364():
     if 1.0 == 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f365(arg1):
     if arg1 == 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f366(arg1):
     if 1.0 == arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f367(arg1):
     if arg1 == arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f368(arg1, arg2):
     if arg1 == arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f369(arg1, arg2):
     if arg2 == arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f370():
     if 1.0 != 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f371(arg1):
     if arg1 != 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f372(arg1):
     if 1.0 != arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f373(arg1):
     if arg1 != arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f374(arg1, arg2):
     if arg1 != arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f375(arg1, arg2):
     if arg2 != arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f376():
     if isfinite(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f377(arg1):
     if isfinite(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f378():
     if isinf(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f379(arg1):
     if isinf(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f380():
     if isnan(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f381(arg1):
     if isnan(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f382():
     if isnormal(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f383(arg1):
     if isnormal(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f384():
     if signbit(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary32')
 def f385(arg1):
     if signbit(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy(precision='binary80')
 def f386():
     if 1.0 < 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f387(arg1):
     if arg1 < 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f388(arg1):
     if 1.0 < arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f389(arg1):
     if arg1 < arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f390(arg1, arg2):
     if arg1 < arg2:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f391(arg1, arg2):
     if arg2 < arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f392():
     if 1.0 > 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f393(arg1):
     if arg1 > 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f394(arg1):
     if 1.0 > arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f395(arg1):
     if arg1 > arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f396(arg1, arg2):
     if arg1 > arg2:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f397(arg1, arg2):
     if arg2 > arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f398():
     if 1.0 <= 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f399(arg1):
     if arg1 <= 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f400(arg1):
     if 1.0 <= arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f401(arg1):
     if arg1 <= arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f402(arg1, arg2):
     if arg1 <= arg2:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f403(arg1, arg2):
     if arg2 <= arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f404():
     if 1.0 >= 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f405(arg1):
     if arg1 >= 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f406(arg1):
     if 1.0 >= arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f407(arg1):
     if arg1 >= arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f408(arg1, arg2):
     if arg1 >= arg2:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f409(arg1, arg2):
     if arg2 >= arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f410():
     if 1.0 == 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f411(arg1):
     if arg1 == 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f412(arg1):
     if 1.0 == arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f413(arg1):
     if arg1 == arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f414(arg1, arg2):
     if arg1 == arg2:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f415(arg1, arg2):
     if arg2 == arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f416():
     if 1.0 != 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f417(arg1):
     if arg1 != 1.0:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f418(arg1):
     if 1.0 != arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f419(arg1):
     if arg1 != arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f420(arg1, arg2):
     if arg1 != arg2:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f421(arg1, arg2):
     if arg2 != arg1:
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f422():
     if isfinite(1.0):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f423(arg1):
     if isfinite(arg1):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f424():
     if isinf(1.0):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f425(arg1):
     if isinf(arg1):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f426():
     if isnan(1.0):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f427(arg1):
     if isnan(arg1):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f428():
     if isnormal(1.0):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f429(arg1):
     if isnormal(arg1):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f430():
     if signbit(1.0):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy(precision='binary80')
 def f431(arg1):
     if signbit(arg1):
-        t1 = 1
+        t = 1
     else:
-        t1 = 0
-    return t1
+        t = 0
+    return t
 
 @fpy
 def f432():
     if 1.0 < 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f433(arg1):
     if arg1 < 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f434(arg1):
     if 1.0 < arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f435(arg1):
     if arg1 < arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f436(arg1, arg2):
     if arg1 < arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f437(arg1, arg2):
     if arg2 < arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f438():
     if 1.0 > 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f439(arg1):
     if arg1 > 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f440(arg1):
     if 1.0 > arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f441(arg1):
     if arg1 > arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f442(arg1, arg2):
     if arg1 > arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f443(arg1, arg2):
     if arg2 > arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f444():
     if 1.0 <= 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f445(arg1):
     if arg1 <= 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f446(arg1):
     if 1.0 <= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f447(arg1):
     if arg1 <= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f448(arg1, arg2):
     if arg1 <= arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f449(arg1, arg2):
     if arg2 <= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f450():
     if 1.0 >= 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f451(arg1):
     if arg1 >= 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f452(arg1):
     if 1.0 >= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f453(arg1):
     if arg1 >= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f454(arg1, arg2):
     if arg1 >= arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f455(arg1, arg2):
     if arg2 >= arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f456():
     if 1.0 == 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f457(arg1):
     if arg1 == 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f458(arg1):
     if 1.0 == arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f459(arg1):
     if arg1 == arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f460(arg1, arg2):
     if arg1 == arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f461(arg1, arg2):
     if arg2 == arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f462():
     if 1.0 != 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f463(arg1):
     if arg1 != 1.0:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f464(arg1):
     if 1.0 != arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f465(arg1):
     if arg1 != arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f466(arg1, arg2):
     if arg1 != arg2:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f467(arg1, arg2):
     if arg2 != arg1:
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f468():
     if isfinite(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f469(arg1):
     if isfinite(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f470():
     if isinf(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f471(arg1):
     if isinf(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f472():
     if isnan(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f473(arg1):
     if isnan(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f474():
     if isnormal(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f475(arg1):
     if isnormal(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f476():
     if signbit(1.0):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f477(arg1):
     if signbit(arg1):
-        t1 = 1.0
+        t = 1.0
     else:
-        t1 = 0.0
-    return t1
+        t = 0.0
+    return t
 
 @fpy
 def f478():

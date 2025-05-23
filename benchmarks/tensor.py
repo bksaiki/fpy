@@ -1,4 +1,4 @@
-from fpy2 import fpy
+from fpy2 import *
 from fpy2.typing import *
 
 @fpy
@@ -87,10 +87,10 @@ def fibonacci(n):
         f_n_2 = f_n_1
         f_n_1 = f_n
         if i == 1:
-            t6 = 1
+            t1 = 1
         else:
-            t6 = (f_n_1 + f_n_2)
-        f_n = t6
+            t1 = (f_n_1 + f_n_2)
+        f_n = t1
     return t0
 
 @fpy(pre=lambda A, B: an == bm)
@@ -117,18 +117,18 @@ def fib_Q():
 @fpy
 def fib_rec(A, n):
     if n == 2:
-        t7 = A[0][0]
+        t1 = A[0][0]
     else:
         if n == 1:
-            t5 = A[0][1]
+            t0 = A[0][1]
         else:
             if n <= 0:
-                t3 = A[1][1]
+                t = A[1][1]
             else:
-                t3 = fib_rec(matmul(A, fib_Q()), (n - 1))
-            t5 = t3
-        t7 = t5
-    return t7
+                t = fib_rec(matmul(A, fib_Q()), (n - 1))
+            t0 = t
+        t1 = t0
+    return t1
 
 @fpy
 def fib(n):
@@ -139,8 +139,8 @@ def fib_iterative(n):
     t = n
     A = fib_Q()
     for i in range(t):
-        A1 = matmul(A, fib_Q())
-        A = A1
+        A0 = matmul(A, fib_Q())
+        A = A0
     return A[1][1]
 
 @fpy
@@ -151,15 +151,15 @@ def main(n):
     for i in range(t):
         for method in range(t0):
             if method == 0:
-                t4 = fib(i)
+                t2 = fib(i)
             else:
-                t4 = fib_iterative(i)
-            t1[i][method] = t4
+                t2 = fib_iterative(i)
+            t1[i][method] = t2
     return t1
 
 @fpy
 def f18(n):
-    with Context(precision='integer'):
+    with FPCoreContext(precision='integer') as _:
         t = 1
     return t
 
@@ -216,18 +216,18 @@ def main():
 @fpy
 def even_int(n):
     if n <= 0:
-        t1 = True
+        t = True
     else:
-        t1 = odd_int((n - 1))
-    return t1
+        t = odd_int((n - 1))
+    return t
 
 @fpy
 def odd_int(n):
     if n <= 0:
-        t1 = False
+        t = False
     else:
-        t1 = even_int((n - 1))
-    return t1
+        t = even_int((n - 1))
+    return t
 
 @fpy
 def even_odd_tensor(A):
@@ -292,10 +292,10 @@ def sqrt_residual(a):
         old_residual = residual
         residual = fabs(((x1 * x1) - a))
     if residual == 0:
-        t9 = x1
+        t = x1
     else:
-        t9 = x0
-    return t9
+        t = x0
+    return t
 
 @fpy(pre=lambda a: 0 <= a)
 def sqrt_epsilon(a):
@@ -334,10 +334,10 @@ def babylonian_residual(a):
         prev_residual = residual
         residual = fabs(((x * x) - a))
     if residual == 0:
-        t9 = x
+        t = x
     else:
-        t9 = prev_x
-    return t9
+        t = prev_x
+    return t
 
 @fpy
 def main(a):
@@ -389,10 +389,10 @@ def sqrt_residual(a):
         old_residual = residual
         residual = fabs(((x1 * x1) - a))
     if residual == 0:
-        t9 = x1
+        t = x1
     else:
-        t9 = x0
-    return t9
+        t = x0
+    return t
 
 @fpy(pre=lambda a: 0 <= a)
 def sqrt_epsilon(a):
@@ -431,10 +431,10 @@ def babylonian_residual(a):
         prev_residual = residual
         residual = fabs(((x * x) - a))
     if residual == 0:
-        t9 = x
+        t = x
     else:
-        t9 = prev_x
-    return t9
+        t = prev_x
+    return t
 
 @fpy
 def sqrt_newton(a, residual_bound):
@@ -448,18 +448,18 @@ def sqrt_newton(a, residual_bound):
 @fpy
 def sqrt_bfloat_limit(a, residual_bound):
     x = a
-    with Context(precision=['float', '8', '32']):
+    with IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE) as _:
         t = ((x * x) - a)
     residual = t
     steps = 0
-    with Context(precision='integer'):
+    with FPCoreContext(precision='integer') as _:
         t0 = 2
     while steps < t0 and fabs(residual) >= residual_bound:
         x = (x - (residual / (2 * x)))
-        with Context(precision=['float', '8', '32']):
+        with IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE) as _:
             t1 = ((x * x) - a)
         residual = t1
-        with Context(precision='integer'):
+        with FPCoreContext(precision='integer') as _:
             t2 = (1 + steps)
         steps = t2
     return x
@@ -472,12 +472,12 @@ def bab_bfloat_limit(a, residual_bound):
     x = a
     residual = fabs(((x * x) - a))
     steps = 0
-    with Context(precision='integer'):
+    with FPCoreContext(precision='integer') as _:
         t = 20
     while steps < t and fabs(residual) >= residual_bound:
         x = (rational(1, 2) * (x + (a / x)))
         residual = fabs(((x * x) - a))
-        with Context(precision='integer'):
+        with FPCoreContext(precision='integer') as _:
             t0 = (1 + steps)
         steps = t0
     return x
@@ -485,12 +485,12 @@ def bab_bfloat_limit(a, residual_bound):
 @fpy
 def sqrt_bfloat(a, residual_bound):
     x = a
-    with Context(precision=['float', '8', '32']):
+    with IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE) as _:
         t = ((x * x) - a)
     residual = t
     while fabs(residual) >= residual_bound:
         x = (x - (residual / (2 * x)))
-        with Context(precision=['float', '8', '32']):
+        with IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE) as _:
             t0 = ((x * x) - a)
         residual = t0
     return x
@@ -604,8 +604,8 @@ def sum_1d(A):
     t = n
     total = 0
     for i in range(t):
-        total1 = (total + A[i])
-        total = total1
+        total0 = (total + A[i])
+        total = total0
     return total
 
 @fpy

@@ -1020,7 +1020,7 @@ class FuncDef(Ast):
     name: str
     args: list[Argument]
     body: StmtBlock
-    ctx: dict[str, Any]
+    metadata: dict[str, Any]
     free_vars: set[NamedId]
 
     def __init__(
@@ -1034,7 +1034,7 @@ class FuncDef(Ast):
         self.name = name
         self.args = list(args)
         self.body = body
-        self.ctx = {}
+        self.metadata = {}
         self.free_vars = set()
 
     def __eq__(self, other: object) -> bool:
