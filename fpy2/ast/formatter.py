@@ -138,6 +138,8 @@ class _FormatterInstance(AstVisitor):
             match target:
                 case NamedId():
                     targets.append(str(target))
+                case UnderscoreId():
+                    pass
                 case TupleBinding():
                     s = self._visit_tuple_binding(target)
                     targets.append(f'({s})')
