@@ -37,20 +37,23 @@ class _SSAInstance(DefaultTransformVisitor):
         iterables = [self._visit_expr(iter, ctx) for iter in e.iterables]
 
         ctx = ctx.copy()
-        vars: list[Id] = []
-        for var in e.vars:
-            match var:
+        targets: list[Id | TupleBinding] = []
+        for target in e.targets:
+            match target:
                 case NamedId():
-                    name = self.gensym.refresh(var)
-                    ctx[var] = name
-                    vars.append(name)
+                    name = self.gensym.refresh(target)
+                    ctx[target] = name
+                    targets.append(name)
                 case UnderscoreId():
-                    vars.append(var)
+                    targets.append(target)
+                case TupleBinding():
+                    t, _ = self._visit_tuple_binding(target, ctx)
+                    targets.append(t)
                 case _:
-                    raise NotImplementedError('unreachable', var)
+                    raise NotImplementedError('unreachable', target)
 
         elt = self._visit_expr(e.elt, ctx)
-        return CompExpr(vars, iterables, elt)
+        return CompExpr(targets, iterables, elt)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         # visit the expression

@@ -28,18 +28,20 @@ class _VerifyPassInstance(DefaultVisitor):
     def _visit_comp_expr(self, e: CompExpr, ctx: _CtxType):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
-        for var in e.vars:
-            match var:
+        for target in e.targets:
+            match target:
                 case NamedId():
-                    if var in self.types:
-                        raise InvalidIRError(f'reassignment of variable {var}')
-                    self.types[var] = AnyType()
-                    ctx.add(var)
+                    if target in self.types:
+                        raise InvalidIRError(f'reassignment of variable {target}')
+                    self.types[target] = AnyType()
+                    ctx.add(target)
                 case UnderscoreId():
                     pass
+                case TupleBinding():
+                    self._visit_tuple_binding(target, ctx)
                 case _:
-                    raise InvalidIRError('unreachable', var)
-        self._visit_expr(e.elt, ctx)
+                    raise InvalidIRError('unreachable', target)
+        self._visit_expr(e.elt, ctx)  
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _CtxType):
         self._visit_expr(stmt.expr, ctx)

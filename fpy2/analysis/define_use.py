@@ -28,9 +28,13 @@ class _DefineUseInstance(DefaultVisitor):
     def _visit_comp_expr(self, e: CompExpr, ctx: None):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
-        for var in e.vars:
-            if isinstance(var, NamedId):
-                self.uses[var] = set()
+        for target in e.targets:
+            match target:
+                case NamedId():
+                    self.uses[target] = set()
+                case TupleBinding():
+                    for name in target.names():
+                        self.uses[name] = set()
         self._visit_expr(e.elt, ctx)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):

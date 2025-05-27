@@ -453,16 +453,43 @@ class TupleExpr(Expr):
         super().__init__()
         self.children = list(children)
 
+
+class TupleBinding(IR):
+    """FPy IR: tuple binding"""
+    elts: list[Id | Self]
+
+    def __init__(self, elts: Sequence[Id | Self]):
+        super().__init__()
+        self.elts = list(elts)
+
+    def __iter__(self):
+        return iter(self.elts)
+
+    def names(self) -> set[NamedId]:
+        ids: set[NamedId] = set()
+        for v in self.elts:
+            if isinstance(v, NamedId):
+                ids.add(v)
+            elif isinstance(v, UnderscoreId):
+                pass
+            elif isinstance(v, TupleBinding):
+                ids |= v.names()
+            else:
+                raise NotImplementedError('unexpected tuple identifier', v)
+        return ids
+
+Binding: TypeAlias = Id | TupleBinding
+
 # TODO: type annotation for variables
 class CompExpr(Expr):
     """FPy node: comprehension expression"""
-    vars: list[Id]
+    targets: list[Binding]
     iterables: list[Expr]
     elt: Expr
 
-    def __init__(self, vars: Sequence[Id], iterables: Sequence[Expr], elt: Expr):
+    def __init__(self, targets: Sequence[Binding], iterables: Sequence[Expr], elt: Expr):
         super().__init__()
-        self.vars = list(vars)
+        self.targets = list(targets)
         self.iterables = list(iterables)
         self.elt = elt
 
@@ -564,30 +591,6 @@ class SimpleAssign(Stmt):
         self.ty = ty
         self.expr = expr
 
-class TupleBinding(IR):
-    """FPy IR: tuple binding"""
-    elts: list[Id | Self]
-
-    def __init__(self, elts: Sequence[Id | Self]):
-        super().__init__()
-        self.elts = list(elts)
-
-    def __iter__(self):
-        return iter(self.elts)
-
-    def names(self) -> set[NamedId]:
-        ids: set[NamedId] = set()
-        for v in self.elts:
-            if isinstance(v, NamedId):
-                ids.add(v)
-            elif isinstance(v, UnderscoreId):
-                pass
-            elif isinstance(v, TupleBinding):
-                ids |= v.names()
-            else:
-                raise NotImplementedError('unexpected tuple identifier', v)
-        return ids
-
 class TupleUnpack(Stmt):
     """FPy node: unpacking / destructing a tuple"""
     binding: TupleBinding
@@ -685,8 +688,6 @@ class WhileStmt(Stmt):
         self.body = body
         self.phis = phis
 
-ForBinding: TypeAlias = Id | TupleBinding
-
 class ForStmt(Stmt):
     """
     FPy IR: for statement
@@ -697,7 +698,7 @@ class ForStmt(Stmt):
     - `phi.name` is the SSA name of the variable after the block
     """
 
-    target: ForBinding
+    target: Binding
     ty: IRType
     iterable: Expr
     body: StmtBlock
@@ -705,7 +706,7 @@ class ForStmt(Stmt):
 
     def __init__(
         self,
-        target: ForBinding,
+        target: Binding,
         ty: IRType,
         iterable: Expr,
         body: StmtBlock,

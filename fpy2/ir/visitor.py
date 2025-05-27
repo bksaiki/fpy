@@ -483,9 +483,19 @@ class DefaultTransformVisitor(TransformVisitor):
         return TupleSet(value, slices, expr)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
+        targets: list[Id | TupleBinding] = []
+        for target in e.targets:
+            match target:
+                case Id():
+                    targets.append(target)
+                case TupleBinding():
+                    targets.append(self._copy_tuple_binding(target))
+                case _:
+                    raise RuntimeError('unreachable', target)
+
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return CompExpr(e.vars, iterables, elt)
+        return CompExpr(targets, iterables, elt)
 
     def _visit_if_expr(self, e: IfExpr, ctx: Any):
         cond = self._visit_expr(e.cond, ctx)

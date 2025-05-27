@@ -332,7 +332,7 @@ class _Interpreter(ReduceVisitor):
 
     def _apply_comp(
         self,
-        bindings: list[tuple[Id, Expr]],
+        bindings: list[tuple[Id | TupleBinding, Expr]],
         elt: Expr,
         ctx: Context,
         elts: list[Any]
@@ -352,7 +352,7 @@ class _Interpreter(ReduceVisitor):
     def _visit_comp_expr(self, e: CompExpr, ctx: Context):
         # evaluate comprehension
         elts: list[Any] = []
-        bindings = [(var, iterable) for var, iterable in zip(e.vars, e.iterables)]
+        bindings = list(zip(e.targets, e.iterables))
         self._apply_comp(bindings, e.elt, ctx, elts)
 
         # remove temporarily bound variables
