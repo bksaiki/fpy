@@ -6,8 +6,6 @@ from abc import ABC, abstractmethod
 from enum import IntEnum
 from typing import Any, Optional, Self, Sequence, TypeAlias
 
-from ..fpc_context import FPCoreContext
-from ..number import Context
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location, default_repr
 
 

@@ -141,9 +141,13 @@ class _LiveVars(ReduceVisitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: _RetType) -> _RetType:
         body_fvs = self._visit_block(stmt.body, ctx)
-        if isinstance(stmt.var, NamedId):
-            body_fvs -= { stmt.var }
-        ctx = ctx | body_fvs
+        match stmt.target:
+            case NamedId():
+                body_fvs -= { stmt.target }
+            case TupleBinding():
+                for var in stmt.target.names():
+                    if isinstance(var, NamedId):
+                        body_fvs.discard(var)
         return ctx | self._visit_expr(stmt.iterable, None)
 
     def _visit_foreign_attr(self, e: ForeignAttribute, ctx: None) -> _RetType:

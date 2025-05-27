@@ -3,10 +3,8 @@ This module contains the intermediate representation (IR).
 """
 
 from abc import abstractmethod
-from typing import Any, Optional, Self, Sequence
+from typing import Any, Optional, Self, Sequence, TypeAlias
 
-from ..fpc_context import FPCoreContext
-from ..number import Context
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, default_repr
 
 from .types import IRType
@@ -683,6 +681,8 @@ class WhileStmt(Stmt):
         self.body = body
         self.phis = phis
 
+ForBinding: TypeAlias = Id | TupleBinding
+
 class ForStmt(Stmt):
     """
     FPy IR: for statement
@@ -693,15 +693,22 @@ class ForStmt(Stmt):
     - `phi.name` is the SSA name of the variable after the block
     """
 
-    var: Id
+    target: ForBinding
     ty: IRType
     iterable: Expr
     body: StmtBlock
     phis: list[PhiNode]
 
-    def __init__(self, var: Id, ty: IRType, iterable: Expr, body: StmtBlock, phis: list[PhiNode]):
+    def __init__(
+        self,
+        target: ForBinding,
+        ty: IRType,
+        iterable: Expr,
+        body: StmtBlock,
+        phis: list[PhiNode]
+    ):
         super().__init__()
-        self.var = var
+        self.target = target
         self.ty = ty
         self.iterable = iterable
         self.body = body

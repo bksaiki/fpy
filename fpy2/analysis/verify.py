@@ -55,13 +55,16 @@ class _VerifyPassInstance(DefaultVisitor):
                 raise InvalidIRError('unreachable', stmt.var)
         return ctx
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _CtxType):
-        self._visit_expr(stmt.expr, ctx)
-        for var in stmt.binding.names():
+    def _visit_tuple_binding(self, binding: TupleBinding, ctx: _CtxType):
+        for var in binding.names():
             if var in self.types:
                 raise InvalidIRError(f'reassignment of variable {var}')
             self.types[var] = AnyType()
             ctx.add(var)
+
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _CtxType):
+        self._visit_expr(stmt.expr, ctx)
+        self._visit_tuple_binding(stmt.binding, ctx)
         return ctx
 
     def _visit_index_assign(self, stmt: IndexAssign, ctx: _CtxType):
@@ -139,16 +142,14 @@ class _VerifyPassInstance(DefaultVisitor):
         # check iterable expression
         self._visit_expr(stmt.iterable, ctx)
         # bind the loop variable
-        match stmt.var:
+        match stmt.target:
             case NamedId():
-                if stmt.var in self.types:
-                    raise InvalidIRError(f'reassignment of variable {stmt.var}')
-                self.types[stmt.var] = AnyType()
-                ctx.add(stmt.var)
-            case UnderscoreId():
-                pass
-            case _:
-                raise InvalidIRError('unreachable', stmt.var)
+                if stmt.target in self.types:
+                    raise InvalidIRError(f'reassignment of variable {stmt.target}')
+                self.types[stmt.target] = AnyType()
+                ctx.add(stmt.target)
+            case TupleBinding():
+                self._visit_tuple_binding(stmt.target, ctx)
         # check (partial) validity of phi variables and update context
         for phi in stmt.phis:
             name, orig = phi.name, phi.lhs

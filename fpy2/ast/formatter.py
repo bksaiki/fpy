@@ -2,6 +2,7 @@
 
 from pprint import pformat
 
+from ..fpc_context import FPCoreContext
 from .fpyast import *
 from .visitor import AstVisitor
 

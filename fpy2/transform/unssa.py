@@ -170,13 +170,19 @@ class _UnSSAInstance(DefaultTransformVisitor):
         return s, None
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        if isinstance(stmt.var, NamedId):
-            var: Id = self.env.get(stmt.var, stmt.var)
-        else:
-            var = stmt.var
+        match stmt.target:
+            case NamedId():
+                target: Id | TupleBinding = self.env.get(stmt.target, stmt.target)
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError(f'unexpected target {stmt.target}')
+    
         iterable = self._visit_expr(stmt.iterable, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
-        s = ForStmt(var, stmt.ty, iterable, body, [])
+        s = ForStmt(target, stmt.ty, iterable, body, [])
         return s, None
 
 

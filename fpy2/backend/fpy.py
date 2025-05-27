@@ -8,7 +8,7 @@ from ..ir import *
 
 from ..ast import fpyast as ast
 from ..ast.syntax_check import SyntaxCheck
-from ..function import Function
+from ..fpc_context import FPCoreContext
 from ..transform import UnSSA
 
 from ..ir.codegen import (
@@ -201,9 +201,17 @@ class _FPyCompilerInstance(ReduceVisitor):
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
 
+        match stmt.target:
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         iterable = self._visit_expr(stmt.iterable, None)
         body = self._visit_block(stmt.body, None)
-        return ast.ForStmt(stmt.var, iterable, body, None)
+        return ast.ForStmt(target, iterable, body, None)
 
     def _visit_context_expr(self, e: ContextExpr, ctx: Any):
         match e.ctor:

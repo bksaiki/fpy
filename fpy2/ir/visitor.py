@@ -576,12 +576,20 @@ class DefaultTransformVisitor(TransformVisitor):
         return s, ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: Any):
+        match stmt.target:
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._copy_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         iterable = self._visit_expr(stmt.iterable, ctx)
         init_phis, init_ctx = self._visit_loop_phis(stmt.phis, ctx, None)
         body, rctx = self._visit_block(stmt.body, init_ctx)
 
         phis, ctx = self._visit_loop_phis(init_phis, ctx, rctx)
-        s = ForStmt(stmt.var, stmt.ty, iterable, body, phis)
+        s = ForStmt(target, stmt.ty, iterable, body, phis)
         return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):

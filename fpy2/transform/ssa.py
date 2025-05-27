@@ -221,14 +221,14 @@ class _SSAInstance(DefaultTransformVisitor):
         iterable = self._visit_expr(stmt.iterable, ctx)
 
         # generate a new name if needed
-        match stmt.var:
+        match stmt.target:
             case NamedId():
-                iter_name = self.gensym.refresh(stmt.var)
-                ctx = { **ctx, stmt.var: iter_name }
-            case UnderscoreId():
-                iter_name = stmt.var
+                iter_name = self.gensym.refresh(stmt.target)
+                ctx = { **ctx, stmt.target: iter_name }
+            case TupleBinding():
+                iter_name, ctx = self._visit_tuple_binding(stmt.target, ctx)
             case _:
-                raise NotImplementedError('unreachable', stmt.var)
+                ctx = ctx.copy()
 
         # compute variables requiring phi node
         reach = self.reaches[stmt.body]

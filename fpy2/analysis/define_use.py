@@ -71,8 +71,13 @@ class _DefineUseInstance(DefaultVisitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         self._visit_expr(stmt.iterable, ctx)
-        if isinstance(stmt.var, NamedId):
-            self.uses[stmt.var] = set()
+        match stmt.target:
+            case NamedId():
+                self.uses[stmt.target] = set()
+            case TupleBinding():
+                for var in stmt.target.names():
+                    if isinstance(var, NamedId):
+                        self.uses[var] = set()
         for phi in stmt.phis:
             self.uses[phi.name] = set()
             self.uses[phi.lhs].add(phi)

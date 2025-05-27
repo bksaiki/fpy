@@ -215,9 +215,17 @@ class _FormatterInstance(BaseVisitor):
         self._visit_block(stmt.body, ctx.indent())
 
     def _visit_for(self, stmt: ForStmt, ctx: _IndentCtx):
+        match stmt.target:
+            case Id():
+                target = str(stmt.target)
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         iterable = self._visit_expr(stmt.iterable, ctx)
         self._visit_loop_phis(stmt.phis, ctx, None)
-        self._add_line(f'for {str(stmt.var)} in {iterable}:', ctx)
+        self._add_line(f'for {target} in {iterable}:', ctx)
         self._visit_block(stmt.body, ctx.indent())
 
     def _visit_context(self, stmt: ContextStmt, ctx: _IndentCtx):

@@ -586,8 +586,11 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a tensor, got {iterable}')
 
         for val in iterable:
-            if isinstance(stmt.var, NamedId):
-                self.env[stmt.var] = val
+            match stmt.target:
+                case NamedId():
+                    self.env[stmt.target] = val
+                case TupleBinding():
+                    raise NotImplementedError('tuple unpacking in for loops is not supported')
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.rhs]
