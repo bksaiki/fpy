@@ -8,7 +8,7 @@ from ..analysis import DefineUse
 from ..fpc_context import FPCoreContext
 from ..ir import *
 from ..number import Context
-from ..transform import ForBundling, FuncUpdate, SimplifyIf, WhileBundling
+from ..transform import ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend
@@ -219,7 +219,7 @@ class FPCoreCompileInstance(ReduceVisitor):
             iter_id = str(self.gensym.fresh('i'))
             return fpc.Let(
                 list(zip(tuple_ids, tuples)),
-                fpc.Tensor([iter_id, fpc.Size(fpc.Var(tuple_ids[0]), fpc.Integer(0))],
+                fpc.Tensor([(iter_id, fpc.Size(fpc.Var(tuple_ids[0]), fpc.Integer(0)))],
                     fpc.Array(*[fpc.Ref(fpc.Var(tid), fpc.Var(iter_id)) for tid in tuple_ids])
                 )
             )
@@ -470,7 +470,15 @@ class FPCoreCompileInstance(ReduceVisitor):
         iterable = self._visit_expr(stmt.iterable, None)
         body = self._visit_block(stmt.body, fpc.Var(update))
         # index variables and state merging
-        dim_binding = (str(stmt.var), _size0_expr(tuple_id))
+        match stmt.target:
+            case Id():
+                # simple case: single variable
+                dim_binding = (str(stmt.target), fpc.Var(tuple_id))
+            case TupleBinding():
+                raise FPCoreCompileError('tuple unpacking in for loops is not supported')
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         while_binding = (name, fpc.Var(init), body)
         return fpc.Let([(tuple_id, iterable)], fpc.For([dim_binding], [while_binding], ctx))
 
@@ -555,6 +563,7 @@ class FPCoreCompiler(Backend):
     def compile(self, func: FuncDef) -> fpc.FPCore:
         # normalization passes
         func = FuncUpdate.apply(func)
+        func = ForUnpack.apply(func)
         func = ForBundling.apply(func)
         func = WhileBundling.apply(func)
         func = SimplifyIf.apply(func)
