@@ -12,8 +12,7 @@ from .. import math
 from ..fpc_context import FPCoreContext
 from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
-from ..runtime.trace import ExprTraceEntry
-from ..runtime.env import ForeignEnv
+from ..env import ForeignEnv
 from ..function import Function
 from ..ir import *
 from ..utils import decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
@@ -116,10 +115,6 @@ class _Interpreter(ReduceVisitor):
     """optional overriding context"""
     env: _Env
     """Environment mapping variable names to values"""
-    trace: list[ExprTraceEntry]
-    """expression trace"""
-    enable_trace: bool
-    """expression tracing enabled?"""
 
     def __init__(
         self, 
@@ -127,7 +122,6 @@ class _Interpreter(ReduceVisitor):
         *,
         override_ctx: Optional[Context] = None,
         env: Optional[_Env] = None,
-        enable_trace: bool = False
     ):
         if env is None:
             env = {}
@@ -135,8 +129,6 @@ class _Interpreter(ReduceVisitor):
         self.foreign = foreign
         self.override_ctx = override_ctx
         self.env = env
-        self.trace = []
-        self.enable_trace = enable_trace
 
     def _eval_ctx(self, ctx: Context | FPCoreContext):
         if self.override_ctx is not None:

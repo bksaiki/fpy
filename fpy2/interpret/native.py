@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional, Sequence, TypeAlias
 from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
 from ..function import Function
-from ..runtime.env import ForeignEnv
+from ..env import ForeignEnv
 from ..ir import *
 from ..utils import digits_to_fraction
 
