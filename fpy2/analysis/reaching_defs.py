@@ -75,6 +75,8 @@ class _ReachingDefsInstance(DefaultVisitor):
         match stmt.target:
             case NamedId():
                 defs = { *defs_in, stmt.target }
+            case UnderscoreId():
+                defs = defs_in.copy()
             case TupleBinding():
                 defs = defs_in | set(stmt.target.names())
 

@@ -231,6 +231,7 @@ class _SSAInstance(DefaultTransformVisitor):
             case TupleBinding():
                 iter_name, ctx = self._visit_tuple_binding(stmt.target, ctx)
             case _:
+                iter_name = stmt.target
                 ctx = ctx.copy()
 
         # compute variables requiring phi node

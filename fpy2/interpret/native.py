@@ -340,13 +340,18 @@ class _Interpreter(ReduceVisitor):
         if bindings == []:
             elts.append(self._visit_expr(elt, ctx))
         else:
-            var, iterable = bindings[0]
+            target, iterable = bindings[0]
             array = self._visit_expr(iterable, ctx)
             if not isinstance(array, tuple):
                 raise TypeError(f'expected a tensor, got {array}')
             for val in array:
-                if isinstance(var, NamedId):
-                    self.env[var] = val
+                match target:
+                    case NamedId():
+                        self.env[target] = val
+                    case TupleBinding():
+                        self._unpack_tuple(target, val, ctx)
+                    case _:
+                        raise RuntimeError('unreachable', target)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Context):
@@ -356,10 +361,13 @@ class _Interpreter(ReduceVisitor):
         self._apply_comp(bindings, e.elt, ctx, elts)
 
         # remove temporarily bound variables
-        for var in e.vars:
-            if isinstance(var, NamedId):
-                del self.env[var]
- 
+        for target in e.targets:
+            match target:
+                case NamedId():
+                    del self.env[target]
+                case TupleBinding():
+                    for var in target.names():
+                        del self.env[var]
         # the result
         return tuple(elts)
 
