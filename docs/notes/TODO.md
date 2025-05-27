@@ -40,5 +40,5 @@ Numbers:
   - hashing by numerical equality (except NaN!)
 
 Documentation:
-  - prune unneccesary documentation
   - integrate config with pyproject.toml
+  - document IR / IR transformation passes
