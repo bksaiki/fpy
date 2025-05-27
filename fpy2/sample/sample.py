@@ -9,10 +9,10 @@ from titanfp.arithmetic.evalctx import determine_ctx
 from titanfp.arithmetic import ieee754
 
 from ..ast import AnyTypeAnn, ScalarTypeAnn, ScalarType
+from ..env import ForeignEnv
 from ..function import Function
 from ..interpret import DefaultInterpreter
 from ..ir import FuncDef
-from ..runtime import ForeignEnv
 
 from .table import RangeTable
 
