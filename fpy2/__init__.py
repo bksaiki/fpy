@@ -58,13 +58,13 @@ from .backend import (
 from .interpret import (
     Interpreter,
     PythonInterpreter,
-    RealInterpreter,
     DefaultInterpreter,
     set_default_interpreter,
     get_default_interpreter,
 )
 
 from .function import Function
+from .env import ForeignEnv
 
 from .utils import (
     fraction,

@@ -2,7 +2,7 @@
 
 from ..fpc_context import FPCoreContext
 from ..number import Context
-from ..runtime import ForeignEnv
+from ..env import ForeignEnv
 
 from .fpyast import *
 from .visitor import DefaultAstTransformVisitor

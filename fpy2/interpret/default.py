@@ -12,8 +12,7 @@ from .. import math
 from ..fpc_context import FPCoreContext
 from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
-from ..runtime.trace import ExprTraceEntry
-from ..runtime.env import ForeignEnv
+from ..env import ForeignEnv
 from ..function import Function
 from ..ir import *
 from ..utils import decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
@@ -116,10 +115,6 @@ class _Interpreter(ReduceVisitor):
     """optional overriding context"""
     env: _Env
     """Environment mapping variable names to values"""
-    trace: list[ExprTraceEntry]
-    """expression trace"""
-    enable_trace: bool
-    """expression tracing enabled?"""
 
     def __init__(
         self, 
@@ -127,7 +122,6 @@ class _Interpreter(ReduceVisitor):
         *,
         override_ctx: Optional[Context] = None,
         env: Optional[_Env] = None,
-        enable_trace: bool = False
     ):
         if env is None:
             env = {}
@@ -135,8 +129,6 @@ class _Interpreter(ReduceVisitor):
         self.foreign = foreign
         self.override_ctx = override_ctx
         self.env = env
-        self.trace = []
-        self.enable_trace = enable_trace
 
     def _eval_ctx(self, ctx: Context | FPCoreContext):
         if self.override_ctx is not None:
@@ -493,10 +485,6 @@ class _Interpreter(ReduceVisitor):
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)
-        if self.enable_trace:
-            entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
-            self.trace.append(entry)
-
         match stmt.var:
             case NamedId():
                 self.env[stmt.var] = val
@@ -523,11 +511,6 @@ class _Interpreter(ReduceVisitor):
         val = self._visit_expr(stmt.expr, ctx)
         if not isinstance(val, NDArray):
             raise TypeError(f'expected a tuple, got {val}')
-
-        if self.enable_trace:
-            entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
-            self.trace.append(entry)
-
         self._unpack_tuple(stmt.binding, val, ctx)
 
     def _visit_index_assign(self, stmt: IndexAssign, ctx: Context) -> None:
@@ -565,10 +548,6 @@ class _Interpreter(ReduceVisitor):
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
-        if self.enable_trace:
-            entry = ExprTraceEntry(stmt.cond, cond, dict(self.env), ctx)
-            self.trace.append(entry)
-
         if cond:
             self._visit_block(stmt.ift, ctx)
             for phi in stmt.phis:
@@ -587,10 +566,6 @@ class _Interpreter(ReduceVisitor):
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
-        if self.enable_trace:
-            entry = ExprTraceEntry(stmt.cond, cond, dict(self.env), ctx)
-            self.trace.append(entry)
-
         while cond:
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
@@ -600,11 +575,6 @@ class _Interpreter(ReduceVisitor):
             cond = self._visit_expr(stmt.cond, ctx)
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
-
-            if self.enable_trace:
-                entry = ExprTraceEntry(stmt.cond, cond, dict(self.env), ctx)
-                self.trace.append(entry)
-
 
     def _visit_for(self, stmt: ForStmt, ctx: Context) -> None:
         for phi in stmt.phis:
@@ -694,11 +664,7 @@ class _Interpreter(ReduceVisitor):
         return ctx
 
     def _visit_return(self, stmt: ReturnStmt, ctx: Context):
-        val = self._visit_expr(stmt.expr, ctx)
-        if self.enable_trace:
-            entry = ExprTraceEntry(stmt.expr, val, dict(self.env), ctx)
-            self.trace.append(entry)
-        return val
+        return self._visit_expr(stmt.expr, ctx)
 
     def _visit_block(self, block: StmtBlock, ctx: Context):
         for stmt in block.stmts:
@@ -743,11 +709,6 @@ class DefaultInterpreter(Interpreter):
             raise TypeError(f'Expected Function, got {func}')
         rt = _Interpreter(func.env, override_ctx=self.ctx)
         return rt.eval(func.to_ir(), args, ctx)
-
-    def eval_with_trace(self, func: Function, args: Sequence[Any], ctx = None):
-        rt = _Interpreter(func.env, override_ctx=self.ctx, enable_trace=True)
-        result = rt.eval(func.to_ir(), args, ctx)
-        return result, rt.trace
 
     def eval_expr(self, expr: Expr, env: _Env, ctx: Context):
         rt = _Interpreter(ForeignEnv.empty(), override_ctx=self.ctx, env=env)

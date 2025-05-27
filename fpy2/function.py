@@ -8,12 +8,11 @@ from . import ast as fpyast
 
 from .ast import ContextInline
 from .analysis import VerifyIR
+from .env import ForeignEnv
 from .frontend import fpcore_to_fpy
 from .number import Context
 from .ir import IRCodegen
 from .transform import SSA
-
-from .runtime.env import ForeignEnv
 
 # avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:

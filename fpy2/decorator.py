@@ -16,10 +16,10 @@ from typing import (
 )
 
 from .ast import SyntaxCheck, EffectStmt
+from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function
 from .rewrite import ExprPattern, StmtPattern
-from .runtime import ForeignEnv
 
 
 P = ParamSpec('P')

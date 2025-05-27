@@ -8,7 +8,6 @@ from typing import Any, Optional
 from ..function import Function, set_default_function_call
 from ..ir import Expr
 from ..number import Context
-from ..runtime.trace import ExprTraceEntry
 
 
 class Interpreter(ABC):
@@ -16,10 +15,6 @@ class Interpreter(ABC):
 
     @abstractmethod
     def eval(self, func: Function, args, ctx: Optional[Context] = None):
-        ...
-
-    @abstractmethod
-    def eval_with_trace(self, func: Function, args, ctx: Optional[Context] = None) -> tuple[Any, list[ExprTraceEntry]]:
         ...
 
     @abstractmethod
