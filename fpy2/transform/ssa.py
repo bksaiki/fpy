@@ -47,7 +47,7 @@ class _SSAInstance(DefaultTransformVisitor):
                 case UnderscoreId():
                     targets.append(target)
                 case TupleBinding():
-                    t, _ = self._visit_tuple_binding(target, ctx)
+                    t, ctx = self._visit_tuple_binding(target, ctx)
                     targets.append(t)
                 case _:
                     raise NotImplementedError('unreachable', target)
