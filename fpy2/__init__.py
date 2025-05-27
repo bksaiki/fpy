@@ -64,6 +64,7 @@ from .interpret import (
 )
 
 from .function import Function
+from .env import ForeignEnv
 
 from .utils import (
     fraction,
