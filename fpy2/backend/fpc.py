@@ -8,7 +8,7 @@ from ..analysis import DefineUse
 from ..fpc_context import FPCoreContext
 from ..ir import *
 from ..number import Context
-from ..transform import ForBundling, FuncUpdate, SimplifyIf, WhileBundling
+from ..transform import ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend
@@ -112,15 +112,17 @@ class FPCoreCompileInstance(ReduceVisitor):
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)
 
-    def _compile_tuple_binding(self, tuple_id: str, binding: TupleBinding, pos: list[int]):
+    def _compile_tuple_binding(self, tuple_id: str, binding: TupleBinding, pos: list[fpc.Expr]):
         tuple_binds: list[tuple[str, fpc.Expr]] = []
         for i, elt in enumerate(binding):
             match elt:
                 case Id():
-                    idxs = [fpc.Integer(idx) for idx in [i, *pos]]
-                    tuple_binds.append((str(elt), fpc.Ref(fpc.Var(tuple_id), *idxs)))
+                    idxs = [fpc.Integer(i), *pos]
+                    tuple_bind = (str(elt), fpc.Ref(fpc.Var(tuple_id), *idxs))
+                    tuple_binds.append(tuple_bind)
                 case TupleBinding():
-                    tuple_binds += self._compile_tuple_binding(tuple_id, elt, [i, *pos])
+                    idxs = [fpc.Integer(i), *pos]
+                    tuple_binds += self._compile_tuple_binding(tuple_id, elt, idxs)
                 case _:
                     raise FPCoreCompileError('unexpected tensor element', elt)
         return tuple_binds
@@ -142,38 +144,38 @@ class FPCoreCompileInstance(ReduceVisitor):
             case _:
                 raise NotImplementedError('unreachable', op)
 
-    def _visit_var(self, e, ctx) -> fpc.Expr:
+    def _visit_var(self, e: Var, ctx: None) -> fpc.Expr:
         return fpc.Var(str(e.name))
 
     def _visit_bool(self, e: BoolVal, ctx: None):
         return fpc.Constant('TRUE' if e.val else 'FALSE')
 
-    def _visit_foreign(self, e: ForeignVal, ctx) -> fpc.Expr:
+    def _visit_foreign(self, e: ForeignVal, ctx: None) -> fpc.Expr:
         raise FPCoreCompileError('unsupported value', e.val)
 
-    def _visit_decnum(self, e, ctx) -> fpc.Expr:
+    def _visit_decnum(self, e: Decnum, ctx: None) -> fpc.Expr:
         return fpc.Decnum(e.val)
 
-    def _visit_hexnum(self, e, ctx):
+    def _visit_hexnum(self, e: Hexnum, ctx: None):
         raise fpc.Hexnum(e.val)
 
-    def _visit_integer(self, e, ctx) -> fpc.Expr:
+    def _visit_integer(self, e: Integer, ctx: None) -> fpc.Expr:
         return fpc.Integer(e.val)
 
-    def _visit_rational(self, e, ctx):
+    def _visit_rational(self, e: Rational, ctx: None):
         raise fpc.Rational(e.p, e.q)
 
-    def _visit_constant(self, e, ctx):
+    def _visit_constant(self, e: Constant, ctx: None):
         raise fpc.Constant(e.val)
 
-    def _visit_digits(self, e, ctx) -> fpc.Expr:
+    def _visit_digits(self, e: Digits, ctx: None) -> fpc.Expr:
         return fpc.Digits(e.m, e.e, e.b)
 
-    def _visit_unknown(self, e, ctx) -> fpc.Expr:
+    def _visit_unknown(self, e: UnknownCall, ctx: None) -> fpc.Expr:
         args = [self._visit_expr(c, ctx) for c in e.children]
         return fpc.UnknownOperator(e.name, *args)
 
-    def _visit_range(self, e: Range, ctx) -> fpc.Expr:
+    def _visit_range(self, e: Range, ctx: None) -> fpc.Expr:
         # expand range expression
         tuple_id = 'i' # only identifier in scope => no need for uniqueness
         size = self._visit_expr(e.children[0], ctx)
@@ -204,7 +206,27 @@ class FPCoreCompileInstance(ReduceVisitor):
             )
         )
 
-    def _visit_nary_expr(self, e, ctx) -> fpc.Expr:
+    def _visit_zip(self, e: Zip, ctx: None) -> fpc.Expr:
+        # expand zip expression (for N=2)
+        #  (let ([t0 <tuple0>] [t1 <tuple1>])
+        #    (tensor ([i (size t0 0)])
+        #      (array (ref t0 i) (ref t1 i)))))
+
+        if len(e.children) == 0:
+            # no children => empty zip
+            return fpc.Array()
+        else:
+            tuples = [self._visit_expr(t, ctx) for t in e.children]
+            tuple_ids = [str(self.gensym.fresh('t')) for _ in e.children]
+            iter_id = str(self.gensym.fresh('i'))
+            return fpc.Let(
+                list(zip(tuple_ids, tuples)),
+                fpc.Tensor([(iter_id, fpc.Size(fpc.Var(tuple_ids[0]), fpc.Integer(0)))],
+                    fpc.Array(*[fpc.Ref(fpc.Var(tid), fpc.Var(iter_id)) for tid in tuple_ids])
+                )
+            )
+
+    def _visit_nary_expr(self, e: NaryExpr, ctx: None) -> fpc.Expr:
         match e:
             case Range():
                 # range expression
@@ -218,6 +240,9 @@ class FPCoreCompileInstance(ReduceVisitor):
             case Shape():
                 # shape expression
                 return self._visit_shape(e, ctx)
+            case Zip():
+                # zip expression
+                return self._visit_zip(e, ctx)
             case _:
                 cls = _op_table.get(e.name)
                 if cls is None:
@@ -262,10 +287,10 @@ class FPCoreCompileInstance(ReduceVisitor):
             case _:
                 raise NotImplementedError('unreachable', e.ops)
 
-    def _visit_tuple_expr(self, e, ctx) -> fpc.Expr:
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> fpc.Expr:
         return fpc.Array(*[self._visit_expr(c, ctx) for c in e.children])
 
-    def _visit_tuple_ref(self, e, ctx) -> fpc.Expr:
+    def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> fpc.Expr:
         value = self._visit_expr(e.value, ctx)
         slices = [self._visit_expr(s, ctx) for s in e.slices]
         return fpc.Ref(value, *slices)
@@ -286,7 +311,7 @@ class FPCoreCompileInstance(ReduceVisitor):
         if_expr = fpc.If(cond_expr, ift_expr, iff_expr)
         return fpc.Tensor(tensor_dims, if_expr)
 
-    def _visit_tuple_set(self, e, ctx) -> fpc.Expr:
+    def _visit_tuple_set(self, e: TupleSet, ctx: None) -> fpc.Expr:
         # general case:
         # 
         #   (let ([t <tuple>] [i0 <index>] ... [v <value>]))
@@ -332,12 +357,12 @@ class FPCoreCompileInstance(ReduceVisitor):
         return fpc.Let(let_bindings, tensor_expr)
 
 
-    def _visit_comp_expr(self, e, ctx) -> fpc.Expr:
-        if len(e.vars) == 1:
+    def _visit_comp_expr(self, e: CompExpr, ctx: None) -> fpc.Expr:
+        if len(e.targets) == 1:
             # simple case:
-            # (let ([t <iterable>]) (tensor ([i (size t)]) (let ([<var> (ref t i)]) <elt>))
+            # (let ([t <iterable>]) (tensor ([i (size t 0)]) (let ([<var> (ref t i)]) <elt>))
+            target = e.targets[0]
             iterable = e.iterables[0]
-            var = str(e.vars[0])
 
             tuple_id = str(self.gensym.fresh('t'))
             iter_id = str(self.gensym.fresh('i'))
@@ -346,12 +371,20 @@ class FPCoreCompileInstance(ReduceVisitor):
 
             let_bindings = [(tuple_id, iterable)]
             tensor_dims: list[tuple[str, fpc.Expr]] = [(iter_id, _size0_expr(tuple_id))]
-            ref_bindings: list[tuple[str, fpc.Expr]] = [(var, fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))]
+            match target:
+                case NamedId():
+                    ref_bindings = [(str(target), fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))]
+                case UnderscoreId():
+                    ref_bindings = []
+                case TupleBinding():
+                    ref_bindings = self._compile_tuple_binding(tuple_id, target, [fpc.Var(iter_id)])
+                case _:
+                    raise RuntimeError('unreachable', target)
             return fpc.Let(let_bindings, fpc.Tensor(tensor_dims, fpc.Let(ref_bindings, elt)))
         else:
             # hard case:
             # (let ([t0 <iterable>] ...)
-            #   (let ([n0 (size t0)] ...)
+            #   (let ([n0 (size t0 0)] ...)
             #     (tensor ([k (! :precision integer (* n0 ...))])
             #       (let ([i0 (! :precision integer :round toZero (/ k (* n1 ...)))]
             #             [i1 (! :precision integer :round toZero (fmod (/ k (* n2 ...)) n1))]
@@ -361,20 +394,20 @@ class FPCoreCompileInstance(ReduceVisitor):
             #           <elt>))))
 
             # bind the tuples to temporaries
-            tuple_ids = [str(self.gensym.fresh('t')) for _ in e.vars]
+            tuple_ids = [str(self.gensym.fresh('t')) for _ in e.targets]
             tuple_binds: list[tuple[str, fpc.Expr]] = [
                 (tid, self._visit_expr(iterable, ctx))
                 for tid, iterable in zip(tuple_ids, e.iterables)
             ]
             # bind the sizes to temporaries
-            size_ids = [str(self.gensym.fresh('n')) for _ in e.vars]
+            size_ids = [str(self.gensym.fresh('n')) for _ in e.targets]
             size_binds: list[tuple[str, fpc.Expr]] = [
                 (sid, _size0_expr(tid))
                 for sid, tid in zip(size_ids, tuple_ids)
             ]
             # bind the indices to temporaries
             idx_ctx = { 'precision': 'integer', 'round': 'toZero' }
-            idx_ids = [str(self.gensym.fresh('i')) for _ in e.vars]
+            idx_ids = [str(self.gensym.fresh('i')) for _ in e.targets]
             idx_binds: list[tuple[str, fpc.Expr]] = []
             for i, iid in enumerate(idx_ids):
                 if i == 0:
@@ -391,18 +424,22 @@ class FPCoreCompileInstance(ReduceVisitor):
             iter_id = str(self.gensym.fresh('k'))
             iter_expr = fpc.Ctx(iter_ctx, _nary_mul([fpc.Var(sid) for sid in size_ids]))
             # reference variables
-            ref_ids = [str(self.gensym.refresh(var)) for var in e.vars]
-            ref_binds: list[tuple[str, fpc.Expr]] = [
-                (rid, fpc.Ref(fpc.Var(tid), fpc.Var(iid)))
-                for rid, tid, iid in zip(ref_ids, tuple_ids, idx_ids)
-            ]
+            ref_binds: list[tuple[str, fpc.Expr]] = []
+            for target, tid, iid in zip(e.targets, tuple_ids, idx_ids):
+                match target:
+                    case NamedId():
+                        ref_id = str(self.gensym.refresh(target))
+                        ref_bind = (ref_id, fpc.Ref(fpc.Var(tid), fpc.Var(iid)))
+                        ref_binds.append(ref_bind)
+                    case TupleBinding():
+                        ref_binds += self._compile_tuple_binding(tid, target, [fpc.Var(iid)])
             # element expression
             elt = self._visit_expr(e.elt, ctx)
             # compose the expression
             tensor_expr = fpc.Tensor([(iter_id, iter_expr)], fpc.Let(idx_binds, fpc.Let(ref_binds, elt)))
             return fpc.Let(tuple_binds, fpc.Let(size_binds, tensor_expr))
 
-    def _visit_if_expr(self, e, ctx) -> fpc.Expr:
+    def _visit_if_expr(self, e: IfExpr, ctx: None) -> fpc.Expr:
         cond = self._visit_expr(e.cond, ctx)
         ift = self._visit_expr(e.ift, ctx)
         iff = self._visit_expr(e.iff, ctx)
@@ -421,13 +458,13 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_index_assign(self, stmt: IndexAssign, ctx: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_if1(self, stmt, ctx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_if(self, stmt, ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: None):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_while(self, stmt, ctx: fpc.Expr):
+    def _visit_while(self, stmt: WhileStmt, ctx: fpc.Expr):
         if len(stmt.phis) != 1:
             raise FPCoreCompileError('while loops must have exactly one phi node')
         phi = stmt.phis[0]
@@ -436,7 +473,7 @@ class FPCoreCompileInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, fpc.Var(update))
         return fpc.While(cond, [(name, fpc.Var(init), body)], ctx)
 
-    def _visit_for(self, stmt, ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: fpc.Expr):
         if len(stmt.phis) != 1:
             raise FPCoreCompileError('for loops must have exactly one phi node')
         # phi nodes
@@ -447,14 +484,22 @@ class FPCoreCompileInstance(ReduceVisitor):
         iterable = self._visit_expr(stmt.iterable, None)
         body = self._visit_block(stmt.body, fpc.Var(update))
         # index variables and state merging
-        dim_binding = (str(stmt.var), _size0_expr(tuple_id))
+        match stmt.target:
+            case Id():
+                # simple case: single variable
+                dim_binding = (str(stmt.target), fpc.Var(tuple_id))
+            case TupleBinding():
+                raise FPCoreCompileError('tuple unpacking in for loops is not supported')
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         while_binding = (name, fpc.Var(init), body)
         return fpc.Let([(tuple_id, iterable)], fpc.For([dim_binding], [while_binding], ctx))
 
     def _visit_context_expr(self, e: ContextExpr, ctx: None):
         raise RuntimeError('do not call')
 
-    def _visit_context(self, stmt, ctx):
+    def _visit_context(self, stmt: ContextStmt, ctx: None):
         body = self._visit_block(stmt.body, ctx)
         # extract a context value
         match stmt.ctx:
@@ -475,17 +520,17 @@ class FPCoreCompileInstance(ReduceVisitor):
                 raise FPCoreCompileError('Expected `Context` or `FPCoreContext`', val)
         return fpc.Ctx(props, body)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None):
         # strip the assertion
         return ctx
 
     def _visit_effect(self, stmt: EffectStmt, ctx: fpc.Expr):
         raise FPCoreCompileError('FPCore does not support effectful computation')
 
-    def _visit_return(self, stmt, ctx) -> fpc.Expr:
+    def _visit_return(self, stmt: ReturnStmt, ctx: None) -> fpc.Expr:
         return self._visit_expr(stmt.expr, ctx)
 
-    def _visit_block(self, block, ctx: Optional[fpc.Expr]):
+    def _visit_block(self, block: StmtBlock, ctx: Optional[fpc.Expr]):
         if ctx is None:
             e = self._visit_statement(block.stmts[-1], None)
             stmts = block.stmts[:-1]
@@ -500,7 +545,7 @@ class FPCoreCompileInstance(ReduceVisitor):
 
         return e
 
-    def _visit_function(self, func, ctx: Optional[fpc.Expr]):
+    def _visit_function(self, func: FuncDef, ctx: Optional[fpc.Expr]):
         args = [self._compile_arg(arg) for arg in func.args]
         body = self._visit_block(func.body, ctx)
         # TODO: parse data
@@ -532,6 +577,7 @@ class FPCoreCompiler(Backend):
     def compile(self, func: FuncDef) -> fpc.FPCore:
         # normalization passes
         func = FuncUpdate.apply(func)
+        func = ForUnpack.apply(func)
         func = ForBundling.apply(func)
         func = WhileBundling.apply(func)
         func = SimplifyIf.apply(func)

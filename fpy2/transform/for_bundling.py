@@ -67,11 +67,20 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             phi_updates = [Var(phi.rhs) for phi in stmt.phis]
             update_stmt = SimpleAssign(phi_update, AnyType(), TupleExpr(*phi_updates))
 
+            # copy the binding
+            match stmt.target:
+                case Id():
+                    target = stmt.target
+                case TupleBinding():
+                    target = self._copy_tuple_binding(stmt.target)
+                case _:
+                    raise RuntimeError('unreachable', stmt.target)
+
             # put it all together
             body, _ = self._visit_block(stmt.body, None)
             phis = [PhiNode(phi_name, phi_init, phi_update, phi_ty)]
             for_body = StmtBlock([deconstruct_stmt, *body.stmts, update_stmt])
-            for_stmt = ForStmt(stmt.var, stmt.ty, iter_expr, for_body, phis)
+            for_stmt = ForStmt(target, stmt.ty, iter_expr, for_body, phis)
 
             # decompose the unified phi variable (again)
             deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))

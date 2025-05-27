@@ -72,9 +72,15 @@ class _ReachingDefsInstance(DefaultVisitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: _StmtCtx) -> _RetType:
         defs_in, kill_in = ctx
-        defs = { *defs_in, stmt.var } if isinstance(stmt.var, NamedId) else defs_in
-        _, block_kill = self._visit_block(stmt.body, defs)
+        match stmt.target:
+            case NamedId():
+                defs = { *defs_in, stmt.target }
+            case UnderscoreId():
+                defs = defs_in.copy()
+            case TupleBinding():
+                defs = defs_in | set(stmt.target.names())
 
+        _, block_kill = self._visit_block(stmt.body, defs)
         defs_out = defs.copy()
         kill_out = kill_in | (defs & block_kill)
         return defs_out, kill_out

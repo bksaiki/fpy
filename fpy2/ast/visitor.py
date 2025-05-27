@@ -431,9 +431,19 @@ class DefaultAstTransformVisitor(AstVisitor):
         return TupleRef(value, slices, e.loc)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
+        targets: list[Id | TupleBinding] = []
+        for target in e.targets:
+            match target:
+                case Id():
+                    targets.append(target)
+                case TupleBinding():
+                    targets.append(self._visit_tuple_binding(target))
+                case _:
+                    raise RuntimeError('unreachable', target)
+
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return CompExpr(e.vars, iterables, elt, e.loc)
+        return CompExpr(targets, iterables, elt, e.loc)
 
     def _visit_if_expr(self, e: IfExpr, ctx: Any):
         cond = self._visit_expr(e.cond, ctx)
@@ -483,7 +493,7 @@ class DefaultAstTransformVisitor(AstVisitor):
                     new_vars.append(self._visit_tuple_binding(var))
                 case _:
                     raise NotImplementedError(f'unreachable {var}')
-        return new_vars
+        return TupleBinding(new_vars, binding.loc)
 
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         binding = self._visit_tuple_binding(stmt.binding)
@@ -517,9 +527,17 @@ class DefaultAstTransformVisitor(AstVisitor):
         return s, ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: Any):
+        match stmt.target:
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         iterable = self._visit_expr(stmt.iterable, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
-        s = ForStmt(stmt.var, iterable, body, stmt.loc)
+        s = ForStmt(target, iterable, body, stmt.loc)
         return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):

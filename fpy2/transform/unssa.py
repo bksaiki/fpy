@@ -95,20 +95,22 @@ class _UnSSAInstance(DefaultTransformVisitor):
         return Var(name)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: None):
-        new_vars: list[Id] = []
-        for var in e.vars:
-            match var:
+        targets: list[Id | TupleBinding] = []
+        for target in e.targets:
+            match target:
                 case NamedId():
-                    renamed = self.env.get(var, var)
-                    new_vars.append(renamed)
+                    renamed = self.env.get(target, target)
+                    targets.append(renamed)
                 case UnderscoreId():
-                    new_vars.append(var)
+                    targets.append(target)
+                case TupleBinding():
+                    targets.append(self._visit_tuple_binding(target))
                 case _:
-                    raise RuntimeError(f'unexpected {var}')
+                    raise RuntimeError('unreachable', target)
 
         iterables = [self._visit_expr(iter, ctx) for iter in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return CompExpr(new_vars, iterables, elt)
+        return CompExpr(targets, iterables, elt)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         if isinstance(stmt.var, NamedId):
@@ -170,13 +172,19 @@ class _UnSSAInstance(DefaultTransformVisitor):
         return s, None
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        if isinstance(stmt.var, NamedId):
-            var: Id = self.env.get(stmt.var, stmt.var)
-        else:
-            var = stmt.var
+        match stmt.target:
+            case NamedId():
+                target: Id | TupleBinding = self.env.get(stmt.target, stmt.target)
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError(f'unexpected target {stmt.target}')
+    
         iterable = self._visit_expr(stmt.iterable, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
-        s = ForStmt(var, stmt.ty, iterable, body, [])
+        s = ForStmt(target, stmt.ty, iterable, body, [])
         return s, None
 
 

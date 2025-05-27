@@ -1,8 +1,11 @@
 """Context inlining for FPy ASTs"""
 
+from ..fpc_context import FPCoreContext
+from ..number import Context
+from ..runtime import ForeignEnv
+
 from .fpyast import *
 from .visitor import DefaultAstTransformVisitor
-from ..runtime import ForeignEnv
 
 class _ContextInlineInstance(DefaultAstTransformVisitor):
     """Per-IR instance of context inlining"""

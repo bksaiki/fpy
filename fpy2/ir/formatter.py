@@ -133,9 +133,20 @@ class _FormatterInstance(BaseVisitor):
         return f'set({arg_str})'
 
     def _visit_comp_expr(self, e: CompExpr, ctx: _IndentCtx):
+        targets: list[str] = []
+        for target in e.targets:
+            match target:
+                case NamedId():
+                    targets.append(str(target))
+                case TupleBinding():
+                    s = self._visit_tuple_binding(target)
+                    targets.append(f'({s})')
+                case _:
+                    raise NotImplementedError('unreachable', target)
+
         elt = self._visit_expr(e.elt, ctx)
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
-        s = ' '.join(f'for {str(var)} in {iterable}' for var, iterable in zip(e.vars, iterables))
+        s = ' '.join(f'for {target} in {iterable}' for target, iterable in zip(targets, iterables))
         return f'[{elt} {s}]'
 
     def _visit_if_expr(self, e: IfExpr, ctx: _IndentCtx):
@@ -215,9 +226,17 @@ class _FormatterInstance(BaseVisitor):
         self._visit_block(stmt.body, ctx.indent())
 
     def _visit_for(self, stmt: ForStmt, ctx: _IndentCtx):
+        match stmt.target:
+            case Id():
+                target = str(stmt.target)
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         iterable = self._visit_expr(stmt.iterable, ctx)
         self._visit_loop_phis(stmt.phis, ctx, None)
-        self._add_line(f'for {str(stmt.var)} in {iterable}:', ctx)
+        self._add_line(f'for {target} in {iterable}:', ctx)
         self._visit_block(stmt.body, ctx.indent())
 
     def _visit_context(self, stmt: ContextStmt, ctx: _IndentCtx):

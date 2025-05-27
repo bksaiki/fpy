@@ -109,7 +109,8 @@ _ternary_table = {
 
 _nary_table = {
     'and': NaryOpKind.AND,
-    'or': NaryOpKind.OR
+    'or': NaryOpKind.OR,
+    'zip': NaryOpKind.ZIP,
 }
 
 _special_functions = {
@@ -471,14 +472,14 @@ class Parser:
             case ast.List():
                 return TupleExpr([self._parse_expr(e) for e in e.elts], loc)
             case ast.ListComp():
-                vars: list[Id] = []
+                targets: list[Id | TupleBinding] = []
                 iterables: list[Expr] = []
                 for gen in e.generators:
-                    var, iterable = self._parse_comprehension(gen, loc)
-                    vars.append(var)
+                    target, iterable = self._parse_comprehension(gen, loc)
+                    targets.append(target)
                     iterables.append(iterable)
                 elt = self._parse_expr(e.elt)
-                return CompExpr(vars, iterables, elt, loc)
+                return CompExpr(targets, iterables, elt, loc)
             case ast.Subscript():
                 value, slices = self._parse_subscript(e)
                 return TupleRef(value, slices, loc)
@@ -492,29 +493,25 @@ class Parser:
                     raise FPyParserError(loc, 'expression is unsupported in FPy', e)
                 return self._parse_foreign_attribute(e)
 
-    def _parse_tuple_target(self, target: ast.expr, st: ast.stmt):
+    def _parse_tuple_target(self, target: ast.expr, e: ast.AST):
         loc = self._parse_location(target)
         match target:
             case ast.Name():
                 return self._parse_id(target)
             case ast.Tuple():
-                elts = [self._parse_tuple_target(elt, st) for elt in target.elts]
+                elts = [self._parse_tuple_target(elt, e) for elt in target.elts]
                 return TupleBinding(elts, loc)
             case _:
-                raise FPyParserError(loc, 'FPy expects an identifier', target, st)       
+                raise FPyParserError(loc, 'FPy expects an identifier', target, e)       
 
     def _parse_comprehension(self, gen: ast.comprehension, loc: Location):
         if gen.is_async:
             raise FPyParserError(loc, 'FPy does not support async comprehensions', gen)
         if gen.ifs != []:
             raise FPyParserError(loc, 'FPy does not support if conditions in comprehensions', gen)
-        match gen.target:
-            case ast.Name():
-                ident = self._parse_id(gen.target)
-                iterable = self._parse_expr(gen.iter)
-                return ident, iterable
-            case _:
-                raise FPyParserError(loc, 'FPy expects an identifier', gen.target, gen)
+        target = self._parse_tuple_target(gen.target, gen)
+        iterable = self._parse_expr(gen.iter)
+        return target, iterable
 
     def _parse_contextdata(self, e: ast.expr):
         loc = self._parse_location(e)
@@ -679,13 +676,10 @@ class Parser:
             case ast.For():
                 if stmt.orelse != []:
                     raise FPyParserError(loc, 'FPy does not support else clause in for statement', stmt)
-                if not isinstance(stmt.target, ast.Name):
-                    raise FPyParserError(loc, 'FPy expects an identifier', stmt)
-
-                ident = self._parse_id(stmt.target)
+                for_target = self._parse_tuple_target(stmt.target, stmt)
                 iterable = self._parse_expr(stmt.iter)
                 block = self._parse_statements(stmt.body)
-                return ForStmt(ident, iterable, block, loc)
+                return ForStmt(for_target, iterable, block, loc)
             case ast.Return():
                 if stmt.value is None:
                     raise FPyParserError(loc, 'Return statement must have value', stmt)

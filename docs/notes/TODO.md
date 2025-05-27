@@ -8,7 +8,6 @@ Frontend:
    - underscore arguments to function
    - f-string
  - language:
-   - support for zip()
    - support for vector addition/multiplication
  - formatter:
    - use IndentCtx

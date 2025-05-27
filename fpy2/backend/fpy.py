@@ -8,7 +8,7 @@ from ..ir import *
 
 from ..ast import fpyast as ast
 from ..ast.syntax_check import SyntaxCheck
-from ..function import Function
+from ..fpc_context import FPCoreContext
 from ..transform import UnSSA
 
 from ..ir.codegen import (
@@ -130,9 +130,20 @@ class _FPyCompilerInstance(ReduceVisitor):
         raise NotImplementedError('do not call')
 
     def _visit_comp_expr(self, e: CompExpr, ctx: None):
+        targets: list[Id | ast.TupleBinding] = []
+        for target in e.targets:
+            match target:
+                case Id():
+                    targets.append(target)
+                case TupleBinding():
+                    bind = self._visit_tuple_binding(target)
+                    targets.append(bind)
+                case _:
+                    raise RuntimeError('unreachable', target)
+
         iters = [self._visit_expr(i, None) for i in e.iterables]
         elt = self._visit_expr(e.elt, None)
-        return ast.CompExpr(e.vars, iters, elt, None)
+        return ast.CompExpr(targets, iters, elt, None)
 
     def _visit_if_expr(self, e: IfExpr, ctx: None):
         cond = self._visit_expr(e.cond, None)
@@ -201,9 +212,17 @@ class _FPyCompilerInstance(ReduceVisitor):
         if stmt.phis != []:
             raise ValueError(f'expected no phis in statement: {stmt}')
 
+        match stmt.target:
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         iterable = self._visit_expr(stmt.iterable, None)
         body = self._visit_block(stmt.body, None)
-        return ast.ForStmt(stmt.var, iterable, body, None)
+        return ast.ForStmt(target, iterable, body, None)
 
     def _visit_context_expr(self, e: ContextExpr, ctx: Any):
         match e.ctor:

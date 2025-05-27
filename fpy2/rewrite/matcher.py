@@ -218,8 +218,14 @@ class _MatcherInst(AstVisitor):
     def _visit_comp_expr(self, e: CompExpr, pat: CompExpr):
         if len(e.iterables) != len(pat.iterables):
             raise _MatchFailure(f'matching {pat} against {e}')
-        for name, pname in zip(e.vars, pat.vars):
-            self._visit_target(name, pname)
+        for target, ptarget in zip(e.targets, pat.targets):
+            match target, ptarget:
+                case Id(), Id():
+                    self._visit_target(target, ptarget)
+                case TupleBinding(), TupleBinding():
+                    self._visit_tuple_binding(target, ptarget)
+                case _:
+                    raise _MatchFailure(f'matching {ptarget} against {target}')
         for it, pit in zip(e.iterables, pat.iterables):
             self._visit_expr(it, pit)
         self._visit_expr(e.elt, pat.elt)
@@ -290,8 +296,14 @@ class _MatcherInst(AstVisitor):
         self._visit_block(stmt.body, pat.body)
 
     def _visit_for(self, stmt: ForStmt, pat: ForStmt):
+        match stmt.target, pat.target:
+            case Id(), Id():
+                self._visit_target(stmt.target, pat.target)
+            case TupleBinding(), TupleBinding():
+                self._visit_tuple_binding(stmt.target, pat.target)
+            case _, _:
+                raise _MatchFailure(f'matching {pat.target} against {stmt.target}')
         self._visit_expr(stmt.iterable, pat.iterable)
-        self._visit_target(stmt.var, pat.var)
         self._visit_block(stmt.body, pat.body)
 
     def _visit_context(self, stmt: ContextStmt, pat: ContextStmt):

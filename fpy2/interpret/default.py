@@ -327,6 +327,22 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected an integer argument, got {dim}')
         return Float.from_int(v.shape[int(dim)], ctx=ctx)
 
+    def _apply_zip(self, e: NaryExpr, ctx: Context):
+        """Apply the `zip` method to the given n-ary expression."""
+        if len(e.children) == 0:
+            return NDArray([])
+
+        # evaluate all children
+        arrays: list[NDArray] = []
+        for arg in e.children:
+            val = self._visit_expr(arg, ctx)
+            if not isinstance(val, NDArray):
+                raise TypeError(f'expected a tensor argument, got {val}')
+            arrays.append(val)
+
+        # zip the arrays
+        return NDArray(zip(*arrays))
+
     def _visit_nary_expr(self, e: NaryExpr, ctx: Context):
         if e.name in _method_table:
             return self._apply_method(e, ctx)
@@ -346,6 +362,8 @@ class _Interpreter(ReduceVisitor):
             return self._apply_dim(e, ctx)
         elif isinstance(e, Size):
             return self._apply_size(e, ctx)
+        elif isinstance(e, Zip):
+            return self._apply_zip(e, ctx)
         else:
             raise NotImplementedError('unknown n-ary expression', e)
 
@@ -428,7 +446,7 @@ class _Interpreter(ReduceVisitor):
 
     def _apply_comp(
         self,
-        bindings: list[tuple[Id, Expr]],
+       bindings: list[tuple[Id | TupleBinding, Expr]],
         elt: Expr,
         ctx: Context,
         elts: list[Any]
@@ -436,25 +454,34 @@ class _Interpreter(ReduceVisitor):
         if bindings == []:
             elts.append(self._visit_expr(elt, ctx))
         else:
-            var, iterable = bindings[0]
+            target, iterable = bindings[0]
             array = self._visit_expr(iterable, ctx)
             if not isinstance(array, NDArray):
                 raise TypeError(f'expected a tensor, got {array}')
             for val in array:
-                if isinstance(var, NamedId):
-                    self.env[var] = val
+                match target:
+                    case NamedId():
+                        self.env[target] = val
+                    case TupleBinding():
+                        self._unpack_tuple(target, val, ctx)
+                    case _:
+                        raise RuntimeError('unreachable', target)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Context):
         # evaluate comprehension
         elts: list[Any] = []
-        bindings = [(var, iterable) for var, iterable in zip(e.vars, e.iterables)]
+        bindings = list(zip(e.targets, e.iterables))
         self._apply_comp(bindings, e.elt, ctx, elts)
 
         # remove temporarily bound variables
-        for var in e.vars:
-            if isinstance(var, NamedId):
-                del self.env[var]
+        for target in e.targets:
+            match target:
+                case NamedId():
+                    del self.env[target]
+                case TupleBinding():
+                    for var in target.names():
+                        del self.env[var]
 
         return NDArray(elts)
 
@@ -589,8 +616,11 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected a tensor, got {iterable}')
 
         for val in iterable:
-            if isinstance(stmt.var, NamedId):
-                self.env[stmt.var] = val
+            match stmt.target:
+                case NamedId():
+                    self.env[stmt.target] = val
+                case TupleBinding():
+                    self._unpack_tuple(stmt.target, val, ctx)
             self._visit_block(stmt.body, ctx)
             for phi in stmt.phis:
                 self.env[phi.name] = self.env[phi.rhs]

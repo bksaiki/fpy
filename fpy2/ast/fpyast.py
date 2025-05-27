@@ -4,10 +4,8 @@ This module contains the AST for FPy programs.
 
 from abc import ABC, abstractmethod
 from enum import IntEnum
-from typing import Any, Optional, Self, Sequence
+from typing import Any, Optional, Self, Sequence, TypeAlias
 
-from ..fpc_context import FPCoreContext
-from ..number import Context
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location, default_repr
 
 
@@ -89,8 +87,9 @@ class TernaryOpKind(IntEnum):
 
 class NaryOpKind(IntEnum):
     # boolean operations
-    AND = 1
-    OR = 2
+    AND = 0
+    OR = 1
+    ZIP = 2
 
 @default_repr
 class Ast(ABC):
@@ -506,31 +505,69 @@ class TupleExpr(Expr):
     def __hash__(self) -> int:
         return hash(tuple(self.args))
 
+class TupleBinding(Ast):
+    """FPy AST: tuple binding"""
+    elts: list[Id | Self]
+
+    def __init__(
+        self,
+        vars: Sequence[Id | Self],
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.elts = list(vars)
+
+    def __iter__(self):
+        return iter(self.elts)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, TupleBinding):
+            return False
+        return self.elts == other.elts
+
+    def __hash__(self) -> int:
+        return hash(tuple(self.elts))
+
+    def names(self) -> set[NamedId]:
+        ids: set[NamedId] = set()
+        for v in self.elts:
+            if isinstance(v, NamedId):
+                ids.add(v)
+            elif isinstance(v, UnderscoreId):
+                pass
+            elif isinstance(v, TupleBinding):
+                ids |= v.names()
+            else:
+                raise NotImplementedError('unexpected tuple identifier', v)
+        return ids
+
+Binding: TypeAlias = Id | TupleBinding
+
 class CompExpr(Expr):
     """FPy AST: comprehension expression"""
-    vars: list[Id]
+    targets: list[Binding]
     iterables: list[Expr]
     elt: Expr
 
     def __init__(
         self,
-        vars: Sequence[Id],
+        targets: Sequence[Binding],
         iterables: Sequence[Expr],
         elt: Expr,
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.vars = list(vars)
+        self.targets = list(targets)
         self.iterables = list(iterables)
         self.elt = elt
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, CompExpr):
             return False
-        return self.vars == other.vars and self.iterables == other.iterables and self.elt == other.elt
+        return self.targets == other.targets and self.iterables == other.iterables and self.elt == other.elt
     
     def __hash__(self) -> int:
-        return hash((tuple(self.vars), tuple(self.iterables), self.elt))
+        return hash((tuple(self.targets), tuple(self.iterables), self.elt))
 
 class TupleRef(Expr):
     """FPy AST: tuple indexing expression"""
@@ -716,45 +753,9 @@ class SimpleAssign(Stmt):
         if not isinstance(other, SimpleAssign):
             return False
         return self.var == other.var and self.expr == other.expr and self.ann == other.ann
-    
+
     def __hash__(self) -> int:
         return hash((self.var, self.expr, self.ann))
-
-class TupleBinding(Ast):
-    """FPy AST: tuple binding"""
-    elts: list[Id | Self]
-
-    def __init__(
-        self,
-        vars: Sequence[Id | Self],
-        loc: Optional[Location]
-    ):
-        super().__init__(loc)
-        self.elts = list(vars)
-
-    def __iter__(self):
-        return iter(self.elts)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, TupleBinding):
-            return False
-        return self.elts == other.elts
-
-    def __hash__(self) -> int:
-        return hash(tuple(self.elts))
-
-    def names(self) -> set[NamedId]:
-        ids: set[NamedId] = set()
-        for v in self.elts:
-            if isinstance(v, NamedId):
-                ids.add(v)
-            elif isinstance(v, UnderscoreId):
-                pass
-            elif isinstance(v, TupleBinding):
-                ids |= v.names()
-            else:
-                raise NotImplementedError('unexpected tuple identifier', v)
-        return ids
 
 class TupleUnpack(Stmt):
     """FPy AST: unpacking / destructing a tuple"""
@@ -879,29 +880,29 @@ class WhileStmt(Stmt):
 
 class ForStmt(Stmt):
     """FPy AST: for statement"""
-    var: Id
+    target: Binding
     iterable: Expr
     body: StmtBlock
 
     def __init__(
         self,
-        var: Id,
+        target: Binding,
         iterable: Expr,
         body: StmtBlock,
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.var = var
+        self.target = target
         self.iterable = iterable
         self.body = body
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ForStmt):
             return False
-        return self.var == other.var and self.iterable == other.iterable and self.body == other.body
+        return self.target == other.target and self.iterable == other.iterable and self.body == other.body
 
     def __hash__(self) -> int:
-        return hash((self.var, self.iterable, self.body))
+        return hash((self.target, self.iterable, self.body))
 
 class ContextStmt(Stmt):
     """FPy AST: with statement"""

@@ -188,9 +188,12 @@ class SyntaxCheckInstance(AstVisitor):
         env, _ = ctx
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
-        for var in e.vars:
-            if isinstance(var, NamedId):
-                env = env.extend(var)
+        for target in e.targets:
+            match target:
+                case NamedId():
+                    env = env.extend(target)
+                case TupleBinding():
+                    env = self._visit_tuple_binding(target, ctx)
         self._visit_expr(e.elt, (env, False))
         return env
 
@@ -286,8 +289,11 @@ class SyntaxCheckInstance(AstVisitor):
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.iterable, ctx)
-        if isinstance(stmt.var, NamedId):
-            env = env.extend(stmt.var)
+        match stmt.target:
+            case NamedId():
+                env = env.extend(stmt.target)
+            case TupleBinding():
+                env = self._visit_tuple_binding(stmt.target, ctx)
         body_env = self._visit_block(stmt.body, (env, False))
         return env.merge(body_env)
 

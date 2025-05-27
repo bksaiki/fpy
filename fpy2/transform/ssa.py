@@ -37,20 +37,23 @@ class _SSAInstance(DefaultTransformVisitor):
         iterables = [self._visit_expr(iter, ctx) for iter in e.iterables]
 
         ctx = ctx.copy()
-        vars: list[Id] = []
-        for var in e.vars:
-            match var:
+        targets: list[Id | TupleBinding] = []
+        for target in e.targets:
+            match target:
                 case NamedId():
-                    name = self.gensym.refresh(var)
-                    ctx[var] = name
-                    vars.append(name)
+                    name = self.gensym.refresh(target)
+                    ctx[target] = name
+                    targets.append(name)
                 case UnderscoreId():
-                    vars.append(var)
+                    targets.append(target)
+                case TupleBinding():
+                    t, ctx = self._visit_tuple_binding(target, ctx)
+                    targets.append(t)
                 case _:
-                    raise NotImplementedError('unreachable', var)
+                    raise NotImplementedError('unreachable', target)
 
         elt = self._visit_expr(e.elt, ctx)
-        return CompExpr(vars, iterables, elt)
+        return CompExpr(targets, iterables, elt)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
         # visit the expression
@@ -221,14 +224,15 @@ class _SSAInstance(DefaultTransformVisitor):
         iterable = self._visit_expr(stmt.iterable, ctx)
 
         # generate a new name if needed
-        match stmt.var:
+        match stmt.target:
             case NamedId():
-                iter_name = self.gensym.refresh(stmt.var)
-                ctx = { **ctx, stmt.var: iter_name }
-            case UnderscoreId():
-                iter_name = stmt.var
+                iter_name = self.gensym.refresh(stmt.target)
+                ctx = { **ctx, stmt.target: iter_name }
+            case TupleBinding():
+                iter_name, ctx = self._visit_tuple_binding(stmt.target, ctx)
             case _:
-                raise NotImplementedError('unreachable', stmt.var)
+                iter_name = stmt.target
+                ctx = ctx.copy()
 
         # compute variables requiring phi node
         reach = self.reaches[stmt.body]

@@ -483,9 +483,19 @@ class DefaultTransformVisitor(TransformVisitor):
         return TupleSet(value, slices, expr)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
+        targets: list[Id | TupleBinding] = []
+        for target in e.targets:
+            match target:
+                case Id():
+                    targets.append(target)
+                case TupleBinding():
+                    targets.append(self._copy_tuple_binding(target))
+                case _:
+                    raise RuntimeError('unreachable', target)
+
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return CompExpr(e.vars, iterables, elt)
+        return CompExpr(targets, iterables, elt)
 
     def _visit_if_expr(self, e: IfExpr, ctx: Any):
         cond = self._visit_expr(e.cond, ctx)
@@ -576,12 +586,20 @@ class DefaultTransformVisitor(TransformVisitor):
         return s, ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: Any):
+        match stmt.target:
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._copy_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
+
         iterable = self._visit_expr(stmt.iterable, ctx)
         init_phis, init_ctx = self._visit_loop_phis(stmt.phis, ctx, None)
         body, rctx = self._visit_block(stmt.body, init_ctx)
 
         phis, ctx = self._visit_loop_phis(init_phis, ctx, rctx)
-        s = ForStmt(stmt.var, stmt.ty, iterable, body, phis)
+        s = ForStmt(target, stmt.ty, iterable, body, phis)
         return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):

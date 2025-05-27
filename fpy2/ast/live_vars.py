@@ -87,7 +87,12 @@ class LiveVarsInstance(AstVisitor):
 
     def _visit_comp_expr(self, e: CompExpr, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.elt, ctx)
-        live -= set([var for var in e.vars if isinstance(var, NamedId)])
+        for target in e.targets:
+            match target:
+                case NamedId():
+                    live -= { target }
+                case TupleBinding():
+                    live |= target.names()
         for iterable in e.iterables:
             live |= self._visit_expr(iterable, ctx)
         return live
@@ -154,8 +159,11 @@ class LiveVarsInstance(AstVisitor):
     def _visit_for(self, stmt: ForStmt, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live |= self._visit_block(stmt.body, live)
-        if isinstance(stmt.var, NamedId):
-            live -= { stmt.var }
+        match stmt.target:
+            case NamedId():
+                live -= { stmt.target }
+            case TupleBinding():
+                live -= stmt.target.names()
         live |= self._visit_expr(stmt.iterable, None)
         return live
 

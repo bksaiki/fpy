@@ -77,7 +77,8 @@ _ternary_table: dict[TernaryOpKind, type[ir.TernaryExpr]] = {
 
 _nary_table: dict[NaryOpKind, type[ir.NaryExpr]] = {
     NaryOpKind.AND: ir.And,
-    NaryOpKind.OR: ir.Or
+    NaryOpKind.OR: ir.Or,
+    NaryOpKind.ZIP: ir.Zip
 }
 
 class _IRCodegenInstance(AstVisitor):
@@ -161,9 +162,19 @@ class _IRCodegenInstance(AstVisitor):
         return ir.TupleExpr(*elts)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: None):
+        targets: list[Id | ir.TupleBinding] = []
+        for target in e.targets:
+            match target:
+                case Id():
+                    targets.append(target)
+                case TupleBinding():
+                    targets.append(self._visit_tuple_binding(target))
+                case _:
+                    raise NotImplementedError('unexpected target', target)
+
         iterables = [self._visit_expr(arg, ctx) for arg in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return ir.CompExpr(list(e.vars), iterables, elt)
+        return ir.CompExpr(targets, iterables, elt)
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: None):
         value = self._visit_expr(e.value, ctx)
@@ -218,9 +229,16 @@ class _IRCodegenInstance(AstVisitor):
         return ir.WhileStmt(cond, body, [])
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
+        match stmt.target:
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
         iterable = self._visit_expr(stmt.iterable, ctx)
         body = self._visit_block(stmt.body, ctx)
-        return ir.ForStmt(stmt.var, AnyType(), iterable, body, [])
+        return ir.ForStmt(target, AnyType(), iterable, body, [])
 
     def _visit_context_expr(self, e: ContextExpr, ctx: None):
         match e.ctor:
