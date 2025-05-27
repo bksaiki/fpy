@@ -483,7 +483,7 @@ class DefaultAstTransformVisitor(AstVisitor):
                     new_vars.append(self._visit_tuple_binding(var))
                 case _:
                     raise NotImplementedError(f'unreachable {var}')
-        return new_vars
+        return TupleBinding(new_vars, binding.loc)
 
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         binding = self._visit_tuple_binding(stmt.binding)

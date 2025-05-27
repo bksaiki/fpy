@@ -252,6 +252,8 @@ class _Interpreter(ReduceVisitor):
             return self._apply_or(e, ctx)
         elif isinstance(e, Range):
             return self._apply_range(e, ctx)
+        elif isinstance(e, Zip):
+            return self._apply_zip(e, ctx)
         else:
             raise NotImplementedError('unknown n-ary expression', e)
 
@@ -288,6 +290,22 @@ class _Interpreter(ReduceVisitor):
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
         return NDArray([str(i) for i in range(int(stop))])
+
+    def _apply_zip(self, e: NaryExpr, ctx: Context):
+        """Apply the `zip` method to the given n-ary expression."""
+        if len(e.children) == 0:
+            return NDArray([])
+
+        # evaluate all children
+        arrays: list[NDArray] = []
+        for arg in e.children:
+            val = self._visit_expr(arg, ctx)
+            if not isinstance(val, NDArray):
+                raise TypeError(f'expected a tensor argument, got {val}')
+            arrays.append(val)
+
+        # zip the arrays
+        return NDArray(zip(*arrays))
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Context):
         raise NotImplementedError

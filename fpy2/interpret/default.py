@@ -327,6 +327,22 @@ class _Interpreter(ReduceVisitor):
             raise TypeError(f'expected an integer argument, got {dim}')
         return Float.from_int(v.shape[int(dim)], ctx=ctx)
 
+    def _apply_zip(self, e: NaryExpr, ctx: Context):
+        """Apply the `zip` method to the given n-ary expression."""
+        if len(e.children) == 0:
+            return NDArray([])
+
+        # evaluate all children
+        arrays: list[NDArray] = []
+        for arg in e.children:
+            val = self._visit_expr(arg, ctx)
+            if not isinstance(val, NDArray):
+                raise TypeError(f'expected a tensor argument, got {val}')
+            arrays.append(val)
+
+        # zip the arrays
+        return NDArray(zip(*arrays))
+
     def _visit_nary_expr(self, e: NaryExpr, ctx: Context):
         if e.name in _method_table:
             return self._apply_method(e, ctx)
@@ -346,6 +362,8 @@ class _Interpreter(ReduceVisitor):
             return self._apply_dim(e, ctx)
         elif isinstance(e, Size):
             return self._apply_size(e, ctx)
+        elif isinstance(e, Zip):
+            return self._apply_zip(e, ctx)
         else:
             raise NotImplementedError('unknown n-ary expression', e)
 

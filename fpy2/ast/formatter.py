@@ -112,6 +112,8 @@ class _FormatterInstance(AstVisitor):
                 return ' and '.join(args)
             case NaryOpKind.OR:
                 return ' or '.join(args)
+            case NaryOpKind.ZIP:
+                return f'zip({", ".join(args)})'
             case _:
                 raise NotImplementedError
 

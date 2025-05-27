@@ -87,8 +87,9 @@ class TernaryOpKind(IntEnum):
 
 class NaryOpKind(IntEnum):
     # boolean operations
-    AND = 1
-    OR = 2
+    AND = 0
+    OR = 1
+    ZIP = 2
 
 @default_repr
 class Ast(ABC):

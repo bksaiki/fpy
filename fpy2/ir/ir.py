@@ -425,6 +425,10 @@ class Size(BinaryExpr):
     """FPy node: size operator"""
     name: str = 'size'
 
+class Zip(NaryExpr):
+    """FPy node: zip operator"""
+    name: str = 'zip'
+
 # Comparisons
 
 class Compare(Expr):

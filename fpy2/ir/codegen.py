@@ -77,7 +77,8 @@ _ternary_table: dict[TernaryOpKind, type[ir.TernaryExpr]] = {
 
 _nary_table: dict[NaryOpKind, type[ir.NaryExpr]] = {
     NaryOpKind.AND: ir.And,
-    NaryOpKind.OR: ir.Or
+    NaryOpKind.OR: ir.Or,
+    NaryOpKind.ZIP: ir.Zip
 }
 
 class _IRCodegenInstance(AstVisitor):

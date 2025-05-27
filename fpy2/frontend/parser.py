@@ -109,7 +109,8 @@ _ternary_table = {
 
 _nary_table = {
     'and': NaryOpKind.AND,
-    'or': NaryOpKind.OR
+    'or': NaryOpKind.OR,
+    'zip': NaryOpKind.ZIP,
 }
 
 _special_functions = {

@@ -204,6 +204,26 @@ class FPCoreCompileInstance(ReduceVisitor):
             )
         )
 
+    def _visit_zip(self, e: Zip, ctx) -> fpc.Expr:
+        # expand zip expression (for N=2)
+        #  (let ([t0 <tuple0>] [t1 <tuple1>])
+        #    (tensor ([i (size t0 0)])
+        #      (array (ref t0 i) (ref t1 i)))))
+
+        if len(e.children) == 0:
+            # no children => empty zip
+            return fpc.Array()
+        else:
+            tuples = [self._visit_expr(t, ctx) for t in e.children]
+            tuple_ids = [str(self.gensym.fresh('t')) for _ in e.children]
+            iter_id = str(self.gensym.fresh('i'))
+            return fpc.Let(
+                list(zip(tuple_ids, tuples)),
+                fpc.Tensor([iter_id, fpc.Size(fpc.Var(tuple_ids[0]), fpc.Integer(0))],
+                    fpc.Array(*[fpc.Ref(fpc.Var(tid), fpc.Var(iter_id)) for tid in tuple_ids])
+                )
+            )
+
     def _visit_nary_expr(self, e, ctx) -> fpc.Expr:
         match e:
             case Range():
@@ -218,6 +238,9 @@ class FPCoreCompileInstance(ReduceVisitor):
             case Shape():
                 # shape expression
                 return self._visit_shape(e, ctx)
+            case Zip():
+                # zip expression
+                return self._visit_zip(e, ctx)
             case _:
                 cls = _op_table.get(e.name)
                 if cls is None:
@@ -436,7 +459,7 @@ class FPCoreCompileInstance(ReduceVisitor):
         body = self._visit_block(stmt.body, fpc.Var(update))
         return fpc.While(cond, [(name, fpc.Var(init), body)], ctx)
 
-    def _visit_for(self, stmt, ctx):
+    def _visit_for(self, stmt: ForStmt, ctx: fpc.Expr):
         if len(stmt.phis) != 1:
             raise FPCoreCompileError('for loops must have exactly one phi node')
         # phi nodes
