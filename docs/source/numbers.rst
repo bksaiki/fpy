@@ -68,6 +68,26 @@ Common Rounding Contexts
 FPy provides a number of aliases for common rounding contexts.
 
 .. autodata:: fpy2.FP256
+.. autodata:: fpy2.FP128
+.. autodata:: fpy2.FP64
+.. autodata:: fpy2.FP32
+.. autodata:: fpy2.FP16
+.. autodata:: fpy2.TF32
+.. autodata:: fpy2.BF16
+.. autodata:: fpy2.S1E5M2
+.. autodata:: fpy2.S1E4M3
+.. autodata:: fpy2.MX_E5M2
+.. autodata:: fpy2.MX_E4M3
+.. autodata:: fpy2.MX_E3M2
+.. autodata:: fpy2.MX_E2M3
+.. autodata:: fpy2.MX_E2M1
+.. autodata:: fpy2.FP8P1
+.. autodata:: fpy2.FP8P2
+.. autodata:: fpy2.FP8P3
+.. autodata:: fpy2.FP8P4
+.. autodata:: fpy2.FP8P5
+.. autodata:: fpy2.FP8P6
+.. autodata:: fpy2.FP8P7
 
 Number Types
 ^^^^^^^^^^^^^^^^^^
