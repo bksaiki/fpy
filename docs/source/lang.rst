@@ -41,3 +41,14 @@ A user can set or get the default interpreter using the following functions:
 
 .. autofunction:: fpy2.set_default_interpreter
 .. autofunction:: fpy2.get_default_interpreter
+
+
+Compatability
+------------------
+
+FPy is compatabile with FPCore, a minimal functional language for specifying
+numerical algorithms.
+
+.. autoclass:: fpy2.FPCoreContext
+   :members:
+   :show-inheritance:
