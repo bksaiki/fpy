@@ -210,6 +210,10 @@ def test_list_comp1():
 def test_list_comp2():
     return [x + y for x in range(4) for y in range(5)]
 
+@fpy
+def test_list_comp3():
+    return [x + y for x, y in zip([0, 1, 2], [3, 4, 5])]
+
 @fpy(name='Test list ref (1/3)')
 def test_list_ref1():
     x = [1.0, 2.0, 3.0]
@@ -383,6 +387,15 @@ def test_for3():
         x += i
         y += 2 * i
     return x, y
+
+@fpy
+def test_for4() -> Real:
+    xs = (1, 2, 3)
+    ys = (3, 5, 7)
+    sum = 0.0
+    for x, y in zip(xs, ys):
+        sum += x * y
+    return sum
 
 @fpy(name='Test context statement (1/3)')
 def test_context1():
@@ -574,6 +587,7 @@ tests = [
     test_list_size2,
     test_list_comp1,
     test_list_comp2,
+    test_list_comp3,
     test_list_ref1,
     test_list_ref2,
     test_list_ref3,
@@ -594,6 +608,7 @@ tests = [
     test_for1,
     test_for2,
     test_for3,
+    test_for4,
     test_context1,
     test_context2,
     # test_context3,

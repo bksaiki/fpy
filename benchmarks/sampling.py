@@ -12,17 +12,15 @@ def clamp(x: Real, a: Real, b: Real):
     """
     return min(max(x, a), b)
 
-# TODO: add support for zip
 @fpy(name='vector addition')
 def vector_add(x: tuple[Real, ...], y: tuple[Real, ...]):
     assert len(x) == len(y)
-    return [x[i] + y[i] for i in range(len(x))]
+    return [x + y for x, y in zip(x, y)]
 
-# TODO: add support for zip
 @fpy(name='vector subtraction')
 def vector_sub(x: tuple[Real, ...], y: tuple[Real, ...]):
     assert len(x) == len(y)
-    return [x[i] - y[i] for i in range(len(x))]
+    return [x - y for x, y in zip(x, y)]
 
 @fpy(name='scalar-vector multiplication')
 def vector_mul(s: Real, x: tuple[Real, ...]):
