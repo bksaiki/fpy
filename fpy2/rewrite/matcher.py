@@ -410,7 +410,7 @@ class Matcher:
             raise TypeError(f'Expected \'Pattern\', got {type(pattern)}')
         self.pattern = pattern
 
-    def match(self, func: Function):
+    def match(self, func: Function) -> list[ExprMatch] | list[StmtMatch]:
         """
         Pattern matches recursively over the function.
         For each match, returns the substitution (and its location).
@@ -425,7 +425,7 @@ class Matcher:
             case _:
                 raise RuntimeError(f'unreachable case: {self.pattern}')
 
-    def match_exact(self, e: StmtBlock | Expr):
+    def match_exact(self, e: StmtBlock | Expr) -> ExprMatch | StmtMatch | None:
         """
         Pattern matches exactly over the function.
         Returns the substitution or `None` if no match is found.
