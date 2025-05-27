@@ -1,7 +1,5 @@
 """Pretty printing of FPy ASTs"""
 
-import ast as pyast
-
 from pprint import pformat
 
 from .fpyast import *

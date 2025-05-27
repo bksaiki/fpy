@@ -19,6 +19,7 @@ This documentation covers FPy's interface, examples, and general tips for users.
    lang
    numbers
    example
+   ast
 
 Indices and tables
 ==================

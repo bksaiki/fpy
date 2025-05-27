@@ -15,7 +15,7 @@ Rather, formats are just *side effects* of rounding and should be de-emphasized 
 Furthermore, all values within a numerical program should be viewed as (extended) real numbers.
 
 Rounding Contexts
-^^^^^^^^^^^^^^^^^^
+------------------
 
 FPy provides a hierarchy of abstract classes describing rounding contexts.
 
@@ -63,7 +63,7 @@ Each context implements a particular flavor of rounding.
    :show-inheritance:
 
 Common Rounding Contexts
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+--------------------------
 .. manually documented: keep in sync with `fpy2/number/__init__.py`
 
 FPy provides a number of aliases for common rounding contexts.
@@ -259,7 +259,7 @@ FPy provides a number of aliases for common rounding contexts.
    for more information.
 
 Number Types
-^^^^^^^^^^^^^^^^^^
+------------------
 
 FPy only provides two number types.
 
@@ -272,7 +272,7 @@ FPy only provides two number types.
    :show-inheritance:
 
 Rounding Utilities
-^^^^^^^^^^^^^^^^^^
+------------------
 
 Additional types for specifying rounding operations.
 
