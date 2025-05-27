@@ -1,15 +1,24 @@
 fpy2
 ==================
 
-.. automodule:: fpy2
-   :members:
-   :imported-members:
-   :show-inheritance:
-   :undoc-members:
+**FPy** (fpy2) is a Python library for specifying and simulating
+numerical algorithms with a focus on number systems and rounding.
+
+It provides three major features:
+
+* an embedded domain-specific language (DSL);
+* a library of different number systems;
+* a compiler to other languages and formats.
+
+This documentation covers FPy's interface, examples, and general tips for users.
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+   :maxdepth: 1
+   :caption: Contents
+
+   lang
+   numbers
+   example
 
 Indices and tables
 ==================
