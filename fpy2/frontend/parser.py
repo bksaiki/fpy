@@ -679,13 +679,10 @@ class Parser:
             case ast.For():
                 if stmt.orelse != []:
                     raise FPyParserError(loc, 'FPy does not support else clause in for statement', stmt)
-                if not isinstance(stmt.target, ast.Name):
-                    raise FPyParserError(loc, 'FPy expects an identifier', stmt)
-
-                ident = self._parse_id(stmt.target)
+                for_target = self._parse_tuple_target(stmt.target, stmt)
                 iterable = self._parse_expr(stmt.iter)
                 block = self._parse_statements(stmt.body)
-                return ForStmt(ident, iterable, block, loc)
+                return ForStmt(for_target, iterable, block, loc)
             case ast.Return():
                 if stmt.value is None:
                     raise FPyParserError(loc, 'Return statement must have value', stmt)

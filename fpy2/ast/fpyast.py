@@ -4,7 +4,7 @@ This module contains the AST for FPy programs.
 
 from abc import ABC, abstractmethod
 from enum import IntEnum
-from typing import Any, Optional, Self, Sequence
+from typing import Any, Optional, Self, Sequence, TypeAlias
 
 from ..fpc_context import FPCoreContext
 from ..number import Context
@@ -877,31 +877,34 @@ class WhileStmt(Stmt):
     def __hash__(self) -> int:
         return hash((self.cond, self.body))
 
+
+ForBinding: TypeAlias = Id | TupleBinding
+
 class ForStmt(Stmt):
     """FPy AST: for statement"""
-    var: Id
+    target: ForBinding
     iterable: Expr
     body: StmtBlock
 
     def __init__(
         self,
-        var: Id,
+        target: ForBinding,
         iterable: Expr,
         body: StmtBlock,
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.var = var
+        self.target = target
         self.iterable = iterable
         self.body = body
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ForStmt):
             return False
-        return self.var == other.var and self.iterable == other.iterable and self.body == other.body
+        return self.target == other.target and self.iterable == other.iterable and self.body == other.body
 
     def __hash__(self) -> int:
-        return hash((self.var, self.iterable, self.body))
+        return hash((self.target, self.iterable, self.body))
 
 class ContextStmt(Stmt):
     """FPy AST: with statement"""

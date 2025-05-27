@@ -290,8 +290,14 @@ class _MatcherInst(AstVisitor):
         self._visit_block(stmt.body, pat.body)
 
     def _visit_for(self, stmt: ForStmt, pat: ForStmt):
+        match stmt.target, pat.target:
+            case Id(), Id():
+                self._visit_target(stmt.target, pat.target)
+            case TupleBinding(), TupleBinding():
+                self._visit_tuple_binding(stmt.target, pat.target)
+            case _, _:
+                raise _MatchFailure(f'matching {pat.target} against {stmt.target}')
         self._visit_expr(stmt.iterable, pat.iterable)
-        self._visit_target(stmt.var, pat.var)
         self._visit_block(stmt.body, pat.body)
 
     def _visit_context(self, stmt: ContextStmt, pat: ContextStmt):

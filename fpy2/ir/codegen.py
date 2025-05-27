@@ -218,9 +218,16 @@ class _IRCodegenInstance(AstVisitor):
         return ir.WhileStmt(cond, body, [])
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
+        match stmt.target:
+            case Id():
+                target = stmt.target
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
         iterable = self._visit_expr(stmt.iterable, ctx)
         body = self._visit_block(stmt.body, ctx)
-        return ir.ForStmt(stmt.var, AnyType(), iterable, body, [])
+        return ir.ForStmt(target, AnyType(), iterable, body, [])
 
     def _visit_context_expr(self, e: ContextExpr, ctx: None):
         match e.ctor:

@@ -60,8 +60,12 @@ class _DefineUseInstance(DefaultAstVisitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         self._visit_expr(stmt.iterable, ctx)
-        if isinstance(stmt.var, NamedId):
-            self.uses[stmt.var] = set()
+        match stmt.target:
+            case NamedId():
+                self.uses[stmt.target] = set()
+            case TupleBinding():
+                for var in stmt.target.names():
+                    self.uses[var] = set()
         self._visit_block(stmt.body, ctx)
 
     def _visit_function(self, func: FuncDef, ctx):

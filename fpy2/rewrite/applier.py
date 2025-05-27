@@ -154,10 +154,15 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
         return s, None
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        var = self._visit_id(stmt.var)
+        match stmt.target:
+            case Id():
+                target = self._visit_id(stmt.target)
+            case TupleBinding():
+                target = self._visit_tuple_binding(stmt.target)
+
         iterable = self._visit_expr(stmt.iterable, None)
         body, _ = self._visit_block(stmt.body, None)
-        s = ForStmt(var, iterable, body, None)
+        s = ForStmt(target, iterable, body, None)
         return s, None
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
