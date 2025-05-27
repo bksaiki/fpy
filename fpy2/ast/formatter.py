@@ -133,9 +133,20 @@ class _FormatterInstance(AstVisitor):
         return f'({", ".join(elts)})'
 
     def _visit_comp_expr(self, e: CompExpr, ctx: _Ctx):
+        targets: list[str] = []
+        for target in e.targets:
+            match target:
+                case NamedId():
+                    targets.append(str(target))
+                case TupleBinding():
+                    s = self._visit_tuple_binding(target)
+                    targets.append(f'({s})')
+                case _:
+                    raise NotImplementedError('unreachable', target)
+
         elt = self._visit_expr(e.elt, ctx)
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
-        s = ' '.join(f'for {str(var)} in {iterable}' for var, iterable in zip(e.vars, iterables))
+        s = ' '.join(f'for {target} in {iterable}' for target, iterable in zip(targets, iterables))
         return f'[{elt} {s}]'
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: _Ctx):

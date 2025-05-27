@@ -101,10 +101,19 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
             return Var(self.free[e.name], None)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: None):
-        vars = [self._visit_id(v) for v in e.vars]
+        targets: list[Id | TupleBinding] = []
+        for target in e.targets:
+            match target:
+                case Id():
+                    targets.append(self._visit_id(target))
+                case TupleBinding():
+                    targets.append(self._visit_tuple_binding(target))
+                case _:
+                    raise RuntimeError(f'unreachable case: {target}')
+
         iterables = [self._visit_expr(e, None) for e in e.iterables]
         elt = self._visit_expr(e.elt, None)
-        return CompExpr(vars, iterables, elt, None)
+        return CompExpr(targets, iterables, elt, None)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
         ident = self._visit_id(stmt.var)

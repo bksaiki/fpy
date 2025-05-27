@@ -218,8 +218,14 @@ class _MatcherInst(AstVisitor):
     def _visit_comp_expr(self, e: CompExpr, pat: CompExpr):
         if len(e.iterables) != len(pat.iterables):
             raise _MatchFailure(f'matching {pat} against {e}')
-        for name, pname in zip(e.vars, pat.vars):
-            self._visit_target(name, pname)
+        for target, ptarget in zip(e.targets, pat.targets):
+            match target, ptarget:
+                case Id(), Id():
+                    self._visit_target(target, ptarget)
+                case TupleBinding(), TupleBinding():
+                    self._visit_tuple_binding(target, ptarget)
+                case _:
+                    raise _MatchFailure(f'matching {ptarget} against {target}')
         for it, pit in zip(e.iterables, pat.iterables):
             self._visit_expr(it, pit)
         self._visit_expr(e.elt, pat.elt)

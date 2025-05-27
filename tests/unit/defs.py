@@ -423,8 +423,8 @@ def dpN(xs: tuple[Real, ...], ys: tuple[Real, ...]) -> Real:
     assert len(xs) == len(ys)
     sum = 0.0
     with RealContext():
-        for i in range(len(xs)):
-            sum += xs[i] * ys[i]
+        for x, y in zip(xs, ys):
+            sum += x * y
     return round(sum)
 
 @fpy(

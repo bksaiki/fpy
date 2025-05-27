@@ -162,9 +162,19 @@ class _IRCodegenInstance(AstVisitor):
         return ir.TupleExpr(*elts)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: None):
+        targets: list[Id | ir.TupleBinding] = []
+        for target in e.targets:
+            match target:
+                case Id():
+                    targets.append(target)
+                case TupleBinding():
+                    targets.append(self._visit_tuple_binding(target))
+                case _:
+                    raise NotImplementedError('unexpected target', target)
+
         iterables = [self._visit_expr(arg, ctx) for arg in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return ir.CompExpr(list(e.vars), iterables, elt)
+        return ir.CompExpr(targets, iterables, elt)
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: None):
         value = self._visit_expr(e.value, ctx)
