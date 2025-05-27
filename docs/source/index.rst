@@ -18,6 +18,8 @@ This documentation covers FPy's interface, examples, and general tips for users.
 
    lang
    numbers
+   rewrite
+   backend
    example
    ast
 

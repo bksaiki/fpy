@@ -17,6 +17,10 @@ FPy programs are represented by the :py:class:`fpy2.Function` class.
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.runtime.ForeignEnv
+   :members:
+   :show-inheritance:
+
 Interpreters
 ------------------
 
