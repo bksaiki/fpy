@@ -285,7 +285,7 @@ class DefaultAstVisitor(AstVisitor):
         for c in e.args:
             self._visit_expr(c, ctx)
 
-    def _visit_call(self, e: Call, ctx: None):
+    def _visit_call(self, e: Call, ctx: Any):
         for arg in e.args:
             self._visit_expr(arg, ctx)
 

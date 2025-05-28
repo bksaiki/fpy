@@ -30,7 +30,7 @@ def _safe_div(x: float, y: float):
     else:
         return x / y
 
-
+# TODO: AST -> method
 _method_table: dict[str, Callable[..., Any]] = {
     '+': lambda x, y: x + y,
     '-': lambda x, y: x - y,
@@ -207,16 +207,15 @@ class _Interpreter(AstVisitor):
     def _visit_call(self, e: Call, ctx: Context):
         raise NotImplementedError('unknown call', e)
 
-    def _apply_method(self, e: NaryExpr, ctx: Context):
-        fn = _method_table[e.name]
-        args: list[float] = []
-        for arg in e.children:
+    def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: Context):
+        vals: list[float] = []
+        for arg in args:
             val = self._visit_expr(arg, ctx)
             if not isinstance(val, float):
-                raise TypeError(f'expected a real number argument for {e.name}, got {val}')
-            args.append(val)
+                raise TypeError(f'expected a real number argument, got {val}')
+            vals.append(val)
         try:
-            result = fn(*args)
+            result = fn(*vals)
         except OverflowError:
             # We could return an infinity, but we don't know which one
             result = math.nan
@@ -226,61 +225,90 @@ class _Interpreter(AstVisitor):
 
         return result
 
-    def _apply_cast(self, e: Cast, ctx: Context):
-        x = self._visit_expr(e.children[0], ctx)
+    def _apply_cast(self, arg: Expr, ctx: Context):
+        x = self._visit_expr(arg, ctx)
         if not isinstance(x, float):
             raise TypeError(f'expected a float, got {x}')
         return x
 
-    def _apply_not(self, e: Not, ctx: Context):
-        arg = self._visit_expr(e.children[0], ctx)
+    def _apply_not(self, arg: Expr, ctx: Context):
+        arg = self._visit_expr(arg, ctx)
         if not isinstance(arg, bool):
             raise TypeError(f'expected a boolean argument, got {arg}')
         return not arg
 
-    def _apply_and(self, e: And, ctx: Context):
-        args: list[bool] = []
-        for arg in e.children:
+    def _apply_and(self, args: Sequence[Expr], ctx: Context):
+        vals: list[bool] = []
+        for arg in args:
             val = self._visit_expr(arg, ctx)
             if not isinstance(val, bool):
                 raise TypeError(f'expected a boolean argument, got {val}')
-            args.append(val)
-        return all(args)
+            vals.append(val)
+        return all(vals)
 
-    def _apply_or(self, e: Or, ctx: Context):
-        args: list[bool] = []
-        for arg in e.children:
+    def _apply_or(self, args: Sequence[Expr], ctx: Context):
+        vals: list[bool] = []
+        for arg in args:
             val = self._visit_expr(arg, ctx)
             if not isinstance(val, bool):
                 raise TypeError(f'expected a boolean argument, got {val}')
-            args.append(val)
-        return any(args)
+            vals.append(val)
+        return any(vals)
 
-    def _apply_range(self, e: Range, ctx: Context):
-        stop = self._visit_expr(e.children[0], ctx)
+    def _apply_range(self, arg: Expr, ctx: Context):
+        stop = self._visit_expr(arg, ctx)
         if not isinstance(stop, float):
             raise TypeError(f'expected a real number argument, got {stop}')
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
         return tuple([float(i) for i in range(int(stop))])
 
-    def _visit_nary_expr(self, e: NaryExpr, ctx: Context):
-        if e.name in _method_table:
-            return self._apply_method(e, ctx)
-        elif e.name == 'fma':
-            raise NotImplementedError('fma not supported in Python 3.11')
-        elif isinstance(e, Cast):
-            return self._apply_cast(e, ctx)
-        elif isinstance(e, Not):
-            return self._apply_not(e, ctx)
-        elif isinstance(e, And):
-            return self._apply_and(e, ctx)
-        elif isinstance(e, Or):
-            return self._apply_or(e, ctx)
-        elif isinstance(e, Range):
-            return self._apply_range(e, ctx)
+    def _visit_unaryop(self, e: UnaryOp, ctx: Context):
+        fn = _method_table.get(e.op)
+        if fn is not None:
+            return self._apply_method(fn, (e.arg,), ctx)
         else:
-            raise NotImplementedError('unknown n-ary expression', e)
+            match e.op:
+                case UnaryOpKind.CAST:
+                    return self._apply_cast(e.arg, ctx)
+                case UnaryOpKind.NOT:
+                    return self._apply_not(e.arg, ctx)
+                case UnaryOpKind.RANGE:
+                    return self._apply_range(e.arg, ctx)
+                case _:
+                    raise RuntimeError('unknown operator', e.op)
+
+    def _visit_binaryop(self, e: BinaryOp, ctx: Context):
+        fn = _method_table.get(e.op)
+        if fn is not None:
+            return self._apply_method(fn, (e.left, e.right), ctx)
+        else:
+            raise RuntimeError('unknown operator', e.op)
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
+        match e.op:
+            case TernaryOpKind.FMA:
+                raise NotImplementedError('fma not supported in Python 3.11')
+            case _:
+                raise RuntimeError('unknown operator', e.op)
+
+        return super()._visit_ternaryop(e, ctx)
+
+    def _visit_naryop(self, e: NaryOp, ctx: Context):
+        fn = _method_table.get(e.op)
+        if fn is not None:
+            return self._apply_method(fn, e.args, ctx)
+        else:
+            match e.op:
+                case NaryOpKind.AND:
+                    return self._apply_and(e.args, ctx)
+                case NaryOpKind.OR:
+                    return self._apply_or(e.args, ctx)
+                case NaryOpKind.ZIP:
+                    # TODO: implement zip
+                    raise NotImplementedError
+                case _:
+                    raise RuntimeError('unknown operator', e.op)
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
@@ -300,8 +328,8 @@ class _Interpreter(AstVisitor):
                 raise NotImplementedError('unknown comparison operator', op)
 
     def _visit_compare(self, e: Compare, ctx: Context):
-        lhs = self._visit_expr(e.children[0], ctx)
-        for op, arg in zip(e.ops, e.children[1:]):
+        lhs = self._visit_expr(e.args[0], ctx)
+        for op, arg in zip(e.ops, e.args[1:]):
             rhs = self._visit_expr(arg, ctx)
             if not self._apply_cmp2(op, lhs, rhs):
                 return False
@@ -309,7 +337,7 @@ class _Interpreter(AstVisitor):
         return True
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
-        return tuple([self._visit_expr(x, ctx) for x in e.children])
+        return tuple([self._visit_expr(x, ctx) for x in e.args])
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: Context):
         value = self._visit_expr(e.value, ctx)

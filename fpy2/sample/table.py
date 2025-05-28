@@ -7,7 +7,7 @@ import math
 from fractions import Fraction
 from titanfp.titanic.gmpmath import compute_constant
 
-from ..ir import *
+from ..ast import *
 from ..utils import digits_to_fraction, hexnum_to_fraction
 
 _POS_INF = math.inf
