@@ -455,7 +455,7 @@ class DefaultAstTransformVisitor(AstVisitor):
                 case Id():
                     targets.append(target)
                 case TupleBinding():
-                    targets.append(self._visit_tuple_binding(target))
+                    targets.append(self._visit_tuple_binding(target, ctx))
                 case _:
                     raise RuntimeError('unreachable', target)
 
@@ -501,20 +501,20 @@ class DefaultAstTransformVisitor(AstVisitor):
         s = SimpleAssign(stmt.var, expr, stmt.ann, stmt.loc)
         return s, ctx
 
-    def _visit_tuple_binding(self, binding: TupleBinding):
+    def _visit_tuple_binding(self, binding: TupleBinding, ctx: Any):
         new_vars: list[Id | TupleBinding] = []
         for var in binding:
             match var:
                 case Id():
                     new_vars.append(var)
                 case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(var))
+                    new_vars.append(self._visit_tuple_binding(var, ctx))
                 case _:
                     raise NotImplementedError(f'unreachable {var}')
         return TupleBinding(new_vars, binding.loc)
 
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
-        binding = self._visit_tuple_binding(stmt.binding)
+        binding = self._visit_tuple_binding(stmt.binding, ctx)
         expr = self._visit_expr(stmt.expr, ctx)
         s = TupleUnpack(binding, expr, stmt.loc)
         return s, ctx

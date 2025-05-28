@@ -2,8 +2,9 @@
 
 from typing import Optional
 
-from ..analysis import DefineUse, DefineUseAnalysis
+from ..analysis import DefineUse, DefineUseAnalysis, DefinitionCtx
 from ..ast import *
+from ..transform import RenameTarget
 from ..utils import Gensym
 
 class _SimplifyIfInstance(DefaultAstTransformVisitor):
@@ -11,7 +12,6 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     gensym: Gensym
-
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
@@ -20,45 +20,123 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
     def apply(self):
         return self._visit_function(self.func, None)
 
+    def _mutated_vars(self, old: DefinitionCtx, new: DefinitionCtx):
+        """
+        Computes the set of variables that were mutated between
+        the `old` and `new` definition contexts.
+        """
+        names: set[NamedId] = set()
+        for name in old.keys() & new.keys():
+            if old[name] != new[name]:
+                names.add(name)
+        return list(names)
+
+    def _intro_vars(self, old: DefinitionCtx, new: DefinitionCtx):
+        """
+        Computes the set of variables that were introduced between
+        the `old` and `new` definition contexts.
+        """
+        return set(new.keys() - old.keys())
+
+
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         stmts: list[Stmt] = []
+
         # compile condition
         cond = self._visit_expr(stmt.cond, ctx)
+
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            stmts.append(SimpleAssign(t, cond, BoolTypeAnn(None), None))
+            s = SimpleAssign(t, cond, BoolTypeAnn(None), None)
+            stmts.append(s)
             cond = Var(t, None)
-        # inline body
+
+        # compile the body
         body, _ = self._visit_block(stmt.body, ctx)
+
+        # identify variables that were mutated in the body
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = self._mutated_vars(defs_in, defs_out)
+
+        # rename mutated variables in the body and inline it
+        rename = { var: self.gensym.refresh(var) for var in mutated }
+        body = RenameTarget.apply_block(body, rename)
         stmts.extend(body.stmts)
-        # convert phi nodes into if expressions
-        raise NotImplementedError(self.def_use)
-        for phi in stmt.phis:
-            ife = IfExpr(cond, Var(phi.rhs), Var(phi.lhs))
-            stmts.append(SimpleAssign(phi.name, AnyTypeAnn(None), ife))
+
+        # make if expressions for each mutated variable
+        for var in mutated:
+            e = IfExpr(cond, Var(rename[var], None), Var(var, None), None)
+            s = SimpleAssign(var, e, None, None)
+            stmts.append(s)
+
         return StmtBlock(stmts)
+
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         stmts: list[Stmt] = []
+
         # compile condition
         cond = self._visit_expr(stmt.cond, ctx)
+
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            stmts.append(SimpleAssign(t, BoolType(), cond))
-            cond = Var(t)
-        # inline if-true block
+            s = SimpleAssign(t, cond, BoolTypeAnn(None), None)
+            stmts.append(s)
+            cond = Var(t, None)
+
+        # compile the bodies
         ift, _ = self._visit_block(stmt.ift, ctx)
-        stmts.extend(ift.stmts)
-        # inline if-false block
         iff, _ = self._visit_block(stmt.iff, ctx)
+
+        # identify variables that were mutated in each body
+        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
+        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
+        mutated_ift = self._mutated_vars(defs_in_ift, defs_out_ift)
+        mutated_iff = self._mutated_vars(defs_in_iff, defs_out_iff)
+
+        # identify variables that were introduced in the bodies
+        # FPy semantics says they must be introduces in both branches
+        intros_ift = self._intro_vars(defs_in_ift, defs_out_ift)
+        intros_iff = self._intro_vars(defs_in_iff, defs_out_iff)
+        intros = intros_ift & intros_iff
+        print(intros)
+
+        # add to "mutated" set (bit of a misnomer)
+        mutated_ift.extend(intros)
+        mutated_iff.extend(intros)
+
+        # rename mutated variables in each body and inline them
+        rename_ift = { var: self.gensym.refresh(var) for var in mutated_ift }
+        ift = RenameTarget.apply_block(ift, rename_ift)
+        stmts.extend(ift.stmts)
+
+        rename_iff = { var: self.gensym.refresh(var) for var in mutated_iff }
+        iff = RenameTarget.apply_block(iff, rename_iff)
         stmts.extend(iff.stmts)
-        # convert phi nodes into if expressions
-        for phi in stmt.phis:
-            ife = IfExpr(cond, Var(phi.lhs), Var(phi.rhs))
-            stmts.append(SimpleAssign(phi.name, AnyType(), ife))
+
+        # make if expressions for each mutated variable
+        mutated_uniq: set[NamedId] = set()
+        for var in mutated_ift:
+            ift_name = rename_ift[var]
+            iff_name = rename_iff.get(var, var)
+            e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
+            s = SimpleAssign(var, e, None, None)
+            stmts.append(s)
+            mutated_uniq.add(var)
+
+        for var in mutated_iff:
+            if var not in mutated_uniq:
+                ift_name = rename_ift.get(var, var)
+                iff_name = rename_iff[var]
+                e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
+                s = SimpleAssign(var, e, None, None)
+                stmts.append(s)
+                mutated_uniq.add(var)
+
         return StmtBlock(stmts)
+
 
     def _visit_block(self, block: StmtBlock, ctx: None):
         stmts: list[Stmt] = []

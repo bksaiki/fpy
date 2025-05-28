@@ -552,17 +552,15 @@ class TupleBinding(Ast):
                 raise NotImplementedError('unexpected tuple identifier', v)
         return ids
 
-Binding: TypeAlias = Id | TupleBinding
-
 class CompExpr(Expr):
     """FPy AST: comprehension expression"""
-    targets: list[Binding]
+    targets: list[Id | TupleBinding]
     iterables: list[Expr]
     elt: Expr
 
     def __init__(
         self,
-        targets: Sequence[Binding],
+        targets: Sequence[Id | TupleBinding],
         iterables: Sequence[Expr],
         elt: Expr,
         loc: Optional[Location]
@@ -907,13 +905,13 @@ class WhileStmt(Stmt):
 
 class ForStmt(Stmt):
     """FPy AST: for statement"""
-    target: Binding
+    target: Id | TupleBinding
     iterable: Expr
     body: StmtBlock
 
     def __init__(
         self,
-        target: Binding,
+        target: Id | TupleBinding,
         iterable: Expr,
         body: StmtBlock,
         loc: Optional[Location]
