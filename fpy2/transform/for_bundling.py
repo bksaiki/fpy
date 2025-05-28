@@ -5,6 +5,7 @@ into a single variable.
 
 from typing import Optional
 
+from ..analysis import DefineUse
 from ..ast import *
 from ..utils import Gensym
 
@@ -106,10 +107,9 @@ class ForBundling:
     @staticmethod
     def apply(func: FuncDef, names: Optional[set[NamedId]] = None) -> FuncDef:
         if names is None:
-            uses = DefineUse.analyze(func)
-            names = set(uses.keys())
+            def_use = DefineUse.analyze(func)
+            names = set(def_use.defs.keys())
         inst = _ForBundlingInstance(func, names)
         func = inst.apply()
-        func = SSA.apply(func)
-        VerifyIR.check(func)
+        SyntaxCheck.check(func)
         return func

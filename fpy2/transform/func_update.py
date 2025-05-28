@@ -4,6 +4,7 @@ Transformation pass to rewrite in-place tuple mutation as functional updates.
 
 from typing import Optional
 
+from ..analysis import DefineUse
 from ..ast import *
 
 class _FuncUpdateInstance(DefaultAstTransformVisitor):
@@ -35,8 +36,8 @@ class FuncUpdate:
     @staticmethod
     def apply(func: FuncDef, names: Optional[set[str]] = None) -> FuncDef:
         if names is None:
-            uses = DefineUse.analyze(func)
-            names = set(uses.keys())
+            def_use = DefineUse.analyze(func)
+            names = set(def_use.defs.keys())
         ast = _FuncUpdateInstance(func).apply()
-        SyntaxCheck.analyze(ast)
+        SyntaxCheck.check(ast)
         return ast

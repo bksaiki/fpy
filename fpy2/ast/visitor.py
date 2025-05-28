@@ -86,6 +86,10 @@ class AstVisitor(ABC):
         ...
 
     @abstractmethod
+    def _visit_tuple_set(self, e: TupleSet, ctx: Any) -> Any:
+        ...
+
+    @abstractmethod
     def _visit_if_expr(self, e: IfExpr, ctx: Any) -> Any:
         ...
 
@@ -197,6 +201,8 @@ class AstVisitor(ABC):
                 return self._visit_comp_expr(e, ctx)
             case TupleRef():
                 return self._visit_tuple_ref(e, ctx)
+            case TupleSet():
+                return self._visit_tuple_set(e, ctx)
             case IfExpr():
                 return self._visit_if_expr(e, ctx)
             case ContextExpr():
@@ -297,6 +303,12 @@ class DefaultAstVisitor(AstVisitor):
         self._visit_expr(e.value, ctx)
         for s in e.slices:
             self._visit_expr(s, ctx)
+
+    def _visit_tuple_set(self, e: TupleSet, ctx: Any):
+        self._visit_expr(e.array, ctx)
+        for s in e.slices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(e.value, ctx)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
         for iterable in e.iterables:
@@ -429,6 +441,12 @@ class DefaultAstTransformVisitor(AstVisitor):
         value = self._visit_expr(e.value, ctx)
         slices = [self._visit_expr(s, ctx) for s in e.slices]
         return TupleRef(value, slices, e.loc)
+
+    def _visit_tuple_set(self, e: TupleSet, ctx: Any):
+        array = self._visit_expr(e.array, ctx)
+        slices = [self._visit_expr(s, ctx) for s in e.slices]
+        value = self._visit_expr(e.value, ctx)
+        return TupleSet(array, slices, value, e.loc)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
         targets: list[Id | TupleBinding] = []

@@ -720,5 +720,5 @@ def fpcore_to_fpy(
     ignore_unknown: bool = False
 ):
     ast = _FPCore2FPy(core, default_name).convert()
-    SyntaxCheck.analyze(ast, ignore_unknown=ignore_unknown)
+    SyntaxCheck.check(ast, ignore_unknown=ignore_unknown)
     return ast

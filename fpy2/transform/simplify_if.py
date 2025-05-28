@@ -2,17 +2,20 @@
 
 from typing import Optional
 
+from ..analysis import DefineUse, DefineUseAnalysis
 from ..ast import *
 from ..utils import Gensym
 
 class _SimplifyIfInstance(DefaultAstTransformVisitor):
     """Single-use instance of the SimplifyIf pass."""
     func: FuncDef
+    def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, names: set[NamedId]):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
-        self.gensym = Gensym(reserved=names)
+        self.def_use = def_use
+        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def apply(self):
         return self._visit_function(self.func, None)
@@ -24,15 +27,16 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            stmts.append(SimpleAssign(t, BoolType(), cond))
-            cond = Var(t)
+            stmts.append(SimpleAssign(t, cond, BoolTypeAnn(None), None))
+            cond = Var(t, None)
         # inline body
         body, _ = self._visit_block(stmt.body, ctx)
         stmts.extend(body.stmts)
         # convert phi nodes into if expressions
+        raise NotImplementedError(self.def_use)
         for phi in stmt.phis:
             ife = IfExpr(cond, Var(phi.rhs), Var(phi.lhs))
-            stmts.append(SimpleAssign(phi.name, AnyType(), ife))
+            stmts.append(SimpleAssign(phi.name, AnyTypeAnn(None), ife))
         return StmtBlock(stmts)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
@@ -94,7 +98,7 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
 
 class SimplifyIf:
     """
-    Control flow simplifification:
+    Control flow simplification:
 
     Transforms if statements into if expressions.
     The inner block is hoisted into the outer block and each
@@ -102,10 +106,8 @@ class SimplifyIf:
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: Optional[set[NamedId]] = None):
-        if names is None:
-            uses = DefineUse.analyze(func)
-            names = (uses.keys())
-        ir = _SimplifyIfInstance(func, names).apply()
-        VerifyIR.check(ir)
+    def apply(func: FuncDef):
+        def_use = DefineUse.analyze(func)
+        ir = _SimplifyIfInstance(func, def_use).apply()
+        SyntaxCheck.check(ir)
         return ir

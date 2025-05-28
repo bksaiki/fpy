@@ -204,6 +204,14 @@ class SyntaxCheckInstance(AstVisitor):
             self._visit_expr(s, ctx)
         return env
 
+    def _visit_tuple_set(self, e: TupleSet, ctx: _Ctx):
+        env, _ = ctx
+        self._visit_expr(e.array, ctx)
+        for s in e.slices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(e.value, ctx)
+        return env
+
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(e.cond, ctx)
@@ -378,7 +386,7 @@ class SyntaxCheck:
     """
 
     @staticmethod
-    def analyze(
+    def check(
         func: FuncDef,
         *,
         free_vars: Optional[set[str]] = None,

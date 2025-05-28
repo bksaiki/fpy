@@ -4,6 +4,7 @@ from typing import Optional
 
 import titanfp.fpbench.fpcast as fpc 
 
+from ..analysis import DefineUse
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..number import Context
@@ -13,61 +14,70 @@ from ..utils import Gensym
 from .backend import Backend
 
 # TODO: AST -> FPCore
-_op_table = {
-    '+': fpc.Add,
-    '-': fpc.Sub,
-    '*': fpc.Mul,
-    '/': fpc.Div,
-    'fabs': fpc.Fabs,
-    'sqrt': fpc.Sqrt,
-    'fma': fpc.Fma,
-    'neg': fpc.Neg,
-    'copysign': fpc.Copysign,
-    'fdim': fpc.Fdim,
-    'fmax': fpc.Fmax,
-    'fmin': fpc.Fmin,
-    'fmod': fpc.Fmod,
-    'remainder': fpc.Remainder,
-    'hypot': fpc.Hypot,
-    'cbrt': fpc.Cbrt,
-    'ceil': fpc.Ceil,
-    'floor': fpc.Floor,
-    'nearbyint': fpc.Nearbyint,
-    'round': fpc.Round,
-    'trunc': fpc.Trunc,
-    'acos': fpc.Acos,
-    'asin': fpc.Asin,
-    'atan': fpc.Atan,
-    'atan2': fpc.Atan2,
-    'cos': fpc.Cos,
-    'sin': fpc.Sin,
-    'tan': fpc.Tan,
-    'acosh': fpc.Acosh,
-    'asinh': fpc.Asinh,
-    'atanh': fpc.Atanh,
-    'cosh': fpc.Cosh,
-    'sinh': fpc.Sinh,
-    'tanh': fpc.Tanh,
-    'exp': fpc.Exp,
-    'exp2': fpc.Exp2,
-    'expm1': fpc.Expm1,
-    'log': fpc.Log,
-    'log10': fpc.Log10,
-    'log1p': fpc.Log1p,
-    'log2': fpc.Log2,
-    'pow': fpc.Pow,
-    'erf': fpc.Erf,
-    'erfc': fpc.Erfc,
-    'lgamma': fpc.Lgamma,
-    'tgamma': fpc.Tgamma,
-    'isfinite': fpc.Isfinite,
-    'isinf': fpc.Isinf,
-    'isnan': fpc.Isnan,
-    'isnormal': fpc.Isnormal,
-    'signbit': fpc.Signbit,
-    'not': fpc.Not,
-    'or': fpc.Or,
-    'and': fpc.And,
+_unary_table = {
+    UnaryOpKind.FABS: fpc.Fabs,
+    UnaryOpKind.SQRT: fpc.Sqrt,
+    UnaryOpKind.NEG: fpc.Neg,
+    UnaryOpKind.CBRT: fpc.Cbrt,
+    UnaryOpKind.CEIL: fpc.Ceil,
+    UnaryOpKind.FLOOR: fpc.Floor,
+    UnaryOpKind.NEARBYINT: fpc.Nearbyint,
+    UnaryOpKind.ROUND: fpc.Round,
+    UnaryOpKind.TRUNC: fpc.Trunc,
+    UnaryOpKind.ACOS: fpc.Acos,
+    UnaryOpKind.ASIN: fpc.Asin,
+    UnaryOpKind.ATAN: fpc.Atan,
+    UnaryOpKind.COS: fpc.Cos,
+    UnaryOpKind.SIN: fpc.Sin,
+    UnaryOpKind.TAN: fpc.Tan,
+    UnaryOpKind.ACOSH: fpc.Acosh,
+    UnaryOpKind.ASINH: fpc.Asinh,
+    UnaryOpKind.ATANH: fpc.Atanh,
+    UnaryOpKind.COSH: fpc.Cosh,
+    UnaryOpKind.SINH: fpc.Sinh,
+    UnaryOpKind.TANH: fpc.Tanh,
+    UnaryOpKind.EXP: fpc.Exp,
+    UnaryOpKind.EXP2: fpc.Exp2,
+    UnaryOpKind.EXPM1: fpc.Expm1,
+    UnaryOpKind.LOG: fpc.Log,
+    UnaryOpKind.LOG10: fpc.Log10,
+    UnaryOpKind.LOG1P: fpc.Log1p,
+    UnaryOpKind.LOG2: fpc.Log2,
+    UnaryOpKind.ERF: fpc.Erf,
+    UnaryOpKind.ERFC: fpc.Erfc,
+    UnaryOpKind.LGAMMA: fpc.Lgamma,
+    UnaryOpKind.TGAMMA: fpc.Tgamma,
+    UnaryOpKind.ISFINITE: fpc.Isfinite,
+    UnaryOpKind.ISINF: fpc.Isinf,
+    UnaryOpKind.ISNAN: fpc.Isnan,
+    UnaryOpKind.ISNORMAL: fpc.Isnormal,
+    UnaryOpKind.SIGNBIT: fpc.Signbit,
+    UnaryOpKind.NOT: fpc.Not,
+}
+
+_binary_table = {
+    BinaryOpKind.ADD: fpc.Add,
+    BinaryOpKind.SUB: fpc.Sub,
+    BinaryOpKind.MUL: fpc.Mul,
+    BinaryOpKind.DIV: fpc.Div,
+    BinaryOpKind.COPYSIGN: fpc.Copysign,
+    BinaryOpKind.FDIM: fpc.Fdim,
+    BinaryOpKind.FMAX: fpc.Fmax,
+    BinaryOpKind.FMIN: fpc.Fmin,
+    BinaryOpKind.FMOD: fpc.Fmod,
+    BinaryOpKind.REMAINDER: fpc.Remainder,
+    BinaryOpKind.HYPOT: fpc.Hypot,
+    BinaryOpKind.ATAN2: fpc.Atan2,
+    BinaryOpKind.POW: fpc.Pow,
+}
+
+_ternary_table = {
+    TernaryOpKind.FMA: fpc.Fma,
+}
+
+_nary_table = {
+    NaryOpKind.OR: fpc.Or,
+    NaryOpKind.AND: fpc.And,
 }
 
 class FPCoreCompileError(Exception):
@@ -94,9 +104,11 @@ class FPCoreCompileInstance(AstVisitor):
     gensym: Gensym
 
     def __init__(self, func: FuncDef):
-        uses = DefineUse().analyze(func)
+        def_use = DefineUse.analyze(func)
+        names = set(def_use.defs.keys())
+
         self.func = func
-        self.gensym = Gensym(reserved=uses.keys())
+        self.gensym = Gensym(reserved=names)
 
     def compile(self) -> fpc.FPCore:
         f = self._visit_function(self.func, None)
@@ -104,10 +116,10 @@ class FPCoreCompileInstance(AstVisitor):
         return f
 
     def _compile_arg(self, arg: Argument):
-        match arg.ty:
-            case RealType():
+        match arg.type:
+            case RealTypeAnn():
                 return arg.name, None, None
-            case AnyType():
+            case AnyTypeAnn():
                 return arg.name, None, None
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)
@@ -227,7 +239,7 @@ class FPCoreCompileInstance(AstVisitor):
             )
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> fpc.Expr:
-        cls = _op_table.get(e.op)
+        cls = _unary_table.get(e.op)
         if cls is not None:
             # known unary operator
             arg = self._visit_expr(e.arg, ctx)
@@ -247,7 +259,7 @@ class FPCoreCompileInstance(AstVisitor):
                     raise NotImplementedError('no FPCore operator for', e.op)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> fpc.Expr:
-        cls = _op_table.get(e.op)
+        cls = _binary_table.get(e.op)
         if cls is not None:
             # known binary operator
             arg0 = self._visit_expr(e.left, ctx)
@@ -263,7 +275,7 @@ class FPCoreCompileInstance(AstVisitor):
                     raise NotImplementedError('no FPCore operator for', e.op)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> fpc.Expr:
-        cls = _op_table.get(e.op)
+        cls = _ternary_table.get(e.op)
         if cls is not None:
             # known ternary operator
             arg0 = self._visit_expr(e.arg0, ctx)
@@ -274,8 +286,8 @@ class FPCoreCompileInstance(AstVisitor):
             # unknown operator
             raise NotImplementedError('no FPCore operator for', e.op)
 
-    def _visit_nary_expr(self, e: NaryOp, ctx: None) -> fpc.Expr:
-        cls = _op_table.get(e.op)
+    def _visit_naryop(self, e: NaryOp, ctx: None) -> fpc.Expr:
+        cls = _nary_table.get(e.op)
         if cls is not None:
             # known n-ary operator
             return cls(*[self._visit_expr(c, ctx) for c in e.args])

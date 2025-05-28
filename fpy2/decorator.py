@@ -132,7 +132,7 @@ def _apply_decorator(
 
     # syntax checkng (and compute relevant free vars)
     if is_pattern:
-        ast.free_vars = SyntaxCheck.analyze(
+        ast.free_vars = SyntaxCheck.check(
             ast,
             free_vars=free_vars,
             ignore_unknown=True,
@@ -140,7 +140,7 @@ def _apply_decorator(
             allow_wildcard=True
         )
     else:
-        ast.free_vars = SyntaxCheck.analyze(ast, free_vars=free_vars)
+        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
 
     # wrap the IR in a Function
     return Function(ast, env)

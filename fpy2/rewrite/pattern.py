@@ -4,7 +4,8 @@ This module defines a pattern of the FPy AST.
 
 from abc import ABC, abstractmethod
 
-from ..ast import Expr, FuncDef, EffectStmt, StmtBlock, LiveVars, DefineUse
+from ..analysis import DefineUse
+from ..ast import Expr, FuncDef, EffectStmt, StmtBlock, LiveVars
 from ..utils import NamedId, default_repr
 
 

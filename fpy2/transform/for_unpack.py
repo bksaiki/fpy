@@ -2,9 +2,9 @@
 Transformation pass to push tuple unpacking in a for loop to the body.
 """
 
+from ..analysis import DefineUse
 from ..ast import *
 from ..utils import Gensym
-
 
 class _ForUnpackInstance(DefaultAstTransformVisitor):
     """Single-use instance of the ForUnpack pass."""
@@ -62,9 +62,9 @@ class ForUnpack:
         Apply the transformation to the given function definition.
         """
         if names is None:
-            uses = DefineUse.analyze(func)
-            names = set(uses.keys())
+            def_use = DefineUse.analyze(func)
+            names = set(def_use.defs.keys())
         inst = _ForUnpackInstance(func, names)
         func = inst.apply()
-        VerifyIR.check(func)
+        SyntaxCheck.check(func)
         return func

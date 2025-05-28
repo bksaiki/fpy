@@ -103,6 +103,13 @@ class LiveVarsInstance(AstVisitor):
             live |= self._visit_expr(s, ctx)
         return live
 
+    def _visit_tuple_set(self, e: TupleSet, ctx: None) -> _LiveSet:
+        live = self._visit_expr(e.array, ctx)
+        for s in e.slices:
+            live |= self._visit_expr(s, ctx)
+        live |= self._visit_expr(e.value, ctx)
+        return live
+
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> _LiveSet:
         cond_live = self._visit_expr(e.cond, ctx)
         ift_live = self._visit_expr(e.ift, ctx)

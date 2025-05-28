@@ -157,6 +157,12 @@ class _FormatterInstance(AstVisitor):
         ref_str = ''.join(f'[{slice}]' for slice in slices)
         return f'{value}{ref_str}'
 
+    def _visit_tuple_set(self, e: TupleSet, ctx: _Ctx):
+        array = self._visit_expr(e.array, ctx)
+        slices = [self._visit_expr(slice, ctx) for slice in e.slices]
+        value = self._visit_expr(e.value, ctx)
+        return f'tuple_set({array}, [{", ".join(slices)}], {value})'
+
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
         cond = self._visit_expr(e.cond, ctx)
         ift = self._visit_expr(e.ift, ctx)
