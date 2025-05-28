@@ -116,11 +116,6 @@ class TypeAnn(Ast):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
-class ScalarType(IntEnum):
-    ANY = 0
-    REAL = 1
-    BOOL = 2
-
 class AnyTypeAnn(TypeAnn):
     """FPy AST: any type annotation"""
 
@@ -135,17 +130,33 @@ class AnyTypeAnn(TypeAnn):
 
 class ScalarTypeAnn(TypeAnn):
     """FPy AST: scalar type annotation"""
-    kind: ScalarType
 
-    def __init__(self, kind: ScalarType, loc: Optional[Location]):
+    def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
-        self.kind = kind
+
+class RealTypeAnn(TypeAnn):
+    """FPy AST: real type annotation"""
+
+    def __init__(self, loc: Optional[Location]):
+        super().__init__(loc)
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, ScalarTypeAnn) and self.kind == other.kind
+        return isinstance(other, RealTypeAnn)
 
     def __hash__(self) -> int:
-        return hash(self.kind)
+        return hash(())
+
+class BoolTypeAnn(TypeAnn):
+    """FPy AST: boolean type annotation"""
+
+    def __init__(self, loc: Optional[Location]):
+        super().__init__(loc)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, BoolTypeAnn)
+
+    def __hash__(self) -> int:
+        return hash(())
 
 class TupleTypeAnn(TypeAnn):
     """FPy AST: tuple type annotation"""

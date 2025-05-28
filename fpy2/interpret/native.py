@@ -3,8 +3,8 @@ FPy runtime backed by the Python runtime.
 """
 
 import math
-import titanfp.titanic.gmpmath as gmpmath
 
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence, TypeAlias
 
 from ..ast import *
@@ -30,66 +30,75 @@ def _safe_div(x: float, y: float):
     else:
         return x / y
 
-# TODO: AST -> method
-_method_table: dict[str, Callable[..., Any]] = {
-    '+': lambda x, y: x + y,
-    '-': lambda x, y: x - y,
-    '*': lambda x, y: x * y,
-    '/': _safe_div,
-    'fabs': math.fabs,
-    'sqrt': math.sqrt,
-    # TODO: only available in Python 3.13
-    # 'fma': math.fma,
-    'neg': lambda x: -x,
-    'copysign': math.copysign,
-    'fdim': lambda x, y: max(x - y, 0),
-    'fmax': max,
-    'fmin': min,
-    'fmod': math.fmod,
-    'remainder': math.remainder,
-    'hypot': math.hypot,
-    'cbrt': math.cbrt,
-    'ceil': math.ceil,
-    'floor': math.floor,
-    'nearbyint': lambda x: round(x),
-    'round': round,
-    'trunc': math.trunc,
-    'acos': math.acos,
-    'asin': math.asin,
-    'atan': math.atan,
-    'atan2': math.atan2,
-    'cos': math.cos,
-    'sin': math.sin,
-    'tan': math.tan,
-    'acosh': math.acosh,
-    'asinh': math.asinh,
-    'atanh': math.atanh,
-    'cosh': math.cosh,
-    'sinh': math.sinh,
-    'tanh': math.tanh,
-    'exp': math.exp,
-    'exp2': lambda x: 2 ** x,
-    'expm1': math.expm1,
-    'log': math.log,
-    'log10': math.log10,
-    'log1p': math.log1p,
-    'log2': math.log2,
-    'pow': math.pow,
-    'erf': math.erf,
-    'erfc': math.erfc,
-    'lgamma': math.lgamma,
-    'tgamma': math.gamma,
-    'isfinite': math.isfinite,
-    'isinf': math.isinf,
-    'isnan': math.isnan,
-    'isnormal': lambda x: math.isfinite(x) and x != 0,
-    'signbit': lambda x: math.copysign(1, x) < 0,
+_unary_table: dict[UnaryOpKind, Callable[[float], float | bool]] = {
+    UnaryOpKind.NEG: lambda x: -x,
+    UnaryOpKind.FABS: math.fabs,
+    UnaryOpKind.SQRT: math.sqrt,
+    UnaryOpKind.CBRT: math.cbrt,
+    UnaryOpKind.CEIL: math.ceil,
+    UnaryOpKind.FLOOR: math.floor,
+    UnaryOpKind.NEARBYINT: lambda x: round(x),
+    UnaryOpKind.ROUND: round,
+    UnaryOpKind.TRUNC: math.trunc,
+    UnaryOpKind.ACOS: math.acos,
+    UnaryOpKind.ASIN: math.asin,
+    UnaryOpKind.ATAN: math.atan,
+    UnaryOpKind.COS: math.cos,
+    UnaryOpKind.SIN: math.sin,
+    UnaryOpKind.TAN: math.tan,
+    UnaryOpKind.ACOSH: math.acosh,
+    UnaryOpKind.ASINH: math.asinh,
+    UnaryOpKind.ATANH: math.atanh,
+    UnaryOpKind.COSH: math.cosh,
+    UnaryOpKind.SINH: math.sinh,
+    UnaryOpKind.TANH: math.tanh,
+    UnaryOpKind.EXP: math.exp,
+    UnaryOpKind.EXP2: lambda x: 2 ** x,
+    UnaryOpKind.EXPM1: math.expm1,
+    UnaryOpKind.LOG: math.log,
+    UnaryOpKind.LOG10: math.log10,
+    UnaryOpKind.LOG1P: math.log1p,
+    UnaryOpKind.LOG2: math.log2,
+    UnaryOpKind.ERF: math.erf,
+    UnaryOpKind.ERFC: math.erfc,
+    UnaryOpKind.LGAMMA: math.lgamma,
+    UnaryOpKind.TGAMMA: math.gamma,
+    UnaryOpKind.ISFINITE: math.isfinite,
+    UnaryOpKind.ISINF: math.isinf,
+    UnaryOpKind.ISNAN: math.isnan,
+    UnaryOpKind.ISNORMAL: lambda x: math.isfinite(x) and x != 0,
+    UnaryOpKind.SIGNBIT: lambda x: math.copysign(1, x) < 0,
 }
 
-_Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
+_binary_table: dict[BinaryOpKind, Callable[[float, float], float]] = {
+    BinaryOpKind.ADD: lambda x, y: x + y,
+    BinaryOpKind.SUB: lambda x, y: x - y,
+    BinaryOpKind.MUL: lambda x, y: x * y,
+    BinaryOpKind.DIV: _safe_div,
+    BinaryOpKind.COPYSIGN: math.copysign,
+    BinaryOpKind.FDIM: lambda x, y: max(x - y, 0),
+    BinaryOpKind.FMAX: max,
+    BinaryOpKind.FMIN: min,
+    BinaryOpKind.FMOD: math.fmod,
+    BinaryOpKind.REMAINDER: math.remainder,
+    BinaryOpKind.HYPOT: math.hypot,
+    BinaryOpKind.ATAN2: math.atan2,
+    BinaryOpKind.POW: math.pow,
+}
+
 
 _PY_CTX = IEEEContext(11, 64, RM.RNE)
 """the native Python floating-point context"""
+
+_Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
+"""the native Python floating-point context"""
+
+@dataclass
+class _EvalCtx:
+    env: _Env
+    """mapping from variable names to values"""
+    round_ctx: Context
+    """rounding context for evaluation"""
 
 
 class _Interpreter(AstVisitor):
@@ -97,15 +106,9 @@ class _Interpreter(AstVisitor):
 
     foreign: ForeignEnv
     """foreign environment"""
-    env: _Env
-    """environment mapping variable names to values"""
 
-    def __init__(self, foreign: ForeignEnv, *, env: Optional[_Env] = None):
-        if env is None:
-            env = {}
-
+    def __init__(self, foreign: ForeignEnv):
         self.foreign = foreign
-        self.env = env
 
     def _is_python_ctx(self, ctx: Context):
         return ctx == _PY_CTX
@@ -121,10 +124,10 @@ class _Interpreter(AstVisitor):
             case _:
                 return arg
 
-    def _lookup(self, name: NamedId):
-        if name not in self.env:
+    def _lookup(self, name: NamedId, ctx: _EvalCtx):
+        if name not in ctx.env:
             raise RuntimeError(f'unbound variable {name}')
-        return self.env[name]
+        return ctx.env[name]
 
     def eval(
         self,
@@ -144,70 +147,72 @@ class _Interpreter(AstVisitor):
         # Python only has doubles
         if not self._is_python_ctx(ctx):
             raise RuntimeError(f'Unsupported context {ctx}, expected {_PY_CTX}')
+        
+        # create the environment
+        eval_ctx = _EvalCtx({}, ctx)
 
         # bind arguments
         for val, arg in zip(args, func.args):
-            match arg.ty:
-                case AnyType():
+            match arg.type:
+                case AnyTypeAnn():
                     x = self._arg_to_float(val)
                     if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
-                case RealType():
+                        eval_ctx.env[arg.name] = x
+                case RealTypeAnn():
                     x = self._arg_to_float(val)
                     if not isinstance(x, float):
                         raise NotImplementedError(f'argument is a scalar, got data {val}')
                     if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
+                        eval_ctx.env[arg.name] = x
                 case _:
-                    raise NotImplementedError(f'unknown argument type {arg.ty}')
+                    raise NotImplementedError(f'unknown argument type {arg.type}')
 
         # process free variables
         for var in func.free_vars:
             x = self._arg_to_float(self.foreign[var.base])
-            self.env[var] = x
+            eval_ctx.env[var] = x
 
         # evaluate the body
         try:
-            self._visit_block(func.body, ctx)
+            self._visit_block(func.body, eval_ctx)
             raise RuntimeError('no return statement encountered')
         except FunctionReturnException as e:
             return e.value
 
-    def _visit_var(self, e: Var, ctx: Context):
-        return self._lookup(e.name)
+    def _visit_var(self, e: Var, ctx: _EvalCtx):
+        return self._lookup(e.name, ctx)
 
-    def _visit_bool(self, e: BoolVal, ctx: Context):
+    def _visit_bool(self, e: BoolVal, ctx: _EvalCtx):
         return e.val
 
     def _visit_foreign(self, e: ForeignVal, ctx: None):
         return e.val
 
-    def _visit_decnum(self, e: Decnum, ctx: Context):
+    def _visit_decnum(self, e: Decnum, ctx: _EvalCtx):
         return float(e.val)
 
-    def _visit_hexnum(self, e: Hexnum, ctx: Context):
+    def _visit_hexnum(self, e: Hexnum, ctx: _EvalCtx):
         return float.fromhex(e.val)
 
-    def _visit_integer(self, e: Integer, ctx: Context):
+    def _visit_integer(self, e: Integer, ctx: _EvalCtx):
         return float(e.val)
 
-    def _visit_rational(self, e: Rational, ctx: Context):
+    def _visit_rational(self, e: Rational, ctx: _EvalCtx):
         return e.p / e.q
 
-    def _visit_constant(self, e: Constant, ctx: Context):
-        prec, _ = ctx.round_params()
+    def _visit_constant(self, e: Constant, ctx: _EvalCtx):
+        prec, _ = ctx.round_ctx.round_params()
         assert isinstance(prec, int)
         x = mpfr_constant(e.val, prec=prec)
         return float(_PY_CTX.round(x))
 
-    def _visit_digits(self, e: Digits, ctx: Context):
-        # rely on Titanic for this
+    def _visit_digits(self, e: Digits, ctx: _EvalCtx):
         return float(digits_to_fraction(e.m, e.e, e.b))
 
-    def _visit_call(self, e: Call, ctx: Context):
+    def _visit_call(self, e: Call, ctx: _EvalCtx):
         raise NotImplementedError('unknown call', e)
 
-    def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: Context):
+    def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: _EvalCtx):
         vals: list[float] = []
         for arg in args:
             val = self._visit_expr(arg, ctx)
@@ -225,19 +230,19 @@ class _Interpreter(AstVisitor):
 
         return result
 
-    def _apply_cast(self, arg: Expr, ctx: Context):
+    def _apply_cast(self, arg: Expr, ctx: _EvalCtx):
         x = self._visit_expr(arg, ctx)
         if not isinstance(x, float):
             raise TypeError(f'expected a float, got {x}')
         return x
 
-    def _apply_not(self, arg: Expr, ctx: Context):
+    def _apply_not(self, arg: Expr, ctx: _EvalCtx):
         arg = self._visit_expr(arg, ctx)
         if not isinstance(arg, bool):
             raise TypeError(f'expected a boolean argument, got {arg}')
         return not arg
 
-    def _apply_and(self, args: Sequence[Expr], ctx: Context):
+    def _apply_and(self, args: Sequence[Expr], ctx: _EvalCtx):
         vals: list[bool] = []
         for arg in args:
             val = self._visit_expr(arg, ctx)
@@ -246,7 +251,7 @@ class _Interpreter(AstVisitor):
             vals.append(val)
         return all(vals)
 
-    def _apply_or(self, args: Sequence[Expr], ctx: Context):
+    def _apply_or(self, args: Sequence[Expr], ctx: _EvalCtx):
         vals: list[bool] = []
         for arg in args:
             val = self._visit_expr(arg, ctx)
@@ -255,16 +260,77 @@ class _Interpreter(AstVisitor):
             vals.append(val)
         return any(vals)
 
-    def _apply_range(self, arg: Expr, ctx: Context):
+    def _apply_range(self, arg: Expr, ctx: _EvalCtx):
         stop = self._visit_expr(arg, ctx)
         if not isinstance(stop, float):
             raise TypeError(f'expected a real number argument, got {stop}')
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
-        return tuple([float(i) for i in range(int(stop))])
+        return [float(i) for i in range(int(stop))]
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: Context):
-        fn = _method_table.get(e.op)
+    def _tensor_shape(self, v: list) -> tuple[int, ...]:
+        """
+        Computes the shape of a tensor represented as a nested tuple.
+        Returns a tuple of floats representing the shape.
+        """
+        shape: list[int] = []
+        while isinstance(v, list):
+            size = len(v)
+            shape.append(size)
+            if size == 0:
+                # empty tensor
+                break
+            else:
+                v = v[0] # assuming a flat structure for simplicity
+        return tuple(shape)
+
+    def _apply_shape(self, arg: Expr, ctx: _EvalCtx):
+        v = self._visit_expr(arg, ctx)
+        if not isinstance(v, list):
+            raise TypeError(f'expected a tensor, got {v}')
+        # compute shape of tensor
+        shape = self._tensor_shape(v)
+        return list([float(s) for s in shape])
+
+    def _apply_dim(self, arg: Expr, ctx: _EvalCtx):
+        v = self._visit_expr(arg, ctx)
+        if not isinstance(v, list):
+            raise TypeError(f'expected a tensor, got {v}')
+        # compute shape of tensor
+        shape = self._tensor_shape(v)
+        return float(len(shape))
+
+    def _apply_size(self, arr: Expr, idx: Expr, ctx: _EvalCtx):
+        v = self._visit_expr(arr, ctx)
+        if not isinstance(v, list):
+            raise TypeError(f'expected a tensor, got {v}')
+        dim = self._visit_expr(idx, ctx)
+        if not isinstance(dim, float):
+            raise TypeError(f'expected a real number argument, got {dim}')
+        if not dim.is_integer():
+            raise TypeError(f'expected an integer argument, got {dim}')
+        # compute shape of tensor
+        shape = self._tensor_shape(v)
+        return float(shape[int(dim)])
+
+    def _apply_zip(self, args: Sequence[Expr], ctx: _EvalCtx):
+        """Apply the `zip` method to the given n-ary expression."""
+        if len(args) == 0:
+            return ()
+
+        # evaluate all children
+        arrays: list[list] = []
+        for arg in args:
+            val = self._visit_expr(arg, ctx)
+            if not isinstance(val, list):
+                raise TypeError(f'expected a tensor argument, got {val}')
+            arrays.append(val)
+
+        # zip the arrays
+        return list(zip(*arrays))
+
+    def _visit_unaryop(self, e: UnaryOp, ctx: _EvalCtx):
+        fn = _unary_table.get(e.op)
         if fn is not None:
             return self._apply_method(fn, (e.arg,), ctx)
         else:
@@ -275,17 +341,25 @@ class _Interpreter(AstVisitor):
                     return self._apply_not(e.arg, ctx)
                 case UnaryOpKind.RANGE:
                     return self._apply_range(e.arg, ctx)
+                case UnaryOpKind.SHAPE:
+                    return self._apply_shape(e.arg, ctx)
+                case UnaryOpKind.DIM:
+                    return self._apply_dim(e.arg, ctx)
                 case _:
                     raise RuntimeError('unknown operator', e.op)
 
-    def _visit_binaryop(self, e: BinaryOp, ctx: Context):
-        fn = _method_table.get(e.op)
+    def _visit_binaryop(self, e: BinaryOp, ctx: _EvalCtx):
+        fn = _binary_table.get(e.op)
         if fn is not None:
             return self._apply_method(fn, (e.left, e.right), ctx)
         else:
-            raise RuntimeError('unknown operator', e.op)
+            match e.op:
+                case BinaryOpKind.SIZE:
+                    return self._apply_size(e.left, e.right, ctx)
+                case _:
+                    raise RuntimeError('unknown operator', e.op)
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
+    def _visit_ternaryop(self, e: TernaryOp, ctx: _EvalCtx):
         match e.op:
             case TernaryOpKind.FMA:
                 raise NotImplementedError('fma not supported in Python 3.11')
@@ -294,21 +368,16 @@ class _Interpreter(AstVisitor):
 
         return super()._visit_ternaryop(e, ctx)
 
-    def _visit_naryop(self, e: NaryOp, ctx: Context):
-        fn = _method_table.get(e.op)
-        if fn is not None:
-            return self._apply_method(fn, e.args, ctx)
-        else:
-            match e.op:
-                case NaryOpKind.AND:
-                    return self._apply_and(e.args, ctx)
-                case NaryOpKind.OR:
-                    return self._apply_or(e.args, ctx)
-                case NaryOpKind.ZIP:
-                    # TODO: implement zip
-                    raise NotImplementedError
-                case _:
-                    raise RuntimeError('unknown operator', e.op)
+    def _visit_naryop(self, e: NaryOp, ctx: _EvalCtx):
+        match e.op:
+            case NaryOpKind.AND:
+                return self._apply_and(e.args, ctx)
+            case NaryOpKind.OR:
+                return self._apply_or(e.args, ctx)
+            case NaryOpKind.ZIP:
+                return self._apply_zip(e.args, ctx)
+            case _:
+                raise RuntimeError('unknown operator', e.op)
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
@@ -327,7 +396,7 @@ class _Interpreter(AstVisitor):
             case _:
                 raise NotImplementedError('unknown comparison operator', op)
 
-    def _visit_compare(self, e: Compare, ctx: Context):
+    def _visit_compare(self, e: Compare, ctx: _EvalCtx):
         lhs = self._visit_expr(e.args[0], ctx)
         for op, arg in zip(e.ops, e.args[1:]):
             rhs = self._visit_expr(arg, ctx)
@@ -336,12 +405,13 @@ class _Interpreter(AstVisitor):
             lhs = rhs
         return True
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
-        return tuple([self._visit_expr(x, ctx) for x in e.args])
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: _EvalCtx):
+        # TODO: check for ragged arrays
+        return list([self._visit_expr(x, ctx) for x in e.args])
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: Context):
+    def _visit_tuple_ref(self, e: TupleRef, ctx: _EvalCtx):
         value = self._visit_expr(e.value, ctx)
-        if not isinstance(value, tuple):
+        if not isinstance(value, list):
             raise TypeError(f'expected a tensor, got {value}')
 
         elt = value
@@ -355,14 +425,14 @@ class _Interpreter(AstVisitor):
 
         return elt
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: Context):
+    def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
         raise NotImplementedError
 
     def _apply_comp(
         self,
         bindings: list[tuple[Id | TupleBinding, Expr]],
         elt: Expr,
-        ctx: Context,
+        ctx: _EvalCtx,
         elts: list[Any]
     ):
         if bindings == []:
@@ -370,19 +440,19 @@ class _Interpreter(AstVisitor):
         else:
             target, iterable = bindings[0]
             array = self._visit_expr(iterable, ctx)
-            if not isinstance(array, tuple):
+            if not isinstance(array, list):
                 raise TypeError(f'expected a tensor, got {array}')
             for val in array:
                 match target:
                     case NamedId():
-                        self.env[target] = val
+                        ctx.env[target] = val
                     case TupleBinding():
                         self._unpack_tuple(target, val, ctx)
                     case _:
                         raise RuntimeError('unreachable', target)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: Context):
+    def _visit_comp_expr(self, e: CompExpr, ctx: _EvalCtx):
         # evaluate comprehension
         elts: list[Any] = []
         bindings = list(zip(e.targets, e.iterables))
@@ -392,36 +462,36 @@ class _Interpreter(AstVisitor):
         for target in e.targets:
             match target:
                 case NamedId():
-                    del self.env[target]
+                    del ctx.env[target]
                 case TupleBinding():
                     for var in target.names():
-                        del self.env[var]
+                        del ctx.env[var]
         # the result
         return tuple(elts)
 
-    def _visit_if_expr(self, e: IfExpr, ctx: Context):
+    def _visit_if_expr(self, e: IfExpr, ctx: _EvalCtx):
         cond = self._visit_expr(e.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Context):
+    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _EvalCtx):
         val = self._visit_expr(stmt.expr, ctx)
         match stmt.var:
             case NamedId():
-                self.env[stmt.var] = val
+                ctx.env[stmt.var] = val
             case UnderscoreId():
                 pass
             case _:
                 raise NotImplementedError('unknown variable', stmt.var)
 
-    def _unpack_tuple(self, binding: TupleBinding, val: tuple, ctx: Context) -> None:
+    def _unpack_tuple(self, binding: TupleBinding, val: list, ctx: _EvalCtx) -> None:
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
         for elt, v in zip(binding.elts, val):
             match elt:
                 case NamedId():
-                    self.env[elt] = v
+                    ctx.env[elt] = v
                 case UnderscoreId():
                     pass
                 case TupleBinding():
@@ -429,86 +499,106 @@ class _Interpreter(AstVisitor):
                 case _:
                     raise NotImplementedError('unknown tuple element', elt)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Context):
+    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _EvalCtx):
         val = self._visit_expr(stmt.expr, ctx)
-        if not isinstance(val, tuple):
+        if not isinstance(val, list):
             raise TypeError(f'expected a tuple, got {val}')
         self._unpack_tuple(stmt.binding, val, ctx)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: Context):
-        raise NotImplementedError
+    def _visit_index_assign(self, stmt: IndexAssign, ctx: _EvalCtx):
+        # lookup the array
+        array0 = self._lookup(stmt.var, ctx)
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: Context):
+        # evaluate indices
+        array = array0
+        dim = len(stmt.slices)
+        for i, s in enumerate(stmt.slices):
+            val = self._visit_expr(s, ctx)
+            if not isinstance(array, list):
+                raise TypeError(f'expected a tensor, got {array0}')
+            if not isinstance(val, float):
+                raise TypeError(f'expected a real number slice, got {val}')
+            if not val.is_integer():
+                raise TypeError(f'expected an integer slice, got {val}')
+
+            if i == dim - 1:
+                # last slice: evaluate and update array
+                val = self._visit_expr(stmt.expr, ctx)
+                array[int(val)] = val
+            else:
+                # intermediate slice: update array to the next dimension
+                array = array[int(val)]
+
+    def _visit_if1(self, stmt: If1Stmt, ctx: _EvalCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
-            self._visit_block(stmt.body, ctx)
-            for phi in stmt.phis:
-                self.env[phi.name] = self.env[phi.rhs]
-                del self.env[phi.rhs]
-        else:
-            for phi in stmt.phis:
-                self.env[phi.name] = self.env[phi.lhs]
-                del self.env[phi.lhs]
+            # evaluate the if-true branch
+            ift_ctx = self._visit_block(stmt.body, ctx)
+            # update the environment with the values from the ift context
+            # a variable cannot be introduced within the branch
+            for var in ctx.env:
+                ctx.env[var] = ift_ctx.env[var]
 
-    def _visit_if(self, stmt: IfStmt, ctx: Context):
+    def _visit_if(self, stmt: IfStmt, ctx: _EvalCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
-        elif cond:
-            self._visit_block(stmt.ift, ctx)
-            for phi in stmt.phis:
-                self.env[phi.name] = self.env[phi.lhs]
-                del self.env[phi.lhs]
+
+        if cond:
+            # evaluate the if-true branch
+            ift_ctx = self._visit_block(stmt.ift, ctx)
+            # TODO: we should take the intserction of defined variables on either branch
+            ctx.env = ift_ctx.env
         else:
-            self._visit_block(stmt.iff, ctx)
-            for phi in stmt.phis:
-                self.env[phi.name] = self.env[phi.rhs]
-                del self.env[phi.rhs]
+            # evaluate the if-false branch
+            iff_ctx = self._visit_block(stmt.iff, ctx)
+            # TODO: we should take the intserction of defined variables on either branch
+            ctx.env = iff_ctx.env
 
-    def _visit_while(self, stmt: WhileStmt, ctx: Context):
-        for phi in stmt.phis:
-            self.env[phi.name] = self.env[phi.lhs]
-            del self.env[phi.lhs]
-
+    def _visit_while(self, stmt: WhileStmt, ctx: _EvalCtx):
+        # evaluate the condition
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
         while cond:
-            self._visit_block(stmt.body, ctx)
-            for phi in stmt.phis:
-                self.env[phi.name] = self.env[phi.rhs]
-                del self.env[phi.rhs]
-
+            # evaluate the while body
+            while_ctx = self._visit_block(stmt.body, ctx)
+            # update the environment with the values from the while context
+            # a variable cannot be introduced within the body
+            for var in ctx.env:
+                ctx.env[var] = while_ctx.env[var]
+            # evaluate the condition
             cond = self._visit_expr(stmt.cond, ctx)
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
-    def _visit_for(self, stmt: ForStmt, ctx: Context):
-        for phi in stmt.phis:
-            self.env[phi.name] = self.env[phi.lhs]
-            del self.env[phi.lhs]
-
+    def _visit_for(self, stmt: ForStmt, ctx: _EvalCtx):
+        # evaluate the iterable data
         iterable = self._visit_expr(stmt.iterable, ctx)
-        if not isinstance(iterable, tuple):
+        if not isinstance(iterable, list):
             raise TypeError(f'expected a tensor, got {iterable}')
-
+        # iterate over each element
         for val in iterable:
+            # bind the value to the target variable
+            body_ctx = _EvalCtx(ctx.env.copy(), ctx.round_ctx)
             match stmt.target:
                 case NamedId():
-                    self.env[stmt.target] = val
+                    body_ctx.env[stmt.target] = val
                 case TupleBinding():
-                    self._unpack_tuple(stmt.target, val, ctx)
-            self._visit_block(stmt.body, ctx)
-            for phi in stmt.phis:
-                self.env[phi.name] = self.env[phi.rhs]
-                del self.env[phi.rhs]
+                    self._unpack_tuple(stmt.target, val, body_ctx)
+            # evaluate the body of the loop
+            body_ctx = self._visit_block(stmt.body, body_ctx)
+            # update the environment with the values from the body context
+            # a variable cannot be introduced within the body
+            for var in ctx.env:
+                ctx.env[var] = body_ctx.env[var]
 
-    def _visit_foreign_attr(self, e: ForeignAttribute):
+    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: _EvalCtx):
         # lookup the root value (should be captured)
-        val = self._lookup(e.name)
+        val = self._lookup(e.name, ctx)
         # walk the attribute chain
         for attr_id in e.attrs:
             # need to manually lookup the attribute
@@ -523,10 +613,10 @@ class _Interpreter(AstVisitor):
                 raise RuntimeError(f'unknown attribute {attr} for {val}')
         return val
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: Context):
+    def _visit_context_expr(self, e: ContextExpr, ctx: _EvalCtx):
         match e.ctor:
             case ForeignAttribute():
-                ctor = self._visit_foreign_attr(e.ctor)
+                ctor = self._visit_foreign_attr(e.ctor, ctx)
             case Var():
                 ctor = self._visit_var(e.ctor, ctx)
 
@@ -534,7 +624,7 @@ class _Interpreter(AstVisitor):
         for arg in e.args:
             match arg:
                 case ForeignAttribute():
-                    args.append(self._visit_foreign_attr(arg))
+                    args.append(self._visit_foreign_attr(arg, ctx))
                 case _:
                     v = self._visit_expr(arg, ctx)
                     if isinstance(v, float) and v.is_integer():
@@ -544,13 +634,13 @@ class _Interpreter(AstVisitor):
                         args.append(v)
         return ctor(*args)
 
-    def _visit_context(self, stmt: ContextStmt, ctx: Context):
-        ctx = self._visit_expr(stmt.ctx, ctx)
-        if not self._is_python_ctx(ctx):
-            raise RuntimeError(f'Unsupported context {ctx}, expected {_PY_CTX}')
+    def _visit_context(self, stmt: ContextStmt, ctx: _EvalCtx):
+        round_ctx = self._visit_expr(stmt.ctx, ctx)
+        if not self._is_python_ctx(round_ctx):
+            raise RuntimeError(f'Unsupported context {round_ctx}, expected {_PY_CTX}')
         return self._visit_block(stmt.body, ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: Context):
+    def _visit_assert(self, stmt: AssertStmt, ctx: _EvalCtx):
         test = self._visit_expr(stmt.test, ctx)
         if not isinstance(test, bool):
             raise TypeError(f'expected a boolean, got {test}')
@@ -562,17 +652,19 @@ class _Interpreter(AstVisitor):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: Context):
+    def _visit_return(self, stmt: ReturnStmt, ctx: _EvalCtx):
         return self._visit_expr(stmt.expr, ctx)
 
-    def _visit_block(self, block: StmtBlock, ctx: Context):
+    def _visit_block(self, block: StmtBlock, ctx: _EvalCtx):
+        ctx = _EvalCtx(ctx.env.copy(), ctx.round_ctx)
         for stmt in block.stmts:
             if isinstance(stmt, ReturnStmt):
                 x = self._visit_return(stmt, ctx)
                 raise FunctionReturnException(x)
             self._visit_statement(stmt, ctx)
+        return ctx
 
-    def _visit_function(self, func: FuncDef, ctx: Context):
+    def _visit_function(self, func: FuncDef, ctx: _EvalCtx):
         raise NotImplementedError('do not call directly')
 
 
@@ -582,7 +674,7 @@ class PythonInterpreter(Interpreter):
 
     Programs are evaluated using Python's `math` library.
     Booleans are Python `bool` values, real numbers are `float` values,
-    and tensors are Python `tuple` values.
+    and tensors are Python `list` values.
     """
 
     def eval(
@@ -594,10 +686,4 @@ class PythonInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
         rt = _Interpreter(func.env)
-        return rt.eval(func.to_ir(), args, ctx)
-
-    def eval_with_trace(self, func: Function, args: Sequence[Any], ctx: Optional[Context] = None):
-        raise NotImplementedError('not implemented')
-
-    def eval_expr(self, expr: Expr, env: _Env, ctx: Context):
-        raise NotImplementedError('not implemented')
+        return rt.eval(func.ast, args, ctx)

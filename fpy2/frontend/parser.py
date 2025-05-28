@@ -207,16 +207,17 @@ class Parser:
         loc = self._parse_location(ann)
         match ann:
             case ast.Name('Real'):
-                return ScalarTypeAnn(ScalarType.REAL, loc)
+                return RealTypeAnn(loc)
             case ast.Name('int'):
-                return ScalarTypeAnn(ScalarType.REAL, loc)
+                # TODO: more specific type
+                return RealTypeAnn(loc)
             case ast.Name('float'):
-                return ScalarTypeAnn(ScalarType.REAL, loc)
+                return RealTypeAnn(loc)
             case ast.Name('bool'):
-                return ScalarTypeAnn(ScalarType.BOOL, loc)
+                return RealTypeAnn(loc)
             case _:
                 # TODO: implement
-                return ScalarTypeAnn(ScalarType.REAL, loc)
+                return RealTypeAnn(loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':
