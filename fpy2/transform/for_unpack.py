@@ -2,12 +2,11 @@
 Transformation pass to push tuple unpacking in a for loop to the body.
 """
 
-from ..analysis import DefineUse, VerifyIR
-from ..ir import *
+from ..ast import *
 from ..utils import Gensym
 
 
-class _ForUnpackInstance(DefaultTransformVisitor):
+class _ForUnpackInstance(DefaultAstTransformVisitor):
     """Single-use instance of the ForUnpack pass."""
     func: FuncDef
     gensym: Gensym

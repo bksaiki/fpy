@@ -4,15 +4,15 @@ from typing import Optional
 
 import titanfp.fpbench.fpcast as fpc 
 
-from ..analysis import DefineUse
+from ..ast import *
 from ..fpc_context import FPCoreContext
-from ..ir import *
 from ..number import Context
 from ..transform import ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend
 
+# TODO: AST -> FPCore
 _op_table = {
     '+': fpc.Add,
     '-': fpc.Sub,
@@ -88,7 +88,7 @@ def _size0_expr(x: str):
     return fpc.Size(fpc.Var(x), fpc.Integer(0))
 
 
-class FPCoreCompileInstance(ReduceVisitor):
+class FPCoreCompileInstance(AstVisitor):
     """Compilation instance from FPy to FPCore"""
     func: FuncDef
     gensym: Gensym
@@ -171,33 +171,33 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_digits(self, e: Digits, ctx: None) -> fpc.Expr:
         return fpc.Digits(e.m, e.e, e.b)
 
-    def _visit_unknown(self, e: UnknownCall, ctx: None) -> fpc.Expr:
-        args = [self._visit_expr(c, ctx) for c in e.children]
-        return fpc.UnknownOperator(e.name, *args)
+    def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
+        args = [self._visit_expr(c, ctx) for c in e.args]
+        return fpc.UnknownOperator(e.op, *args)
 
-    def _visit_range(self, e: Range, ctx: None) -> fpc.Expr:
+    def _visit_range(self, arg: Expr, ctx: None) -> fpc.Expr:
         # expand range expression
         tuple_id = 'i' # only identifier in scope => no need for uniqueness
-        size = self._visit_expr(e.children[0], ctx)
+        size = self._visit_expr(arg, ctx)
         return fpc.Tensor([(tuple_id, size)], fpc.Var(tuple_id))
 
-    def _visit_size(self, e: Size, ctx) -> fpc.Expr:
-        tup = self._visit_expr(e.children[0], ctx)
-        idx = self._visit_expr(e.children[1], ctx)
+    def _visit_size(self, arr: Expr, dim: Expr, ctx) -> fpc.Expr:
+        tup = self._visit_expr(arr, ctx)
+        idx = self._visit_expr(dim, ctx)
         return fpc.Size(tup, idx)
 
-    def _visit_dim(self, e: Dim, ctx) -> fpc.Expr:
-        tup = self._visit_expr(e.children[0], ctx)
+    def _visit_dim(self, arr: Expr, ctx) -> fpc.Expr:
+        tup = self._visit_expr(arr, ctx)
         return fpc.Dim(tup)
 
-    def _visit_shape(self, e: Shape, ctx) -> fpc.Expr:
+    def _visit_shape(self, arr: Expr, ctx) -> fpc.Expr:
         # expand into a for loop
         #  (let ([t <tuple>])
         #    (tensor ([i (dim t)])
         #      (size t i)])))
         tuple_id = 't' # only identifier in scope => no need for uniqueness
         iter_id = 'i' # only identifier in scope => no need for uniqueness
-        tup = self._visit_expr(e.children[0], ctx)
+        tup = self._visit_expr(arr, ctx)
         return fpc.Let(
             [(tuple_id, tup)],
             fpc.Tensor(
@@ -206,18 +206,18 @@ class FPCoreCompileInstance(ReduceVisitor):
             )
         )
 
-    def _visit_zip(self, e: Zip, ctx: None) -> fpc.Expr:
+    def _visit_zip(self, args: list[Expr], ctx: None) -> fpc.Expr:
         # expand zip expression (for N=2)
         #  (let ([t0 <tuple0>] [t1 <tuple1>])
         #    (tensor ([i (size t0 0)])
         #      (array (ref t0 i) (ref t1 i)))))
 
-        if len(e.children) == 0:
+        if len(args) == 0:
             # no children => empty zip
             return fpc.Array()
         else:
-            tuples = [self._visit_expr(t, ctx) for t in e.children]
-            tuple_ids = [str(self.gensym.fresh('t')) for _ in e.children]
+            tuples = [self._visit_expr(t, ctx) for t in args]
+            tuple_ids = [str(self.gensym.fresh('t')) for _ in args]
             iter_id = str(self.gensym.fresh('i'))
             return fpc.Let(
                 list(zip(tuple_ids, tuples)),
@@ -226,44 +226,82 @@ class FPCoreCompileInstance(ReduceVisitor):
                 )
             )
 
-    def _visit_nary_expr(self, e: NaryExpr, ctx: None) -> fpc.Expr:
-        match e:
-            case Range():
-                # range expression
-                return self._visit_range(e, ctx)
-            case Dim():
-                # dim expression
-                return self._visit_dim(e, ctx)
-            case Size():
-                # size expression
-                return self._visit_size(e, ctx)
-            case Shape():
-                # shape expression
-                return self._visit_shape(e, ctx)
-            case Zip():
-                # zip expression
-                return self._visit_zip(e, ctx)
-            case _:
-                cls = _op_table.get(e.name)
-                if cls is None:
-                    raise NotImplementedError('no FPCore operator for', e.name)
-                return cls(*[self._visit_expr(c, ctx) for c in e.children])
+    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> fpc.Expr:
+        cls = _op_table.get(e.op)
+        if cls is not None:
+            # known unary operator
+            arg = self._visit_expr(e.arg, ctx)
+            return cls(arg)
+        else:
+            match e.op:
+                case UnaryOpKind.RANGE:
+                    # range expression
+                    return self._visit_range(e.arg, ctx)
+                case UnaryOpKind.DIM:
+                    # dim expression
+                    return self._visit_dim(e.arg, ctx)
+                case UnaryOpKind.SHAPE:
+                    # shape expression
+                    return self._visit_shape(e.arg, ctx)
+                case _:
+                    raise NotImplementedError('no FPCore operator for', e.op)
 
+    def _visit_binaryop(self, e: BinaryOp, ctx: None) -> fpc.Expr:
+        cls = _op_table.get(e.op)
+        if cls is not None:
+            # known binary operator
+            arg0 = self._visit_expr(e.left, ctx)
+            arg1 = self._visit_expr(e.right, ctx)
+            return cls(arg0, arg1)
+        else:
+            match e.op:
+                case BinaryOpKind.SIZE:
+                    # size expression
+                    return self._visit_size(e.left, e.right, ctx)
+                case _:
+                    # unknown operator
+                    raise NotImplementedError('no FPCore operator for', e.op)
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> fpc.Expr:
+        cls = _op_table.get(e.op)
+        if cls is not None:
+            # known ternary operator
+            arg0 = self._visit_expr(e.arg0, ctx)
+            arg1 = self._visit_expr(e.arg1, ctx)
+            arg2 = self._visit_expr(e.arg2, ctx)
+            return cls(arg0, arg1, arg2)
+        else:
+            # unknown operator
+            raise NotImplementedError('no FPCore operator for', e.op)
+
+    def _visit_nary_expr(self, e: NaryOp, ctx: None) -> fpc.Expr:
+        cls = _op_table.get(e.op)
+        if cls is not None:
+            # known n-ary operator
+            return cls(*[self._visit_expr(c, ctx) for c in e.args])
+        else:
+            match e.op:
+                case NaryOpKind.ZIP:
+                    # zip expression
+                    return self._visit_zip(e.args, ctx)
+                case _:
+                    # unknown operator
+                    raise NotImplementedError('no FPCore operator for', e.op)
     def _visit_compare(self, e: Compare, ctx: None) -> fpc.Expr:
         assert e.ops != [], 'should not be empty'
         match e.ops:
             case [op]:
                 # 2-argument case: just compile
                 cls = self._compile_compareop(op)
-                arg0 = self._visit_expr(e.children[0], ctx)
-                arg1 = self._visit_expr(e.children[1], ctx)
+                arg0 = self._visit_expr(e.args[0], ctx)
+                arg1 = self._visit_expr(e.args[1], ctx)
                 return cls(arg0, arg1)
             case [op, *ops]:
                 # N-argument case:
                 # TODO: want to evaluate each argument only once;
                 #       may need to let-bind in case any argument is
                 #       used multiple times
-                args = [self._visit_expr(arg, ctx) for arg in e.children]
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
                 curr_group = (op, [args[0], args[1]])
                 groups: list[tuple[CompareOp, list[fpc.Expr]]] = [curr_group]
                 for op, lhs, rhs in zip(ops, args[1:], args[2:]):
@@ -288,7 +326,7 @@ class FPCoreCompileInstance(ReduceVisitor):
                 raise NotImplementedError('unreachable', e.ops)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> fpc.Expr:
-        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.children])
+        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.args])
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> fpc.Expr:
         value = self._visit_expr(e.value, ctx)

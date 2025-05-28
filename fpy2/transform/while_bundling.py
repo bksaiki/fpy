@@ -5,10 +5,7 @@ into a single variable.
 
 from typing import Optional
 
-from ..analysis.define_use import DefineUse
-from .ssa import SSA
-from ..analysis.verify import VerifyIR
-from ..ir import *
+from ..ast import *
 from ..utils import Gensym
 
 _CtxType = dict[NamedId, Expr]
@@ -16,7 +13,7 @@ _CtxType = dict[NamedId, Expr]
 Visitor method context type for expressions
 """
 
-class _WhileBundlingInstance(DefaultTransformVisitor):
+class _WhileBundlingInstance(DefaultAstTransformVisitor):
     """Single-use instance of the WhileBundling pass."""
     func: FuncDef
     gensym: Gensym
@@ -30,7 +27,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
 
     def _visit_var(self, e: Var, ctx: Optional[_CtxType]):
         if ctx is None or e.name not in ctx:
-            return Var(e.name)
+            return Var(e.name, None)
         else:
             return ctx[e.name]
 
@@ -54,43 +51,44 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     #  - violates SSA invariant
     #  - need to substitute for any a_1, ..., z_1 in the condition
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):  
-        if len(stmt.phis) <= 1:
-            stmt, _ = super()._visit_while(stmt, None)
-            return StmtBlock([stmt])
-        else:
-            # create a new phi variable
-            phi_name = self.gensym.fresh('t')
-            phi_init = self.gensym.fresh('t')
-            phi_update = self.gensym.fresh('t')
-            phi_ty = AnyType() # TODO: infer type
+    def _visit_while(self, stmt: WhileStmt, ctx: None):
+        raise NotImplementedError
+        # if len(stmt.phis) <= 1:
+        #     stmt, _ = super()._visit_while(stmt, None)
+        #     return StmtBlock([stmt])
+        # else:
+        #     # create a new phi variable
+        #     phi_name = self.gensym.fresh('t')
+        #     phi_init = self.gensym.fresh('t')
+        #     phi_update = self.gensym.fresh('t')
+        #     phi_ty = AnyType() # TODO: infer type
 
-            # construct a tuple of phi variables
-            phi_vars = [Var(phi.lhs) for phi in stmt.phis]
-            init_stmt = SimpleAssign(phi_init, AnyType(), TupleExpr(*phi_vars))
+        #     # construct a tuple of phi variables
+        #     phi_vars = [Var(phi.lhs) for phi in stmt.phis]
+        #     init_stmt = SimpleAssign(phi_init, AnyType(), TupleExpr(*phi_vars))
 
-            # apply substitution to the condition
-            cond_ctx: _CtxType = {}
-            for i, phi in enumerate(stmt.phis):
-                cond_ctx[phi.name] = TupleRef(Var(phi_name), Integer(i))
-            cond = self._visit_expr(stmt.cond, cond_ctx)
+        #     # apply substitution to the condition
+        #     cond_ctx: _CtxType = {}
+        #     for i, phi in enumerate(stmt.phis):
+        #         cond_ctx[phi.name] = TupleRef(Var(phi_name), Integer(i))
+        #     cond = self._visit_expr(stmt.cond, cond_ctx)
 
-            # deconstruct unified phi variable
-            phi_names = [phi.name for phi in stmt.phis]
-            deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))
+        #     # deconstruct unified phi variable
+        #     phi_names = [phi.name for phi in stmt.phis]
+        #     deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))
 
-            # construct the update tuple of phi variables
-            phi_updates = [Var(phi.rhs) for phi in stmt.phis]
-            update_stmt = SimpleAssign(phi_update, AnyType(), TupleExpr(*phi_updates))
+        #     # construct the update tuple of phi variables
+        #     phi_updates = [Var(phi.rhs) for phi in stmt.phis]
+        #     update_stmt = SimpleAssign(phi_update, AnyType(), TupleExpr(*phi_updates))
 
-            # put it all together
-            body, _ = self._visit_block(stmt.body, None)
-            phis = [PhiNode(phi_name, phi_init, phi_update, phi_ty)]
-            while_stmt = WhileStmt(cond, StmtBlock([deconstruct_stmt, *body.stmts, update_stmt]), phis)
+        #     # put it all together
+        #     body, _ = self._visit_block(stmt.body, None)
+        #     phis = [PhiNode(phi_name, phi_init, phi_update, phi_ty)]
+        #     while_stmt = WhileStmt(cond, StmtBlock([deconstruct_stmt, *body.stmts, update_stmt]), phis)
 
-            # decompose the unified phi variable (again)
-            deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))
-            return StmtBlock([init_stmt, while_stmt, deconstruct_stmt])
+        #     # decompose the unified phi variable (again)
+        #     deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))
+        #     return StmtBlock([init_stmt, while_stmt, deconstruct_stmt])
 
     def _visit_block(self, block: StmtBlock, ctx: None):
         stmts: list[Stmt] = []
@@ -120,6 +118,5 @@ class WhileBundling:
             names = set(uses.keys())
         inst = _WhileBundlingInstance(func, names)
         func = inst.apply()
-        func = SSA.apply(func)
-        VerifyIR.check(func)
+        SyntaxCheck.analyze(func)
         return func

@@ -4,7 +4,7 @@ FPy backend abstraction.
 
 from abc import ABC, abstractmethod
 
-from ..ir import FuncDef
+from ..ast import FuncDef
 
 
 class Backend(ABC):

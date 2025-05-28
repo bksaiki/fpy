@@ -2,13 +2,10 @@
 
 from typing import Optional
 
-from ..analysis.define_use import DefineUse
-from ..analysis.verify import VerifyIR
-
-from ..ir import *
+from ..ast import *
 from ..utils import Gensym
 
-class _SimplifyIfInstance(DefaultTransformVisitor):
+class _SimplifyIfInstance(DefaultAstTransformVisitor):
     """Single-use instance of the SimplifyIf pass."""
     func: FuncDef
     gensym: Gensym

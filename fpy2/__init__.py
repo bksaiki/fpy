@@ -51,8 +51,7 @@ from .decorator import fpy, pattern
 
 from .backend import (
     Backend,
-    FPCoreCompiler,
-    FPYCompiler,
+    FPCoreCompiler
 )
 
 from .interpret import (

@@ -3,10 +3,10 @@ Defines the abstract base class for FPy interpreters.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Optional
 
+from ..ast import Expr
 from ..function import Function, set_default_function_call
-from ..ir import Expr
 from ..number import Context
 
 

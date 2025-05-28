@@ -2,17 +2,11 @@
 
 from typing import Callable, Optional, TYPE_CHECKING
 from titanfp.fpbench.fpcast import FPCore
-
-from . import ir as fpyir
 from . import ast as fpyast
 
-from .ast import ContextInline
-from .analysis import VerifyIR
 from .env import ForeignEnv
 from .frontend import fpcore_to_fpy
 from .number import Context
-from .ir import IRCodegen
-from .transform import SSA
 
 # avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:
@@ -29,9 +23,6 @@ class Function:
     ast: fpyast.FuncDef
     env: ForeignEnv
     runtime: Optional['Interpreter']
-
-    _ir: Optional[fpyir.FuncDef]
-    """possibly cached IR of the function"""
 
     _func: Optional[Callable]
     """original native function"""
@@ -98,22 +89,6 @@ class Function:
         if not isinstance(ast, fpyast.FuncDef):
             raise TypeError(f'expected \'FuncDef\', got {ast}')
         return Function(ast, self.env, runtime=self.runtime, func=self._func)
-
-    def to_ir(self):
-        """Returns the IR of the function."""
-        # check if the IR is already cached
-        if self._ir is None:
-            # apply AST passes to normalize the AST
-            ast = ContextInline.apply(self.ast, self.env)
-            # lower the AST to IR
-            ir = IRCodegen().lower(ast)
-            ir = SSA.apply(ir)
-            VerifyIR().check(ir)
-            # cache the IR
-            self._ir = ir
-
-        return self._ir
-
 
 ###########################################################
 # Default function call

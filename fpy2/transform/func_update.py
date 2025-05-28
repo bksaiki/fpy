@@ -4,12 +4,9 @@ Transformation pass to rewrite in-place tuple mutation as functional updates.
 
 from typing import Optional
 
-from ..analysis.define_use import DefineUse
-from .ssa import SSA
-from ..analysis.verify import VerifyIR
-from ..ir import *
+from ..ast import *
 
-class _FuncUpdateInstance(DefaultTransformVisitor):
+class _FuncUpdateInstance(DefaultAstTransformVisitor):
     """Single-use instance of the FuncUpdate pass."""
     func: FuncDef
 
@@ -22,8 +19,9 @@ class _FuncUpdateInstance(DefaultTransformVisitor):
     def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        e = TupleSet(Var(stmt.var), slices, expr)
-        return SimpleAssign(stmt.var, AnyType(), e), None
+        e = TupleSet(Var(stmt.var, None), slices, expr, stmt.loc)
+        s = SimpleAssign(stmt.var, e, None, stmt.loc)
+        return s, None
 
 class FuncUpdate:
     """
@@ -39,7 +37,6 @@ class FuncUpdate:
         if names is None:
             uses = DefineUse.analyze(func)
             names = set(uses.keys())
-        ir = _FuncUpdateInstance(func).apply()
-        ir = SSA.apply(ir)
-        VerifyIR.check(ir)
-        return ir
+        ast = _FuncUpdateInstance(func).apply()
+        SyntaxCheck.analyze(ast)
+        return ast

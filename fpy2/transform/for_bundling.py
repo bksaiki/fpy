@@ -5,13 +5,10 @@ into a single variable.
 
 from typing import Optional
 
-from ..analysis.define_use import DefineUse
-from .ssa import SSA
-from ..analysis.verify import VerifyIR
-from ..ir import *
+from ..ast import *
 from ..utils import Gensym
 
-class _ForBundlingInstance(DefaultTransformVisitor):
+class _ForBundlingInstance(DefaultAstTransformVisitor):
     """Single-use instance of the ForBundling pass."""
     func: FuncDef
     gensym: Gensym

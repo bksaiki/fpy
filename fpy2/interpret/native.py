@@ -7,11 +7,11 @@ import titanfp.titanic.gmpmath as gmpmath
 
 from typing import Any, Callable, Optional, Sequence, TypeAlias
 
+from ..ast import *
 from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
 from ..function import Function
 from ..env import ForeignEnv
-from ..ir import *
 from ..utils import digits_to_fraction
 
 from .interpreter import Interpreter, FunctionReturnException
@@ -92,7 +92,7 @@ _PY_CTX = IEEEContext(11, 64, RM.RNE)
 """the native Python floating-point context"""
 
 
-class _Interpreter(ReduceVisitor):
+class _Interpreter(AstVisitor):
     """Single-use interpreter for a function."""
 
     foreign: ForeignEnv
@@ -204,7 +204,7 @@ class _Interpreter(ReduceVisitor):
         # rely on Titanic for this
         return float(digits_to_fraction(e.m, e.e, e.b))
 
-    def _visit_unknown(self, e: UnknownCall, ctx: Context):
+    def _visit_call(self, e: Call, ctx: Context):
         raise NotImplementedError('unknown call', e)
 
     def _apply_method(self, e: NaryExpr, ctx: Context):
