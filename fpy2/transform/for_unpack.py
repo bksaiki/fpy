@@ -2,7 +2,7 @@
 Transformation pass to push tuple unpacking in a for loop to the body.
 """
 
-from ..analysis import DefineUse
+from ..analysis import DefineUse, DefineUseAnalysis
 from ..ast import *
 from ..utils import Gensym
 
@@ -11,9 +11,9 @@ class _ForUnpackInstance(DefaultAstTransformVisitor):
     func: FuncDef
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, names: set[NamedId]):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
-        self.gensym = Gensym(reserved=names)
+        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -23,14 +23,19 @@ class _ForUnpackInstance(DefaultAstTransformVisitor):
             case Id():
                 return super()._visit_for(stmt, None)
             case TupleBinding():
-                t_id = self.gensym.fresh('t')
+                # compile iterable and body
                 iterable = self._visit_expr(stmt.iterable, None)
                 body, _ = self._visit_block(stmt.body, None)
-                phis, _ = self._visit_loop_phis(stmt.phis, ctx, None)
 
-                binding = self._copy_tuple_binding(stmt.target)
-                body.stmts.insert(0, TupleUnpack(binding, AnyType(), Var(t_id)))
-                s = ForStmt(t_id, stmt.ty, iterable, body, phis)
+                # create a fresh variable for the tuple
+                t = self.gensym.fresh('t')
+                binding = self._visit_tuple_binding(stmt.target, ctx)
+
+                # insert tuple unpacking at the beginning of the body
+                body.stmts.insert(0, TupleUnpack(binding, Var(t, None), None))
+
+                # create the for statement with the fresh variable
+                s = ForStmt(t, iterable, body, None)
                 return s, None
             case _:
                 raise RuntimeError('unreachable', stmt.target)
@@ -56,14 +61,12 @@ class ForUnpack:
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: Optional[set[NamedId]] = None) -> FuncDef:
+    def apply(func: FuncDef) -> FuncDef:
         """
         Apply the transformation to the given function definition.
         """
-        if names is None:
-            def_use = DefineUse.analyze(func)
-            names = set(def_use.defs.keys())
-        inst = _ForUnpackInstance(func, names)
+        def_use = DefineUse.analyze(func)
+        inst = _ForUnpackInstance(func, def_use)
         func = inst.apply()
         SyntaxCheck.check(func)
         return func

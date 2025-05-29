@@ -15,7 +15,7 @@ from typing import (
     TypeVar
 )
 
-from .ast import SyntaxCheck, EffectStmt
+from .ast import SyntaxCheck, EffectStmt, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function
@@ -109,8 +109,11 @@ def _apply_decorator(
 
     # get defining environment
     cvars = inspect.getclosurevars(func)
-    free_vars = cvars.nonlocals.keys() | cvars.globals.keys() | cvars.builtins.keys()
+    cfree_vars = cvars.nonlocals.keys() | cvars.globals.keys() | cvars.builtins.keys()
     env = _function_env(func)
+
+    # set of free variables as `NamedId`
+    free_vars = { NamedId(name) for name in cfree_vars }
 
     # parse the source as an FPy function
     parser = Parser(src_name, src, start_line)

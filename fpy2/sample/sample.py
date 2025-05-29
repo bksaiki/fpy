@@ -8,7 +8,7 @@ from typing import Optional
 from titanfp.arithmetic.evalctx import determine_ctx
 from titanfp.arithmetic import ieee754
 
-from ..ast import AnyTypeAnn, ScalarTypeAnn, ScalarType, FuncDef
+from ..ast import AnyTypeAnn, ScalarTypeAnn, FuncDef
 from ..env import ForeignEnv
 from ..function import Function
 from ..interpret import DefaultInterpreter

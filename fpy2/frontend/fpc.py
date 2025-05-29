@@ -703,9 +703,7 @@ class _FPCore2FPy:
         block = StmtBlock(ctx.stmts + [ReturnStmt(e, None)])
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
-        ast = FuncDef(name, args, block, None)
-        ast.metadata = props
-        return ast
+        return FuncDef(name, args, block, props, None, None)
 
     def convert(self) -> FuncDef:
         ast = self._visit_function(self.core)

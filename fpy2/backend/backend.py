@@ -4,8 +4,7 @@ FPy backend abstraction.
 
 from abc import ABC, abstractmethod
 
-from ..ast import FuncDef
-
+from ..function import Function
 
 class Backend(ABC):
     """
@@ -13,6 +12,6 @@ class Backend(ABC):
     """
 
     @abstractmethod
-    def compile(self, func: FuncDef):
+    def compile(self, func: Function):
         """Compiles `func` to the backend's target language."""
         ...

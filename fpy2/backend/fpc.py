@@ -4,9 +4,10 @@ from typing import Optional
 
 import titanfp.fpbench.fpcast as fpc 
 
-from ..analysis import DefineUse, DefineUseAnalysis, DefinitionCtx
+from ..analysis import DefineUse, DefineUseAnalysis
 from ..ast import *
 from ..fpc_context import FPCoreContext
+from ..function import Function
 from ..number import Context
 from ..transform import ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
 from ..utils import Gensym
@@ -665,13 +666,14 @@ class FPCoreCompileInstance(AstVisitor):
 class FPCoreCompiler(Backend):
     """Compiler from FPy IR to FPCore"""
 
-    def compile(self, func: FuncDef) -> fpc.FPCore:
+    def compile(self, func: Function) -> fpc.FPCore:
         # normalization passes
-        func = FuncUpdate.apply(func)
-        func = ForUnpack.apply(func)
-        func = ForBundling.apply(func)
-        func = WhileBundling.apply(func)
-        func = SimplifyIf.apply(func)
+        ast = ContextInline.apply(func.ast, func.env)
+        ast = FuncUpdate.apply(ast)
+        ast = ForUnpack.apply(ast)
+        ast = ForBundling.apply(ast)
+        ast = WhileBundling.apply(ast)
+        ast = SimplifyIf.apply(ast)
         # compile
-        def_use = DefineUse.analyze(func)
-        return FPCoreCompileInstance(func, def_use).compile()
+        def_use = DefineUse.analyze(ast)
+        return FPCoreCompileInstance(ast, def_use).compile()

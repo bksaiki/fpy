@@ -107,7 +107,7 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
                 case Id():
                     targets.append(self._visit_id(target))
                 case TupleBinding():
-                    targets.append(self._visit_tuple_binding(target))
+                    targets.append(self._visit_tuple_binding(target, ctx))
                 case _:
                     raise RuntimeError(f'unreachable case: {target}')
 
@@ -121,20 +121,20 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
         s =  SimpleAssign(ident, expr, stmt.ann, None)
         return s, None
 
-    def _visit_tuple_binding(self, binding: TupleBinding):
+    def _visit_tuple_binding(self, binding: TupleBinding, ctx: None):
         new_vars: list[Id | TupleBinding] = []
         for elt in binding.elts:
             match elt:
                 case Id():
                     new_vars.append(self._visit_id(elt))
                 case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(elt))
+                    new_vars.append(self._visit_tuple_binding(elt, ctx))
                 case _:
                     raise RuntimeError(f'unreachable case: {elt}')
         return TupleBinding(new_vars, None)
 
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
-        binding = self._visit_tuple_binding(stmt.binding)
+        binding = self._visit_tuple_binding(stmt.binding, ctx)
         expr = self._visit_expr(stmt.expr, None)
         s = TupleUnpack(binding, expr, None)
         return s, None
@@ -167,7 +167,9 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
             case Id():
                 target = self._visit_id(stmt.target)
             case TupleBinding():
-                target = self._visit_tuple_binding(stmt.target)
+                target = self._visit_tuple_binding(stmt.target, ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
 
         iterable = self._visit_expr(stmt.iterable, None)
         body, _ = self._visit_block(stmt.body, None)

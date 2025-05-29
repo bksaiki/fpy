@@ -215,6 +215,14 @@ class _MatcherInst(AstVisitor):
         for s1, s2 in zip(e.slices, pat.slices):
             self._visit_expr(s1, s2)
 
+    def _visit_tuple_set(self, e: TupleSet, pat: TupleSet):
+        if len(e.slices) != len(pat.slices):
+            raise _MatchFailure(f'matching {pat} against {e}')
+        self._visit_expr(e.array, pat.array)
+        for s1, s2 in zip(e.slices, pat.slices):
+            self._visit_expr(s1, s2)
+        self._visit_expr(e.value, pat.value)
+
     def _visit_comp_expr(self, e: CompExpr, pat: CompExpr):
         if len(e.iterables) != len(pat.iterables):
             raise _MatchFailure(f'matching {pat} against {e}')

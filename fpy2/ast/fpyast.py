@@ -1054,14 +1054,26 @@ class FuncDef(Ast):
         name: str,
         args: Sequence[Argument],
         body: StmtBlock,
+        metadata: Optional[dict[str, Any]],
+        free_vars: Optional[set[NamedId]],
         loc: Optional[Location]
     ):
+        if metadata is None:
+            metadata = {}
+        else:
+            metadata = dict(metadata)
+
+        if free_vars is None:
+            free_vars = set()
+        else:
+            free_vars = set(free_vars)
+
         super().__init__(loc)
         self.name = name
         self.args = list(args)
         self.body = body
-        self.metadata = {}
-        self.free_vars = set()
+        self.metadata = metadata
+        self.free_vars = free_vars
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, FuncDef):

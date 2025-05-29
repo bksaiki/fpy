@@ -44,7 +44,7 @@ _Ctx = tuple[_Env, bool]
 class SyntaxCheckInstance(AstVisitor):
     """Single-use instance of syntax checking"""
     func: FuncDef
-    free_vars: set[str]
+    free_vars: set[NamedId]
     ignore_unknown: bool
     ignore_noreturn: bool
     allow_wildcard: bool
@@ -55,7 +55,7 @@ class SyntaxCheckInstance(AstVisitor):
     def __init__(
         self,
         func: FuncDef,
-        free_vars: set[str],
+        free_vars: set[NamedId],
         ignore_unknown: bool,
         ignore_noreturn: bool,
         allow_wildcard: bool
@@ -90,7 +90,7 @@ class SyntaxCheckInstance(AstVisitor):
                 raise FPySyntaxError(f'unbound variable `{name}`')
             if not env[name]:
                 raise FPySyntaxError(f'variable `{name}` not defined along all paths')
-        if name.base in self.free_vars:
+        if name in self.free_vars:
             self.free_var_args.add(name)
 
     def _visit_var(self, e: Var, ctx: _Ctx):
@@ -346,7 +346,7 @@ class SyntaxCheckInstance(AstVisitor):
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
         env, _ = ctx
         for var in self.free_vars:
-            env = env.extend(NamedId(var))
+            env = env.extend(var)
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 env = env.extend(arg.name)
@@ -389,7 +389,7 @@ class SyntaxCheck:
     def check(
         func: FuncDef,
         *,
-        free_vars: Optional[set[str]] = None,
+        free_vars: Optional[set[NamedId]] = None,
         ignore_unknown: bool = False,
         ignore_noreturn: bool = False,
         allow_wildcard: bool = False
@@ -402,8 +402,9 @@ class SyntaxCheck:
 
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a Function, got {func}')
+
         if free_vars is None:
-            free_vars = set()
+            free_vars = set(func.free_vars)
 
         inst = SyntaxCheckInstance(func, free_vars, ignore_unknown, ignore_noreturn, allow_wildcard)
         return inst.analyze()

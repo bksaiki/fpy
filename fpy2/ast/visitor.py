@@ -560,8 +560,8 @@ class DefaultAstTransformVisitor(AstVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
         match stmt.ctx:
-            case Var():
-                context = self._visit_var(stmt.ctx, ctx)
+            case Var() | ForeignVal():
+                context = self._visit_expr(stmt.ctx, ctx)
             case ContextExpr():
                 context = self._visit_context_expr(stmt.ctx, ctx)
             case _:
@@ -597,7 +597,7 @@ class DefaultAstTransformVisitor(AstVisitor):
         for arg in func.args:
             args.append(Argument(arg.name, arg.type, arg.loc))
         body, _ = self._visit_block(func.body, ctx)
-        return FuncDef(func.name, args, body, func.loc)
+        return FuncDef(func.name, args, body, func.metadata, func.free_vars, func.loc)
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: Any) -> Expr:

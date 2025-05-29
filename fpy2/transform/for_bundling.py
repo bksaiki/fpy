@@ -69,8 +69,6 @@ class _ForBundlingInstance(DefaultAstTransformVisitor):
         defs_in, _ = self.def_use.stmts[stmt]
         _, defs_out = self.def_use.blocks[stmt.body]
         mutated = defs_in.mutated_in(defs_out)
-        print(defs_in.keys())
-        print(defs_out.keys())
 
         if len(mutated) > 1:
             # need to apply the transformation
