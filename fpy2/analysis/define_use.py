@@ -125,14 +125,9 @@ class _DefineUseInstance(DefaultAstVisitor):
             self._visit_expr(iterable, ctx)
         ctx = ctx.copy()
         for target in e.targets:
-            match target:
-                case NamedId():
-                    self._add_def(target, e)
-                    ctx[target] = e
-                case TupleBinding():
-                    for name in target.names():
-                        self._add_def(name, e)
-                        ctx[name] = e
+            for name in target.names():
+                self._add_def(name, e)
+                ctx[name] = e
         self._visit_expr(e.elt, ctx)
 
     def _visit_simple_assign(self, stmt: SimpleAssign, ctx: DefinitionCtx):

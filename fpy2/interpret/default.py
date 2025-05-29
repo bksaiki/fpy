@@ -498,12 +498,8 @@ class _Interpreter(DefaultAstVisitor):
 
         # remove temporarily bound variables
         for target in e.targets:
-            match target:
-                case NamedId():
-                    del ctx.env[target]
-                case TupleBinding():
-                    for var in target.names():
-                        del ctx.env[var]
+            for name in target.names():
+                del ctx.env[name]
         return NDArray(elts)
 
     def _visit_if_expr(self, e: IfExpr, ctx: _EvalCtx):

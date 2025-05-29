@@ -459,12 +459,8 @@ class _Interpreter(AstVisitor):
 
         # remove temporarily bound variables
         for target in e.targets:
-            match target:
-                case NamedId():
-                    del ctx.env[target]
-                case TupleBinding():
-                    for var in target.names():
-                        del ctx.env[var]
+            for name in target.names():
+                del ctx.env[name]
         # the result
         return tuple(elts)
 
