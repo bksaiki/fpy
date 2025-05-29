@@ -113,6 +113,17 @@ class Stmt(Ast):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
+    @abstractmethod
+    def is_equiv(self, other) -> bool:
+        """
+        Check if this statement is structurally equivalent to another statement.
+
+        This is essentially a recursive equality check.
+        The dunder method `__eq__` is used to check if two statements
+        represent exactly the same tree, e.g., `id(self) == id(other)`.
+        """
+        ...
+
 class ValueExpr(Expr):
     """FPy Ast: terminal expression"""
 
@@ -901,6 +912,13 @@ class StmtBlock(Ast):
         super().__init__(loc)
         self.stmts = stmts
 
+    def is_equiv(self, other):
+        return (
+            isinstance(other, StmtBlock)
+            and len(self.stmts) == len(other.stmts)
+            and all(s1.is_equiv(s2) for s1, s2 in zip(self.stmts, other.stmts))
+        )
+
 class SimpleAssign(Stmt):
     """FPy AST: variable assignment"""
     var: Id
@@ -919,6 +937,13 @@ class SimpleAssign(Stmt):
         self.expr = expr
         self.ann = ann
 
+    def is_equiv(self, other):
+        return (
+            isinstance(other, SimpleAssign)
+            and self.var == other.var
+            and self.expr.is_equiv(other.expr)
+        )
+
 class TupleUnpack(Stmt):
     """FPy AST: unpacking / destructing a tuple"""
     binding: TupleBinding
@@ -933,6 +958,13 @@ class TupleUnpack(Stmt):
         super().__init__(loc)
         self.binding = vars
         self.expr = expr
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, TupleUnpack)
+            and self.binding.is_equiv(other.binding)
+            and self.expr.is_equiv(other.expr)
+        )
 
 class IndexAssign(Stmt):
     """FPy AST: assignment to tuple indexing"""
@@ -952,6 +984,15 @@ class IndexAssign(Stmt):
         self.slices = list(slices)
         self.expr = expr
 
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, IndexAssign)
+            and self.var == other.var
+            and len(self.slices) == len(other.slices)
+            and all(s1.is_equiv(s2) for s1, s2 in zip(self.slices, other.slices))
+            and self.expr.is_equiv(other.expr)
+        )
+
 class If1Stmt(Stmt):
     """FPy AST: if statement with one branch"""
     cond: Expr
@@ -966,6 +1007,13 @@ class If1Stmt(Stmt):
         super().__init__(loc)
         self.cond = cond
         self.body = body
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, If1Stmt)
+            and self.cond.is_equiv(other.cond)
+            and self.body.is_equiv(other.body)
+        )
 
 class IfStmt(Stmt):
     """FPy AST: if statement (with two branhces)"""
@@ -985,6 +1033,14 @@ class IfStmt(Stmt):
         self.ift = ift
         self.iff = iff
 
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, IfStmt)
+            and self.cond.is_equiv(other.cond)
+            and self.ift.is_equiv(other.ift)
+            and self.iff.is_equiv(other.iff)
+        )
+
 class WhileStmt(Stmt):
     """FPy AST: while statement"""
     cond: Expr
@@ -999,6 +1055,13 @@ class WhileStmt(Stmt):
         super().__init__(loc)
         self.cond = cond
         self.body = body
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, WhileStmt)
+            and self.cond.is_equiv(other.cond)
+            and self.body.is_equiv(other.body)
+        )
 
 class ForStmt(Stmt):
     """FPy AST: for statement"""
@@ -1018,6 +1081,23 @@ class ForStmt(Stmt):
         self.iterable = iterable
         self.body = body
 
+    def is_equiv(self, other) -> bool:
+        if not isinstance(other, ForStmt):
+            return False
+        match self.target, other.target:
+            case Id(), Id():
+                if self.target != other.target:
+                    return False
+            case TupleBinding(), TupleBinding():
+                if not self.target.is_equiv(other.target):
+                    return False
+            case _:
+                return False
+        return (
+            self.iterable.is_equiv(other.iterable)
+            and self.body.is_equiv(other.body)
+        )
+
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
     name: Id
@@ -1036,6 +1116,14 @@ class ContextStmt(Stmt):
         self.name = name
         self.body = body
 
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, ContextStmt)
+            and self.name == other.name
+            and self.ctx.is_equiv(other.ctx)
+            and self.body.is_equiv(other.body)
+        )
+
 class AssertStmt(Stmt):
     """FPy AST: assert statement"""
     test: Expr
@@ -1051,6 +1139,13 @@ class AssertStmt(Stmt):
         self.test = test
         self.msg = msg
 
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, AssertStmt)
+            and self.test.is_equiv(other.test)
+            and self.msg == other.msg
+        )
+
 class EffectStmt(Stmt):
     """FPy AST: an expression without a result"""
     expr: Expr
@@ -1063,6 +1158,12 @@ class EffectStmt(Stmt):
         super().__init__(loc)
         self.expr = expr
 
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, EffectStmt)
+            and self.expr.is_equiv(other.expr)
+        )
+
 class ReturnStmt(Stmt):
     """FPy AST: return statement"""
     expr: Expr
@@ -1074,6 +1175,12 @@ class ReturnStmt(Stmt):
     ):
         super().__init__(loc)
         self.expr = expr
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, ReturnStmt)
+            and self.expr.is_equiv(other.expr)
+        )
 
 class Argument(Ast):
     """FPy AST: function argument"""
@@ -1090,6 +1197,8 @@ class Argument(Ast):
         self.name = name
         self.type = type
 
+    def is_equiv(self, other) -> bool:
+        return isinstance(other, Argument) and self.name == other.name
 
 class FuncDef(Ast):
     """FPy AST: function definition"""
@@ -1124,6 +1233,15 @@ class FuncDef(Ast):
         self.body = body
         self.metadata = metadata
         self.free_vars = free_vars
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, FuncDef)
+            and self.name == other.name
+            and len(self.args) == len(other.args)
+            and all(a.is_equiv(b) for a, b in zip(self.args, other.args))
+            and self.body.is_equiv(other.body)
+        )
 
 
 class BaseFormatter:
