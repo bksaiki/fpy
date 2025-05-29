@@ -72,7 +72,7 @@ class DefinitionCtx(dict[NamedId, Definition | _DefineUnion]):
 class DefineUseAnalysis:
     """Result of definition-use analysis"""
     defs: dict[NamedId, set[Definition]]
-    uses: dict[Definition, set[Var | IndexAssign]]
+    uses: dict[Definition, set[Var | IndexedAssign]]
     stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
     blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
 
@@ -107,7 +107,7 @@ class _DefineUseInstance(DefaultAstVisitor):
         self.analysis.defs[name].add(definition)
         self.analysis.uses[definition] = set()
 
-    def _add_use(self, name: NamedId, use: Var | IndexAssign, ctx: DefinitionCtx):
+    def _add_use(self, name: NamedId, use: Var | IndexedAssign, ctx: DefinitionCtx):
         def_or_union = ctx[name]
         if isinstance(def_or_union, _DefineUnion):
             for def_ in def_or_union.defs:
@@ -142,7 +142,7 @@ class _DefineUseInstance(DefaultAstVisitor):
             self._add_def(var, stmt)
             ctx[var] = stmt
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: DefinitionCtx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefinitionCtx):
         self._add_use(stmt.var, stmt, ctx)
         for slice in stmt.slices:
             self._visit_expr(slice, ctx)

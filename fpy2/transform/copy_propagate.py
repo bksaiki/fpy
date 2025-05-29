@@ -41,7 +41,7 @@ class _CopyPropagateInstance(DefaultAstVisitor):
                         match use:
                             case Var():
                                 use.name = d.expr.name
-                            case IndexAssign():
+                            case IndexedAssign():
                                 use.var = d.expr.name
                             case _:
                                 raise RuntimeError('unreachable', use)

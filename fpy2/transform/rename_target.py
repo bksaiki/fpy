@@ -64,11 +64,11 @@ class _RenameTargetInstance(DefaultAstTransformVisitor):
         s = TupleUnpack(binding, expr, stmt.loc)
         return s, None
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         var = self.rename.get(stmt.var, stmt.var)
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        s = IndexAssign(var, slices, expr, stmt.loc)
+        s = IndexedAssign(var, slices, expr, stmt.loc)
         return s, None
 
     def _visit_for(self, stmt: ForStmt, ctx: None):

@@ -662,7 +662,7 @@ class Parser:
                         if not isinstance(var, Var):
                             raise FPyParserError(loc, 'FPy expects a variable', target, stmt)
                         value = self._parse_expr(stmt.value)
-                        return IndexAssign(var.name, slices, value, loc)
+                        return IndexedAssign(var.name, slices, value, loc)
                     case _:
                         raise FPyParserError(loc, 'Unexpected binding type', stmt)
             case ast.If():

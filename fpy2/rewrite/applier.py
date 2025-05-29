@@ -139,11 +139,11 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
         s = TupleUnpack(binding, expr, None)
         return s, None
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         var = self._visit_id(stmt.var)
         slices = [self._visit_expr(s, None) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, None)
-        s = IndexAssign(var, slices, expr, None)
+        s = IndexedAssign(var, slices, expr, None)
         return s, None
 
     def _visit_if(self, stmt: IfStmt, ctx: None):

@@ -504,7 +504,7 @@ class FPCoreCompileInstance(AstVisitor):
         destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
         return fpc.Let([tuple_bind] + destruct_bindings, ctx)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: fpc.Expr):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):

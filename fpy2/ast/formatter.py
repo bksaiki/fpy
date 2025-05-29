@@ -218,7 +218,7 @@ class _FormatterInstance(AstVisitor):
         vars = self._visit_tuple_binding(stmt.binding)
         self._add_line(f'{vars} = {val}', ctx)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: _Ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         val = self._visit_expr(stmt.expr, ctx)
         ref_str = ''.join(f'[{slice}]' for slice in slices)

@@ -970,7 +970,7 @@ class TupleUnpack(Stmt):
             and self.expr.is_equiv(other.expr)
         )
 
-class IndexAssign(Stmt):
+class IndexedAssign(Stmt):
     """FPy AST: assignment to tuple indexing"""
     var: NamedId
     slices: list[Expr]
@@ -990,7 +990,7 @@ class IndexAssign(Stmt):
 
     def is_equiv(self, other) -> bool:
         return (
-            isinstance(other, IndexAssign)
+            isinstance(other, IndexedAssign)
             and self.var == other.var
             and len(self.slices) == len(other.slices)
             and all(s1.is_equiv(s2) for s1, s2 in zip(self.slices, other.slices))

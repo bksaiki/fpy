@@ -538,7 +538,7 @@ class _Interpreter(DefaultAstVisitor):
             raise TypeError(f'expected a tuple, got {val}')
         self._unpack_tuple(stmt.binding, val, ctx)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: _EvalCtx) -> None:
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _EvalCtx) -> None:
         # lookup the array
         array = self._lookup(stmt.var, ctx)
 

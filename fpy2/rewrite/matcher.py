@@ -284,7 +284,7 @@ class _MatcherInst(AstVisitor):
         self._visit_tuple_binding(stmt.binding, pat.binding)
         self._visit_expr(stmt.expr, pat.expr)
 
-    def _visit_index_assign(self, stmt: IndexAssign, pat: IndexAssign):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, pat: IndexedAssign):
         self._visit_target(stmt.var, pat.var)
         for e, p in zip(stmt.slices, pat.slices):
             self._visit_expr(e, p)

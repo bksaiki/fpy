@@ -109,7 +109,7 @@ class AstVisitor(ABC):
         ...
 
     @abstractmethod
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any) -> Any:
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -217,8 +217,8 @@ class AstVisitor(ABC):
                 return self._visit_simple_assign(stmt, ctx)
             case TupleUnpack():
                 return self._visit_tuple_unpack(stmt, ctx)
-            case IndexAssign():
-                return self._visit_index_assign(stmt, ctx)
+            case IndexedAssign():
+                return self._visit_indexed_assign(stmt, ctx)
             case If1Stmt():
                 return self._visit_if1(stmt, ctx)
             case IfStmt():
@@ -331,7 +331,7 @@ class DefaultAstVisitor(AstVisitor):
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
         for s in stmt.slices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
@@ -519,10 +519,10 @@ class DefaultAstTransformVisitor(AstVisitor):
         s = TupleUnpack(binding, expr, stmt.loc)
         return s, ctx
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        s = IndexAssign(stmt.var, slices, expr, stmt.loc)
+        s = IndexedAssign(stmt.var, slices, expr, stmt.loc)
         return s, ctx
 
     def _visit_if1(self, stmt: If1Stmt, ctx: Any):

@@ -437,7 +437,7 @@ class _FPCore2FPy:
 
         # set tensor element
         body_e = self._visit(e.body, loop_ctx)
-        stmt = IndexAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
+        stmt = IndexedAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
         loop_stmts.append(stmt)
 
         # compile loop updates
@@ -490,7 +490,7 @@ class _FPCore2FPy:
 
         # set tensor element
         body_e = self._visit(e.body, loop_ctx)
-        stmt = IndexAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
+        stmt = IndexedAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
         loop_stmts.append(stmt)
 
         return Var(tuple_id, None)

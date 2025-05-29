@@ -267,7 +267,7 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(stmt.expr, ctx)
         return self._visit_tuple_binding(stmt.binding, ctx)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: _Ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
         env, _ = ctx
         self._mark_use(stmt.var, env)
         for s in stmt.slices:

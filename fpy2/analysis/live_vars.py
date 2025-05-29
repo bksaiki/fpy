@@ -132,7 +132,7 @@ class LiveVarsInstance(AstVisitor):
         live |= self._visit_expr(stmt.expr, None)
         return live
 
-    def _visit_index_assign(self, stmt: IndexAssign, live: _LiveSet) -> _LiveSet:
+    def _visit_indexed_assign(self, stmt: IndexedAssign, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live |= self._visit_expr(stmt.expr, None)
         for s in stmt.slices:
