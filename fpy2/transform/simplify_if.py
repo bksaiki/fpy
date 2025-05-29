@@ -39,9 +39,15 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
         defs_in, defs_out = self.def_use.blocks[stmt.body]
         mutated = defs_in.mutated_in(defs_out)
 
-        # rename mutated variables in the body and inline it
+        # rename mutated variables in the body
         rename = { var: self.gensym.refresh(var) for var in mutated }
         body = RenameTarget.apply_block(body, rename)
+
+        # generate assignments and inline the body
+        for var in mutated:
+            t = rename[var]
+            s = SimpleAssign(t, Var(var, None), None, None)
+            stmts.append(s)
         stmts.extend(body.stmts)
 
         # make if expressions for each mutated variable
@@ -82,37 +88,41 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
         intros_iff = defs_in_iff.fresh_in(defs_out_iff)
         intros = intros_ift & intros_iff
 
-        # add to "mutated" set (bit of a misnomer)
-        mutated_ift.extend(intros)
-        mutated_iff.extend(intros)
+        # combine sets
+        mutated_or_new_ift = mutated_ift.copy()
+        mutated_or_new_iff = mutated_iff.copy()
+        mutated_or_new_ift.extend(intros)
+        mutated_or_new_iff.extend(intros)
 
-        # rename mutated variables in each body and inline them
-        rename_ift = { var: self.gensym.refresh(var) for var in mutated_ift }
+        # rename mutated variables in each body, generate assignments, and inline
+        rename_ift = { var: self.gensym.refresh(var) for var in mutated_or_new_ift }
+        rename_iff = { var: self.gensym.refresh(var) for var in mutated_or_new_iff }
+
         ift = RenameTarget.apply_block(ift, rename_ift)
+        iff = RenameTarget.apply_block(iff, rename_iff)
+
+        for var in mutated_ift:
+            t = rename_ift[var]
+            s = SimpleAssign(t, Var(var, None), None, None)
+            stmts.append(s)
         stmts.extend(ift.stmts)
 
-        rename_iff = { var: self.gensym.refresh(var) for var in mutated_iff }
-        iff = RenameTarget.apply_block(iff, rename_iff)
+        for var in mutated_iff:
+            t = rename_iff[var]
+            s = SimpleAssign(t, Var(var, None), None, None)
+            stmts.append(s)
         stmts.extend(iff.stmts)
 
-        # make if expressions for each mutated variable
-        mutated_uniq: set[NamedId] = set()
-        for var in mutated_ift:
-            ift_name = rename_ift[var]
-            iff_name = rename_iff.get(var, var)
-            e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
-            s = SimpleAssign(var, e, None, None)
-            stmts.append(s)
-            mutated_uniq.add(var)
-
-        for var in mutated_iff:
-            if var not in mutated_uniq:
+        # make if expressions for each mutated or introduced variable
+        unique: set[NamedId] = set()
+        for var in mutated_or_new_ift:
+            if var not in unique:
                 ift_name = rename_ift.get(var, var)
-                iff_name = rename_iff[var]
+                iff_name = rename_iff.get(var, var)
                 e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
                 s = SimpleAssign(var, e, None, None)
                 stmts.append(s)
-                mutated_uniq.add(var)
+                unique.add(var)
 
         return StmtBlock(stmts)
 
@@ -166,5 +176,6 @@ class SimplifyIf:
     def apply(func: FuncDef):
         def_use = DefineUse.analyze(func)
         ast = _SimplifyIfInstance(func, def_use).apply()
+        print(ast.format())
         SyntaxCheck.check(ast)
         return ast

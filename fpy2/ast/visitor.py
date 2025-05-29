@@ -559,13 +559,7 @@ class DefaultAstTransformVisitor(AstVisitor):
         return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
-        match stmt.ctx:
-            case Var() | ForeignVal():
-                context = self._visit_expr(stmt.ctx, ctx)
-            case ContextExpr():
-                context = self._visit_context_expr(stmt.ctx, ctx)
-            case _:
-                raise RuntimeError('unreachable', stmt.ctx)
+        context = self._visit_expr(stmt.ctx, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
         s = ContextStmt(stmt.name, context, body, stmt.loc)
         return s, ctx
