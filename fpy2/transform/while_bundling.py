@@ -12,7 +12,7 @@ from .rename_target import RenameTarget
 
 _Ctx = dict[NamedId, Expr]
 
-class _WhileBundlingInstance(DefaultAstTransformVisitor):
+class _WhileBundlingInstance(DefaultTransformVisitor):
     """Single-use instance of the WhileBundling pass."""
     func: FuncDef
     def_use: DefineUseAnalysis
@@ -68,7 +68,7 @@ class _WhileBundlingInstance(DefaultAstTransformVisitor):
             rename = { var: self.gensym.refresh(var) for var in mutated }
 
             # create a tuple of mutated variables
-            s: Stmt = SimpleAssign(t, TupleExpr([Var(var, None) for var in mutated], None), None, None)
+            s: Stmt = Assign(t, None, TupleExpr([Var(var, None) for var in mutated], None), None)
             stmts.append(s)
 
             # apply substitution to the condition
@@ -80,11 +80,11 @@ class _WhileBundlingInstance(DefaultAstTransformVisitor):
             body = RenameTarget.apply_block(body, rename)
 
             # unpack the tuple at the start of the body
-            s = TupleUnpack(TupleBinding([rename[v] for v in mutated], None), Var(t, None), None)
+            s = Assign(TupleBinding([rename[v] for v in mutated], None), None, Var(t, None), None)
             body.stmts.insert(0, s)
 
             # repack the tuple at the end of the body
-            s = SimpleAssign(t, TupleExpr([Var(rename[v], None) for v in mutated], None), None, None)
+            s = Assign(t, None, TupleExpr([Var(rename[v], None) for v in mutated], None), None)
             body.stmts.append(s)
 
             # append the while statement
@@ -92,7 +92,7 @@ class _WhileBundlingInstance(DefaultAstTransformVisitor):
             stmts.append(s)
 
             # unpack the tuple after the loop
-            s = TupleUnpack(TupleBinding(mutated, None), Var(t, None), None)
+            s = Assign(TupleBinding(mutated, None), None, Var(t, None), None)
             stmts.append(s)
 
             return StmtBlock(stmts)

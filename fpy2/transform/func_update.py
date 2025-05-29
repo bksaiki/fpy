@@ -7,7 +7,7 @@ from typing import Optional
 from ..analysis import DefineUse, SyntaxCheck
 from ..ast import *
 
-class _FuncUpdateInstance(DefaultAstTransformVisitor):
+class _FuncUpdateInstance(DefaultTransformVisitor):
     """Single-use instance of the FuncUpdate pass."""
     func: FuncDef
 
@@ -17,11 +17,11 @@ class _FuncUpdateInstance(DefaultAstTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         e = TupleSet(Var(stmt.var, None), slices, expr, stmt.loc)
-        s = SimpleAssign(stmt.var, e, None, stmt.loc)
+        s = Assign(stmt.var, None, e, stmt.loc)
         return s, None
 
 class FuncUpdate:

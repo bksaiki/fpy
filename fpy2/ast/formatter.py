@@ -4,11 +4,11 @@ from pprint import pformat
 
 from ..fpc_context import FPCoreContext
 from .fpyast import *
-from .visitor import AstVisitor
+from .visitor import Visitor
 
 _Ctx = int
 
-class _FormatterInstance(AstVisitor):
+class _FormatterInstance(Visitor):
     """Single-instance visitor for pretty printing FPy ASTs"""
     ast: Ast
     fmt: str
@@ -196,10 +196,6 @@ class _FormatterInstance(AstVisitor):
 
         return f'{ctor_str}({", ".join(arg_strs)})'
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
-        val = self._visit_expr(stmt.expr, ctx)
-        self._add_line(f'{str(stmt.var)} = {val}', ctx)
-
     def _visit_tuple_binding(self, vars: TupleBinding) -> str:
         ss: list[str] = []
         for var in vars:
@@ -213,12 +209,18 @@ class _FormatterInstance(AstVisitor):
                     raise NotImplementedError('unreachable', var)
         return ', '.join(ss)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _Ctx):
+    def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
-        vars = self._visit_tuple_binding(stmt.binding)
-        self._add_line(f'{vars} = {val}', ctx)
+        match stmt.binding:
+            case Id():
+                self._add_line(f'{str(stmt.binding)} = {val}', ctx)
+            case TupleBinding():
+                vars_str = self._visit_tuple_binding(stmt.binding)
+                self._add_line(f'{vars_str} = {val}', ctx)
+            case _:
+                raise NotImplementedError('unreachable', stmt.var)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: _Ctx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         val = self._visit_expr(stmt.expr, ctx)
         ref_str = ''.join(f'[{slice}]' for slice in slices)

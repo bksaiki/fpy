@@ -121,7 +121,7 @@ class _EvalCtx:
     """rounding context for evaluation"""
 
 
-class _Interpreter(DefaultAstVisitor):
+class _Interpreter(DefaultVisitor):
     """Single-use interpreter for a function"""
 
     foreign: ForeignEnv
@@ -498,12 +498,8 @@ class _Interpreter(DefaultAstVisitor):
 
         # remove temporarily bound variables
         for target in e.targets:
-            match target:
-                case NamedId():
-                    del ctx.env[target]
-                case TupleBinding():
-                    for var in target.names():
-                        del ctx.env[var]
+            for name in target.names():
+                del ctx.env[name]
         return NDArray(elts)
 
     def _visit_if_expr(self, e: IfExpr, ctx: _EvalCtx):
@@ -511,16 +507,6 @@ class _Interpreter(DefaultAstVisitor):
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
-
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _EvalCtx) -> None:
-        val = self._visit_expr(stmt.expr, ctx)
-        match stmt.var:
-            case NamedId():
-                ctx.env[stmt.var] = val
-            case UnderscoreId():
-                pass
-            case _:
-                raise NotImplementedError('unknown variable', stmt.var)
 
     def _unpack_tuple(self, binding: TupleBinding, val: NDArray, ctx: _EvalCtx) -> None:
         if len(binding.elts) != len(val):
@@ -536,13 +522,15 @@ class _Interpreter(DefaultAstVisitor):
                 case _:
                     raise NotImplementedError('unknown tuple element', elt)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _EvalCtx) -> None:
+    def _visit_assign(self, stmt: Assign, ctx: _EvalCtx) -> None:
         val = self._visit_expr(stmt.expr, ctx)
-        if not isinstance(val, NDArray):
-            raise TypeError(f'expected a tuple, got {val}')
-        self._unpack_tuple(stmt.binding, val, ctx)
+        match stmt.binding:
+            case NamedId():
+                ctx.env[stmt.binding] = val
+            case TupleBinding():
+                self._unpack_tuple(stmt.binding, val, ctx)
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: _EvalCtx) -> None:
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _EvalCtx) -> None:
         # lookup the array
         array = self._lookup(stmt.var, ctx)
 

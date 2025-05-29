@@ -98,7 +98,7 @@ def _size0_expr(x: str):
     return fpc.Size(fpc.Var(x), fpc.Integer(0))
 
 
-class FPCoreCompileInstance(AstVisitor):
+class FPCoreCompileInstance(Visitor):
     """Compilation instance from FPy to FPCore"""
     func: FuncDef
     def_use: DefineUseAnalysis
@@ -494,17 +494,20 @@ class FPCoreCompileInstance(AstVisitor):
         iff = self._visit_expr(e.iff, ctx)
         return fpc.If(cond, ift, iff)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: fpc.Expr):
-        bindings = [(str(stmt.var), self._visit_expr(stmt.expr, None))]
-        return fpc.Let(bindings, ctx)
+    def _visit_assign(self, stmt: Assign, ctx: fpc.Expr):
+        match stmt.binding:
+            case Id():
+                bindings = [(str(stmt.binding), self._visit_expr(stmt.expr, None))]
+                return fpc.Let(bindings, ctx)
+            case TupleBinding():
+                tuple_id = str(self.gensym.fresh('t'))
+                tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
+                destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
+                return fpc.Let([tuple_bind] + destruct_bindings, ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.binding)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: fpc.Expr):
-        tuple_id = str(self.gensym.fresh('t'))
-        tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
-        destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
-        return fpc.Let([tuple_bind] + destruct_bindings, ctx)
-
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: fpc.Expr):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):

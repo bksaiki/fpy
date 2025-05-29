@@ -5,9 +5,9 @@ from ..number import Context
 from ..env import ForeignEnv
 
 from ..ast.fpyast import *
-from ..ast.visitor import DefaultAstTransformVisitor
+from ..ast.visitor import DefaultTransformVisitor
 
-class _ContextInlineInstance(DefaultAstTransformVisitor):
+class _ContextInlineInstance(DefaultTransformVisitor):
     """Per-IR instance of context inlining"""
     ast: FuncDef
     env: ForeignEnv

@@ -6,7 +6,7 @@ from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
 
-class _ForUnpackInstance(DefaultAstTransformVisitor):
+class _ForUnpackInstance(DefaultTransformVisitor):
     """Single-use instance of the ForUnpack pass."""
     func: FuncDef
     gensym: Gensym
@@ -32,7 +32,7 @@ class _ForUnpackInstance(DefaultAstTransformVisitor):
                 binding = self._visit_tuple_binding(stmt.target, ctx)
 
                 # insert tuple unpacking at the beginning of the body
-                body.stmts.insert(0, TupleUnpack(binding, Var(t, None), None))
+                body.stmts.insert(0, Assign(binding, None, Var(t, None), None))
 
                 # create the for statement with the fresh variable
                 s = ForStmt(t, iterable, body, None)

@@ -4,7 +4,7 @@ from ..ast import *
 
 _LiveSet = set[NamedId]
 
-class LiveVarsInstance(AstVisitor):
+class LiveVarsInstance(Visitor):
     """Single-use live variable analyzer"""
 
     ast: FuncDef | Expr
@@ -88,11 +88,7 @@ class LiveVarsInstance(AstVisitor):
     def _visit_comp_expr(self, e: CompExpr, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.elt, ctx)
         for target in e.targets:
-            match target:
-                case NamedId():
-                    live -= { target }
-                case TupleBinding():
-                    live |= target.names()
+            live |= target.names()
         for iterable in e.iterables:
             live |= self._visit_expr(iterable, ctx)
         return live
@@ -123,20 +119,13 @@ class LiveVarsInstance(AstVisitor):
                 live.add(arg)
         return live
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, live: _LiveSet) -> _LiveSet:
-        live = set(live)
-        if isinstance(stmt.var, NamedId):
-            live -= { stmt.var }
-        live |= self._visit_expr(stmt.expr, None)
-        return live
-
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, live: _LiveSet) -> _LiveSet:
+    def _visit_assign(self, stmt: Assign, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live -= stmt.binding.names()
         live |= self._visit_expr(stmt.expr, None)
         return live
 
-    def _visit_index_assign(self, stmt: IndexAssign, live: _LiveSet) -> _LiveSet:
+    def _visit_indexed_assign(self, stmt: IndexedAssign, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live |= self._visit_expr(stmt.expr, None)
         for s in stmt.slices:

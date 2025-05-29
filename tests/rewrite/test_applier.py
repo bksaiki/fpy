@@ -1,7 +1,7 @@
 import unittest
 
 from fpy2 import fpy, pattern, Function
-from fpy2.ast import Expr, Stmt, StmtBlock, FuncDef, Fma, Var, NamedId, SimpleAssign, Call
+from fpy2.ast import Expr, Stmt, StmtBlock, FuncDef, Fma, Var, NamedId, Assign, Call
 from fpy2.rewrite.applier import Applier
 from fpy2.rewrite.matcher import Matcher
 from fpy2.typing import *
@@ -96,8 +96,10 @@ class ApplierStmtTestCase(_ApplierTestCase):
         self.assertAstEqual(
             h2, 
             StmtBlock([
-                SimpleAssign(
+                Assign(
                     NamedId('sum'),
-                    Call('sum', [Var(NamedId('lst'), None)], None), None, None),
+                    None,
+                    Call('sum', [Var(NamedId('lst'), None)], None),
+                    None),
             ])
         )

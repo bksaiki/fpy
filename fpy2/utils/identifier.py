@@ -5,12 +5,30 @@ Strings are not sufficient as identifiers, especially when (re)-generating
 unique identifiers.
 """
 
+from abc import ABC, abstractmethod
 from typing import Optional
 
 from .location import Location
 
-class Id(object):
+class Id(ABC):
     """Abstract base class for identifiers."""
+
+    @abstractmethod
+    def names(self) -> set['NamedId']:
+        """
+        Return a set of all named identifiers contained in this identifier.
+
+        This method is for compability with AST classes.
+        """
+        ...
+
+    def is_equiv(self, other) -> bool:
+        """
+        Check if this identifier is equivalent to another identifier.
+
+        This method is for compability with AST classes.
+        """
+        return self == other
 
 class UnderscoreId(Id):
     """
@@ -31,6 +49,9 @@ class UnderscoreId(Id):
 
     def __hash__(self):
         return hash(())
+
+    def names(self) -> set['NamedId']:
+        return set()
 
 class NamedId(Id):
     """
@@ -65,6 +86,9 @@ class NamedId(Id):
 
     def __hash__(self):
         return hash((self.base, self.count))
+
+    def names(self) -> set['NamedId']:
+        return { self }
 
 
 class SourceId(NamedId):

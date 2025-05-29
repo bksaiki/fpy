@@ -3,7 +3,7 @@
 from ..ast import *
 from ..analysis import SyntaxCheck
 
-class _RenameTargetInstance(DefaultAstTransformVisitor):
+class _RenameTargetInstance(DefaultTransformVisitor):
     """Renames targets in a function."""
     ast: FuncDef | StmtBlock
     rename: dict[NamedId, NamedId]
@@ -34,16 +34,6 @@ class _RenameTargetInstance(DefaultAstTransformVisitor):
         elt = self._visit_expr(e.elt, ctx)
         return CompExpr(targets, iterables, elt, e.loc)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
-        match stmt.var:
-            case NamedId():
-                var: Id = self.rename.get(stmt.var, stmt.var)
-            case _:
-                var = stmt.var
-        expr = self._visit_expr(stmt.expr, ctx)
-        s = SimpleAssign(var, expr, stmt.ann, stmt.loc)
-        return s, None
-
     def _visit_binding(self, binding: Id | TupleBinding, ctx: None):
         match binding:
             case NamedId():
@@ -58,17 +48,17 @@ class _RenameTargetInstance(DefaultAstTransformVisitor):
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: None):
         return TupleBinding([self._visit_binding(elt, ctx) for elt in binding.elts], None)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
-        binding = self._visit_tuple_binding(stmt.binding, ctx)
+    def _visit_assign(self, stmt: Assign, ctx: None):
+        binding = self._visit_binding(stmt.binding, ctx)
         expr = self._visit_expr(stmt.expr, ctx)
-        s = TupleUnpack(binding, expr, stmt.loc)
+        s = Assign(binding, stmt.type, expr, stmt.loc)
         return s, None
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         var = self.rename.get(stmt.var, stmt.var)
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        s = IndexAssign(var, slices, expr, stmt.loc)
+        s = IndexedAssign(var, slices, expr, stmt.loc)
         return s, None
 
     def _visit_for(self, stmt: ForStmt, ctx: None):

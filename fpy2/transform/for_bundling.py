@@ -8,7 +8,7 @@ from ..ast import *
 from ..utils import Gensym
 
 
-class _ForBundlingInstance(DefaultAstTransformVisitor):
+class _ForBundlingInstance(DefaultTransformVisitor):
     """Single-use instance of the ForBundling pass."""
     func: FuncDef
     def_use: DefineUseAnalysis
@@ -91,7 +91,8 @@ class _ForBundlingInstance(DefaultAstTransformVisitor):
                     raise RuntimeError('unreachable', stmt.target)
 
             # create a tuple of mutated variables
-            s: Stmt = SimpleAssign(t, TupleExpr([Var(var, None) for var in mutated], None), None, None)
+            e = TupleExpr([Var(var, None) for var in mutated], None)
+            s: Stmt = Assign(t, None, e, None)
             stmts.append(s)
 
             # transform target
@@ -109,12 +110,12 @@ class _ForBundlingInstance(DefaultAstTransformVisitor):
 
             # unpack the tuple at the start of the body
             # replace any variable in the target with `_`
-            unpack_names = [UnderscoreId() if var in target_names else rename[var] for var in mutated]
-            s = TupleUnpack(TupleBinding(unpack_names, None), Var(t, None), None)
+            binding = TupleBinding([UnderscoreId() if var in target_names else rename[var] for var in mutated], None)
+            s = Assign(binding, None, Var(t, None), None)
             body.stmts.insert(0, s)
 
             # repack the tuple at the end of the body
-            s = SimpleAssign(t, TupleExpr([Var(rename[v], None) for v in mutated], None), None, None)
+            s = Assign(t, None, TupleExpr([Var(rename[v], None) for v in mutated], None), None)
             body.stmts.append(s)
 
             # append the for statement
@@ -122,7 +123,7 @@ class _ForBundlingInstance(DefaultAstTransformVisitor):
             stmts.append(s)
 
             # unpack the tuple after the loop
-            s = TupleUnpack(TupleBinding(mutated, None), Var(t, None), None)
+            s = Assign(TupleBinding(mutated, None), None, Var(t, None), None)
             stmts.append(s)
 
             return StmtBlock(stmts)

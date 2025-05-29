@@ -13,15 +13,15 @@ The Abstract Syntax Tree (AST) is a representation of an FPy program.
 Visitors
 ---------------------------
 
-.. automodule:: fpy2.ast.AstVisitor
+.. automodule:: fpy2.ast.Visitor
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.ast.DefaultAstVisitor
+.. autoclass:: fpy2.ast.DefaultVisitor
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.ast.DefaultAstTransformVisitor
+.. autoclass:: fpy2.ast.DefaultTransformVisitor
    :members:
    :show-inheritance:
 

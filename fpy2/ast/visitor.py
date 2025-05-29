@@ -5,7 +5,7 @@ from typing import Any
 
 from .fpyast import *
 
-class AstVisitor(ABC):
+class Visitor(ABC):
     """
     Visitor base class for FPy AST nodes.
     """
@@ -101,15 +101,11 @@ class AstVisitor(ABC):
     # Statements
 
     @abstractmethod
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any) -> Any:
+    def _visit_assign(self, stmt: Assign, ctx: Any) -> Any:
         ...
 
     @abstractmethod
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any) -> Any:
-        ...
-
-    @abstractmethod
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any) -> Any:
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -213,12 +209,10 @@ class AstVisitor(ABC):
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         """Dispatch to the appropriate visit method for a statement."""
         match stmt:
-            case SimpleAssign():
-                return self._visit_simple_assign(stmt, ctx)
-            case TupleUnpack():
-                return self._visit_tuple_unpack(stmt, ctx)
-            case IndexAssign():
-                return self._visit_index_assign(stmt, ctx)
+            case Assign():
+                return self._visit_assign(stmt, ctx)
+            case IndexedAssign():
+                return self._visit_indexed_assign(stmt, ctx)
             case If1Stmt():
                 return self._visit_if1(stmt, ctx)
             case IfStmt():
@@ -241,7 +235,7 @@ class AstVisitor(ABC):
 #####################################################################
 # Default visitor
 
-class DefaultAstVisitor(AstVisitor):
+class DefaultVisitor(Visitor):
     """Default visitor: visits all nodes without doing anything."""
 
     def _visit_var(self, e: Var, ctx: Any):
@@ -325,13 +319,10 @@ class DefaultAstVisitor(AstVisitor):
             if not isinstance(arg, ForeignAttribute):
                 self._visit_expr(arg, ctx)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
+    def _visit_assign(self, stmt: Assign, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
-        self._visit_expr(stmt.expr, ctx)
-
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
         for s in stmt.slices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
@@ -376,7 +367,7 @@ class DefaultAstVisitor(AstVisitor):
 #####################################################################
 # Default transform visitor
 
-class DefaultAstTransformVisitor(AstVisitor):
+class DefaultTransformVisitor(Visitor):
     """Default visitor: visits all nodes without doing anything."""
 
     def _visit_var(self, e: Var, ctx: Any):
@@ -449,16 +440,7 @@ class DefaultAstTransformVisitor(AstVisitor):
         return TupleSet(array, slices, value, e.loc)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
-        targets: list[Id | TupleBinding] = []
-        for target in e.targets:
-            match target:
-                case Id():
-                    targets.append(target)
-                case TupleBinding():
-                    targets.append(self._visit_tuple_binding(target, ctx))
-                case _:
-                    raise RuntimeError('unreachable', target)
-
+        targets = [self._visit_binding(target, ctx) for target in e.targets]
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
         return CompExpr(targets, iterables, elt, e.loc)
@@ -496,33 +478,29 @@ class DefaultAstTransformVisitor(AstVisitor):
 
         return ContextExpr(ctor, args, kwargs, e.loc)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
-        expr = self._visit_expr(stmt.expr, ctx)
-        s = SimpleAssign(stmt.var, expr, stmt.ann, stmt.loc)
-        return s, ctx
+    def _visit_binding(self, binding: Id | TupleBinding, ctx: Any):
+        match binding:
+            case Id():
+                return binding
+            case TupleBinding():
+                return self._visit_tuple_binding(binding, ctx)
+            case _:
+                raise RuntimeError('unreachable', binding)
 
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: Any):
-        new_vars: list[Id | TupleBinding] = []
-        for var in binding:
-            match var:
-                case Id():
-                    new_vars.append(var)
-                case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(var, ctx))
-                case _:
-                    raise NotImplementedError(f'unreachable {var}')
-        return TupleBinding(new_vars, binding.loc)
+        elts = [self._visit_binding(var, ctx) for var in binding]
+        return TupleBinding(elts, binding.loc)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
-        binding = self._visit_tuple_binding(stmt.binding, ctx)
+    def _visit_assign(self, stmt: Assign, ctx: Any):
+        binding = self._visit_binding(stmt.binding, ctx)
         expr = self._visit_expr(stmt.expr, ctx)
-        s = TupleUnpack(binding, expr, stmt.loc)
+        s = Assign(binding, stmt.type, expr, stmt.loc)
         return s, ctx
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: Any):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
         slices = [self._visit_expr(s, ctx) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
-        s = IndexAssign(stmt.var, slices, expr, stmt.loc)
+        s = IndexedAssign(stmt.var, slices, expr, stmt.loc)
         return s, ctx
 
     def _visit_if1(self, stmt: If1Stmt, ctx: Any):
@@ -545,14 +523,7 @@ class DefaultAstTransformVisitor(AstVisitor):
         return s, ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: Any):
-        match stmt.target:
-            case Id():
-                target = stmt.target
-            case TupleBinding():
-                target = self._visit_tuple_binding(stmt.target, ctx)
-            case _:
-                raise RuntimeError('unreachable', stmt.target)
-
+        target = self._visit_binding(stmt.target, ctx)
         iterable = self._visit_expr(stmt.iterable, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
         s = ForStmt(target, iterable, body, stmt.loc)

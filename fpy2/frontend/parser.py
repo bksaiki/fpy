@@ -582,22 +582,6 @@ class Parser:
                 return ContextExpr(ctor, pos_args, kw_args, loc)
             case _:
                 raise FPyParserError(loc, 'FPy expects a valid context expression', e, item)
-        # match e:
-        #     case ast.Call():
-        #         call_name = self._parse_call(e)
-        #         if call_name != 'Context':
-        #             raise FPyParserError(loc, 'FPy with statements only expect `Context`', e)
-        #         if e.args != []:
-        #             raise FPyParserError(loc, 'FPy with statements do not expect arguments', e)
-        #         # TODO: what data is allowed?
-        #         props: dict[str, Any] = {}
-        #         for kwd in e.keywords:
-        #             if kwd.arg is None:
-        #                 raise FPyParserError(loc, '`Context` only takes keyword arguments', e)
-        #             props[kwd.arg] = self._parse_contextdata(kwd.value)
-        #         return props
-        #     case _:
-        #         raise FPyParserError(loc, 'FPy expects an identifier', e, item)
 
     def _parse_augassign(self, stmt: ast.AugAssign):
         loc = self._parse_location(stmt)
@@ -624,7 +608,7 @@ class Parser:
 
         value = self._parse_expr(stmt.value)
         e = cls(Var(ident, loc), value, loc)
-        return SimpleAssign(ident, e, None, loc)
+        return Assign(ident, None, e, loc)
 
     def _parse_statement(self, stmt: ast.stmt) -> Stmt:
         """Parse a Python statement."""
@@ -643,7 +627,7 @@ class Parser:
                 ident = self._parse_id(stmt.target)
                 ty = self._parse_type_annotation(stmt.annotation)
                 value = self._parse_expr(stmt.value)
-                return SimpleAssign(ident, value, ty, loc)
+                return Assign(ident, ty, value, loc)
             case ast.Assign():
                 if len(stmt.targets) != 1:
                     raise FPyParserError(loc, 'FPy only supports single assignment', stmt)
@@ -652,17 +636,17 @@ class Parser:
                     case ast.Name():
                         ident = self._parse_id(target)
                         value = self._parse_expr(stmt.value)
-                        return SimpleAssign(ident, value, None, loc)
+                        return Assign(ident, None, value, loc)
                     case ast.Tuple():
                         binding = self._parse_tuple_target(target, stmt)
                         value = self._parse_expr(stmt.value)
-                        return TupleUnpack(binding, value, loc)
+                        return Assign(binding, None, value, loc)
                     case ast.Subscript():
                         var, slices = self._parse_subscript(target)
                         if not isinstance(var, Var):
                             raise FPyParserError(loc, 'FPy expects a variable', target, stmt)
                         value = self._parse_expr(stmt.value)
-                        return IndexAssign(var.name, slices, value, loc)
+                        return IndexedAssign(var.name, slices, value, loc)
                     case _:
                         raise FPyParserError(loc, 'Unexpected binding type', stmt)
             case ast.If():

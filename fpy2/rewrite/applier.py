@@ -22,7 +22,7 @@ class SubstitutionError(Exception):
     def __str__(self):
         return f'SubstitutionError: {self.message}'
 
-class _ExprApplierInst(DefaultAstTransformVisitor):
+class _ExprApplierInst(DefaultTransformVisitor):
     """
     FPy pattern match applier instance for expressions.
 
@@ -49,7 +49,7 @@ class _ExprApplierInst(DefaultAstTransformVisitor):
             return super()._visit_var(e, ctx)
 
 
-class _StmtApplierInst(DefaultAstTransformVisitor):
+class _StmtApplierInst(DefaultTransformVisitor):
     """
     FPy pattern match applier instance for statements.
 
@@ -115,35 +115,29 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
         elt = self._visit_expr(e.elt, None)
         return CompExpr(targets, iterables, elt, None)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
-        ident = self._visit_id(stmt.var)
-        expr = self._visit_expr(stmt.expr, None)
-        s =  SimpleAssign(ident, expr, stmt.ann, None)
-        return s, None
+    def _visit_binding(self, binding: Id | TupleBinding, ctx: None):
+        match binding:
+            case Id():
+                return self._visit_id(binding)
+            case TupleBinding():
+                return self._visit_tuple_binding(binding, ctx)
+            case _:
+                raise RuntimeError(f'unreachable case: {binding}')
 
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: None):
-        new_vars: list[Id | TupleBinding] = []
-        for elt in binding.elts:
-            match elt:
-                case Id():
-                    new_vars.append(self._visit_id(elt))
-                case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(elt, ctx))
-                case _:
-                    raise RuntimeError(f'unreachable case: {elt}')
-        return TupleBinding(new_vars, None)
+        return TupleBinding([binding for binding in binding.elts], None)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
-        binding = self._visit_tuple_binding(stmt.binding, ctx)
+    def _visit_assign(self, stmt: Assign, ctx: None):
+        binding = self._visit_binding(stmt.binding, None)
         expr = self._visit_expr(stmt.expr, None)
-        s = TupleUnpack(binding, expr, None)
+        s =  Assign(binding, stmt.type, expr, None)
         return s, None
 
-    def _visit_index_assign(self, stmt: IndexAssign, ctx: None):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         var = self._visit_id(stmt.var)
         slices = [self._visit_expr(s, None) for s in stmt.slices]
         expr = self._visit_expr(stmt.expr, None)
-        s = IndexAssign(var, slices, expr, None)
+        s = IndexedAssign(var, slices, expr, None)
         return s, None
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
@@ -163,14 +157,7 @@ class _StmtApplierInst(DefaultAstTransformVisitor):
         return s, None
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        match stmt.target:
-            case Id():
-                target = self._visit_id(stmt.target)
-            case TupleBinding():
-                target = self._visit_tuple_binding(stmt.target, ctx)
-            case _:
-                raise RuntimeError('unreachable', stmt.target)
-
+        target = self._visit_binding(stmt.target, None)
         iterable = self._visit_expr(stmt.iterable, None)
         body, _ = self._visit_block(stmt.body, None)
         s = ForStmt(target, iterable, body, None)

@@ -55,7 +55,7 @@ class StmtMatch(LocatedMatch):
         self.idx = idx
 
 
-class _MatcherInst(AstVisitor):
+class _MatcherInst(Visitor):
     """
     FPy pattern matching instance for a pattern and sub-program.
 
@@ -112,13 +112,16 @@ class _MatcherInst(AstVisitor):
         The left-hand side is an `Id` while in an expression it is a `Var`.
         """
         match pat, name:
+            case UnderscoreId(), _:
+                # wildcard => ignore
+                pass
             case NamedId(), NamedId():
                 # pattern variable
                 self._bind_expr(pat, Var(name, None))
             case NamedId(), UnderscoreId():
                 raise NotImplementedError(pat, name)
             case _:
-                pass
+                raise RuntimeError('unreachable', pat, name)
 
     def _visit_var(self, e: Var, pat: Var):
         raise RuntimeError('do not call')
@@ -259,8 +262,17 @@ class _MatcherInst(AstVisitor):
                 case _, _:
                     raise RuntimeError(f'unreachable case: {c1} vs {c2}')
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, pat: SimpleAssign):
-        self._visit_target(stmt.var, pat.var)
+    def _visit_binding(self, binding: Id | TupleBinding, pat: Id | TupleBinding):
+        match binding, pat:
+            case Id(), Id():
+                self._visit_target(binding, pat)
+            case TupleBinding(), TupleBinding():
+                self._visit_tuple_binding(binding, pat)
+            case _:
+                raise _MatchFailure(f'matching {pat} against {binding}')
+
+    def _visit_assign(self, stmt: Assign, pat: Assign):
+        self._visit_binding(stmt.binding, pat.binding)
         self._visit_expr(stmt.expr, pat.expr)
 
     def _visit_tuple_binding(self, binding: TupleBinding, pat: TupleBinding):
@@ -280,11 +292,7 @@ class _MatcherInst(AstVisitor):
                 case _:
                     raise _MatchFailure(f'matching {p} against {elt}')
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, pat: TupleUnpack):
-        self._visit_tuple_binding(stmt.binding, pat.binding)
-        self._visit_expr(stmt.expr, pat.expr)
-
-    def _visit_index_assign(self, stmt: IndexAssign, pat: IndexAssign):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, pat: IndexedAssign):
         self._visit_target(stmt.var, pat.var)
         for e, p in zip(stmt.slices, pat.slices):
             self._visit_expr(e, p)
@@ -304,13 +312,7 @@ class _MatcherInst(AstVisitor):
         self._visit_block(stmt.body, pat.body)
 
     def _visit_for(self, stmt: ForStmt, pat: ForStmt):
-        match stmt.target, pat.target:
-            case Id(), Id():
-                self._visit_target(stmt.target, pat.target)
-            case TupleBinding(), TupleBinding():
-                self._visit_tuple_binding(stmt.target, pat.target)
-            case _, _:
-                raise _MatchFailure(f'matching {pat.target} against {stmt.target}')
+        self._visit_binding(stmt.target, pat.target)
         self._visit_expr(stmt.iterable, pat.iterable)
         self._visit_block(stmt.body, pat.body)
 
@@ -359,7 +361,7 @@ class _MatcherInst(AstVisitor):
         return super()._visit_statement(stmt, pat)
 
 
-class _ExprMatcherEngine(DefaultAstVisitor):
+class _ExprMatcherEngine(DefaultVisitor):
     """FPy pattern matching for expression patterns"""
     pattern: ExprPattern
     func: FuncDef
@@ -383,7 +385,7 @@ class _ExprMatcherEngine(DefaultAstVisitor):
             self.matches.append(pmatch)
         super()._visit_expr(e, ctx)
 
-class _StmtMatcherEngine(DefaultAstVisitor):
+class _StmtMatcherEngine(DefaultVisitor):
     """FPy pattern matching for statement patterns"""
     pattern: StmtPattern
     func: FuncDef
