@@ -898,74 +898,27 @@ class StmtBlock(Ast):
             and all(s1.is_equiv(s2) for s1, s2 in zip(self.stmts, other.stmts))
         )
 
-# class SimpleAssign(Stmt):
-#     """FPy AST: variable assignment"""
-#     binding: Id | TupleBinding
-#     type: Optional[TypeAnn]
-#     expr: Expr
-
-#     def __init__(
-#         self,
-#         binding: Id | TupleBinding,
-#         type: Optional[TypeAnn],
-#         expr: Expr,
-#         loc: Optional[Location]
-#     ):
-#         super().__init__(loc)
-#         self.binding = binding
-#         self.type = type
-#         self.expr = expr
-
-#     def is_equiv(self, other):
-#         return (
-#             isinstance(other, SimpleAssign)
-#             and self.binding.is_equiv(other.binding)
-#             and self.expr.is_equiv(other.expr)
-#         )
-
 class Assign(Stmt):
     """FPy AST: variable assignment"""
-    var: Id
+    binding: Id | TupleBinding
+    type: Optional[TypeAnn]
     expr: Expr
-    ann: Optional[TypeAnn]
 
     def __init__(
         self,
-        var: Id,
+        binding: Id | TupleBinding,
+        type: Optional[TypeAnn],
         expr: Expr,
-        ann: Optional[TypeAnn],
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.var = var
+        self.binding = binding
+        self.type = type
         self.expr = expr
-        self.ann = ann
 
     def is_equiv(self, other):
         return (
             isinstance(other, Assign)
-            and self.var == other.var
-            and self.expr.is_equiv(other.expr)
-        )
-
-class TupleUnpack(Stmt):
-    """FPy AST: unpacking / destructing a tuple"""
-    binding: TupleBinding
-    expr: Expr
-
-    def __init__(
-        self,
-        vars: TupleBinding,
-        expr: Expr,
-        loc: Optional[Location]
-    ):
-        super().__init__(loc)
-        self.binding = vars
-        self.expr = expr
-
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, TupleUnpack)
             and self.binding.is_equiv(other.binding)
             and self.expr.is_equiv(other.expr)
         )

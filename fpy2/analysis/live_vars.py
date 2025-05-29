@@ -121,13 +121,6 @@ class LiveVarsInstance(Visitor):
 
     def _visit_assign(self, stmt: Assign, live: _LiveSet) -> _LiveSet:
         live = set(live)
-        if isinstance(stmt.var, NamedId):
-            live -= { stmt.var }
-        live |= self._visit_expr(stmt.expr, None)
-        return live
-
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, live: _LiveSet) -> _LiveSet:
-        live = set(live)
         live -= stmt.binding.names()
         live |= self._visit_expr(stmt.expr, None)
         return live

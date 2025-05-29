@@ -189,11 +189,7 @@ class SyntaxCheckInstance(Visitor):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
         for target in e.targets:
-            match target:
-                case NamedId():
-                    env = env.extend(target)
-                case TupleBinding():
-                    env = self._visit_tuple_binding(target, ctx)
+            env = self._visit_binding(target, env)
         self._visit_expr(e.elt, (env, False))
         return env
 
@@ -242,30 +238,27 @@ class SyntaxCheckInstance(Visitor):
                         if free not in self.free_vars:
                             raise FPySyntaxError('context is data-dependent')
 
+    def _visit_binding(self, binding: Id | TupleBinding, env: _Env):
+        match binding:
+            case NamedId():
+                env = env.extend(binding)
+            case UnderscoreId():
+                pass
+            case TupleBinding():
+                env = self._visit_tuple_binding(binding, env)
+            case _:
+                raise RuntimeError('unreachable', binding)
+        return env
+
+    def _visit_tuple_binding(self, binding: TupleBinding, env: _Env):
+        for elt in binding.elts:
+            env = self._visit_binding(elt, env)
+        return env
+
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.expr, ctx)
-        if isinstance(stmt.var, NamedId):
-            env = env.extend(stmt.var)
-        return env
-
-    def _visit_tuple_binding(self, binding: TupleBinding, ctx: _Ctx):
-        env, _ = ctx
-        for elt in binding.elts:
-            match elt:
-                case NamedId():
-                    env = env.extend(elt)
-                case TupleBinding():
-                    env = self._visit_tuple_binding(elt, ctx)
-                case UnderscoreId():
-                    pass
-                case _:
-                    raise NotImplementedError('unreachable', elt)
-        return env
-
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _Ctx):
-        self._visit_expr(stmt.expr, ctx)
-        return self._visit_tuple_binding(stmt.binding, ctx)
+        return self._visit_binding(stmt.binding, env)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
         env, _ = ctx
@@ -297,11 +290,7 @@ class SyntaxCheckInstance(Visitor):
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.iterable, ctx)
-        match stmt.target:
-            case NamedId():
-                env = env.extend(stmt.target)
-            case TupleBinding():
-                env = self._visit_tuple_binding(stmt.target, ctx)
+        env = self._visit_binding(stmt.target, env)
         body_env = self._visit_block(stmt.body, (env, False))
         return env.merge(body_env)
 

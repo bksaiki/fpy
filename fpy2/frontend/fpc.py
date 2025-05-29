@@ -263,8 +263,8 @@ class _FPCore2FPy:
 
         # emit temporary to bind result of branches
         t = self.gensym.fresh('t')
-        ift_ctx.stmts.append(Assign(t, ift_expr, None, None))
-        iff_ctx.stmts.append(Assign(t, iff_expr, None, None))
+        ift_ctx.stmts.append(Assign(t, None, ift_expr, None))
+        iff_ctx.stmts.append(Assign(t, None, iff_expr, None))
 
         # create if statement and bind it
         if_stmt = IfStmt(cond_expr, StmtBlock(ift_ctx.stmts), StmtBlock(iff_ctx.stmts), None)
@@ -283,7 +283,7 @@ class _FPCore2FPy:
             # bind value to variable
             t = self.gensym.fresh(var)
             env = { **env, var: t }
-            stmt = Assign(t, v_e, None, None)
+            stmt = Assign(t, None, v_e, None)
             ctx.stmts.append(stmt)
 
         return self._visit(e.body, _Ctx(env=env, props=ctx.props, stmts=ctx.stmts))
@@ -297,7 +297,7 @@ class _FPCore2FPy:
             # bind value to variable
             t = self.gensym.fresh(var)
             env = { **env, var: t }
-            stmt = Assign(t, init_e, None, None)
+            stmt = Assign(t, None, init_e, None)
             ctx.stmts.append(stmt)
 
         # compile condition
@@ -310,7 +310,7 @@ class _FPCore2FPy:
         for var, _, update in e.while_bindings:
             # compile value and update loop variable
             update_e = self._visit(update, update_ctx)
-            stmt = Assign(env[var], update_e, None, None)
+            stmt = Assign(env[var], None, update_e, None)
             stmts.append(stmt)
 
         # append while statement
@@ -330,7 +330,7 @@ class _FPCore2FPy:
             # bind value to variable
             t = self.gensym.fresh(var)
             env = { **env, var: t }
-            stmt = Assign(t, init_e, None, None)
+            stmt = Assign(t, None, init_e, None)
             ctx.stmts.append(stmt)
 
         # compile condition
@@ -347,14 +347,14 @@ class _FPCore2FPy:
             # bind value to temporary
             t = self.gensym.fresh('t')
             loop_env = { **loop_env, var: t }
-            stmt = Assign(t, update_e, None, None)
+            stmt = Assign(t, None, update_e, None)
             stmts.append(stmt)
 
         # rebind temporaries
         for var, _, _ in e.while_bindings:
             v = env[var]
             t = loop_env[var]
-            stmt = Assign(v, Var(t, None), None, None)
+            stmt = Assign(v, None, Var(t, None), None)
             stmts.append(stmt)
 
         # append while statement
@@ -401,7 +401,7 @@ class _FPCore2FPy:
         bound_vars: list[NamedId] = []
         for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
-            stmt: Stmt = Assign(t, self._visit(val, ctx), None, None)
+            stmt: Stmt = Assign(t, None, self._visit(val, ctx), None)
             ctx.stmts.append(stmt)
             bound_vars.append(t)
 
@@ -413,14 +413,14 @@ class _FPCore2FPy:
             init_e = self._visit(init, init_ctx)
             # bind value to variable
             t = self.gensym.fresh(var)
-            stmt = Assign(t, init_e, None, None)
+            stmt = Assign(t, None, init_e, None)
             ctx.stmts.append(stmt)
             init_env[var] = t
 
         # initialize tensor
         tuple_id = self.gensym.fresh('t')
         zeroed = _zeros([Var(var, None) for var in bound_vars])
-        stmt = Assign(tuple_id, zeroed, None, None)
+        stmt = Assign(tuple_id, None, zeroed, None)
         ctx.stmts.append(stmt)
 
         # initial iteration variables
@@ -446,7 +446,7 @@ class _FPCore2FPy:
             update_e = self._visit(update, loop_ctx)
             # bind value to temporary
             t = loop_ctx.env[var]
-            stmt = Assign(t, update_e, None, None)
+            stmt = Assign(t, None, update_e, None)
             loop_stmts.append(stmt)
 
         return Var(tuple_id, None)
@@ -466,14 +466,14 @@ class _FPCore2FPy:
         bound_vars: list[NamedId] = []
         for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
-            stmt: Stmt = Assign(t, self._visit(val, ctx), None, None)
+            stmt: Stmt = Assign(t, None, self._visit(val, ctx), None)
             ctx.stmts.append(stmt)
             bound_vars.append(t)
 
         # initialize tensor
         tuple_id = self.gensym.fresh('t')
         zeroed = _zeros([Var(var, None) for var in bound_vars])
-        stmt = Assign(tuple_id, zeroed, None, None)
+        stmt = Assign(tuple_id, None, zeroed, None)
         ctx.stmts.append(stmt)
 
         # initial iteration variables
@@ -517,7 +517,7 @@ class _FPCore2FPy:
         bound_vars: list[NamedId] = []
         for _, val in e.dim_bindings:
             t = self.gensym.fresh('t')
-            stmt: Stmt = Assign(t, self._visit(val, ctx), None, None)
+            stmt: Stmt = Assign(t, None, self._visit(val, ctx), None)
             ctx.stmts.append(stmt)
             bound_vars.append(t)
 
@@ -529,7 +529,7 @@ class _FPCore2FPy:
             init_e = self._visit(init, init_ctx)
             # bind value to variable
             t = self.gensym.fresh(var)
-            stmt = Assign(t, init_e, None, None)
+            stmt = Assign(t, None, init_e, None)
             ctx.stmts.append(stmt)
             init_env[var] = t
 
@@ -550,7 +550,7 @@ class _FPCore2FPy:
             for var, _, update in e.while_bindings:
                 t = loop_env[var]
                 update_e = self._visit(update, loop_ctx)
-                stmt = Assign(t, update_e, None, None)
+                stmt = Assign(t, None, update_e, None)
                 loop_stmts.append(stmt)
         else:
             # temporary update variables
@@ -558,7 +558,7 @@ class _FPCore2FPy:
             for var, _, update in e.while_bindings:
                 update_e = self._visit(update, loop_ctx)
                 update_var = self.gensym.fresh(var)
-                stmt = Assign(update_var, update_e, None, None)
+                stmt = Assign(update_var, None, update_e, None)
                 loop_stmts.append(stmt)
                 update_env[var] = update_var
 
@@ -566,7 +566,7 @@ class _FPCore2FPy:
             for var, _, _ in e.while_bindings:
                 x = init_env[var]
                 t = update_env[var]
-                stmt = Assign(x, Var(t, None), None, None)
+                stmt = Assign(x, None, Var(t, None), None)
                 loop_stmts.append(stmt)
 
         body_ctx = _Ctx(env=init_env, props=ctx.props, stmts=ctx.stmts)
@@ -589,7 +589,7 @@ class _FPCore2FPy:
 
         # bind value to temporary
         t = self.gensym.fresh('t')
-        block = StmtBlock(val_ctx.stmts + [Assign(t, val, None, None)])
+        block = StmtBlock(val_ctx.stmts + [Assign(t, None, val, None)])
         stmt = ContextStmt(UnderscoreId(), ctx_val, block, None)
         ctx.stmts.append(stmt)
         return Var(t, None)
@@ -686,7 +686,7 @@ class _FPCore2FPy:
                         dim_ids.append(UnderscoreId())
 
                 shape_e = Shape(Var(t, None), None)
-                stmt = TupleUnpack(TupleBinding(dim_ids, None), shape_e, None)
+                stmt = Assign(TupleBinding(dim_ids, None), None, shape_e, None)
                 ctx.stmts.append(stmt)
                 for dim, dim_id in zip(shape, dim_ids):
                     if isinstance(dim, str):

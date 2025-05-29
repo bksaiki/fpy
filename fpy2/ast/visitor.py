@@ -105,10 +105,6 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any) -> Any:
-        ...
-
-    @abstractmethod
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any) -> Any:
         ...
 
@@ -215,8 +211,6 @@ class Visitor(ABC):
         match stmt:
             case Assign():
                 return self._visit_assign(stmt, ctx)
-            case TupleUnpack():
-                return self._visit_tuple_unpack(stmt, ctx)
             case IndexedAssign():
                 return self._visit_indexed_assign(stmt, ctx)
             case If1Stmt():
@@ -326,9 +320,6 @@ class DefaultVisitor(Visitor):
                 self._visit_expr(arg, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx: Any):
-        self._visit_expr(stmt.expr, ctx)
-
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
@@ -449,16 +440,7 @@ class DefaultTransformVisitor(Visitor):
         return TupleSet(array, slices, value, e.loc)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
-        targets: list[Id | TupleBinding] = []
-        for target in e.targets:
-            match target:
-                case Id():
-                    targets.append(target)
-                case TupleBinding():
-                    targets.append(self._visit_tuple_binding(target, ctx))
-                case _:
-                    raise RuntimeError('unreachable', target)
-
+        targets = [self._visit_binding(target, ctx) for target in e.targets]
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
         return CompExpr(targets, iterables, elt, e.loc)
@@ -496,27 +478,23 @@ class DefaultTransformVisitor(Visitor):
 
         return ContextExpr(ctor, args, kwargs, e.loc)
 
-    def _visit_assign(self, stmt: Assign, ctx: Any):
-        expr = self._visit_expr(stmt.expr, ctx)
-        s = Assign(stmt.var, expr, stmt.ann, stmt.loc)
-        return s, ctx
+    def _visit_binding(self, binding: Id | TupleBinding, ctx: Any):
+        match binding:
+            case Id():
+                return binding
+            case TupleBinding():
+                return self._visit_tuple_binding(binding, ctx)
+            case _:
+                raise RuntimeError('unreachable', binding)
 
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: Any):
-        new_vars: list[Id | TupleBinding] = []
-        for var in binding:
-            match var:
-                case Id():
-                    new_vars.append(var)
-                case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(var, ctx))
-                case _:
-                    raise NotImplementedError(f'unreachable {var}')
-        return TupleBinding(new_vars, binding.loc)
+        elts = [self._visit_binding(var, ctx) for var in binding]
+        return TupleBinding(elts, binding.loc)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
-        binding = self._visit_tuple_binding(stmt.binding, ctx)
+    def _visit_assign(self, stmt: Assign, ctx: Any):
+        binding = self._visit_binding(stmt.binding, ctx)
         expr = self._visit_expr(stmt.expr, ctx)
-        s = TupleUnpack(binding, expr, stmt.loc)
+        s = Assign(binding, stmt.type, expr, stmt.loc)
         return s, ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
@@ -545,14 +523,7 @@ class DefaultTransformVisitor(Visitor):
         return s, ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: Any):
-        match stmt.target:
-            case Id():
-                target = stmt.target
-            case TupleBinding():
-                target = self._visit_tuple_binding(stmt.target, ctx)
-            case _:
-                raise RuntimeError('unreachable', stmt.target)
-
+        target = self._visit_binding(stmt.target, ctx)
         iterable = self._visit_expr(stmt.iterable, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
         s = ForStmt(target, iterable, body, stmt.loc)

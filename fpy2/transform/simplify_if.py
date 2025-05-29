@@ -32,7 +32,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            s = Assign(t, cond, BoolTypeAnn(None), None)
+            s = Assign(t, BoolTypeAnn(None), cond, None)
             stmts.append(s)
             cond = Var(t, None)
 
@@ -50,14 +50,14 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         # generate assignments and inline the body
         for var in mutated:
             t = rename[var]
-            s = Assign(t, Var(var, None), None, None)
+            s = Assign(t, None, Var(var, None), None)
             stmts.append(s)
         stmts.extend(body.stmts)
 
         # make if expressions for each mutated variable
         for var in mutated:
             e = IfExpr(cond, Var(rename[var], None), Var(var, None), None)
-            s = Assign(var, e, None, None)
+            s = Assign(var, None, e, None)
             stmts.append(s)
 
         return StmtBlock(stmts)
@@ -72,7 +72,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            s = Assign(t, cond, BoolTypeAnn(None), None)
+            s = Assign(t, BoolTypeAnn(None), cond, None)
             stmts.append(s)
             cond = Var(t, None)
 
@@ -107,13 +107,13 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
 
         for var in mutated_ift:
             t = rename_ift[var]
-            s = Assign(t, Var(var, None), None, None)
+            s = Assign(t, None, Var(var, None), None)
             stmts.append(s)
         stmts.extend(ift.stmts)
 
         for var in mutated_iff:
             t = rename_iff[var]
-            s = Assign(t, Var(var, None), None, None)
+            s = Assign(t, None, Var(var, None), None)
             stmts.append(s)
         stmts.extend(iff.stmts)
 
@@ -124,7 +124,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
                 ift_name = rename_ift.get(var, var)
                 iff_name = rename_iff.get(var, var)
                 e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
-                s = Assign(var, e, None, None)
+                s = Assign(var, None, e, None)
                 stmts.append(s)
                 unique.add(var)
 

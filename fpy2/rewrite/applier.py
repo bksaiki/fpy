@@ -115,28 +115,22 @@ class _StmtApplierInst(DefaultTransformVisitor):
         elt = self._visit_expr(e.elt, None)
         return CompExpr(targets, iterables, elt, None)
 
-    def _visit_assign(self, stmt: Assign, ctx: None):
-        ident = self._visit_id(stmt.var)
-        expr = self._visit_expr(stmt.expr, None)
-        s =  Assign(ident, expr, stmt.ann, None)
-        return s, None
+    def _visit_binding(self, binding: Id | TupleBinding, ctx: None):
+        match binding:
+            case Id():
+                return self._visit_id(binding)
+            case TupleBinding():
+                return self._visit_tuple_binding(binding, ctx)
+            case _:
+                raise RuntimeError(f'unreachable case: {binding}')
 
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: None):
-        new_vars: list[Id | TupleBinding] = []
-        for elt in binding.elts:
-            match elt:
-                case Id():
-                    new_vars.append(self._visit_id(elt))
-                case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(elt, ctx))
-                case _:
-                    raise RuntimeError(f'unreachable case: {elt}')
-        return TupleBinding(new_vars, None)
+        return TupleBinding([binding for binding in binding.elts], None)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
-        binding = self._visit_tuple_binding(stmt.binding, ctx)
+    def _visit_assign(self, stmt: Assign, ctx: None):
+        binding = self._visit_binding(stmt.binding, None)
         expr = self._visit_expr(stmt.expr, None)
-        s = TupleUnpack(binding, expr, None)
+        s =  Assign(binding, stmt.type, expr, None)
         return s, None
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
@@ -163,14 +157,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
         return s, None
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        match stmt.target:
-            case Id():
-                target = self._visit_id(stmt.target)
-            case TupleBinding():
-                target = self._visit_tuple_binding(stmt.target, ctx)
-            case _:
-                raise RuntimeError('unreachable', stmt.target)
-
+        target = self._visit_binding(stmt.target, None)
         iterable = self._visit_expr(stmt.iterable, None)
         body, _ = self._visit_block(stmt.body, None)
         s = ForStmt(target, iterable, body, None)

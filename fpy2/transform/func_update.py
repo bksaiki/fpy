@@ -21,7 +21,7 @@ class _FuncUpdateInstance(DefaultTransformVisitor):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
         expr = self._visit_expr(stmt.expr, ctx)
         e = TupleSet(Var(stmt.var, None), slices, expr, stmt.loc)
-        s = Assign(stmt.var, e, None, stmt.loc)
+        s = Assign(stmt.var, None, e, stmt.loc)
         return s, None
 
 class FuncUpdate:

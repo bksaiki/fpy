@@ -495,14 +495,17 @@ class FPCoreCompileInstance(Visitor):
         return fpc.If(cond, ift, iff)
 
     def _visit_assign(self, stmt: Assign, ctx: fpc.Expr):
-        bindings = [(str(stmt.var), self._visit_expr(stmt.expr, None))]
-        return fpc.Let(bindings, ctx)
-
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: fpc.Expr):
-        tuple_id = str(self.gensym.fresh('t'))
-        tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
-        destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
-        return fpc.Let([tuple_bind] + destruct_bindings, ctx)
+        match stmt.binding:
+            case Id():
+                bindings = [(str(stmt.binding), self._visit_expr(stmt.expr, None))]
+                return fpc.Let(bindings, ctx)
+            case TupleBinding():
+                tuple_id = str(self.gensym.fresh('t'))
+                tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
+                destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
+                return fpc.Let([tuple_bind] + destruct_bindings, ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.binding)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')

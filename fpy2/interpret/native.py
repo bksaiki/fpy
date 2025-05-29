@@ -470,16 +470,6 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _visit_assign(self, stmt: Assign, ctx: _EvalCtx):
-        val = self._visit_expr(stmt.expr, ctx)
-        match stmt.var:
-            case NamedId():
-                ctx.env[stmt.var] = val
-            case UnderscoreId():
-                pass
-            case _:
-                raise NotImplementedError('unknown variable', stmt.var)
-
     def _unpack_tuple(self, binding: TupleBinding, val: list, ctx: _EvalCtx) -> None:
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
@@ -494,11 +484,13 @@ class _Interpreter(Visitor):
                 case _:
                     raise NotImplementedError('unknown tuple element', elt)
 
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: _EvalCtx):
+    def _visit_assign(self, stmt: Assign, ctx: _EvalCtx):
         val = self._visit_expr(stmt.expr, ctx)
-        if not isinstance(val, list):
-            raise TypeError(f'expected a tuple, got {val}')
-        self._unpack_tuple(stmt.binding, val, ctx)
+        match stmt.binding:
+            case NamedId():
+                ctx.env[stmt.binding] = val
+            case TupleBinding():
+                self._unpack_tuple(stmt.binding, val, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _EvalCtx):
         # lookup the array

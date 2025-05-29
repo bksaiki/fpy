@@ -132,12 +132,6 @@ class _DefineUseInstance(DefaultVisitor):
 
     def _visit_assign(self, stmt: Assign, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
-        if isinstance(stmt.var, NamedId):
-            self._add_def(stmt.var, stmt)
-            ctx[stmt.var] = stmt
-
-    def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: DefinitionCtx):
-        self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
             self._add_def(var, stmt)
             ctx[var] = stmt
