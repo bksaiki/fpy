@@ -4,7 +4,6 @@ into a single variable.
 """
 
 from ..analysis import DefineUse, DefineUseAnalysis
-from ..analysis import DefineUse
 from ..ast import *
 from ..utils import Gensym
 

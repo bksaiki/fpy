@@ -8,7 +8,7 @@ from typing import Optional
 from titanfp.arithmetic.evalctx import determine_ctx
 from titanfp.arithmetic import ieee754
 
-from ..ast import AnyTypeAnn, ScalarTypeAnn, FuncDef
+from ..ast import AnyTypeAnn, RealTypeAnn, FuncDef
 from ..env import ForeignEnv
 from ..function import Function
 from ..interpret import DefaultInterpreter
@@ -154,7 +154,7 @@ def sample_function(
         match arg.type:
             case AnyTypeAnn():
                 pass
-            case ScalarTypeAnn(kind=ScalarType.REAL):
+            case RealTypeAnn():
                 pass
             case _:
                 raise ValueError(f"expected Real, got {arg.type}")
