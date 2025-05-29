@@ -139,7 +139,6 @@ class _Interpreter(AstVisitor):
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
-        # TODO: what context is set when entering the FPy runtime?
         # determine context when specified
         if ctx is None:
             ctx = _PY_CTX

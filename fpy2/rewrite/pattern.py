@@ -82,7 +82,7 @@ class StmtPattern(Pattern):
         # set of targets (LHS of assignments)
         # TODO: which analysis should be run?
         def_use = DefineUse.analyze(func)
-        targets = set(def_use.keys())
+        targets = set(def_use.defs.keys())
 
         self.block = func.body
         self._func = func

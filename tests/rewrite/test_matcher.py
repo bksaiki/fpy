@@ -1,7 +1,7 @@
 import unittest
 
 from fpy2 import fpy, pattern, Function
-from fpy2.ast import BinaryOp, BinaryOpKind, Var, NamedId, Integer
+from fpy2.ast import Add, Var, NamedId, Integer
 from fpy2.rewrite.matcher import Matcher
 from fpy2.typing import *
 
@@ -168,7 +168,7 @@ class MatchStmtTestCase(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0].subst['t'], Var(NamedId('x'), None))
         self.assertEqual(matches[0].subst['N'], Integer(100, None))
-        self.assertEqual(matches[0].subst['e'], BinaryOp(BinaryOpKind.ADD, Var(NamedId('x'), None), Integer(1, None), None))
+        self.assertEqual(matches[0].subst['e'], Add(Var(NamedId('x'), None), Integer(1, None), None))
 
 
     def test_fma_example_1(self):
