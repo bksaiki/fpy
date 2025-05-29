@@ -251,6 +251,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: _Ctx):
         env, _ = ctx
+        print(binding)
         for elt in binding.elts:
             match elt:
                 case NamedId():

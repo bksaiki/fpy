@@ -57,7 +57,7 @@ class _RenameTargetInstance(DefaultAstTransformVisitor):
                 raise RuntimeError('unreachable', binding)
 
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: None):
-        return [self._visit_binding(elt, ctx) for elt in binding.elts]
+        return TupleBinding([self._visit_binding(elt, ctx) for elt in binding.elts], None)
 
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: None):
         binding = self._visit_tuple_binding(stmt.binding, ctx)

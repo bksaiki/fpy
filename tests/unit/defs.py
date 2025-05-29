@@ -306,13 +306,19 @@ def test_if6():
 
 @fpy
 def test_while1():
+    while False:
+        x = 1
+    return 0
+
+@fpy
+def test_while2():
     x = 0
     while x < 1:
         x = 1
     return x
 
 @fpy
-def test_while2():
+def test_while3():
     x = 0
     t = 1
     while x < 1:
@@ -320,22 +326,12 @@ def test_while2():
     return x + t
 
 @fpy
-def test_while3():
+def test_while4():
     x = 0
     y = 0
     while x < 5:
         x += 1
         y += x
-    return x, y
-
-@fpy
-def test_while4():
-    x = 0
-    y = 0
-    while x < 5:
-        while y < 25:
-            y += 1
-            x += y
     return x, y
 
 @fpy
@@ -343,6 +339,16 @@ def test_while5():
     x = 0
     y = 0
     while x < 5:
+        while y < 25:
+            y += 1
+            x += y
+    return x, y
+
+@fpy
+def test_while6():
+    x = 0
+    y = 0
+    while x < 5:
         x += 1
         y += x
         while y < 25:
@@ -351,7 +357,7 @@ def test_while5():
     return x, y
 
 @fpy
-def test_while6():
+def test_while7():
     a = 0
     b = 0
     while a <= 3:
@@ -605,6 +611,7 @@ tests = [
     test_while3,
     test_while4,
     test_while5,
+    test_while6,
     test_for1,
     test_for2,
     test_for3,

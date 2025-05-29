@@ -522,11 +522,11 @@ class TupleBinding(Ast):
 
     def __init__(
         self,
-        vars: Sequence[Id | Self],
+        elts: Sequence[Id | Self],
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.elts = list(vars)
+        self.elts = list(elts)
 
     def __iter__(self):
         return iter(self.elts)

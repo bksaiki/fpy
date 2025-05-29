@@ -1,7 +1,5 @@
 """Transformation pass to rewrite if statements to if expressions."""
 
-from typing import Optional
-
 from ..analysis import DefineUse, DefineUseAnalysis, DefinitionCtx
 from ..ast import *
 from ..transform import RenameTarget
@@ -12,6 +10,7 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     gensym: Gensym
+
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
@@ -19,25 +18,6 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
 
     def apply(self):
         return self._visit_function(self.func, None)
-
-    def _mutated_vars(self, old: DefinitionCtx, new: DefinitionCtx):
-        """
-        Computes the set of variables that were mutated between
-        the `old` and `new` definition contexts.
-        """
-        names: set[NamedId] = set()
-        for name in old.keys() & new.keys():
-            if old[name] != new[name]:
-                names.add(name)
-        return list(names)
-
-    def _intro_vars(self, old: DefinitionCtx, new: DefinitionCtx):
-        """
-        Computes the set of variables that were introduced between
-        the `old` and `new` definition contexts.
-        """
-        return set(new.keys() - old.keys())
-
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         stmts: list[Stmt] = []
@@ -57,7 +37,7 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
 
         # identify variables that were mutated in the body
         defs_in, defs_out = self.def_use.blocks[stmt.body]
-        mutated = self._mutated_vars(defs_in, defs_out)
+        mutated = defs_in.mutated_in(defs_out)
 
         # rename mutated variables in the body and inline it
         rename = { var: self.gensym.refresh(var) for var in mutated }
@@ -93,15 +73,14 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
         # identify variables that were mutated in each body
         defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
         defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
-        mutated_ift = self._mutated_vars(defs_in_ift, defs_out_ift)
-        mutated_iff = self._mutated_vars(defs_in_iff, defs_out_iff)
+        mutated_ift = defs_in_ift.mutated_in(defs_out_ift)
+        mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
 
         # identify variables that were introduced in the bodies
         # FPy semantics says they must be introduces in both branches
-        intros_ift = self._intro_vars(defs_in_ift, defs_out_ift)
-        intros_iff = self._intro_vars(defs_in_iff, defs_out_iff)
+        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
+        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
         intros = intros_ift & intros_iff
-        print(intros)
 
         # add to "mutated" set (bit of a misnomer)
         mutated_ift.extend(intros)

@@ -3,104 +3,116 @@ Transformation pass to bundle updated variables in while loops
 into a single variable.
 """
 
-from typing import Optional
-
-from ..analysis import DefineUse
+from ..analysis import DefineUse, DefineUseAnalysis, DefinitionCtx
 from ..ast import *
+from ..transform import RenameTarget
 from ..utils import Gensym
 
-_CtxType = dict[NamedId, Expr]
-"""
-Visitor method context type for expressions
-"""
+_Ctx = dict[NamedId, Expr]
 
 class _WhileBundlingInstance(DefaultAstTransformVisitor):
     """Single-use instance of the WhileBundling pass."""
     func: FuncDef
+    def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, names: set[NamedId]):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
-        self.gensym = Gensym(reserved=names)
+        self.def_use = def_use
+        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})
 
-    def _visit_var(self, e: Var, ctx: Optional[_CtxType]):
-        if ctx is None or e.name not in ctx:
-            return Var(e.name, None)
-        else:
+    def _visit_var(self, e: Var, ctx: _Ctx):
+        if e.name in ctx:
             return ctx[e.name]
+        else:
+            return Var(e.name, e.loc)
 
-    #
-    #  a_1 = phi(a_0, a_2)
-    #  ...
-    #  z_1 = phi(z_0, z_2)
-    #  while <cond>:
-    #      <stmts> ...
-    #
-    #  ==>
-    #
-    #  t_0 = (a_0, ..., z_0)
-    #  t_1 = phi(t_0, t_2)
-    #  while <cond>:
-    #     a_1, ..., z_1 = t_1
-    #     <stmts> ...
-    #     t_2 = (a_2, ..., z_2)
-    #  a_1, ..., z_1 = t_1
-    #
-    #  - violates SSA invariant
-    #  - need to substitute for any a_1, ..., z_1 in the condition
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx) -> StmtBlock:
+        # let x_0, ..., x_N be variables mutated in the while loop
+        # let x_0', ..., x_N', t be fresh variables
+        #
+        # The transformation is as follows:
+        # ```
+        # while <cond>:
+        #    ...
+        # ```
+        # ==>
+        # ```
+        # t = (x_0, ..., x_N)
+        # while <cond'>:
+        #     x_0', ..., x_N' = t
+        #     ...
+        #     t = (x_0', ..., x_N')
+        # x_0, ..., x_N = t
+        # ```
+        # where `<cond'> := [x_0 -> t[0], ..., x_N -> t[N]] <cond>`
+        # subsitutes for `x_0, ..., x_N` in the condition.
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
-        raise NotImplementedError
-        # if len(stmt.phis) <= 1:
-        #     stmt, _ = super()._visit_while(stmt, None)
-        #     return StmtBlock([stmt])
-        # else:
-        #     # create a new phi variable
-        #     phi_name = self.gensym.fresh('t')
-        #     phi_init = self.gensym.fresh('t')
-        #     phi_update = self.gensym.fresh('t')
-        #     phi_ty = AnyType() # TODO: infer type
+        # identify variables that were mutated in the body
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
 
-        #     # construct a tuple of phi variables
-        #     phi_vars = [Var(phi.lhs) for phi in stmt.phis]
-        #     init_stmt = SimpleAssign(phi_init, AnyType(), TupleExpr(*phi_vars))
+        if len(mutated) > 1:
+            # need to apply the transformation
+            stmts: list[Stmt] = []
 
-        #     # apply substitution to the condition
-        #     cond_ctx: _CtxType = {}
-        #     for i, phi in enumerate(stmt.phis):
-        #         cond_ctx[phi.name] = TupleRef(Var(phi_name), Integer(i))
-        #     cond = self._visit_expr(stmt.cond, cond_ctx)
+            # fresh variable to hold tuple of mutated variables
+            t = self.gensym.fresh('t')
 
-        #     # deconstruct unified phi variable
-        #     phi_names = [phi.name for phi in stmt.phis]
-        #     deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))
+            # fresh variables for each mutated variable
+            rename = { var: self.gensym.refresh(var) for var in mutated }
 
-        #     # construct the update tuple of phi variables
-        #     phi_updates = [Var(phi.rhs) for phi in stmt.phis]
-        #     update_stmt = SimpleAssign(phi_update, AnyType(), TupleExpr(*phi_updates))
+            # create a tuple of mutated variables
+            s: Stmt = SimpleAssign(t, TupleExpr([Var(var, None) for var in mutated], None), None, None)
+            stmts.append(s)
 
-        #     # put it all together
-        #     body, _ = self._visit_block(stmt.body, None)
-        #     phis = [PhiNode(phi_name, phi_init, phi_update, phi_ty)]
-        #     while_stmt = WhileStmt(cond, StmtBlock([deconstruct_stmt, *body.stmts, update_stmt]), phis)
+            # apply substitution to the condition
+            cond_ctx = { var: TupleRef(Var(t, None), (Integer(i, None),), None) for i, var in enumerate(mutated) }
+            cond = self._visit_expr(stmt.cond, cond_ctx)
 
-        #     # decompose the unified phi variable (again)
-        #     deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))
-        #     return StmtBlock([init_stmt, while_stmt, deconstruct_stmt])
+            # compile the body and apply the renaming
+            body, _ = self._visit_block(stmt.body, ctx)
+            body = RenameTarget.apply_block(body, rename)
 
-    def _visit_block(self, block: StmtBlock, ctx: None):
+            # unpack the tuple at the start of the body
+            s = TupleUnpack(TupleBinding([rename[v] for v in mutated], None), Var(t, None), None)
+            body.stmts.insert(0, s)
+
+            # repack the tuple at the end of the body
+            s = SimpleAssign(t, TupleExpr([Var(rename[v], None) for v in mutated], None), None, None)
+            body.stmts.append(s)
+
+            # append the while statement
+            s = WhileStmt(cond, body, None)
+            stmts.append(s)
+
+            # unpack the tuple after the loop
+            s = TupleUnpack(TupleBinding(mutated, None), Var(t, None), None)
+            stmts.append(s)
+
+            print(StmtBlock(stmts).format())
+            return StmtBlock(stmts)
+        else:
+            # transformation is not needed
+            cond = self._visit_expr(stmt.cond, ctx)
+            body, _ = self._visit_block(stmt.body, ctx)
+            s = WhileStmt(cond, body, None)
+            return StmtBlock([s])
+
+
+    def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         stmts: list[Stmt] = []
         for stmt in block.stmts:
             if isinstance(stmt, WhileStmt):
-                b = self._visit_while(stmt, None)
+                b = self._visit_while(stmt, ctx)
                 stmts.extend(b.stmts)
             else:
-                stmt, _ = self._visit_statement(stmt, None)
+                stmt, _ = self._visit_statement(stmt, ctx)
                 stmts.append(stmt)
-        return StmtBlock(stmts), None
+        return StmtBlock(stmts), ctx
 
 
 class WhileBundling:
@@ -113,11 +125,8 @@ class WhileBundling:
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: Optional[set[NamedId]] = None) -> FuncDef:
-        if names is None:
-            def_use = DefineUse.analyze(func)
-            names = set(def_use.defs.keys())
-        inst = _WhileBundlingInstance(func, names)
-        func = inst.apply()
+    def apply(func: FuncDef) -> FuncDef:
+        def_use = DefineUse.analyze(func)
+        func = _WhileBundlingInstance(func, def_use).apply()
         SyntaxCheck.check(func)
         return func

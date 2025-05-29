@@ -4,7 +4,7 @@ from typing import Optional
 
 import titanfp.fpbench.fpcast as fpc 
 
-from ..analysis import DefineUse
+from ..analysis import DefineUse, DefineUseAnalysis, DefinitionCtx
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..number import Context
@@ -101,14 +101,13 @@ def _size0_expr(x: str):
 class FPCoreCompileInstance(AstVisitor):
     """Compilation instance from FPy to FPCore"""
     func: FuncDef
+    def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef):
-        def_use = DefineUse.analyze(func)
-        names = set(def_use.defs.keys())
-
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
-        self.gensym = Gensym(reserved=names)
+        self.def_use = def_use
+        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def compile(self) -> fpc.FPCore:
         f = self._visit_function(self.func, None)
@@ -514,14 +513,31 @@ class FPCoreCompileInstance(AstVisitor):
     def _visit_if(self, stmt: IfStmt, ctx: None):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_while(self, stmt: WhileStmt, ctx: fpc.Expr):
-        if len(stmt.phis) != 1:
-            raise FPCoreCompileError('while loops must have exactly one phi node')
-        phi = stmt.phis[0]
-        name, init, update = str(phi.name), str(phi.lhs), str(phi.rhs)
-        cond = self._visit_expr(stmt.cond, None)
-        body = self._visit_block(stmt.body, fpc.Var(update))
-        return fpc.While(cond, [(name, fpc.Var(init), body)], ctx)
+    def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr):
+        # check that only one variable is mutated in the loop
+        # the `WhileBundling` pass is required to ensure this
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
+        num_mutated = len(mutated)
+
+        if num_mutated == 0:
+            # no mutated variables (loop with no side effect)
+            # still want to return a valid FPCore
+            # (while ([_ 0 (let ([_ <body>]) 0)]) <ret>)
+            cond = self._visit_expr(stmt.cond, None)
+            body = self._visit_block(stmt.body, fpc.Integer(0))
+            return fpc.While(cond, [('_', fpc.Integer(0), body)], ret)
+        elif num_mutated == 1:
+            # exactly one mutated variable
+            # the mutated variable is the loop variable
+            # (while ([<t> <t> <body>]) <ret>)
+            loop_var = str(mutated.pop())
+            cond = self._visit_expr(stmt.cond, None)
+            body = self._visit_block(stmt.body, fpc.Var(loop_var))
+            return fpc.While(cond, [(loop_var, fpc.Var(loop_var), body)], ret)
+        else:
+            raise FPCoreCompileError(f'while loops cannot have more than 1 mutated variable: {list(mutated)}')
+
 
     def _visit_for(self, stmt: ForStmt, ctx: fpc.Expr):
         if len(stmt.phis) != 1:
@@ -632,4 +648,5 @@ class FPCoreCompiler(Backend):
         func = WhileBundling.apply(func)
         func = SimplifyIf.apply(func)
         # compile
-        return FPCoreCompileInstance(func).compile()
+        def_use = DefineUse.analyze(func)
+        return FPCoreCompileInstance(func, def_use).compile()

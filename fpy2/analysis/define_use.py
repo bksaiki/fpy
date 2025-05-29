@@ -42,7 +42,31 @@ class _DefineUnion:
         else:
             return _DefineUnion(defs)
 
-DefinitionCtx: TypeAlias = dict[NamedId, Definition | _DefineUnion]
+class DefinitionCtx(dict[NamedId, Definition | _DefineUnion]):
+    """Mapping from variable to its definition (or possible definitions)."""
+
+    def copy(self) -> 'DefinitionCtx':
+        """Returns a shallow copy of the context."""
+        return DefinitionCtx(self)
+
+    def mutated_in(self, other: 'DefinitionCtx') -> list[NamedId]:
+        """
+        Returns the set of variables that are defined in `self`
+        and mutated in `other`.
+        """
+        names: set[NamedId] = set()
+        for name in self.keys() & other.keys():
+            if self[name] != other[name]:
+                names.add(name)
+        return list(names)
+
+    def fresh_in(self, other: 'DefinitionCtx') -> set[NamedId]:
+        """
+        Returns the set of variables that are defined in `other`
+        but not in `self`.
+        """
+        return set(other.keys() - self.keys())
+
 
 @dataclass
 class DefineUseAnalysis:
@@ -70,9 +94,9 @@ class _DefineUseInstance(DefaultAstVisitor):
     def analyze(self):
         match self.ast:
             case FuncDef():
-                self._visit_function(self.ast, {})
+                self._visit_function(self.ast, DefinitionCtx())
             case StmtBlock():
-                self._visit_block(self.ast, {})
+                self._visit_block(self.ast, DefinitionCtx())
             case _:
                 raise RuntimeError(f'unreachable case: {self.ast}')
         return self.analysis
