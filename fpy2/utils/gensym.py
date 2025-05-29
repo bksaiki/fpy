@@ -14,6 +14,7 @@ class Gensym(object):
     has generated or reserved.
     """
     _idents: set[NamedId]
+    _generated: set[NamedId]
     _counter: int
     _rename_hook: Optional[Callable[[str], str]]
 
@@ -29,6 +30,7 @@ class Gensym(object):
             self._idents = set(reserved)
             self._counter = len(reserved)
 
+        self._generated = set()
         self._rename_hook = rename_hook
 
     def _copy_id(self, id: NamedId) -> NamedId:
@@ -39,7 +41,7 @@ class Gensym(object):
                 return NamedId(id.base, id.count)
 
     def reserve(self, *idents: NamedId):
-        """Reserves a set of identifiers"""
+        """Reserves a set of identifiers. Does not add to `self.generated`."""
         for ident in idents:
             if not isinstance(ident, NamedId):
                 raise TypeError('must be a list of identifiers', idents)
@@ -55,6 +57,7 @@ class Gensym(object):
             self._counter += 1
 
         self._idents.add(ident)
+        self._generated.add(ident)
         return ident
 
     def fresh(self, prefix: str = 't'):
@@ -77,3 +80,8 @@ class Gensym(object):
     @property
     def names(self):
         return set(self._idents)
+
+    @property
+    def generated(self):
+        """Returns the set of generated identifiers."""
+        return set(self._generated)

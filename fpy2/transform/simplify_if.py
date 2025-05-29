@@ -4,6 +4,7 @@ from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
 
+from .copy_propagate import CopyPropagate
 from .rename_target import RenameTarget
 
 
@@ -19,7 +20,8 @@ class _SimplifyIfInstance(DefaultAstTransformVisitor):
         self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def apply(self):
-        return self._visit_function(self.func, None)
+        func = self._visit_function(self.func, None)
+        return func, self.gensym.generated
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         stmts: list[Stmt] = []
@@ -177,7 +179,8 @@ class SimplifyIf:
     @staticmethod
     def apply(func: FuncDef):
         def_use = DefineUse.analyze(func)
-        ast = _SimplifyIfInstance(func, def_use).apply()
+        ast, new_ids = _SimplifyIfInstance(func, def_use).apply()
+        ast = CopyPropagate.apply(ast, names=new_ids)
         print(ast.format())
         SyntaxCheck.check(ast)
         return ast
