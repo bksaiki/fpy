@@ -72,50 +72,48 @@ class _FormatterInstance(AstVisitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
         arg = self._visit_expr(e.arg, ctx)
-        match e.op:
-            case UnaryOpKind.NEG:
+        match e:
+            case Neg():
                 return f'-{arg}'
-            case UnaryOpKind.NOT:
+            case Not():
                 return f'not {arg}'
             case _:
-                return f'{str(e.op)}({arg})'
+                return f'{e.name}({arg})'
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx):
-        lhs = self._visit_expr(e.left, ctx)
-        rhs = self._visit_expr(e.right, ctx)
-        match e.op:
-            case BinaryOpKind.ADD:
+        lhs = self._visit_expr(e.first, ctx)
+        rhs = self._visit_expr(e.second, ctx)
+        match e:
+            case Add():
                 return f'({lhs} + {rhs})'
-            case BinaryOpKind.SUB:
+            case Sub():
                 return f'({lhs} - {rhs})'
-            case BinaryOpKind.MUL:
+            case Mul():
                 return f'({lhs} * {rhs})'
-            case BinaryOpKind.DIV:
+            case Div():
                 return f'({lhs} / {rhs})'
             case _:
-                return f'{str(e.op)}({lhs}, {rhs})'
+                return f'{e.name}({lhs}, {rhs})'
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx):
-        arg0 = self._visit_expr(e.arg0, ctx)
-        arg1 = self._visit_expr(e.arg1, ctx)
-        arg2 = self._visit_expr(e.arg2, ctx)
-        match e.op:
-            case TernaryOpKind.FMA:
+        arg0 = self._visit_expr(e.first, ctx)
+        arg1 = self._visit_expr(e.second, ctx)
+        arg2 = self._visit_expr(e.third, ctx)
+        match e:
+            case Fma():
                 return f'fma({arg0}, {arg1}, {arg2})'
             case _:
-                return f'{str(e.op)}({arg0}, {arg1}, {arg2})'
+                return f'{e.name}({arg0}, {arg1}, {arg2})'
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        match e.op:
-            case NaryOpKind.AND:
-                return ' and '.join(args)
-            case NaryOpKind.OR:
-                return ' or '.join(args)
-            case NaryOpKind.ZIP:
+        match e:
+            case And() | Or():
+                return f' {e.name} '.join(args)
+            case Zip():
                 return f'zip({", ".join(args)})'
             case _:
-                raise NotImplementedError
+                raise RuntimeError('unreachable', e)
 
     def _visit_compare(self, e: Compare, ctx: _Ctx):
         first = self._visit_expr(e.args[0], ctx)
@@ -126,7 +124,7 @@ class _FormatterInstance(AstVisitor):
     def _visit_call(self, e: Call, ctx: _Ctx):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         arg_str = ', '.join(args)
-        return f'{e.op}({arg_str})'
+        return f'{e.name}({arg_str})'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
         num_elts = len(e.args)
@@ -151,7 +149,7 @@ class _FormatterInstance(AstVisitor):
                     s = self._visit_tuple_binding(target)
                     targets.append(f'({s})')
                 case _:
-                    raise NotImplementedError('unreachable', target)
+                    raise RuntimeError('unreachable', target)
 
         elt = self._visit_expr(e.elt, ctx)
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]

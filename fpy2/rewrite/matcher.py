@@ -162,31 +162,31 @@ class _MatcherInst(AstVisitor):
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_unaryop(self, e: UnaryOp, pat: UnaryOp):
-        if e.op != pat.op:
+        if type(e) is not type(pat):
             raise _MatchFailure(f'matching {pat} against {e}')
         self._visit_expr(e.arg, pat.arg)
 
     def _visit_binaryop(self, e: BinaryOp, pat: BinaryOp):
-        if e.op != pat.op:
+        if type(e) is not type(pat):
             raise _MatchFailure(f'matching {pat} against {e}')
-        self._visit_expr(e.left, pat.left)
-        self._visit_expr(e.right, pat.right)
+        self._visit_expr(e.first, pat.first)
+        self._visit_expr(e.second, pat.second)
 
     def _visit_ternaryop(self, e: TernaryOp, pat: TernaryOp):
-        if e.op != pat.op:
+        if type(e) is not type(pat):
             raise _MatchFailure(f'matching {pat} against {e}')
-        self._visit_expr(e.arg0, pat.arg0)
-        self._visit_expr(e.arg1, pat.arg1)
-        self._visit_expr(e.arg2, pat.arg2)
+        self._visit_expr(e.first, pat.first)
+        self._visit_expr(e.second, pat.second)
+        self._visit_expr(e.third, pat.third)
 
     def _visit_naryop(self, e: NaryOp, pat: NaryOp):
-        if e.op != pat.op:
+        if type(e) is not type(pat):
             raise _MatchFailure(f'matching {pat} against {e}')
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)
 
     def _visit_call(self, e: Call, pat: Call):
-        if e.op != pat.op or len(e.args) != len(pat.args):
+        if e.name != pat.name or len(e.args) != len(pat.args):
             raise _MatchFailure(f'matching {pat} against {e}')
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)

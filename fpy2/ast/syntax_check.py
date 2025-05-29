@@ -148,15 +148,15 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx):
         env, _ = ctx
-        self._visit_expr(e.left, ctx)
-        self._visit_expr(e.right, ctx)
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
         return env
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx):
         env, _ = ctx
-        self._visit_expr(e.arg0, ctx)
-        self._visit_expr(e.arg1, ctx)
-        self._visit_expr(e.arg2, ctx)
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
+        self._visit_expr(e.third, ctx)
         return env
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
@@ -173,7 +173,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_call(self, e: Call, ctx: _Ctx):
         env, _ = ctx
-        self._mark_use(NamedId(e.op), env, ignore_missing=self.ignore_unknown)
+        self._mark_use(NamedId(e.name), env, ignore_missing=self.ignore_unknown)
         for c in e.args:
             self._visit_expr(c, ctx)
         return env

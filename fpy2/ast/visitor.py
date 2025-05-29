@@ -275,13 +275,13 @@ class DefaultAstVisitor(AstVisitor):
         self._visit_expr(e.arg, ctx)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Any):
-        self._visit_expr(e.left, ctx)
-        self._visit_expr(e.right, ctx)
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Any):
-        self._visit_expr(e.arg0, ctx)
-        self._visit_expr(e.arg1, ctx)
-        self._visit_expr(e.arg2, ctx)
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
+        self._visit_expr(e.third, ctx)
 
     def _visit_naryop(self, e: NaryOp, ctx: Any):
         for arg in e.args:
@@ -408,22 +408,22 @@ class DefaultAstTransformVisitor(AstVisitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Any):
         arg = self._visit_expr(e.arg, ctx)
-        return UnaryOp(e.op, arg, e.loc)
+        return type(e)(arg, e.loc)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Any):
-        left = self._visit_expr(e.left, ctx)
-        right = self._visit_expr(e.right, ctx)
-        return BinaryOp(e.op, left, right, e.loc)
+        first = self._visit_expr(e.first, ctx)
+        second = self._visit_expr(e.second, ctx)
+        return type(e)(first, second, e.loc)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Any):
-        arg0 = self._visit_expr(e.arg0, ctx)
-        arg1 = self._visit_expr(e.arg1, ctx)
-        arg2 = self._visit_expr(e.arg2, ctx)
-        return TernaryOp(e.op, arg0, arg1, arg2, e.loc)
+        first = self._visit_expr(e.first, ctx)
+        second = self._visit_expr(e.second, ctx)
+        third = self._visit_expr(e.third, ctx)
+        return type(e)(first, second, third, e.loc)
 
     def _visit_naryop(self, e: NaryOp, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        return NaryOp(e.op, args, e.loc)
+        return type(e)(args, e.loc)
 
     def _visit_compare(self, e: Compare, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
@@ -431,7 +431,7 @@ class DefaultAstTransformVisitor(AstVisitor):
 
     def _visit_call(self, e: Call, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        return Call(e.op, args, e.loc)
+        return Call(e.name, args, e.loc)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]

@@ -14,71 +14,70 @@ from ..utils import Gensym
 
 from .backend import Backend
 
-# TODO: AST -> FPCore
-_unary_table = {
-    UnaryOpKind.FABS: fpc.Fabs,
-    UnaryOpKind.SQRT: fpc.Sqrt,
-    UnaryOpKind.NEG: fpc.Neg,
-    UnaryOpKind.CBRT: fpc.Cbrt,
-    UnaryOpKind.CEIL: fpc.Ceil,
-    UnaryOpKind.FLOOR: fpc.Floor,
-    UnaryOpKind.NEARBYINT: fpc.Nearbyint,
-    UnaryOpKind.ROUND: fpc.Round,
-    UnaryOpKind.TRUNC: fpc.Trunc,
-    UnaryOpKind.ACOS: fpc.Acos,
-    UnaryOpKind.ASIN: fpc.Asin,
-    UnaryOpKind.ATAN: fpc.Atan,
-    UnaryOpKind.COS: fpc.Cos,
-    UnaryOpKind.SIN: fpc.Sin,
-    UnaryOpKind.TAN: fpc.Tan,
-    UnaryOpKind.ACOSH: fpc.Acosh,
-    UnaryOpKind.ASINH: fpc.Asinh,
-    UnaryOpKind.ATANH: fpc.Atanh,
-    UnaryOpKind.COSH: fpc.Cosh,
-    UnaryOpKind.SINH: fpc.Sinh,
-    UnaryOpKind.TANH: fpc.Tanh,
-    UnaryOpKind.EXP: fpc.Exp,
-    UnaryOpKind.EXP2: fpc.Exp2,
-    UnaryOpKind.EXPM1: fpc.Expm1,
-    UnaryOpKind.LOG: fpc.Log,
-    UnaryOpKind.LOG10: fpc.Log10,
-    UnaryOpKind.LOG1P: fpc.Log1p,
-    UnaryOpKind.LOG2: fpc.Log2,
-    UnaryOpKind.ERF: fpc.Erf,
-    UnaryOpKind.ERFC: fpc.Erfc,
-    UnaryOpKind.LGAMMA: fpc.Lgamma,
-    UnaryOpKind.TGAMMA: fpc.Tgamma,
-    UnaryOpKind.ISFINITE: fpc.Isfinite,
-    UnaryOpKind.ISINF: fpc.Isinf,
-    UnaryOpKind.ISNAN: fpc.Isnan,
-    UnaryOpKind.ISNORMAL: fpc.Isnormal,
-    UnaryOpKind.SIGNBIT: fpc.Signbit,
-    UnaryOpKind.NOT: fpc.Not,
+_unary_table: dict[type[UnaryOp], type[fpc.Expr]] = {
+    Fabs: fpc.Fabs,
+    Sqrt: fpc.Sqrt,
+    Neg: fpc.Neg,
+    Cbrt: fpc.Cbrt,
+    Ceil: fpc.Ceil,
+    Floor: fpc.Floor,
+    NearbyInt: fpc.Nearbyint,
+    Round: fpc.Round,
+    Trunc: fpc.Trunc,
+    Acos: fpc.Acos,
+    Asin: fpc.Asin,
+    Atan: fpc.Atan,
+    Cos: fpc.Cos,
+    Sin: fpc.Sin,
+    Tan: fpc.Tan,
+    Acosh: fpc.Acosh,
+    Asinh: fpc.Asinh,
+    Atanh: fpc.Atanh,
+    Cosh: fpc.Cosh,
+    Sinh: fpc.Sinh,
+    Tanh: fpc.Tanh,
+    Exp: fpc.Exp,
+    Exp2: fpc.Exp2,
+    Expm1: fpc.Expm1,
+    Log: fpc.Log,
+    Log10: fpc.Log10,
+    Log1p: fpc.Log1p,
+    Log2: fpc.Log2,
+    Erf: fpc.Erf,
+    Erfc: fpc.Erfc,
+    Lgamma: fpc.Lgamma,
+    Tgamma: fpc.Tgamma,
+    IsFinite: fpc.Isfinite,
+    IsInf: fpc.Isinf,
+    IsNan: fpc.Isnan,
+    IsNormal: fpc.Isnormal,
+    Signbit: fpc.Signbit,
+    Not: fpc.Not,
 }
 
-_binary_table = {
-    BinaryOpKind.ADD: fpc.Add,
-    BinaryOpKind.SUB: fpc.Sub,
-    BinaryOpKind.MUL: fpc.Mul,
-    BinaryOpKind.DIV: fpc.Div,
-    BinaryOpKind.COPYSIGN: fpc.Copysign,
-    BinaryOpKind.FDIM: fpc.Fdim,
-    BinaryOpKind.FMAX: fpc.Fmax,
-    BinaryOpKind.FMIN: fpc.Fmin,
-    BinaryOpKind.FMOD: fpc.Fmod,
-    BinaryOpKind.REMAINDER: fpc.Remainder,
-    BinaryOpKind.HYPOT: fpc.Hypot,
-    BinaryOpKind.ATAN2: fpc.Atan2,
-    BinaryOpKind.POW: fpc.Pow,
+_binary_table: dict[type[BinaryOp], type[fpc.Expr]] = {
+    Add: fpc.Add,
+    Sub: fpc.Sub,
+    Mul: fpc.Mul,
+    Div: fpc.Div,
+    Copysign: fpc.Copysign,
+    Fdim: fpc.Fdim,
+    Fmax: fpc.Fmax,
+    Fmin: fpc.Fmin,
+    Fmod: fpc.Fmod,
+    Remainder: fpc.Remainder,
+    Hypot: fpc.Hypot,
+    Atan2: fpc.Atan2,
+    Pow: fpc.Pow,
 }
 
-_ternary_table = {
-    TernaryOpKind.FMA: fpc.Fma,
+_ternary_table: dict[type[TernaryOp], type[fpc.Expr]] = {
+    Fma: fpc.Fma,
 }
 
-_nary_table = {
-    NaryOpKind.OR: fpc.Or,
-    NaryOpKind.AND: fpc.And,
+_nary_table: dict[type[NaryOp], type[fpc.Expr]] = {
+    Or: fpc.Or,
+    And: fpc.And,
 }
 
 class FPCoreCompileError(Exception):
@@ -185,7 +184,7 @@ class FPCoreCompileInstance(AstVisitor):
 
     def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
         args = [self._visit_expr(c, ctx) for c in e.args]
-        return fpc.UnknownOperator(e.op, *args)
+        return fpc.UnknownOperator(e.name, *args)
 
     def _visit_range(self, arg: Expr, ctx: None) -> fpc.Expr:
         # expand range expression
@@ -239,66 +238,66 @@ class FPCoreCompileInstance(AstVisitor):
             )
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> fpc.Expr:
-        cls = _unary_table.get(e.op)
+        cls = _unary_table.get(type(e))
         if cls is not None:
             # known unary operator
             arg = self._visit_expr(e.arg, ctx)
             return cls(arg)
         else:
-            match e.op:
-                case UnaryOpKind.RANGE:
+            match e:
+                case Range():
                     # range expression
                     return self._visit_range(e.arg, ctx)
-                case UnaryOpKind.DIM:
+                case Dim():
                     # dim expression
                     return self._visit_dim(e.arg, ctx)
-                case UnaryOpKind.SHAPE:
+                case Shape():
                     # shape expression
                     return self._visit_shape(e.arg, ctx)
                 case _:
-                    raise NotImplementedError('no FPCore operator for', e.op)
+                    raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> fpc.Expr:
-        cls = _binary_table.get(e.op)
+        cls = _binary_table.get(type(e))
         if cls is not None:
             # known binary operator
-            arg0 = self._visit_expr(e.left, ctx)
-            arg1 = self._visit_expr(e.right, ctx)
+            arg0 = self._visit_expr(e.first, ctx)
+            arg1 = self._visit_expr(e.second, ctx)
             return cls(arg0, arg1)
         else:
-            match e.op:
-                case BinaryOpKind.SIZE:
+            match e:
+                case Size():
                     # size expression
-                    return self._visit_size(e.left, e.right, ctx)
+                    return self._visit_size(e.first, e.second, ctx)
                 case _:
                     # unknown operator
-                    raise NotImplementedError('no FPCore operator for', e.op)
+                    raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> fpc.Expr:
-        cls = _ternary_table.get(e.op)
+        cls = _ternary_table.get(type(e))
         if cls is not None:
             # known ternary operator
-            arg0 = self._visit_expr(e.arg0, ctx)
-            arg1 = self._visit_expr(e.arg1, ctx)
-            arg2 = self._visit_expr(e.arg2, ctx)
+            arg0 = self._visit_expr(e.first, ctx)
+            arg1 = self._visit_expr(e.second, ctx)
+            arg2 = self._visit_expr(e.third, ctx)
             return cls(arg0, arg1, arg2)
         else:
             # unknown operator
-            raise NotImplementedError('no FPCore operator for', e.op)
+            raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> fpc.Expr:
-        cls = _nary_table.get(e.op)
+        cls = _nary_table.get(type(e))
         if cls is not None:
             # known n-ary operator
             return cls(*[self._visit_expr(c, ctx) for c in e.args])
         else:
-            match e.op:
-                case NaryOpKind.ZIP:
+            match e:
+                case Zip():
                     # zip expression
                     return self._visit_zip(e.args, ctx)
                 case _:
                     # unknown operator
-                    raise NotImplementedError('no FPCore operator for', e.op)
+                    raise NotImplementedError('no FPCore operator for', e)
     def _visit_compare(self, e: Compare, ctx: None) -> fpc.Expr:
         assert e.ops != [], 'should not be empty'
         match e.ops:

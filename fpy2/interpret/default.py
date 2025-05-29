@@ -47,64 +47,64 @@ def _signbit(x: Float, _: Context) -> bool:
     # TODO: should all Floats have this property?
     return x.s
 
-_unary_table: dict[UnaryOpKind, Callable[[Float, Context], Any]] = {
-    UnaryOpKind.FABS: math.fabs,
-    UnaryOpKind.SQRT: math.sqrt,
-    UnaryOpKind.NEG: math.neg,
-    UnaryOpKind.CBRT: math.cbrt,
-    UnaryOpKind.CEIL: math.ceil,
-    UnaryOpKind.FLOOR: math.floor,
-    UnaryOpKind.NEARBYINT: math.nearbyint,
-    UnaryOpKind.ROUND: math.round,
-    UnaryOpKind.TRUNC: math.trunc,
-    UnaryOpKind.ACOS: math.acos,
-    UnaryOpKind.ASIN: math.asin,
-    UnaryOpKind.ATAN: math.atan,
-    UnaryOpKind.COS: math.cos,
-    UnaryOpKind.SIN: math.sin,
-    UnaryOpKind.TAN: math.tan,
-    UnaryOpKind.ACOSH: math.acosh,
-    UnaryOpKind.ASINH: math.asinh,
-    UnaryOpKind.ATANH: math.atanh,
-    UnaryOpKind.COSH: math.cosh,
-    UnaryOpKind.SINH: math.sinh,
-    UnaryOpKind.TANH: math.tanh,
-    UnaryOpKind.EXP: math.exp,
-    UnaryOpKind.EXP2: math.exp2,
-    UnaryOpKind.EXPM1: math.expm1,
-    UnaryOpKind.LOG: math.log,
-    UnaryOpKind.LOG10: math.log10,
-    UnaryOpKind.LOG1P: math.log1p,
-    UnaryOpKind.LOG2: math.log2,
-    UnaryOpKind.ERF: math.erf,
-    UnaryOpKind.ERFC: math.erfc,
-    UnaryOpKind.LGAMMA: math.lgamma,
-    UnaryOpKind.TGAMMA: math.tgamma,
-    UnaryOpKind.ISFINITE: _isfinite,
-    UnaryOpKind.ISINF: _isinf,
-    UnaryOpKind.ISNAN: _isnan,
-    UnaryOpKind.ISNORMAL: _isnormal,
-    UnaryOpKind.SIGNBIT: _signbit,
+_unary_table: dict[type[UnaryOp], Callable[[Float, Context], Any]] = {
+    Fabs: math.fabs,
+    Sqrt: math.sqrt,
+    Neg: math.neg,
+    Cbrt: math.cbrt,
+    Ceil: math.ceil,
+    Floor: math.floor,
+    NearbyInt: math.nearbyint,
+    Round: math.round,
+    Trunc: math.trunc,
+    Acos: math.acos,
+    Asin: math.asin,
+    Atan: math.atan,
+    Cos: math.cos,
+    Sin: math.sin,
+    Tan: math.tan,
+    Acosh: math.acosh,
+    Asinh: math.asinh,
+    Atanh: math.atanh,
+    Cosh: math.cosh,
+    Sinh: math.sinh,
+    Tanh: math.tanh,
+    Exp: math.exp,
+    Exp2: math.exp2,
+    Expm1: math.expm1,
+    Log: math.log,
+    Log10: math.log10,
+    Log1p: math.log1p,
+    Log2: math.log2,
+    Erf: math.erf,
+    Erfc: math.erfc,
+    Lgamma: math.lgamma,
+    Tgamma: math.tgamma,
+    IsFinite: _isfinite,
+    IsInf: _isinf,
+    IsNan: _isnan,
+    IsNormal: _isnormal,
+    Signbit: _signbit,
 }
 
-_binary_table: dict[BinaryOpKind, Callable[[Float, Float, Context], Any]] = {
-    BinaryOpKind.ADD: math.add,
-    BinaryOpKind.SUB: math.sub,
-    BinaryOpKind.MUL: math.mul,
-    BinaryOpKind.DIV: math.div,
-    BinaryOpKind.COPYSIGN: math.copysign,
-    BinaryOpKind.FDIM: math.fdim,
-    BinaryOpKind.FMAX: math.fmax,
-    BinaryOpKind.FMIN: math.fmin,
-    BinaryOpKind.FMOD: math.fmod,
-    BinaryOpKind.REMAINDER: math.remainder,
-    BinaryOpKind.HYPOT: math.hypot,
-    BinaryOpKind.ATAN2: math.atan2,
-    BinaryOpKind.POW: math.pow,
+_binary_table: dict[type[BinaryOp], Callable[[Float, Float, Context], Any]] = {
+    Add: math.add,
+    Sub: math.sub,
+    Mul: math.mul,
+    Div: math.div,
+    Copysign: math.copysign,
+    Fdim: math.fdim,
+    Fmax: math.fmax,
+    Fmin: math.fmin,
+    Fmod: math.fmod,
+    Remainder: math.remainder,
+    Hypot: math.hypot,
+    Atan2: math.atan2,
+    Pow: math.pow,
 }
 
-_ternary_table: dict[TernaryOpKind, Callable[[Float, Float, Float, Context], Any]] = {
-    TernaryOpKind.FMA: math.fma,
+_ternary_table: dict[type[TernaryOp], Callable[[Float, Float, Float, Context], Any]] = {
+    Fma: math.fma,
 }
 
 _PY_CTX = IEEEContext(11, 64, RM.RNE)
@@ -342,56 +342,56 @@ class _Interpreter(DefaultAstVisitor):
         return NDArray(zip(*arrays))
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _EvalCtx):
-        fn = _unary_table.get(e.op)
+        fn = _unary_table.get(type(e))
         if fn is not None:
             return self._apply_method(fn, (e.arg,), ctx)
         else:
-            match e.op:
-                case UnaryOpKind.CAST:
+            match e:
+                case Cast():
                     return self._apply_cast(e.arg, ctx)
-                case UnaryOpKind.NOT:
+                case Not():
                     return self._apply_not(e.arg, ctx)
-                case UnaryOpKind.RANGE:
+                case Range():
                     return self._apply_range(e.arg, ctx)
-                case UnaryOpKind.SHAPE:
+                case Shape():
                     return self._apply_shape(e.arg, ctx)
-                case UnaryOpKind.DIM:
+                case Dim():
                     return self._apply_dim(e.arg, ctx)
                 case _:
-                    raise RuntimeError('unknown operator', e.op)
+                    raise RuntimeError('unknown operator', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _EvalCtx):
-        fn = _binary_table.get(e.op)
+        fn = _binary_table.get(type(e))
         if fn is not None:
-            return self._apply_method(fn, (e.left, e.right), ctx)
+            return self._apply_method(fn, (e.first, e.second), ctx)
         else:
-            match e.op:
-                case BinaryOpKind.SIZE:
-                    return self._apply_size(e.left, e.right, ctx)
+            match e:
+                case Size():
+                    return self._apply_size(e.first, e.second, ctx)
                 case _:
-                    raise RuntimeError('unknown operator', e.op)
+                    raise RuntimeError('unknown operator', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _EvalCtx):
-        fn = _ternary_table.get(e.op)
+        fn = _ternary_table.get(type(e))
         if fn is not None:
-            return self._apply_method(fn, (e.arg0, e.arg1, e.arg2), ctx)
+            return self._apply_method(fn, (e.first, e.second, e.third), ctx)
         else:
-            raise RuntimeError('unknown operator', e.op)
+            raise RuntimeError('unknown operator', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: _EvalCtx):
-        match e.op:
-            case NaryOpKind.AND:
+        match e:
+            case And():
                 return self._apply_and(e.args, ctx)
-            case NaryOpKind.OR:
+            case Or():
                 return self._apply_or(e.args, ctx)
-            case NaryOpKind.ZIP:
+            case Zip():
                 return self._apply_zip(e.args, ctx)
             case _:
-                raise RuntimeError('unknown operator', e.op)
+                raise RuntimeError('unknown operator', e)
 
     def _visit_call(self, e: Call, ctx: _EvalCtx):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        fn = self.foreign[e.op]
+        fn = self.foreign[e.name]
         if isinstance(fn, Function):
             # calling FPy function
             rt = _Interpreter(fn.env, override_ctx=self.override_ctx)

@@ -53,12 +53,12 @@ class LiveVarsInstance(AstVisitor):
         return self._visit_expr(e.arg, ctx)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> _LiveSet:
-        return self._visit_expr(e.left, ctx) | self._visit_expr(e.right, ctx)
+        return self._visit_expr(e.first, ctx) | self._visit_expr(e.second, ctx)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> _LiveSet:
-        live0 = self._visit_expr(e.arg0, ctx)
-        live1 = self._visit_expr(e.arg1, ctx)
-        live2 = self._visit_expr(e.arg2, ctx)
+        live0 = self._visit_expr(e.first, ctx)
+        live1 = self._visit_expr(e.second, ctx)
+        live2 = self._visit_expr(e.third, ctx)
         return live0 | live1 | live2
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> _LiveSet:

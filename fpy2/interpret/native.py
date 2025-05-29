@@ -30,60 +30,60 @@ def _safe_div(x: float, y: float):
     else:
         return x / y
 
-_unary_table: dict[UnaryOpKind, Callable[[float], float | bool]] = {
-    UnaryOpKind.NEG: lambda x: -x,
-    UnaryOpKind.FABS: math.fabs,
-    UnaryOpKind.SQRT: math.sqrt,
-    UnaryOpKind.CBRT: math.cbrt,
-    UnaryOpKind.CEIL: math.ceil,
-    UnaryOpKind.FLOOR: math.floor,
-    UnaryOpKind.NEARBYINT: lambda x: round(x),
-    UnaryOpKind.ROUND: round,
-    UnaryOpKind.TRUNC: math.trunc,
-    UnaryOpKind.ACOS: math.acos,
-    UnaryOpKind.ASIN: math.asin,
-    UnaryOpKind.ATAN: math.atan,
-    UnaryOpKind.COS: math.cos,
-    UnaryOpKind.SIN: math.sin,
-    UnaryOpKind.TAN: math.tan,
-    UnaryOpKind.ACOSH: math.acosh,
-    UnaryOpKind.ASINH: math.asinh,
-    UnaryOpKind.ATANH: math.atanh,
-    UnaryOpKind.COSH: math.cosh,
-    UnaryOpKind.SINH: math.sinh,
-    UnaryOpKind.TANH: math.tanh,
-    UnaryOpKind.EXP: math.exp,
-    UnaryOpKind.EXP2: lambda x: 2 ** x,
-    UnaryOpKind.EXPM1: math.expm1,
-    UnaryOpKind.LOG: math.log,
-    UnaryOpKind.LOG10: math.log10,
-    UnaryOpKind.LOG1P: math.log1p,
-    UnaryOpKind.LOG2: math.log2,
-    UnaryOpKind.ERF: math.erf,
-    UnaryOpKind.ERFC: math.erfc,
-    UnaryOpKind.LGAMMA: math.lgamma,
-    UnaryOpKind.TGAMMA: math.gamma,
-    UnaryOpKind.ISFINITE: math.isfinite,
-    UnaryOpKind.ISINF: math.isinf,
-    UnaryOpKind.ISNAN: math.isnan,
-    UnaryOpKind.ISNORMAL: lambda x: math.isfinite(x) and x != 0,
-    UnaryOpKind.SIGNBIT: lambda x: math.copysign(1, x) < 0,
+_unary_table: dict[type[UnaryOp], Callable[[float], float | bool]] = {
+    Neg: lambda x: -x,
+    Fabs: math.fabs,
+    Sqrt: math.sqrt,
+    Cbrt: math.cbrt,
+    Ceil: math.ceil,
+    Floor: math.floor,
+    NearbyInt: lambda x: round(x),
+    Round: round,
+    Trunc: math.trunc,
+    Acos: math.acos,
+    Asin: math.asin,
+    Atan: math.atan,
+    Cos: math.cos,
+    Sin: math.sin,
+    Tan: math.tan,
+    Acosh: math.acosh,
+    Asinh: math.asinh,
+    Atanh: math.atanh,
+    Cosh: math.cosh,
+    Sinh: math.sinh,
+    Tanh: math.tanh,
+    Exp: math.exp,
+    Exp2: lambda x: 2 ** x,
+    Expm1: math.expm1,
+    Log: math.log,
+    Log10: math.log10,
+    Log1p: math.log1p,
+    Log2: math.log2,
+    Erf: math.erf,
+    Erfc: math.erfc,
+    Lgamma: math.lgamma,
+    Tgamma: math.gamma,
+    IsFinite: math.isfinite,
+    IsInf: math.isinf,
+    IsNan: math.isnan,
+    IsNormal: lambda x: math.isfinite(x) and x != 0,
+    Signbit: lambda x: math.copysign(1, x) < 0,
 }
 
-_binary_table: dict[BinaryOpKind, Callable[[float, float], float]] = {
-    BinaryOpKind.ADD: lambda x, y: x + y,
-    BinaryOpKind.SUB: lambda x, y: x - y,
-    BinaryOpKind.MUL: lambda x, y: x * y,
-    BinaryOpKind.DIV: _safe_div,
-    BinaryOpKind.COPYSIGN: math.copysign,
-    BinaryOpKind.FDIM: lambda x, y: max(x - y, 0),
-    BinaryOpKind.FMAX: max,
-    BinaryOpKind.FMIN: min,
-    BinaryOpKind.FMOD: math.fmod,
-    BinaryOpKind.REMAINDER: math.remainder,
-    BinaryOpKind.HYPOT: math.hypot,
-    BinaryOpKind.ATAN2: math.atan2,
-    BinaryOpKind.POW: math.pow,
+_binary_table: dict[type[BinaryOp], Callable[[float, float], float]] = {
+    Add: lambda x, y: x + y,
+    Sub: lambda x, y: x - y,
+    Mul: lambda x, y: x * y,
+    Div: _safe_div,
+    Copysign: math.copysign,
+    Fdim: lambda x, y: max(x - y, 0),
+    Fmax: max,
+    Fmin: min,
+    Fmod: math.fmod,
+    Remainder: math.remainder,
+    Hypot: math.hypot,
+    Atan2: math.atan2,
+    Pow: math.pow,
 }
 
 
@@ -330,54 +330,54 @@ class _Interpreter(AstVisitor):
         return list(zip(*arrays))
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _EvalCtx):
-        fn = _unary_table.get(e.op)
+        fn = _unary_table.get(type(e))
         if fn is not None:
             return self._apply_method(fn, (e.arg,), ctx)
         else:
-            match e.op:
-                case UnaryOpKind.CAST:
+            match e:
+                case Cast():
                     return self._apply_cast(e.arg, ctx)
-                case UnaryOpKind.NOT:
+                case Not():
                     return self._apply_not(e.arg, ctx)
-                case UnaryOpKind.RANGE:
+                case Range():
                     return self._apply_range(e.arg, ctx)
-                case UnaryOpKind.SHAPE:
+                case Shape():
                     return self._apply_shape(e.arg, ctx)
-                case UnaryOpKind.DIM:
+                case Dim():
                     return self._apply_dim(e.arg, ctx)
                 case _:
-                    raise RuntimeError('unknown operator', e.op)
+                    raise RuntimeError('unknown operator', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _EvalCtx):
-        fn = _binary_table.get(e.op)
+        fn = _binary_table.get(type(e))
         if fn is not None:
-            return self._apply_method(fn, (e.left, e.right), ctx)
+            return self._apply_method(fn, (e.first, e.second), ctx)
         else:
-            match e.op:
-                case BinaryOpKind.SIZE:
-                    return self._apply_size(e.left, e.right, ctx)
+            match e:
+                case Size():
+                    return self._apply_size(e.first, e.second, ctx)
                 case _:
-                    raise RuntimeError('unknown operator', e.op)
+                    raise RuntimeError('unknown operator', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _EvalCtx):
-        match e.op:
-            case TernaryOpKind.FMA:
+        match e:
+            case Fma():
                 raise NotImplementedError('fma not supported in Python 3.11')
             case _:
-                raise RuntimeError('unknown operator', e.op)
+                raise RuntimeError('unknown operator', e)
 
         return super()._visit_ternaryop(e, ctx)
 
     def _visit_naryop(self, e: NaryOp, ctx: _EvalCtx):
-        match e.op:
-            case NaryOpKind.AND:
+        match e:
+            case And():
                 return self._apply_and(e.args, ctx)
-            case NaryOpKind.OR:
+            case Or():
                 return self._apply_or(e.args, ctx)
-            case NaryOpKind.ZIP:
+            case Zip():
                 return self._apply_zip(e.args, ctx)
             case _:
-                raise RuntimeError('unknown operator', e.op)
+                raise RuntimeError('unknown operator', e)
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
