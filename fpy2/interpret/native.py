@@ -101,7 +101,7 @@ class _EvalCtx:
     """rounding context for evaluation"""
 
 
-class _Interpreter(AstVisitor):
+class _Interpreter(Visitor):
     """Single-use interpreter for a function."""
 
     foreign: ForeignEnv

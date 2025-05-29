@@ -5,7 +5,7 @@ from typing import Any
 
 from .fpyast import *
 
-class AstVisitor(ABC):
+class Visitor(ABC):
     """
     Visitor base class for FPy AST nodes.
     """
@@ -241,7 +241,7 @@ class AstVisitor(ABC):
 #####################################################################
 # Default visitor
 
-class DefaultAstVisitor(AstVisitor):
+class DefaultVisitor(Visitor):
     """Default visitor: visits all nodes without doing anything."""
 
     def _visit_var(self, e: Var, ctx: Any):
@@ -376,7 +376,7 @@ class DefaultAstVisitor(AstVisitor):
 #####################################################################
 # Default transform visitor
 
-class DefaultAstTransformVisitor(AstVisitor):
+class DefaultTransformVisitor(Visitor):
     """Default visitor: visits all nodes without doing anything."""
 
     def _visit_var(self, e: Var, ctx: Any):

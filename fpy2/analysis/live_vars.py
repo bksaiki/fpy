@@ -4,7 +4,7 @@ from ..ast import *
 
 _LiveSet = set[NamedId]
 
-class LiveVarsInstance(AstVisitor):
+class LiveVarsInstance(Visitor):
     """Single-use live variable analyzer"""
 
     ast: FuncDef | Expr

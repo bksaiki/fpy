@@ -8,7 +8,7 @@ from ..ast import *
 from ..utils import Gensym
 
 
-class _ForBundlingInstance(DefaultAstTransformVisitor):
+class _ForBundlingInstance(DefaultTransformVisitor):
     """Single-use instance of the ForBundling pass."""
     func: FuncDef
     def_use: DefineUseAnalysis

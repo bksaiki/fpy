@@ -7,7 +7,7 @@ from typing import Optional
 from ..analysis import DefineUse, SyntaxCheck
 from ..ast import *
 
-class _FuncUpdateInstance(DefaultAstTransformVisitor):
+class _FuncUpdateInstance(DefaultTransformVisitor):
     """Single-use instance of the FuncUpdate pass."""
     func: FuncDef
 

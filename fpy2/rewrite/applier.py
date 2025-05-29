@@ -22,7 +22,7 @@ class SubstitutionError(Exception):
     def __str__(self):
         return f'SubstitutionError: {self.message}'
 
-class _ExprApplierInst(DefaultAstTransformVisitor):
+class _ExprApplierInst(DefaultTransformVisitor):
     """
     FPy pattern match applier instance for expressions.
 
@@ -49,7 +49,7 @@ class _ExprApplierInst(DefaultAstTransformVisitor):
             return super()._visit_var(e, ctx)
 
 
-class _StmtApplierInst(DefaultAstTransformVisitor):
+class _StmtApplierInst(DefaultTransformVisitor):
     """
     FPy pattern match applier instance for statements.
 

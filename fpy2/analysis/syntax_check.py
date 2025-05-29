@@ -5,7 +5,7 @@ from typing import Optional, Self
 from ..utils import FPySyntaxError
 
 from ..ast.fpyast import *
-from ..ast.visitor import AstVisitor
+from ..ast.visitor import Visitor
 from .live_vars import LiveVars
 
 class _Env:
@@ -41,7 +41,7 @@ _Ctx = tuple[_Env, bool]
 2nd element: whether the current block is at the top-level.
 """
 
-class SyntaxCheckInstance(AstVisitor):
+class SyntaxCheckInstance(Visitor):
     """Single-use instance of syntax checking"""
     func: FuncDef
     free_vars: set[NamedId]

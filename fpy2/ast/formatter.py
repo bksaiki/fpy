@@ -4,11 +4,11 @@ from pprint import pformat
 
 from ..fpc_context import FPCoreContext
 from .fpyast import *
-from .visitor import AstVisitor
+from .visitor import Visitor
 
 _Ctx = int
 
-class _FormatterInstance(AstVisitor):
+class _FormatterInstance(Visitor):
     """Single-instance visitor for pretty printing FPy ASTs"""
     ast: Ast
     fmt: str

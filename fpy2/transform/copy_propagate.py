@@ -8,16 +8,16 @@ from ..analysis import DefineUse, SyntaxCheck
 from ..ast import *
 
 
-class _CopyPropagateInstance(DefaultAstVisitor):
+class _CopyPropagateInstance(DefaultVisitor):
     """Single-use instance of copy propagation."""
     func: FuncDef
     names: Optional[set[NamedId]]
-    xform: DefaultAstTransformVisitor
+    xform: DefaultTransformVisitor
 
     def __init__(self, func: FuncDef, names: Optional[set[NamedId]]):
         self.func = func
         self.names = names
-        self.xform = DefaultAstTransformVisitor()
+        self.xform = DefaultTransformVisitor()
 
     def apply(self):
         """Applies copy propagation to the function."""

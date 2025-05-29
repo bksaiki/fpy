@@ -12,7 +12,7 @@ from .rename_target import RenameTarget
 
 _Ctx = dict[NamedId, Expr]
 
-class _WhileBundlingInstance(DefaultAstTransformVisitor):
+class _WhileBundlingInstance(DefaultTransformVisitor):
     """Single-use instance of the WhileBundling pass."""
     func: FuncDef
     def_use: DefineUseAnalysis

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TypeAlias, Union
 
 from ..ast.fpyast import *
-from ..ast.visitor import DefaultAstVisitor
+from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
 
 Definition: TypeAlias = Argument | Stmt | CompExpr
@@ -82,7 +82,7 @@ class DefineUseAnalysis:
         return DefineUseAnalysis({}, {}, {}, {})
 
 
-class _DefineUseInstance(DefaultAstVisitor):
+class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""
     ast: FuncDef | StmtBlock
     analysis: DefineUseAnalysis

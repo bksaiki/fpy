@@ -3,7 +3,7 @@
 from ..ast import *
 from ..analysis import SyntaxCheck
 
-class _RenameTargetInstance(DefaultAstTransformVisitor):
+class _RenameTargetInstance(DefaultTransformVisitor):
     """Renames targets in a function."""
     ast: FuncDef | StmtBlock
     rename: dict[NamedId, NamedId]

@@ -31,7 +31,7 @@ class _RewriteContext:
 
 
 
-class _RewriteEngine(DefaultAstTransformVisitor):
+class _RewriteEngine(DefaultTransformVisitor):
     """Rewrite rule applier for a given rewrite rule."""
 
     matcher: Matcher

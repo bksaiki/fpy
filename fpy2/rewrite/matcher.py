@@ -55,7 +55,7 @@ class StmtMatch(LocatedMatch):
         self.idx = idx
 
 
-class _MatcherInst(AstVisitor):
+class _MatcherInst(Visitor):
     """
     FPy pattern matching instance for a pattern and sub-program.
 
@@ -359,7 +359,7 @@ class _MatcherInst(AstVisitor):
         return super()._visit_statement(stmt, pat)
 
 
-class _ExprMatcherEngine(DefaultAstVisitor):
+class _ExprMatcherEngine(DefaultVisitor):
     """FPy pattern matching for expression patterns"""
     pattern: ExprPattern
     func: FuncDef
@@ -383,7 +383,7 @@ class _ExprMatcherEngine(DefaultAstVisitor):
             self.matches.append(pmatch)
         super()._visit_expr(e, ctx)
 
-class _StmtMatcherEngine(DefaultAstVisitor):
+class _StmtMatcherEngine(DefaultVisitor):
     """FPy pattern matching for statement patterns"""
     pattern: StmtPattern
     func: FuncDef

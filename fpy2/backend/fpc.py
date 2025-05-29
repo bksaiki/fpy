@@ -98,7 +98,7 @@ def _size0_expr(x: str):
     return fpc.Size(fpc.Var(x), fpc.Integer(0))
 
 
-class FPCoreCompileInstance(AstVisitor):
+class FPCoreCompileInstance(Visitor):
     """Compilation instance from FPy to FPCore"""
     func: FuncDef
     def_use: DefineUseAnalysis

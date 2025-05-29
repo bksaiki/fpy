@@ -8,7 +8,7 @@ from .copy_propagate import CopyPropagate
 from .rename_target import RenameTarget
 
 
-class _SimplifyIfInstance(DefaultAstTransformVisitor):
+class _SimplifyIfInstance(DefaultTransformVisitor):
     """Single-use instance of the SimplifyIf pass."""
     func: FuncDef
     def_use: DefineUseAnalysis
