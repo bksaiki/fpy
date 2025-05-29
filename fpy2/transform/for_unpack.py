@@ -2,19 +2,18 @@
 Transformation pass to push tuple unpacking in a for loop to the body.
 """
 
-from ..analysis import DefineUse, VerifyIR
-from ..ir import *
+from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
+from ..ast import *
 from ..utils import Gensym
 
-
-class _ForUnpackInstance(DefaultTransformVisitor):
+class _ForUnpackInstance(DefaultAstTransformVisitor):
     """Single-use instance of the ForUnpack pass."""
     func: FuncDef
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, names: set[NamedId]):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
-        self.gensym = Gensym(reserved=names)
+        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -24,15 +23,19 @@ class _ForUnpackInstance(DefaultTransformVisitor):
             case Id():
                 return super()._visit_for(stmt, None)
             case TupleBinding():
-                t_id = self.gensym.fresh('t')
+                # compile iterable and body
                 iterable = self._visit_expr(stmt.iterable, None)
                 body, _ = self._visit_block(stmt.body, None)
-                phis, _ = self._visit_loop_phis(stmt.phis, ctx, None)
 
-                binding = self._copy_tuple_binding(stmt.target)
-                body.stmts.insert(0, TupleUnpack(binding, AnyType(), Var(t_id)))
-                s = ForStmt(t_id, stmt.ty, iterable, body, phis)
-                print(s.format())
+                # create a fresh variable for the tuple
+                t = self.gensym.fresh('t')
+                binding = self._visit_tuple_binding(stmt.target, ctx)
+
+                # insert tuple unpacking at the beginning of the body
+                body.stmts.insert(0, TupleUnpack(binding, Var(t, None), None))
+
+                # create the for statement with the fresh variable
+                s = ForStmt(t, iterable, body, None)
                 return s, None
             case _:
                 raise RuntimeError('unreachable', stmt.target)
@@ -40,32 +43,27 @@ class _ForUnpackInstance(DefaultTransformVisitor):
 
 class ForUnpack:
     """
-    Transformation pass to move any tuple unpacking in a for loop to its body.
+    Transformation pass to move any tuple unpacking in a for loop to its body::
 
-    ```
-    for x, y in iterable:
-        ...
-    ```
-    becomes
+        for x, y in iterable:
+            ...
 
-    ```
-    for t in iterable:
-        x, y = t
-        ...
-    ```
+    becomes::
+
+        for t in iterable:
+            x, y = t
+            ...
 
     where `t` is a fresh variable.
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: Optional[set[NamedId]] = None) -> FuncDef:
+    def apply(func: FuncDef) -> FuncDef:
         """
         Apply the transformation to the given function definition.
         """
-        if names is None:
-            uses = DefineUse.analyze(func)
-            names = set(uses.keys())
-        inst = _ForUnpackInstance(func, names)
+        def_use = DefineUse.analyze(func)
+        inst = _ForUnpackInstance(func, def_use)
         func = inst.apply()
-        VerifyIR.check(func)
+        SyntaxCheck.check(func)
         return func

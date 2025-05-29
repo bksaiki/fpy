@@ -15,7 +15,8 @@ from typing import (
     TypeVar
 )
 
-from .ast import SyntaxCheck, EffectStmt
+from .analysis import SyntaxCheck
+from .ast import EffectStmt, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function
@@ -109,8 +110,11 @@ def _apply_decorator(
 
     # get defining environment
     cvars = inspect.getclosurevars(func)
-    free_vars = cvars.nonlocals.keys() | cvars.globals.keys() | cvars.builtins.keys()
+    cfree_vars = cvars.nonlocals.keys() | cvars.globals.keys() | cvars.builtins.keys()
     env = _function_env(func)
+
+    # set of free variables as `NamedId`
+    free_vars = { NamedId(name) for name in cfree_vars }
 
     # parse the source as an FPy function
     parser = Parser(src_name, src, start_line)
@@ -132,7 +136,7 @@ def _apply_decorator(
 
     # syntax checkng (and compute relevant free vars)
     if is_pattern:
-        ast.free_vars = SyntaxCheck.analyze(
+        ast.free_vars = SyntaxCheck.check(
             ast,
             free_vars=free_vars,
             ignore_unknown=True,
@@ -140,7 +144,7 @@ def _apply_decorator(
             allow_wildcard=True
         )
     else:
-        ast.free_vars = SyntaxCheck.analyze(ast, free_vars=free_vars)
+        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
 
     # wrap the IR in a Function
     return Function(ast, env)

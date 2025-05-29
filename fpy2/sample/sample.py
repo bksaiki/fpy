@@ -8,11 +8,10 @@ from typing import Optional
 from titanfp.arithmetic.evalctx import determine_ctx
 from titanfp.arithmetic import ieee754
 
-from ..ast import AnyTypeAnn, ScalarTypeAnn, ScalarType
+from ..ast import AnyTypeAnn, RealTypeAnn, FuncDef
 from ..env import ForeignEnv
 from ..function import Function
 from ..interpret import DefaultInterpreter
-from ..ir import FuncDef
 
 from .table import RangeTable
 
@@ -155,17 +154,17 @@ def sample_function(
         match arg.type:
             case AnyTypeAnn():
                 pass
-            case ScalarTypeAnn(kind=ScalarType.REAL):
+            case RealTypeAnn():
                 pass
             case _:
                 raise ValueError(f"expected Real, got {arg.type}")
 
     # process precondition
-    ir = fun.to_ir()
-    if 'pre' not in ir.metadata or ignore_pre:
+    ast = fun.ast
+    if 'pre' not in ast.metadata or ignore_pre:
         table = RangeTable()
     else:
-        pre: FuncDef = ir.metadata['pre']
+        pre: FuncDef = ast.metadata['pre']
         table = RangeTable.from_condition(pre)
 
     # add unmentioned variables

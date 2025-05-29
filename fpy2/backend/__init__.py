@@ -2,4 +2,3 @@
 
 from .backend import Backend
 from .fpc import FPCoreCompiler
-from .fpy import FPYCompiler

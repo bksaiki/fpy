@@ -9,79 +9,79 @@ from titanfp.fpbench.fpcparser import data_as_expr
 
 from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..ast.fpyast import *
-from ..ast.syntax_check import SyntaxCheck
+from ..analysis.syntax_check import SyntaxCheck
 from ..utils import Gensym, pythonize_id
 
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 
-_unary_table = {
-    'neg': UnaryOpKind.NEG,
-    'not': UnaryOpKind.NOT,
-    'fabs': UnaryOpKind.FABS,
-    'sqrt': UnaryOpKind.SQRT,
-    'cbrt': UnaryOpKind.CBRT,
-    'ceil': UnaryOpKind.CEIL,
-    'floor': UnaryOpKind.FLOOR,
-    'nearbyint': UnaryOpKind.NEARBYINT,
-    'round': UnaryOpKind.ROUND,
-    'trunc': UnaryOpKind.TRUNC,
-    'acos': UnaryOpKind.ACOS,
-    'asin': UnaryOpKind.ASIN,
-    'atan': UnaryOpKind.ATAN,
-    'cos': UnaryOpKind.COS,
-    'sin': UnaryOpKind.SIN,
-    'tan': UnaryOpKind.TAN,
-    'acosh': UnaryOpKind.ACOSH,
-    'asinh': UnaryOpKind.ASINH,
-    'atanh': UnaryOpKind.ATANH,
-    'cosh': UnaryOpKind.COSH,
-    'sinh': UnaryOpKind.SINH,
-    'tanh': UnaryOpKind.TANH,
-    'exp': UnaryOpKind.EXP,
-    'exp2': UnaryOpKind.EXP2,
-    'expm1': UnaryOpKind.EXPM1,
-    'log': UnaryOpKind.LOG,
-    'log10': UnaryOpKind.LOG10,
-    'log1p': UnaryOpKind.LOG1P,
-    'log2': UnaryOpKind.LOG2,
-    'erf': UnaryOpKind.ERF,
-    'erfc': UnaryOpKind.ERFC,
-    'lgamma': UnaryOpKind.LGAMMA,
-    'tgamma': UnaryOpKind.TGAMMA,
-    'isfinite': UnaryOpKind.ISFINITE,
-    'isinf': UnaryOpKind.ISINF,
-    'isnan': UnaryOpKind.ISNAN,
-    'isnormal': UnaryOpKind.ISNORMAL,
-    'signbit': UnaryOpKind.SIGNBIT,
-    'cast': UnaryOpKind.CAST,
-    'range': UnaryOpKind.RANGE,
-    'dim': UnaryOpKind.DIM,
+_unary_table: dict[str, type[UnaryOp]] = {
+    'neg': Neg,
+    'not': Not,
+    'fabs': Fabs,
+    'sqrt': Sqrt,
+    'cbrt': Cbrt,
+    'ceil': Ceil,
+    'floor': Floor,
+    'nearbyint': NearbyInt,
+    'round': Round,
+    'trunc': Trunc,
+    'acos': Acos,
+    'asin': Asin,
+    'atan': Atan,
+    'cos': Cos,
+    'sin': Sin,
+    'tan': Tan,
+    'acosh': Acosh,
+    'asinh': Asinh,
+    'atanh': Atanh,
+    'cosh': Cosh,
+    'sinh': Sinh,
+    'tanh': Tanh,
+    'exp': Exp,
+    'exp2': Exp2,
+    'expm1': Expm1,
+    'log': Log,
+    'log10': Log10,
+    'log1p': Log1p,
+    'log2': Log2,
+    'erf': Erf,
+    'erfc': Erfc,
+    'lgamma': Lgamma,
+    'tgamma': Tgamma,
+    'isfinite': IsFinite,
+    'isinf': IsInf,
+    'isnan': IsNan,
+    'isnormal': IsNormal,
+    'signbit': Signbit,
+    'cast': Cast,
+    'range': Range,
+    'dim': Dim,
 }
 
-_binary_table = {
-    '+': BinaryOpKind.ADD,
-    '-': BinaryOpKind.SUB,
-    '*': BinaryOpKind.MUL,
-    '/': BinaryOpKind.DIV,
-    'copysign': BinaryOpKind.COPYSIGN,
-    'fdim': BinaryOpKind.FDIM,
-    'fmax': BinaryOpKind.FMAX,
-    'fmin': BinaryOpKind.FMIN,
-    'fmod': BinaryOpKind.FMOD,
-    'remainder': BinaryOpKind.REMAINDER,
-    'hypot': BinaryOpKind.HYPOT,
-    'atan2': BinaryOpKind.ATAN2,
-    'pow': BinaryOpKind.POW,
+_binary_table: dict[str, type[BinaryOp]] = {
+    '+': Add,
+    '-': Sub,
+    '*': Mul,
+    '/': Div,
+    'copysign': Copysign,
+    'fdim': Fdim,
+    'fmax': Fmax,
+    'fmin': Fmin,
+    'fmod': Fmod,
+    'remainder': Remainder,
+    'hypot': Hypot,
+    'atan2': Atan2,
+    'pow': Pow,
 }
 
-_ternary_table = {
-    'fma': TernaryOpKind.FMA
+_ternary_table: dict[str, type[TernaryOp]] = {
+    'fma': Fma
 }
 
 def _zeros(ns: list[Expr]) -> Expr:
     vars = [UnderscoreId() for _ in ns]
-    args = [UnaryOp(UnaryOpKind.RANGE, n, None) for n in ns]
+    args = [Range(n, None) for n in ns]
     return CompExpr(vars, args, Integer(0, None), None)
 
 # TODO: clean this up
@@ -160,32 +160,32 @@ class _FPCore2FPy:
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         if e.name == '-':
-            kind = _unary_table['neg']
+            cls = _unary_table['neg']
             arg = self._visit(e.children[0], ctx)
-            return UnaryOp(kind, arg, None)
+            return cls(arg, None)
         elif e.name in _unary_table:
-            kind = _unary_table[e.name]
+            cls = _unary_table[e.name]
             arg = self._visit(e.children[0], ctx)
-            return UnaryOp(kind, arg, None)
+            return cls(arg, None)
         else:
             raise NotImplementedError(f'unsupported unary operation {e.name}')
 
     def _visit_binary(self, e: fpc.BinaryExpr, ctx: _Ctx) -> Expr:
         if e.name in _binary_table:
-            kind = _binary_table[e.name]
+            cls = _binary_table[e.name]
             left = self._visit(e.children[0], ctx)
             right = self._visit(e.children[1], ctx)
-            return BinaryOp(kind, left, right, None)
+            return cls(left, right, None)
         else:
             raise NotImplementedError(f'unsupported binary operation {e.name}')
 
     def _visit_ternary(self, e: fpc.TernaryExpr, ctx: _Ctx) -> Expr:
         if e.name in _ternary_table:
-            kind = _ternary_table[e.name]
+            cls = _ternary_table[e.name]
             arg0 = self._visit(e.children[0], ctx)
             arg1 = self._visit(e.children[1], ctx)
             arg2 = self._visit(e.children[2], ctx)
-            return TernaryOp(kind, arg0, arg1, arg2, None)
+            return cls(arg0, arg1, arg2, None)
         else:
             raise NotImplementedError(f'unsupported ternary operation {e.name}')
 
@@ -193,10 +193,10 @@ class _FPCore2FPy:
         match e:
             case fpc.And():
                 exprs = [self._visit(e, ctx) for e in e.children]
-                return NaryOp(NaryOpKind.AND, exprs, None)
+                return And(exprs, None)
             case fpc.Or():
                 exprs = [self._visit(e, ctx) for e in e.children]
-                return NaryOp(NaryOpKind.OR, exprs, None)
+                return Or(exprs, None)
             case fpc.LT():
                 assert len(e.children) >= 2, "not enough children"
                 ops = [CompareOp.LT for _ in e.children[1:]]
@@ -234,7 +234,7 @@ class _FPCore2FPy:
                     raise ValueError('size operator expects 2 arguments')
                 arg0 = self._visit(e.children[0], ctx)
                 arg1 = self._visit(e.children[1], ctx)
-                return BinaryOp(BinaryOpKind.SIZE, arg0, arg1, None)
+                return Size(arg0, arg1, None)
             case fpc.UnknownOperator():
                 name = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
@@ -377,7 +377,7 @@ class _FPCore2FPy:
             t = iter_vars[0]
             n = range_vars[0]
             inner_stmts: list[Stmt] = []
-            e = UnaryOp(UnaryOpKind.RANGE, Var(n, None), None)
+            e = Range(Var(n, None), None)
             stmt = ForStmt(t, e, StmtBlock(inner_stmts), None)
             stmts.append(stmt)
             return self._make_tensor_body(iter_vars[1:], range_vars[1:], inner_stmts)
@@ -590,7 +590,6 @@ class _FPCore2FPy:
         # bind value to temporary
         t = self.gensym.fresh('t')
         block = StmtBlock(val_ctx.stmts + [SimpleAssign(t, val, None, None)])
-        # TODO: need to generate an FPy context
         stmt = ContextStmt(UnderscoreId(), ctx_val, block, None)
         ctx.stmts.append(stmt)
         return Var(t, None)
@@ -686,7 +685,7 @@ class _FPCore2FPy:
                     else:
                         dim_ids.append(UnderscoreId())
 
-                shape_e = UnaryOp(UnaryOpKind.SHAPE, Var(t, None), None)
+                shape_e = Shape(Var(t, None), None)
                 stmt = TupleUnpack(TupleBinding(dim_ids, None), shape_e, None)
                 ctx.stmts.append(stmt)
                 for dim, dim_id in zip(shape, dim_ids):
@@ -703,9 +702,7 @@ class _FPCore2FPy:
         block = StmtBlock(ctx.stmts + [ReturnStmt(e, None)])
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
-        ast = FuncDef(name, args, block, None)
-        ast.metadata = props
-        return ast
+        return FuncDef(name, args, block, props, None, None)
 
     def convert(self) -> FuncDef:
         ast = self._visit_function(self.core)
@@ -720,5 +717,5 @@ def fpcore_to_fpy(
     ignore_unknown: bool = False
 ):
     ast = _FPCore2FPy(core, default_name).convert()
-    SyntaxCheck.analyze(ast, ignore_unknown=ignore_unknown)
+    SyntaxCheck.check(ast, ignore_unknown=ignore_unknown)
     return ast

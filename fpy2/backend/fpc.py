@@ -4,70 +4,80 @@ from typing import Optional
 
 import titanfp.fpbench.fpcast as fpc 
 
-from ..analysis import DefineUse
+from ..analysis import DefineUse, DefineUseAnalysis
+from ..ast import *
 from ..fpc_context import FPCoreContext
-from ..ir import *
+from ..function import Function
 from ..number import Context
-from ..transform import ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
+from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend
 
-_op_table = {
-    '+': fpc.Add,
-    '-': fpc.Sub,
-    '*': fpc.Mul,
-    '/': fpc.Div,
-    'fabs': fpc.Fabs,
-    'sqrt': fpc.Sqrt,
-    'fma': fpc.Fma,
-    'neg': fpc.Neg,
-    'copysign': fpc.Copysign,
-    'fdim': fpc.Fdim,
-    'fmax': fpc.Fmax,
-    'fmin': fpc.Fmin,
-    'fmod': fpc.Fmod,
-    'remainder': fpc.Remainder,
-    'hypot': fpc.Hypot,
-    'cbrt': fpc.Cbrt,
-    'ceil': fpc.Ceil,
-    'floor': fpc.Floor,
-    'nearbyint': fpc.Nearbyint,
-    'round': fpc.Round,
-    'trunc': fpc.Trunc,
-    'acos': fpc.Acos,
-    'asin': fpc.Asin,
-    'atan': fpc.Atan,
-    'atan2': fpc.Atan2,
-    'cos': fpc.Cos,
-    'sin': fpc.Sin,
-    'tan': fpc.Tan,
-    'acosh': fpc.Acosh,
-    'asinh': fpc.Asinh,
-    'atanh': fpc.Atanh,
-    'cosh': fpc.Cosh,
-    'sinh': fpc.Sinh,
-    'tanh': fpc.Tanh,
-    'exp': fpc.Exp,
-    'exp2': fpc.Exp2,
-    'expm1': fpc.Expm1,
-    'log': fpc.Log,
-    'log10': fpc.Log10,
-    'log1p': fpc.Log1p,
-    'log2': fpc.Log2,
-    'pow': fpc.Pow,
-    'erf': fpc.Erf,
-    'erfc': fpc.Erfc,
-    'lgamma': fpc.Lgamma,
-    'tgamma': fpc.Tgamma,
-    'isfinite': fpc.Isfinite,
-    'isinf': fpc.Isinf,
-    'isnan': fpc.Isnan,
-    'isnormal': fpc.Isnormal,
-    'signbit': fpc.Signbit,
-    'not': fpc.Not,
-    'or': fpc.Or,
-    'and': fpc.And,
+_unary_table: dict[type[UnaryOp], type[fpc.Expr]] = {
+    Fabs: fpc.Fabs,
+    Sqrt: fpc.Sqrt,
+    Neg: fpc.Neg,
+    Cbrt: fpc.Cbrt,
+    Ceil: fpc.Ceil,
+    Floor: fpc.Floor,
+    NearbyInt: fpc.Nearbyint,
+    Round: fpc.Round,
+    Trunc: fpc.Trunc,
+    Acos: fpc.Acos,
+    Asin: fpc.Asin,
+    Atan: fpc.Atan,
+    Cos: fpc.Cos,
+    Sin: fpc.Sin,
+    Tan: fpc.Tan,
+    Acosh: fpc.Acosh,
+    Asinh: fpc.Asinh,
+    Atanh: fpc.Atanh,
+    Cosh: fpc.Cosh,
+    Sinh: fpc.Sinh,
+    Tanh: fpc.Tanh,
+    Exp: fpc.Exp,
+    Exp2: fpc.Exp2,
+    Expm1: fpc.Expm1,
+    Log: fpc.Log,
+    Log10: fpc.Log10,
+    Log1p: fpc.Log1p,
+    Log2: fpc.Log2,
+    Erf: fpc.Erf,
+    Erfc: fpc.Erfc,
+    Lgamma: fpc.Lgamma,
+    Tgamma: fpc.Tgamma,
+    IsFinite: fpc.Isfinite,
+    IsInf: fpc.Isinf,
+    IsNan: fpc.Isnan,
+    IsNormal: fpc.Isnormal,
+    Signbit: fpc.Signbit,
+    Not: fpc.Not,
+}
+
+_binary_table: dict[type[BinaryOp], type[fpc.Expr]] = {
+    Add: fpc.Add,
+    Sub: fpc.Sub,
+    Mul: fpc.Mul,
+    Div: fpc.Div,
+    Copysign: fpc.Copysign,
+    Fdim: fpc.Fdim,
+    Fmax: fpc.Fmax,
+    Fmin: fpc.Fmin,
+    Fmod: fpc.Fmod,
+    Remainder: fpc.Remainder,
+    Hypot: fpc.Hypot,
+    Atan2: fpc.Atan2,
+    Pow: fpc.Pow,
+}
+
+_ternary_table: dict[type[TernaryOp], type[fpc.Expr]] = {
+    Fma: fpc.Fma,
+}
+
+_nary_table: dict[type[NaryOp], type[fpc.Expr]] = {
+    Or: fpc.Or,
+    And: fpc.And,
 }
 
 class FPCoreCompileError(Exception):
@@ -88,15 +98,16 @@ def _size0_expr(x: str):
     return fpc.Size(fpc.Var(x), fpc.Integer(0))
 
 
-class FPCoreCompileInstance(ReduceVisitor):
+class FPCoreCompileInstance(AstVisitor):
     """Compilation instance from FPy to FPCore"""
     func: FuncDef
+    def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef):
-        uses = DefineUse().analyze(func)
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
-        self.gensym = Gensym(reserved=uses.keys())
+        self.def_use = def_use
+        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def compile(self) -> fpc.FPCore:
         f = self._visit_function(self.func, None)
@@ -104,10 +115,10 @@ class FPCoreCompileInstance(ReduceVisitor):
         return f
 
     def _compile_arg(self, arg: Argument):
-        match arg.ty:
-            case RealType():
+        match arg.type:
+            case RealTypeAnn():
                 return arg.name, None, None
-            case AnyType():
+            case AnyTypeAnn():
                 return arg.name, None, None
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)
@@ -171,33 +182,33 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_digits(self, e: Digits, ctx: None) -> fpc.Expr:
         return fpc.Digits(e.m, e.e, e.b)
 
-    def _visit_unknown(self, e: UnknownCall, ctx: None) -> fpc.Expr:
-        args = [self._visit_expr(c, ctx) for c in e.children]
+    def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
+        args = [self._visit_expr(c, ctx) for c in e.args]
         return fpc.UnknownOperator(e.name, *args)
 
-    def _visit_range(self, e: Range, ctx: None) -> fpc.Expr:
+    def _visit_range(self, arg: Expr, ctx: None) -> fpc.Expr:
         # expand range expression
         tuple_id = 'i' # only identifier in scope => no need for uniqueness
-        size = self._visit_expr(e.children[0], ctx)
+        size = self._visit_expr(arg, ctx)
         return fpc.Tensor([(tuple_id, size)], fpc.Var(tuple_id))
 
-    def _visit_size(self, e: Size, ctx) -> fpc.Expr:
-        tup = self._visit_expr(e.children[0], ctx)
-        idx = self._visit_expr(e.children[1], ctx)
+    def _visit_size(self, arr: Expr, dim: Expr, ctx) -> fpc.Expr:
+        tup = self._visit_expr(arr, ctx)
+        idx = self._visit_expr(dim, ctx)
         return fpc.Size(tup, idx)
 
-    def _visit_dim(self, e: Dim, ctx) -> fpc.Expr:
-        tup = self._visit_expr(e.children[0], ctx)
+    def _visit_dim(self, arr: Expr, ctx) -> fpc.Expr:
+        tup = self._visit_expr(arr, ctx)
         return fpc.Dim(tup)
 
-    def _visit_shape(self, e: Shape, ctx) -> fpc.Expr:
+    def _visit_shape(self, arr: Expr, ctx) -> fpc.Expr:
         # expand into a for loop
         #  (let ([t <tuple>])
         #    (tensor ([i (dim t)])
         #      (size t i)])))
         tuple_id = 't' # only identifier in scope => no need for uniqueness
         iter_id = 'i' # only identifier in scope => no need for uniqueness
-        tup = self._visit_expr(e.children[0], ctx)
+        tup = self._visit_expr(arr, ctx)
         return fpc.Let(
             [(tuple_id, tup)],
             fpc.Tensor(
@@ -206,18 +217,18 @@ class FPCoreCompileInstance(ReduceVisitor):
             )
         )
 
-    def _visit_zip(self, e: Zip, ctx: None) -> fpc.Expr:
+    def _visit_zip(self, args: list[Expr], ctx: None) -> fpc.Expr:
         # expand zip expression (for N=2)
         #  (let ([t0 <tuple0>] [t1 <tuple1>])
         #    (tensor ([i (size t0 0)])
         #      (array (ref t0 i) (ref t1 i)))))
 
-        if len(e.children) == 0:
+        if len(args) == 0:
             # no children => empty zip
             return fpc.Array()
         else:
-            tuples = [self._visit_expr(t, ctx) for t in e.children]
-            tuple_ids = [str(self.gensym.fresh('t')) for _ in e.children]
+            tuples = [self._visit_expr(t, ctx) for t in args]
+            tuple_ids = [str(self.gensym.fresh('t')) for _ in args]
             iter_id = str(self.gensym.fresh('i'))
             return fpc.Let(
                 list(zip(tuple_ids, tuples)),
@@ -226,44 +237,82 @@ class FPCoreCompileInstance(ReduceVisitor):
                 )
             )
 
-    def _visit_nary_expr(self, e: NaryExpr, ctx: None) -> fpc.Expr:
-        match e:
-            case Range():
-                # range expression
-                return self._visit_range(e, ctx)
-            case Dim():
-                # dim expression
-                return self._visit_dim(e, ctx)
-            case Size():
-                # size expression
-                return self._visit_size(e, ctx)
-            case Shape():
-                # shape expression
-                return self._visit_shape(e, ctx)
-            case Zip():
-                # zip expression
-                return self._visit_zip(e, ctx)
-            case _:
-                cls = _op_table.get(e.name)
-                if cls is None:
-                    raise NotImplementedError('no FPCore operator for', e.name)
-                return cls(*[self._visit_expr(c, ctx) for c in e.children])
+    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> fpc.Expr:
+        cls = _unary_table.get(type(e))
+        if cls is not None:
+            # known unary operator
+            arg = self._visit_expr(e.arg, ctx)
+            return cls(arg)
+        else:
+            match e:
+                case Range():
+                    # range expression
+                    return self._visit_range(e.arg, ctx)
+                case Dim():
+                    # dim expression
+                    return self._visit_dim(e.arg, ctx)
+                case Shape():
+                    # shape expression
+                    return self._visit_shape(e.arg, ctx)
+                case _:
+                    raise NotImplementedError('no FPCore operator for', e)
 
+    def _visit_binaryop(self, e: BinaryOp, ctx: None) -> fpc.Expr:
+        cls = _binary_table.get(type(e))
+        if cls is not None:
+            # known binary operator
+            arg0 = self._visit_expr(e.first, ctx)
+            arg1 = self._visit_expr(e.second, ctx)
+            return cls(arg0, arg1)
+        else:
+            match e:
+                case Size():
+                    # size expression
+                    return self._visit_size(e.first, e.second, ctx)
+                case _:
+                    # unknown operator
+                    raise NotImplementedError('no FPCore operator for', e)
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> fpc.Expr:
+        cls = _ternary_table.get(type(e))
+        if cls is not None:
+            # known ternary operator
+            arg0 = self._visit_expr(e.first, ctx)
+            arg1 = self._visit_expr(e.second, ctx)
+            arg2 = self._visit_expr(e.third, ctx)
+            return cls(arg0, arg1, arg2)
+        else:
+            # unknown operator
+            raise NotImplementedError('no FPCore operator for', e)
+
+    def _visit_naryop(self, e: NaryOp, ctx: None) -> fpc.Expr:
+        cls = _nary_table.get(type(e))
+        if cls is not None:
+            # known n-ary operator
+            return cls(*[self._visit_expr(c, ctx) for c in e.args])
+        else:
+            match e:
+                case Zip():
+                    # zip expression
+                    return self._visit_zip(e.args, ctx)
+                case _:
+                    # unknown operator
+                    raise NotImplementedError('no FPCore operator for', e)
     def _visit_compare(self, e: Compare, ctx: None) -> fpc.Expr:
         assert e.ops != [], 'should not be empty'
         match e.ops:
             case [op]:
                 # 2-argument case: just compile
                 cls = self._compile_compareop(op)
-                arg0 = self._visit_expr(e.children[0], ctx)
-                arg1 = self._visit_expr(e.children[1], ctx)
+                arg0 = self._visit_expr(e.args[0], ctx)
+                arg1 = self._visit_expr(e.args[1], ctx)
                 return cls(arg0, arg1)
             case [op, *ops]:
                 # N-argument case:
                 # TODO: want to evaluate each argument only once;
                 #       may need to let-bind in case any argument is
                 #       used multiple times
-                args = [self._visit_expr(arg, ctx) for arg in e.children]
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
                 curr_group = (op, [args[0], args[1]])
                 groups: list[tuple[CompareOp, list[fpc.Expr]]] = [curr_group]
                 for op, lhs, rhs in zip(ops, args[1:], args[2:]):
@@ -288,7 +337,7 @@ class FPCoreCompileInstance(ReduceVisitor):
                 raise NotImplementedError('unreachable', e.ops)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> fpc.Expr:
-        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.children])
+        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.args])
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> fpc.Expr:
         value = self._visit_expr(e.value, ctx)
@@ -464,37 +513,79 @@ class FPCoreCompileInstance(ReduceVisitor):
     def _visit_if(self, stmt: IfStmt, ctx: None):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_while(self, stmt: WhileStmt, ctx: fpc.Expr):
-        if len(stmt.phis) != 1:
-            raise FPCoreCompileError('while loops must have exactly one phi node')
-        phi = stmt.phis[0]
-        name, init, update = str(phi.name), str(phi.lhs), str(phi.rhs)
-        cond = self._visit_expr(stmt.cond, None)
-        body = self._visit_block(stmt.body, fpc.Var(update))
-        return fpc.While(cond, [(name, fpc.Var(init), body)], ctx)
+    def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr):
+        # check that only one variable is mutated in the loop
+        # the `WhileBundling` pass is required to ensure this
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
+        num_mutated = len(mutated)
 
-    def _visit_for(self, stmt: ForStmt, ctx: fpc.Expr):
-        if len(stmt.phis) != 1:
-            raise FPCoreCompileError('for loops must have exactly one phi node')
-        # phi nodes
-        phi = stmt.phis[0]
-        name, init, update = str(phi.name), str(phi.lhs), str(phi.rhs)
-        # fresh variable for the iterable value
-        tuple_id = str(self.gensym.fresh('t'))
-        iterable = self._visit_expr(stmt.iterable, None)
-        body = self._visit_block(stmt.body, fpc.Var(update))
-        # index variables and state merging
-        match stmt.target:
-            case Id():
-                # simple case: single variable
-                dim_binding = (str(stmt.target), fpc.Var(tuple_id))
-            case TupleBinding():
-                raise FPCoreCompileError('tuple unpacking in for loops is not supported')
-            case _:
-                raise RuntimeError('unreachable', stmt.target)
+        if num_mutated == 0:
+            # no mutated variables (loop with no side effect)
+            # still want to return a valid FPCore
+            # (while ([_ 0 (let ([_ <body>]) 0)]) <ret>)
+            cond = self._visit_expr(stmt.cond, None)
+            body = self._visit_block(stmt.body, fpc.Integer(0))
+            return fpc.While(cond, [('_', fpc.Integer(0), body)], ret)
+        elif num_mutated == 1:
+            # exactly one mutated variable
+            # the mutated variable is the loop variable
+            # (while ([<loop> <loop> <body>]) <ret>)
+            loop_id = str(mutated.pop())
+            cond = self._visit_expr(stmt.cond, None)
+            body = self._visit_block(stmt.body, fpc.Var(loop_id))
+            return fpc.While(cond, [(loop_id, fpc.Var(loop_id), body)], ret)
+        else:
+            raise FPCoreCompileError(f'while loops cannot have more than 1 mutated variable: {list(mutated)}')
 
-        while_binding = (name, fpc.Var(init), body)
-        return fpc.Let([(tuple_id, iterable)], fpc.For([dim_binding], [while_binding], ctx))
+
+    def _visit_for(self, stmt: ForStmt, ret: fpc.Expr):
+        # check that only one variable is mutated in the loop
+        # the `ForBundling` pass is required to ensure this
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
+        num_mutated = len(mutated)
+
+        if num_mutated == 0:
+            # no mutated variables (loop with no side effect)
+            # still want to return a valid FPCore
+            # (let ([<t> <iterable>])
+            #   (for ([<i> (size <t> 0)])
+            #        ([_ 0 (let ([_ <body>]) 0)])))
+            #        <ret>))
+            tuple_id = str(self.gensym.fresh('t'))
+            idx_id = str(self.gensym.fresh('i'))
+
+            iterable = self._visit_expr(stmt.iterable, None)
+            body = self._visit_block(stmt.body, fpc.Integer(0))
+            return fpc.Let(
+                [(tuple_id, iterable)],
+                fpc.For(
+                    [(idx_id, _size0_expr(tuple_id))],
+                    [(('_', fpc.Integer(0), body))],
+                    ret
+            ))
+        else:
+            # exactly one mutated variable
+            # the mutated variable is the loop variable
+            # (let ([<t> <iterable>])
+            #   (for ([<i> (size <t> 0)])
+            #        ([<loop> <loop> (let ([_ <body>]) <loop>)])))
+            #        <ret>))
+            loop_id = str(mutated.pop())
+            tuple_id = str(self.gensym.fresh('t'))
+            idx_id = str(self.gensym.fresh('i'))
+
+            iterable = self._visit_expr(stmt.iterable, None)
+            body = self._visit_block(stmt.body, fpc.Var(loop_id))
+            return fpc.Let(
+                [(tuple_id, iterable)],
+                fpc.For(
+                    [(idx_id, _size0_expr(tuple_id))],
+                    [(loop_id, fpc.Var(loop_id), body)],
+                    ret
+            ))
+
 
     def _visit_context_expr(self, e: ContextExpr, ctx: None):
         raise RuntimeError('do not call')
@@ -574,12 +665,14 @@ class FPCoreCompileInstance(ReduceVisitor):
 class FPCoreCompiler(Backend):
     """Compiler from FPy IR to FPCore"""
 
-    def compile(self, func: FuncDef) -> fpc.FPCore:
+    def compile(self, func: Function) -> fpc.FPCore:
         # normalization passes
-        func = FuncUpdate.apply(func)
-        func = ForUnpack.apply(func)
-        func = ForBundling.apply(func)
-        func = WhileBundling.apply(func)
-        func = SimplifyIf.apply(func)
+        ast = ContextInline.apply(func.ast, func.env)
+        ast = FuncUpdate.apply(ast)
+        ast = ForUnpack.apply(ast)
+        ast = ForBundling.apply(ast)
+        ast = WhileBundling.apply(ast)
+        ast = SimplifyIf.apply(ast)
         # compile
-        return FPCoreCompileInstance(func).compile()
+        def_use = DefineUse.analyze(ast)
+        return FPCoreCompileInstance(ast, def_use).compile()

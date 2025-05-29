@@ -4,7 +4,7 @@ This module contains the parser for the FPy language.
 
 import ast
 
-from typing import cast, Mapping
+from typing import cast, Callable, Mapping
 from types import FunctionType
 
 from ..ast.fpyast import *
@@ -17,9 +17,9 @@ def _ipow(expr: Expr, n: int, loc: Location):
     elif n == 1:
         return expr
     else:
-        e = BinaryOp(BinaryOpKind.MUL, expr, expr, loc)
+        e = Mul(expr, expr, loc)
         for _ in range(2, n):
-            e = BinaryOp(BinaryOpKind.MUL, e, expr, loc)
+            e = Mul(e, expr, loc)
         return e
 
 _constants: set[str] = {
@@ -39,78 +39,78 @@ _constants: set[str] = {
     'SQRT1_2'
 }
 
-_unary_table = {
-    'abs': UnaryOpKind.FABS,
-    'fabs': UnaryOpKind.FABS,
-    'sqrt': UnaryOpKind.SQRT,
-    'cbrt': UnaryOpKind.CBRT,
-    'ceil': UnaryOpKind.CEIL,
-    'floor': UnaryOpKind.FLOOR,
-    'nearbyint': UnaryOpKind.NEARBYINT,
-    'round': UnaryOpKind.ROUND,
-    'trunc': UnaryOpKind.TRUNC,
-    'acos': UnaryOpKind.ACOS,
-    'asin': UnaryOpKind.ASIN,
-    'atan': UnaryOpKind.ATAN,
-    'cos': UnaryOpKind.COS,
-    'sin': UnaryOpKind.SIN,
-    'tan': UnaryOpKind.TAN,
-    'acosh': UnaryOpKind.ACOSH,
-    'asinh': UnaryOpKind.ASINH,
-    'atanh': UnaryOpKind.ATANH,
-    'cosh': UnaryOpKind.COSH,
-    'sinh': UnaryOpKind.SINH,
-    'tanh': UnaryOpKind.TANH,
-    'exp': UnaryOpKind.EXP,
-    'exp2': UnaryOpKind.EXP2,
-    'expm1': UnaryOpKind.EXPM1,
-    'log': UnaryOpKind.LOG,
-    'log10': UnaryOpKind.LOG10,
-    'log1p': UnaryOpKind.LOG1P,
-    'log2': UnaryOpKind.LOG2,
-    'erf': UnaryOpKind.ERF,
-    'erfc': UnaryOpKind.ERFC,
-    'lgamma': UnaryOpKind.LGAMMA,
-    'tgamma': UnaryOpKind.TGAMMA,
-    'isfinite': UnaryOpKind.ISFINITE,
-    'isinf': UnaryOpKind.ISINF,
-    'isnan': UnaryOpKind.ISNAN,
-    'isnormal': UnaryOpKind.ISNORMAL,
-    'signbit': UnaryOpKind.SIGNBIT,
-    'not': UnaryOpKind.NOT,
-    'cast': UnaryOpKind.CAST,
-    'range': UnaryOpKind.RANGE,
-    'shape': UnaryOpKind.SHAPE,
-    'dim': UnaryOpKind.DIM,
+_unary_table: dict[str, type[UnaryOp]] = {
+    'abs': Fabs,
+    'fabs': Fabs,
+    'sqrt': Sqrt,
+    'cbrt': Cbrt,
+    'ceil': Ceil,
+    'floor': Floor,
+    'nearbyint': NearbyInt,
+    'round': Round,
+    'trunc': Trunc,
+    'acos': Acos,
+    'asin': Asin,
+    'atan': Atan,
+    'cos': Cos,
+    'sin': Sin,
+    'tan': Tan,
+    'acosh': Acosh,
+    'asinh': Asinh,
+    'atanh': Atanh,
+    'cosh': Cosh,
+    'sinh': Sinh,
+    'tanh': Tanh,
+    'exp': Exp,
+    'exp2': Exp2,
+    'expm1': Expm1,
+    'log': Log,
+    'log10': Log10,
+    'log1p': Log1p,
+    'log2': Log2,
+    'erf': Erf,
+    'erfc': Erfc,
+    'lgamma': Lgamma,
+    'tgamma': Tgamma,
+    'isfinite': IsFinite,
+    'isinf': IsInf,
+    'isnan': IsNan,
+    'isnormal': IsNormal,
+    'signbit': Signbit,
+    'not': Not,
+    'cast': Cast,
+    'range': Range,
+    'shape': Shape,
+    'dim': Dim,
 }
 
-_binary_table = {
-    'add': BinaryOpKind.ADD,
-    'sub': BinaryOpKind.SUB,
-    'mul': BinaryOpKind.MUL,
-    'div': BinaryOpKind.DIV,
-    'copysign': BinaryOpKind.COPYSIGN,
-    'fdim': BinaryOpKind.FDIM,
-    'fmax': BinaryOpKind.FMAX,
-    'min': BinaryOpKind.FMIN,
-    'max': BinaryOpKind.FMAX,
-    'fmin': BinaryOpKind.FMIN,
-    'fmod': BinaryOpKind.FMOD,
-    'remainder': BinaryOpKind.REMAINDER,
-    'hypot': BinaryOpKind.HYPOT,
-    'atan2': BinaryOpKind.ATAN2,
-    'pow': BinaryOpKind.POW,
-    'size': BinaryOpKind.SIZE
+_binary_table: dict[str, type[BinaryOp]] = {
+    'add': Add,
+    'sub': Sub,
+    'mul': Mul,
+    'div': Div,
+    'copysign': Copysign,
+    'fdim': Fdim,
+    'fmax': Fmax,
+    'min': Fmin,
+    'max': Fmax,
+    'fmin': Fmin,
+    'fmod': Fmod,
+    'remainder': Remainder,
+    'hypot': Hypot,
+    'atan2': Atan2,
+    'pow': Pow,
+    'size': Size
 }
 
-_ternary_table = {
-    'fma': TernaryOpKind.FMA
+_ternary_table: dict[str, type[TernaryOp]] = {
+    'fma': Fma
 }
 
-_nary_table = {
-    'and': NaryOpKind.AND,
-    'or': NaryOpKind.OR,
-    'zip': NaryOpKind.ZIP,
+_nary_table: dict[str, type[NaryOp]] = {
+    'and': And,
+    'or': Or,
+    'zip': Zip,
 }
 
 _special_functions = {
@@ -207,16 +207,17 @@ class Parser:
         loc = self._parse_location(ann)
         match ann:
             case ast.Name('Real'):
-                return ScalarTypeAnn(ScalarType.REAL, loc)
+                return RealTypeAnn(loc)
             case ast.Name('int'):
-                return ScalarTypeAnn(ScalarType.REAL, loc)
+                # TODO: more specific type
+                return RealTypeAnn(loc)
             case ast.Name('float'):
-                return ScalarTypeAnn(ScalarType.REAL, loc)
+                return RealTypeAnn(loc)
             case ast.Name('bool'):
-                return ScalarTypeAnn(ScalarType.BOOL, loc)
+                return RealTypeAnn(loc)
             case _:
                 # TODO: implement
-                return ScalarTypeAnn(ScalarType.REAL, loc)
+                return RealTypeAnn(loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':
@@ -284,10 +285,10 @@ class Parser:
         match e.op:
             case ast.And():
                 args = [self._parse_expr(e) for e in e.values]
-                return NaryOp(NaryOpKind.AND, args, loc)
+                return And(args, loc)
             case ast.Or():
                 args = [self._parse_expr(e) for e in e.values]
-                return NaryOp(NaryOpKind.OR, args, loc)
+                return Or(args, loc)
             case _:
                 raise FPyParserError(loc, 'Not a valid FPy operator', e.op, e)
 
@@ -302,10 +303,10 @@ class Parser:
                 if isinstance(arg, Integer):
                     return Integer(-arg.val, loc)
                 else:
-                    return UnaryOp(UnaryOpKind.NEG, arg, loc)
+                    return Neg(arg, loc)
             case ast.Not():
                 arg = self._parse_expr(e.operand)
-                return UnaryOp(UnaryOpKind.NOT, arg, loc)
+                return Not(arg, loc)
             case _:
                 raise FPyParserError(loc, 'Not a valid FPy operator', e.op, e)
 
@@ -315,19 +316,19 @@ class Parser:
             case ast.Add():
                 lhs = self._parse_expr(e.left)
                 rhs = self._parse_expr(e.right)
-                return BinaryOp(BinaryOpKind.ADD, lhs, rhs, loc)
+                return Add(lhs, rhs, loc)
             case ast.Sub():
                 lhs = self._parse_expr(e.left)
                 rhs = self._parse_expr(e.right)
-                return BinaryOp(BinaryOpKind.SUB, lhs, rhs, loc)
+                return Sub(lhs, rhs, loc)
             case ast.Mult():
                 lhs = self._parse_expr(e.left)
                 rhs = self._parse_expr(e.right)
-                return BinaryOp(BinaryOpKind.MUL, lhs, rhs, loc)
+                return Mul(lhs, rhs, loc)
             case ast.Div():
                 lhs = self._parse_expr(e.left)
                 rhs = self._parse_expr(e.right)
-                return BinaryOp(BinaryOpKind.DIV, lhs, rhs, loc)
+                return Div(lhs, rhs, loc)
             case ast.Pow():
                 base = self._parse_expr(e.left)
                 exp = self._parse_expr(e.right)
@@ -440,25 +441,30 @@ class Parser:
                     if len(e.args) != 1:
                         raise FPyParserError(loc, 'FPy unary operator expects one argument', e)
                     arg = self._parse_expr(e.args[0])
-                    return UnaryOp(_unary_table[name], arg, loc)
+                    cls1 = _unary_table[name]
+                    return cls1(arg, loc)
                 elif name in _binary_table:
                     if len(e.args) != 2:
                         raise FPyParserError(loc, 'FPy binary operator expects two arguments', e)
                     lhs = self._parse_expr(e.args[0])
                     rhs = self._parse_expr(e.args[1])
-                    return BinaryOp(_binary_table[name], lhs, rhs, loc)
+                    cls2 = _binary_table[name]
+                    return cls2(lhs, rhs, loc)
                 elif name in _ternary_table:
                     if len(e.args) != 3:
                         raise FPyParserError(loc, 'FPy ternary operator expects three arguments', e)
                     arg0 = self._parse_expr(e.args[0])
                     arg1 = self._parse_expr(e.args[1])
                     arg2 = self._parse_expr(e.args[2])
-                    return TernaryOp(_ternary_table[name], arg0, arg1, arg2, loc)
+                    cls3 = _ternary_table[name]
+                    return cls3(arg0, arg1, arg2, loc)
                 elif name in _nary_table:
                     args = [self._parse_expr(arg) for arg in e.args]
-                    return NaryOp(_nary_table[name], args, loc)
+                    clsN = _nary_table[name]
+                    return clsN(args, loc)
                 elif name == 'len':
-                    return BinaryOp(BinaryOpKind.SIZE, self._parse_expr(e.args[0]), Integer(0, loc), loc)
+                    arg = self._parse_expr(e.args[0])
+                    return Size(arg, Integer(0, loc), loc)
                 elif name == 'rational':
                     return self._parse_rational(e)
                 elif name == 'hexfloat':
@@ -604,20 +610,20 @@ class Parser:
 
         match stmt.op:
             case ast.Add():
-                op = BinaryOpKind.ADD
+                cls: type[BinaryOp] = Add
             case ast.Sub():
-                op = BinaryOpKind.SUB
+                cls = Sub
             case ast.Mult():
-                op = BinaryOpKind.MUL
+                cls = Mul
             case ast.Div():
-                op = BinaryOpKind.DIV
+                cls = Div
             case ast.Mod():
-                op = BinaryOpKind.FMOD
+                cls = Fmod
             case _:
                 raise FPyParserError(loc, 'Unsupported operator-assignment in FPy', stmt)
 
         value = self._parse_expr(stmt.value)
-        e = BinaryOp(op, Var(ident, loc), value, loc)
+        e = cls(Var(ident, loc), value, loc)
         return SimpleAssign(ident, e, None, loc)
 
     def _parse_statement(self, stmt: ast.stmt) -> Stmt:
@@ -731,7 +737,7 @@ class Parser:
         args = self._parse_arguments(f.args.args)
         expr = self._parse_expr(f.body)
         block = StmtBlock([ReturnStmt(expr, expr.loc)])
-        return FuncDef('pre', args, block, loc)
+        return FuncDef('pre', args, block, None, None, loc)
 
     def _parse_function(self, f: ast.FunctionDef):
         """Parse a Python function definition."""
@@ -756,7 +762,8 @@ class Parser:
         block = self._parse_statements(body)
 
         # return AST and decorator list
-        return FuncDef(f.name, args, block, loc), f.decorator_list
+        func = FuncDef(f.name, args, block, None, None, loc)
+        return func, f.decorator_list
 
     def _eval(
         self,

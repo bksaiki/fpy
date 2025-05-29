@@ -1,7 +1,7 @@
 import unittest
 
 from fpy2 import fpy, pattern, Function
-from fpy2.ast import TernaryOp, TernaryOpKind, Var, NamedId, SimpleAssign, StmtBlock, Call
+from fpy2.ast import Fma, Var, NamedId, SimpleAssign, StmtBlock, Call
 from fpy2.rewrite.applier import Applier
 from fpy2.rewrite.matcher import Matcher
 from fpy2.typing import *
@@ -36,8 +36,7 @@ class ApplierExprTestCase(unittest.TestCase):
         a = Applier(insert_fma_r)
         matches = m.match(f)
         f2 = a.apply(matches[0])
-        self.assertEqual(f2, TernaryOp(
-            TernaryOpKind.FMA,
+        self.assertEqual(f2, Fma(
             Var(NamedId('x'), None),
             Var(NamedId('y'), None),
             Var(NamedId('z'), None),
@@ -50,8 +49,7 @@ class ApplierExprTestCase(unittest.TestCase):
         a = Applier(insert_fma_r)
         matches = m.match(g)
         f2 = a.apply(matches[0])
-        self.assertEqual(f2, TernaryOp(
-            TernaryOpKind.FMA,
+        self.assertEqual(f2, Fma(
             Var(NamedId('x'), None),
             Var(NamedId('y'), None),
             Var(NamedId('z'), None),

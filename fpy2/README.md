@@ -5,7 +5,6 @@
 - `backend` - Code generation from FPyIR
 - `frontend` - Parsing / Checking / IR-codegen
 - `interpret` - FPy interpreters
-- `ir` - Intermediate representation
 - `number` - Numbers library
 - `rewrite` - Pattern-based rewriter
 - `sample` - Point sampling

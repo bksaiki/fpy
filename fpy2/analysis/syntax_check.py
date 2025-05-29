@@ -4,8 +4,8 @@ from typing import Optional, Self
 
 from ..utils import FPySyntaxError
 
-from .fpyast import *
-from .visitor import AstVisitor
+from ..ast.fpyast import *
+from ..ast.visitor import AstVisitor
 from .live_vars import LiveVars
 
 class _Env:
@@ -44,7 +44,7 @@ _Ctx = tuple[_Env, bool]
 class SyntaxCheckInstance(AstVisitor):
     """Single-use instance of syntax checking"""
     func: FuncDef
-    free_vars: set[str]
+    free_vars: set[NamedId]
     ignore_unknown: bool
     ignore_noreturn: bool
     allow_wildcard: bool
@@ -55,7 +55,7 @@ class SyntaxCheckInstance(AstVisitor):
     def __init__(
         self,
         func: FuncDef,
-        free_vars: set[str],
+        free_vars: set[NamedId],
         ignore_unknown: bool,
         ignore_noreturn: bool,
         allow_wildcard: bool
@@ -90,7 +90,7 @@ class SyntaxCheckInstance(AstVisitor):
                 raise FPySyntaxError(f'unbound variable `{name}`')
             if not env[name]:
                 raise FPySyntaxError(f'variable `{name}` not defined along all paths')
-        if name.base in self.free_vars:
+        if name in self.free_vars:
             self.free_var_args.add(name)
 
     def _visit_var(self, e: Var, ctx: _Ctx):
@@ -148,15 +148,15 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx):
         env, _ = ctx
-        self._visit_expr(e.left, ctx)
-        self._visit_expr(e.right, ctx)
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
         return env
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx):
         env, _ = ctx
-        self._visit_expr(e.arg0, ctx)
-        self._visit_expr(e.arg1, ctx)
-        self._visit_expr(e.arg2, ctx)
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
+        self._visit_expr(e.third, ctx)
         return env
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
@@ -173,7 +173,7 @@ class SyntaxCheckInstance(AstVisitor):
 
     def _visit_call(self, e: Call, ctx: _Ctx):
         env, _ = ctx
-        self._mark_use(NamedId(e.op), env, ignore_missing=self.ignore_unknown)
+        self._mark_use(NamedId(e.name), env, ignore_missing=self.ignore_unknown)
         for c in e.args:
             self._visit_expr(c, ctx)
         return env
@@ -202,6 +202,14 @@ class SyntaxCheckInstance(AstVisitor):
         self._visit_expr(e.value, ctx)
         for s in e.slices:
             self._visit_expr(s, ctx)
+        return env
+
+    def _visit_tuple_set(self, e: TupleSet, ctx: _Ctx):
+        env, _ = ctx
+        self._visit_expr(e.array, ctx)
+        for s in e.slices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(e.value, ctx)
         return env
 
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
@@ -338,7 +346,7 @@ class SyntaxCheckInstance(AstVisitor):
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
         env, _ = ctx
         for var in self.free_vars:
-            env = env.extend(NamedId(var))
+            env = env.extend(var)
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 env = env.extend(arg.name)
@@ -363,22 +371,25 @@ class SyntaxCheck:
     Rules enforced:
 
     Variables:
+
     - any variables must be defined before it is used;
 
     Return statements:
-     - all functions must have exactly one return statement,
-     - must be at the end of the function definiton;
+
+    - all functions must have exactly one return statement,
+    - must be at the end of the function definiton;
 
     If statements
-     - any variable must be defined along both branches when
-        used after the `if` statement
+
+    - any variable must be defined along both branches when
+      used after the `if` statement
     """
 
     @staticmethod
-    def analyze(
+    def check(
         func: FuncDef,
         *,
-        free_vars: Optional[set[str]] = None,
+        free_vars: Optional[set[NamedId]] = None,
         ignore_unknown: bool = False,
         ignore_noreturn: bool = False,
         allow_wildcard: bool = False
@@ -391,8 +402,9 @@ class SyntaxCheck:
 
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a Function, got {func}')
+
         if free_vars is None:
-            free_vars = set()
+            free_vars = set(func.free_vars)
 
         inst = SyntaxCheckInstance(func, free_vars, ignore_unknown, ignore_noreturn, allow_wildcard)
         return inst.analyze()

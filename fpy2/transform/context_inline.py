@@ -4,8 +4,8 @@ from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..env import ForeignEnv
 
-from .fpyast import *
-from .visitor import DefaultAstTransformVisitor
+from ..ast.fpyast import *
+from ..ast.visitor import DefaultAstTransformVisitor
 
 class _ContextInlineInstance(DefaultAstTransformVisitor):
     """Per-IR instance of context inlining"""

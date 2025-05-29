@@ -3,10 +3,10 @@ Defines the abstract base class for FPy interpreters.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Optional
 
+from ..ast import Expr
 from ..function import Function, set_default_function_call
-from ..ir import Expr
 from ..number import Context
 
 
@@ -17,9 +17,6 @@ class Interpreter(ABC):
     def eval(self, func: Function, args, ctx: Optional[Context] = None):
         ...
 
-    @abstractmethod
-    def eval_expr(self, expr: Expr, env: dict, ctx: Context):
-        ...
 
 class FunctionReturnException(Exception):
     """Raised when a function returns a value."""

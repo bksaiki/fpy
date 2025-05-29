@@ -1,63 +1,133 @@
 """Transformation pass to rewrite if statements to if expressions."""
 
-from typing import Optional
-
-from ..analysis.define_use import DefineUse
-from ..analysis.verify import VerifyIR
-
-from ..ir import *
+from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
+from ..ast import *
 from ..utils import Gensym
 
-class _SimplifyIfInstance(DefaultTransformVisitor):
+from .rename_target import RenameTarget
+
+
+class _SimplifyIfInstance(DefaultAstTransformVisitor):
     """Single-use instance of the SimplifyIf pass."""
     func: FuncDef
+    def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, names: set[NamedId]):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
-        self.gensym = Gensym(reserved=names)
+        self.def_use = def_use
+        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def apply(self):
         return self._visit_function(self.func, None)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         stmts: list[Stmt] = []
+
         # compile condition
         cond = self._visit_expr(stmt.cond, ctx)
+
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            stmts.append(SimpleAssign(t, BoolType(), cond))
-            cond = Var(t)
-        # inline body
+            s = SimpleAssign(t, cond, BoolTypeAnn(None), None)
+            stmts.append(s)
+            cond = Var(t, None)
+
+        # compile the body
         body, _ = self._visit_block(stmt.body, ctx)
+
+        # identify variables that were mutated in the body
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
+
+        # rename mutated variables in the body
+        rename = { var: self.gensym.refresh(var) for var in mutated }
+        body = RenameTarget.apply_block(body, rename)
+
+        # generate assignments and inline the body
+        for var in mutated:
+            t = rename[var]
+            s = SimpleAssign(t, Var(var, None), None, None)
+            stmts.append(s)
         stmts.extend(body.stmts)
-        # convert phi nodes into if expressions
-        for phi in stmt.phis:
-            ife = IfExpr(cond, Var(phi.rhs), Var(phi.lhs))
-            stmts.append(SimpleAssign(phi.name, AnyType(), ife))
+
+        # make if expressions for each mutated variable
+        for var in mutated:
+            e = IfExpr(cond, Var(rename[var], None), Var(var, None), None)
+            s = SimpleAssign(var, e, None, None)
+            stmts.append(s)
+
         return StmtBlock(stmts)
+
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         stmts: list[Stmt] = []
+
         # compile condition
         cond = self._visit_expr(stmt.cond, ctx)
+
         # generate temporary if needed
         if not isinstance(cond, Var):
             t = self.gensym.fresh('cond')
-            stmts.append(SimpleAssign(t, BoolType(), cond))
-            cond = Var(t)
-        # inline if-true block
+            s = SimpleAssign(t, cond, BoolTypeAnn(None), None)
+            stmts.append(s)
+            cond = Var(t, None)
+
+        # compile the bodies
         ift, _ = self._visit_block(stmt.ift, ctx)
-        stmts.extend(ift.stmts)
-        # inline if-false block
         iff, _ = self._visit_block(stmt.iff, ctx)
+
+        # identify variables that were mutated in each body
+        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
+        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
+        mutated_ift = defs_in_ift.mutated_in(defs_out_ift)
+        mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
+
+        # identify variables that were introduced in the bodies
+        # FPy semantics says they must be introduces in both branches
+        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
+        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
+        intros = intros_ift & intros_iff
+
+        # combine sets
+        mutated_or_new_ift = mutated_ift.copy()
+        mutated_or_new_iff = mutated_iff.copy()
+        mutated_or_new_ift.extend(intros)
+        mutated_or_new_iff.extend(intros)
+
+        # rename mutated variables in each body, generate assignments, and inline
+        rename_ift = { var: self.gensym.refresh(var) for var in mutated_or_new_ift }
+        rename_iff = { var: self.gensym.refresh(var) for var in mutated_or_new_iff }
+
+        ift = RenameTarget.apply_block(ift, rename_ift)
+        iff = RenameTarget.apply_block(iff, rename_iff)
+
+        for var in mutated_ift:
+            t = rename_ift[var]
+            s = SimpleAssign(t, Var(var, None), None, None)
+            stmts.append(s)
+        stmts.extend(ift.stmts)
+
+        for var in mutated_iff:
+            t = rename_iff[var]
+            s = SimpleAssign(t, Var(var, None), None, None)
+            stmts.append(s)
         stmts.extend(iff.stmts)
-        # convert phi nodes into if expressions
-        for phi in stmt.phis:
-            ife = IfExpr(cond, Var(phi.lhs), Var(phi.rhs))
-            stmts.append(SimpleAssign(phi.name, AnyType(), ife))
+
+        # make if expressions for each mutated or introduced variable
+        unique: set[NamedId] = set()
+        for var in mutated_or_new_ift:
+            if var not in unique:
+                ift_name = rename_ift.get(var, var)
+                iff_name = rename_iff.get(var, var)
+                e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
+                s = SimpleAssign(var, e, None, None)
+                stmts.append(s)
+                unique.add(var)
+
         return StmtBlock(stmts)
+
 
     def _visit_block(self, block: StmtBlock, ctx: None):
         stmts: list[Stmt] = []
@@ -97,7 +167,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
 
 class SimplifyIf:
     """
-    Control flow simplifification:
+    Control flow simplification:
 
     Transforms if statements into if expressions.
     The inner block is hoisted into the outer block and each
@@ -105,10 +175,9 @@ class SimplifyIf:
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: Optional[set[NamedId]] = None):
-        if names is None:
-            uses = DefineUse.analyze(func)
-            names = (uses.keys())
-        ir = _SimplifyIfInstance(func, names).apply()
-        VerifyIR.check(ir)
-        return ir
+    def apply(func: FuncDef):
+        def_use = DefineUse.analyze(func)
+        ast = _SimplifyIfInstance(func, def_use).apply()
+        print(ast.format())
+        SyntaxCheck.check(ast)
+        return ast

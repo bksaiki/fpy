@@ -86,6 +86,10 @@ class AstVisitor(ABC):
         ...
 
     @abstractmethod
+    def _visit_tuple_set(self, e: TupleSet, ctx: Any) -> Any:
+        ...
+
+    @abstractmethod
     def _visit_if_expr(self, e: IfExpr, ctx: Any) -> Any:
         ...
 
@@ -197,6 +201,8 @@ class AstVisitor(ABC):
                 return self._visit_comp_expr(e, ctx)
             case TupleRef():
                 return self._visit_tuple_ref(e, ctx)
+            case TupleSet():
+                return self._visit_tuple_set(e, ctx)
             case IfExpr():
                 return self._visit_if_expr(e, ctx)
             case ContextExpr():
@@ -269,13 +275,13 @@ class DefaultAstVisitor(AstVisitor):
         self._visit_expr(e.arg, ctx)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Any):
-        self._visit_expr(e.left, ctx)
-        self._visit_expr(e.right, ctx)
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Any):
-        self._visit_expr(e.arg0, ctx)
-        self._visit_expr(e.arg1, ctx)
-        self._visit_expr(e.arg2, ctx)
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
+        self._visit_expr(e.third, ctx)
 
     def _visit_naryop(self, e: NaryOp, ctx: Any):
         for arg in e.args:
@@ -285,7 +291,7 @@ class DefaultAstVisitor(AstVisitor):
         for c in e.args:
             self._visit_expr(c, ctx)
 
-    def _visit_call(self, e: Call, ctx: None):
+    def _visit_call(self, e: Call, ctx: Any):
         for arg in e.args:
             self._visit_expr(arg, ctx)
 
@@ -297,6 +303,12 @@ class DefaultAstVisitor(AstVisitor):
         self._visit_expr(e.value, ctx)
         for s in e.slices:
             self._visit_expr(s, ctx)
+
+    def _visit_tuple_set(self, e: TupleSet, ctx: Any):
+        self._visit_expr(e.array, ctx)
+        for s in e.slices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(e.value, ctx)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
         for iterable in e.iterables:
@@ -396,22 +408,22 @@ class DefaultAstTransformVisitor(AstVisitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Any):
         arg = self._visit_expr(e.arg, ctx)
-        return UnaryOp(e.op, arg, e.loc)
+        return type(e)(arg, e.loc)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Any):
-        left = self._visit_expr(e.left, ctx)
-        right = self._visit_expr(e.right, ctx)
-        return BinaryOp(e.op, left, right, e.loc)
+        first = self._visit_expr(e.first, ctx)
+        second = self._visit_expr(e.second, ctx)
+        return type(e)(first, second, e.loc)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Any):
-        arg0 = self._visit_expr(e.arg0, ctx)
-        arg1 = self._visit_expr(e.arg1, ctx)
-        arg2 = self._visit_expr(e.arg2, ctx)
-        return TernaryOp(e.op, arg0, arg1, arg2, e.loc)
+        first = self._visit_expr(e.first, ctx)
+        second = self._visit_expr(e.second, ctx)
+        third = self._visit_expr(e.third, ctx)
+        return type(e)(first, second, third, e.loc)
 
     def _visit_naryop(self, e: NaryOp, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        return NaryOp(e.op, args, e.loc)
+        return type(e)(args, e.loc)
 
     def _visit_compare(self, e: Compare, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
@@ -419,7 +431,7 @@ class DefaultAstTransformVisitor(AstVisitor):
 
     def _visit_call(self, e: Call, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        return Call(e.op, args, e.loc)
+        return Call(e.name, args, e.loc)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
@@ -430,6 +442,12 @@ class DefaultAstTransformVisitor(AstVisitor):
         slices = [self._visit_expr(s, ctx) for s in e.slices]
         return TupleRef(value, slices, e.loc)
 
+    def _visit_tuple_set(self, e: TupleSet, ctx: Any):
+        array = self._visit_expr(e.array, ctx)
+        slices = [self._visit_expr(s, ctx) for s in e.slices]
+        value = self._visit_expr(e.value, ctx)
+        return TupleSet(array, slices, value, e.loc)
+
     def _visit_comp_expr(self, e: CompExpr, ctx: Any):
         targets: list[Id | TupleBinding] = []
         for target in e.targets:
@@ -437,7 +455,7 @@ class DefaultAstTransformVisitor(AstVisitor):
                 case Id():
                     targets.append(target)
                 case TupleBinding():
-                    targets.append(self._visit_tuple_binding(target))
+                    targets.append(self._visit_tuple_binding(target, ctx))
                 case _:
                     raise RuntimeError('unreachable', target)
 
@@ -483,20 +501,20 @@ class DefaultAstTransformVisitor(AstVisitor):
         s = SimpleAssign(stmt.var, expr, stmt.ann, stmt.loc)
         return s, ctx
 
-    def _visit_tuple_binding(self, binding: TupleBinding):
+    def _visit_tuple_binding(self, binding: TupleBinding, ctx: Any):
         new_vars: list[Id | TupleBinding] = []
         for var in binding:
             match var:
                 case Id():
                     new_vars.append(var)
                 case TupleBinding():
-                    new_vars.append(self._visit_tuple_binding(var))
+                    new_vars.append(self._visit_tuple_binding(var, ctx))
                 case _:
                     raise NotImplementedError(f'unreachable {var}')
         return TupleBinding(new_vars, binding.loc)
 
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
-        binding = self._visit_tuple_binding(stmt.binding)
+        binding = self._visit_tuple_binding(stmt.binding, ctx)
         expr = self._visit_expr(stmt.expr, ctx)
         s = TupleUnpack(binding, expr, stmt.loc)
         return s, ctx
@@ -531,7 +549,7 @@ class DefaultAstTransformVisitor(AstVisitor):
             case Id():
                 target = stmt.target
             case TupleBinding():
-                target = self._visit_tuple_binding(stmt.target)
+                target = self._visit_tuple_binding(stmt.target, ctx)
             case _:
                 raise RuntimeError('unreachable', stmt.target)
 
@@ -546,8 +564,11 @@ class DefaultAstTransformVisitor(AstVisitor):
                 context = self._visit_var(stmt.ctx, ctx)
             case ContextExpr():
                 context = self._visit_context_expr(stmt.ctx, ctx)
+            case ForeignVal():
+                context = ForeignVal(stmt.ctx.val, stmt.loc)
             case _:
                 raise RuntimeError('unreachable', stmt.ctx)
+
         body, _ = self._visit_block(stmt.body, ctx)
         s = ContextStmt(stmt.name, context, body, stmt.loc)
         return s, ctx
@@ -579,7 +600,7 @@ class DefaultAstTransformVisitor(AstVisitor):
         for arg in func.args:
             args.append(Argument(arg.name, arg.type, arg.loc))
         body, _ = self._visit_block(func.body, ctx)
-        return FuncDef(func.name, args, body, func.loc)
+        return FuncDef(func.name, args, body, func.metadata, func.free_vars, func.loc)
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: Any) -> Expr:

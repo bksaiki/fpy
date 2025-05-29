@@ -42,21 +42,45 @@ The AST can be formatted to a string representation using the :py:class:`fpy2.as
 Analyses
 ---------------------------
 
-.. autoclass:: fpy2.ast.DefineUse
+.. autoclass:: fpy2.analysis.DefineUse
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.ast.LiveVars
+.. autoclass:: fpy2.analysis.LiveVars
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.ast.SyntaxCheck
+.. autoclass:: fpy2.analysis.SyntaxCheck
    :members:
    :show-inheritance:
 
 Tranformations
 ---------------------------
 
-.. autoclass:: fpy2.ast.ContextInline
+.. autoclass:: fpy2.transform.ContextInline
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.ForBundling
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.ForUnpack
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.FuncUpdate
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.RenameTarget
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.SimplifyIf
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.WhileBundling
    :members:
    :show-inheritance:

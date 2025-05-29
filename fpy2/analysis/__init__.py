@@ -1,8 +1,5 @@
-"""
-This module defines compiler analyses over FPy IR.
-"""
+"""Program analyses for FPy programs"""
 
-from .define_use import DefineUse
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefinitionCtx
 from .live_vars import LiveVars
-from .reaching_defs import ReachingDefs
-from .verify import VerifyIR
+from .syntax_check import SyntaxCheck
