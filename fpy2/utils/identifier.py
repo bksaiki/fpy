@@ -18,10 +18,17 @@ class Id(ABC):
         """
         Return a set of all named identifiers contained in this identifier.
 
-        This method is mainly for compability with other AST methods.
+        This method is for compability with AST classes.
         """
         ...
 
+    def is_equiv(self, other) -> bool:
+        """
+        Check if this identifier is equivalent to another identifier.
+
+        This method is for compability with AST classes.
+        """
+        return self == other
 
 class UnderscoreId(Id):
     """
@@ -45,7 +52,6 @@ class UnderscoreId(Id):
 
     def names(self) -> set['NamedId']:
         return set()
-
 
 class NamedId(Id):
     """

@@ -681,21 +681,11 @@ class TupleBinding(Ast):
         return iter(self.elts)
 
     def is_equiv(self, other) -> bool:
-        if not isinstance(other, TupleBinding):
-            return False
-        if len(self.elts) != len(other.elts):
-            return False
-        for self_elt, other_elt in zip(self.elts, other.elts):
-            match self_elt, other_elt:
-                case Id(), Id():
-                    if self_elt != other_elt:
-                        return False
-                case TupleBinding(), TupleBinding():
-                    if not self_elt.is_equiv(other_elt):
-                        return False
-                case _:
-                    return False
-        return True
+        return (
+            isinstance(other, TupleBinding)
+            and len(self.elts) == len(other.elts)
+            and all(self_elt.is_equiv(other_elt) for self_elt, other_elt in zip(self.elts, other.elts))
+        )
 
     def names(self) -> set[NamedId]:
         ids: set[NamedId] = set()
@@ -730,22 +720,11 @@ class CompExpr(Expr):
         self.elt = elt
 
     def is_equiv(self, other) -> bool:
-        if not isinstance(other, CompExpr):
-            return False
-        if len(self.targets) != len(other.targets):
-            return False
-        for self_target, other_target in zip(self.targets, other.targets):
-            match self_target, other_target:
-                case Id(), Id():
-                    if self_target != other_target:
-                        return False
-                case TupleBinding(), TupleBinding():
-                    if not self_target.is_equiv(other_target):
-                        return False
-                case _:
-                    return False
         return (
-            all(i.is_equiv(o_i) for i, o_i in zip(self.iterables, other.iterables))
+            isinstance(other, CompExpr)
+            and len(self.targets) == len(other.targets)
+            and all(t.is_equiv(o_t) for t, o_t in zip(self.targets, other.targets))
+            and all(i.is_equiv(o_i) for i, o_i in zip(self.iterables, other.iterables))
             and self.elt.is_equiv(other.elt)
         )
 
@@ -919,6 +898,31 @@ class StmtBlock(Ast):
             and all(s1.is_equiv(s2) for s1, s2 in zip(self.stmts, other.stmts))
         )
 
+# class SimpleAssign(Stmt):
+#     """FPy AST: variable assignment"""
+#     binding: Id | TupleBinding
+#     type: Optional[TypeAnn]
+#     expr: Expr
+
+#     def __init__(
+#         self,
+#         binding: Id | TupleBinding,
+#         type: Optional[TypeAnn],
+#         expr: Expr,
+#         loc: Optional[Location]
+#     ):
+#         super().__init__(loc)
+#         self.binding = binding
+#         self.type = type
+#         self.expr = expr
+
+#     def is_equiv(self, other):
+#         return (
+#             isinstance(other, SimpleAssign)
+#             and self.binding.is_equiv(other.binding)
+#             and self.expr.is_equiv(other.expr)
+#         )
+
 class SimpleAssign(Stmt):
     """FPy AST: variable assignment"""
     var: Id
@@ -1082,19 +1086,10 @@ class ForStmt(Stmt):
         self.body = body
 
     def is_equiv(self, other) -> bool:
-        if not isinstance(other, ForStmt):
-            return False
-        match self.target, other.target:
-            case Id(), Id():
-                if self.target != other.target:
-                    return False
-            case TupleBinding(), TupleBinding():
-                if not self.target.is_equiv(other.target):
-                    return False
-            case _:
-                return False
         return (
-            self.iterable.is_equiv(other.iterable)
+            isinstance(other, ForStmt)
+            and self.target.is_equiv(other.target)
+            and self.iterable.is_equiv(other.iterable)
             and self.body.is_equiv(other.body)
         )
 
