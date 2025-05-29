@@ -100,7 +100,7 @@ class _MatcherInst(AstVisitor):
         if name in self.subst:
             # check if the current binding is the same as `e`
             bound = self.subst[name]
-            if e != bound:
+            if not e.is_equiv(bound):
                 raise _MatchFailure(f'conflicting bindings for {name}: {bound} != {e}')
         else:
             # insert a new binding

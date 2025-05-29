@@ -1,5 +1,7 @@
 import unittest
 
+from typing import TypeAlias
+
 from fpy2 import *
 from fpy2.typing import *
 from fpy2.ast import *
@@ -223,12 +225,15 @@ def if_not_test1(c):
     return x
 
 
-
 class RewriteTestCase(unittest.TestCase):
     """Testing `Pattern` parsing for examples"""
 
-    def assertAstEqual(self, a: Ast, b: Ast):
-        self.assertEqual(a, b, f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n')
+    def assertAstEqual(
+        self,
+        a: Expr | Stmt | StmtBlock | FuncDef,
+        b: Expr | Stmt | StmtBlock | FuncDef
+    ):
+        self.assertTrue(a.is_equiv(b), f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n')
 
     def test_fma_example1(self):
         assert isinstance(f, Function)

@@ -1,7 +1,7 @@
 import unittest
 
 from fpy2 import fpy, pattern, Function
-from fpy2.ast import Fma, Var, NamedId, SimpleAssign, StmtBlock, Call
+from fpy2.ast import Expr, Stmt, StmtBlock, FuncDef, Fma, Var, NamedId, SimpleAssign, Call
 from fpy2.rewrite.applier import Applier
 from fpy2.rewrite.matcher import Matcher
 from fpy2.typing import *
@@ -27,7 +27,17 @@ def g(x, y, z):
     return t
 
 
-class ApplierExprTestCase(unittest.TestCase):
+class _ApplierTestCase(unittest.TestCase):
+
+    def assertAstEqual(
+        self,
+        a: Expr | Stmt | StmtBlock | FuncDef,
+        b: Expr | Stmt | StmtBlock | FuncDef
+    ):
+        self.assertTrue(a.is_equiv(b), f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n')
+
+
+class ApplierExprTestCase(_ApplierTestCase):
     """Testing `Applier` for expressions"""
 
     def test_fma_example_1(self):
@@ -36,7 +46,7 @@ class ApplierExprTestCase(unittest.TestCase):
         a = Applier(insert_fma_r)
         matches = m.match(f)
         f2 = a.apply(matches[0])
-        self.assertEqual(f2, Fma(
+        self.assertAstEqual(f2, Fma(
             Var(NamedId('x'), None),
             Var(NamedId('y'), None),
             Var(NamedId('z'), None),
@@ -49,7 +59,7 @@ class ApplierExprTestCase(unittest.TestCase):
         a = Applier(insert_fma_r)
         matches = m.match(g)
         f2 = a.apply(matches[0])
-        self.assertEqual(f2, Fma(
+        self.assertAstEqual(f2, Fma(
             Var(NamedId('x'), None),
             Var(NamedId('y'), None),
             Var(NamedId('z'), None),
@@ -74,7 +84,7 @@ def insert_sum_l(xs):
 def insert_sum_r(xs):
     y = sum(xs)
 
-class ApplierStmtTestCase(unittest.TestCase):
+class ApplierStmtTestCase(_ApplierTestCase):
     """Testing `Applier` for sum expressions"""
 
     def test_sum_example_1(self):
@@ -83,7 +93,7 @@ class ApplierStmtTestCase(unittest.TestCase):
         a = Applier(insert_sum_r)
         matches = m.match(h)
         h2 = a.apply(matches[0])
-        self.assertEqual(
+        self.assertAstEqual(
             h2, 
             StmtBlock([
                 SimpleAssign(
