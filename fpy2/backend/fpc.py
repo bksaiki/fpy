@@ -530,37 +530,62 @@ class FPCoreCompileInstance(AstVisitor):
         elif num_mutated == 1:
             # exactly one mutated variable
             # the mutated variable is the loop variable
-            # (while ([<t> <t> <body>]) <ret>)
-            loop_var = str(mutated.pop())
+            # (while ([<loop> <loop> <body>]) <ret>)
+            loop_id = str(mutated.pop())
             cond = self._visit_expr(stmt.cond, None)
-            body = self._visit_block(stmt.body, fpc.Var(loop_var))
-            return fpc.While(cond, [(loop_var, fpc.Var(loop_var), body)], ret)
+            body = self._visit_block(stmt.body, fpc.Var(loop_id))
+            return fpc.While(cond, [(loop_id, fpc.Var(loop_id), body)], ret)
         else:
             raise FPCoreCompileError(f'while loops cannot have more than 1 mutated variable: {list(mutated)}')
 
 
-    def _visit_for(self, stmt: ForStmt, ctx: fpc.Expr):
-        if len(stmt.phis) != 1:
-            raise FPCoreCompileError('for loops must have exactly one phi node')
-        # phi nodes
-        phi = stmt.phis[0]
-        name, init, update = str(phi.name), str(phi.lhs), str(phi.rhs)
-        # fresh variable for the iterable value
-        tuple_id = str(self.gensym.fresh('t'))
-        iterable = self._visit_expr(stmt.iterable, None)
-        body = self._visit_block(stmt.body, fpc.Var(update))
-        # index variables and state merging
-        match stmt.target:
-            case Id():
-                # simple case: single variable
-                dim_binding = (str(stmt.target), fpc.Var(tuple_id))
-            case TupleBinding():
-                raise FPCoreCompileError('tuple unpacking in for loops is not supported')
-            case _:
-                raise RuntimeError('unreachable', stmt.target)
+    def _visit_for(self, stmt: ForStmt, ret: fpc.Expr):
+        # check that only one variable is mutated in the loop
+        # the `ForBundling` pass is required to ensure this
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
+        num_mutated = len(mutated)
 
-        while_binding = (name, fpc.Var(init), body)
-        return fpc.Let([(tuple_id, iterable)], fpc.For([dim_binding], [while_binding], ctx))
+        if num_mutated == 0:
+            # no mutated variables (loop with no side effect)
+            # still want to return a valid FPCore
+            # (let ([<t> <iterable>])
+            #   (for ([<i> (size <t> 0)])
+            #        ([_ 0 (let ([_ <body>]) 0)])))
+            #        <ret>))
+            tuple_id = str(self.gensym.fresh('t'))
+            idx_id = str(self.gensym.fresh('i'))
+
+            iterable = self._visit_expr(stmt.iterable, None)
+            body = self._visit_block(stmt.body, fpc.Integer(0))
+            return fpc.Let(
+                [(tuple_id, iterable)],
+                fpc.For(
+                    [(idx_id, _size0_expr(tuple_id))],
+                    [(('_', fpc.Integer(0), body))],
+                    ret
+            ))
+        else:
+            # exactly one mutated variable
+            # the mutated variable is the loop variable
+            # (let ([<t> <iterable>])
+            #   (for ([<i> (size <t> 0)])
+            #        ([<loop> <loop> (let ([_ <body>]) <loop>)])))
+            #        <ret>))
+            loop_id = str(mutated.pop())
+            tuple_id = str(self.gensym.fresh('t'))
+            idx_id = str(self.gensym.fresh('i'))
+
+            iterable = self._visit_expr(stmt.iterable, None)
+            body = self._visit_block(stmt.body, fpc.Var(loop_id))
+            return fpc.Let(
+                [(tuple_id, iterable)],
+                fpc.For(
+                    [(idx_id, _size0_expr(tuple_id))],
+                    [(loop_id, fpc.Var(loop_id), body)],
+                    ret
+            ))
+
 
     def _visit_context_expr(self, e: ContextExpr, ctx: None):
         raise RuntimeError('do not call')

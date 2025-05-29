@@ -3,7 +3,7 @@ Transformation pass to bundle updated variables in while loops
 into a single variable.
 """
 
-from ..analysis import DefineUse, DefineUseAnalysis, DefinitionCtx
+from ..analysis import DefineUse, DefineUseAnalysis
 from ..ast import *
 from ..transform import RenameTarget
 from ..utils import Gensym
@@ -93,7 +93,6 @@ class _WhileBundlingInstance(DefaultAstTransformVisitor):
             s = TupleUnpack(TupleBinding(mutated, None), Var(t, None), None)
             stmts.append(s)
 
-            print(StmtBlock(stmts).format())
             return StmtBlock(stmts)
         else:
             # transformation is not needed

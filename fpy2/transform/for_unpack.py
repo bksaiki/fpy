@@ -31,7 +31,6 @@ class _ForUnpackInstance(DefaultAstTransformVisitor):
                 binding = self._copy_tuple_binding(stmt.target)
                 body.stmts.insert(0, TupleUnpack(binding, AnyType(), Var(t_id)))
                 s = ForStmt(t_id, stmt.ty, iterable, body, phis)
-                print(s.format())
                 return s, None
             case _:
                 raise RuntimeError('unreachable', stmt.target)

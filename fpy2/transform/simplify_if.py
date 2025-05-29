@@ -1,6 +1,6 @@
 """Transformation pass to rewrite if statements to if expressions."""
 
-from ..analysis import DefineUse, DefineUseAnalysis, DefinitionCtx
+from ..analysis import DefineUse, DefineUseAnalysis
 from ..ast import *
 from ..transform import RenameTarget
 from ..utils import Gensym
@@ -165,6 +165,6 @@ class SimplifyIf:
     @staticmethod
     def apply(func: FuncDef):
         def_use = DefineUse.analyze(func)
-        ir = _SimplifyIfInstance(func, def_use).apply()
-        SyntaxCheck.check(ir)
-        return ir
+        ast = _SimplifyIfInstance(func, def_use).apply()
+        SyntaxCheck.check(ast)
+        return ast

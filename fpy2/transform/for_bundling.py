@@ -3,86 +3,147 @@ Transformation pass to bundle updated variables in for loops
 into a single variable.
 """
 
-from typing import Optional
-
+from ..analysis import DefineUse, DefineUseAnalysis
 from ..analysis import DefineUse
 from ..ast import *
 from ..utils import Gensym
 
+
 class _ForBundlingInstance(DefaultAstTransformVisitor):
     """Single-use instance of the ForBundling pass."""
     func: FuncDef
+    def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, names: set[NamedId]):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
-        self.gensym = Gensym(reserved=names)
+        self.def_use = def_use
+        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
 
     def apply(self) -> FuncDef:
-        return self._visit_function(self.func, {})
+        return self._visit_function(self.func, None)
 
-    #
-    #  a_1 = phi(a_0, a_2)
-    #  ...
-    #  z_1 = phi(z_0, z_2)
-    #
-    # ==>
-    #
-    #  t_0 = (a_0, ..., z_0)
-    #  t_1 = phi(t_0, t_2)
-    #  for <var> in <iterable>:
-    #     a_1, ..., z_1 = t_1
-    #     <stmts> ...
-    #     t_2 = (a_2, ..., z_2)
-    #  a_1, ..., z_1 = t_1
-    #
-    # - violates SSA invariant
-    #
+    def _visit_tuple_binding(self, binding: TupleBinding, rename: Optional[dict[NamedId, NamedId]] = None):
+        new_vars: list[Id | TupleBinding] = []
+        for var in binding:
+            match var:
+                case NamedId():
+                    if rename is None:
+                        new_vars.append(var)
+                    else:
+                        new_vars.append(rename.get(var, var))
+                case UnderscoreId():
+                    new_vars.append(var)
+                case TupleBinding():
+                    new_vars.append(self._visit_tuple_binding(var, rename))
+                case _:
+                    raise NotImplementedError(f'unreachable {var}')
+        return TupleBinding(new_vars, binding.loc)
 
-    def _visit_for(self, stmt: ForStmt, ctx: None):  
-        if len(stmt.phis) <= 1:
-            stmt, _ = super()._visit_for(stmt, None)
-            return StmtBlock([stmt])
-        else:
-            # create a new phi variable
-            phi_name = self.gensym.fresh('t')
-            phi_init = self.gensym.fresh('t')
-            phi_update = self.gensym.fresh('t')
-            phi_ty = AnyType() # TODO: infer type
 
-            # construct the tuple of phi variables
-            phi_vars = [Var(phi.lhs) for phi in stmt.phis]
-            init_stmt = SimpleAssign(phi_init, AnyType(), TupleExpr(*phi_vars))
+    def _visit_for(self, stmt: ForStmt, ctx: None) -> StmtBlock:
+        # let x_0, ..., x_N be variables mutated in the for loop
+        # let x_0', ..., x_N', t be fresh variables
+        #
+        # The transformation is as follows:
+        # ```
+        # for <target> in <iterable>:
+        #    ...
+        # ```
+        # ==>
+        # ```
+        # t = (x_0, ..., x_N)
+        # for <target> in <iterable>:
+        #     x_0', ..., x_N' = t
+        #     ...
+        #     t = (x_0', ..., x_N')
+        # x_0, ..., x_N = t
+        # ```
+        # 
+        # In the case that `x_i` is re-defined in `<target>`,
+        # replace `x_i` with `x_i'` in the target and
+        # generate `_` in place of `x_i'` in the body.
+        # 
 
-            # recurse on iterable
-            iter_expr = self._visit_expr(stmt.iterable, None)
+        # identify variables that were mutated in the body
+        defs_in, _ = self.def_use.stmts[stmt]
+        _, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
+        print(defs_in.keys())
+        print(defs_out.keys())
 
-            # deconstruct unified phi variable
-            phi_names = [phi.name for phi in stmt.phis]
-            deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))
+        if len(mutated) > 1:
+            # need to apply the transformation
+            stmts: list[Stmt] = []
 
-            # construct the update tuple of phi variables
-            phi_updates = [Var(phi.rhs) for phi in stmt.phis]
-            update_stmt = SimpleAssign(phi_update, AnyType(), TupleExpr(*phi_updates))
+            # fresh variable to hold tuple of mutated variables
+            t = self.gensym.fresh('t')
 
-            # copy the binding
+            # fresh variables for each mutated variable
+            rename = { var: self.gensym.refresh(var) for var in mutated }
+
+            # extract target names
+            match stmt.target:
+                case NamedId():
+                    target_names = { stmt.target }
+                case UnderscoreId():
+                    target_names = set()
+                case TupleBinding():
+                    target_names = stmt.target.names()
+                case _:
+                    raise RuntimeError('unreachable', stmt.target)
+
+            # create a tuple of mutated variables
+            s: Stmt = SimpleAssign(t, TupleExpr([Var(var, None) for var in mutated], None), None, None)
+            stmts.append(s)
+
+            # transform target
             match stmt.target:
                 case Id():
                     target = stmt.target
                 case TupleBinding():
-                    target = self._copy_tuple_binding(stmt.target)
+                    target = self._visit_tuple_binding(stmt.target, rename)
                 case _:
                     raise RuntimeError('unreachable', stmt.target)
 
-            # put it all together
+            # compile iterable and body
+            iterable = self._visit_expr(stmt.iterable, None)
             body, _ = self._visit_block(stmt.body, None)
-            phis = [PhiNode(phi_name, phi_init, phi_update, phi_ty)]
-            for_body = StmtBlock([deconstruct_stmt, *body.stmts, update_stmt])
-            for_stmt = ForStmt(target, stmt.ty, iter_expr, for_body, phis)
 
-            # decompose the unified phi variable (again)
-            deconstruct_stmt = TupleUnpack(TupleBinding(phi_names), AnyType(), Var(phi_name))
-            return StmtBlock([init_stmt, for_stmt, deconstruct_stmt])
+            # unpack the tuple at the start of the body
+            # replace any variable in the target with `_`
+            unpack_names = [UnderscoreId() if var in target_names else rename[var] for var in mutated]
+            s = TupleUnpack(TupleBinding(unpack_names, None), Var(t, None), None)
+            body.stmts.insert(0, s)
+
+            # repack the tuple at the end of the body
+            s = SimpleAssign(t, TupleExpr([Var(rename[v], None) for v in mutated], None), None, None)
+            body.stmts.append(s)
+
+            # append the for statement
+            s = ForStmt(target, iterable, body, None)
+            stmts.append(s)
+
+            # unpack the tuple after the loop
+            s = TupleUnpack(TupleBinding(mutated, None), Var(t, None), None)
+            stmts.append(s)
+
+            return StmtBlock(stmts)
+        else:
+            # transformation is not needed
+            match stmt.target:
+                case Id():
+                    target = stmt.target
+                case TupleBinding():
+                    target = self._visit_tuple_binding(stmt.target, None)
+                case _:
+                    raise RuntimeError('unreachable', stmt.target)
+
+            iterable = self._visit_expr(stmt.iterable, None)
+            body, _ = self._visit_block(stmt.body, None)
+            s = ForStmt(target, iterable, body, None)
+            return StmtBlock([s])
+
 
     def _visit_block(self, block: StmtBlock, ctx: None):
         stmts: list[Stmt] = []
@@ -95,6 +156,7 @@ class _ForBundlingInstance(DefaultAstTransformVisitor):
                 stmts.append(stmt)
         return StmtBlock(stmts), None
 
+
 class ForBundling:
     """
     Transformation pass to bundle updated variables in for loops.
@@ -105,11 +167,8 @@ class ForBundling:
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: Optional[set[NamedId]] = None) -> FuncDef:
-        if names is None:
-            def_use = DefineUse.analyze(func)
-            names = set(def_use.defs.keys())
-        inst = _ForBundlingInstance(func, names)
-        func = inst.apply()
-        SyntaxCheck.check(func)
-        return func
+    def apply(func: FuncDef) -> FuncDef:
+        def_use = DefineUse.analyze(func)
+        ast = _ForBundlingInstance(func, def_use).apply()
+        SyntaxCheck.check(ast)
+        return ast

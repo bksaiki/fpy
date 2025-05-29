@@ -549,7 +549,7 @@ class DefaultAstTransformVisitor(AstVisitor):
             case Id():
                 target = stmt.target
             case TupleBinding():
-                target = self._visit_tuple_binding(stmt.target)
+                target = self._visit_tuple_binding(stmt.target, ctx)
             case _:
                 raise RuntimeError('unreachable', stmt.target)
 
