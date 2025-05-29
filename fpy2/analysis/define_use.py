@@ -221,11 +221,9 @@ class DefineUse:
 
     Computes definition-use chains for each variable.
 
-    ```
     name ---> definition ---> use1, use2, ...
          ---> definition ---> use1, use2, ...
          ...
-    ```
     """
 
     @staticmethod

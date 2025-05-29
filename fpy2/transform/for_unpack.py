@@ -43,19 +43,16 @@ class _ForUnpackInstance(DefaultAstTransformVisitor):
 
 class ForUnpack:
     """
-    Transformation pass to move any tuple unpacking in a for loop to its body.
+    Transformation pass to move any tuple unpacking in a for loop to its body::
 
-    ```
-    for x, y in iterable:
-        ...
-    ```
-    becomes
+        for x, y in iterable:
+            ...
 
-    ```
-    for t in iterable:
-        x, y = t
-        ...
-    ```
+    becomes::
+
+        for t in iterable:
+            x, y = t
+            ...
 
     where `t` is a fresh variable.
     """
