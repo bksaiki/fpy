@@ -13,11 +13,7 @@ Frontend:
    - use IndentCtx
 
 Middle-end:
- - do we really need a separate AST / IR?
- - String IR node
  - passes:
-  - copy propagation
-  - eliminate unneeded phi variables
   - dead code elimination
   - variable renaming
 
@@ -29,8 +25,8 @@ Backend:
     - detect multi-variable for loops
 
 Misc:
- - Rational contains a Fraction
- - decnum and hexnum conversion to Fraction
+ - fma for RealContext
+ - separable mathematical core
 
 Interpreters:
  - integrate FPCoreContext into other interpreters
@@ -40,4 +36,3 @@ Numbers:
 
 Documentation:
   - integrate config with pyproject.toml
-  - document IR / IR transformation passes
