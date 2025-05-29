@@ -624,7 +624,7 @@ class Parser:
 
         value = self._parse_expr(stmt.value)
         e = cls(Var(ident, loc), value, loc)
-        return SimpleAssign(ident, e, None, loc)
+        return Assign(ident, e, None, loc)
 
     def _parse_statement(self, stmt: ast.stmt) -> Stmt:
         """Parse a Python statement."""
@@ -643,7 +643,7 @@ class Parser:
                 ident = self._parse_id(stmt.target)
                 ty = self._parse_type_annotation(stmt.annotation)
                 value = self._parse_expr(stmt.value)
-                return SimpleAssign(ident, value, ty, loc)
+                return Assign(ident, value, ty, loc)
             case ast.Assign():
                 if len(stmt.targets) != 1:
                     raise FPyParserError(loc, 'FPy only supports single assignment', stmt)
@@ -652,7 +652,7 @@ class Parser:
                     case ast.Name():
                         ident = self._parse_id(target)
                         value = self._parse_expr(stmt.value)
-                        return SimpleAssign(ident, value, None, loc)
+                        return Assign(ident, value, None, loc)
                     case ast.Tuple():
                         binding = self._parse_tuple_target(target, stmt)
                         value = self._parse_expr(stmt.value)

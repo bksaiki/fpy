@@ -242,7 +242,7 @@ class SyntaxCheckInstance(Visitor):
                         if free not in self.free_vars:
                             raise FPySyntaxError('context is data-dependent')
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
+    def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(stmt.expr, ctx)
         if isinstance(stmt.var, NamedId):

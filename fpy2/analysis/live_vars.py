@@ -119,7 +119,7 @@ class LiveVarsInstance(Visitor):
                 live.add(arg)
         return live
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, live: _LiveSet) -> _LiveSet:
+    def _visit_assign(self, stmt: Assign, live: _LiveSet) -> _LiveSet:
         live = set(live)
         if isinstance(stmt.var, NamedId):
             live -= { stmt.var }

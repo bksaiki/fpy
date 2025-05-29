@@ -508,7 +508,7 @@ class _Interpreter(DefaultVisitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _EvalCtx) -> None:
+    def _visit_assign(self, stmt: Assign, ctx: _EvalCtx) -> None:
         val = self._visit_expr(stmt.expr, ctx)
         match stmt.var:
             case NamedId():

@@ -259,7 +259,7 @@ class _MatcherInst(Visitor):
                 case _, _:
                     raise RuntimeError(f'unreachable case: {c1} vs {c2}')
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, pat: SimpleAssign):
+    def _visit_assign(self, stmt: Assign, pat: Assign):
         self._visit_target(stmt.var, pat.var)
         self._visit_expr(stmt.expr, pat.expr)
 

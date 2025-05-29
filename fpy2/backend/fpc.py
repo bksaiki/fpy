@@ -494,7 +494,7 @@ class FPCoreCompileInstance(Visitor):
         iff = self._visit_expr(e.iff, ctx)
         return fpc.If(cond, ift, iff)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: fpc.Expr):
+    def _visit_assign(self, stmt: Assign, ctx: fpc.Expr):
         bindings = [(str(stmt.var), self._visit_expr(stmt.expr, None))]
         return fpc.Let(bindings, ctx)
 

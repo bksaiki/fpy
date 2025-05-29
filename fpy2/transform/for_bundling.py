@@ -91,7 +91,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
                     raise RuntimeError('unreachable', stmt.target)
 
             # create a tuple of mutated variables
-            s: Stmt = SimpleAssign(t, TupleExpr([Var(var, None) for var in mutated], None), None, None)
+            s: Stmt = Assign(t, TupleExpr([Var(var, None) for var in mutated], None), None, None)
             stmts.append(s)
 
             # transform target
@@ -114,7 +114,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             body.stmts.insert(0, s)
 
             # repack the tuple at the end of the body
-            s = SimpleAssign(t, TupleExpr([Var(rename[v], None) for v in mutated], None), None, None)
+            s = Assign(t, TupleExpr([Var(rename[v], None) for v in mutated], None), None, None)
             body.stmts.append(s)
 
             # append the for statement

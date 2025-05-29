@@ -923,7 +923,7 @@ class StmtBlock(Ast):
 #             and self.expr.is_equiv(other.expr)
 #         )
 
-class SimpleAssign(Stmt):
+class Assign(Stmt):
     """FPy AST: variable assignment"""
     var: Id
     expr: Expr
@@ -943,7 +943,7 @@ class SimpleAssign(Stmt):
 
     def is_equiv(self, other):
         return (
-            isinstance(other, SimpleAssign)
+            isinstance(other, Assign)
             and self.var == other.var
             and self.expr.is_equiv(other.expr)
         )

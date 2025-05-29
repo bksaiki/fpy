@@ -26,14 +26,14 @@ class _CopyPropagateInstance(DefaultVisitor):
         def_use = DefineUse.analyze(func)
 
         # find direct assigments and substitute them
-        remove: set[SimpleAssign] = set()
+        remove: set[Assign] = set()
         for name, defs in def_use.defs.items():
             # skip any names not matching the filter
             if self.names is not None and name not in self.names:
                 continue
 
             for d in defs:
-                if isinstance(d, SimpleAssign) and isinstance(d.expr, Var):
+                if isinstance(d, Assign) and isinstance(d.expr, Var):
                     # direct assignment: x = y
                     # substitute all occurences of this definition of `x` with `y`
                     remove.add(d)
@@ -50,10 +50,10 @@ class _CopyPropagateInstance(DefaultVisitor):
         self._visit_function(func, remove)
         return func
 
-    def _visit_block(self, block: StmtBlock, ctx: set[SimpleAssign]):
+    def _visit_block(self, block: StmtBlock, ctx: set[Assign]):
         stmts: list[Stmt] = []
         for stmt in block.stmts:
-            if not isinstance(stmt, SimpleAssign) or stmt not in ctx:
+            if not isinstance(stmt, Assign) or stmt not in ctx:
                 self._visit_statement(stmt, ctx)
                 stmts.append(stmt)
         block.stmts = stmts

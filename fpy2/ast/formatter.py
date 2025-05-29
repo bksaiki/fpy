@@ -196,7 +196,7 @@ class _FormatterInstance(Visitor):
 
         return f'{ctor_str}({", ".join(arg_strs)})'
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: _Ctx):
+    def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'{str(stmt.var)} = {val}', ctx)
 

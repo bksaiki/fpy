@@ -101,7 +101,7 @@ class Visitor(ABC):
     # Statements
 
     @abstractmethod
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any) -> Any:
+    def _visit_assign(self, stmt: Assign, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -213,8 +213,8 @@ class Visitor(ABC):
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         """Dispatch to the appropriate visit method for a statement."""
         match stmt:
-            case SimpleAssign():
-                return self._visit_simple_assign(stmt, ctx)
+            case Assign():
+                return self._visit_assign(stmt, ctx)
             case TupleUnpack():
                 return self._visit_tuple_unpack(stmt, ctx)
             case IndexedAssign():
@@ -325,7 +325,7 @@ class DefaultVisitor(Visitor):
             if not isinstance(arg, ForeignAttribute):
                 self._visit_expr(arg, ctx)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
+    def _visit_assign(self, stmt: Assign, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
 
     def _visit_tuple_unpack(self, stmt: TupleUnpack, ctx: Any):
@@ -496,9 +496,9 @@ class DefaultTransformVisitor(Visitor):
 
         return ContextExpr(ctor, args, kwargs, e.loc)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: Any):
+    def _visit_assign(self, stmt: Assign, ctx: Any):
         expr = self._visit_expr(stmt.expr, ctx)
-        s = SimpleAssign(stmt.var, expr, stmt.ann, stmt.loc)
+        s = Assign(stmt.var, expr, stmt.ann, stmt.loc)
         return s, ctx
 
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: Any):

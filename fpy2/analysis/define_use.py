@@ -130,7 +130,7 @@ class _DefineUseInstance(DefaultVisitor):
                 ctx[name] = e
         self._visit_expr(e.elt, ctx)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: DefinitionCtx):
+    def _visit_assign(self, stmt: Assign, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
         if isinstance(stmt.var, NamedId):
             self._add_def(stmt.var, stmt)

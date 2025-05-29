@@ -115,10 +115,10 @@ class _StmtApplierInst(DefaultTransformVisitor):
         elt = self._visit_expr(e.elt, None)
         return CompExpr(targets, iterables, elt, None)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
+    def _visit_assign(self, stmt: Assign, ctx: None):
         ident = self._visit_id(stmt.var)
         expr = self._visit_expr(stmt.expr, None)
-        s =  SimpleAssign(ident, expr, stmt.ann, None)
+        s =  Assign(ident, expr, stmt.ann, None)
         return s, None
 
     def _visit_tuple_binding(self, binding: TupleBinding, ctx: None):

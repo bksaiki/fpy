@@ -34,14 +34,14 @@ class _RenameTargetInstance(DefaultTransformVisitor):
         elt = self._visit_expr(e.elt, ctx)
         return CompExpr(targets, iterables, elt, e.loc)
 
-    def _visit_simple_assign(self, stmt: SimpleAssign, ctx: None):
+    def _visit_assign(self, stmt: Assign, ctx: None):
         match stmt.var:
             case NamedId():
                 var: Id = self.rename.get(stmt.var, stmt.var)
             case _:
                 var = stmt.var
         expr = self._visit_expr(stmt.expr, ctx)
-        s = SimpleAssign(var, expr, stmt.ann, stmt.loc)
+        s = Assign(var, expr, stmt.ann, stmt.loc)
         return s, None
 
     def _visit_binding(self, binding: Id | TupleBinding, ctx: None):
