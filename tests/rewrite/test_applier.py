@@ -98,6 +98,8 @@ class ApplierStmtTestCase(_ApplierTestCase):
             StmtBlock([
                 Assign(
                     NamedId('sum'),
-                    Call('sum', [Var(NamedId('lst'), None)], None), None, None),
+                    None,
+                    Call('sum', [Var(NamedId('lst'), None)], None),
+                    None),
             ])
         )
