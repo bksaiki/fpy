@@ -3,7 +3,7 @@ Transformation pass to bundle updated variables in for loops
 into a single variable.
 """
 
-from ..analysis import DefineUse, DefineUseAnalysis
+from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
 

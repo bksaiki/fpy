@@ -9,7 +9,7 @@ from titanfp.fpbench.fpcparser import data_as_expr
 
 from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..ast.fpyast import *
-from ..ast.syntax_check import SyntaxCheck
+from ..analysis.syntax_check import SyntaxCheck
 from ..utils import Gensym, pythonize_id
 
 

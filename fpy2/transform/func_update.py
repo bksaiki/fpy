@@ -4,7 +4,7 @@ Transformation pass to rewrite in-place tuple mutation as functional updates.
 
 from typing import Optional
 
-from ..analysis import DefineUse
+from ..analysis import DefineUse, SyntaxCheck
 from ..ast import *
 
 class _FuncUpdateInstance(DefaultAstTransformVisitor):

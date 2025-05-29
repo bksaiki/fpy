@@ -1,8 +1,7 @@
 """Renames targets."""
 
-from ..ast.fpyast import *
-from ..ast import SyntaxCheck, DefaultAstTransformVisitor
-
+from ..ast import *
+from ..analysis import SyntaxCheck
 
 class _RenameTargetInstance(DefaultAstTransformVisitor):
     """Renames targets in a function."""

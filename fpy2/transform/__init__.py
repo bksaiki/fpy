@@ -2,6 +2,7 @@
 This module defines compiler transforms over FPy IR.
 """
 
+from .context_inline import ContextInline
 from .for_bundling import ForBundling
 from .for_unpack import ForUnpack
 from .func_update import FuncUpdate

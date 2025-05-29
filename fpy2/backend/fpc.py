@@ -9,7 +9,7 @@ from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..number import Context
-from ..transform import ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
+from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend

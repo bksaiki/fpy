@@ -2,7 +2,7 @@
 Transformation pass to push tuple unpacking in a for loop to the body.
 """
 
-from ..analysis import DefineUse, DefineUseAnalysis
+from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
 

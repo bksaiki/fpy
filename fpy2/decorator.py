@@ -15,7 +15,8 @@ from typing import (
     TypeVar
 )
 
-from .ast import SyntaxCheck, EffectStmt, NamedId
+from .analysis import SyntaxCheck
+from .ast import EffectStmt, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function

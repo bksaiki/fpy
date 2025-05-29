@@ -1,9 +1,11 @@
 """Transformation pass to rewrite if statements to if expressions."""
 
-from ..analysis import DefineUse, DefineUseAnalysis
+from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
-from ..transform import RenameTarget
 from ..utils import Gensym
+
+from .rename_target import RenameTarget
+
 
 class _SimplifyIfInstance(DefaultAstTransformVisitor):
     """Single-use instance of the SimplifyIf pass."""

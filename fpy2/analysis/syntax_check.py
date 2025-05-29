@@ -4,8 +4,8 @@ from typing import Optional, Self
 
 from ..utils import FPySyntaxError
 
-from .fpyast import *
-from .visitor import AstVisitor
+from ..ast.fpyast import *
+from ..ast.visitor import AstVisitor
 from .live_vars import LiveVars
 
 class _Env:

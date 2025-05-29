@@ -1,6 +1,6 @@
 """Live variable analysis for the FPy AST."""
 
-from . import *
+from ..ast import *
 
 _LiveSet = set[NamedId]
 

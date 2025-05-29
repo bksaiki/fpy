@@ -3,10 +3,12 @@ Transformation pass to bundle updated variables in while loops
 into a single variable.
 """
 
-from ..analysis import DefineUse, DefineUseAnalysis
+from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
-from ..transform import RenameTarget
 from ..utils import Gensym
+
+from .rename_target import RenameTarget
+
 
 _Ctx = dict[NamedId, Expr]
 
