@@ -57,6 +57,10 @@ Analyses
 Tranformations
 ---------------------------
 
+.. automodule:: fpy2.transform.CopyPropagate
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.transform.ContextInline
    :members:
    :show-inheritance:
