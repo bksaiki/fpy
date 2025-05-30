@@ -4,7 +4,7 @@ An embedded Python DSL for specifying and simulating numerical algorithms.
 
 Important links:
  - PyPI package: [fpy2](https://pypi.org/project/fpy2/)
- - Documentation: [fpy2.readthedocs.io](https://fpy2.readthedocs.io/)
+ - Documentation: [fpy.readthedocs.io](https://fpy.readthedocs.io/)
  - GitHub: [fpy](https://github.com/bksaiki/fpy)
 
 ## Installation

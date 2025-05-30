@@ -15,7 +15,7 @@ This documentation covers FPy's interface, examples, and general tips for users.
 Important links:
 
 * PyPI package: `fpy2 <https://pypi.org/project/fpy2/>`_
-* Documentation: `fpy2.readthedocs.io <https://fpy2.readthedocs.io/>`_
+* Documentation: `fpy.readthedocs.io <https://fpy.readthedocs.io/>`_
 * GitHub: `fpy <https://github.com/bksaiki/fpy>`_
 
 .. toctree::
