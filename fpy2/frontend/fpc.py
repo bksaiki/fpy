@@ -697,18 +697,26 @@ class _FPCore2FPy:
         props = self._visit_props(f.props, ctx)
         ctx.props = props
 
+        # possibly generate context
+        if 'precision' in props:
+            try:
+                ctx_val: None | Context | FPCoreContext = FPCoreContext(**props).to_context()
+            except NoSuchContextError:
+                ctx_val = FPCoreContext(**props)
+            del props['precision']
+        else:
+            ctx_val = None
+
         # compile function body
         e = self._visit(f.e, ctx)
         block = StmtBlock(ctx.stmts + [ReturnStmt(e, None)])
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
-        return FuncDef(name, args, block, metadata=props)
+        return FuncDef(name, args, block, metadata=props, ctx=ctx_val)
 
     def convert(self) -> FuncDef:
-        ast = self._visit_function(self.core)
-        if not isinstance(ast, FuncDef):
-            raise TypeError(f'should have produced a FunctionDef {ast}')
-        return ast
+        return self._visit_function(self.core)
+
 
 def fpcore_to_fpy(
     core: fpc.FPCore,

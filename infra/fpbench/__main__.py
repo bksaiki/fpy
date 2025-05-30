@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from titanfp.fpbench.fpcast import FPCore
-from fpy2 import Function, FPYCompiler
+from fpy2 import Function
 from fpy2.utils import pythonize_id
 
 from .fetch import read_dir, read_file
