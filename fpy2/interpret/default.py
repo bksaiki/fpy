@@ -12,7 +12,7 @@ from .. import math
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
-from ..number import Context, Float, IEEEContext, RM
+from ..number import Context, Float
 from ..number.gmp import mpfr_constant
 from ..env import ForeignEnv
 from ..function import Function
@@ -107,9 +107,6 @@ _ternary_table: dict[type[TernaryOp], Callable[[Float, Float, Float, Context], A
     Fma: math.fma,
 }
 
-_PY_CTX = IEEEContext(11, 64, RM.RNE)
-"""the native Python floating-point context"""
-
 _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 """Type of the environment used by the interpreter."""
 
@@ -167,16 +164,12 @@ class _Interpreter(DefaultVisitor):
         self,
         func: FuncDef,
         args: Sequence[Any],
-        ctx: Optional[Context] = None
+        ctx: Context
     ):
         # check arity
         args = tuple(args)
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
-
-        # determine context if `None` is specified
-        if ctx is None:
-            ctx = _PY_CTX
 
         # possibly override the context
         eval_ctx = self._eval_ctx({}, ctx)
@@ -728,5 +721,7 @@ class DefaultInterpreter(Interpreter):
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
+
         rt = _Interpreter(func.env, override_ctx=self.ctx)
+        ctx = self._func_ctx(func, ctx)
         return rt.eval(func.ast, args, ctx)

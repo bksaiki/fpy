@@ -44,7 +44,7 @@ class Function:
         return f'{self.__class__.__name__}(ast={self.ast}, ...)'
 
     def __str__(self):
-        return 'Function(\n' + self.ast.format() + '\n)'
+        return self.ast.format()
 
     def __call__(self, *args, ctx: Optional[Context] = None):
         fn = get_default_function_call()

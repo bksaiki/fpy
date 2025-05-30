@@ -131,6 +131,10 @@ def _apply_decorator(
     # parse any relevant properties from the decorator
     props = parser.parse_decorator(dec_ast)
 
+    # function may have a global context
+    if 'context' in kwargs:
+        ast.ctx = kwargs['context']
+
     # add context information
     ast.metadata = { **kwargs, **props }
 

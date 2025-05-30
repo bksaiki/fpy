@@ -141,10 +141,8 @@ class _FormatterInstance(Visitor):
         targets: list[str] = []
         for target in e.targets:
             match target:
-                case NamedId():
+                case Id():
                     targets.append(str(target))
-                case UnderscoreId():
-                    pass
                 case TupleBinding():
                     s = self._visit_tuple_binding(target)
                     targets.append(f'({s})')
@@ -197,17 +195,24 @@ class _FormatterInstance(Visitor):
         return f'{ctor_str}({", ".join(arg_strs)})'
 
     def _visit_tuple_binding(self, vars: TupleBinding) -> str:
-        ss: list[str] = []
+        elt_strs: list[str] = []
         for var in vars:
             match var:
                 case Id():
-                    ss.append(str(var))
+                    elt_strs.append(str(var))
                 case TupleBinding():
                     s = self._visit_tuple_binding(var)
-                    ss.append(f'({s})')
+                    elt_strs.append(f'({s})')
                 case _:
                     raise NotImplementedError('unreachable', var)
-        return ', '.join(ss)
+
+        num_elts = len(elt_strs)
+        if num_elts == 0:
+            return '()'
+        elif num_elts == 1:
+            return f'({elt_strs[0]},)'
+        else:
+            return ', '.join(elt_strs)
 
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
@@ -305,7 +310,12 @@ class _FormatterInstance(Visitor):
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)
-        self._format_decorator(func.metadata, arg_str, ctx)
+
+        # metadata
+        props = func.metadata.copy()
+        if func.ctx is not None:
+            props['context'] = func.ctx
+        self._format_decorator(props, arg_str, ctx)
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)
 

@@ -642,15 +642,29 @@ class FPCoreCompileInstance(Visitor):
     def _visit_function(self, func: FuncDef, ctx: Optional[fpc.Expr]):
         args = [self._compile_arg(arg) for arg in func.args]
         body = self._visit_block(func.body, ctx)
-        # TODO: parse data
+
+        # metadata
+        props = func.metadata.copy()
+        if func.ctx is not None:
+            match func.ctx:
+                case Context():
+                    fpc_ctx = FPCoreContext.from_context(func.ctx)
+                case FPCoreContext():
+                    fpc_ctx = func.ctx
+                case _:
+                    raise RuntimeError('unreachable', func.ctx)
+            props.update(fpc_ctx.props)
+
+        # TODO: parse datas
         ident = func.name
-        name = func.metadata.get('name', None)
-        pre = func.metadata.get('pre', None)
-        spec = func.metadata.get('spec', None)
+        name = props.get('name')
+        pre = props.get('pre')
+        spec = props.get('spec')
+
         return fpc.FPCore(
             inputs=args,
             e=body,
-            props=func.metadata.copy(),
+            props=props,
             ident=ident,
             name=name,
             pre=pre,
