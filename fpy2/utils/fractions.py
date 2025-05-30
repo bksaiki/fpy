@@ -73,8 +73,8 @@ def _sci_to_fraction(
 
     # combine the parts
     x = ipart * Fraction(b) ** exp
-    x *= fpart * Fraction(b) ** (exp + efrac)
-    x *= sign
+    x += fpart * Fraction(b) ** (exp + efrac)
+    x *= sign 
     return x
 
 
