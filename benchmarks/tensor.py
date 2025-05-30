@@ -114,25 +114,25 @@ def matmul(A, B):
 def fib_Q():
     return ((1, 1), (1, 0))
 
-@fpy
-def fib_rec(A, n):
-    if n == 2:
-        t1 = A[0][0]
-    else:
-        if n == 1:
-            t0 = A[0][1]
-        else:
-            if n <= 0:
-                t = A[1][1]
-            else:
-                t = fib_rec(matmul(A, fib_Q()), (n - 1))
-            t0 = t
-        t1 = t0
-    return t1
+# @fpy
+# def fib_rec(A, n):
+#     if n == 2:
+#         t1 = A[0][0]
+#     else:
+#         if n == 1:
+#             t0 = A[0][1]
+#         else:
+#             if n <= 0:
+#                 t = A[1][1]
+#             else:
+#                 t = fib_rec(matmul(A, fib_Q()), (n - 1))
+#             t0 = t
+#         t1 = t0
+#     return t1
 
-@fpy
-def fib(n):
-    return fib_rec(fib_Q(), n)
+# @fpy
+# def fib(n):
+#     return fib_rec(fib_Q(), n)
 
 @fpy
 def fib_iterative(n):
@@ -143,19 +143,19 @@ def fib_iterative(n):
         A = A0
     return A[1][1]
 
-@fpy
-def main(n):
-    t = n
-    t0 = 2
-    t1 = [0 for _ in range(t) for _ in range(t0)]
-    for i in range(t):
-        for method in range(t0):
-            if method == 0:
-                t2 = fib(i)
-            else:
-                t2 = fib_iterative(i)
-            t1[i][method] = t2
-    return t1
+# @fpy
+# def main(n):
+#     t = n
+#     t0 = 2
+#     t1 = [0 for _ in range(t) for _ in range(t0)]
+#     for i in range(t):
+#         for method in range(t0):
+#             if method == 0:
+#                 t2 = fib(i)
+#             else:
+#                 t2 = fib_iterative(i)
+#             t1[i][method] = t2
+#     return t1
 
 @fpy
 def f18(n):
@@ -213,39 +213,39 @@ def main():
     B = ((1, 2), (3, 4))
     return matmul(A, B)
 
-@fpy
-def even_int(n):
-    if n <= 0:
-        t = True
-    else:
-        t = odd_int((n - 1))
-    return t
+# @fpy
+# def even_int(n):
+#     if n <= 0:
+#         t = True
+#     else:
+#         t = odd_int((n - 1))
+#     return t
 
-@fpy
-def odd_int(n):
-    if n <= 0:
-        t = False
-    else:
-        t = even_int((n - 1))
-    return t
+# @fpy
+# def odd_int(n):
+#     if n <= 0:
+#         t = False
+#     else:
+#         t = even_int((n - 1))
+#     return t
 
-@fpy
-def even_odd_tensor(A):
-    n = shape(A)
-    t = n
-    t0 = [0 for _ in range(t)]
-    for i in range(t):
-        t0[i] = even_int(A[i])
-    return t0
+# @fpy
+# def even_odd_tensor(A):
+#     n = shape(A)
+#     t = n
+#     t0 = [0 for _ in range(t)]
+#     for i in range(t):
+#         t0[i] = even_int(A[i])
+#     return t0
 
-@fpy
-def f27(n):
-    t = n
-    t0 = [0 for _ in range(t)]
-    for i in range(t):
-        t0[i] = i
-    A = t0
-    return even_odd_tensor(A)
+# @fpy
+# def f27(n):
+#     t = n
+#     t0 = [0 for _ in range(t)]
+#     for i in range(t):
+#         t0[i] = i
+#     A = t0
+#     return even_odd_tensor(A)
 
 @fpy
 def f(x):
@@ -255,7 +255,7 @@ def f(x):
 def fprime(x):
     return (2 * x)
 
-@fpy(precision=['float', '15', '256'])
+@fpy(context=IEEEContext(es=15, nbits=256, rm=RoundingMode.RNE))
 def newton_raphson(x0, tolerance):
     x00 = x0
     x1 = (x0 - (f(x0) / fprime(x0)))
@@ -543,60 +543,60 @@ def lorenz_3d(xyz):
     z = xyz[2]
     return ((sigma * (y - x)), ((x * (rho - z)) - y), ((x * y) - (beta * z)))
 
-@fpy
-def forward_euler_3d(xyz, h):
-    k1 = vec_scale(target_3d(xyz), h)
-    return vec_add(xyz, k1)
+# @fpy
+# def forward_euler_3d(xyz, h):
+#     k1 = vec_scale(target_3d(xyz), h)
+#     return vec_add(xyz, k1)
 
-@fpy
-def midpoint_3d(xyz, h):
-    k1 = vec_scale(target_3d(xyz), h)
-    k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(1, 2)))), h)
-    return vec_add(xyz, k2)
+# @fpy
+# def midpoint_3d(xyz, h):
+#     k1 = vec_scale(target_3d(xyz), h)
+#     k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(1, 2)))), h)
+#     return vec_add(xyz, k2)
 
-@fpy
-def ralston_3d(xyz, h):
-    k1 = vec_scale(target_3d(xyz), h)
-    k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(2, 3)))), h)
-    t = 3
-    t0 = [0 for _ in range(t)]
-    for i in range(t):
-        t0[i] = (xyz[i] + (rational(1, 4) * (k1[i] + (k2[i] * 3))))
-    return t0
+# @fpy
+# def ralston_3d(xyz, h):
+#     k1 = vec_scale(target_3d(xyz), h)
+#     k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(2, 3)))), h)
+#     t = 3
+#     t0 = [0 for _ in range(t)]
+#     for i in range(t):
+#         t0[i] = (xyz[i] + (rational(1, 4) * (k1[i] + (k2[i] * 3))))
+#     return t0
 
-@fpy
-def rk4_step_3d(xyz, h):
-    k1 = vec_scale(target_3d(xyz), h)
-    k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(1, 2)))), h)
-    k3 = vec_scale(target_3d(vec_add(xyz, vec_scale(k2, rational(1, 2)))), h)
-    k4 = vec_scale(target_3d(vec_add(xyz, k3)), h)
-    t = 3
-    t0 = [0 for _ in range(t)]
-    for i in range(t):
-        t0[i] = (xyz[i] + (rational(1, 6) * (((k1[i] + (k2[i] * 2)) + (k3[i] * 2)) + k4[i])))
-    return t0
+# @fpy
+# def rk4_step_3d(xyz, h):
+#     k1 = vec_scale(target_3d(xyz), h)
+#     k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(1, 2)))), h)
+#     k3 = vec_scale(target_3d(vec_add(xyz, vec_scale(k2, rational(1, 2)))), h)
+#     k4 = vec_scale(target_3d(vec_add(xyz, k3)), h)
+#     t = 3
+#     t0 = [0 for _ in range(t)]
+#     for i in range(t):
+#         t0[i] = (xyz[i] + (rational(1, 6) * (((k1[i] + (k2[i] * 2)) + (k3[i] * 2)) + k4[i])))
+#     return t0
 
-@fpy
-def target_3d(xyz):
-    return lorenz_3d(xyz)
+# @fpy
+# def target_3d(xyz):
+#     return lorenz_3d(xyz)
 
-@fpy
-def step_3d(xyz, h):
-    return rk4_step_3d(xyz, h)
+# @fpy
+# def step_3d(xyz, h):
+#     return rk4_step_3d(xyz, h)
 
-@fpy
-def rk4_3d_run(initial_conditions, h, steps):
-    t = steps
-    xyz = initial_conditions
-    t0 = [0 for _ in range(t)]
-    for step in range(t):
-        t0[step] = xyz
-        xyz = step_3d(xyz, h)
-    return t0
+# @fpy
+# def rk4_3d_run(initial_conditions, h, steps):
+#     t = steps
+#     xyz = initial_conditions
+#     t0 = [0 for _ in range(t)]
+#     for step in range(t):
+#         t0[step] = xyz
+#         xyz = step_3d(xyz, h)
+#     return t0
 
-@fpy
-def main():
-    return rk4_3d_run((1, 1, 1), .02, 685)
+# @fpy
+# def main():
+#     return rk4_3d_run((1, 1, 1), .02, 685)
 
 @fpy
 def sum_1d(A):

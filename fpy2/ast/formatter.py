@@ -141,10 +141,8 @@ class _FormatterInstance(Visitor):
         targets: list[str] = []
         for target in e.targets:
             match target:
-                case NamedId():
+                case Id():
                     targets.append(str(target))
-                case UnderscoreId():
-                    pass
                 case TupleBinding():
                     s = self._visit_tuple_binding(target)
                     targets.append(f'({s})')
@@ -311,7 +309,6 @@ class _FormatterInstance(Visitor):
         if func.ctx is not None:
             props['context'] = func.ctx
         self._format_decorator(props, arg_str, ctx)
-        
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)
 
