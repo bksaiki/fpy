@@ -5,6 +5,8 @@ This module contains the AST for FPy programs.
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Self, Sequence
 
+from ..fpc_context import FPCoreContext
+from ..number import Context
 from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location, default_repr
 
 @default_repr
@@ -1155,15 +1157,18 @@ class FuncDef(Ast):
     body: StmtBlock
     metadata: dict[str, Any]
     free_vars: set[NamedId]
+    ctx: Optional[Context | FPCoreContext]
 
     def __init__(
         self,
         name: str,
         args: Sequence[Argument],
         body: StmtBlock,
-        metadata: Optional[dict[str, Any]],
-        free_vars: Optional[set[NamedId]],
-        loc: Optional[Location]
+        *,
+        metadata: Optional[dict[str, Any]] = None,
+        free_vars: Optional[set[NamedId]] = None,
+        ctx: Optional[Context | FPCoreContext] = None,
+        loc: Optional[Location] = None
     ):
         if metadata is None:
             metadata = {}
@@ -1181,6 +1186,7 @@ class FuncDef(Ast):
         self.body = body
         self.metadata = metadata
         self.free_vars = free_vars
+        self.ctx = ctx
 
     def is_equiv(self, other) -> bool:
         return (

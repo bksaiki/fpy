@@ -721,7 +721,7 @@ class Parser:
         args = self._parse_arguments(f.args.args)
         expr = self._parse_expr(f.body)
         block = StmtBlock([ReturnStmt(expr, expr.loc)])
-        return FuncDef('pre', args, block, None, None, loc)
+        return FuncDef('pre', args, block, loc=loc)
 
     def _parse_function(self, f: ast.FunctionDef):
         """Parse a Python function definition."""
@@ -746,7 +746,7 @@ class Parser:
         block = self._parse_statements(body)
 
         # return AST and decorator list
-        func = FuncDef(f.name, args, block, None, None, loc)
+        func = FuncDef(f.name, args, block, loc=loc)
         return func, f.decorator_list
 
     def _eval(

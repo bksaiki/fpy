@@ -133,20 +133,16 @@ class _Interpreter(Visitor):
         self,
         func: FuncDef,
         args: Sequence[Any],
-        ctx: Optional[Context] = None
+        ctx: Context
     ):
         args = tuple(args)
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
-        # determine context when specified
-        if ctx is None:
-            ctx = _PY_CTX
-
         # Python only has doubles
         if not self._is_python_ctx(ctx):
             raise RuntimeError(f'Unsupported context {ctx}, expected {_PY_CTX}')
-        
+
         # create the environment
         eval_ctx = _EvalCtx({}, ctx)
 
@@ -673,4 +669,5 @@ class PythonInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')
         rt = _Interpreter(func.env)
+        ctx = self._func_ctx(func, ctx)
         return rt.eval(func.ast, args, ctx)

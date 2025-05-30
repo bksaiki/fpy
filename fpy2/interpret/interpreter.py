@@ -5,9 +5,13 @@ Defines the abstract base class for FPy interpreters.
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from ..ast import Expr
+from ..fpc_context import FPCoreContext
 from ..function import Function, set_default_function_call
-from ..number import Context
+from ..number import Context, IEEEContext, RM
+
+
+_PY_CTX = IEEEContext(11, 64, RM.RNE)
+"""the native Python floating-point context"""
 
 
 class Interpreter(ABC):
@@ -16,6 +20,27 @@ class Interpreter(ABC):
     @abstractmethod
     def eval(self, func: Function, args, ctx: Optional[Context] = None):
         ...
+
+    def _func_ctx(self, func: Function, ctx: Optional[Context] = None) -> Context:
+        """
+        Computes the context to use during evaluation.
+
+        If `func` specifies a context, it will be used.
+        Otherwise, the provided context `ctx` will be used.
+        """
+        if func.ast.ctx is None:
+            if ctx is None:
+                ctx = _PY_CTX
+        else:
+            match func.ast.ctx:
+                case Context():
+                    ctx = func.ast.ctx
+                case FPCoreContext():
+                    ctx = func.ast.ctx.to_context()
+                case _:
+                    raise RuntimeError('unreachable', func.ast.ctx)
+
+        return ctx
 
 
 class FunctionReturnException(Exception):

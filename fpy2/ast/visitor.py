@@ -571,7 +571,15 @@ class DefaultTransformVisitor(Visitor):
         for arg in func.args:
             args.append(Argument(arg.name, arg.type, arg.loc))
         body, _ = self._visit_block(func.body, ctx)
-        return FuncDef(func.name, args, body, func.metadata, func.free_vars, func.loc)
+        return FuncDef(
+            func.name,
+            args,
+            body,
+            metadata=func.metadata,
+            free_vars=func.free_vars,
+            ctx=func.ctx,
+            loc=func.loc
+        )
 
     # override for typing hint
     def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
