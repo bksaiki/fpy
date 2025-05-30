@@ -7,7 +7,7 @@ import re
 from fractions import Fraction
 from typing import Optional
 
-_DECIMAL_PATTERN = re.compile(r'([+-])?([0-9]+)(\.([0-9]+))?([eE]([-+]?[0-9]+))?')
+_DECIMAL_PATTERN = re.compile(r'([+-])?(([0-9]+)|(([0-9]+)?\.([0-9]*)))([eE]([-+]?[0-9]+))?')
 _HEXNUM_PATTERN = re.compile(r'([+-])?0x(([0-9a-f]+)(\.([0-9a-f]+))?|\.[0-9a-f]+)(p([-+]?[0-9]+))?')
 
 def fraction(numerator: int, denominator: int):
@@ -87,15 +87,23 @@ def decnum_to_fraction(s: str):
     if not isinstance(s, str):
         raise TypeError(f'Expected \'str\', got \'{type(s)}\' for s={s}')
 
+    # apply the regex to extract components
     m = re.match(_DECIMAL_PATTERN, s)
     if not m:
         raise ValueError(f'invalid decimal number: {s}')
 
-    # all relevant components
+    # sign (optional)
     s = m.group(1)
-    i = m.group(2)
-    f = m.group(4)
-    e = m.group(6)
+    if m.group(4) is None:
+        # integer only
+        i = m.group(3)
+        f = None
+        e = m.group(7)
+    else:
+        # fractional part
+        i = m.group(5) or '0'
+        f = m.group(6)
+        e = m.group(8)
 
     return _sci_to_fraction(s, i, f, e, 10)
 

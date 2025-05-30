@@ -80,9 +80,12 @@ _ternary_table: dict[str, type[TernaryOp]] = {
 }
 
 def _zeros(ns: list[Expr]) -> Expr:
-    vars = [UnderscoreId() for _ in ns]
-    args = [Range(n, None) for n in ns]
-    return CompExpr(vars, args, Integer(0, None), None)
+    assert len(ns) >= 1
+    v: Expr = Integer(0, None)
+    for n in reversed(ns):
+        v = CompExpr([UnderscoreId()], [Range(n, None)], v, None)
+    return v
+
 
 # TODO: clean this up
 class _Ctx:
