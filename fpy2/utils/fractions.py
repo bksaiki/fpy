@@ -7,8 +7,8 @@ import re
 from fractions import Fraction
 from typing import Optional
 
-_DECIMAL_PATTERN = re.compile(r'([+-])?(([0-9]+)|(([0-9]+)?\.([0-9]*)))([eE]([-+]?[0-9]+))?')
-_HEXNUM_PATTERN = re.compile(r'([+-])?0x(([0-9a-f]+)(\.([0-9a-f]+))?|\.[0-9a-f]+)(p([-+]?[0-9]+))?')
+_DECIMAL_PATTERN = re.compile(r'([-+])?([0-9]+(\.[0-9]+)?|\.[0-9]+)(e([-+]?[0-9]+))?')
+_HEXNUM_PATTERN = re.compile(r'([-+])?0x([0-9a-f]+(\.[0-9a-f]+)?|\.[0-9a-f]+)(p([-+]?[0-9]+))?')
 
 def fraction(numerator: int, denominator: int):
     """Creates a fraction from a numerator and denominator."""
@@ -35,7 +35,8 @@ def _sci_to_fraction(
     i: str,
     f: Optional[str],
     e: Optional[str],
-    b: int
+    base: int,
+    b: int,
 ) -> Fraction:
     """
     Converts a number in base `b` to a fraction.
@@ -46,6 +47,7 @@ def _sci_to_fraction(
     :param e: exponent part (as a string)
     :param b: base
     """
+    assert base >= 2, f'base must be >= 2: base={base}'
     assert b >= 2, f'base must be >= 2: b={b}'
 
     # sign (optional)
@@ -55,14 +57,14 @@ def _sci_to_fraction(
         sign = +1
 
     # integer component (required)
-    ipart = int(i, b)
+    ipart = int(i, base)
 
     # fraction (optional)
     if f is not None:
-        fpart = int(f, b)
+        fpart = int(f, base)
         efrac = -len(f)
     else:
-        fpart = 1
+        fpart = 0
         efrac = 0
 
     # exponent (optional)
@@ -72,10 +74,7 @@ def _sci_to_fraction(
         exp = 0
 
     # combine the parts
-    x = ipart * Fraction(b) ** exp
-    x += fpart * Fraction(b) ** (exp + efrac)
-    x *= sign 
-    return x
+    return sign * (ipart + fpart * Fraction(base) ** efrac) * (Fraction(b) ** exp)
 
 
 def decnum_to_fraction(s: str):
@@ -88,24 +87,24 @@ def decnum_to_fraction(s: str):
         raise TypeError(f'Expected \'str\', got \'{type(s)}\' for s={s}')
 
     # apply the regex to extract components
-    m = re.match(_DECIMAL_PATTERN, s)
+    m = re.fullmatch(_DECIMAL_PATTERN, s.strip())
     if not m:
         raise ValueError(f'invalid decimal number: {s}')
 
-    # sign (optional)
-    s = m.group(1)
-    if m.group(4) is None:
-        # integer only
-        i = m.group(3)
-        f = None
-        e = m.group(7)
-    else:
-        # fractional part
-        i = m.group(5) or '0'
-        f = m.group(6)
-        e = m.group(8)
+    sign = m.group(1)
+    mant = m.group(2)
+    exp = m.group(4)
 
-    return _sci_to_fraction(s, i, f, e, 10)
+    if '.' in mant:
+        parts = mant.split('.')
+        assert len(parts) == 2
+        i = parts[0]
+        f = parts[1]
+    else:
+        i = mant
+        f = None
+
+    return _sci_to_fraction(sign, i, f, exp, 10, 10)
 
 
 def hexnum_to_fraction(s: str):
@@ -117,14 +116,21 @@ def hexnum_to_fraction(s: str):
     if not isinstance(s, str):
         raise TypeError(f'Expected \'str\', got \'{type(s)}\' for s={s}')
 
-    m = re.match(_HEXNUM_PATTERN, s)
+    m = re.fullmatch(_HEXNUM_PATTERN, s.strip())
     if not m:
         raise ValueError(f'invalid hexadecimal number: {s}')
 
-    # all relevant components
-    s = m.group(1)
-    i = m.group(3)
-    f = m.group(5)
-    e = m.group(7)
+    sign = m.group(1)
+    mant = m.group(2)
+    exp = m.group(5)
 
-    return _sci_to_fraction(s, i, f, e, 16)
+    if '.' in mant:
+        parts = mant.split('.')
+        assert len(parts) == 2
+        i = parts[0]
+        f = parts[1]
+    else:
+        i = mant
+        f = None
+
+    return _sci_to_fraction(sign, i, f, exp, 16, 2)
