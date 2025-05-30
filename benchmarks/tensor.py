@@ -20,7 +20,7 @@ def size_2x3():
 
 @fpy
 def alternating_sum(A):
-    n = shape(A)
+    (n,) = shape(A)
     t = n
     sign = 1
     total = 0
@@ -63,7 +63,7 @@ def main():
 
 @fpy
 def expand(A):
-    n = shape(A)
+    (n,) = shape(A)
     t = n
     t0 = [0 for _ in range(t)]
     for i in range(t):
@@ -231,7 +231,7 @@ def main():
 
 # @fpy
 # def even_odd_tensor(A):
-#     n = shape(A)
+#     (n,) = shape(A)
 #     t = n
 #     t0 = [0 for _ in range(t)]
 #     for i in range(t):
@@ -516,7 +516,7 @@ def main():
 
 @fpy
 def vec_scale(A, x):
-    n = shape(A)
+    (n,) = shape(A)
     t = n
     t0 = [0 for _ in range(t)]
     for i in range(t):
@@ -525,23 +525,23 @@ def vec_scale(A, x):
 
 @fpy(pre=lambda A, B: n == m)
 def vec_add(A, B):
-    n = shape(A)
-    m = shape(B)
+    (n,) = shape(A)
+    (m,) = shape(B)
     t = n
     t0 = [0 for _ in range(t)]
     for i in range(t):
         t0[i] = (A[i] + B[i])
     return t0
 
-@fpy
-def lorenz_3d(xyz):
-    sigma = 10
-    beta = rational(8, 3)
-    rho = 28
-    x = xyz[0]
-    y = xyz[1]
-    z = xyz[2]
-    return ((sigma * (y - x)), ((x * (rho - z)) - y), ((x * y) - (beta * z)))
+# @fpy
+# def lorenz_3d(xyz):
+#     sigma = 10
+#     beta = rational(8, 3)
+#     rho = 28
+#     x = xyz[0]
+#     y = xyz[1]
+#     z = xyz[2]
+#     return ((sigma * (y - x)), ((x * (rho - z)) - y), ((x * y) - (beta * z)))
 
 # @fpy
 # def forward_euler_3d(xyz, h):
@@ -600,7 +600,7 @@ def lorenz_3d(xyz):
 
 @fpy
 def sum_1d(A):
-    n = shape(A)
+    (n,) = shape(A)
     t = n
     total = 0
     for i in range(t):

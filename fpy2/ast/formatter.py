@@ -195,17 +195,24 @@ class _FormatterInstance(Visitor):
         return f'{ctor_str}({", ".join(arg_strs)})'
 
     def _visit_tuple_binding(self, vars: TupleBinding) -> str:
-        ss: list[str] = []
+        elt_strs: list[str] = []
         for var in vars:
             match var:
                 case Id():
-                    ss.append(str(var))
+                    elt_strs.append(str(var))
                 case TupleBinding():
                     s = self._visit_tuple_binding(var)
-                    ss.append(f'({s})')
+                    elt_strs.append(f'({s})')
                 case _:
                     raise NotImplementedError('unreachable', var)
-        return ', '.join(ss)
+
+        num_elts = len(elt_strs)
+        if num_elts == 0:
+            return '()'
+        elif num_elts == 1:
+            return f'({elt_strs[0]},)'
+        else:
+            return ', '.join(elt_strs)
 
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
