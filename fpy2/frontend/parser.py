@@ -217,7 +217,7 @@ class Parser:
                 return RealTypeAnn(loc)
             case _:
                 # TODO: implement
-                return RealTypeAnn(loc)
+                return AnyTypeAnn(loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':

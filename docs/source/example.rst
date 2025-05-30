@@ -7,14 +7,14 @@ Exact Dot Product
 The following program computes the dot product of two vectors
 but with only a single rounding operation::
 
-   @fpy2
+   @fpy2.fpy
    def dot_prod(a: tuple[Real, ...], b: tuple[Real, ...]) -> Real:
       assert len(a) == len(b)
       sum = 0
       with RealContext():
-         for i in range(len(a)):
-            sum += a[i] * b[i]
-      return round(sum)
+         for ai, bi in zip(a, b):
+            sum += ai * bi
+      return cast(sum)
 
 We briefly note some important FPy features:
 
