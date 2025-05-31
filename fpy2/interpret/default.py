@@ -30,20 +30,19 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
-def _isfinite(x: Float, *, ctx: Context) -> bool:
+def _isfinite(x: Float, ctx: Context) -> bool:
     return x.is_finite()
 
-def _isinf(x: Float, *, ctx: Context) -> bool:
+def _isinf(x: Float, ctx: Context) -> bool:
     return x.isinf
 
-def _isnan(x: Float, *, ctx: Context) -> bool:
+def _isnan(x: Float, ctx: Context) -> bool:
     return x.isnan
 
-def _isnormal(x: Float, *, ctx: Context) -> bool:
-    # TODO: should all Floats have this property?
-    return True
+def _isnormal(x: Float, ctx: Context) -> bool:
+    return x.is_normal()
 
-def _signbit(x: Float, *, ctx: Context) -> bool:
+def _signbit(x: Float, ctx: Context) -> bool:
     # TODO: should all Floats have this property?
     return x.s
 

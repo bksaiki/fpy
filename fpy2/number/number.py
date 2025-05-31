@@ -1379,6 +1379,17 @@ class Float:
             raise ValueError(f'Float values without a context cannot be normalized: self={self}')
         return self.ctx.is_canonical(self)
 
+    def is_normal(self) -> bool:
+        """
+        Returns if this number is "normal".
+
+        For IEEE-style contexts, this means that the number is finite, non-zero,
+        and `x.normalize()` has full precision.
+        """
+        if self.ctx is None:
+            raise ValueError(f'Float values without a context cannot be normalized: self={self}')
+        return self.ctx.is_normal(self)
+
     def as_real(self) -> RealFloat:
         """Returns the real part of this number."""
         if self.is_nar():

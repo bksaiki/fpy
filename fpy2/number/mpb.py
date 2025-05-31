@@ -147,12 +147,17 @@ class MPBContext(SizedContext):
             # check bounded (non-negative values)
             return x <= self.maxval(False)
 
-    def is_canonical(self, x):
+    def is_canonical(self, x: Float):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mps_ctx.is_canonical(x)
 
-    def normalize(self, x):
+    def is_normal(self, x: Float):
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mps_ctx.is_normal(x)
+
+    def normalize(self, x: Float):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         x = self._mps_ctx.normalize(x)

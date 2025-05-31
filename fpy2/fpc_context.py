@@ -124,7 +124,7 @@ class FPCoreContext:
                 match (ctx.es, ctx.nbits):
                     case (15, 128):
                         return FPCoreContext(precision='binary128', round=rm)
-                    case (15, 80):
+                    case (15, 79):
                         return FPCoreContext(precision='binary80', round=rm)
                     case (11, 64):
                         return FPCoreContext(precision='binary64', round=rm)
@@ -158,7 +158,7 @@ class FPCoreContext:
                 case 'binary128':
                     return FP128.with_rm(_round_mode_to_fpy(rnd))
                 case 'binary80':
-                    return IEEEContext(15, 80, _round_mode_to_fpy(rnd))
+                    return IEEEContext(15, 79, _round_mode_to_fpy(rnd))
                 case 'binary64':
                     return FP64.with_rm(_round_mode_to_fpy(rnd))
                 case 'binary32':

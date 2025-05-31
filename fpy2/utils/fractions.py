@@ -98,7 +98,7 @@ def decnum_to_fraction(s: str):
     if '.' in mant:
         parts = mant.split('.')
         assert len(parts) == 2
-        i = parts[0]
+        i = '0' if parts[0] == '' else parts[0]
         f = parts[1]
     else:
         i = mant

@@ -395,9 +395,9 @@ class _FPCore2FPy:
         # <t> = zeros(<n0>, ...)
         # for <i0> in range(<n0>):
         #    ...
-        #      t[<i0>, ...] = <body>
         #      <x0> = <update0>
         #      ...
+        #      t[<i0>, ...] = <body>
         #
 
         # bind iteration bounds to temporaries
@@ -438,11 +438,6 @@ class _FPCore2FPy:
         loop_stmts = self._make_tensor_body(iter_vars, bound_vars, ctx.stmts)
         loop_ctx = _Ctx(env=loop_env, props=ctx.props, stmts=loop_stmts)
 
-        # set tensor element
-        body_e = self._visit(e.body, loop_ctx)
-        stmt = IndexedAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
-        loop_stmts.append(stmt)
-
         # compile loop updates
         for var, _, update in e.while_bindings:
             # compile value
@@ -451,6 +446,11 @@ class _FPCore2FPy:
             t = loop_ctx.env[var]
             stmt = Assign(t, None, update_e, None)
             loop_stmts.append(stmt)
+
+        # set tensor element
+        body_e = self._visit(e.body, loop_ctx)
+        stmt = IndexedAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
+        loop_stmts.append(stmt)
 
         return Var(tuple_id, None)
 

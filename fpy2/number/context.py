@@ -71,6 +71,16 @@ class Context(ABC):
         ...
 
     @abstractmethod
+    def is_normal(self, x: Float) -> bool:
+        """
+        Returns if `x` is "normal" under this context.
+
+        For IEEE-style contexts, this means that `x` is finite, non-zero,
+        and `x.normalize()` has full precision.
+        """
+        ...
+
+    @abstractmethod
     def round_params(self) -> tuple[Optional[int], Optional[int]]:
         """
         Returns the rounding parameters `(max_p, min_n)` used for rounding

@@ -161,6 +161,11 @@ class ExtContext(EncodableContext):
         x.ctx = self
         return x
 
+    def is_normal(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mpb_ctx.is_normal(x)
+
     def round_params(self):
         return self._mpb_ctx.round_params()
 

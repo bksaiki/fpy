@@ -2,10 +2,11 @@ import fpy2.math
 import types
 
 from fpy2 import Function, ForeignEnv, Float, IEEEContext, RoundingMode
-from titanfp.fpbench.fpcast import FPCore, Nearbyint
 from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
+from titanfp.fpbench.fpcast import FPCore, Nearbyint
+from titanfp.titanic.ndarray import NDArray
 
 from .fetch import fetch_cores
 
@@ -16,8 +17,34 @@ _skip_cores = [
     'Circle',
 ]
 
-def _mpmf_to_float(x: MPMF) -> Float:
-    return Float(s=x.negative, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
+def _mpmf_to_fpy(x: MPMF | NDArray):
+    match x:
+        case MPMF():
+            return Float(s=x.negative, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
+        case NDArray():
+            return NDArray([_mpmf_to_fpy(v) for v in x])
+        case _:
+            raise TypeError(f'Expected MPMF or NDArray, got {x}')
+
+def _compare(
+    expect: Float | NDArray,
+    actual: Float | NDArray,
+    **kwargs
+):
+    match expect, actual:
+        case Float(), Float():
+            if (expect.isnan and not actual.isnan) or expect != actual:
+                kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
+                raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
+        case NDArray(), NDArray():
+            if len(expect) != len(actual):
+                kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
+                raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
+            for expect_elt, actual_elt in zip(expect, actual):
+                _compare(expect_elt, actual_elt, **kwargs)
+        case _, _:
+            kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
+            raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
 
 def _to_fpy_rm(rm: RM):
     match rm:
@@ -45,7 +72,7 @@ def _to_fpy_context(ctx: EvalCtx):
 
 def _eval_nearbyint(rt: Interpreter, e: Nearbyint, ctx: EvalCtx):
     arg = rt.evaluate(e.children[0], ctx)
-    v = fpy2.math.nearbyint(_mpmf_to_float(arg), ctx=_to_fpy_context(ctx))
+    v = fpy2.math.nearbyint(_mpmf_to_fpy(arg), ctx=_to_fpy_context(ctx))
     result = MPMF(negative=v.s, exp=v.exp, c=v.c, isinf=v.isinf, isnan=v.isnan, inexact=v.inexact)
     return [v], result
 
@@ -85,24 +112,19 @@ def eval(
 
     # sample inputs
     if core.inputs == []:
-        inputs: list[list] = [[] for _ in range(num_inputs)]
+        inputs: list[list] = [[]]
     else:
         print('skipping sampling for', core.ident)
         return
 
-    print('evaluating', core.name, 'with', num_inputs, 'inputs')
+    print('evaluating', core.name, 'with', len(inputs), 'inputs')
 
     # evaluate both FPy and FPCore functions
     for input in inputs:
         # evaluate functions on point
-        fpcore = _mpmf_to_float(rt.interpret(core, input))
+        fpcore = _mpmf_to_fpy(rt.interpret(core, input))
         fpy = fun(*input)
-
-        # compare the outputs
-        if (fpcore.isnan and not fpy.isnan) or (fpcore != fpy):
-            raise ValueError(f'Outputs do not match for {core.name} {input}: {fpcore} != {fpy}\n{core}\n{fun.format()}')
-
-        # TODO: check outputs are equal
+        _compare(fpcore, fpy, core=core, func=fun.format(), input=input)
 
 
 def test_eval():

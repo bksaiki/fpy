@@ -131,6 +131,10 @@ def _apply_decorator(
     # parse any relevant properties from the decorator
     props = parser.parse_decorator(dec_ast)
 
+    # strictness
+    strict = kwargs.get('strict', True)
+
+
     # function may have a global context
     if 'context' in kwargs:
         ast.ctx = kwargs['context']
@@ -148,7 +152,7 @@ def _apply_decorator(
             allow_wildcard=True
         )
     else:
-        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
+        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
 
     # wrap the IR in a Function
     return Function(ast, env)

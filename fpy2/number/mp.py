@@ -98,6 +98,11 @@ class MPContext(Context):
             xr = x._real.normalize(self.pmax, None)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
+    def is_normal(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero()
+
     def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
