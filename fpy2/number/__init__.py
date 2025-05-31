@@ -217,9 +217,10 @@ See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
 """
 
-INTEGER = MPFContext(-1, RoundingMode.RNE)
+INTEGER = MPFContext(-1, RoundingMode.RTZ)
 """
-Alias for an arbitrary-precision integer context.
+Alias for an arbitrary-precision integer context with
+round towards zero rounding mode.
 
 Numbers rounded under this context behave like Python's native `int` type.
 """

@@ -25,7 +25,7 @@ class MPFContext(Context):
     """
 
     nmin: int
-    """the first unreprsentable digit"""
+    """the first unrepresentable digit"""
 
     rm: RoundingMode
     """rounding mode"""
@@ -58,33 +58,86 @@ class MPFContext(Context):
             case _:
                 raise RuntimeError(f'unreachable {x}')
 
-        # case split on class
-        if xr.is_zero():
-            # special values and zeros are valid
-            return True
-        elif xr.exp > self.nmin:
-            # all digits are above `nmin`
-            return True
-        elif xr.e <= self.nmin:
-            # all digits are below `nmin`
-            return False
+        return xr.is_more_significant(self.nmin)
+
+    def is_canonical(self, x: Float):
+        if not isinstance(x, Float) and self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return x.exp == self.nmin + 1
+
+    def normalize(self, x: Float):
+        if not isinstance(x, Float) and self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+
+        offset = x.exp - (self.nmin + 1)
+        if offset > 0:
+            # shift the significand to the right
+            c = x.c >> offset
+            exp = x.exp - offset
+        elif offset < 0:
+            # shift the significand to the left
+            c = x.c << -offset
+            exp = x.exp - offset
         else:
-            # need to check the digits at or below `nmin`
-            _, lo = xr.split(self.nmin)
-            return lo.is_zero()
+            c = x.c
+            exp = x.exp
 
-
-    def is_canonical(self, x):
-        raise NotImplementedError
-
-    def normalize(self, x):
-        raise NotImplementedError
+        return Float(exp=exp, c=c, x=x, ctx=self)
 
     def round_params(self):
-        raise NotImplementedError
+        return None, self.nmin
+
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+        """
+        Like `self.round_at()` but only for `RealFloat` or `Float` instances.
+
+        Optionally, specify `n` to override the least absolute digit position.
+        If `n < self.nmin`, it will be set to `self.nmin`.
+        """
+        if n is None:
+            n = self.nmin
+        else:
+            n = max(n, self.nmin)
+
+        # step 1. handle special values
+        if isinstance(x, Float):
+            if x.isnan:
+                raise ValueError(f'Cannot round NaN under this context')
+            elif x.isinf:
+                raise ValueError(f'Cannot round Inf under this context')
+            else:
+                x = x._real
+
+        # step 2. shortcut for exact zero values
+        if x.is_zero():
+            # exactly zero
+            return Float(ctx=self)
+
+        # step 3. round value based on rounding parameters
+        return x.round(min_n=n, rm=self.rm)
+
+    def _round_at(self, x, n: Optional[int]) -> Float:
+        match x:
+            case Float() | RealFloat():
+                xr = x
+            case int():
+                xr = RealFloat(c=x)
+            case float() | str():
+                # TODO: xr = mpfr_value(x, self.pmax)
+                raise NotImplementedError
+            case Fraction():
+                if x.denominator == 1:
+                    xr = RealFloat(c=int(x))
+                else:
+                    # TODO: xr = mpfr_value(x, self.pmax)
+                    raise NotImplementedError
+            case _:
+                raise TypeError(f'not valid argument x={x}')
+
+        return self._round_float_at(xr, n)
 
     def round(self, x):
-        raise NotImplementedError
+        return self._round_at(x, None)
 
     def round_at(self, x, n):
-        raise NotImplementedError
+        return self._round_at(x, n)
