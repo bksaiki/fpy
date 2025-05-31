@@ -93,7 +93,7 @@ def decnum_to_fraction(s: str):
 
     sign = m.group(1)
     mant = m.group(2)
-    exp = m.group(4)
+    exp = m.group(5)
 
     if '.' in mant:
         parts = mant.split('.')

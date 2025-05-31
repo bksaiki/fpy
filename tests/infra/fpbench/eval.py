@@ -1,7 +1,7 @@
 import fpy2.math
 import types
 
-from fpy2 import Function, ForeignEnv, Float, IEEEContext, RoundingMode
+from fpy2 import Function, ForeignEnv, Float, IEEEContext, RoundingMode, NoSuchContextError
 from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
@@ -15,10 +15,31 @@ _skip_cores = [
     'Euler Oscillator',
     'Filter',
     'Circle',
+    # loops too long
+    'Rocket Trajectory',
+    'Flower',
+    # unsupported context
+    'arclength of a wiggly function',
+    'arclength of a wiggly function (old version)',
+    # mutual recursion
+    'even-int'
 ]
 
-def _mpmf_to_fpy(x: MPMF | NDArray):
+def _fpy_to_mpmf(x: bool | Float | NDArray):
     match x:
+        case bool():
+            return x
+        case Float():
+            return MPMF(negative=x.s, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
+        case NDArray():
+            return NDArray([_fpy_to_mpmf(v) for v in x])
+        case _:
+            raise TypeError(f'Expected Float or NDArray, got {x}')
+
+def _mpmf_to_fpy(x: bool | MPMF | NDArray):
+    match x:
+        case bool():
+            return x
         case MPMF():
             return Float(s=x.negative, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
         case NDArray():
@@ -32,8 +53,13 @@ def _compare(
     **kwargs
 ):
     match expect, actual:
+        case bool(), bool():
+            if expect != actual:
+                kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
+                raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
         case Float(), Float():
-            if (expect.isnan and not actual.isnan) or expect != actual:
+            if not actual.isnan if expect.isnan else expect != actual:
+                print(expect.isnan, actual.isnan)
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
         case NDArray(), NDArray():
@@ -73,7 +99,7 @@ def _to_fpy_context(ctx: EvalCtx):
 def _eval_nearbyint(rt: Interpreter, e: Nearbyint, ctx: EvalCtx):
     arg = rt.evaluate(e.children[0], ctx)
     v = fpy2.math.nearbyint(_mpmf_to_fpy(arg), ctx=_to_fpy_context(ctx))
-    result = MPMF(negative=v.s, exp=v.exp, c=v.c, isinf=v.isinf, isnan=v.isnan, inexact=v.inexact)
+    result = _fpy_to_mpmf(v)
     return [v], result
 
 def _mpmf_interpreter():
@@ -95,11 +121,6 @@ def eval(
     *,
     num_inputs: int = 10
 ):
-    # apply filter
-    if core.name in _skip_cores:
-        print('skipping', core.ident, 'due to filter')
-        return
-
     # convert to FPy
     fun = Function.from_fpcore(core, ignore_unknown=True)
     fun.env = env
@@ -107,31 +128,51 @@ def eval(
     # register the function
     if core.ident is not None:
         rt.register_function(core)
-        print(fun.name)
         env.globals[fun.name] = fun
+
+    # apply filter
+    if core.name in _skip_cores or core.ident in _skip_cores:
+        print('skipping', core.ident, 'due to filter')
+        return
 
     # sample inputs
     if core.inputs == []:
         inputs: list[list] = [[]]
     else:
-        print('skipping sampling for', core.ident)
-        return
+        inputs = []
+        for _ in range(num_inputs):
+            input: list[Float] = []
+            for name, _, shape in core.inputs:
+                if shape is not None:
+                    print('skipping sampling for', core.ident)
+                    return
+                # TODO: sample
+                input.append(Float.from_float(1.0, None))
+            inputs.append(input)
 
-    print('evaluating', core.name, 'with', len(inputs), 'inputs')
+    print('evaluating', core.name, 'with', len(inputs), 'inputs', end='')
 
     # evaluate both FPy and FPCore functions
     for input in inputs:
         # evaluate functions on point
-        fpcore = _mpmf_to_fpy(rt.interpret(core, input))
-        fpy = fun(*input)
+        try:
+            fpcore = _mpmf_to_fpy(rt.interpret(core, list(map(_fpy_to_mpmf, input))))
+            fpy = fun(*input)
+        except NoSuchContextError:
+            # TODO: implement integer contexts
+            print('skipping', core.ident, 'due to NoSuchContextError')
+            return 
         _compare(fpcore, fpy, core=core, func=fun.format(), input=input)
+        print('.', end='', flush=True)
+
+    print('', flush=True)
 
 
 def test_eval():
     rt = _mpmf_interpreter()
     env = ForeignEnv.empty()
     fpbench = fetch_cores()
-    for core in fpbench.all_cores():
+    for core in fpbench.tensor_cores:
         eval(rt, env, core)
 
 

@@ -294,11 +294,12 @@ class _Interpreter(DefaultVisitor):
             raise TypeError(f'expected a real number argument, got {stop}')
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
+        n = int(stop)
 
         elts: list[Float] = []
-        for i in range(int(stop)):
+        for i in range(n):
             elts.append(Float.from_int(i, ctx=ctx.round_ctx))
-        return NDArray(elts)
+        return NDArray(elts, shape=(n,))
 
     def _apply_dim(self, arg: Expr, ctx: _EvalCtx):
         v = self._visit_expr(arg, ctx)
