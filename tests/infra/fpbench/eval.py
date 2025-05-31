@@ -143,11 +143,27 @@ def eval(
         for _ in range(num_inputs):
             input: list[Float] = []
             for name, _, shape in core.inputs:
-                if shape is not None:
-                    print('skipping sampling for', core.ident)
-                    return
-                # TODO: sample
-                input.append(Float.from_float(1.0, None))
+                if shape is None:
+                    # scalar argument
+                    # TODO: sampling
+                    v = Float.from_float(1.0, None)
+                    input.append(v)
+                else:
+                    # tensor argument
+                    # Replace symbolic dimensions with N=3
+                    dims = []
+                    for dim in shape:
+                        if isinstance(dim, int):
+                            dims.append(dim)
+                        else:
+                            dims.append(3)
+                    def make_tensor(dims):
+                        if not dims:
+                            return Float.from_float(1.0, None)
+                        return NDArray([make_tensor(dims[1:]) for _ in range(dims[0])])
+                    v = make_tensor(dims)
+                    input.append(v)
+                    print(v)
             inputs.append(input)
 
     print('evaluating', core.name, 'with', len(inputs), 'inputs', end='')
