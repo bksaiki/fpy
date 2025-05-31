@@ -48,7 +48,7 @@ class MPFContext(Context):
         # check for Inf or NaN
         if isinstance(x, Float) and x.is_nar():
             return False
-        
+
         # extract real part
         match x:
             case Float():

@@ -19,6 +19,9 @@ Rounding Contexts
 
 FPy provides a hierarchy of abstract classes describing rounding contexts.
 
+Abstract Contexts
+^^^^^^^^^^^^^^^^^^
+
 .. autoclass:: fpy2.Context
    :members:
    :show-inheritance:
@@ -38,9 +41,8 @@ FPy provides a hierarchy of abstract classes describing rounding contexts.
 FPy provides a number of concrete rounding contexts.
 Each context implements a particular flavor of rounding.
 
-.. autoclass:: fpy2.RealContext
-   :members:
-   :show-inheritance:
+Floating-Point Contexts
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autoclass:: fpy2.MPContext
    :members:
@@ -62,11 +64,30 @@ Each context implements a particular flavor of rounding.
    :members:
    :show-inheritance:
 
+Fixed-Point Contexts
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: fpy2.MPFContext
+   :members:
+   :show-inheritance:
+
+Real Context
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. autoclass:: fpy2.RealContext
+   :members:
+   :show-inheritance:
+
+
+
 Common Rounding Contexts
 --------------------------
 .. manually documented: keep in sync with `fpy2/number/__init__.py`
 
 FPy provides a number of aliases for common rounding contexts.
+
+Floating-Point Contexts
+^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. py:data:: fpy2.FP256
    :value: IEEEContext(19, 256, RM.RNE)
@@ -257,6 +278,15 @@ FPy provides a number of aliases for common rounding contexts.
    See the IEEE P3109 working group 
    `draft <https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf>`_
    for more information.
+
+Fixed-Point Contexts
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. py:data:: fpy2.Integer
+   :value: MPFContext(-1, RM.RTZ)
+
+   Alias for the fixed-point integer format with no fractional bits
+   and round towards zero rounding mode.
 
 Number Types
 ------------------

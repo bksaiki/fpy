@@ -28,8 +28,9 @@ from .number import (
     # concrete context types
     ExtContext,
     MPContext,
-    MPSContext,
     MPBContext,
+    MPFContext,
+    MPSContext,
     IEEEContext,
     RealContext,
     # rounding utilities

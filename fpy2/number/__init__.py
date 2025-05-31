@@ -9,6 +9,7 @@ from .ext import ExtContext, ExtNanKind
 from .ieee754 import IEEEContext
 from .mp import MPContext
 from .mpb import MPBContext
+from .mpf import MPFContext
 from .mps import MPSContext
 from .real import RealContext
 
@@ -214,4 +215,11 @@ Format subject to change.
 
 See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
+"""
+
+INTEGER = MPFContext(-1, RoundingMode.RNE)
+"""
+Alias for an arbitrary-precision integer context.
+
+Numbers rounded under this context behave like Python's native `int` type.
 """
