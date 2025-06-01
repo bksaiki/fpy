@@ -83,10 +83,10 @@ class MPFContext(Context):
                 # this field matters
                 if nan_value.isinf:
                     if not enable_inf:
-                        raise ValueError(f'Rounding NaN to infinity, but infinity not enabled')
+                        raise ValueError('Rounding NaN to infinity, but infinity not enabled')
                 elif nan_value.is_finite():
                     if not nan_value.as_real().is_more_significant(nmin):
-                        raise ValueError(f'Rounding NaN to unrepresentable value')
+                        raise ValueError('Rounding NaN to unrepresentable value')
 
         if inf_value is not None:
             if not isinstance(inf_value, Float):
@@ -95,10 +95,10 @@ class MPFContext(Context):
                 # this field matters
                 if inf_value.isnan:
                     if not enable_nan:
-                        raise ValueError(f'Rounding Inf to NaN, but NaN not enabled')
+                        raise ValueError('Rounding Inf to NaN, but NaN not enabled')
                 elif inf_value.is_finite():
                     if not inf_value.as_real().is_more_significant(nmin):
-                        raise ValueError(f'Rounding Inf to unrepresentable value')
+                        raise ValueError('Rounding Inf to unrepresentable value')
 
         self.nmin = nmin
         self.rm = rm
@@ -182,14 +182,14 @@ class MPFContext(Context):
                 if self.enable_nan:
                     return Float(isnan=True, ctx=self)
                 elif self.nan_value is None:
-                    raise ValueError(f'Cannot round NaN under this context')
+                    raise ValueError('Cannot round NaN under this context')
                 else:
                     return Float(x=self.nan_value, ctx=self)
             elif x.isinf:
                 if self.enable_inf:
                     return Float(isinf=True, ctx=self)
                 elif self.inf_value is None:
-                    raise ValueError(f'Cannot round infinity under this context')
+                    raise ValueError('Cannot round infinity under this context')
                 else:
                     return Float(x=self.inf_value, ctx=self)
             else:
