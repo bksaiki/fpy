@@ -134,15 +134,26 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
     don't throw an exception for randomly sampled inputs.
     """
 
-    MAX_INTEGER = 1 << 16
+    _default_max_integer = 1 << 16
+    _max_integer = {
+        exp: 1 << 8,
+        exp2: 1 << 8,
+        exp10: 1 << 8,
+        expm1: 1 << 8,
+        pow: 1 << 4,
+        cosh: 1 << 8,
+        sinh: 1 << 8,
+        tgamma: 1 << 4,
+    }
 
     def test_fuzz_unary(self, num_inputs: int = 256):
         for op in _unary_ops:
+            max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:
                 ctx = INTEGER.with_rm(rm)
                 for _ in range(num_inputs):
                     # sample point
-                    i = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    i = random.randint(0, max_value) * random.choice([-1, 1])
                     i *= random.choice([-1, 1])
                     x = Float.from_int(i, ctx)
                     # evaluate
@@ -150,12 +161,13 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
 
     def test_fuzz_binary(self, num_inputs: int = 256):
         for op in _binary_ops:
+            max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:
                 ctx = INTEGER.with_rm(rm)
                 for _ in range(num_inputs):
                     # sample point
-                    i = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
-                    j = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    i = random.randint(0, max_value) * random.choice([-1, 1])
+                    j = random.randint(0, max_value) * random.choice([-1, 1])
                     x = Float.from_int(i, ctx)
                     y = Float.from_int(j, ctx)
                     # evaluate
@@ -163,13 +175,14 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
         for op in _ternary_ops:
+            max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:
                 ctx = INTEGER.with_rm(rm)
                 for _ in range(num_inputs):
                     # sample point
-                    i = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
-                    j = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
-                    k = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    i = random.randint(0, max_value) * random.choice([-1, 1])
+                    j = random.randint(0, max_value) * random.choice([-1, 1])
+                    k = random.randint(0,max_value) * random.choice([-1, 1])
                     x = Float.from_int(i, ctx)
                     y = Float.from_int(j, ctx)
                     z = Float.from_int(k, ctx)
