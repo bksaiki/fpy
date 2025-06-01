@@ -103,21 +103,21 @@ class MPFContext(Context):
         # step 1. handle special values
         if isinstance(x, Float):
             if x.isnan:
-                x = RealFloat.zero()
+                xr = RealFloat.zero()
                 # raise ValueError(f'Cannot round NaN under this context')
             elif x.isinf:
-                x = RealFloat.zero()
+                xr = RealFloat.zero()
                 # raise ValueError(f'Cannot round Inf under this context')
             else:
-                x = x._real
+                xr = x._real
 
         # step 2. shortcut for exact zero values
-        if x.is_zero():
+        if xr.is_zero():
             # exactly zero
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        return x.round(min_n=n, rm=self.rm)
+        return xr.round(min_n=n, rm=self.rm)
 
     def _round_at(self, x, n: Optional[int]) -> Float:
         match x:
