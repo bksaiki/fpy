@@ -109,7 +109,14 @@ class MPFContext(Context):
 
 
     def with_rm(self, rm: RoundingMode):
-        return MPFContext(self.nmin, rm)
+        return MPFContext(
+            self.nmin,
+            rm,
+            enable_nan=self.enable_nan,
+            enable_inf=self.enable_inf,
+            nan_value=self.nan_value,
+            inf_value=self.inf_value
+        )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):
