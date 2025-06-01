@@ -23,6 +23,14 @@ class MPFContext(Context):
     This context is parameterized by the most significant digit
     that is not representable `nmin` and a rounding mode `rm`.
     It emulates fixed-point numbers with arbitrary precision.
+
+    Optionally, specify the following keywords:
+    - `enable_nan`: if `True`, then NaN is representable [default: `False`]
+    - `enable_inf`: if `True`, then infinity is representable [default: `False`]
+    - `nan_value`: if NaN is not enabled, what value should NaN round to? [default: `None`];
+    if not set, then `round()` will raise a `ValueError` on NaN.
+    - `inf_value`: if Inf is not enabled, what value should Inf round to? [default: `None`];
+    if not set, then `round()` will raise a `ValueError` on infinity.
     """
 
     nmin: int
@@ -31,13 +39,74 @@ class MPFContext(Context):
     rm: RoundingMode
     """rounding mode"""
 
-    def __init__(self, nmin: int, rm: RoundingMode):
+    enbale_nan: bool
+    """is NaN representable?"""
+
+    enable_inf: bool
+    """is infinity representable?"""
+
+    nan_value: Optional[Float]
+    """
+    if NaN is not enabled, what value should NaN round to?
+    if not set, then `round()` will raise a `ValueError`.
+    """
+
+    inf_value: Optional[Float]
+    """
+    if Inf is not enabled, what value should Inf round to?
+    if not set, then `round()` will raise a `ValueError`.
+    """
+
+    def __init__(
+        self,
+        nmin: int,
+        rm: RoundingMode,
+        *,
+        enable_nan: bool = False,
+        enable_inf: bool = False,
+        nan_value: Optional[Float] = None,
+        inf_value: Optional[Float] = None
+    ):
         if not isinstance(nmin, int):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if not isinstance(enable_nan, bool):
+            raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
+        if not isinstance(enable_inf, bool):
+            raise TypeError(f'Expected \'bool\' for enable_inf={enable_inf}, got {type(enable_inf)}')
+
+        if nan_value is not None:
+            if not isinstance(nan_value, Float):
+                raise TypeError(f'Expected \'RealFloat\' for nan_value={nan_value}, got {type(nan_value)}')
+            if not enable_nan:
+                # this field matters
+                if nan_value.isinf:
+                    if not enable_inf:
+                        raise ValueError(f'Rounding NaN to infinity, but infinity not enabled')
+                elif nan_value.is_finite():
+                    if not nan_value.as_real().is_more_significant(nmin):
+                        raise ValueError(f'Rounding NaN to unrepresentable value')
+
+        if inf_value is not None:
+            if not isinstance(inf_value, Float):
+                raise TypeError(f'Expected \'RealFloat\' for inf_value={inf_value}, got {type(inf_value)}')
+            if not enable_inf:
+                # this field matters
+                if inf_value.isnan:
+                    if not enable_nan:
+                        raise ValueError(f'Rounding Inf to NaN, but NaN not enabled')
+                elif inf_value.is_finite():
+                    if not inf_value.as_real().is_more_significant(nmin):
+                        raise ValueError(f'Rounding Inf to unrepresentable value')
+
         self.nmin = nmin
         self.rm = rm
+        self.enable_nan = enable_nan
+        self.enable_inf = enable_inf
+        self.nan_value = nan_value
+        self.inf_value = inf_value
+
 
     def with_rm(self, rm: RoundingMode):
         return MPFContext(self.nmin, rm)
@@ -46,14 +115,14 @@ class MPFContext(Context):
         if not isinstance(x, RealFloat | Float):
             raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        # check for Inf or NaN
-        if isinstance(x, Float) and x.is_nar():
-            return False
-
-        # extract real part
         match x:
             case Float():
-                xr = x.as_real()
+                if x.isnan:
+                    return self.enable_nan
+                elif x.isinf:
+                    return self.enable_inf
+                else:
+                    xr = x.as_real()
             case RealFloat():
                 xr = x
             case _:
@@ -103,11 +172,19 @@ class MPFContext(Context):
         # step 1. handle special values
         if isinstance(x, Float):
             if x.isnan:
-                xr = RealFloat.zero()
-                # raise ValueError(f'Cannot round NaN under this context')
+                if self.enable_nan:
+                    return Float(isnan=True, ctx=self)
+                elif self.nan_value is None:
+                    raise ValueError(f'Cannot round NaN under this context')
+                else:
+                    return Float(x=self.nan_value, ctx=self)
             elif x.isinf:
-                xr = RealFloat.zero()
-                # raise ValueError(f'Cannot round Inf under this context')
+                if self.enable_inf:
+                    return Float(isinf=True, ctx=self)
+                elif self.inf_value is None:
+                    raise ValueError(f'Cannot round infinity under this context')
+                else:
+                    return Float(x=self.inf_value, ctx=self)
             else:
                 xr = x._real
 
