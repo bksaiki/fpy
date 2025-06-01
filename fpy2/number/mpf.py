@@ -161,6 +161,11 @@ class MPFContext(Context):
 
         return Float(exp=exp, c=c, x=x, ctx=self)
 
+    def is_normal(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero()
+
     def round_params(self):
         return None, self.nmin
 
@@ -201,7 +206,8 @@ class MPFContext(Context):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        return xr.round(min_n=n, rm=self.rm)
+        xr = xr.round(min_n=n, rm=self.rm)
+        return Float(x=xr, ctx=self)
 
     def _round_at(self, x, n: Optional[int]) -> Float:
         match x:

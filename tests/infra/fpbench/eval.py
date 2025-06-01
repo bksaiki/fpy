@@ -48,8 +48,8 @@ def _mpmf_to_fpy(x: bool | MPMF | NDArray):
             raise TypeError(f'Expected MPMF or NDArray, got {x}')
 
 def _compare(
-    expect: Float | NDArray,
-    actual: Float | NDArray,
+    expect: bool | Float | NDArray,
+    actual: bool | Float | NDArray,
     **kwargs
 ):
     match expect, actual:
@@ -59,7 +59,6 @@ def _compare(
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
         case Float(), Float():
             if not actual.isnan if expect.isnan else expect != actual:
-                print(expect.isnan, actual.isnan)
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
         case NDArray(), NDArray():
@@ -68,7 +67,8 @@ def _compare(
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
             for expect_elt, actual_elt in zip(expect, actual):
                 _compare(expect_elt, actual_elt, **kwargs)
-        case _, _:
+        case _:
+            print(type(expect), type(actual))
             kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
             raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
 
