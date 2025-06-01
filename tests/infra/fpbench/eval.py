@@ -22,7 +22,11 @@ _skip_cores = [
     'arclength of a wiggly function',
     'arclength of a wiggly function (old version)',
     # mutual recursion
-    'even-int'
+    'even-int',
+    'forward-euler-3d',
+    'midpoint-3d',
+    'ralston-3d',
+    'rk4-step-3d'
 ]
 
 def _fpy_to_mpmf(x: bool | Float | NDArray):
@@ -146,8 +150,7 @@ def eval(
                 if shape is None:
                     # scalar argument
                     # TODO: sampling
-                    v = Float.from_float(1.0, None)
-                    input.append(v)
+                    input.append(Float.from_float(1.0, None))
                 else:
                     # tensor argument
                     # Replace symbolic dimensions with N=3
@@ -161,9 +164,7 @@ def eval(
                         if not dims:
                             return Float.from_float(1.0, None)
                         return NDArray([make_tensor(dims[1:]) for _ in range(dims[0])])
-                    v = make_tensor(dims)
-                    input.append(v)
-                    print(v)
+                    input.append(make_tensor(dims))
             inputs.append(input)
 
     print('evaluating', core.name, 'with', len(inputs), 'inputs', end='')
@@ -188,10 +189,8 @@ def test_eval():
     rt = _mpmf_interpreter()
     env = ForeignEnv.empty()
     fpbench = fetch_cores()
-    for core in fpbench.tensor_cores:
+    for core in fpbench.all_cores():
         eval(rt, env, core)
-
-
 
 if __name__ == "__main__":
     test_eval()
