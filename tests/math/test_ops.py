@@ -1,7 +1,7 @@
 import random
 import unittest
 
-from fpy2 import IEEEContext, RM
+from fpy2 import IEEEContext, RM, FP64, FP32, FP16, INTEGER
 from fpy2.math import *
 
 _unary_ops = [
@@ -69,13 +69,13 @@ _rms = [
 ]
 
 _ctxs = [
-    IEEEContext(11, 64, RM.RNE),
-    IEEEContext(8, 32, RM.RNE),
-    IEEEContext(5, 16, RM.RNE),
+    FP64,
+    FP32,
+    FP16,
     IEEEContext(5, 8, RM.RNE)
 ]
 
-class MathNoExceptTestCase(unittest.TestCase):
+class MathIEEENoExceptTestCase(unittest.TestCase):
     """
     Fuzz testing for each operation under `fpy2.math`.
 
@@ -125,3 +125,53 @@ class MathNoExceptTestCase(unittest.TestCase):
                         z = ctx.decode(k)
                         # evaluate
                         op(x, y, z, ctx)
+
+class MathIntegerNoExceptTestCase(unittest.TestCase):
+    """
+    Fuzz testing for integer operations under `fpy2.math`.
+
+    Ensures that the integer operations in `fpy2.math`
+    don't throw an exception for randomly sampled inputs.
+    """
+
+    MAX_INTEGER = 1 << 16
+
+    def test_fuzz_unary(self, num_inputs: int = 256):
+        for op in _unary_ops:
+            for rm in _rms:
+                ctx = INTEGER.with_rm(rm)
+                for _ in range(num_inputs):
+                    # sample point
+                    i = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    i *= random.choice([-1, 1])
+                    x = Float.from_int(i, ctx)
+                    # evaluate
+                    op(x, ctx)
+
+    def test_fuzz_binary(self, num_inputs: int = 256):
+        for op in _binary_ops:
+            for rm in _rms:
+                ctx = INTEGER.with_rm(rm)
+                for _ in range(num_inputs):
+                    # sample point
+                    i = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    j = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    x = Float.from_int(i, ctx)
+                    y = Float.from_int(j, ctx)
+                    # evaluate
+                    op(x, y, ctx)
+
+    def test_fuzz_ternary(self, num_inputs: int = 256):
+        for op in _ternary_ops:
+            for rm in _rms:
+                ctx = INTEGER.with_rm(rm)
+                for _ in range(num_inputs):
+                    # sample point
+                    i = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    j = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    k = random.randint(0, self.MAX_INTEGER) * random.choice([-1, 1])
+                    x = Float.from_int(i, ctx)
+                    y = Float.from_int(j, ctx)
+                    z = Float.from_int(k, ctx)
+                    # evaluate
+                    op(x, y, z, ctx)

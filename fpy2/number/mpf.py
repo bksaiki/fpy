@@ -13,6 +13,7 @@ from .context import Context
 from .number import Float
 from .real import RealFloat
 from .round import RoundingMode
+from .gmp import mpfr_value
 
 @default_repr
 class MPFContext(Context):
@@ -102,9 +103,11 @@ class MPFContext(Context):
         # step 1. handle special values
         if isinstance(x, Float):
             if x.isnan:
-                raise ValueError(f'Cannot round NaN under this context')
+                x = RealFloat.zero()
+                # raise ValueError(f'Cannot round NaN under this context')
             elif x.isinf:
-                raise ValueError(f'Cannot round Inf under this context')
+                x = RealFloat.zero()
+                # raise ValueError(f'Cannot round Inf under this context')
             else:
                 x = x._real
 
@@ -123,14 +126,12 @@ class MPFContext(Context):
             case int():
                 xr = RealFloat(c=x)
             case float() | str():
-                # TODO: xr = mpfr_value(x, self.pmax)
-                raise NotImplementedError
+                xr = mpfr_value(x, n=self.nmin)
             case Fraction():
                 if x.denominator == 1:
                     xr = RealFloat(c=int(x))
                 else:
-                    # TODO: xr = mpfr_value(x, self.pmax)
-                    raise NotImplementedError
+                    xr = mpfr_value(x, n=self.nmin)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
@@ -139,5 +140,5 @@ class MPFContext(Context):
     def round(self, x):
         return self._round_at(x, None)
 
-    def round_at(self, x, n):
+    def round_at(self, x, n: int):
         return self._round_at(x, n)
