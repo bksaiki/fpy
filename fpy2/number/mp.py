@@ -131,12 +131,12 @@ class MPContext(Context):
             case int():
                 xr = RealFloat(c=x)
             case float() | str():
-                xr = mpfr_value(x, self.pmax)
+                xr = mpfr_value(x, prec=self.pmax)
             case Fraction():
                 if x.denominator == 1:
                     xr = RealFloat(c=int(x))
                 else:
-                    xr = mpfr_value(x, self.pmax)
+                    xr = mpfr_value(x, prec=self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 

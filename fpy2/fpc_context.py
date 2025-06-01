@@ -4,8 +4,15 @@ Runtime utilities for integrating with FPCore from Titanic.
 
 from typing import Any
 
-from .number import Context, IEEEContext, RealContext, RM
-from .utils import default_repr
+from .number import (
+    Context,
+    IEEEContext,
+    MPFContext,
+    RealContext,
+    RM,
+    FP128, FP64, FP32, FP16,
+    INTEGER
+)
 
 _round_mode = {
     'nearestEven': RM.RNE,
@@ -127,6 +134,9 @@ class FPCoreContext:
                         return FPCoreContext(precision='binary16', round=rm)
                     case _:
                         return FPCoreContext(precision=['float', ctx.es, ctx.nbits], round=rm)
+            case MPFContext() if ctx.nmin == -1:
+                rm = _round_mode_from_fpc(ctx.rm)
+                return FPCoreContext(precision='integer', round=rm)
             case RealContext():
                 return FPCoreContext(precision='real')
             case _:
@@ -146,15 +156,18 @@ class FPCoreContext:
                     return IEEEContext(int(es), int(nbits), _round_mode_to_fpy(rnd))
                 # IEEE 754 shorthands
                 case 'binary128':
-                    return IEEEContext(15, 128, _round_mode_to_fpy(rnd))
+                    return FP128.with_rm(_round_mode_to_fpy(rnd))
                 case 'binary80':
                     return IEEEContext(15, 80, _round_mode_to_fpy(rnd))
                 case 'binary64':
-                    return IEEEContext(11, 64, _round_mode_to_fpy(rnd))
+                    return FP64.with_rm(_round_mode_to_fpy(rnd))
                 case 'binary32':
-                    return IEEEContext(8, 32, _round_mode_to_fpy(rnd))
+                    return FP32.with_rm(_round_mode_to_fpy(rnd))
                 case 'binary16':
-                    return IEEEContext(5, 16, _round_mode_to_fpy(rnd))
+                    return FP16.with_rm(_round_mode_to_fpy(rnd))
+                # integer context
+                case 'integer':
+                    return INTEGER.with_rm(_round_mode_to_fpy(rnd))
                 # real context
                 case 'real':
                     return RealContext()

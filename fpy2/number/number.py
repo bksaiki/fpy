@@ -549,22 +549,38 @@ class RealFloat(numbers.Rational):
         """Returns whether this value is negative."""
         return self.c != 0 and self.s
 
-    def is_integer(self) -> bool:
-        """Returns whether this value is an integer."""
+    def is_more_significant(self, n: int) -> bool:
+        """
+        Returns `True` iff this value only has significant digits above `n`,
+        that is, every non-zero digit in the number is more significant than `n`.
+
+        When `n = -1`, this method is equivalent to `is_integer()`.
+
+        This method is equivalent to::
+
+            _, lo = self.split(n)
+            return lo.is_zero()
+        """
         if self.is_zero():
             return True
 
-        # all significant digits are integer digits
-        if self.exp >= 0:
+        # All significant digits are above n
+        if self.exp > n:
             return True
 
-        # all non-significant digits are fractional digits
-        if self.e < 0:
+        # All significant digits are at or below n
+        if self.e <= n:
             return False
 
-        # must check if fractional digits are zero
-        fbits = self.c & bitmask(-self.exp)
-        return fbits == 0
+        # Some digits may be at or below n; check if those are zero
+        n_relative = n - self.exp
+        return (self.c & bitmask(n_relative + 1)) == 0
+
+    def is_integer(self) -> bool:
+        """
+        Returns whether this value is an integer.
+        """
+        return self.is_more_significant(-1)
 
     def bit(self, n: int) -> bool:
         """
