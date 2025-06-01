@@ -1,4 +1,4 @@
-from fpy2 import Function, ForeignEnv, Float, NoSuchContextError
+from fpy2 import Function, Float, NoSuchContextError, FPCoreCompiler
 from titanfp.arithmetic.mpmf import Interpreter
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.titanic.ndarray import NDArray
@@ -27,19 +27,20 @@ _skip_cores = [
 
 def eval(
     rt: Interpreter,
-    env: ForeignEnv,
+    comp: FPCoreCompiler,
     core: FPCore,
     *,
     num_inputs: int = 10
 ):
     # convert to FPy
     fun = Function.from_fpcore(core, ignore_unknown=True)
-    fun.env = env
+
+    # convert back to FPCore
+    core2 = comp.compile(fun)
 
     # register the function
     if core.ident is not None:
         rt.register_function(core)
-        env.globals[fun.name] = fun
 
     # apply filter
     if core.name in _skip_cores or core.ident in _skip_cores:
@@ -75,31 +76,32 @@ def eval(
             inputs.append(input)
 
     print('evaluating', core.name, 'with', len(inputs), 'inputs', end='')
+    print(core, '\n', core2)
 
     # evaluate both FPy and FPCore functions
     for input in inputs:
         # evaluate functions on point
         try:
-            fpcore = mpmf_to_fpy(rt.interpret(core, list(map(fpy_to_mpmf, input))))
-            fpy = fun(*input)
+            expect = mpmf_to_fpy(rt.interpret(core, list(map(fpy_to_mpmf, input))))
+            actual = mpmf_to_fpy(rt.interpret(core2, list(map(fpy_to_mpmf, input))))
         except NoSuchContextError:
             # TODO: implement integer contexts
             print('skipping', core.ident, 'due to NoSuchContextError')
             return
 
         # compare output
-        compare(fpcore, fpy, core=core, func=fun.format(), input=input)
+        compare(expect, actual, core=core, func=core2, input=input)
         print('.', end='', flush=True)
 
     print('', flush=True)
 
 
-def test_eval():
+def test_round_trip():
     rt = mpmf_interpreter()
-    env = ForeignEnv.empty()
+    comp = FPCoreCompiler()
     fpbench = fetch_cores()
     for core in fpbench.all_cores():
-        eval(rt, env, core)
+        eval(rt, comp, core)
 
 if __name__ == "__main__":
-    test_eval()
+    test_round_trip()

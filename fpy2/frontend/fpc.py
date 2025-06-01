@@ -144,7 +144,7 @@ class _FPCore2FPy:
         return Hexnum(str(e.value), None)
 
     def _visit_integer(self, e: fpc.Integer, ctx: _Ctx) -> Expr:
-        return Integer(e.value, None)
+        return Integer(int(e.value), None)
 
     def _visit_rational(self, e: fpc.Rational, ctx: _Ctx) -> Expr:
         return Rational(e.p, e.q, None)

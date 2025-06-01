@@ -53,6 +53,8 @@ _unary_table: dict[type[UnaryOp], type[fpc.Expr]] = {
     IsNormal: fpc.Isnormal,
     Signbit: fpc.Signbit,
     Not: fpc.Not,
+    # rounding
+    Cast: fpc.Cast,
 }
 
 _binary_table: dict[type[BinaryOp], type[fpc.Expr]] = {
@@ -168,16 +170,16 @@ class FPCoreCompileInstance(Visitor):
         return fpc.Decnum(e.val)
 
     def _visit_hexnum(self, e: Hexnum, ctx: None):
-        raise fpc.Hexnum(e.val)
+        return fpc.Hexnum(e.val)
 
     def _visit_integer(self, e: Integer, ctx: None) -> fpc.Expr:
         return fpc.Integer(e.val)
 
     def _visit_rational(self, e: Rational, ctx: None):
-        raise fpc.Rational(e.p, e.q)
+        return fpc.Rational(e.p, e.q)
 
     def _visit_constant(self, e: Constant, ctx: None):
-        raise fpc.Constant(e.val)
+        return fpc.Constant(e.val)
 
     def _visit_digits(self, e: Digits, ctx: None) -> fpc.Expr:
         return fpc.Digits(e.m, e.e, e.b)
@@ -503,7 +505,7 @@ class FPCoreCompileInstance(Visitor):
                 tuple_id = str(self.gensym.fresh('t'))
                 tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
                 destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
-                return fpc.Let([tuple_bind] + destruct_bindings, ctx)
+                return fpc.LetStar([tuple_bind] + destruct_bindings, ctx)
             case _:
                 raise RuntimeError('unreachable', stmt.binding)
 
