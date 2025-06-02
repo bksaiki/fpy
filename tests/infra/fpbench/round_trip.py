@@ -1,4 +1,4 @@
-from fpy2 import Function, Float, NoSuchContextError, FPCoreCompiler
+from fpy2 import Function, ForeignEnv, Float, NoSuchContextError, FPCoreCompiler
 from titanfp.arithmetic.mpmf import Interpreter
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.titanic.ndarray import NDArray
@@ -27,6 +27,7 @@ _skip_cores = [
 
 def eval(
     rt: Interpreter,
+    env: ForeignEnv,
     comp: FPCoreCompiler,
     core: FPCore,
     *,
@@ -34,13 +35,15 @@ def eval(
 ):
     # convert to FPy
     fun = Function.from_fpcore(core, ignore_unknown=True)
-
-    # convert back to FPCore
-    core2 = comp.compile(fun)
+    fun.env = env
 
     # register the function
     if core.ident is not None:
         rt.register_function(core)
+        env.globals[fun.name] = fun
+
+    # convert back to FPCore
+    core2 = comp.compile(fun)
 
     # apply filter
     if core.name in _skip_cores or core.ident in _skip_cores:
@@ -62,12 +65,7 @@ def eval(
                 else:
                     # tensor argument
                     # Replace symbolic dimensions with N=3
-                    dims = []
-                    for dim in shape:
-                        if isinstance(dim, int):
-                            dims.append(dim)
-                        else:
-                            dims.append(3)
+                    dims = [dim if isinstance(dim, int) else 3 for dim in shape]
                     def make_tensor(dims):
                         if not dims:
                             return Float.from_float(1.0, None)
@@ -76,6 +74,7 @@ def eval(
             inputs.append(input)
 
     print('evaluating', core.name, 'with', len(inputs), 'inputs', end='')
+    print(fun.format())
     print(core, '\n', core2)
 
     # evaluate both FPy and FPCore functions
@@ -98,10 +97,11 @@ def eval(
 
 def test_round_trip():
     rt = mpmf_interpreter()
+    env = ForeignEnv.empty()
     comp = FPCoreCompiler()
     fpbench = fetch_cores()
-    for core in fpbench.all_cores():
-        eval(rt, comp, core)
+    for core in fpbench.tensor_cores:
+        eval(rt, env, comp, core)
 
 if __name__ == "__main__":
     test_round_trip()

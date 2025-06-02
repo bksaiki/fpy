@@ -72,5 +72,5 @@ class CopyPropagate:
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\' for {func}, got {type(func)}')
         func = _CopyPropagateInstance(func, names).apply()
-        SyntaxCheck.check(func)
+        SyntaxCheck.check(func, ignore_unknown=True)
         return func

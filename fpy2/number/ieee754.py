@@ -24,3 +24,6 @@ class IEEEContext(ExtContext):
 
     def __repr__(self):
         return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r})'
+
+    def with_rm(self, rm: RoundingMode):
+        return IEEEContext(self.es, self.nbits, rm)

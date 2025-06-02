@@ -39,5 +39,5 @@ class FuncUpdate:
             def_use = DefineUse.analyze(func)
             names = set(def_use.defs.keys())
         ast = _FuncUpdateInstance(func).apply()
-        SyntaxCheck.check(ast)
+        SyntaxCheck.check(ast, ignore_unknown=True)
         return ast

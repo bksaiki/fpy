@@ -182,23 +182,28 @@ class MPFContext(Context):
             n = max(n, self.nmin)
 
         # step 1. handle special values
-        if isinstance(x, Float):
-            if x.isnan:
-                if self.enable_nan:
-                    return Float(isnan=True, ctx=self)
-                elif self.nan_value is None:
-                    raise ValueError('Cannot round NaN under this context')
+        match x:
+            case Float():
+                if x.isnan:
+                    if self.enable_nan:
+                        return Float(isnan=True, ctx=self)
+                    elif self.nan_value is None:
+                        raise ValueError('Cannot round NaN under this context')
+                    else:
+                        return Float(x=self.nan_value, ctx=self)
+                elif x.isinf:
+                    if self.enable_inf:
+                        return Float(isinf=True, ctx=self)
+                    elif self.inf_value is None:
+                        raise ValueError('Cannot round infinity under this context')
+                    else:
+                        return Float(x=self.inf_value, ctx=self)
                 else:
-                    return Float(x=self.nan_value, ctx=self)
-            elif x.isinf:
-                if self.enable_inf:
-                    return Float(isinf=True, ctx=self)
-                elif self.inf_value is None:
-                    raise ValueError('Cannot round infinity under this context')
-                else:
-                    return Float(x=self.inf_value, ctx=self)
-            else:
-                xr = x._real
+                    xr = x._real
+            case RealFloat():
+                xr = x
+            case _:
+                raise RuntimeError(f'unreachable {x}')
 
         # step 2. shortcut for exact zero values
         if xr.is_zero():

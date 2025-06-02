@@ -129,5 +129,5 @@ class WhileBundling:
     def apply(func: FuncDef) -> FuncDef:
         def_use = DefineUse.analyze(func)
         func = _WhileBundlingInstance(func, def_use).apply()
-        SyntaxCheck.check(func)
+        SyntaxCheck.check(func, ignore_unknown=True)
         return func

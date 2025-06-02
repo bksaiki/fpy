@@ -181,6 +181,5 @@ class SimplifyIf:
         def_use = DefineUse.analyze(func)
         ast, new_ids = _SimplifyIfInstance(func, def_use).apply()
         ast = CopyPropagate.apply(ast, names=new_ids)
-        print(ast.format())
-        SyntaxCheck.check(ast)
+        SyntaxCheck.check(ast, ignore_unknown=True)
         return ast

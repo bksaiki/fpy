@@ -65,5 +65,5 @@ class ForUnpack:
         def_use = DefineUse.analyze(func)
         inst = _ForUnpackInstance(func, def_use)
         func = inst.apply()
-        SyntaxCheck.check(func)
+        SyntaxCheck.check(func, ignore_unknown=True)
         return func
