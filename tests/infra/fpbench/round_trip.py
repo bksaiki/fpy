@@ -41,6 +41,11 @@ def eval(
     if core.ident is not None:
         rt.register_function(core)
         env.globals[fun.name] = fun
+        if core.ident != fun.name:
+            # TODO: should we allow name mangling?
+            # also register the function under its ident
+            core.ident = fun.name # UNSAFE: stateful
+            rt.register_function(core)
 
     # convert back to FPCore
     core2 = comp.compile(fun)

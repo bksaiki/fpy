@@ -564,8 +564,6 @@ class FPCoreCompileInstance(Visitor):
             #         [_ 0 (let ([_ <body>]) 0)])))
             #        <ret>))
             tuple_id = str(self.gensym.fresh('t'))
-            idx_ctx = { 'precision': 'integer', 'round': 'toZero' }
-
             iterable = self._visit_expr(stmt.iterable, None)
             body = self._visit_block(stmt.body, fpc.Integer(0))
             return fpc.Let(
@@ -584,7 +582,6 @@ class FPCoreCompileInstance(Visitor):
             #        <ret>))
             loop_id = str(mutated.pop())
             tuple_id = str(self.gensym.fresh('t'))
-
             iterable = self._visit_expr(stmt.iterable, None)
             body = self._visit_block(stmt.body, fpc.Var(loop_id))
             return fpc.Let(
@@ -678,12 +675,13 @@ class FPCoreCompileInstance(Visitor):
                     raise RuntimeError('unreachable', func.ctx)
             props.update(fpc_ctx.props)
 
-        # transform properties
-        for k in props:
-            props[k] = fpc.Data(self._visit_data(props[k]))
-
-        # TODO: parse datas
+        # function identifier
         ident = func.name
+
+        # transform properties
+        props = { k: fpc.Data(self._visit_data(v)) for k, v in props.items() }
+
+        # special properties
         name = props.get('name')
         pre = props.get('pre')
         spec = props.get('spec')
