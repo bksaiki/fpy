@@ -6,33 +6,33 @@ from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
 from titanfp.fpbench.fpcast import Nearbyint
-from titanfp.titanic.ndarray import NDArray
+from titanfp.titanic import ndarray
 
-def fpy_to_mpmf(x: bool | Float | NDArray):
+def fpy_to_mpmf(x: bool | Float | ndarray.NDArray):
     match x:
         case bool():
             return x
         case Float():
             return MPMF(negative=x.s, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
-        case NDArray():
-            return NDArray([fpy_to_mpmf(v) for v in x])
+        case ndarray.NDArray():
+            return ndarray.NDArray([fpy_to_mpmf(v) for v in x])
         case _:
-            raise TypeError(f'Expected Float or NDArray, got {x}')
+            raise TypeError(f'Expected Float or ndarray.NDArray, got {x}')
 
-def mpmf_to_fpy(x: bool | MPMF | NDArray):
+def mpmf_to_fpy(x: bool | MPMF | ndarray.NDArray):
     match x:
         case bool():
             return x
         case MPMF():
             return Float(s=x.negative, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
-        case NDArray():
-            return NDArray([mpmf_to_fpy(v) for v in x])
+        case ndarray.NDArray():
+            return ndarray.NDArray([mpmf_to_fpy(v) for v in x])
         case _:
-            raise TypeError(f'Expected MPMF or NDArray, got {x}')
+            raise TypeError(f'Expected MPMF or ndarray.NDArray, got {x}')
 
 def compare(
-    expect: bool | Float | NDArray,
-    actual: bool | Float | NDArray,
+    expect: bool | Float | ndarray.NDArray,
+    actual: bool | Float | ndarray.NDArray,
     **kwargs
 ):
     match expect, actual:
@@ -44,7 +44,7 @@ def compare(
             if not actual.isnan if expect.isnan else expect != actual:
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
-        case NDArray(), NDArray():
+        case ndarray.NDArray(), ndarray.NDArray():
             if len(expect) != len(actual):
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
@@ -85,13 +85,25 @@ def _eval_nearbyint(rt: Interpreter, e: Nearbyint, ctx: EvalCtx):
     result = fpy_to_mpmf(v)
     return [v], result
 
+def make_check_offset(check_offset):
+    def _check_offset(data, shape, start, strides):
+        # bail for empty tensors
+        for dim in shape:
+            if dim == 0:
+                return
+        return check_offset(data, shape, start, strides)
+    return _check_offset
+
 def mpmf_interpreter():
     """
-    Creates a hacked version of the MPMF interpreter.
+    Creates a hacked version of the MPMF interpreter and
+    manually patches Titanic's runtime
 
     - fixes `nearbyint` to use FPy's implementation;
     Titanic's `nearbyint` is hopeless broken.
+    - fixes ndarray `check_offset` for empty tensors
     """
     rt = Interpreter()
     rt._eval_nearbyint = types.MethodType(_eval_nearbyint, rt)
+    ndarray.check_offset = make_check_offset(ndarray.check_offset)
     return rt

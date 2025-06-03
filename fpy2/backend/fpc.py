@@ -792,5 +792,4 @@ class FPCoreCompiler(Backend):
         ast = IfBundling.apply(ast)
         # compile
         def_use = DefineUse.analyze(ast)
-        print(ast.format())
         return FPCoreCompileInstance(ast, def_use).compile()

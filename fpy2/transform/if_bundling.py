@@ -141,8 +141,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
         # identify variables that were introduced in each body
         intros_ift = defs_in_ift.fresh_in(defs_out_ift)
         intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        assert intros_ift == intros_iff # sanity check the property
-        intros = list(intros_ift)
+        intros = list(intros_ift & intros_iff) # intersection of fresh variables
 
         # either mutated or introed
         changed = mutated + intros
@@ -251,6 +250,5 @@ class IfBundling:
 
         def_use = DefineUse.analyze(func)
         ast = _IfBundlingInstance(func, def_use).apply()
-        print(ast.format())
         SyntaxCheck.check(ast, ignore_unknown=True)
         return ast

@@ -90,8 +90,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         # FPy semantics says they must be introduced in both branches
         intros_ift = defs_in_ift.fresh_in(defs_out_ift)
         intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        assert intros_ift == intros_iff # sanity check the property
-        intros = intros_ift
+        intros = list(intros_ift & intros_iff) # intersection of fresh variables
 
         # combine sets
         mutated_or_new_ift = mutated_ift.copy()

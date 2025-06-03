@@ -3,7 +3,7 @@ from titanfp.arithmetic.mpmf import Interpreter
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.titanic.ndarray import NDArray
 
-from .fetch import fetch_cores
+from .fetch import fetch_cores, read_file
 from .shim import fpy_to_mpmf, mpmf_to_fpy, mpmf_interpreter, compare
 
 _skip_cores = [
@@ -113,7 +113,7 @@ def test_round_trip():
     env = ForeignEnv.empty()
     comp = FPCoreCompiler()
     fpbench = fetch_cores()
-    for core in fpbench.tensor_cores:
+    for core in fpbench.all_cores():
         eval(rt, env, comp, core)
 
 if __name__ == "__main__":
