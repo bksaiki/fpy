@@ -205,7 +205,6 @@ class Parser:
 
     def _parse_type_annotation(self, ann: ast.expr) -> TypeAnn:
         loc = self._parse_location(ann)
-        print(ast.dump(ann, indent=2))
         match ann:
             case ast.Name('Real'):
                 return RealTypeAnn(loc)

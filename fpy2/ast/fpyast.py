@@ -76,8 +76,14 @@ class BoolTypeAnn(TypeAnn):
     def __hash__(self) -> int:
         return hash(())
 
+class TensorTypeAnn(TypeAnn):
+    """FPy AST: tensor type annotation"""
+
+    def __init__(self, loc: Optional[Location]):
+        super().__init__(loc)
+
 class TupleTypeAnn(TypeAnn):
-    """FPy AST: tuple type annotation"""
+    """FPy AST: native tuple type annotation"""
     elts: list[TypeAnn]
 
     def __init__(self, elts: list[TypeAnn], loc: Optional[Location]):
@@ -91,6 +97,25 @@ class TupleTypeAnn(TypeAnn):
 
     def __hash__(self) -> int:
         return hash(tuple(self.elts))
+
+class SizedTensorTypeAnn(TypeAnn):
+    """FPy AST: sized, homogenous tensor type annotation"""
+    dims: list[int | NamedId]
+    elt: TypeAnn
+
+    def __init__(self, dims: list[int | NamedId], elt: TypeAnn, loc: Optional[Location]):
+        super().__init__(loc)
+        self.dims = dims
+        self.elt = elt
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SizedTensorTypeAnn):
+            return False
+        return self.dims == other.dims and self.elt == other.elt
+
+    def __hash__(self) -> int:
+        return hash((tuple(self.dims), self.elt))
+
 
 class Expr(Ast):
     """FPy AST: expression"""

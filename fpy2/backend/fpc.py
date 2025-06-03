@@ -122,6 +122,16 @@ class FPCoreCompileInstance(Visitor):
                 return str(arg.name), {}, None
             case RealTypeAnn():
                 return str(arg.name), {}, None
+            case SizedTensorTypeAnn():
+                dims: list[int | str] = []
+                for dim in arg.type.dims:
+                    if isinstance(dim, int):
+                        dims.append(dim)
+                    elif isinstance(dim, NamedId):
+                        dims.append(str(dim))
+                    else:
+                        raise FPCoreCompileError('unexpected dimension type', dim)
+                return str(arg.name), {}, dims
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)
 

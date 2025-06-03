@@ -37,18 +37,27 @@ def eval(
     fun = Function.from_fpcore(core, ignore_unknown=True)
     fun.env = env
 
-    # register the function
-    if core.ident is not None:
-        rt.register_function(core)
-        env.globals[fun.name] = fun
-        if core.ident != fun.name:
-            # TODO: should we allow name mangling?
-            # also register the function under its ident
-            core.ident = fun.name # UNSAFE: stateful
-            rt.register_function(core)
-
     # convert back to FPCore
     core2 = comp.compile(fun)
+
+    # register the function
+    if core.ident is not None:
+        print('registering', core.ident)
+        rt.register_function(core)
+        env.globals[fun.name] = fun
+        # if core.ident != fun.name:
+            # TODO: should we allow name mangling?
+            # also register the function under its ident
+            # core.ident = fun.name # UNSAFE: stateful
+            # print('registering', core.ident)
+            # rt.register_function(core)
+
+        if core2.ident is not None and core2.ident != core.ident:
+            # if the ident has changed, we need to register it again
+            print('registering', core2.ident)
+            rt.register_function(core2)
+
+    print(core, '\n', core2)
 
     # apply filter
     if core.name in _skip_cores or core.ident in _skip_cores:
@@ -80,7 +89,6 @@ def eval(
 
     print('evaluating', core.name, 'with', len(inputs), 'inputs', end='')
     print(fun.format())
-    print(core, '\n', core2)
 
     # evaluate both FPy and FPCore functions
     for input in inputs:
