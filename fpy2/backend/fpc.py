@@ -2,14 +2,14 @@
 
 from typing import Optional
 
-import titanfp.fpbench.fpcast as fpc 
+import titanfp.fpbench.fpcast as fpc
 
 from ..analysis import DefineUse, DefineUseAnalysis
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..number import Context
-from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
+from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend
@@ -53,6 +53,8 @@ _unary_table: dict[type[UnaryOp], type[fpc.Expr]] = {
     IsNormal: fpc.Isnormal,
     Signbit: fpc.Signbit,
     Not: fpc.Not,
+    # rounding
+    Cast: fpc.Cast,
 }
 
 _binary_table: dict[type[BinaryOp], type[fpc.Expr]] = {
@@ -114,12 +116,22 @@ class FPCoreCompileInstance(Visitor):
         assert isinstance(f, fpc.FPCore), 'unexpected result type'
         return f
 
-    def _compile_arg(self, arg: Argument):
+    def _compile_arg(self, arg: Argument) -> tuple[str, dict, list[int | str] | None]:
         match arg.type:
+            case AnyTypeAnn() | None:
+                return str(arg.name), {}, None
             case RealTypeAnn():
-                return arg.name, None, None
-            case AnyTypeAnn():
-                return arg.name, None, None
+                return str(arg.name), {}, None
+            case SizedTensorTypeAnn():
+                dims: list[int | str] = []
+                for dim in arg.type.dims:
+                    if isinstance(dim, int):
+                        dims.append(dim)
+                    elif isinstance(dim, NamedId):
+                        dims.append(str(dim))
+                    else:
+                        raise FPCoreCompileError('unexpected dimension type', dim)
+                return str(arg.name), {}, dims
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)
 
@@ -168,27 +180,27 @@ class FPCoreCompileInstance(Visitor):
         return fpc.Decnum(e.val)
 
     def _visit_hexnum(self, e: Hexnum, ctx: None):
-        raise fpc.Hexnum(e.val)
+        return fpc.Hexnum(e.val)
 
     def _visit_integer(self, e: Integer, ctx: None) -> fpc.Expr:
         return fpc.Integer(e.val)
 
     def _visit_rational(self, e: Rational, ctx: None):
-        raise fpc.Rational(e.p, e.q)
+        return fpc.Rational(e.p, e.q)
 
     def _visit_constant(self, e: Constant, ctx: None):
-        raise fpc.Constant(e.val)
+        return fpc.Constant(e.val)
 
     def _visit_digits(self, e: Digits, ctx: None) -> fpc.Expr:
         return fpc.Digits(e.m, e.e, e.b)
 
     def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
         args = [self._visit_expr(c, ctx) for c in e.args]
-        return fpc.UnknownOperator(e.name, *args)
+        return fpc.UnknownOperator(*args, name=e.name)
 
     def _visit_range(self, arg: Expr, ctx: None) -> fpc.Expr:
         # expand range expression
-        tuple_id = 'i' # only identifier in scope => no need for uniqueness
+        tuple_id = str(self.gensym.fresh('i'))
         size = self._visit_expr(arg, ctx)
         return fpc.Tensor([(tuple_id, size)], fpc.Var(tuple_id))
 
@@ -206,8 +218,8 @@ class FPCoreCompileInstance(Visitor):
         #  (let ([t <tuple>])
         #    (tensor ([i (dim t)])
         #      (size t i)])))
-        tuple_id = 't' # only identifier in scope => no need for uniqueness
-        iter_id = 'i' # only identifier in scope => no need for uniqueness
+        tuple_id = str(self.gensym.fresh('t'))
+        iter_id = str(self.gensym.fresh('i'))
         tup = self._visit_expr(arr, ctx)
         return fpc.Let(
             [(tuple_id, tup)],
@@ -350,11 +362,11 @@ class FPCoreCompileInstance(Visitor):
         tensor_dims = [(iter_id, _size0_expr(tuple_id))]
         # generate if expression
         cond_expr = fpc.EQ(fpc.Var(iter_id), fpc.Var(idx_id))
-        iff_expr = fpc.Ref(fpc.Var(tuple_id), fpc.Var(idx_id))
+        iff_expr = fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id))
         if len(idx_ids) == 1:
             ift_expr = fpc.Var(val_id)
         else:
-            let_bindings = [(tuple_id, fpc.Ref(fpc.Var(tuple_id), fpc.Var(idx_id)))]
+            let_bindings = [(tuple_id, fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))]
             rec_expr = self._generate_tuple_set(tuple_id, iter_id, idx_ids[1:], val_id)
             ift_expr = fpc.Let(let_bindings, rec_expr)
         if_expr = fpc.If(cond_expr, ift_expr, iff_expr)
@@ -429,7 +441,7 @@ class FPCoreCompileInstance(Visitor):
                     ref_bindings = self._compile_tuple_binding(tuple_id, target, [fpc.Var(iter_id)])
                 case _:
                     raise RuntimeError('unreachable', target)
-            return fpc.Let(let_bindings, fpc.Tensor(tensor_dims, fpc.Let(ref_bindings, elt)))
+            return fpc.Let(let_bindings, fpc.Tensor(tensor_dims, fpc.LetStar(ref_bindings, elt)))
         else:
             # hard case:
             # (let ([t0 <iterable>] ...)
@@ -485,7 +497,7 @@ class FPCoreCompileInstance(Visitor):
             # element expression
             elt = self._visit_expr(e.elt, ctx)
             # compose the expression
-            tensor_expr = fpc.Tensor([(iter_id, iter_expr)], fpc.Let(idx_binds, fpc.Let(ref_binds, elt)))
+            tensor_expr = fpc.Tensor([(iter_id, iter_expr)], fpc.LetStar(idx_binds, fpc.LetStar(ref_binds, elt)))
             return fpc.Let(tuple_binds, fpc.Let(size_binds, tensor_expr))
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> fpc.Expr:
@@ -503,18 +515,83 @@ class FPCoreCompileInstance(Visitor):
                 tuple_id = str(self.gensym.fresh('t'))
                 tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
                 destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
-                return fpc.Let([tuple_bind] + destruct_bindings, ctx)
+                return fpc.LetStar([tuple_bind] + destruct_bindings, ctx)
             case _:
                 raise RuntimeError('unreachable', stmt.binding)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: None):
-        raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
+    def _visit_if1(self, stmt: If1Stmt, ret: fpc.Expr):
+        # check that only one variable is mutated in the loop
+        # the `IfBundling` pass is required to ensure this
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
+        num_mutated = len(mutated)
 
-    def _visit_if(self, stmt: IfStmt, ctx: None):
-        raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
+        if num_mutated == 0:
+            # no mutated variables (if block with no side effect)
+            # still want to return a valid FPCore
+            # (let ([_ (if <cond> (begin <body> 0) 0)]) <ret>)
+            cond = self._visit_expr(stmt.cond, None)
+            body = self._visit_block(stmt.body, fpc.Integer(0))
+            # return the if expression
+            return fpc.Let([('_', fpc.If(cond, body, fpc.Integer(0)))], ret)
+        elif num_mutated == 1:
+            # exactly one mutated variable
+            # the mutated variable is the loop variable
+            # (let ([<mut> (if <cond> (begin <body> <mut>) <mut>)]) <ret>)
+            mut_id = str(mutated.pop())
+            cond = self._visit_expr(stmt.cond, None)
+            body = self._visit_block(stmt.body, fpc.Var(mut_id))
+            # return the if expression
+            return fpc.Let([(mut_id, fpc.If(cond, body, fpc.Var(mut_id)))], ret)
+        else:
+            # more than one mutated variable
+            # cannot compile to FPCore
+            raise FPCoreCompileError(f'if statements cannot have more than 1 mutated variable: {list(mutated)}')
+
+    def _visit_if(self, stmt: IfStmt, ret: fpc.Expr):
+        # check that only one variable is mutated in the loop
+        # the `IfBundling` pass is required to ensure this
+        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
+        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
+        mutated_ift = defs_in_ift.mutated_in(defs_out_ift)
+        mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
+        mutated  = list(dict.fromkeys(mutated_ift + mutated_iff)) # union with ordering
+
+        # identify variables that were introduced in each body
+        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
+        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
+        intros = list(intros_ift & intros_iff) # intersection of fresh variables
+
+        # mutated or introduced variables
+        changed = mutated + intros
+        num_changed = len(changed)
+
+        if num_changed == 0:
+            # no variables mutated or introduced (block has no side effects)
+            # still want to return a valid FPCore
+            # (let ([_ (if <cond> (begin <ift> 0) (begin <iff> 0))]) <ret>)
+            cond = self._visit_expr(stmt.cond, None)
+            ift = self._visit_block(stmt.ift, fpc.Integer(0))
+            iff = self._visit_block(stmt.iff, fpc.Integer(0))
+            # return the if expression
+            return fpc.Let([('_', fpc.If(cond, ift, iff))], ret)
+        elif num_changed == 1:
+            # exactly one variable mutated or introduced
+            # the mutated variable is the loop variable
+            # (let ([<mut> (if <cond> (begin <ift> <mut>) (begin <iff> <mut>))]) <ret>)
+            mut_id = str(changed[0])
+            cond = self._visit_expr(stmt.cond, None)
+            ift = self._visit_block(stmt.ift, fpc.Var(mut_id))
+            iff = self._visit_block(stmt.iff, fpc.Var(mut_id))
+            # return the if expression
+            return fpc.Let([(mut_id, fpc.If(cond, ift, iff))], ret)
+        else:
+            # more than one mutated or introduced variable
+            # cannot compile to FPCore
+            raise FPCoreCompileError(f'if statements cannot have more than 1 mutated or introduced variable: {list(changed)}')
 
     def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr):
         # check that only one variable is mutated in the loop
@@ -549,23 +626,26 @@ class FPCoreCompileInstance(Visitor):
         mutated = defs_in.mutated_in(defs_out)
         num_mutated = len(mutated)
 
+        if not isinstance(stmt.target, Id):
+            raise FPCoreCompileError(f'for loops must have a single target: {stmt.target} ')
+        idx_id = str(stmt.target)
+
         if num_mutated == 0:
             # no mutated variables (loop with no side effect)
             # still want to return a valid FPCore
             # (let ([<t> <iterable>])
             #   (for ([<i> (size <t> 0)])
-            #        ([_ 0 (let ([_ <body>]) 0)])))
+            #        ([<i> 0 (! :precision integer :round toZero (+ i 1)_])
+            #         [_ 0 (let ([_ <body>]) 0)])))
             #        <ret>))
             tuple_id = str(self.gensym.fresh('t'))
-            idx_id = str(self.gensym.fresh('i'))
-
             iterable = self._visit_expr(stmt.iterable, None)
             body = self._visit_block(stmt.body, fpc.Integer(0))
             return fpc.Let(
                 [(tuple_id, iterable)],
                 fpc.For(
                     [(idx_id, _size0_expr(tuple_id))],
-                    [(('_', fpc.Integer(0), body))],
+                    [('_', fpc.Integer(0), body)],
                     ret
             ))
         else:
@@ -573,12 +653,10 @@ class FPCoreCompileInstance(Visitor):
             # the mutated variable is the loop variable
             # (let ([<t> <iterable>])
             #   (for ([<i> (size <t> 0)])
-            #        ([<loop> <loop> (let ([_ <body>]) <loop>)])))
+            #         [<loop> <loop> (let ([_ <body>]) <loop>)])))
             #        <ret>))
             loop_id = str(mutated.pop())
             tuple_id = str(self.gensym.fresh('t'))
-            idx_id = str(self.gensym.fresh('i'))
-
             iterable = self._visit_expr(stmt.iterable, None)
             body = self._visit_block(stmt.body, fpc.Var(loop_id))
             return fpc.Let(
@@ -592,6 +670,19 @@ class FPCoreCompileInstance(Visitor):
 
     def _visit_context_expr(self, e: ContextExpr, ctx: None):
         raise RuntimeError('do not call')
+
+    def _visit_data(self, data):
+        match data:
+            case int():
+                return fpc.Integer(data)
+            case str():
+                return fpc.Var(data)
+            case tuple() | list():
+                return tuple(self._visit_data(d) for d in data)
+            case Expr():
+                return self._visit_expr(data, None)
+            case _:
+                raise NotImplementedError(repr(data))
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         body = self._visit_block(stmt.body, ctx)
@@ -612,6 +703,10 @@ class FPCoreCompileInstance(Visitor):
                 props = val.props
             case _:
                 raise FPCoreCompileError('Expected `Context` or `FPCoreContext`', val)
+
+        # transform properties
+        for k in props:
+            props[k] = fpc.Data(self._visit_data(props[k]))
         return fpc.Ctx(props, body)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
@@ -655,8 +750,13 @@ class FPCoreCompileInstance(Visitor):
                     raise RuntimeError('unreachable', func.ctx)
             props.update(fpc_ctx.props)
 
-        # TODO: parse datas
+        # function identifier
         ident = func.name
+
+        # transform properties
+        props = { k: fpc.Data(self._visit_data(v)) for k, v in props.items() }
+
+        # special properties
         name = props.get('name')
         pre = props.get('pre')
         spec = props.get('spec')
@@ -689,7 +789,7 @@ class FPCoreCompiler(Backend):
         ast = ForUnpack.apply(ast)
         ast = ForBundling.apply(ast)
         ast = WhileBundling.apply(ast)
-        ast = SimplifyIf.apply(ast)
+        ast = IfBundling.apply(ast)
         # compile
         def_use = DefineUse.analyze(ast)
         return FPCoreCompileInstance(ast, def_use).compile()

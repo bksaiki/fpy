@@ -80,7 +80,7 @@ class RenameTarget:
         ast = _RenameTargetInstance(func, rename).apply()
         if not isinstance(ast, FuncDef):
             raise TypeError(f"Expected \'FuncDef\' for {ast}, got {type(ast)}")
-        SyntaxCheck.check(ast)
+        SyntaxCheck.check(ast, ignore_unknown=True)
         return ast
 
     @staticmethod

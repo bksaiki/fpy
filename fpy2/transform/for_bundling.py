@@ -7,6 +7,7 @@ from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
 
+from .rename_target import RenameTarget
 
 class _ForBundlingInstance(DefaultTransformVisitor):
     """Single-use instance of the ForBundling pass."""
@@ -107,6 +108,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             # compile iterable and body
             iterable = self._visit_expr(stmt.iterable, None)
             body, _ = self._visit_block(stmt.body, None)
+            body = RenameTarget.apply_block(body, rename)
 
             # unpack the tuple at the start of the body
             # replace any variable in the target with `_`
@@ -166,7 +168,10 @@ class ForBundling:
 
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:
+        if not isinstance(func, FuncDef):
+            raise SyntaxCheck(f'Expected \'FuncDef\', got {func}')
+
         def_use = DefineUse.analyze(func)
         ast = _ForBundlingInstance(func, def_use).apply()
-        SyntaxCheck.check(ast)
+        SyntaxCheck.check(ast, ignore_unknown=True)
         return ast

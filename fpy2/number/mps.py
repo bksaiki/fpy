@@ -126,6 +126,11 @@ class MPSContext(OrdinalContext):
             xr = x._real.normalize(self.pmax, self.nmin)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
+    def is_normal(self, x: Float):
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero() and x.e >= self.emin
+
     def round_params(self):
         return (self.pmax, self.nmin)
 

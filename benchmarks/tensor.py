@@ -533,70 +533,70 @@ def vec_add(A, B):
         t0[i] = (A[i] + B[i])
     return t0
 
-# @fpy
-# def lorenz_3d(xyz):
-#     sigma = 10
-#     beta = rational(8, 3)
-#     rho = 28
-#     x = xyz[0]
-#     y = xyz[1]
-#     z = xyz[2]
-#     return ((sigma * (y - x)), ((x * (rho - z)) - y), ((x * y) - (beta * z)))
+@fpy
+def lorenz_3d(xyz):
+    sigma = 10
+    beta = rational(8, 3)
+    rho = 28
+    x = xyz[0]
+    y = xyz[1]
+    z = xyz[2]
+    return ((sigma * (y - x)), ((x * (rho - z)) - y), ((x * y) - (beta * z)))
 
-# @fpy
-# def forward_euler_3d(xyz, h):
-#     k1 = vec_scale(target_3d(xyz), h)
-#     return vec_add(xyz, k1)
+@fpy
+def forward_euler_3d(xyz, h):
+    k1 = vec_scale(target_3d(xyz), h)
+    return vec_add(xyz, k1)
 
-# @fpy
-# def midpoint_3d(xyz, h):
-#     k1 = vec_scale(target_3d(xyz), h)
-#     k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(1, 2)))), h)
-#     return vec_add(xyz, k2)
+@fpy
+def midpoint_3d(xyz, h):
+    k1 = vec_scale(target_3d(xyz), h)
+    k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(1, 2)))), h)
+    return vec_add(xyz, k2)
 
-# @fpy
-# def ralston_3d(xyz, h):
-#     k1 = vec_scale(target_3d(xyz), h)
-#     k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(2, 3)))), h)
-#     t = 3
-#     t0 = [0 for _ in range(t)]
-#     for i in range(t):
-#         t0[i] = (xyz[i] + (rational(1, 4) * (k1[i] + (k2[i] * 3))))
-#     return t0
+@fpy
+def ralston_3d(xyz, h):
+    k1 = vec_scale(target_3d(xyz), h)
+    k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(2, 3)))), h)
+    t = 3
+    t0 = [0 for _ in range(t)]
+    for i in range(t):
+        t0[i] = (xyz[i] + (rational(1, 4) * (k1[i] + (k2[i] * 3))))
+    return t0
 
-# @fpy
-# def rk4_step_3d(xyz, h):
-#     k1 = vec_scale(target_3d(xyz), h)
-#     k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(1, 2)))), h)
-#     k3 = vec_scale(target_3d(vec_add(xyz, vec_scale(k2, rational(1, 2)))), h)
-#     k4 = vec_scale(target_3d(vec_add(xyz, k3)), h)
-#     t = 3
-#     t0 = [0 for _ in range(t)]
-#     for i in range(t):
-#         t0[i] = (xyz[i] + (rational(1, 6) * (((k1[i] + (k2[i] * 2)) + (k3[i] * 2)) + k4[i])))
-#     return t0
+@fpy
+def rk4_step_3d(xyz, h):
+    k1 = vec_scale(target_3d(xyz), h)
+    k2 = vec_scale(target_3d(vec_add(xyz, vec_scale(k1, rational(1, 2)))), h)
+    k3 = vec_scale(target_3d(vec_add(xyz, vec_scale(k2, rational(1, 2)))), h)
+    k4 = vec_scale(target_3d(vec_add(xyz, k3)), h)
+    t = 3
+    t0 = [0 for _ in range(t)]
+    for i in range(t):
+        t0[i] = (xyz[i] + (rational(1, 6) * (((k1[i] + (k2[i] * 2)) + (k3[i] * 2)) + k4[i])))
+    return t0
 
-# @fpy
-# def target_3d(xyz):
-#     return lorenz_3d(xyz)
+@fpy
+def target_3d(xyz):
+    return lorenz_3d(xyz)
 
-# @fpy
-# def step_3d(xyz, h):
-#     return rk4_step_3d(xyz, h)
+@fpy
+def step_3d(xyz, h):
+    return rk4_step_3d(xyz, h)
 
-# @fpy
-# def rk4_3d_run(initial_conditions, h, steps):
-#     t = steps
-#     xyz = initial_conditions
-#     t0 = [0 for _ in range(t)]
-#     for step in range(t):
-#         t0[step] = xyz
-#         xyz = step_3d(xyz, h)
-#     return t0
+@fpy
+def rk4_3d_run(initial_conditions, h, steps):
+    t = steps
+    xyz = initial_conditions
+    t0 = [0 for _ in range(t)]
+    for step in range(t):
+        t0[step] = xyz
+        xyz = step_3d(xyz, h)
+    return t0
 
-# @fpy
-# def main():
-#     return rk4_3d_run((1, 1, 1), .02, 685)
+@fpy
+def main():
+    return rk4_3d_run((1, 1, 1), .02, 685)
 
 @fpy
 def sum_1d(A):

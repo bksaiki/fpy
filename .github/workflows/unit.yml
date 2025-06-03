@@ -102,6 +102,6 @@ jobs:
       - name: Install
         run: pip install -e .[dev]
       - name: Tests (unit)
-        run: python3 -m tests.unit
+        run: python3 -m tests.infra.unit
       - name: Tests (FPCore)
-        run: python3 -m tests.fpbench
+        run: python3 -m tests.infra.fpbench

@@ -87,10 +87,10 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
 
         # identify variables that were introduced in the bodies
-        # FPy semantics says they must be introduces in both branches
+        # FPy semantics says they must be introduced in both branches
         intros_ift = defs_in_ift.fresh_in(defs_out_ift)
         intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        intros = intros_ift & intros_iff
+        intros = list(intros_ift & intros_iff) # intersection of fresh variables
 
         # combine sets
         mutated_or_new_ift = mutated_ift.copy()
@@ -181,6 +181,5 @@ class SimplifyIf:
         def_use = DefineUse.analyze(func)
         ast, new_ids = _SimplifyIfInstance(func, def_use).apply()
         ast = CopyPropagate.apply(ast, names=new_ids)
-        print(ast.format())
-        SyntaxCheck.check(ast)
+        SyntaxCheck.check(ast, ignore_unknown=True)
         return ast

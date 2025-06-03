@@ -80,9 +80,12 @@ _ternary_table: dict[str, type[TernaryOp]] = {
 }
 
 def _zeros(ns: list[Expr]) -> Expr:
-    vars = [UnderscoreId() for _ in ns]
-    args = [Range(n, None) for n in ns]
-    return CompExpr(vars, args, Integer(0, None), None)
+    assert len(ns) >= 1
+    v: Expr = Integer(0, None)
+    for n in reversed(ns):
+        v = CompExpr([UnderscoreId()], [Range(n, None)], v, None)
+    return v
+
 
 # TODO: clean this up
 class _Ctx:
@@ -141,7 +144,7 @@ class _FPCore2FPy:
         return Hexnum(str(e.value), None)
 
     def _visit_integer(self, e: fpc.Integer, ctx: _Ctx) -> Expr:
-        return Integer(e.value, None)
+        return Integer(int(e.value), None)
 
     def _visit_rational(self, e: fpc.Rational, ctx: _Ctx) -> Expr:
         return Rational(e.p, e.q, None)
@@ -392,9 +395,9 @@ class _FPCore2FPy:
         # <t> = zeros(<n0>, ...)
         # for <i0> in range(<n0>):
         #    ...
-        #      t[<i0>, ...] = <body>
         #      <x0> = <update0>
         #      ...
+        #      t[<i0>, ...] = <body>
         #
 
         # bind iteration bounds to temporaries
@@ -435,11 +438,6 @@ class _FPCore2FPy:
         loop_stmts = self._make_tensor_body(iter_vars, bound_vars, ctx.stmts)
         loop_ctx = _Ctx(env=loop_env, props=ctx.props, stmts=loop_stmts)
 
-        # set tensor element
-        body_e = self._visit(e.body, loop_ctx)
-        stmt = IndexedAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
-        loop_stmts.append(stmt)
-
         # compile loop updates
         for var, _, update in e.while_bindings:
             # compile value
@@ -448,6 +446,11 @@ class _FPCore2FPy:
             t = loop_ctx.env[var]
             stmt = Assign(t, None, update_e, None)
             loop_stmts.append(stmt)
+
+        # set tensor element
+        body_e = self._visit(e.body, loop_ctx)
+        stmt = IndexedAssign(tuple_id, [Var(v, None) for v in iter_vars], body_e, None)
+        loop_stmts.append(stmt)
 
         return Var(tuple_id, None)
 
@@ -670,28 +673,40 @@ class _FPCore2FPy:
         # compile arguments
         args: list[Argument] = []
         for name, _, shape in f.inputs:
-            # TODO: argument properties and shape
             t = self.gensym.fresh(name)
-            arg = Argument(t, None, None)
-            args.append(arg)
-            ctx.env[name] = t
+            match shape:
+                case tuple() | list():
+                    # tensor argument
+                    dims: list[int | NamedId] = []
+                    dim_ids: list[Id] = []
+                    for dim in shape:
+                        if isinstance(dim, str):
+                            d = self.gensym.fresh(dim)
+                            dims.append(d)
+                            dim_ids.append(d)
+                        else:
+                            dims.append(dim)
+                            dim_ids.append(UnderscoreId())
 
-            if shape is not None and any(isinstance(dim, str) for dim in shape):
-                dim_ids: list[Id] = []
-                for dim in shape:
-                    if isinstance(dim, str):
-                        d = self.gensym.fresh(dim)
-                        dim_ids.append(d)
-                    else:
-                        dim_ids.append(UnderscoreId())
+                    arg = Argument(t, SizedTensorTypeAnn(dims, AnyTypeAnn(None), None), None)
+                    args.append(arg)
+                    ctx.env[name] = t
 
-                shape_e = Shape(Var(t, None), None)
-                stmt = Assign(TupleBinding(dim_ids, None), None, shape_e, None)
-                ctx.stmts.append(stmt)
-                for dim, dim_id in zip(shape, dim_ids):
-                    if isinstance(dim, str):
-                        assert isinstance(dim_id, NamedId), "must be a NamedId"
-                        ctx.env[dim] = dim_id
+                    # bind tensor dimensions
+                    shape_e = Shape(Var(t, None), None)
+                    stmt = Assign(TupleBinding(dim_ids, None), None, shape_e, None)
+                    ctx.stmts.append(stmt)
+                    for dim, dim_id in zip(shape, dim_ids):
+                        if isinstance(dim, str):
+                            assert isinstance(dim_id, NamedId), "must be a NamedId"
+                            ctx.env[dim] = dim_id
+                case None:
+                    # scalar argument
+                    arg = Argument(t, None, None)
+                    args.append(arg)
+                    ctx.env[name] = t
+                case _:
+                    raise RuntimeError(f'unsupported shape {shape} for argument {name}')
 
         # compile 
         props = self._visit_props(f.props, ctx)

@@ -30,20 +30,19 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = NDArray | tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
-def _isfinite(x: Float, _: Context) -> bool:
+def _isfinite(x: Float, ctx: Context) -> bool:
     return x.is_finite()
 
-def _isinf(x: Float, _: Context) -> bool:
+def _isinf(x: Float, ctx: Context) -> bool:
     return x.isinf
 
-def _isnan(x: Float, _: Context) -> bool:
+def _isnan(x: Float, ctx: Context) -> bool:
     return x.isnan
 
-def _isnormal(x: Float, _: Context) -> bool:
-    # TODO: should all Floats have this property?
-    return True
+def _isnormal(x: Float, ctx: Context) -> bool:
+    return x.is_normal()
 
-def _signbit(x: Float, _: Context) -> bool:
+def _signbit(x: Float, ctx: Context) -> bool:
     # TODO: should all Floats have this property?
     return x.s
 
@@ -178,7 +177,7 @@ class _Interpreter(DefaultVisitor):
         # process arguments and add to environment
         for val, arg in zip(args, func.args):
             match arg.type:
-                case AnyTypeAnn():
+                case AnyTypeAnn() | None:
                     x = self._arg_to_mpmf(val, eval_ctx)
                     if isinstance(arg.name, NamedId):
                         eval_ctx.env[arg.name] = x
@@ -186,6 +185,13 @@ class _Interpreter(DefaultVisitor):
                     x = self._arg_to_mpmf(val, eval_ctx)
                     if not isinstance(x, Float):
                         raise NotImplementedError(f'argument is a scalar, got data {val}')
+                    if isinstance(arg.name, NamedId):
+                        eval_ctx.env[arg.name] = x
+                case TensorTypeAnn():
+                    # TODO: check shape
+                    x = self._arg_to_mpmf(val, eval_ctx)
+                    if not isinstance(x, NDArray):
+                        raise NotImplementedError(f'argument is a tensor, got data {val}')
                     if isinstance(arg.name, NamedId):
                         eval_ctx.env[arg.name] = x
                 case _:
@@ -295,11 +301,12 @@ class _Interpreter(DefaultVisitor):
             raise TypeError(f'expected a real number argument, got {stop}')
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
+        n = int(stop)
 
         elts: list[Float] = []
-        for i in range(int(stop)):
+        for i in range(n):
             elts.append(Float.from_int(i, ctx=ctx.round_ctx))
-        return NDArray(elts)
+        return NDArray(elts, shape=(n,))
 
     def _apply_dim(self, arg: Expr, ctx: _EvalCtx):
         v = self._visit_expr(arg, ctx)
@@ -479,8 +486,6 @@ class _Interpreter(DefaultVisitor):
                         ctx.env[target] = val
                     case TupleBinding():
                         self._unpack_tuple(target, val, ctx)
-                    case _:
-                        raise RuntimeError('unreachable', target)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
     def _visit_comp_expr(self, e: CompExpr, ctx: _EvalCtx):

@@ -161,6 +161,11 @@ class MPFContext(Context):
 
         return Float(exp=exp, c=c, x=x, ctx=self)
 
+    def is_normal(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero()
+
     def round_params(self):
         return None, self.nmin
 
@@ -177,23 +182,28 @@ class MPFContext(Context):
             n = max(n, self.nmin)
 
         # step 1. handle special values
-        if isinstance(x, Float):
-            if x.isnan:
-                if self.enable_nan:
-                    return Float(isnan=True, ctx=self)
-                elif self.nan_value is None:
-                    raise ValueError('Cannot round NaN under this context')
+        match x:
+            case Float():
+                if x.isnan:
+                    if self.enable_nan:
+                        return Float(isnan=True, ctx=self)
+                    elif self.nan_value is None:
+                        raise ValueError('Cannot round NaN under this context')
+                    else:
+                        return Float(x=self.nan_value, ctx=self)
+                elif x.isinf:
+                    if self.enable_inf:
+                        return Float(isinf=True, ctx=self)
+                    elif self.inf_value is None:
+                        raise ValueError('Cannot round infinity under this context')
+                    else:
+                        return Float(x=self.inf_value, ctx=self)
                 else:
-                    return Float(x=self.nan_value, ctx=self)
-            elif x.isinf:
-                if self.enable_inf:
-                    return Float(isinf=True, ctx=self)
-                elif self.inf_value is None:
-                    raise ValueError('Cannot round infinity under this context')
-                else:
-                    return Float(x=self.inf_value, ctx=self)
-            else:
-                xr = x._real
+                    xr = x._real
+            case RealFloat():
+                xr = x
+            case _:
+                raise RuntimeError(f'unreachable {x}')
 
         # step 2. shortcut for exact zero values
         if xr.is_zero():
@@ -201,7 +211,8 @@ class MPFContext(Context):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        return xr.round(min_n=n, rm=self.rm)
+        xr = xr.round(min_n=n, rm=self.rm)
+        return Float(x=xr, ctx=self)
 
     def _round_at(self, x, n: Optional[int]) -> Float:
         match x:

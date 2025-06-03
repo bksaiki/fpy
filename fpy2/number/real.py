@@ -35,6 +35,11 @@ class RealContext(Context):
     def normalize(self, x: Float) -> Float:
         return Float(x=x, ctx=self)
 
+    def is_normal(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero()
+
     def round_params(self):
         return (None, None)
 

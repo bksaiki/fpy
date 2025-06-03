@@ -73,3 +73,31 @@ from .utils import (
     decnum_to_fraction as decnum,
     hexnum_to_fraction as hexnum,
 )
+
+###########################################################
+# typing hints
+
+import typing
+
+from typing import Literal as Dim
+
+_Dims = typing.TypeVarTuple('_Dims')
+_DType = typing.TypeVar('_DType')
+
+class Tensor(tuple, typing.Generic[*_Dims, _DType]):
+    """
+    FPy type hint for a homogenous tensor object::
+
+        from fpy2 import Tensor, Real
+        from typing import TypeAlias
+
+        MatrixN: TypeAlias = Tensor[Literal['N', 'N'], Real]
+        Matrix3: TypeAlias = Tensor[Literal[3, 3], Real]
+
+    Tensors have fixed or symbolic sizes and a uniform scalar data type.
+
+    Values of this type should not be constructed directly.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)

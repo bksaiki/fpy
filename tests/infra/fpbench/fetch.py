@@ -23,6 +23,10 @@ class FPBenchCores:
     benchmark_cores: list[FPCore]
     tensor_cores: list[FPCore]
 
+    def all_cores(self) -> list[FPCore]:
+        return (self.sanity_cores + self.tests_cores +
+                self.benchmark_cores + self.tensor_cores)
+
 def fetch_cores():
     sanity_cores = read_dir(sanity_dir)
     tests_cores = read_dir(tests_dir)
