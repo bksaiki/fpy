@@ -87,10 +87,11 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
 
         # identify variables that were introduced in the bodies
-        # FPy semantics says they must be introduces in both branches
+        # FPy semantics says they must be introduced in both branches
         intros_ift = defs_in_ift.fresh_in(defs_out_ift)
         intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        intros = intros_ift & intros_iff
+        assert intros_ift == intros_iff # sanity check the property
+        intros = intros_ift
 
         # combine sets
         mutated_or_new_ift = mutated_ift.copy()

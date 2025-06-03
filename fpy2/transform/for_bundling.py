@@ -168,6 +168,9 @@ class ForBundling:
 
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:
+        if not isinstance(func, FuncDef):
+            raise SyntaxCheck(f'Expected \'FuncDef\', got {func}')
+
         def_use = DefineUse.analyze(func)
         ast = _ForBundlingInstance(func, def_use).apply()
         SyntaxCheck.check(ast, ignore_unknown=True)

@@ -9,7 +9,7 @@ from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..number import Context
-from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, SimplifyIf, WhileBundling
+from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend
@@ -522,10 +522,36 @@ class FPCoreCompileInstance(Visitor):
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: None):
-        raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
+    def _visit_if1(self, stmt: If1Stmt, ret: fpc.Expr):
+        # check that only one variable is mutated in the loop
+        # the `IfBundling` pass is required to ensure this
+        defs_in, defs_out = self.def_use.blocks[stmt.body]
+        mutated = defs_in.mutated_in(defs_out)
+        num_mutated = len(mutated)
 
-    def _visit_if(self, stmt: IfStmt, ctx: None):
+        if num_mutated == 0:
+            # no mutated variables (if block with no side effect)
+            # still want to return a valid FPCore
+            # (let ([_ (if <cond> (begin <body> 0) 0)]) <ret>)
+            cond = self._visit_expr(stmt.cond, None)
+            body = self._visit_block(stmt.body, fpc.Integer(0))
+            # return the if expression
+            return fpc.Let([('_', fpc.If(cond, body, fpc.Integer(0)))], ret)
+        elif num_mutated == 1:
+            # exactly one mutated variable
+            # the mutated variable is the loop variable
+            # (let ([<mut> (if <cond> (begin <body> <mut>) <mut>)]) <ret>)
+            mut_id = str(mutated.pop())
+            cond = self._visit_expr(stmt.cond, None)
+            body = self._visit_block(stmt.body, fpc.Var(mut_id))
+            # return the if expression
+            return fpc.Let([(mut_id, fpc.If(cond, body, fpc.Var(mut_id)))], ret)
+        else:
+            # more than one mutated variable
+            # cannot compile to FPCore
+            raise FPCoreCompileError(f'if statements cannot have more than 1 mutated variable: {list(mutated)}')
+
+    def _visit_if(self, stmt: IfStmt, ret: fpc.Expr):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
 
     def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr):
@@ -724,7 +750,7 @@ class FPCoreCompiler(Backend):
         ast = ForUnpack.apply(ast)
         ast = ForBundling.apply(ast)
         ast = WhileBundling.apply(ast)
-        ast = SimplifyIf.apply(ast)
+        ast = IfBundling.apply(ast)
         # compile
         def_use = DefineUse.analyze(ast)
         print(ast.format())

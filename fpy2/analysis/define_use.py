@@ -81,6 +81,11 @@ class DefineUseAnalysis:
         """Default analysis with empty definitions and uses"""
         return DefineUseAnalysis({}, {}, {}, {})
 
+    @property
+    def names(self) -> set[NamedId]:
+        """Returns the set of all variable names in the analysis"""
+        return set(self.defs.keys())
+
 
 class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""

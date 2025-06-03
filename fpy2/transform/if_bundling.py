@@ -1,6 +1,6 @@
 """
-Transformation pass to bundle updated variables in while loops
-into a single variable.
+Transformation pass to pack mutated variables in an if statement
+into a single mutated variable.
 """
 
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
@@ -12,8 +12,8 @@ from .rename_target import RenameTarget
 
 _Ctx = dict[NamedId, Expr]
 
-class _WhileBundlingInstance(DefaultTransformVisitor):
-    """Single-use instance of the WhileBundling pass."""
+class _IfBundlingInstance(DefaultTransformVisitor):
+    """Single-use instance of the IfBundling pass."""
     func: FuncDef
     def_use: DefineUseAnalysis
     gensym: Gensym
@@ -21,7 +21,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
+        self.gensym = Gensym(reserved=def_use.names)
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})
@@ -32,21 +32,20 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
         else:
             return Var(e.name, e.loc)
 
-    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx) -> StmtBlock:
-        # let x_0, ..., x_N be variables mutated in the while loop
+    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx) -> StmtBlock:
+        # let x_0, ..., x_N be variables mutated in the if statement body
         # let x_0', ..., x_N', t be fresh variables
         #
-        # The transformation is as follows:
         # ```
-        # while <cond>:
-        #    ...
+        # if <cond>:
+        #    <body>
         # ```
         # ==>
         # ```
         # t = (x_0, ..., x_N)
-        # while <cond'>:
+        # if <cond>:
         #     x_0', ..., x_N' = t
-        #     ...
+        #     <body>
         #     t = (x_0', ..., x_N')
         # x_0, ..., x_N = t
         # ```
@@ -87,42 +86,74 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
             s = Assign(t, None, TupleExpr([Var(rename[v], None) for v in mutated], None), None)
             body.stmts.append(s)
 
-            # append the while statement
-            s = WhileStmt(cond, body, None)
+            # append the if statement
+            s = If1Stmt(cond, body, None)
             stmts.append(s)
 
-            # unpack the tuple after the loop
+            # unpack the tuple after the if
             s = Assign(TupleBinding(mutated, None), None, Var(t, None), None)
             stmts.append(s)
 
             return StmtBlock(stmts)
         else:
-            # transformation is not needed
+            # no need to apply the transformation
             cond = self._visit_expr(stmt.cond, ctx)
             body, _ = self._visit_block(stmt.body, ctx)
-            s = WhileStmt(cond, body, None)
+            s = If1Stmt(cond, body, None)
             return StmtBlock([s])
 
+    def _visit_if(self, stmt: IfStmt, ctx: _Ctx) -> StmtBlock:
+        # let x_0, ..., x_N be variables mutated in the if statement bodies
+        # let y_0, ..., y_N be variables introduced in the if statement bodies
+        # let x_0', ..., x_N', t be fresh variables
+        #
+        # ```
+        # if <cond>:
+        #    <ift-body>
+        # else:
+        #    <iff-body>
+        # ```
+        # ==>
+        # ```
+        # t = (x_0, ..., x_N)
+        # if <cond>:
+        #     x_0', ..., x_N' = t
+        #     <ift-body>
+        #     t = (x_0', ..., x_N', y_0, ..., y_N)
+        # else:
+        #     x_0', ..., x_N' = t
+        #     <iff-body>
+        #     t = (x_0', ..., x_N', y_0, ..., y_N)
+        # x_0, ..., x_N, y_0, ..., y_N = t
+        # ```
+        # where `<cond'> := [x_0 -> t[0], ..., x_N -> t[N]] <cond>`
+        # subsitutes for `x_0, ..., x_N` in the condition.
+
+        raise NotImplementedError
 
     def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         stmts: list[Stmt] = []
         for stmt in block.stmts:
-            if isinstance(stmt, WhileStmt):
-                b = self._visit_while(stmt, ctx)
-                stmts.extend(b.stmts)
-            else:
-                stmt, _ = self._visit_statement(stmt, ctx)
-                stmts.append(stmt)
+            match stmt:
+                case If1Stmt():
+                    b = self._visit_if1(stmt, ctx)
+                    stmts.extend(b.stmts)
+                case IfStmt():
+                    b = self._visit_if(stmt, ctx)
+                    stmts.extend(b.stmts)
+                case _:
+                    stmt, _ = self._visit_statement(stmt, ctx)
+                    stmts.append(stmt)
         return StmtBlock(stmts), ctx
 
 
-class WhileBundling:
+class IfBundling:
     """
-    Transformation pass to bundle updated variables in while loops.
+    Transformation pass to pack mutated variables in if statements.
 
-    This pass rewrites the IR to bundle updated variables in while loops
-    into a single variable. This transformation ensures there is only
-    one phi node per while loop.
+    This pass rewrites the AST to pack mutated variables in an if statement
+    into a single mutated variable. This ensures a convenient translation
+    into more functional languages.
     """
 
     @staticmethod
@@ -131,6 +162,6 @@ class WhileBundling:
             raise SyntaxCheck(f'Expected \'FuncDef\', got {func}')
 
         def_use = DefineUse.analyze(func)
-        func = _WhileBundlingInstance(func, def_use).apply()
-        SyntaxCheck.check(func, ignore_unknown=True)
-        return func
+        ast = _IfBundlingInstance(func, def_use).apply()
+        SyntaxCheck.check(ast, ignore_unknown=True)
+        return ast
