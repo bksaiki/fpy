@@ -105,7 +105,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
     def _visit_if(self, stmt: IfStmt, ctx: _Ctx) -> StmtBlock:
         # let x_0, ..., x_N be variables mutated in the if statement bodies
         # let y_0, ..., y_N be variables introduced in the if statement bodies
-        # let x_0', ..., x_N', t be fresh variables
+        # let x_0', ..., x_N', t, t' be fresh variables
         #
         # ```
         # if <cond>:
@@ -119,17 +119,105 @@ class _IfBundlingInstance(DefaultTransformVisitor):
         # if <cond>:
         #     x_0', ..., x_N' = t
         #     <ift-body>
-        #     t = (x_0', ..., x_N', y_0, ..., y_N)
+        #     t' = (x_0', ..., x_N', y_0, ..., y_N)
         # else:
         #     x_0', ..., x_N' = t
         #     <iff-body>
-        #     t = (x_0', ..., x_N', y_0, ..., y_N)
-        # x_0, ..., x_N, y_0, ..., y_N = t
+        #     t' = (x_0', ..., x_N', y_0, ..., y_N)
+        # x_0, ..., x_N, y_0, ..., y_N = t'
         # ```
         # where `<cond'> := [x_0 -> t[0], ..., x_N -> t[N]] <cond>`
         # subsitutes for `x_0, ..., x_N` in the condition.
 
-        raise NotImplementedError
+        stmts: list[Stmt] = []
+
+        # identify variables that were mutated in each body
+        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
+        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
+        mutated_ift = defs_in_ift.mutated_in(defs_out_ift)
+        mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
+        mutated  = list(dict.fromkeys(mutated_ift + mutated_iff)) # union with ordering
+
+        # identify variables that were introduced in each body
+        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
+        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
+        assert intros_ift == intros_iff # sanity check the property
+        intros = list(intros_ift)
+
+        # either mutated or introed
+        changed = mutated + intros
+
+        # fresh variables for each mutated variable
+        rename_mut_ift = { var: self.gensym.refresh(var) for var in mutated }
+        rename_mut_iff = { var: self.gensym.refresh(var) for var in mutated }
+        rename_intro_ift = { var: self.gensym.refresh(var) for var in intros }
+        rename_intro_iff = { var: self.gensym.refresh(var) for var in intros }
+        rename_ift = rename_mut_ift | rename_intro_ift
+        rename_iff = rename_mut_iff | rename_intro_iff
+
+        # compile the bodies
+        ift, _ = self._visit_block(stmt.ift, ctx)
+        iff, _ = self._visit_block(stmt.iff, ctx)
+        ift = RenameTarget.apply_block(ift, rename_ift)
+        iff = RenameTarget.apply_block(iff, rename_iff)
+
+        num_mutated = len(mutated)
+        if num_mutated > 1:
+            # need to insert packed variable `t`
+            t = self.gensym.fresh('t')
+
+            # create a tuple of mutated variables
+            s: Stmt = Assign(t, None, TupleExpr([Var(var, None) for var in mutated], None), None)
+            stmts.append(s)
+
+            # apply substitution to the condition
+            cond_ctx = { var: TupleRef(Var(t, None), (Integer(i, None),), None) for i, var in enumerate(mutated) }
+            cond = self._visit_expr(stmt.cond, cond_ctx)
+
+            # unpack the tuple at the start of each body
+            ift.stmts.insert(0, Assign(TupleBinding([rename_ift[v] for v in mutated], None), None, Var(t, None), None))
+            iff.stmts.insert(0, Assign(TupleBinding([rename_iff[v] for v in mutated], None), None, Var(t, None), None))
+        elif num_mutated == 1:
+            # only a single mutated variable
+            # need to reassign in each body
+
+            # compile the condition
+            cond = self._visit_expr(stmt.cond, ctx)
+
+            # reassign the mutated variable in each body
+            mut = mutated[0]
+            ift.stmts.insert(0, Assign(rename_ift[mut], None, Var(mut, None), None))
+            iff.stmts.insert(0, Assign(rename_iff[mut], None, Var(mut, None), None))
+        else:
+            # compile the condition
+            cond = self._visit_expr(stmt.cond, ctx)
+
+        # append the if statement
+        s = IfStmt(cond, ift, iff, None)
+        stmts.append(s)
+
+        num_changed = len(changed)
+        if num_changed > 1:
+            # need to insert packed variable `t'`
+            t = self.gensym.fresh('t')
+
+            # repack the tuple at the end of each body
+            ift.stmts.append(Assign(t, None, TupleExpr([Var(rename_ift[v], None) for v in mutated + intros], None), None))
+            iff.stmts.append(Assign(t, None, TupleExpr([Var(rename_iff[v], None) for v in mutated + intros], None), None))
+
+            # unpack the tuple after the if statement
+            s = Assign(TupleBinding(mutated + intros, None), None, Var(t, None), None)
+            stmts.append(s)
+        elif num_changed == 1:
+            # need to reassign only mutated/introed variable
+            name = changed[0]
+
+            # reassign the mutated variable at the end of each body
+            ift.stmts.append(Assign(name, None, Var(rename_ift[name], None), None))
+            iff.stmts.append(Assign(name, None, Var(rename_iff[name], None), None))
+
+        return StmtBlock(stmts)
+
 
     def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         stmts: list[Stmt] = []
@@ -163,5 +251,6 @@ class IfBundling:
 
         def_use = DefineUse.analyze(func)
         ast = _IfBundlingInstance(func, def_use).apply()
+        print(ast.format())
         SyntaxCheck.check(ast, ignore_unknown=True)
         return ast

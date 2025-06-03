@@ -116,7 +116,7 @@ class FPCoreCompileInstance(Visitor):
         assert isinstance(f, fpc.FPCore), 'unexpected result type'
         return f
 
-    def _compile_arg(self, arg: Argument) -> tuple[str, dict, tuple[int] | None]:
+    def _compile_arg(self, arg: Argument) -> tuple[str, dict, list[int | str] | None]:
         match arg.type:
             case AnyTypeAnn() | None:
                 return str(arg.name), {}, None
@@ -552,7 +552,46 @@ class FPCoreCompileInstance(Visitor):
             raise FPCoreCompileError(f'if statements cannot have more than 1 mutated variable: {list(mutated)}')
 
     def _visit_if(self, stmt: IfStmt, ret: fpc.Expr):
-        raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
+        # check that only one variable is mutated in the loop
+        # the `IfBundling` pass is required to ensure this
+        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
+        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
+        mutated_ift = defs_in_ift.mutated_in(defs_out_ift)
+        mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
+        mutated  = list(dict.fromkeys(mutated_ift + mutated_iff)) # union with ordering
+
+        # identify variables that were introduced in each body
+        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
+        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
+        intros = list(intros_ift & intros_iff) # intersection of fresh variables
+
+        # mutated or introduced variables
+        changed = mutated + intros
+        num_changed = len(changed)
+
+        if num_changed == 0:
+            # no variables mutated or introduced (block has no side effects)
+            # still want to return a valid FPCore
+            # (let ([_ (if <cond> (begin <ift> 0) (begin <iff> 0))]) <ret>)
+            cond = self._visit_expr(stmt.cond, None)
+            ift = self._visit_block(stmt.ift, fpc.Integer(0))
+            iff = self._visit_block(stmt.iff, fpc.Integer(0))
+            # return the if expression
+            return fpc.Let([('_', fpc.If(cond, ift, iff))], ret)
+        elif num_changed == 1:
+            # exactly one variable mutated or introduced
+            # the mutated variable is the loop variable
+            # (let ([<mut> (if <cond> (begin <ift> <mut>) (begin <iff> <mut>))]) <ret>)
+            mut_id = str(changed[0])
+            cond = self._visit_expr(stmt.cond, None)
+            ift = self._visit_block(stmt.ift, fpc.Var(mut_id))
+            iff = self._visit_block(stmt.iff, fpc.Var(mut_id))
+            # return the if expression
+            return fpc.Let([(mut_id, fpc.If(cond, ift, iff))], ret)
+        else:
+            # more than one mutated or introduced variable
+            # cannot compile to FPCore
+            raise FPCoreCompileError(f'if statements cannot have more than 1 mutated or introduced variable: {list(changed)}')
 
     def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr):
         # check that only one variable is mutated in the loop

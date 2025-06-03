@@ -679,11 +679,11 @@ class TupleExpr(Expr):
 
     def __init__(
         self,
-        args: list[Expr],
+        args: Sequence[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.args = args
+        self.args = list(args)
 
     def is_equiv(self, other) -> bool:
         return (
