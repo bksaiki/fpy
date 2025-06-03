@@ -187,6 +187,13 @@ class _Interpreter(DefaultVisitor):
                         raise NotImplementedError(f'argument is a scalar, got data {val}')
                     if isinstance(arg.name, NamedId):
                         eval_ctx.env[arg.name] = x
+                case TensorTypeAnn():
+                    # TODO: check shape
+                    x = self._arg_to_mpmf(val, eval_ctx)
+                    if not isinstance(x, NDArray):
+                        raise NotImplementedError(f'argument is a tensor, got data {val}')
+                    if isinstance(arg.name, NamedId):
+                        eval_ctx.env[arg.name] = x
                 case _:
                     raise NotImplementedError(f'unknown argument type {arg.type}')
 

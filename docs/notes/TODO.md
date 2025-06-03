@@ -16,6 +16,7 @@ Middle-end:
  - passes:
   - dead code elimination
   - variable renaming
+ - tests for each pass
 
 Backend:
  - fpc:

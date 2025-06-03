@@ -82,7 +82,7 @@ class TensorTypeAnn(TypeAnn):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
-class TupleTypeAnn(TypeAnn):
+class TupleTypeAnn(TensorTypeAnn):
     """FPy AST: native tuple type annotation"""
     elts: list[TypeAnn]
 
@@ -98,7 +98,7 @@ class TupleTypeAnn(TypeAnn):
     def __hash__(self) -> int:
         return hash(tuple(self.elts))
 
-class SizedTensorTypeAnn(TypeAnn):
+class SizedTensorTypeAnn(TensorTypeAnn):
     """FPy AST: sized, homogenous tensor type annotation"""
     dims: list[int | NamedId]
     elt: TypeAnn
