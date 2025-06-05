@@ -41,7 +41,7 @@ _Ctx = tuple[_Env, bool]
 2nd element: whether the current block is at the top-level.
 """
 
-class SyntaxCheckInstance(Visitor):
+class _SyntaxCheckInstance(Visitor):
     """Single-use instance of syntax checking"""
     func: FuncDef
     free_vars: set[NamedId]
@@ -395,5 +395,5 @@ class SyntaxCheck:
         if free_vars is None:
             free_vars = set(func.free_vars)
 
-        inst = SyntaxCheckInstance(func, free_vars, ignore_unknown, ignore_noreturn, allow_wildcard)
+        inst = _SyntaxCheckInstance(func, free_vars, ignore_unknown, ignore_noreturn, allow_wildcard)
         return inst.analyze()

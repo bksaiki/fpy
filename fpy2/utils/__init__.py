@@ -24,3 +24,4 @@ from .iterator import sliding_window
 from .location import Location
 from .ordering import Ordering
 from .string import pythonize_id
+from .unionfind import UnionFind

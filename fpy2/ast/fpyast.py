@@ -103,9 +103,9 @@ class SizedTensorTypeAnn(TensorTypeAnn):
     dims: list[int | Id]
     elt: TypeAnn
 
-    def __init__(self, dims: list[int | Id], elt: TypeAnn, loc: Optional[Location]):
+    def __init__(self, dims: Sequence[int | Id], elt: TypeAnn, loc: Optional[Location]):
         super().__init__(loc)
-        self.dims = dims
+        self.dims = list(dims)
         self.elt = elt
 
     def __eq__(self, other: object) -> bool:

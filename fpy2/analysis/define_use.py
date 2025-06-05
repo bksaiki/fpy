@@ -7,7 +7,12 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
 
-Definition: TypeAlias = Argument | Stmt | CompExpr
+_Site: TypeAlias = Argument | Stmt | CompExpr
+
+@dataclass
+class Definition:
+    id: NamedId
+    site: _Site
 
 @default_repr
 class _DefineUnion:
@@ -106,11 +111,13 @@ class _DefineUseInstance(DefaultVisitor):
                 raise RuntimeError(f'unreachable case: {self.ast}')
         return self.analysis
 
-    def _add_def(self, name: NamedId, definition: Definition):
+    def _add_def(self, name: NamedId, site: _Site):
         if name not in self.analysis.defs:
             self.analysis.defs[name] = set()
+        definition = Definition(name, site)
         self.analysis.defs[name].add(definition)
         self.analysis.uses[definition] = set()
+        return definition
 
     def _add_use(self, name: NamedId, use: Var | IndexedAssign, ctx: DefinitionCtx):
         def_or_union = ctx[name]
@@ -131,15 +138,15 @@ class _DefineUseInstance(DefaultVisitor):
         ctx = ctx.copy()
         for target in e.targets:
             for name in target.names():
-                self._add_def(name, e)
-                ctx[name] = e
+                d = self._add_def(name, e)
+                ctx[name] = d
         self._visit_expr(e.elt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
-            self._add_def(var, stmt)
-            ctx[var] = stmt
+            d = self._add_def(var, stmt)
+            ctx[var] = d
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefinitionCtx):
         self._add_use(stmt.var, stmt, ctx)
@@ -176,12 +183,12 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = ctx.copy()
         match stmt.target:
             case NamedId():
-                self._add_def(stmt.target, stmt)
-                body_ctx[stmt.target] = stmt
+                d = self._add_def(stmt.target, stmt)
+                body_ctx[stmt.target] = d
             case TupleBinding():
                 for var in stmt.target.names():
-                    self._add_def(var, stmt)
-                    body_ctx[var] = stmt
+                    d = self._add_def(var, stmt)
+                    body_ctx[var] = d
 
         body_ctx = self._visit_block(stmt.body, body_ctx)
         # merge contexts along both paths
@@ -204,8 +211,8 @@ class _DefineUseInstance(DefaultVisitor):
     def _visit_function(self, func: FuncDef, ctx: DefinitionCtx):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
-                self._add_def(arg.name, arg)
-                ctx[arg.name] = arg
+                d = self._add_def(arg.name, arg)
+                ctx[arg.name] = d
         self._visit_block(func.body, ctx.copy())
 
 
