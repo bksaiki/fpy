@@ -100,10 +100,10 @@ class TupleTypeAnn(TensorTypeAnn):
 
 class SizedTensorTypeAnn(TensorTypeAnn):
     """FPy AST: sized, homogenous tensor type annotation"""
-    dims: list[int | NamedId]
+    dims: list[int | Id]
     elt: TypeAnn
 
-    def __init__(self, dims: list[int | NamedId], elt: TypeAnn, loc: Optional[Location]):
+    def __init__(self, dims: list[int | Id], elt: TypeAnn, loc: Optional[Location]):
         super().__init__(loc)
         self.dims = dims
         self.elt = elt

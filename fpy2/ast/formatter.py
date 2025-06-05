@@ -306,9 +306,43 @@ class _FormatterInstance(Visitor):
                 self._add_line(f'{k}={v},', ctx + 1)
             self._add_line(')', ctx)
 
+    def _visit_type(self, ty: TypeAnn) -> str:
+        match ty:
+            case AnyTypeAnn():
+                return 'Any'
+            case RealTypeAnn():
+                return 'Real'
+            case BoolTypeAnn():
+                return 'bool'
+            case TupleTypeAnn():
+                elts = ', '.join(self._visit_type(elt) for elt in ty.elts)
+                return f'tuple[{elts}]'
+            case SizedTensorTypeAnn():
+                dims: list[str] = []
+                for dim in ty.dims:
+                    match dim:
+                        case int():
+                            dims.append(f'Dim[{dim}]')
+                        case Id():
+                            dims.append(f'Dim[\'{str(dim)}\']')
+                        case _:
+                            raise RuntimeError('unreachable', dim)
+                elt = self._visit_type(ty.elt)
+                elt_str = ', '.join(dims + [elt])
+                return f'Tensor[{elt_str}]'
+            case _:
+                raise RuntimeError('unreachable', ty)
+
+    def _visit_argument(self, arg: Argument) -> str:
+        match arg.type:
+            case AnyTypeAnn() | None:
+                return str(arg.name)
+            case _:
+                ty = self._visit_type(arg.type)
+                return f'{str(arg.name)}: {ty}'
+
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
-        # TODO: type annotation
-        arg_strs = [str(arg.name) for arg in func.args]
+        arg_strs = [self._visit_argument(arg) for arg in func.args]
         arg_str = ', '.join(arg_strs)
 
         # metadata

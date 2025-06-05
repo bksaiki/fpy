@@ -1,4 +1,4 @@
-from fpy2 import fpy, IEEEContext, RM, RealContext
+from fpy2 import *
 from fpy2.typing import *
 
 ### Simple tests
@@ -428,6 +428,50 @@ def test_assert():
     assert 0 == 0
     return 0
 
+### Type annotation
+
+@fpy
+def test_annotation1(x: Real) -> Real:
+    return x + 1
+
+@fpy
+def test_annotation2(xs: tuple[Real, Real]) -> Real:
+    return xs[0] + xs[1]
+
+@fpy
+def test_annotation3(xs: tuple[Real, ...]) -> Real:
+    y: Real = 0
+    for x in xs:
+        y += x
+    return y
+
+@fpy
+def test_annotation4(xs: Tensor[Dim[3], Real]) -> Real:
+    return xs[0] + xs[1] + xs[2]
+
+@fpy
+def test_annotation5(xs: Tensor[Dim[2], Dim[2], Real]) -> Real:
+    return xs[0][0] + xs[1][1]
+
+@fpy
+def test_annotation6(xs: Tensor[Dim['M'], Dim['N'], Real]) -> Real:
+    sum: Real = 0
+    for x in xs:
+        for y in x:
+            sum += y
+    return sum
+
+@fpy
+def test_annotation7(
+    xs: Tensor[Dim['K'], Dim['M'], Real],
+    ys: Tensor[Dim['M'], Dim['N'], Real]
+) -> Real:
+    sum: Real = 0
+    for i in range(size(xs, 0)):
+        for j in range(size(ys, 1)):
+            for k in range(size(xs, 1)):
+                sum += xs[i][k] * ys[k][j]
+    return sum
 
 ### Examples
 
@@ -620,6 +664,13 @@ tests = [
     test_context2,
     # test_context3,
     test_assert,
+    # test_annotation1,
+    # test_annotation2,
+    # test_annotation3,
+    # test_annotation4,
+    # test_annotation5,
+    # test_annotation6,
+    # test_annotation7,
 ]
 
 # Examples

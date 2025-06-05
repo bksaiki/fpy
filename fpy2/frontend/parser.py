@@ -207,17 +207,63 @@ class Parser:
         loc = self._parse_location(ann)
         match ann:
             case ast.Name('Real'):
+                # real number with no specific rounding
                 return RealTypeAnn(loc)
             case ast.Name('int'):
-                # TODO: more specific type
+                # Python integer
+                # TODO: add specific rounding
                 return RealTypeAnn(loc)
             case ast.Name('float'):
+                # Python float
+                # TODO: add specific rounding
                 return RealTypeAnn(loc)
             case ast.Name('bool'):
+                # boolean values
                 return RealTypeAnn(loc)
-            case _:
+            case ast.Subscript(value=ast.Name('Real')):
                 # TODO: implement
                 return AnyTypeAnn(loc)
+            case ast.Subscript(value=ast.Name('tuple')):
+                if not isinstance(ann.slice, ast.Tuple):
+                    raise FPyParserError(loc, 'FPy tuple type annotation must be a tuple of types', ann.slice, ann)
+
+                match ann.slice.elts:
+                    case [ty, ast.Constant(v)] if v == Ellipsis:
+                        # tuple of unknown length
+                        match self._parse_type_annotation(ty):
+                            case SizedTensorTypeAnn() as elt:
+                                return SizedTensorTypeAnn([UnderscoreId()] + elt.dims, elt.elt, loc)
+                            case elt:
+                                return SizedTensorTypeAnn([UnderscoreId()], elt, loc)
+                    case _:
+                        elts = [self._parse_type_annotation(s) for s in ann.slice.elts]
+                        return TupleTypeAnn(elts, loc)
+            case ast.Subscript(value=ast.Name('Tensor')):
+                if not isinstance(ann.slice, ast.Tuple):
+                    raise FPyParserError(loc, 'FPy tensor type annotation must be a tuple of dimensions and element type', ann.slice, ann)
+                if len(ann.slice.elts) == 0:
+                    raise FPyParserError(loc, 'FPy tensor type annotation must at least have an element type', ann.slice, ann)
+
+                dims: list[int | Id] = []
+                for dim in ann.slice.elts[:-1]:
+                    match dim:
+                        case ast.Subscript(value=ast.Name('Dim'), slice=ast.Constant(v)):
+                            match v:
+                                case int():
+                                    dims.append(v)
+                                case str():
+                                    if v == '_':
+                                        dims.append(UnderscoreId())
+                                    else:
+                                        dims.append(NamedId(v))
+                                case _:
+                                    raise FPyParserError(loc, 'FPy tensor type dimension must be integer or string', dim, ann)
+                        case _:
+                            raise FPyParserError(loc, 'FPy tensor type annotation expects \'Dim[...]\'', dim, ann)
+                elt = self._parse_type_annotation(ann.slice.elts[-1])
+                return SizedTensorTypeAnn(dims, elt, loc)
+            case _:
+                raise FPyParserError(loc, 'unsupported type annotation', ann)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':
