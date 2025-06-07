@@ -7,7 +7,7 @@ from typing import Any
 from .number import (
     Context,
     IEEEContext,
-    MPFContext,
+    MPFixedContext,
     RealContext,
     RM,
     FP128, FP64, FP32, FP16,
@@ -134,7 +134,7 @@ class FPCoreContext:
                         return FPCoreContext(precision='binary16', round=rm)
                     case _:
                         return FPCoreContext(precision=['float', ctx.es, ctx.nbits], round=rm)
-            case MPFContext() if ctx.nmin == -1:
+            case MPFixedContext() if ctx.nmin == -1:
                 rm = _round_mode_from_fpc(ctx.rm)
                 return FPCoreContext(precision='integer', round=rm)
             case RealContext():
