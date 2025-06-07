@@ -1,21 +1,28 @@
 """Type checking for FPy programs."""
 
+from typing import TypeAlias
+
 from ..ast import *
+from ..utils import Gensym, Unionfind
 from .define_use import DefineUse, DefineUseAnalysis, Definition
 
-_TCtx = dict[NamedId, TypeAnn]
+_TCtx: TypeAlias = dict[NamedId, TypeAnn]
+_Type: TypeAlias = TypeAnn | NamedId
 
 class _TypeCheckInstance(Visitor):
     """Single-use instance of type checking."""
     func: FuncDef
     def_use: DefineUseAnalysis
-    types: dict[Definition, TypeAnn]
+    types: dict[Definition, _Type]
+    tvars: Unionfind[NamedId]
+    gensym: Gensym
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
-        super().__init__()
         self.func = func
         self.def_use = def_use
         self.types = {}
+        self.tvars = Unionfind()
+        self.gensym = Gensym()
 
     def analyze(self):
         return self._visit_function(self.func, {})
@@ -117,6 +124,20 @@ class _TypeCheckInstance(Visitor):
         raise NotImplementedError
 
     def _visit_function(self, func: FuncDef, tctx: _TCtx):
+        arg_tys: list[TypeAnn] = []
+        for arg in func.args:
+            match arg.type:
+                case None | AnyTypeAnn():
+                    arg_ty = self.gensym.fresh()
+
+            arg_tys.append(arg_ty)
+            if isinstance(arg, NamedId):
+                tctx[arg.name] = arg_ty
+
+
+            if not isinstance(arg, NamedId):
+                raise TypeError(f'expected a \'NamedId\' for function argument, got {arg}')
+            self.tvars.add(arg)
 
 
         raise NotImplementedError

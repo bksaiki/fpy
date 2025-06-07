@@ -86,10 +86,14 @@ class DefineUseAnalysis:
         """Default analysis with empty definitions and uses"""
         return DefineUseAnalysis({}, {}, {}, {})
 
-    @property
     def names(self) -> set[NamedId]:
         """Returns the set of all variable names in the analysis"""
         return set(self.defs.keys())
+
+    def find(self, name: NamedId, site: _Site) -> Definition:
+        """Looks up a definition given a variable name and a site."""
+        return self.defs.get(name, set())
+
 
 
 class _DefineUseInstance(DefaultVisitor):

@@ -4,15 +4,15 @@ from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
-class UnionFind(Generic[T]):
+class Unionfind(Generic[T]):
     """
     The classic union-find data structure.
 
     A union-find extends the usual set data structure by
     grouping elements into disjoint (sub-)sets.
     The union-find supports three main operations:
-    - `find`: Determine which set a particular element is in.
-    - `union`: Join two sets together.
+    - `find`: determine which set a particular element is in.
+    - `union`: join two sets together.
     """
 
     _parent: dict[T, T]
