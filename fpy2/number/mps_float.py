@@ -11,12 +11,12 @@ from ..utils import default_repr, bitmask
 
 from .context import OrdinalContext
 from .number import RealFloat, Float
-from .mp import MPContext
+from .mp_float import MPFloatContext
 from .round import RoundingMode
 from .gmp import mpfr_value
 
 @default_repr
-class MPSContext(OrdinalContext):
+class MPSFloatContext(OrdinalContext):
     """
     Rounding context for multi-precision floating-point numbers with
     a minimum exponent (and subnormalization).
@@ -26,7 +26,7 @@ class MPSContext(OrdinalContext):
     It emulates floating-point numbers as implemented by MPFR
     with subnormalization.
 
-    Unlike `MPContext`, the `MPSContext` is inherits from `OrdinalContext`
+    Unlike `MPFloatContext`, the `MPSFloatContext` is inherits from `OrdinalContext`
     since each representable value can be mapped to the ordinals.
     """
 
@@ -36,7 +36,7 @@ class MPSContext(OrdinalContext):
     emin: int
     """minimum (normalized exponent)"""
 
-    _mp_ctx: MPContext
+    _mp_ctx: MPFloatContext
     """this context without subnormalization"""
 
     rm: RoundingMode
@@ -55,7 +55,7 @@ class MPSContext(OrdinalContext):
         self.pmax = pmax
         self.emin = emin
         self.rm = rm
-        self._mp_ctx = MPContext(pmax, rm)
+        self._mp_ctx = MPFloatContext(pmax, rm)
 
     @property
     def expmin(self):
@@ -70,7 +70,7 @@ class MPSContext(OrdinalContext):
         return self.expmin - 1
 
     def with_rm(self, rm: RoundingMode):
-        return MPSContext(self.pmax, self.emin, rm)
+        return MPSFloatContext(self.pmax, self.emin, rm)
 
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):

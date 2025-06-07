@@ -2,7 +2,7 @@ import gmpy2 as gmp
 import random
 import unittest
 
-from fpy2 import RealFloat, MPContext, RM
+from fpy2 import RealFloat, MPFloatContext, RM
 
 def _mpfr_rm(rm: RM):
     match rm:
@@ -20,7 +20,7 @@ def _mpfr_rm(rm: RM):
             raise ValueError(f'unsupported rounding mode {rm}')
 
 
-def _round_mpfr(x: RealFloat, ctx: MPContext) -> RealFloat:
+def _round_mpfr(x: RealFloat, ctx: MPFloatContext) -> RealFloat:
     s_str = '-' if x.s else '+'
     xf = gmp.mpfr(f'{s_str}{hex(x.c)}p{x.exp}', precision=x.p, base=16)
     with gmp.context(
@@ -57,7 +57,7 @@ class RoundTestCase(unittest.TestCase):
             # sample rounding mode
             p = random.randint(2, p_max)
             rm = random.choice([RM.RNE, RM.RTP, RM.RTN, RM.RTZ, RM.RAZ])
-            ctx = MPContext(p, rm)
+            ctx = MPFloatContext(p, rm)
 
             # round value
             y = ctx.round(x)

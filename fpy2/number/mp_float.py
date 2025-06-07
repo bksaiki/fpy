@@ -14,7 +14,7 @@ from .round import RoundingMode
 from .gmp import mpfr_value
 
 @default_repr
-class MPContext(Context):
+class MPFloatContext(Context):
     """
     Rounding context for multi-precision floating-point numbers.
 
@@ -41,7 +41,7 @@ class MPContext(Context):
         self.rm = rm
 
     def with_rm(self, rm: RoundingMode):
-        return MPContext(self.pmax, rm)
+        return MPFloatContext(self.pmax, rm)
 
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):

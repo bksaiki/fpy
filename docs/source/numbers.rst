@@ -44,15 +44,15 @@ Each context implements a particular flavor of rounding.
 Floating-Point Contexts
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: fpy2.MPContext
+.. autoclass:: fpy2.MPFloatContext
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.MPSContext
+.. autoclass:: fpy2.MPSFloatContext
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.MPBContext
+.. autoclass:: fpy2.MPBFloatContext
    :members:
    :show-inheritance:
 
@@ -60,14 +60,14 @@ Floating-Point Contexts
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.ExtContext
+.. autoclass:: fpy2.ExtFloatContext
    :members:
    :show-inheritance:
 
 Fixed-Point Contexts
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. autoclass:: fpy2.MPFContext
+.. autoclass:: fpy2.MPFixedContext
    :members:
    :show-inheritance:
 
@@ -132,7 +132,7 @@ Floating-Point Contexts
    with round nearest, ties-to-even rounding mode.
 
 .. py:data:: fpy2.S1E5M2
-   :value: ExtContext(5, 8, False, ExtNanKind.NEG_ZERO, -1, RM.RNE)
+   :value: ExtFloatContext(5, 8, False, ExtNanKind.NEG_ZERO, -1, RM.RNE)
 
    Alias for Graphcore's FP8 format with 5 bits of exponent
    with round nearest, ties-to-even rounding mode.
@@ -140,7 +140,7 @@ Floating-Point Contexts
    See Graphcore's `FP8 proposal <https://arxiv.org/pdf/2206.02915>`_ for more information.
 
 .. py:data:: fpy2.S1E4M3
-   :value: ExtContext(4, 8, False, ExtNanKind.NEG_ZERO, -1, RM.RNE)
+   :value: ExtFloatContext(4, 8, False, ExtNanKind.NEG_ZERO, -1, RM.RNE)
 
    Alias for Graphcore's FP8 format with 4 bits of exponent
    with round nearest, ties-to-even rounding mode.
@@ -159,7 +159,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.MX_E4M3
-   :value: ExtContext(4, 8, False, ExtNanKind.MAX_VAL, 0, RM.RNE)
+   :value: ExtFloatContext(4, 8, False, ExtNanKind.MAX_VAL, 0, RM.RNE)
 
    Alias for the FP8 format with 4 bits of exponent in
    the Open Compute Project (OCP) Microscaling Formats (MX) specification
@@ -170,7 +170,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.MX_E3M2
-   :value: ExtContext(3, 6, False, ExtNanKind.NONE, 0, RM.RNE)
+   :value: ExtFloatContext(3, 6, False, ExtNanKind.NONE, 0, RM.RNE)
 
    Alias for the FP6 format with 3 bits of exponent in
    the Open Compute Project (OCP) Microscaling Formats (MX) specification
@@ -181,7 +181,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.MX_E2M3
-   :value: ExtContext(2, 6, False, ExtNanKind.NONE, 0, RM.RNE)
+   :value: ExtFloatContext(2, 6, False, ExtNanKind.NONE, 0, RM.RNE)
 
    Alias for the FP6 format with 2 bits of exponent in
    the Open Compute Project (OCP) Microscaling Formats (MX) specification
@@ -192,7 +192,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.MX_E2M1
-   :value: ExtContext(2, 4, False, ExtNanKind.NONE, 0, RM.RNE)
+   :value: ExtFloatContext(2, 4, False, ExtNanKind.NONE, 0, RM.RNE)
 
    Alias for the FP4 format with 2 bits of exponent in
    the Open Compute Project (OCP) Microscaling Formats (MX) specification
@@ -203,7 +203,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.FP8P1
-   :value: ExtContext(7, 8, True, ExtNanKind.NEG_ZERO, 0, RM.RNE)
+   :value: ExtFloatContext(7, 8, True, ExtNanKind.NEG_ZERO, 0, RM.RNE)
 
    Alias for the FP8 format with 7 bits of exponent found in a draft proposal
    by the IEEE P3109 working group with round nearest, ties-to-even rounding mode.
@@ -214,7 +214,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.FP8P2
-   :value: ExtContext(6, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
+   :value: ExtFloatContext(6, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
 
    Alias for the FP8 format with 6 bits of exponent found in a draft proposal
    by the IEEE P3109 working group with round nearest, ties-to-even rounding mode.
@@ -225,7 +225,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.FP8P3
-   :value: ExtContext(5, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
+   :value: ExtFloatContext(5, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
 
    Alias for the FP8 format with 5 bits of exponent found in a draft proposal
    by the IEEE P3109 working group with round nearest, ties-to-even rounding mode.
@@ -236,7 +236,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.FP8P4
-   :value: ExtContext(4, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
+   :value: ExtFloatContext(4, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
 
    Alias for the FP8 format with 4 bits of exponent found in a draft proposal
    by the IEEE P3109 working group with round nearest, ties-to-even rounding mode.
@@ -247,7 +247,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.FP8P5
-   :value: ExtContext(3, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
+   :value: ExtFloatContext(3, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
 
    Alias for the FP8 format with 3 bits of exponent found in a draft proposal
    by the IEEE P3109 working group with round nearest, ties-to-even rounding mode.
@@ -258,7 +258,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.FP8P6
-   :value: ExtContext(2, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
+   :value: ExtFloatContext(2, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
 
    Alias for the FP8 format with 2 bits of exponent found in a draft proposal
    by the IEEE P3109 working group with round nearest, ties-to-even rounding mode.
@@ -269,7 +269,7 @@ Floating-Point Contexts
    for more information.
 
 .. py:data:: fpy2.FP8P7
-   :value: ExtContext(1, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
+   :value: ExtFloatContext(1, 8, True, ExtNanKind.NEG_ZERO, -1, RM.RNE)
 
    Alias for the FP8 format with 1 bit of exponent found in a draft proposal
    by the IEEE P3109 working group with round nearest, ties-to-even rounding mode.
@@ -283,7 +283,7 @@ Fixed-Point Contexts
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. py:data:: fpy2.Integer
-   :value: MPFContext(-1, RM.RTZ)
+   :value: MPFixedContext(-1, RM.RTZ)
 
    Alias for the fixed-point integer format with no fractional bits
    and round towards zero rounding mode.
@@ -314,6 +314,6 @@ Additional types for specifying rounding operations.
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.ExtNanKind
+.. autoclass:: fpy2.ExtFloatNanKind
    :members:
    :show-inheritance:

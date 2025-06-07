@@ -1,7 +1,7 @@
 import unittest
 
 from fpy2 import (
-    ExtContext,
+    ExtFloatContext,
     Float,
     S1E5M2, S1E4M3,
     MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
@@ -9,14 +9,14 @@ from fpy2 import (
 )
 
 
-_common: list[ExtContext] = [
+_common: list[ExtFloatContext] = [
     S1E5M2, S1E4M3,
     MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7
 ]
 
 class DecodeTestCase(unittest.TestCase):
-    """Testing `ExtContext.decode()`"""
+    """Testing `ExtFloatContext.decode()`"""
 
     def test_common(self):
         # iterate over common contexts
@@ -28,7 +28,7 @@ class DecodeTestCase(unittest.TestCase):
                 self.assertTrue(x.is_representable(), f'i={i}, x={x}')
 
 class EncodeTestCase(unittest.TestCase):
-    """Testing `ExtContext.encode()`"""
+    """Testing `ExtFloatContext.encode()`"""
 
     def test_common(self):
         # iterate over common contexts
@@ -52,7 +52,7 @@ class EncodeTestCase(unittest.TestCase):
 
 
 class EncodeRoundTripTestCase(unittest.TestCase):
-    """Testing `ExtContext.encode()` and `ExtContext.decode()`"""
+    """Testing `ExtFloatContext.encode()` and `ExtFloatContext.decode()`"""
 
     def test_common(self):
         # iterate over common contexts

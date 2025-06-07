@@ -1,7 +1,7 @@
 import random
 import unittest
 
-from fpy2 import IEEEContext, MPFContext, RM, FP64, FP32, FP16
+from fpy2 import IEEEContext, MPFixedContext, RM, FP64, FP32, FP16
 from fpy2.math import *
 
 _unary_ops = [
@@ -150,7 +150,7 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
         for op in _unary_ops:
             max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:
-                ctx = MPFContext(-1, rm, enable_nan=True, enable_inf=True)
+                ctx = MPFixedContext(-1, rm, enable_nan=True, enable_inf=True)
                 for _ in range(num_inputs):
                     # sample point
                     i = random.randint(0, max_value) * random.choice([-1, 1])
@@ -163,7 +163,7 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
         for op in _binary_ops:
             max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:
-                ctx = MPFContext(-1, rm, enable_nan=True, enable_inf=True)
+                ctx = MPFixedContext(-1, rm, enable_nan=True, enable_inf=True)
                 for _ in range(num_inputs):
                     # sample point
                     i = random.randint(0, max_value) * random.choice([-1, 1])
@@ -177,7 +177,7 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
         for op in _ternary_ops:
             max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:
-                ctx = MPFContext(-1, rm, enable_nan=True, enable_inf=True)
+                ctx = MPFixedContext(-1, rm, enable_nan=True, enable_inf=True)
                 for _ in range(num_inputs):
                     # sample point
                     i = random.randint(0, max_value) * random.choice([-1, 1])

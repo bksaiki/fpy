@@ -1,7 +1,7 @@
 import random
 import unittest
 
-from fpy2 import Float, MPContext, RM
+from fpy2 import Float, MPFloatContext, RM
 
 class NormalizeTestCase(unittest.TestCase):
     """Testing `IEEEContext.normalize()`"""
@@ -11,7 +11,7 @@ class NormalizeTestCase(unittest.TestCase):
         for _ in range(num_values):
             # sample maximum starting precision
             p_init = random.randint(2, p_max)
-            ctx = MPContext(p_max, RM.RNE)
+            ctx = MPFloatContext(p_max, RM.RNE)
 
             # sample random value
             s = random.choice([False, True])

@@ -8,9 +8,9 @@ under different number systems and compilers to other languages.
 
 The numbers library supports many different number types including:
 
- - multiprecision floating point (`MPContext`)
- - multiprecision floatingpoint with subnormalization (`MPSContext`)
- - bounded, multiprecision floating point (`MPBContext`)
+ - multiprecision floating point (`MPFloatContext`)
+ - multiprecision floatingpoint with subnormalization (`MPSFloatContext`)
+ - bounded, multiprecision floating point (`MPBFloatContext`)
  - IEEE 754 floating point (`IEEEContext`)
 
 These number systems guarantee correct rounding via MPFR.
@@ -26,18 +26,18 @@ from .number import (
     SizedContext,
     EncodableContext,
     # concrete context types
-    ExtContext,
-    MPContext,
-    MPBContext,
-    MPFContext,
-    MPSContext,
+    ExtFloatContext,
+    MPFloatContext,
+    MPBFloatContext,
+    MPFixedContext,
+    MPSFloatContext,
     IEEEContext,
     RealContext,
     # rounding utilities
     RoundingMode,
     RoundingDirection, RM,
     # encoding utilities
-    ExtNanKind,
+    ExtFloatNanKind,
     # type aliases
     FP256, FP128, FP64, FP32, FP16,
     TF32, BF16,

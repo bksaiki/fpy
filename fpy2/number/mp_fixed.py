@@ -16,7 +16,7 @@ from .round import RoundingMode
 from .gmp import mpfr_value
 
 @default_repr
-class MPFContext(Context):
+class MPFixedContext(Context):
     """
     Rounding context for mulit-precision fixed-point numbers.
 
@@ -109,7 +109,7 @@ class MPFContext(Context):
 
 
     def with_rm(self, rm: RoundingMode):
-        return MPFContext(
+        return MPFixedContext(
             self.nmin,
             rm,
             enable_nan=self.enable_nan,

@@ -11,13 +11,13 @@ from ..utils import default_repr
 
 from .context import SizedContext
 from .number import RealFloat, Float
-from .mps import MPSContext
+from .mps_float import MPSFloatContext
 from .round import RoundingMode, RoundingDirection
 from .gmp import mpfr_value
 
 
 @default_repr
-class MPBContext(SizedContext):
+class MPBFloatContext(SizedContext):
     """
     Rounding context for multi-precision floating-point numbers with
     a minimum exponent (and subnormalization) and a maximum value.
@@ -28,7 +28,7 @@ class MPBContext(SizedContext):
     may be specified as well, but by default it is set to the negative
     of `maxval`.
 
-    Unlike `MPContext`, the `MPBContext` is inherits from `SizedContext`
+    Unlike `MPFloatContext`, the `MPBFloatContext` is inherits from `SizedContext`
     since the set of representable values may be encoded in
     a finite amount of space.
     """
@@ -48,7 +48,7 @@ class MPBContext(SizedContext):
     rm: RoundingMode
     """rounding mode"""
 
-    _mps_ctx: MPSContext
+    _mps_ctx: MPSFloatContext
     """this context without maximum values"""
 
     _pos_maxval_ord: int
@@ -96,7 +96,7 @@ class MPBContext(SizedContext):
         self.neg_maxval = neg_maxval
         self.rm = rm
 
-        self._mps_ctx = MPSContext(pmax, emin, rm)
+        self._mps_ctx = MPSFloatContext(pmax, emin, rm)
         pos_maxval_mps = Float(x=self.pos_maxval, ctx=self._mps_ctx)
         neg_maxval_mps = Float(x=self.neg_maxval, ctx=self._mps_ctx)
         self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_mps)
@@ -128,7 +128,7 @@ class MPBContext(SizedContext):
         return self._mps_ctx.nmin
 
     def with_rm(self, rm: RoundingMode):
-        return MPBContext(self.pmax, self.emin, self.pos_maxval, rm, neg_maxval=self.neg_maxval)
+        return MPBFloatContext(self.pmax, self.emin, self.pos_maxval, rm, neg_maxval=self.neg_maxval)
 
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):
