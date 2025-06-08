@@ -7,9 +7,10 @@ from .number import RealFloat, Float
 from .context import Context, OrdinalContext, SizedContext, EncodableContext
 from .ext_float import ExtFloatContext, ExtFloatNanKind
 from .ieee754 import IEEEContext
-from .mp_float import MPFloatContext
-from .mpb_float import MPBFloatContext
 from .mp_fixed import MPFixedContext
+from .mp_float import MPFloatContext
+from .mpb_fixed import MPBFixedContext
+from .mpb_float import MPBFloatContext
 from .mps_float import MPSFloatContext
 from .real import RealContext
 

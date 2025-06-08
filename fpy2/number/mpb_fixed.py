@@ -10,7 +10,7 @@ from ..utils import default_repr
 
 from .context import SizedContext
 from .number import RealFloat, Float
-from .mps_float import MPSFloatContext
+from .mp_fixed import MPFixedContext
 from .round import RoundingMode, RoundingDirection
 from .gmp import mpfr_value
 
@@ -67,6 +67,15 @@ class MPBFixedContext(SizedContext):
     if Inf is not enabled, what value should Inf round to?
     if not set, then `round()` will raise a `ValueError`.
     """
+
+    _mp_ctx: MPFixedContext
+    """this context without maximum values"""
+
+    _pos_maxval_ord: int
+    """precomputed ordinal of `self.pos_maxval`"""
+
+    _neg_maxval_ord: int
+    """precomputed ordinal of `self.neg_maxval`"""
 
 
     def __init__(
@@ -139,8 +148,24 @@ class MPBFixedContext(SizedContext):
         self.nan_value = nan_value
         self.inf_value = inf_value
 
+        self._mp_ctx = MPFixedContext(nmin, rm, enable_nan=enable_nan, enable_inf=enable_inf)
+        pos_maxval_mp = Float(x=self.pos_maxval, ctx=self._mp_ctx)
+        neg_maxval_mp = Float(x=self.neg_maxval, ctx=self._mp_ctx)
+        self._pos_maxval_ord = self._mp_ctx.to_ordinal(pos_maxval_mp)
+        self._neg_maxval_ord = self._mp_ctx.to_ordinal(neg_maxval_mp)
+
+
     def with_rm(self, rm: RoundingMode):
-        raise NotImplementedError
+        return MPBFixedContext(
+            nmin=self.nmin,
+            maxval=self.pos_maxval,
+            rm=rm,
+            neg_maxval=self.neg_maxval,
+            enable_nan=self.enable_nan,
+            enable_inf=self.enable_inf,
+            nan_value=self.nan_value,
+            inf_value=self.inf_value
+        )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
         raise NotImplementedError
@@ -164,14 +189,65 @@ class MPBFixedContext(SizedContext):
         raise NotImplementedError
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
-        raise NotImplementedError
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected \'Float\' for x={x}, got {type(x)}')
+
+        # case split by class
+        if x.isnan:
+            # NaN
+            raise ValueError('Cannot convert NaN to ordinal')
+        elif x.isinf:
+            # INf
+            if not infval:
+                raise ValueError(f'Expected a finite value for x={x} when infval=False')
+            elif x.s:
+                # -Inf mapped to 1 less than -MAX
+                return self._neg_maxval_ord - 1
+            else:
+                # +Inf mapped to 1 more than +MAX
+                return self._pos_maxval_ord + 1
+        else:
+            # finite, real
+            return self._mp_ctx.to_ordinal(x)
 
     def from_ordinal(self, x: int, infval: bool = False) -> Float:
-        raise NotImplementedError
+        if not isinstance(x, int):
+            raise TypeError(f'Expected \'int\' for x={x}, got {type(x)}')
+
+        if infval:
+            pos_maxord = self._pos_maxval_ord + 1
+            neg_maxord = self._neg_maxval_ord - 1
+        else:
+            pos_maxord = self._pos_maxval_ord
+            neg_maxord = self._neg_maxval_ord
+
+        if x > pos_maxord:
+            raise ValueError(f'Expected an \'int\' between {neg_maxord} and {pos_maxord}, got x={x}')
+        elif x < neg_maxord:
+            raise ValueError(f'Expected an \'int\' between {neg_maxord} and {pos_maxord}, got x={x}')
+        elif x > self._pos_maxval_ord:
+            # +Inf
+            return Float(isinf=True, ctx=self)
+        elif x < self._neg_maxval_ord:
+            # -Inf
+            return Float(isinf=True, s=True, ctx=self)
+        else:
+            # finite, real
+            v = self._mp_ctx.from_ordinal(x)
+            v.ctx = self
+            return v
 
     def minval(self, s: bool = False) -> Float:
-        raise NotImplementedError
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        x = self._mp_ctx.minval(s=s)
+        x.ctx = self
+        return x
 
     def maxval(self, s: bool = False) -> Float:
-        raise NotImplementedError
-
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        if s:
+            return Float(x=self.pos_maxval, ctx=self)
+        else:
+            return Float(x=self.neg_maxval, ctx=self)

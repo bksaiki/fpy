@@ -27,9 +27,10 @@ from .number import (
     EncodableContext,
     # concrete context types
     ExtFloatContext,
-    MPFloatContext,
-    MPBFloatContext,
     MPFixedContext,
+    MPFloatContext,
+    MPBFixedContext,
+    MPBFloatContext,
     MPSFloatContext,
     IEEEContext,
     RealContext,

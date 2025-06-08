@@ -291,7 +291,7 @@ class MPBFloatContext(SizedContext):
             # ordinal too large to be a finite number
             if not infval or x > self._pos_maxval_ord + 1:
                 # infinity ordinal is disabled or ordinal is too large to even be infinity
-                raise TypeError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
+                raise ValueError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
             else:
                 # +Inf
                 return Float(isinf=True, ctx=self)
@@ -299,13 +299,15 @@ class MPBFloatContext(SizedContext):
             # ordinal is too large to be a finite number
             if not infval or x < self._neg_maxval_ord - 1:
                 # infinity ordinal is disabled or ordinal is too large to even be infinity
-                raise TypeError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
+                raise ValueError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
             else:
                 # -Inf
                 return Float(s=True, isinf=True, ctx=self)
         else:
             # must be a finite number
-            return self._mps_ctx.from_ordinal(x)
+            v = self._mps_ctx.from_ordinal(x)
+            v.ctx = self
+            return v
 
     def zero(self, s: bool = False) -> Float:
         """Returns a signed 0 under this context."""
