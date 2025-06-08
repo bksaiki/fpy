@@ -154,7 +154,6 @@ class MPBFixedContext(SizedContext):
         self._pos_maxval_ord = self._mp_ctx.to_ordinal(pos_maxval_mp)
         self._neg_maxval_ord = self._mp_ctx.to_ordinal(neg_maxval_mp)
 
-
     def with_rm(self, rm: RoundingMode):
         return MPBFixedContext(
             nmin=self.nmin,
@@ -168,25 +167,120 @@ class MPBFixedContext(SizedContext):
         )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
-        raise NotImplementedError
+        if not isinstance(x, RealFloat | Float):
+            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        if not self._mp_ctx.is_representable(x):
+            # not representable even without a maximum value
+            return False
+        elif not x.is_nonzero():
+            # NaN, Inf, 0
+            return True
+        elif x.s:
+            # check bounded (negative values)
+            return self.neg_maxval <= x
+        else:
+            # check bounded (positive values)
+            return x <= self.pos_maxval
 
     def is_canonical(self, x: Float):
-        raise NotImplementedError
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mp_ctx.is_canonical(x)
 
     def normalize(self, x: Float) -> Float:
-        raise NotImplementedError
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        x = self._mp_ctx.normalize(x)
+        x.ctx = self
+        return x
 
     def is_normal(self, x: Float) -> bool:
-        raise NotImplementedError
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mp_ctx.is_normal(x)
 
     def round_params(self):
-        raise NotImplementedError
+        return self._mp_ctx.round_params()
+
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+        """
+        Like `self.round_at()` but only for `RealFloat` or `Float` instances.
+
+        Optionally, specify `n` to override the least absolute digit position.
+        If `n < self.nmin`, it will be set to `self.nmin`.
+        """
+        if n is None:
+            n = self.nmin
+        else:
+            n = max(n, self.nmin)
+
+        # step 1. handle special values
+        match x:
+            case Float():
+                if x.isnan:
+                    if self.enable_nan:
+                        return Float(isnan=True, ctx=self)
+                    elif self.nan_value is None:
+                        raise ValueError('Cannot round NaN under this context')
+                    else:
+                        return Float(x=self.nan_value, ctx=self)
+                elif x.isinf:
+                    if self.enable_inf:
+                        return Float(isinf=True, ctx=self)
+                    elif self.inf_value is None:
+                        raise ValueError('Cannot round infinity under this context')
+                    else:
+                        return Float(x=self.inf_value, ctx=self)
+                else:
+                    xr = x._real
+            case RealFloat():
+                xr = x
+            case _:
+                raise RuntimeError(f'unreachable {x}')
+
+        # step 2. shortcut for exact zero values
+        if xr.is_zero():
+            # exactly zero
+            return Float(ctx=self)
+
+        # step 3. round value based on rounding parameters
+        xr = xr.round(min_n=n, rm=self.rm)
+
+        # step 4. check for overflow
+        if xr.s:
+            if xr > self.pos_maxval:
+                # overflow (positive)
+                raise NotImplementedError
+        else:
+            if xr < self.neg_maxval:
+                # overflow (negative)
+                raise NotImplementedError
+
+        return Float(x=xr, ctx=self)
+
+    def _round_at(self, x, n: Optional[int]) -> Float:
+        match x:
+            case Float() | RealFloat():
+                xr = x
+            case int():
+                xr = RealFloat(c=x)
+            case float() | str():
+                xr = mpfr_value(x, n=self.nmin)
+            case Fraction():
+                if x.denominator == 1:
+                    xr = RealFloat(c=int(x))
+                else:
+                    xr = mpfr_value(x, n=self.nmin)
+            case _:
+                raise TypeError(f'not valid argument x={x}')
+
+        return self._round_float_at(xr, n)
 
     def round(self, x):
-        raise NotImplementedError
+        return self._round_at(x, None)
 
     def round_at(self, x, n: int):
-        raise NotImplementedError
+        return self._round_at(x, n)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
