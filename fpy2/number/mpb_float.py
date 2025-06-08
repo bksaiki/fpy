@@ -28,7 +28,7 @@ class MPBFloatContext(SizedContext):
     may be specified as well, but by default it is set to the negative
     of `maxval`.
 
-    Unlike `MPFloatContext`, the `MPBFloatContext` is inherits from `SizedContext`
+    Unlike `MPFloatContext`, the `MPBFloatContext` inherits from `SizedContext`
     since the set of representable values may be encoded in
     a finite amount of space.
     """
