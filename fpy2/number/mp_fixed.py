@@ -25,12 +25,13 @@ class MPFixedContext(OrdinalContext):
     It emulates fixed-point numbers with arbitrary precision.
 
     Optionally, specify the following keywords:
+
     - `enable_nan`: if `True`, then NaN is representable [default: `False`]
     - `enable_inf`: if `True`, then infinity is representable [default: `False`]
     - `nan_value`: if NaN is not enabled, what value should NaN round to? [default: `None`];
-    if not set, then `round()` will raise a `ValueError` on NaN.
+      if not set, then `round()` will raise a `ValueError` on NaN.
     - `inf_value`: if Inf is not enabled, what value should Inf round to? [default: `None`];
-    if not set, then `round()` will raise a `ValueError` on infinity.
+      if not set, then `round()` will raise a `ValueError` on infinity.
 
     `MPFixedContext` inherits from `OrdinalContext` since each representable
     value can be mapped to the ordinals.

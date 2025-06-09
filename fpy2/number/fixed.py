@@ -21,12 +21,11 @@ class FixedContext(MPBFixedContext, EncodableContext):
     the rounding mode `rm`, and the overflow behavior `overflow`.
 
     Optionally, specify the following keywords:
-    - `enable_nan`: if `True`, then NaN is representable [default: `False`]
-    - `enable_inf`: if `True`, then infinity is representable [default: `False`]
+
     - `nan_value`: if NaN is not enabled, what value should NaN round to? [default: `None`];
-    if not set, then `round()` will raise a `ValueError` on NaN.
+      if not set, then `round()` will raise a `ValueError` on NaN.
     - `inf_value`: if Inf is not enabled, what value should Inf round to? [default: `None`];
-    if not set, then `round()` will raise a `ValueError` on infinity.
+      if not set, then `round()` will raise a `ValueError` on infinity.
 
     Unlike `MPBFixedContext`, the `FixedContext` inherits from
     `EncodableContext`, since the representation has a well-defined encoding.
@@ -49,8 +48,6 @@ class FixedContext(MPBFixedContext, EncodableContext):
         rm: RoundingMode,
         overflow: FixedOverflowKind,
         *,
-        enable_nan: bool = False,
-        enable_inf: bool = False,
         nan_value: Optional[Float] = None,
         inf_value: Optional[Float] = None
     ):
@@ -63,8 +60,8 @@ class FixedContext(MPBFixedContext, EncodableContext):
             rm,
             overflow,
             neg_maxval=neg_maxval,
-            enable_nan=enable_nan,
-            enable_inf=enable_inf,
+            enable_nan=False,
+            enable_inf=False,
             nan_value=nan_value,
             inf_value=inf_value
         )
@@ -81,8 +78,6 @@ class FixedContext(MPBFixedContext, EncodableContext):
             self.nbits,
             rm,
             self.overflow,
-            enable_nan=self.enable_nan,
-            enable_inf=self.enable_inf,
             nan_value=self.nan_value,
             inf_value=self.inf_value
         )
