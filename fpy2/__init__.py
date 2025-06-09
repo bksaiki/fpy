@@ -47,7 +47,9 @@ from .number import (
     S1E5M2, S1E4M3,
     MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
-    INTEGER
+    INTEGER,
+    SINT8, SINT16, SINT32, SINT64,
+    UINT8, UINT16, UINT32, UINT64
 )
 
 from .fpc_context import FPCoreContext, NoSuchContextError
