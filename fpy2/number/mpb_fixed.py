@@ -288,7 +288,7 @@ class MPBFixedContext(SizedContext):
                     return self.maxval(s=xr.s)
                 case FixedOverflowKind.WRAP:
                     # wrap around the ordinals
-                    ord_abs = self.to_ordinal(Float(x=xr, ctx=self)) - self._neg_maxval_ord
+                    ord_abs = self._mp_ctx.to_ordinal(Float(x=xr, ctx=self)) - self._neg_maxval_ord
                     total_ord = self._pos_maxval_ord - self._neg_maxval_ord + 1
                     ord_mod = (ord_abs % total_ord) + self._neg_maxval_ord
                     return self.from_ordinal(ord_mod, infval=False)
@@ -382,6 +382,6 @@ class MPBFixedContext(SizedContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         if s:
-            return Float(x=self.pos_maxval, ctx=self)
-        else:
             return Float(x=self.neg_maxval, ctx=self)
+        else:
+            return Float(x=self.pos_maxval, ctx=self)

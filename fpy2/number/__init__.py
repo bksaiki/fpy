@@ -26,6 +26,9 @@ from .native import default_float_convert, default_str_convert
 RM: TypeAlias = RoundingMode
 """alias for `RoundingMode`"""
 
+OF: TypeAlias = FixedOverflowKind
+"""alias for `FixedOverflowKind`"""
+
 ###########################################################
 # Format aliases
 

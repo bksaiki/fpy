@@ -116,7 +116,7 @@ class MPFixedContext(OrdinalContext):
         The minimum exponent for this context.
         This is equal to `nmin + 1`.
         """
-        return self.expmin
+        return self.nmin + 1
 
     def with_rm(self, rm: RoundingMode):
         return MPFixedContext(
@@ -265,7 +265,7 @@ class MPFixedContext(OrdinalContext):
             return 0
         else:
             # finite, non-zero
-            offset = x.exp - (self.expmin)
+            offset = x.exp - self.expmin
             if offset > 0:
                 # need to increase precision of `c`
                 c = x.c << offset

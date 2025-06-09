@@ -39,7 +39,7 @@ from .number import (
     RoundingDirection, RM,
     # encoding utilities
     ExtFloatNanKind,
-    FixedOverflowKind,
+    FixedOverflowKind, OF,
     # type aliases
     FP256, FP128, FP64, FP32, FP16,
     TF32, BF16,
