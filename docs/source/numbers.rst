@@ -75,6 +75,10 @@ Fixed-Point Contexts
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.FixedContext
+   :members:
+   :show-inheritance:
+
 Real Context
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -287,8 +291,75 @@ Fixed-Point Contexts
 .. py:data:: fpy2.Integer
    :value: MPFixedContext(-1, RM.RTZ)
 
-   Alias for the fixed-point integer format with no fractional bits
-   and round towards zero rounding mode.
+   Alias for an arbitrary-precision integer context with
+   round towards zero rounding mode.
+
+   Numbers rounded under this context behave like Python's native `int` type.
+
+.. py:data:: fpy2.SINT8
+   :value: FixedContext(True, 0, 8, RM.RTZ, OF.WRAP)
+
+   Alias for a signed 8-bit integer context with
+   round towards zero rounding mode and wrapping overflow behavior.
+
+   Rounding infinity or NaN under this context produces an OverflowError.
+
+.. py:data:: fpy2.SINT16
+   :value: FixedContext(True, 0, 16, RM.RTZ, OF.WRAP)
+
+   Alias for a signed 16-bit integer context with
+   round towards zero rounding mode and wrapping overflow behavior.
+
+   Rounding infinity or NaN under this context produces an OverflowError.
+
+.. py:data:: fpy2.SINT32
+   :value: FixedContext(True, 0, 32, RM.RTZ, OF.WRAP)
+
+   Alias for a signed 32-bit integer context with
+   round towards zero rounding mode and wrapping overflow behavior.
+
+   Rounding infinity or NaN under this context produces an OverflowError.
+
+.. py:data:: fpy2.SINT64
+   :value: FixedContext(True, 0, 64, RM.RTZ, OF.WRAP)
+
+   Alias for a signed 64-bit integer context with
+   round towards zero rounding mode and wrapping overflow behavior.
+
+   Rounding infinity or NaN under this context produces an OverflowError.
+
+.. py:data:: fpy2.UINT8
+   :value: FixedContext(False, 0, 8, RM.RTZ, OF.WRAP)
+
+   Alias for an unsigned 8-bit integer context with
+   round towards zero rounding mode and wrapping overflow behavior.
+
+   Rounding infinity or NaN under this context produces an OverflowError.
+
+.. py:data:: fpy2.UINT16
+   :value: FixedContext(False, 0, 16, RM.RTZ, OF.WRAP)
+
+   Alias for an unsigned 16-bit integer context with
+   round towards zero rounding mode and wrapping overflow behavior.
+
+   Rounding infinity or NaN under this context produces an OverflowError.
+
+.. py:data:: fpy2.UINT32
+   :value: FixedContext(False, 0, 32, RM.RTZ, OF.WRAP)
+
+   Alias for an unsigned 32-bit integer context with
+   round towards zero rounding mode and wrapping overflow behavior.
+
+   Rounding infinity or NaN under this context produces an OverflowError.
+
+.. py:data:: fpy2.UINT64
+   :value: FixedContext(False, 0, 64, RM.RTZ, OF.WRAP)
+
+   Alias for an unsigned 64-bit integer context with
+   round towards zero rounding mode and wrapping overflow behavior.
+
+   Rounding infinity or NaN under this context produces an OverflowError.
+
 
 Number Types
 ------------------

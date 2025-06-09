@@ -6,6 +6,7 @@ from .number import RealFloat, Float
 # Contexts
 from .context import Context, OrdinalContext, SizedContext, EncodableContext
 from .ext_float import ExtFloatContext, ExtFloatNanKind
+from .fixed import FixedContext
 from .ieee754 import IEEEContext
 from .mp_fixed import MPFixedContext
 from .mp_float import MPFloatContext
@@ -227,4 +228,68 @@ Alias for an arbitrary-precision integer context with
 round towards zero rounding mode.
 
 Numbers rounded under this context behave like Python's native `int` type.
+"""
+
+SINT8 = FixedContext(True, 0, 8, RM.RTZ, OF.WRAP)
+"""
+Alias for a signed 8-bit integer context with
+round towards zero rounding mode and wrapping overflow behavior.
+
+Rounding infinity or NaN under this context produces an OverflowError.
+"""
+
+SINT16 = FixedContext(True, 0, 16, RM.RTZ, OF.WRAP)
+"""
+Alias for a signed 16-bit integer context with
+round towards zero rounding mode and wrapping overflow behavior.
+
+Rounding infinity or NaN under this context produces an OverflowError.
+"""
+
+SINT32 = FixedContext(True, 0, 32, RM.RTZ, OF.WRAP)
+"""
+Alias for a signed 32-bit integer context with
+round towards zero rounding mode and wrapping overflow behavior.
+
+Rounding infinity or NaN under this context produces an OverflowError.
+"""
+
+SINT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP)
+"""
+Alias for a signed 64-bit integer context with
+round towards zero rounding mode and wrapping overflow behavior.
+
+Rounding infinity or NaN under this context produces an OverflowError.
+"""
+
+UINT8 = FixedContext(False, 0, 8, RM.RTZ, OF.WRAP)
+"""
+Alias for an unsigned 8-bit integer context with
+round towards zero rounding mode and wrapping overflow behavior.
+
+Rounding infinity or NaN under this context produces an OverflowError.
+"""
+
+UINT16 = FixedContext(False, 0, 16, RM.RTZ, OF.WRAP)
+"""
+Alias for an unsigned 16-bit integer context with
+round towards zero rounding mode and wrapping overflow behavior.
+
+Rounding infinity or NaN under this context produces an OverflowError.
+"""
+
+UINT32 = FixedContext(False, 0, 32, RM.RTZ, OF.WRAP)
+"""
+Alias for an unsigned 32-bit integer context with
+round towards zero rounding mode and wrapping overflow behavior.
+
+Rounding infinity or NaN under this context produces an OverflowError.
+"""
+
+UINT64 = FixedContext(False, 0, 64, RM.RTZ, OF.WRAP)
+"""
+Alias for an unsigned 64-bit integer context with
+round towards zero rounding mode and wrapping overflow behavior.
+
+Rounding infinity or NaN under this context produces an OverflowError.
 """
