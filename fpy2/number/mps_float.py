@@ -26,7 +26,7 @@ class MPSFloatContext(OrdinalContext):
     It emulates floating-point numbers as implemented by MPFR
     with subnormalization.
 
-    Unlike `MPFloatContext`, the `MPSFloatContext` is inherits from `OrdinalContext`
+    Unlike `MPFloatContext`, the `MPSFloatContext` inherits from `OrdinalContext`
     since each representable value can be mapped to the ordinals.
     """
 

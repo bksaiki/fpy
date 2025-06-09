@@ -27,9 +27,10 @@ from .number import (
     EncodableContext,
     # concrete context types
     ExtFloatContext,
-    MPFloatContext,
-    MPBFloatContext,
     MPFixedContext,
+    MPFloatContext,
+    MPBFixedContext,
+    MPBFloatContext,
     MPSFloatContext,
     IEEEContext,
     RealContext,
@@ -38,6 +39,7 @@ from .number import (
     RoundingDirection, RM,
     # encoding utilities
     ExtFloatNanKind,
+    FixedOverflowKind, OF,
     # type aliases
     FP256, FP128, FP64, FP32, FP16,
     TF32, BF16,

@@ -71,14 +71,16 @@ Fixed-Point Contexts
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.MPBFixedContext
+   :members:
+   :show-inheritance:
+
 Real Context
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. autoclass:: fpy2.RealContext
    :members:
    :show-inheritance:
-
-
 
 Common Rounding Contexts
 --------------------------
@@ -315,5 +317,9 @@ Additional types for specifying rounding operations.
    :show-inheritance:
 
 .. autoclass:: fpy2.ExtFloatNanKind
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.FixedOverflowKind
    :members:
    :show-inheritance:

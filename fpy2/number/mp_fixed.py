@@ -9,14 +9,14 @@ from typing import Optional
 
 from ..utils import default_repr
 
-from .context import Context
+from .context import OrdinalContext
 from .number import Float
 from .real import RealFloat
 from .round import RoundingMode
 from .gmp import mpfr_value
 
 @default_repr
-class MPFixedContext(Context):
+class MPFixedContext(OrdinalContext):
     """
     Rounding context for mulit-precision fixed-point numbers.
 
@@ -31,6 +31,9 @@ class MPFixedContext(Context):
     if not set, then `round()` will raise a `ValueError` on NaN.
     - `inf_value`: if Inf is not enabled, what value should Inf round to? [default: `None`];
     if not set, then `round()` will raise a `ValueError` on infinity.
+
+    `MPFixedContext` inherits from `OrdinalContext` since each representable
+    value can be mapped to the ordinals.
     """
 
     nmin: int
@@ -39,7 +42,7 @@ class MPFixedContext(Context):
     rm: RoundingMode
     """rounding mode"""
 
-    enbale_nan: bool
+    enable_nan: bool
     """is NaN representable?"""
 
     enable_inf: bool
@@ -107,6 +110,13 @@ class MPFixedContext(Context):
         self.nan_value = nan_value
         self.inf_value = inf_value
 
+    @property
+    def expmin(self) -> int:
+        """
+        The minimum exponent for this context.
+        This is equal to `nmin + 1`.
+        """
+        return self.nmin + 1
 
     def with_rm(self, rm: RoundingMode):
         return MPFixedContext(
@@ -140,13 +150,13 @@ class MPFixedContext(Context):
     def is_canonical(self, x: Float):
         if not isinstance(x, Float) and self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return x.exp == self.nmin + 1
+        return x.exp == self.expmin
 
     def normalize(self, x: Float):
         if not isinstance(x, Float) and self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
-        offset = x.exp - (self.nmin + 1)
+        offset = x.exp - self.expmin
         if offset > 0:
             # shift the significand to the right
             c = x.c >> offset
@@ -237,3 +247,58 @@ class MPFixedContext(Context):
 
     def round_at(self, x, n: int):
         return self._round_at(x, n)
+
+    def to_ordinal(self, x: Float, infval: bool = False) -> int:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        if not self.is_representable(x):
+            raise ValueError(f'Expected representable \'Float\', got x={x}')
+        if infval:
+            raise ValueError('infvalue=True is invalid for contexts without maximum value')
+
+        # case split by class
+        if x.is_nar():
+            # NaN or Inf
+            raise TypeError(f'Expected a finite value for={x}')
+        elif x.is_zero():
+            # zero -> 0
+            return 0
+        else:
+            # finite, non-zero
+            offset = x.exp - self.expmin
+            if offset > 0:
+                # need to increase precision of `c`
+                c = x.c << offset
+            elif offset < 0:
+                # need to decrease precision of `c`
+                c = x.c >> -offset
+            else:
+                c = x.c
+
+            # apply sign
+            if x.s:
+                c *= -1
+
+            return c
+
+    def from_ordinal(self, x: int, infval: bool = False) -> Float:
+        if not isinstance(x, int):
+            raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
+        if infval:
+            raise ValueError('infval=True is invalid for contexts without a maximum value')
+
+        s = x < 0
+        uord = abs(x)
+
+        if x == 0:
+            # 0 -> zero
+            return Float(ctx=self)
+        else:
+            # finite, non-zero
+            return Float(s=s, c=uord, exp=self.expmin, ctx=self)
+
+    def minval(self, s: bool = False) -> Float:
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        return Float(s=s, c=1, exp=self.expmin, ctx=self)
+
