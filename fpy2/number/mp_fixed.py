@@ -42,7 +42,7 @@ class MPFixedContext(OrdinalContext):
     rm: RoundingMode
     """rounding mode"""
 
-    enbale_nan: bool
+    enable_nan: bool
     """is NaN representable?"""
 
     enable_inf: bool

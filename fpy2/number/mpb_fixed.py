@@ -3,16 +3,33 @@ This module defines fixed-pont numbers with a maximum value,
 that is, multiprecision and bounded. Hence "MP-B".
 """
 
+from enum import IntEnum
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import default_repr, enum_repr
 
 from .context import SizedContext
 from .number import RealFloat, Float
 from .mp_fixed import MPFixedContext
-from .round import RoundingMode, RoundingDirection
+from .round import RoundingMode
 from .gmp import mpfr_value
+
+
+@enum_repr
+class FixedOverflowKind(IntEnum):
+    """
+    Overflow behavior for bounded, fixed-point rounding.
+
+    This is used to specify what value to produce when
+    a value is larger (in magnitude) than the maximum value.
+    - `OVERFLOW`: raise an OverflowError
+    - `SATURATE`: produce the (correctly signed) maximum value
+    - `WRAP`: produce the modulus over the ordinals
+    """
+    OVERFLOW = 0
+    SATURATE = 1
+    WRAP = 2
 
 
 @default_repr
@@ -50,7 +67,10 @@ class MPBFixedContext(SizedContext):
     rm: RoundingMode
     """rounding mode"""
 
-    enbale_nan: bool
+    overflow: FixedOverflowKind
+    """overflow behavior"""
+
+    enable_nan: bool
     """is NaN representable?"""
 
     enable_inf: bool
@@ -83,6 +103,7 @@ class MPBFixedContext(SizedContext):
         nmin: int,
         maxval: RealFloat,
         rm: RoundingMode,
+        overflow: FixedOverflowKind,
         *,
         neg_maxval: Optional[RealFloat] = None,
         enable_nan: bool = False,
@@ -96,6 +117,8 @@ class MPBFixedContext(SizedContext):
             raise TypeError(f'Expected \'RealFloat\' for maxval={maxval}, got {type(maxval)}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if not isinstance(overflow, FixedOverflowKind):
+            raise TypeError(f'Expected \'FixedOverflowKind\' for overflow={overflow}, got {type(overflow)}')
         if not isinstance(enable_nan, bool):
             raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
         if not isinstance(enable_inf, bool):
@@ -143,6 +166,7 @@ class MPBFixedContext(SizedContext):
         self.pos_maxval = maxval
         self.neg_maxval = neg_maxval
         self.rm = rm
+        self.overflow = overflow
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
         self.nan_value = nan_value
@@ -159,6 +183,7 @@ class MPBFixedContext(SizedContext):
             nmin=self.nmin,
             maxval=self.pos_maxval,
             rm=rm,
+            overflow=self.overflow,
             neg_maxval=self.neg_maxval,
             enable_nan=self.enable_nan,
             enable_inf=self.enable_inf,
@@ -201,6 +226,13 @@ class MPBFixedContext(SizedContext):
 
     def round_params(self):
         return self._mp_ctx.round_params()
+
+    def _is_overflowing(self, x: RealFloat) -> bool:
+        """Checks if `x` is overflowing."""
+        if x.s:
+            return x < self.neg_maxval
+        else:
+            return x > self.pos_maxval
 
     def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
         """
@@ -247,15 +279,23 @@ class MPBFixedContext(SizedContext):
         xr = xr.round(min_n=n, rm=self.rm)
 
         # step 4. check for overflow
-        if xr.s:
-            if xr > self.pos_maxval:
-                # overflow (positive)
-                raise NotImplementedError
-        else:
-            if xr < self.neg_maxval:
-                # overflow (negative)
-                raise NotImplementedError
+        if self._is_overflowing(xr):
+            # overflow
+            match self.overflow:
+                case FixedOverflowKind.OVERFLOW:
+                    raise OverflowError(f'Overflow when rounding {x} under context {self}')
+                case FixedOverflowKind.SATURATE:
+                    return self.maxval(s=xr.s)
+                case FixedOverflowKind.WRAP:
+                    # wrap around the ordinals
+                    ord_abs = self.to_ordinal(Float(x=xr, ctx=self)) - self._neg_maxval_ord
+                    total_ord = self._pos_maxval_ord - self._neg_maxval_ord + 1
+                    ord_mod = (ord_abs % total_ord) + self._neg_maxval_ord
+                    return self.from_ordinal(ord_mod, infval=False)
+                case _:
+                    raise RuntimeError(f'unreachable overflow kind {self.overflow}')
 
+        # step 5. return the rounded value
         return Float(x=xr, ctx=self)
 
     def _round_at(self, x, n: Optional[int]) -> Float:

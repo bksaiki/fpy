@@ -82,8 +82,6 @@ Real Context
    :members:
    :show-inheritance:
 
-
-
 Common Rounding Contexts
 --------------------------
 .. manually documented: keep in sync with `fpy2/number/__init__.py`
@@ -319,5 +317,9 @@ Additional types for specifying rounding operations.
    :show-inheritance:
 
 .. autoclass:: fpy2.ExtFloatNanKind
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.FixedOverflowKind
    :members:
    :show-inheritance:

@@ -9,7 +9,7 @@ from .ext_float import ExtFloatContext, ExtFloatNanKind
 from .ieee754 import IEEEContext
 from .mp_fixed import MPFixedContext
 from .mp_float import MPFloatContext
-from .mpb_fixed import MPBFixedContext
+from .mpb_fixed import MPBFixedContext, FixedOverflowKind
 from .mpb_float import MPBFloatContext
 from .mps_float import MPSFloatContext
 from .real import RealContext
