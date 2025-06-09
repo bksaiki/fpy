@@ -2,10 +2,9 @@
 This module defines the usual fixed-width fixed-point numbers.
 """
 
-from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import bitmask, default_repr
 
 from .context import EncodableContext
 from .mpb_fixed import MPBFixedContext, FixedOverflowKind
@@ -33,6 +32,15 @@ class FixedContext(MPBFixedContext, EncodableContext):
     `EncodableContext`, since the representation has a well-defined encoding.
     """
 
+    signed: bool
+    """is the representation signed?"""
+
+    scale: int
+    """the implicit scale factor of the representation"""
+
+    nbits: int
+    """the total number of bits in the representation"""
+
     def __init__(
         self,
         signed: bool,
@@ -46,11 +54,110 @@ class FixedContext(MPBFixedContext, EncodableContext):
         nan_value: Optional[Float] = None,
         inf_value: Optional[Float] = None
     ):
-        raise NotImplementedError
+        nmin = scale - 1
+        pos_maxval, neg_maxval = _fixed_to_mpb_fixed(signed, scale, nbits)
+
+        super().__init__(
+            nmin,
+            pos_maxval,
+            rm,
+            overflow,
+            neg_maxval=neg_maxval,
+            enable_nan=enable_nan,
+            enable_inf=enable_inf,
+            nan_value=nan_value,
+            inf_value=inf_value
+        )
+
+        self.signed = signed
+        self.scale = scale
+        self.nbits = nbits
+
+
+    def with_rm(self, rm: RoundingMode) -> 'FixedContext':
+        return FixedContext(
+            self.signed,
+            self.scale,
+            self.nbits,
+            rm,
+            self.overflow,
+            enable_nan=self.enable_nan,
+            enable_inf=self.enable_inf,
+            nan_value=self.nan_value,
+            inf_value=self.inf_value
+        )
+
+    def normalize(self, x: Float):
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got x={x}')
+        x = super().normalize(x)
+        x.ctx = self
+        return x
+
+    def round(self, x) -> Float:
+        x = super().round(x)
+        x.ctx = self
+        return x
+
+    def round_at(self, x, n: int) -> Float:
+        if not isinstance(n, int):
+            raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
+        x = super().round_at(x, n)
+        x.ctx = self
+        return x
+
+    def minval(self, s: bool = False) -> Float:
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        x = super().minval(s)
+        x.ctx = self
+        return x
+
+    def maxval(self, s: bool = False) -> Float:
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        x = super().maxval(s)
+        x.ctx = self
+        return x
+
+    def from_ordinal(self, x: int, infval: bool = False) -> Float:
+        if not isinstance(x, int):
+            raise TypeError(f'Expected \'int\', got x={x}')
+        y = super().from_ordinal(x, infval)
+        y.ctx = self
+        return y
 
     def encode(self, x: Float) -> int:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got x={x}')
+        if not self.is_representable(x):
+            raise ValueError(f'Expected representable value, got x={x} for self={self}')
         raise NotImplementedError
 
     def decode(self, x: int) -> Float:
+        if not isinstance(x, int):
+            raise TypeError(f'Expected \'int\', got x={x}')
         raise NotImplementedError
+
+
+def _fixed_to_mpb_fixed(
+    signed: bool,
+    scale: int,
+    nbits: int,
+) -> tuple[RealFloat, RealFloat]:
+    """
+    Computes the maximum positive and negative values
+    for a fixed-width fixed-point representation.
+    """
+
+    if signed:
+        # signed fixed-point numbers
+        pos_maxval = RealFloat(exp=scale, c=bitmask(nbits - 1))
+        neg_maxval = RealFloat(s=True, exp=scale, c=1 << (nbits - 1))
+    else:
+        # unsigned fixed-point numbers
+        pos_maxval = RealFloat(exp=scale, c=bitmask(nbits))
+        neg_maxval = RealFloat.zero()
+
+    return pos_maxval, neg_maxval
 

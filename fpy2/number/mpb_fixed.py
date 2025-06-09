@@ -124,8 +124,8 @@ class MPBFixedContext(SizedContext):
         if not isinstance(enable_inf, bool):
             raise TypeError(f'Expected \'bool\' for enable_inf={enable_inf}, got {type(enable_inf)}')
 
-        if maxval.s:
-            raise ValueError(f'Expected positive maximum value, got {maxval}')
+        if maxval.is_negative():
+            raise ValueError(f'Expected non-negative maximum value, got {maxval}')
         if not maxval.is_more_significant(nmin):
             raise ValueError(f'maxval={maxval} is an unrepresentable value')
 
@@ -133,8 +133,8 @@ class MPBFixedContext(SizedContext):
             neg_maxval = RealFloat(s=True, x=maxval)
         elif not isinstance(neg_maxval, RealFloat):
             raise TypeError(f'Expected \'RealFloat\' for neg_maxval={neg_maxval}, got {type(neg_maxval)}')
-        elif not neg_maxval.s:
-            raise ValueError(f'Expected negative maximum value, got {neg_maxval}')
+        elif neg_maxval.is_positive():
+            raise ValueError(f'Expected a non-positive maximum value, got {neg_maxval}')
         elif not neg_maxval.is_more_significant(nmin):
             raise ValueError(f'neg_maxval={neg_maxval} is an unrepresentable value')
 
@@ -320,6 +320,8 @@ class MPBFixedContext(SizedContext):
         return self._round_at(x, None)
 
     def round_at(self, x, n: int):
+        if not isinstance(n, int):
+            raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
         return self._round_at(x, n)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
