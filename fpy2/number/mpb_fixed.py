@@ -10,8 +10,8 @@ from typing import Optional
 from ..utils import default_repr, enum_repr
 
 from .context import SizedContext
-from .number import RealFloat, Float
 from .mp_fixed import MPFixedContext
+from .number import RealFloat, Float
 from .round import RoundingMode
 from .gmp import mpfr_value
 

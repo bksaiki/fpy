@@ -6,6 +6,7 @@ from .number import RealFloat, Float
 # Contexts
 from .context import Context, OrdinalContext, SizedContext, EncodableContext
 from .ext_float import ExtFloatContext, ExtFloatNanKind
+from .fixed import FixedContext
 from .ieee754 import IEEEContext
 from .mp_fixed import MPFixedContext
 from .mp_float import MPFloatContext

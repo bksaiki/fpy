@@ -27,6 +27,7 @@ from .number import (
     EncodableContext,
     # concrete context types
     ExtFloatContext,
+    FixedContext,
     MPFixedContext,
     MPFloatContext,
     MPBFixedContext,
