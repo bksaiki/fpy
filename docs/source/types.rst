@@ -10,7 +10,7 @@ a typed lambda calculus demonstrating the core features of FPy.
 
 The :math:`\lambda_{FPy}` language consists of the usual
 terms found in the simply typed lambda calculus (STLC).
-The termainsl of :math:`\lambda_{FPy}` consists of
+The terminals of :math:`\lambda_{FPy}` consists of
 boolean values, :math:`\texttt{true}` and :math:`\texttt{false}`,
 real number constants, :math:`n`, and variables, :math:`x`.
 
@@ -26,7 +26,10 @@ real number constants, :math:`n`, and variables, :math:`x`.
       & \mid & \text{with}\; R \;\text{in}\; e \\
     \end{array}
 
-
+All expressions in :math:`\lambda_{FPy}` have an implcit *rounding context*
+which defines how real numbers (or real-valued operations) should be rounded.
+The *context expression* :math:`\text{with}\; R\; \text{in}\; e`
+allows explicit control over the rounding context.
 
 Like the STLC, types in :math:`\lambda_{FPy}` consist of
 base types, the boolean and real types, and function types.
@@ -39,10 +42,12 @@ base types, the boolean and real types, and function types.
       & \mid & T_1 \overset{\small R}{\rightarrow} T_2
     \end{array}
 
-The real number type is parameterized by a *rounding context*,
-:math:`R`, which defines how real numbers should be rounded.
-Similarly, each function type is parameterized by a *rounding context*,
-which may be viewed as a *coeffect* in the type system.
+The real number type is parameterized by the rounding context, :math:`R`.
+Thus the type :math:`\texttt{Real}\; R` may be read as the type
+of real numbers rounded under the rounding context :math:`R`.
+Function type are also parameterized by a rounding context,
+which may be viewed as a *coeffect* in the type system:
+functions in :math:`\lambda_{FPy}` require a rounding context from the caller.
 Unlike other coeffect systems,
 a coeffect in this system consists of at most one rounding context:
 rounding contexts are not additive.
