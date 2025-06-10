@@ -46,84 +46,91 @@ which is one of the following:
       & \mid & T_1 \to T_2
     \end{array}
 
-The typing judgements for the core language of FPy are
-as follows.
+The typing judgements for the core language of FPy are below.
+The symbol :math:`\Gamma` is a typing context and the judgement
+:math:`\rho : T` means the return type of the current function is :math:`T`.
 
 .. math::
 
     \frac{}
-         {\Gamma, R \vdash \text{true} : \text{Bool}}
+         {\Gamma; R \vdash \text{true} : \text{Bool}}
     \quad\text{(T-True)}\\
 
 .. math::
 
     \frac{}
-         {\Gamma, R \vdash \text{false} : \text{Bool}}
+         {\Gamma; R \vdash \text{false} : \text{Bool}}
     \quad\text{(T-False)}\\
 
 .. math::
 
     \frac{}
-         {\Gamma, R \vdash n : \text{Real}\; R}
+         {\Gamma; R \vdash n : \text{Real}\; R}
     \quad\text{(T-Real)}\\
 
 .. math::
 
     \frac{x : T \in \Gamma}
-         {\Gamma, R \vdash x : T}
+         {\Gamma; R \vdash x : T}
     \quad \text{(T-Var)}
 
 .. math::
 
-    \frac{\Gamma, R \vdash f : T \to \text{Bool}
-         \qquad \Gamma, R \vdash e : T }
-         {\Gamma, R \vdash f\; e : \text{Bool}}
+    \frac{\Gamma; R \vdash f : T \to \text{Bool}
+         \qquad \Gamma; R \vdash e : T }
+         {\Gamma; R \vdash f\; e : \text{Bool}}
     \quad\text{(T-BoolApp)}
 
 .. math::
 
-    \frac{\Gamma, R_1 \vdash f : T \to \text{Real}\; R_2
-         \qquad \Gamma, R_1 \vdash e : T }
-         {\Gamma, R_1 \vdash f\; e : \text{Real}\; R_2}
+    \frac{\Gamma; R_1 \vdash f : T \to \text{Real}\; R_2
+         \qquad \Gamma; R_1 \vdash e : T }
+         {\Gamma; R_1 \vdash f\; e : \text{Real}\; R_2}
     \quad\text{(T-RealApp)}
 
 .. math::
 
-    \frac{\Gamma, R \vdash x : T
-         \qquad \Gamma, R \vdash e : T }
-         {\Gamma, R \vdash x = e : \text{Unit}}
+    \frac{\Gamma; R \vdash x : T
+         \qquad \Gamma; R \vdash e : T }
+         {\Gamma; R \vdash x = e : \text{Unit}}
     \quad\text{(T-Assign)}
 
 .. math::
 
-    \frac{\Gamma, R \vdash s_1 : \text{Unit}
-         \qquad \Gamma, R \vdash s_2 : \text{Unit} }
-         {\Gamma, R \vdash s_1 ; s_2 : \text{Unit}}
+    \frac{\Gamma; R \vdash s_1 : \text{Unit}
+         \qquad \Gamma; R \vdash s_2 : \text{Unit} }
+         {\Gamma; R \vdash s_1 ; s_2 : \text{Unit}}
     \quad\text{(T-Seq)}
 
 .. math::
 
-    \frac{\Gamma, R \vdash e : \text{Bool}
-         \qquad \Gamma, R \vdash s_1 : \text{Unit}
-         \qquad \Gamma, R \vdash s_2 : \text{Unit} }
-         {\Gamma, R \vdash \text{if}\; e\; \text{then}\; s_1\; \text{else}\; s_2 : \text{Unit} }
+    \frac{\Gamma; R \vdash e : \text{Bool}
+         \qquad \Gamma; R \vdash s_1 : \text{Unit}
+         \qquad \Gamma; R \vdash s_2 : \text{Unit} }
+         {\Gamma; R \vdash \text{if}\; e\; \text{then}\; s_1\; \text{else}\; s_2 : \text{Unit} }
     \quad\text{(T-If)}
 
 .. math::
 
-    \frac{\Gamma, R \vdash e : \text{Bool}
-         \qquad \Gamma, R \vdash s : \text{Unit} }
-         {\Gamma, R \vdash \text{while}\; e\; \text{then}\; s : \text{Unit}  }
+    \frac{\Gamma; R \vdash e : \text{Bool}
+         \qquad \Gamma; R \vdash s : \text{Unit} }
+         {\Gamma; R \vdash \text{while}\; e\; \text{then}\; s : \text{Unit}  }
     \quad\text{(T-While)}
 
 .. math::
 
-    \frac{\Gamma, R_2 \vdash s : \text{Unit}}
-         {\Gamma, R_1 \vdash \text{with}\; R_2\; \text{then}\; s : \text{Unit} }
+    \frac{\Gamma; R_2 \vdash s : \text{Unit}}
+         {\Gamma; R_1 \vdash \text{with}\; R_2\; \text{then}\; s : \text{Unit} }
     \quad\text{(T-Context)}
 
 .. math::
 
-    \frac{\Gamma, R \vdash e : T}
-         {\Gamma, R \vdash \text{ret}\; e : \text{Unit} }
+    \frac{\Gamma; R \vdash e : T}
+         {\Gamma; R \vdash \text{ret}\; e : \text{Unit} }
+    \quad\text{(T-Ret)}
+
+.. math::
+
+    \frac{\Gamma; R \vdash e : T}
+         {\Gamma, \rho : T; R \vdash \text{ret}\; e : \text{Unit} }
     \quad\text{(T-Ret)}
