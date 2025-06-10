@@ -14,6 +14,17 @@ class Definition:
     id: NamedId
     site: _Site
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, Definition)
+            and self.id == other.id
+            and self.site == other.site
+        )
+
+    def __hash__(self):
+        return hash((self.id, self.site))
+
+
 @default_repr
 class _DefineUnion:
     """Union of possible definition sites."""

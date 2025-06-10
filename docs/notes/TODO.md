@@ -9,6 +9,8 @@ Frontend:
    - f-string
  - language:
    - support for vector addition/multiplication
+ - type checker
+   - move types out of AST module
  - formatter:
    - use IndentCtx
 

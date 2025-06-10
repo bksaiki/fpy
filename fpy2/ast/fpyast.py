@@ -54,15 +54,18 @@ class ScalarTypeAnn(TypeAnn):
 
 class RealTypeAnn(TypeAnn):
     """FPy AST: real type annotation"""
+    ctx: Context | NamedId | None
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, ctx: Context | NamedId | None, loc: Optional[Location]):
         super().__init__(loc)
+        self.ctx = ctx
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, RealTypeAnn)
+        # TODO: how to check if contexts are equivalent?
+        return isinstance(other, RealTypeAnn) and self.ctx == other.ctx
 
     def __hash__(self) -> int:
-        return hash(())
+        return hash(self.ctx,)
 
 class BoolTypeAnn(TypeAnn):
     """FPy AST: boolean type annotation"""
@@ -115,6 +118,35 @@ class SizedTensorTypeAnn(TensorTypeAnn):
 
     def __hash__(self) -> int:
         return hash((tuple(self.dims), self.elt))
+
+class FuncTypeAnn(TypeAnn):
+    """FPy AST: function type annotation"""
+    ctx: Context | NamedId
+    args: list[TypeAnn | NamedId]
+    ret: TypeAnn | NamedId
+
+    def __init__(
+        self,
+        ctx: Context | NamedId,
+        args: Sequence[TypeAnn | NamedId],
+        ret: TypeAnn | NamedId,
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.ctx = ctx
+        self.args = list(args)
+        self.ret = ret
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, FuncTypeAnn):
+            return False
+        return (self.ctx == other.ctx
+            and self.args == other.args
+            and self.ret == other.ret
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.ctx, tuple(self.args), self.ret))
 
 
 class Expr(Ast):
