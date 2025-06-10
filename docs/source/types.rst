@@ -32,7 +32,7 @@ The *context expression* :math:`\text{with}\; R\; \text{in}\; e`
 allows explicit control over the rounding context.
 
 Like the STLC, types in :math:`\lambda_{FPy}` consist of
-base types, the boolean and real types, and function types.
+base types (boolean and real types) and function types.
 
 .. math::
 
