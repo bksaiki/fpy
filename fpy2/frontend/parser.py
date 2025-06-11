@@ -208,18 +208,18 @@ class Parser:
         match ann:
             case ast.Name('Real'):
                 # real number with no specific rounding
-                return RealTypeAnn(loc)
+                return RealTypeAnn(None, loc)
             case ast.Name('int'):
                 # Python integer
                 # TODO: add specific rounding
-                return RealTypeAnn(loc)
+                return RealTypeAnn(None, loc)
             case ast.Name('float'):
                 # Python float
                 # TODO: add specific rounding
-                return RealTypeAnn(loc)
+                return RealTypeAnn(None, loc)
             case ast.Name('bool'):
                 # boolean values
-                return RealTypeAnn(loc)
+                return BoolTypeAnn(loc)
             case ast.Subscript(value=ast.Name('Real')):
                 # TODO: implement
                 return AnyTypeAnn(loc)

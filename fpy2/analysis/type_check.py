@@ -4,9 +4,13 @@ from typing import TypeAlias
 
 from ..ast import *
 from ..ast.types import *
+from ..env import ForeignEnv
 from ..number import Context
+from ..transform import ContextInline
 from ..utils import Gensym, Unionfind
+
 from .define_use import DefineUse, DefineUseAnalysis, Definition
+
 
 _Type: TypeAlias = Type | NamedId
 """type: either a type annotation or type variable"""
@@ -148,6 +152,40 @@ class _TypeCheckInstance(Visitor):
     def analyze(self):
         return self._visit_function(self.func, None)
 
+    def _add_context_var(self, ctx: _RCtx) -> _RCtx:
+        """Adds a rounding context variable to the union-find structure."""
+        match ctx:
+            case NamedId():
+                return self.rvars.add(ctx)
+            case Context():
+                return self.rvars.add(ctx)
+            case _:
+                raise RuntimeError(f'unexpected rounding context: {ctx}')
+
+    def _add_type_var(self, ty: _Type) -> _Type:
+        """Adds a type variable to the union-find structure."""
+        match ty:
+            case NamedId():
+                return self.tvars.add(ty)
+            case BoolType():
+                return self.tvars.add(ty)
+            case RealType():
+                ctx = self._add_context_var(ty.ctx)
+                return self.tvars.add(RealType(ctx))
+            case TupleType():
+                elts = [self._add_type_var(elt) for elt in ty.elts]
+                return self.tvars.add(TupleType(*elts))
+            case ListType():
+                elt = self._add_type_var(ty.elt)
+                return self.tvars.add(ListType(elt))
+            case FuncType():
+                rctx = self._add_context_var(ty.ctx)
+                args = [self._add_type_var(arg) for arg in ty.args]
+                ret = self._add_type_var(ty.ret)
+                return self.tvars.add(FuncType(rctx, args, ret))
+            case _:
+                raise RuntimeError(f'unexpected type: {ty}')
+
     def _fresh_type_var(self) -> NamedId:
         """Generates a fresh type variable."""
         tvar = self.gensym.fresh('t')
@@ -206,17 +244,17 @@ class _TypeCheckInstance(Visitor):
             case NamedId():
                 if ty not in fresh:
                     fresh[ty] = self._fresh_type_var()
-                return self.tvars.add(fresh[ty])
+                return self._add_type_var(fresh[ty])
             case BoolType():
-                return self.tvars.add(BoolType())
+                return self._add_type_var(BoolType())
             case RealType():
                 ctx = self._instantiate_context_var(ty.ctx, fresh=fresh)
-                return self.tvars.add(RealType(ctx))
+                return self._add_type_var(RealType(ctx))
             case FuncType():
                 rctx = self._instantiate_context_var(ty.ctx, fresh=fresh)
                 args = [self._instantiate_type_var(arg, fresh=fresh) for arg in ty.args]
                 ret = self._instantiate_type_var(ty.ret, fresh=fresh)
-                return self.tvars.add(FuncType(rctx, args, ret))
+                return self._add_type_var(FuncType(rctx, args, ret))
             case _:
                 raise RuntimeError(f'unreachable type: {ty}')
 
@@ -288,12 +326,10 @@ class _TypeCheckInstance(Visitor):
                 return self.rvars.union(a, b)
             case NamedId(), _:
                 # if `a` is a context variable, unify it with `b`
-                # TODO: unify
-                raise NotImplementedError
+                return self.rvars.union(b, a)
             case _, NamedId():
                 # if `b` is a context variable, unify it with `a`
-                # TODO: unify
-                raise NotImplementedError
+                return self.rvars.union(a, b)
             case Context(), Context():
                 # if both are contexts, unify them
                 # TODO: context equality
@@ -321,7 +357,7 @@ class _TypeCheckInstance(Visitor):
             case RealType(), RealType():
                 # unify the rounding contexts
                 ctx = self._unify_contexts(a.ctx, b.ctx)
-                ty = self.tvars.add(RealType(ctx))
+                ty = self._add_type_var(RealType(ctx))
                 self.tvars.union(ty, a)
                 self.tvars.union(ty, b)
                 return ty
@@ -330,14 +366,14 @@ class _TypeCheckInstance(Visitor):
                 if len(a.elts) != len(b.elts):
                     raise ValueError(f'cannot unify types: a={a} and b={b}')
                 elts = list(map(self._unify_types, a.elts, b.elts))
-                ty = self.tvars.add(TupleType(*elts))
+                ty = self._add_type_var(TupleType(*elts))
                 self.tvars.union(ty, a)
                 self.tvars.union(ty, b)
                 return ty
             case ListType(), ListType():
                 # unify the element type and dimensions
                 elt = self._unify_types(a.elt, b.elt)
-                ty = self.tvars.add(ListType(elt))
+                ty = self._add_type_var(ListType(elt))
                 self.tvars.union(ty, a)
                 self.tvars.union(ty, b)
                 return ty
@@ -385,6 +421,26 @@ class _TypeCheckInstance(Visitor):
             case None | AnyTypeAnn():
                 # generate a type variable
                 return self._fresh_type_var()
+            case BoolTypeAnn():
+                # boolean type
+                return self._add_type_var(BoolType())
+            case RealTypeAnn():
+                # real type
+                if ty.ctx is None:
+                    return self._add_type_var(RealType(self._fresh_context_var()))
+                else:
+                    return self._add_type_var(RealType(ty.ctx))
+            case TupleTypeAnn():
+                # tuple type
+                elt_tys = [self._annotation_to_type(elt) for elt in ty.elts]
+                return self._add_type_var(TupleType(*elt_tys))
+            case SizedTensorTypeAnn():
+                # sized tensor type
+                elt_ty = self._annotation_to_type(ty.elt)
+                arr_ty = elt_ty
+                for _ in ty.dims:
+                    arr_ty = self._add_type_var(ListType(arr_ty))
+                return arr_ty
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
@@ -434,12 +490,12 @@ class _TypeCheckInstance(Visitor):
             case Shape():
                 # special case: shape operator
                 # TODO: unify with a tensor type
-                elt = self.tvars.add(RealType(rctx))
+                elt = self._add_type_var(RealType(rctx))
                 return ListType(elt)
             case Dim():
                 # special case: dimension operator
                 # TODO: unify with a tensor type
-                return self.tvars.add(RealType(rctx))
+                return self._add_type_var(RealType(rctx))
             case Range():
                 # special case: range operator
                 # range: {r} Real a -> List (Real r)
@@ -474,8 +530,8 @@ class _TypeCheckInstance(Visitor):
             case Size():
                 # special case: size operator
                 # size : {r} List a -> Real b -> Real r
-                tup_ty = self.tvars.add(ListType(self._fresh_type_var()))
-                idx_ty = self.tvars.add(RealType(self._fresh_context_var()))
+                tup_ty = self._add_type_var(ListType(self._fresh_type_var()))
+                idx_ty = self._add_type_var(RealType(self._fresh_context_var()))
                 self._unify_types(arg1_ty, tup_ty)
                 self._unify_types(arg2_ty, idx_ty)
                 return RealType(rctx)
@@ -514,20 +570,19 @@ class _TypeCheckInstance(Visitor):
                 # must all be lists 
                 elts: list[_Type] = []
                 for arg in arg_tys:
-                    expect_ty = self.tvars.add(ListType(self._fresh_type_var()))
+                    expect_ty = self._add_type_var(ListType(self._fresh_type_var()))
                     self._unify_types(arg, expect_ty)
                     elts.append(expect_ty)
 
                 # return a list of tuples
-                tup_ty = self.tvars.add(TupleType(*elts))
-                return ListType(tup_ty)
+                return ListType(TupleType(*elts))
             case _:
                 raise RuntimeError(f'unexpected nary operator: {e}')
 
     def _visit_compare(self, e: Compare, trctx: _TRCtx):
         for arg in e.args:
             arg_ty = self._visit_expr(arg, trctx)
-            expect_ty = self.tvars.add(RealType(self._fresh_context_var()))
+            expect_ty = self._add_type_var(RealType(self._fresh_context_var()))
             self._unify_types(arg_ty, expect_ty)
         return BoolType()
 
@@ -545,23 +600,23 @@ class _TypeCheckInstance(Visitor):
         iterable_tys: list[_Type] = []
         for target, iterable in zip(e.targets, e.iterables):
             # iterable : List a
+            elt_ty: _Type = self._fresh_type_var()
             iterable_ty = self._visit_expr(iterable, trctx)
-            expect_ty = self.tvars.add(ListType(self._fresh_type_var()))
+            expect_ty = self._add_type_var(ListType(elt_ty))
             self._unify_types(iterable_ty, expect_ty)
             iterable_tys.append(iterable_ty)
 
             # target : a
-            assert isinstance(expect_ty, ListType)
             match target:
                 case NamedId():
                     # update the typing context
-                    body_tctx[target] = expect_ty.elt
+                    body_tctx[target] = elt_ty
                 case Id():
                     pass
                 case TupleBinding():
                     # unpack the tuple
                     body_tctx = body_tctx.copy()
-                    self._visit_tuple_binding(target, expect_ty.elt, body_tctx)
+                    self._visit_tuple_binding(target, elt_ty, body_tctx)
                 case _:
                     raise RuntimeError(f'unreachable target: {target}')
 
@@ -569,9 +624,29 @@ class _TypeCheckInstance(Visitor):
         return ListType(elt_ty)
 
     def _visit_tuple_ref(self, e: TupleRef, trctx: _TRCtx):
-        value_ty = self._visit_expr(e.value, trctx)
+        #
+        #  value : List a    idx : Real b
+        #  -------------------------------
+        #          value [idx] : a
+
+        arr_ty = self._visit_expr(e.value, trctx)
         slice_tys = [self._visit_expr(slice_, trctx) for slice_ in e.slices]
-        raise NotImplementedError(e, value_ty, slice_tys)
+
+        # recurse through the slices
+        for slice_ty in slice_tys:
+            # value : List a
+            elt_ty = self._fresh_type_var()
+            expect_ty = self._add_type_var(ListType(elt_ty))
+            self._unify_types(arr_ty, expect_ty)
+
+            # slice : Real b
+            expect_ty = self._add_type_var(RealType(self._fresh_context_var()))
+            self._unify_types(slice_ty, expect_ty)
+
+            # value [idx] : a
+            arr_ty = elt_ty
+
+        return arr_ty
 
     def _visit_tuple_set(self, e: TupleSet, trctx: _TRCtx):
         raise NotImplementedError
@@ -589,7 +664,7 @@ class _TypeCheckInstance(Visitor):
     def _visit_tuple_binding(self, binding: TupleBinding, ty: _Type, tctx: _TCtx):
         # unify `ty` with a `TupleType` of the right length
         elts = [self._fresh_type_var() for _ in binding.elts]
-        tuple_ty = self.tvars.add(TupleType(*elts))
+        tuple_ty = self._add_type_var(TupleType(*elts))
         self._unify_types(ty, tuple_ty)
 
         # recurse for additional tuple bindings
@@ -632,28 +707,129 @@ class _TypeCheckInstance(Visitor):
         return (tctx, rctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, trctx: _TRCtx):
-        raise NotImplementedError
+        # lookup the array
+        tctx, _ = trctx
+        if stmt.var not in tctx:
+            raise RuntimeError(f'variable {stmt.var} not found in typing context: {tctx}')
+        arr_ty = tctx[stmt.var]
+
+        slice_tys = [self._visit_expr(slice, trctx) for slice in stmt.slices]
+        val_ty = self._visit_expr(stmt.expr, trctx)
+
+        # recurse through the slices
+        for slice_ty in slice_tys:
+            # arr : List a
+            elt_ty = self._fresh_type_var()
+            expect_ty = self._add_type_var(ListType(elt_ty))
+            self._unify_types(arr_ty, expect_ty)
+
+            # slice : Real b
+            expect_ty = self._add_type_var(RealType(self._fresh_context_var()))
+            self._unify_types(slice_ty, expect_ty)
+
+            # arr [idx] : a
+            arr_ty = elt_ty
+
+        # unify the value type with the element type
+        self._unify_types(arr_ty, val_ty)
+
+        return trctx
 
     def _visit_if1(self, stmt: If1Stmt, trctx: _TRCtx):
-        raise NotImplementedError
+        # type check the condition
+        cond_ty = self._visit_expr(stmt.cond, trctx)
+        cond_ty = self._unify_types(cond_ty, self._add_type_var(BoolType()))
+        # type check the body
+        self._visit_block(stmt.body, trctx)
+        # no new identifiers introduced
+        return trctx
 
     def _visit_if(self, stmt: IfStmt, trctx: _TRCtx):
-        raise NotImplementedError
+        # type check the condition
+        cond_ty = self._visit_expr(stmt.cond, trctx)
+        cond_ty = self._unify_types(cond_ty, self._add_type_var(BoolType()))
+        # type check the bodies
+        ift_trctx = self._visit_block(stmt.ift, trctx)
+        iff_trctx = self._visit_block(stmt.iff, trctx)
+        # identify variables that were introduced in each body
+        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
+        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
+        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
+        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
+        # merge by unification
+        tctx, rctx = trctx
+        ift_tctx, _ = ift_trctx
+        iff_tctx, _ = iff_trctx
+        # merge by unification
+        tctx = tctx.copy()
+        for intro in intros_ift & intros_iff:
+            tctx[intro] = self._unify_types(ift_tctx[intro], iff_tctx[intro])
+        return (tctx, rctx)
 
     def _visit_while(self, stmt: WhileStmt, trctx: _TRCtx):
-        raise NotImplementedError
+        # type check the condition
+        cond_ty = self._visit_expr(stmt.cond, trctx)
+        cond_ty = self._unify_types(cond_ty, self._add_type_var(BoolType()))
+        # type check the body
+        self._visit_block(stmt.body, trctx)
+        # no new identifiers introduced
+        return trctx
 
     def _visit_for(self, stmt: ForStmt, trctx: _TRCtx):
-        raise NotImplementedError
+        tctx, _ = trctx
+        # type check the iterable
+        elt_ty = self._fresh_type_var()
+        iterable_ty = self._visit_expr(stmt.iterable, trctx)
+        expect_ty = self._add_type_var(ListType(elt_ty))
+        self._unify_types(iterable_ty, expect_ty)
+        # create the body typing context
+        body_tctx = tctx.copy()
+        match stmt.target:
+            case NamedId():
+                body_tctx[stmt.target] = elt_ty
+            case Id():
+                pass
+            case TupleBinding():
+                # unpack the tuple
+                body_tctx = body_tctx.copy()
+                self._visit_tuple_binding(stmt.target, elt_ty, body_tctx)
+            case _:
+                raise RuntimeError(f'unreachable target: {stmt.target}')
+
+        # type check the body
+        self._visit_block(stmt.body, (body_tctx, trctx[1]))
+        # no new identifiers introduced
+        # return the original typing context
+        return trctx
 
     def _visit_context(self, stmt: ContextStmt, trctx: _TRCtx):
-        raise NotImplementedError
+        tctx, rctx = trctx
+        # update the rounding context
+        match stmt.ctx:
+            case ForeignVal():
+                val = stmt.ctx.val
+                if not isinstance(val, Context):
+                    raise RuntimeError(f'unexpected context value: {val}')
+                new_rctx: _RCtx = val
+            case _:
+                raise RuntimeError(f'unexpected rounding context: {stmt.ctx}')
+
+        # type check the body 
+        new_rctx = self._add_context_var(new_rctx)
+        body_trctx = self._visit_block(stmt.body, (tctx, new_rctx))
+
+        # use the old rounding context
+        tctx, _ = body_trctx
+        return (tctx, rctx)
 
     def _visit_assert(self, stmt: AssertStmt, trctx: _TRCtx):
-        raise NotImplementedError
+        cond_ty = self._visit_expr(stmt.test, trctx)
+        cond_ty = self._unify_types(cond_ty, self._add_type_var(BoolType()))
+        return trctx
 
     def _visit_effect(self, stmt: EffectStmt, trctx: _TRCtx):
-        raise NotImplementedError
+        self._visit_expr(stmt.expr, trctx)
+        return trctx
 
     def _visit_return(self, stmt: ReturnStmt, trctx: _TRCtx) -> _TRCtx:
         ty = self._visit_expr(stmt.expr, trctx)
@@ -693,7 +869,7 @@ class _TypeCheckInstance(Visitor):
         self.ret_type = self._resolve_type(self.ret_type)
 
         # generalize the return type
-        fun_ty = self.tvars.add(FuncType(rctx, arg_tys, self.ret_type))
+        fun_ty = self._add_type_var(FuncType(rctx, arg_tys, self.ret_type))
         return self._generalize_type(fun_ty)
 
     # override for typing hint
@@ -702,7 +878,7 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_expr(self, expr: Expr, trctx: _TRCtx) -> _Type:
         ty = super()._visit_expr(expr, trctx)
-        return self.tvars.add(ty)
+        return self._add_type_var(ty)
 
 
 class TypeCheck:
@@ -716,7 +892,7 @@ class TypeCheck:
     """
 
     @staticmethod
-    def check(func):
+    def check(func, env: ForeignEnv):
         """
         Analyzes the function for type errors.
 
@@ -725,8 +901,9 @@ class TypeCheck:
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
 
+        func = ContextInline.apply(func, env)
         def_use = DefineUse.analyze(func)
         inst = _TypeCheckInstance(func, def_use)
         ty = inst.analyze()
-        print(ty)
+        print(func.name, ty)
 

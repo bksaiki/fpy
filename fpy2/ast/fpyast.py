@@ -54,9 +54,9 @@ class ScalarTypeAnn(TypeAnn):
 
 class RealTypeAnn(TypeAnn):
     """FPy AST: real type annotation"""
-    ctx: Context | NamedId | None
+    ctx: Context | None
 
-    def __init__(self, ctx: Context | NamedId | None, loc: Optional[Location]):
+    def __init__(self, ctx: Context | None, loc: Optional[Location]):
         super().__init__(loc)
         self.ctx = ctx
 

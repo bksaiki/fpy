@@ -155,7 +155,7 @@ def _apply_decorator(
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
 
     # type checking
-    TypeCheck.check(ast)
+    TypeCheck.check(ast, env)
 
     # wrap the IR in a Function
     return Function(ast, env)
