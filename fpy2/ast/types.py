@@ -45,22 +45,22 @@ class RealType(ScalarType):
 
 class TupleType(Type):
     """Tuple type."""
-    types: tuple[Type | NamedId, ...]
+    elts: tuple[Type | NamedId, ...]
 
-    def __init__(self, *types: Type):
-        self.types = types
+    def __init__(self, *elts: Type | NamedId):
+        self.elts = elts
 
     def __eq__(self, other):
-        return isinstance(other, TupleType) and self.types == other.types
+        return isinstance(other, TupleType) and self.elts == other.elts
 
     def __hash__(self):
-        return hash(self.types)
+        return hash(self.elts)
 
 class SizedTensorType(Type):
     dims: list[int | NamedId]
-    elt: Type
+    elt: Type | NamedId
 
-    def __init__(self, dims: Sequence[int | NamedId], elt: Type):
+    def __init__(self, dims: Sequence[int | NamedId], elt: Type | NamedId):
         self.dims = list(dims)
         self.elt = elt
 
@@ -72,7 +72,7 @@ class SizedTensorType(Type):
     def __hash__(self):
         return hash((tuple(self.dims), self.elt))
 
-class FunctionType(Type):
+class FuncType(Type):
     """Function type."""
     ctx: Context | NamedId
     args: tuple[Type | NamedId, ...]
@@ -84,7 +84,7 @@ class FunctionType(Type):
         self.ret = ret
 
     def __eq__(self, other):
-        return (isinstance(other, FunctionType) and
+        return (isinstance(other, FuncType) and
                 self.ctx == other.ctx and
                 self.args == other.args and
                 self.ret == other.ret)

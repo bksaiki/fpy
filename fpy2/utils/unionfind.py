@@ -79,7 +79,7 @@ class Unionfind(Generic[T]):
         if x not in self._parent:
             raise KeyError(x)
         if y not in self._parent:
-            raise KeyError(y)
+            raise KeyError(y, self._parent)
 
         root_x = self._find(x)
         root_y = self._find(y)
