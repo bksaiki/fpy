@@ -29,18 +29,37 @@ class Unionfind(Generic[T]):
     def __contains__(self, x: T) -> bool:
         return x in self._parent
 
-    def add(self, x: T) -> None:
+    def add(self, x: T) -> T:
         """
         Add an element `x` to the union-find.
-        If `x` is already present, this is a no-op.
+        Returns the representative of the set containing `x`.
         """
         if x not in self._parent:
             self._parent[x] = x
+        return self._find_no_compress(x)
+
+    def _find_no_compress(self, x: T) -> T:
+        """
+        Finds the representative of the set containing `x`.
+        Does not use path compression.
+        """
+        parent = self._parent[x]
+        while x != parent:
+            x = parent
+            parent = self._parent[x]
+        return x
 
     def _find(self, x: T) -> T:
-        if self._parent[x] != x:
-            self._parent[x] = self._find(self._parent[x])  # Path compression
-        return self._parent[x]
+        # use path compression
+        parent = self._parent[x]
+        while x != parent:
+            # path compression
+            gparent = self._parent[parent]
+            self._parent[x] = gparent
+            # advance twice
+            x = gparent
+            parent = self._parent[x]
+        return x
 
     def find(self, x: T) -> T:
         """

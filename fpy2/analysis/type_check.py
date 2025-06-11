@@ -125,6 +125,8 @@ _ternary_table: dict[type[TernaryOp], FuncTypeAnn] = {
     Fma: _Real3ary,
 }
 
+_LETTERS = 'abcdefghijklmnopqrstuvwxyz'
+
 
 class _TypeCheckInstance(Visitor):
     """Single-use instance of type checking."""
@@ -132,7 +134,8 @@ class _TypeCheckInstance(Visitor):
     def_use: DefineUseAnalysis
     types: dict[Definition, _Type]
     ret_type: Optional[_Type]
-    tvars: Unionfind[_TCtx | _RCtx]
+    tvars: Unionfind[_Type]
+    rvars: Unionfind[_RCtx]
     gensym: Gensym
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
@@ -141,48 +144,162 @@ class _TypeCheckInstance(Visitor):
         self.types = {}
         self.ret_type = None
         self.tvars = Unionfind()
+        self.rvars = Unionfind()
         self.gensym = Gensym()
 
     def analyze(self):
         return self._visit_function(self.func, None)
 
-    def _inst_rec(self, ty: _Type, to_tvar: dict[NamedId, NamedId]) -> _Type:
+    def _fresh_type_var(self) -> NamedId:
+        """Generates a fresh type variable."""
+        tvar = self.gensym.fresh('t')
+        self.tvars.add(tvar)
+        return tvar
+
+    def _fresh_context_var(self) -> NamedId:
+        """Generates a fresh context variable."""
+        rvar = self.gensym.fresh('r')
+        self.rvars.add(rvar)
+        return rvar
+
+    def _generalized_type_var(self, counter: int) -> NamedId:
+        """Generates a type variable during generalization."""
+        assert counter >= 0
+        quo, rem = divmod(counter, 26)
+        suffix = '' if quo == 0 else str(quo)
+        return NamedId(f't{_LETTERS[rem]}{suffix}')
+
+    def _generalized_context_var(self, counter: int) -> NamedId:
+        """Generates a context variable during generalization."""
+        assert counter >= 0
+        quo, rem = divmod(counter, 26)
+        suffix = '' if quo == 0 else str(quo)
+        return NamedId(f'r{_LETTERS[rem]}{suffix}')
+
+    def _instantiate_context_var(
+        self,
+        ctx: _RCtx, *,
+        fresh: Optional[dict[NamedId, NamedId]] = None
+    ) -> _RCtx:
+        """Instantiates a rounding context with fresh context variables."""
+        if fresh is None:
+            fresh = {}
+
+        match ctx:
+            case NamedId():
+                if ctx not in fresh:
+                    fresh[ctx] = self._fresh_context_var()
+                return fresh[ctx]
+            case Context():
+                return ctx
+            case _:
+                raise RuntimeError(f'unreachable rounding context: {ctx}')
+
+    def _instantiate_type_var(
+        self,
+        ty: _Type, *,
+        fresh: Optional[dict[NamedId, NamedId]] = None
+    ) -> _Type:
+        """Instantiates a type with fresh type variables."""
+        if fresh is None:
+            fresh = {}
+
         match ty:
             case NamedId():
-                if ty not in to_tvar:
-                    to_tvar[ty] = self.gensym.fresh()
-                return to_tvar[ty]
+                if ty not in fresh:
+                    fresh[ty] = self._fresh_type_var()
+                return fresh[ty]
             case BoolTypeAnn():
                 return BoolTypeAnn(None)
             case RealTypeAnn():
-                match ty.ctx:
-                    case None | Context():
-                        return RealTypeAnn(ty.ctx, None)
-                    case NamedId():
-                        if ty not in to_tvar:
-                            to_tvar[ty.ctx] = self.gensym.fresh()
-                        return RealTypeAnn(to_tvar[ty.ctx], None)
-                    case _:
-                        raise RuntimeError(f'unreachable type context: {ty.ctx}')
+                ctx = None if ty.ctx is None else self._instantiate_context_var(ty.ctx, fresh=fresh)
+                return RealTypeAnn(ctx, None)
             case FuncTypeAnn():
-                if isinstance(ty.ctx, NamedId):
-                    if ty.ctx not in to_tvar:
-                        to_tvar[ty.ctx] = self.gensym.fresh()
-                    rctx: _RCtx = to_tvar[ty.ctx]
-                else:
-                    rctx = ty.ctx
-                args = [self._inst_rec(arg, to_tvar) for arg in ty.args]
-                ret = self._inst_rec(ty.ret, to_tvar)
+                rctx = self._instantiate_context_var(ty.ctx, fresh=fresh)
+                args = [self._instantiate_type_var(arg, fresh=fresh) for arg in ty.args]
+                ret = self._instantiate_type_var(ty.ret, fresh=fresh)
                 return FuncTypeAnn(rctx, args, ret, None)
             case _:
                 raise RuntimeError(f'unreachable type: {ty}')
 
-    def _inst(self, ty: _Type):
-        """Instantiates a function type annotation with fresh type variables."""
-        to_tvar: dict[NamedId, NamedId] = {}
-        return self._inst_rec(ty, to_tvar)
+    def _generalize_context(
+        self,
+        ctx: _RCtx, *,
+        counters: Optional[list[int]] = None, # mutable_tuple[int, int]
+        rename: Optional[dict[NamedId, NamedId]] = None,
+    ) -> _RCtx:
+        """Generalizes a rounding context, replacing context variables with canonical ones."""
+        if counters is None:
+            counters = [0, 0]
+        if rename is None:
+            rename = {}
 
-    def _unify(self, a: _Type, b: _Type) -> _Type:
+        match ctx:
+            case NamedId():
+                if ctx not in rename:
+                    rename[ctx] = self._generalized_context_var(counters[1])
+                    counters[1] += 1
+                return rename[ctx]
+            case Context():
+                return ctx
+            case _:
+                raise RuntimeError(f'unreachable rounding context: {ctx}')
+
+    def _generalize_type(
+        self,
+        ty: _Type, *,
+        counters: Optional[list[int]] = None, # mutable_tuple[int, int]
+        rename: Optional[dict[NamedId, NamedId]] = None,
+    ) -> _Type:
+        """Generalizes a type, replacing type variables with canonical ones."""
+        if counters is None:
+            counters = [0, 0]
+        if rename is None:
+            rename = {}
+
+        ty = self.tvars.find(ty)
+        match ty:
+            case NamedId():
+                if ty not in rename:
+                    rename[ty] = self._generalized_type_var(counters[0])
+                    counters[0] += 1
+                return rename[ty]
+            case BoolTypeAnn():
+                return BoolTypeAnn(None)
+            case RealTypeAnn():
+                ctx = None if ty.ctx is None else self._generalize_context(ty.ctx, counters=counters, rename=rename)
+                return RealTypeAnn(ctx, None)
+            case FuncTypeAnn():
+                rctx = self._generalize_context(ty.ctx, counters=counters, rename=rename)
+                args = [self._generalize_type(arg, counters=counters, rename=rename) for arg in ty.args]
+                ret = self._generalize_type(ty.ret, counters=counters, rename=rename)
+                return FuncTypeAnn(rctx, args, ret, None)
+            case _:
+                raise RuntimeError(f'unreachable type: {ty}')
+
+    def _unify_contexts(self, a: _RCtx, b: _RCtx) -> _RCtx:
+        """Unifies two rounding contexts, returning the most general unifier."""
+        match a, b:
+            case NamedId(), NamedId():
+                return self.rvars.union(a, b)
+            case NamedId(), _:
+                # if `a` is a context variable, unify it with `b`
+                # TODO: unify
+                raise NotImplementedError
+            case _, NamedId():
+                # if `b` is a context variable, unify it with `a`
+                # TODO: unify
+                raise NotImplementedError
+            case Context(), Context():
+                # if both are contexts, unify them
+                # TODO: context equality
+                if a != b:
+                    raise ValueError(f'cannot unify contexts: a={a} and b={b}')
+                return a
+            case _:
+                raise RuntimeError(f'unreachable a={a}, b={b}')
+
+    def _unify_types(self, a: _Type, b: _Type) -> _Type:
         """Unifies two types, returning the most general unifier."""
         match a, b:
             case NamedId(), NamedId():
@@ -191,19 +308,49 @@ class _TypeCheckInstance(Visitor):
             case NamedId(), _:
                 # if `a` is a type variable, unify it with `b`
                 # TODO: unify
-                return b
+                raise NotImplementedError
             case _, NamedId():
                 # if `b` is a type variable, unify it with `a`
                 # TODO: unify
-                return a
+                raise NotImplementedError
             case BoolTypeAnn(), BoolTypeAnn():
                 # always equal
                 return a
             case RealTypeAnn(), RealTypeAnn():
                 # might need to unify the rounding context
-                raise NotImplementedError(a, b)
+                match a.ctx, b.ctx:
+                    case None, _:
+                        # if `a` has no context, use `b`'s context
+                        return b
+                    case _, None:
+                        # if `b` has no context, use `a`'s context
+                        return a
+                    case _:
+                        # both have contexts, unify them
+                        ctx = self._unify_contexts(a.ctx, b.ctx)
+                        ty = self.tvars.add(RealTypeAnn(ctx, None))
+                        self.tvars.union(ty, a)
+                        self.tvars.union(ty, b)
+                        return ty
             case _:
                 raise ValueError(f'cannot unify types: a={a} and b={b}')
+
+    def _resolve_context(self, ctx: _RCtx) -> _RCtx:
+        """Resolves a rounding context to its representative."""
+        return self.rvars.find(ctx)
+
+    def _resolve_type(self, ty: _Type) -> _Type:
+        """Resolves a type variable to its representative."""
+        ty = self.tvars.find(ty)
+        match ty:
+            case NamedId() | BoolTypeAnn():
+                return ty
+            case RealTypeAnn():
+                # resolve the rounding context
+                ctx = None if ty.ctx is None else self._resolve_context(ty.ctx)
+                return RealTypeAnn(ctx, None)
+            case _:
+                raise RuntimeError(f'unexpected type: {ty}')
 
     def _visit_var(self, e: Var, trctx: _TRCtx):
         tctx, _ = trctx
@@ -249,10 +396,10 @@ class _TypeCheckInstance(Visitor):
         cls = type(e)
         if cls not in _binary_table:
             raise TypeError(f'unknown binary operator: {cls}')
-        fun_ty = _binary_table[cls]
+        fun_ty: _Type = _binary_table[cls]
 
         # instantiate the function type with fresh type variables
-        fun_ty = self._inst(fun_ty)
+        fun_ty = self._instantiate_type_var(fun_ty)
         assert isinstance(fun_ty, FuncTypeAnn)
 
         # compute the types of the arguments
@@ -260,8 +407,10 @@ class _TypeCheckInstance(Visitor):
         arg2_ty = self._visit_expr(e.second, trctx)
 
         # unify the types
-        self._unify(fun_ty.args[0], arg1_ty)
-        self._unify(fun_ty.args[1], arg2_ty)
+        _, rctx = trctx
+        self._unify_contexts(rctx, fun_ty.ctx)
+        self._unify_types(fun_ty.args[0], arg1_ty)
+        self._unify_types(fun_ty.args[1], arg2_ty)
 
         # return type is valid
         # TODO: apply unionfind?
@@ -274,13 +423,17 @@ class _TypeCheckInstance(Visitor):
         raise NotImplementedError
 
     def _visit_compare(self, e: Compare, trctx: _TRCtx):
-        raise NotImplementedError
+        for arg in e.args:
+            arg_ty = self._visit_expr(arg, trctx)
+            self._unify_types(arg_ty, RealTypeAnn(None, None))
+        return BoolTypeAnn(None)
 
     def _visit_call(self, e: Call, trctx: _TRCtx):
         raise NotImplementedError
 
     def _visit_tuple_expr(self, e: TupleExpr, trctx: _TRCtx):
-        raise NotImplementedError
+        elt_tys = [self._visit_expr(elts, trctx) for elts in e.args]
+        return TupleTypeAnn(elt_tys, None)
 
     def _visit_comp_expr(self, e: CompExpr, trctx: _TRCtx):
         raise NotImplementedError
@@ -292,7 +445,11 @@ class _TypeCheckInstance(Visitor):
         raise NotImplementedError
 
     def _visit_if_expr(self, e: IfExpr, trctx: _TRCtx):
-        raise NotImplementedError
+        cond_ty = self._visit_expr(e.cond, trctx)
+        cond_ty = self._unify_types(cond_ty, BoolTypeAnn(None))
+        ift_ty = self._visit_expr(e.ift, trctx)
+        iff_ty = self._visit_expr(e.iff, trctx)
+        return self._unify_types(ift_ty, iff_ty)
 
     def _visit_context_expr(self, e: ContextExpr, trctx: _TRCtx):
         raise NotImplementedError
@@ -301,7 +458,7 @@ class _TypeCheckInstance(Visitor):
         # evaluate the expression to get its type
         ty = self._visit_expr(stmt.expr, trctx)
         if stmt.type is not None:
-            ty = self._unify(stmt.type, ty)
+            ty = self._unify_types(stmt.type, ty)
 
         # bind to variables
         tctx, rctx = trctx
@@ -350,7 +507,7 @@ class _TypeCheckInstance(Visitor):
         if self.ret_type is None:
             self.ret_type = ty
         else:
-            self.ret_type = self._unify(self.ret_type, ty)
+            self.ret_type = self._unify_types(self.ret_type, ty)
         # dummy return value
         return ({}, trctx[1])
 
@@ -361,14 +518,13 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_function(self, func: FuncDef, _: None):
         tctx: _TCtx = {}
-        rctx: _RCtx = self.gensym.fresh('r')
+        rctx: _RCtx = self._fresh_context_var()
 
-        arg_tys: list[TypeAnn] = []
+        arg_tys: list[_Type] = []
         for arg in func.args:
             match arg.type:
                 case None | AnyTypeAnn():
-                    arg_ty = self.gensym.fresh()
-                    self.tvars.add(arg_ty)
+                    arg_ty: _Type = self._fresh_type_var()
                 case _:
                     arg_ty = arg.type
 
@@ -382,15 +538,23 @@ class _TypeCheckInstance(Visitor):
         if self.ret_type is None:
             raise RuntimeError(f'function unexpectedly has no return type: {func}')
 
-        return FuncTypeAnn(rctx, arg_tys, self.ret_type, None)
+        # resolve types
+        rctx = self._resolve_context(rctx)
+        arg_tys = [self._resolve_type(arg_ty) for arg_ty in arg_tys]
+        self.ret_type = self._resolve_type(self.ret_type)
+
+        # generalize the return type
+        fun_ty = FuncTypeAnn(rctx, arg_tys, self.ret_type, None)
+        self.tvars.add(fun_ty)
+        return self._generalize_type(fun_ty)
 
     # override for typing hint
     def _visit_statement(self, stmt: Stmt, trctx: _TRCtx) -> _TRCtx:
         return super()._visit_statement(stmt, trctx)
 
-    # override for typing hint
     def _visit_expr(self, expr: Expr, trctx: _TRCtx) -> _Type:
-        return super()._visit_expr(expr, trctx)
+        ty = super()._visit_expr(expr, trctx)
+        return self.tvars.add(ty)
 
 
 class TypeCheck:
@@ -414,6 +578,7 @@ class TypeCheck:
             raise TypeError(f'expected a \'FuncDef\', got {func}')
 
         def_use = DefineUse.analyze(func)
-        ty = _TypeCheckInstance(func, def_use).analyze()
+        inst = _TypeCheckInstance(func, def_use)
+        ty = inst.analyze()
         print(ty)
 
