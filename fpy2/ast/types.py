@@ -44,7 +44,11 @@ class RealType(ScalarType):
         return hash((self.ctx,))
 
 class TupleType(Type):
-    """Tuple type."""
+    """
+    Tuple type.
+
+    A tuple has a fixed number of elements, each of which can be a different type.
+    """
     elts: tuple[Type | NamedId, ...]
 
     def __init__(self, *elts: Type | NamedId):
@@ -56,24 +60,33 @@ class TupleType(Type):
     def __hash__(self):
         return hash(self.elts)
 
-class SizedTensorType(Type):
-    dims: list[int | NamedId]
+class ListType(Type):
+    """
+    List type (homogeneous tuple).
+
+    A list has a variable number of elements, all of which are of the same type.
+    """
     elt: Type | NamedId
 
-    def __init__(self, dims: Sequence[int | NamedId], elt: Type | NamedId):
-        self.dims = list(dims)
+    def __init__(self, elt: Type | NamedId):
         self.elt = elt
 
     def __eq__(self, other):
-        return (isinstance(other, SizedTensorType) and
-                self.dims == other.dims and
-                self.elt == other.elt)
+        return isinstance(other, ListType) and self.elt == other.elt
 
     def __hash__(self):
-        return hash((tuple(self.dims), self.elt))
+        return hash((self.elt,))
+
 
 class FuncType(Type):
-    """Function type."""
+    """
+    Function type.
+
+    Parameterized by:
+    - `ctx`: the rounding context
+    - `args`: argument types
+    - `ret`: return type
+    """
     ctx: Context | NamedId
     args: tuple[Type | NamedId, ...]
     ret: Type | NamedId

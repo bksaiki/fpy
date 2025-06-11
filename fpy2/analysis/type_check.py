@@ -133,7 +133,6 @@ class _TypeCheckInstance(Visitor):
     types: dict[Definition, _Type]
     ret_type: Optional[_Type]
     tvars: Unionfind[_Type]
-    dvars: Unionfind[_Dim]
     rvars: Unionfind[_RCtx]
     gensym: Gensym
 
@@ -143,7 +142,6 @@ class _TypeCheckInstance(Visitor):
         self.types = {}
         self.ret_type = None
         self.tvars = Unionfind()
-        self.dvars = Unionfind()
         self.rvars = Unionfind()
         self.gensym = Gensym()
 
@@ -155,12 +153,6 @@ class _TypeCheckInstance(Visitor):
         tvar = self.gensym.fresh('t')
         self.tvars.add(tvar)
         return tvar
-
-    def _fresh_dim_var(self) -> NamedId:
-        """Generates a fresh dimension variable."""
-        dvar = self.gensym.fresh('d')
-        self.dvars.add(dvar)
-        return dvar
 
     def _fresh_context_var(self) -> NamedId:
         """Generates a fresh context variable."""
@@ -174,13 +166,6 @@ class _TypeCheckInstance(Visitor):
         quo, rem = divmod(counter, 26)
         suffix = '' if quo == 0 else str(quo)
         return NamedId(f't{_LETTERS[rem]}{suffix}')
-
-    def _generalized_dim_var(self, counter: int) -> NamedId:
-        """Generates a dimension variable during generalization."""
-        assert counter >= 0
-        quo, rem = divmod(counter, 26)
-        suffix = '' if quo == 0 else str(quo)
-        return NamedId(f'd{_LETTERS[rem]}{suffix}')
 
     def _generalized_context_var(self, counter: int) -> NamedId:
         """Generates a context variable during generalization."""
@@ -238,7 +223,7 @@ class _TypeCheckInstance(Visitor):
     def _generalize_context(
         self,
         ctx: _RCtx, *,
-        counters: Optional[list[int]] = None, # mutable_tuple[int, int, int]
+        counters: Optional[list[int]] = None, # mutable_tuple[int, int]
         rename: Optional[dict[NamedId, NamedId]] = None,
     ) -> _RCtx:
         """Generalizes a rounding context, replacing context variables with canonical ones."""
@@ -250,46 +235,23 @@ class _TypeCheckInstance(Visitor):
         match ctx:
             case NamedId():
                 if ctx not in rename:
-                    rename[ctx] = self._generalized_context_var(counters[2])
-                    counters[2] += 1
+                    rename[ctx] = self._generalized_context_var(counters[1])
+                    counters[1] += 1
                 return rename[ctx]
             case Context():
                 return ctx
             case _:
                 raise RuntimeError(f'unreachable rounding context: {ctx}')
 
-    def _generalize_dim(
-        self,
-        dim: _Dim, *,
-        counters: Optional[list[int]] = None, # mutable_tuple[int, int, int]
-        rename: Optional[dict[NamedId, NamedId]] = None,
-    ) -> _Dim:
-        """Generalizes a dimension, replacing dimension variables with canonical ones."""
-        if counters is None:
-            counters = [0, 0]
-        if rename is None:
-            rename = {}
-
-        match dim:
-            case int():
-                return dim
-            case NamedId():
-                if dim not in rename:
-                    rename[dim] = self._generalized_dim_var(counters[1])
-                    counters[1] += 1
-                return rename[dim]
-            case _:
-                raise RuntimeError(f'unexpected dimension: {dim}')
-
     def _generalize_type(
         self,
         ty: _Type, *,
-        counters: Optional[list[int]] = None, # mutable_tuple[int, int, int]
+        counters: Optional[list[int]] = None, # mutable_tuple[int, int]
         rename: Optional[dict[NamedId, NamedId]] = None,
     ) -> _Type:
         """Generalizes a type, replacing type variables with canonical ones."""
         if counters is None:
-            counters = [0, 0, 0]
+            counters = [0, 0]
         if rename is None:
             rename = {}
 
@@ -308,10 +270,9 @@ class _TypeCheckInstance(Visitor):
             case TupleType():
                 elts = [self._generalize_type(elt, counters=counters, rename=rename) for elt in ty.elts]
                 return TupleType(*elts)
-            case SizedTensorType():
-                elts = [self._generalize_type(ty.elt, counters=counters, rename=rename)]
-                dims = [self._generalize_dim(dim, counters=counters, rename=rename) for dim in ty.dims]
-                return SizedTensorType(dims, *elts)
+            case ListType():
+                elt = self._generalize_type(ty.elt, counters=counters, rename=rename)
+                return ListType(elt)
             case FuncType():
                 rctx = self._generalize_context(ty.ctx, counters=counters, rename=rename)
                 args = [self._generalize_type(arg, counters=counters, rename=rename) for arg in ty.args]
@@ -341,26 +302,6 @@ class _TypeCheckInstance(Visitor):
                 return a
             case _:
                 raise RuntimeError(f'unreachable a={a}, b={b}')
-
-    def _unify_dims(self, a: _Dim, b: _Dim) -> _Dim:
-        """Unifies two dimensions, returning the most general unifier."""
-        match a, b:
-            case NamedId(), NamedId():
-                # unify, prefer `a` as the leader
-                return self.dvars.union(a, b)
-            case NamedId(), _:
-                # if `a` is a dimension variable, unify it with `b`
-                return self.dvars.union(b, a)
-            case _, NamedId():
-                # if `b` is a dimension variable, unify it with `a`
-                return self.dvars.union(a, b)
-            case int(), int():
-                # both are integers, must be equal
-                if a != b:
-                    raise ValueError(f'cannot unify dimensions: a={a} and b={b}')
-                return a
-            case _:
-                raise RuntimeError(f'unexpected dimension: {a}, {b}')
 
     def _unify_types(self, a: _Type, b: _Type) -> _Type:
         """Unifies two types, returning the most general unifier."""
@@ -393,17 +334,23 @@ class _TypeCheckInstance(Visitor):
                 self.tvars.union(ty, a)
                 self.tvars.union(ty, b)
                 return ty
-            case SizedTensorType(), SizedTensorType():
+            case ListType(), ListType():
                 # unify the element type and dimensions
-                if len(a.dims) != len(b.dims):
-                    raise ValueError(f'cannot unify types: a={a} and b={b}')
-                dims = list(map(self._unify_dims, a.dims, b.dims))
                 elt = self._unify_types(a.elt, b.elt)
-                ty = self.tvars.add(SizedTensorType(dims, elt))
+                ty = self.tvars.add(ListType(elt))
                 self.tvars.union(ty, a)
                 self.tvars.union(ty, b)
                 return ty
-            case BoolType() | RealType() | TupleType() | SizedTensorType():
+            case TupleType(), ListType():
+                # tuple type is more specific
+                # unify elements with the list element type
+                for elt in a.elts:
+                    self._unify_types(elt, b.elt)
+                return a
+            case ListType(), TupleType():
+                # switch order of arguments
+                return self._unify_types(b, a)
+            case BoolType() | RealType() | TupleType() | ListType():
                 raise ValueError(f'cannot unify types: a={a} and b={b}')
             case _:
                 raise RuntimeError(f'unreachable: a={a} b={b}')
@@ -411,16 +358,6 @@ class _TypeCheckInstance(Visitor):
     def _resolve_context(self, ctx: _RCtx) -> _RCtx:
         """Resolves a rounding context to its representative."""
         return self.rvars.find(ctx)
-
-    def _resolve_dim(self, dim: _Dim) -> _Dim:
-        """Resolves a dimension variable to its representative."""
-        match dim:
-            case int():
-                return dim
-            case NamedId():
-                return self.dvars.find(dim)
-            case _:
-                raise RuntimeError(f'unexpected dimension: {dim}')
 
     def _resolve_type(self, ty: _Type) -> _Type:
         """Resolves a type variable to its representative."""
@@ -436,11 +373,10 @@ class _TypeCheckInstance(Visitor):
                 # resolve each element type
                 elts = [self._resolve_type(elt) for elt in ty.elts]
                 return TupleType(*elts)
-            case SizedTensorType():
+            case ListType():
                 # resolve the element type and dimensions
                 elt = self._resolve_type(ty.elt)
-                dims = [self._resolve_dim(dim) for dim in ty.dims]
-                return SizedTensorType(dims, elt)
+                return ListType(elt)
             case _:
                 raise RuntimeError(f'unexpected type: {ty}')
 
@@ -499,15 +435,15 @@ class _TypeCheckInstance(Visitor):
                 # special case: shape operator
                 # TODO: unify with a tensor type
                 elt = self.tvars.add(RealType(rctx))
-                return SizedTensorType([self._fresh_dim_var()], elt)
+                return ListType(elt)
             case Dim():
                 # special case: dimension operator
                 # TODO: unify with a tensor type
                 return self.tvars.add(RealType(rctx))
             case Range():
                 # special case: range operator
-                # range: {r} Real a -> SizedTensorType[d, Real r]
-                return SizedTensorType([self._fresh_dim_var()], RealType(rctx))
+                # range: {r} Real a -> List (Real r)
+                return ListType(RealType(rctx))
             case _:
                 # lookup type signature for the operator
                 cls = type(e)
@@ -537,9 +473,11 @@ class _TypeCheckInstance(Visitor):
         match e:
             case Size():
                 # special case: size operator
-                # size : {r} Tuple[Any, ...] -> Real a -> Real r
-                # TODO: check if first argument is a tuple
-                self._unify_types(arg2_ty, self.tvars.add(RealType(self._fresh_context_var())))
+                # size : {r} List a -> Real b -> Real r
+                tup_ty = self.tvars.add(ListType(self._fresh_type_var()))
+                idx_ty = self.tvars.add(RealType(self._fresh_context_var()))
+                self._unify_types(arg1_ty, tup_ty)
+                self._unify_types(arg2_ty, idx_ty)
                 return RealType(rctx)
             case _:
                 # lookup type signature for the operator
@@ -565,7 +503,26 @@ class _TypeCheckInstance(Visitor):
         raise NotImplementedError
 
     def _visit_naryop(self, e: NaryOp, trctx: _TRCtx):
-        raise NotImplementedError
+        # argument types
+        arg_tys = [self._visit_expr(arg, trctx) for arg in e.args]
+        # case split on operator type
+        match e:
+            case Zip():
+                # special case: zip operator
+                # zip: {r} List a -> ... -> List (Tuple (a ...))
+
+                # must all be lists 
+                elts: list[_Type] = []
+                for arg in arg_tys:
+                    expect_ty = self.tvars.add(ListType(self._fresh_type_var()))
+                    self._unify_types(arg, expect_ty)
+                    elts.append(expect_ty)
+
+                # return a list of tuples
+                tup_ty = self.tvars.add(TupleType(*elts))
+                return ListType(tup_ty)
+            case _:
+                raise RuntimeError(f'unexpected nary operator: {e}')
 
     def _visit_compare(self, e: Compare, trctx: _TRCtx):
         for arg in e.args:
@@ -587,20 +544,34 @@ class _TypeCheckInstance(Visitor):
 
         iterable_tys: list[_Type] = []
         for target, iterable in zip(e.targets, e.iterables):
+            # iterable : List a
             iterable_ty = self._visit_expr(iterable, trctx)
-            # TODO: unify `iterable_ty` with a `SizedTensorType`
-            expect_ty = self.tvars.add(SizedTensorType([self._fresh_dim_var()], RealType(rctx)))
+            expect_ty = self.tvars.add(ListType(self._fresh_type_var()))
             self._unify_types(iterable_ty, expect_ty)
-            assert isinstance(expect_ty, SizedTensorType)
-            if isinstance(target, NamedId):
-                body_tctx[target] = expect_ty.elt
             iterable_tys.append(iterable_ty)
 
+            # target : a
+            assert isinstance(expect_ty, ListType)
+            match target:
+                case NamedId():
+                    # update the typing context
+                    body_tctx[target] = expect_ty.elt
+                case Id():
+                    pass
+                case TupleBinding():
+                    # unpack the tuple
+                    body_tctx = body_tctx.copy()
+                    self._visit_tuple_binding(target, expect_ty.elt, body_tctx)
+                case _:
+                    raise RuntimeError(f'unreachable target: {target}')
+
         elt_ty = self._visit_expr(e.elt, (body_tctx, rctx))
-        raise NotImplementedError(e, iterable_tys, elt_ty)
+        return ListType(elt_ty)
 
     def _visit_tuple_ref(self, e: TupleRef, trctx: _TRCtx):
-        raise NotImplementedError
+        value_ty = self._visit_expr(e.value, trctx)
+        slice_tys = [self._visit_expr(slice_, trctx) for slice_ in e.slices]
+        raise NotImplementedError(e, value_ty, slice_tys)
 
     def _visit_tuple_set(self, e: TupleSet, trctx: _TRCtx):
         raise NotImplementedError
