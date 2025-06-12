@@ -54,7 +54,7 @@ from .number import (
 
 from .fpc_context import FPCoreContext, NoSuchContextError
 
-from .decorator import fpy, pattern
+from .decorator import fpy, pattern, fpy_prim
 
 from .backend import (
     Backend,
