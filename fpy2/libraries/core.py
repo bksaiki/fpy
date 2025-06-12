@@ -64,6 +64,28 @@ def logb(x: Float, ctx: Context):
     else:
         return Float.from_int(x.e, ctx=ctx)
 
+@fpy_prim
+def ldexp(x: Float, n: Float, ctx: Context) -> Float:
+    """
+    Computes `x * 2**n` with correct rounding.
+
+    If `n` is not an integer, a `ValueError` is raised.
+    Special cases:
+    - If `x` is NaN, the result is NaN.
+    - If `x` is infinite, the result is infinite.
+    """
+    if not n.is_integer():
+        raise ValueError("n must be an integer")
+
+    if x.isnan:
+        return Float(isnan=True, ctx=ctx)
+    elif x.isinf:
+        return Float(s=x.s, isinf=True, ctx=ctx)
+    else:
+        xr = x.as_real()
+        scale = RealFloat.power_of_2(int(n))
+        return Float.from_real(xr * scale, ctx=ctx)
+
 @fpy(ctx=RealContext())
 def modf(x: Real) -> tuple[Real, Real]:
     """
@@ -103,3 +125,4 @@ def max_e(xs: tuple[Real, ...]) -> tuple[Real, bool]:
             largest_e = max(largest_e, logb(x))
 
     return (largest_e, any_non_zero)
+

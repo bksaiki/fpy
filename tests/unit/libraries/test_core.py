@@ -1,7 +1,7 @@
 import unittest
 
 from fpy2 import *
-from fpy2.libraries.core import split, logb, modf
+from fpy2.libraries.core import split, logb, modf, ldexp
 
 class TestCore(unittest.TestCase):
     """Testing core functionality"""
@@ -18,7 +18,7 @@ class TestCore(unittest.TestCase):
         return a.shape == b.shape and all(self.assertNumEqual(x, y) for x, y in zip(a, b))
 
     def test_split(self):
-        """Testing `split` primitive"""
+        """Testing `split` function"""
         self.assertArrayEqual(split(Float.from_int(0), Float.from_int(-1)), NDArray((Float.from_int(0), Float.from_int(0))))
         self.assertArrayEqual(split(Float.from_float(-0.0), Float.from_int(-1)), NDArray((Float.from_float(-0.0), Float.from_float(-0.0))))
         self.assertArrayEqual(split(Float.from_int(1), Float.from_int(-1)), NDArray((Float.from_int(1), Float.from_int(0))))
@@ -29,7 +29,7 @@ class TestCore(unittest.TestCase):
         self.assertArrayEqual(split(Float(s=True, isinf=True), Float.from_int(0)), NDArray((Float(s=True, isinf=True), Float(isinf=True, s=True))))
 
     def test_logb(self):
-        """Testing `logb` primitive"""
+        """Testing `logb` function"""
         self.assertNumEqual(logb(Float.from_int(1)), Float.from_int(0))
         self.assertNumEqual(logb(Float.from_int(2)), Float.from_int(1))
         self.assertNumEqual(logb(Float.from_int(4)), Float.from_int(2))
@@ -41,7 +41,7 @@ class TestCore(unittest.TestCase):
         self.assertNumEqual(logb(Float.from_int(0)), Float(isinf=True, s=True))
 
     def test_modf(self):
-        """Testing `modf` primitive"""
+        """Testing `modf` function"""
         self.assertArrayEqual(modf(Float.from_int(0)), NDArray((Float.from_int(0), Float.from_int(0))))
         self.assertArrayEqual(modf(Float.from_float(-0.0)), NDArray((Float.from_float(-0.0), Float.from_float(-0.0))))
         self.assertArrayEqual(modf(Float.from_int(1)), NDArray((Float.from_int(1), Float.from_int(0))))
@@ -51,3 +51,16 @@ class TestCore(unittest.TestCase):
         self.assertArrayEqual(modf(Float(isinf=True, s=True)), NDArray((Float(s=True), Float(isinf=True, s=True))))
         self.assertArrayEqual(modf(Float(s=True, isinf=True)), NDArray((Float(s=True), Float(isinf=True, s=True))))
         self.assertArrayEqual(modf(Float(s=False, isinf=True)), NDArray((Float(s=False), Float(isinf=True, s=False))))
+
+    def test_ldexp(self):
+        """Testing `ldexp` function"""
+        self.assertNumEqual(ldexp(Float.from_int(1), Float.from_int(0)), Float.from_int(1))
+        self.assertNumEqual(ldexp(Float.from_int(1), Float.from_int(1)), Float.from_int(2))
+        self.assertNumEqual(ldexp(Float.from_int(1), Float.from_int(-1)), Float.from_float(0.5))
+
+        with self.assertRaises(ValueError):
+            ldexp(Float.from_int(1), Float.from_float(0.5))
+
+        self.assertNumEqual(ldexp(Float(isnan=True), Float.from_int(0)), Float(isnan=True))
+        self.assertNumEqual(ldexp(Float(isinf=True), Float.from_int(0)), Float(isinf=True))
+        self.assertNumEqual(ldexp(Float(s=True, isinf=True), Float.from_int(0)), Float(s=True, isinf=True))
