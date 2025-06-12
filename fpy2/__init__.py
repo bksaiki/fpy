@@ -80,6 +80,11 @@ from .utils import (
 )
 
 ###########################################################
+# Re-exports
+
+from titanfp.titanic.ndarray import NDArray
+
+###########################################################
 # typing hints
 
 import typing

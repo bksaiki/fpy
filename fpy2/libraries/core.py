@@ -38,6 +38,33 @@ def logb(x: Float, ctx: Context):
     else:
         return Float.from_int(x.e, ctx=ctx)
 
+@fpy_prim
+def modf(x: Float) -> tuple[Float, Float]:
+    """
+    Decomposes `x` into its integral and fractional parts.
+    The operation is performed exactly.
+
+    Mirroring the behavior of C/C++ `modf`:
+    - if `x` is `+/-0`, the result is `(+/-0, +/-0)`
+    - if `x` is `+/-Inf`, the result is `(+/-0, +/-Inf)`
+    - if `x` is NaN, the result is `(NaN, NaN)`
+    """
+    if x.isnan:
+        ipart = Float(isnan=True, ctx=x.ctx)
+        fpart = Float(isnan=True, ctx=x.ctx)
+    elif x.isinf:
+        ipart = Float(s=x.s, ctx=x.ctx)
+        fpart = Float(s=x.s, isinf=True, ctx=x.ctx)
+    elif x.is_zero():
+        ipart = Float(s=x.s, ctx=x.ctx)
+        fpart = Float(s=x.s, ctx=x.ctx)
+    else:
+        hi, lo = x.as_real().split(1)
+        ipart = Float.from_real(hi, ctx=x.ctx)
+        fpart = Float.from_real(lo, ctx=x.ctx)
+
+    return NDArray((ipart, fpart))
+
 @fpy
 def max_e(xs: tuple[Real, ...]) -> tuple[Real, bool]:
     """
