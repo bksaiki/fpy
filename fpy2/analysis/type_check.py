@@ -321,6 +321,8 @@ class _TypeCheckInstance(Visitor):
 
     def _unify_contexts(self, a: _RCtx, b: _RCtx) -> _RCtx:
         """Unifies two rounding contexts, returning the most general unifier."""
+        a = self.rvars.find(a)
+        b = self.rvars.find(b)
         match a, b:
             case NamedId(), NamedId():
                 return self.rvars.union(a, b)
@@ -341,6 +343,8 @@ class _TypeCheckInstance(Visitor):
 
     def _unify_types(self, a: _Type, b: _Type) -> _Type:
         """Unifies two types, returning the most general unifier."""
+        a = self.tvars.find(a)
+        b = self.tvars.find(b)
         match a, b:
             case NamedId(), NamedId():
                 # unify, prefer `a` as the leader
@@ -386,7 +390,7 @@ class _TypeCheckInstance(Visitor):
             case ListType(), TupleType():
                 # switch order of arguments
                 return self._unify_types(b, a)
-            case BoolType() | RealType() | TupleType() | ListType():
+            case BoolType() | RealType() | TupleType() | ListType(), _:
                 raise ValueError(f'cannot unify types: a={a} and b={b}')
             case _:
                 raise RuntimeError(f'unreachable: a={a} b={b}')
@@ -570,9 +574,10 @@ class _TypeCheckInstance(Visitor):
                 # must all be lists 
                 elts: list[_Type] = []
                 for arg in arg_tys:
-                    expect_ty = self._add_type_var(ListType(self._fresh_type_var()))
+                    elt_ty = self._fresh_type_var()
+                    expect_ty = self._add_type_var(ListType(elt_ty))
                     self._unify_types(arg, expect_ty)
-                    elts.append(expect_ty)
+                    elts.append(self._resolve_type(elt_ty))
 
                 # return a list of tuples
                 return ListType(TupleType(*elts))
@@ -597,14 +602,13 @@ class _TypeCheckInstance(Visitor):
         tctx, rctx = trctx
         body_tctx = tctx.copy()
 
-        iterable_tys: list[_Type] = []
         for target, iterable in zip(e.targets, e.iterables):
             # iterable : List a
             elt_ty: _Type = self._fresh_type_var()
-            iterable_ty = self._visit_expr(iterable, trctx)
             expect_ty = self._add_type_var(ListType(elt_ty))
-            self._unify_types(iterable_ty, expect_ty)
-            iterable_tys.append(iterable_ty)
+            iterable_ty = self._visit_expr(iterable, trctx)
+            iterable_ty = self._unify_types(iterable_ty, expect_ty)
+            elt_ty = self._resolve_type(elt_ty)
 
             # target : a
             match target:
@@ -615,7 +619,6 @@ class _TypeCheckInstance(Visitor):
                     pass
                 case TupleBinding():
                     # unpack the tuple
-                    body_tctx = body_tctx.copy()
                     self._visit_tuple_binding(target, elt_ty, body_tctx)
                 case _:
                     raise RuntimeError(f'unreachable target: {target}')
@@ -625,9 +628,9 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_tuple_ref(self, e: TupleRef, trctx: _TRCtx):
         #
-        #  value : List a    idx : Real b
-        #  -------------------------------
-        #          value [idx] : a
+        #   value : List a    idx : Real b
+        #  --------------------------------
+        #           value [idx] : a
 
         arr_ty = self._visit_expr(e.value, trctx)
         slice_tys = [self._visit_expr(slice_, trctx) for slice_ in e.slices]
@@ -673,7 +676,7 @@ class _TypeCheckInstance(Visitor):
             match bind:
                 case NamedId():
                     # mutate in-place
-                    tctx[bind] = elt
+                    tctx[bind] = self._resolve_type(elt)
                 case Id():
                     pass
                 case TupleBinding():

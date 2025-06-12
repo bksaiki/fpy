@@ -36,18 +36,7 @@ class Unionfind(Generic[T]):
         """
         if x not in self._parent:
             self._parent[x] = x
-        return self._find_no_compress(x)
-
-    def _find_no_compress(self, x: T) -> T:
-        """
-        Finds the representative of the set containing `x`.
-        Does not use path compression.
-        """
-        parent = self._parent[x]
-        while x != parent:
-            x = parent
-            parent = self._parent[x]
-        return x
+        return self._find(x)
 
     def _find(self, x: T) -> T:
         # use path compression
