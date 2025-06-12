@@ -5,6 +5,32 @@ Core numerical functions.
 from fpy2 import *
 from fpy2.typing import *
 
+@fpy_prim
+def split(x: Float, n: Float):
+    """
+    Splits `x` into two parts:
+    - all digits of `x` that are above the `n`th digit
+    - all digits of `x` that are at or below the `n`th digit
+
+    The operation is performed exactly.
+
+    Special cases:
+    - if `x` is NaN, the result is `(NaN, NaN)`
+    - if `x` is infinite, the result is `(x, x)`
+    - if `n` is not an integer, a `ValueError` is raised.
+    """
+
+    if not n.is_integer():
+        raise ValueError("n must be an integer")
+
+    if x.isnan:
+        return NDArray((Float(isnan=True, ctx=x.ctx), Float(isnan=True, ctx=x.ctx)))
+    elif x.isinf:
+        return NDArray((Float(s=x.s, isinf=True, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)))
+    else:
+        hi, lo = x.as_real().split(int(n))
+        return NDArray((Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)))
+
 @fpy
 def _logb_spec(x: Real):
     """
@@ -38,8 +64,8 @@ def logb(x: Float, ctx: Context):
     else:
         return Float.from_int(x.e, ctx=ctx)
 
-@fpy_prim
-def modf(x: Float) -> tuple[Float, Float]:
+@fpy(ctx=RealContext())
+def modf(x: Real) -> tuple[Real, Real]:
     """
     Decomposes `x` into its integral and fractional parts.
     The operation is performed exactly.
@@ -49,21 +75,16 @@ def modf(x: Float) -> tuple[Float, Float]:
     - if `x` is `+/-Inf`, the result is `(+/-0, +/-Inf)`
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
-    if x.isnan:
-        ipart = Float(isnan=True, ctx=x.ctx)
-        fpart = Float(isnan=True, ctx=x.ctx)
-    elif x.isinf:
-        ipart = Float(s=x.s, ctx=x.ctx)
-        fpart = Float(s=x.s, isinf=True, ctx=x.ctx)
-    elif x.is_zero():
-        ipart = Float(s=x.s, ctx=x.ctx)
-        fpart = Float(s=x.s, ctx=x.ctx)
+    if isnan(x):
+        ret = (NAN, NAN)
+    elif isinf(x):
+        ret = (copysign(0, x), x)
+    elif x == 0:
+        ret = (copysign(0, x), copysign(0, x))
     else:
-        hi, lo = x.as_real().split(1)
-        ipart = Float.from_real(hi, ctx=x.ctx)
-        fpart = Float.from_real(lo, ctx=x.ctx)
+        ret = split(x, -1)
 
-    return NDArray((ipart, fpart))
+    return ret
 
 @fpy
 def max_e(xs: tuple[Real, ...]) -> tuple[Real, bool]:

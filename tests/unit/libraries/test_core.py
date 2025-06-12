@@ -1,7 +1,7 @@
 import unittest
 
 from fpy2 import *
-from fpy2.libraries.core import logb, modf
+from fpy2.libraries.core import split, logb, modf
 
 class TestCore(unittest.TestCase):
     """Testing core functionality"""
@@ -9,13 +9,24 @@ class TestCore(unittest.TestCase):
     def assertNumEqual(self, a: Float, b: Float):
         """Assert that two numbers are equal, handling NaN and Inf"""
         if a.isnan or b.isnan:
-            return a.isnan == b.isnan
+            self.assertEqual(a.isnan, b.isnan)
         else:
-            return a == b
+            self.assertEqual(a, b)
 
     def assertArrayEqual(self, a: NDArray, b: NDArray):
         """Assert that two arrays are equal, handling NaN and Inf"""
-        return a.shape == b.shape and all(self.assertNumEqual(a[i], b[i]) for i in range(a.size))
+        return a.shape == b.shape and all(self.assertNumEqual(x, y) for x, y in zip(a, b))
+
+    def test_split(self):
+        """Testing `split` primitive"""
+        self.assertArrayEqual(split(Float.from_int(0), Float.from_int(-1)), NDArray((Float.from_int(0), Float.from_int(0))))
+        self.assertArrayEqual(split(Float.from_float(-0.0), Float.from_int(-1)), NDArray((Float.from_float(-0.0), Float.from_float(-0.0))))
+        self.assertArrayEqual(split(Float.from_int(1), Float.from_int(-1)), NDArray((Float.from_int(1), Float.from_int(0))))
+        self.assertArrayEqual(split(Float.from_float(1.5), Float.from_int(-1)), NDArray((Float.from_int(1), Float.from_float(0.5))))
+
+        self.assertArrayEqual(split(Float(isnan=True), Float.from_int(0)), NDArray((Float(isnan=True), Float(isnan=True))))
+        self.assertArrayEqual(split(Float(isinf=True), Float.from_int(0)), NDArray((Float(isinf=True), Float(isinf=True))))
+        self.assertArrayEqual(split(Float(s=True, isinf=True), Float.from_int(0)), NDArray((Float(s=True, isinf=True), Float(isinf=True, s=True))))
 
     def test_logb(self):
         """Testing `logb` primitive"""

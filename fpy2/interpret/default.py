@@ -400,7 +400,7 @@ class _Interpreter(DefaultVisitor):
                 return rt.eval(fn.ast, args, ctx.round_ctx)
             case Primitive():
                 # calling FPy primitive
-                return fn.func(*args, ctx=ctx.round_ctx)
+                return fn(*args, ctx=ctx.round_ctx)
             case _:
                 # calling foreign function
                 if not callable(fn):
