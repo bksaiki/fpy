@@ -31,6 +31,34 @@ def split(x: Float, n: Float):
         hi, lo = x.as_real().split(int(n))
         return NDArray((Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)))
 
+@fpy(ctx=RealContext())
+def modf(x: Real) -> tuple[Real, Real]:
+    """
+    Decomposes `x` into its integral and fractional parts.
+    The operation is performed exactly.
+
+    Mirroring the behavior of C/C++ `modf`:
+    - if `x` is `+/-0`, the result is `(+/-0, +/-0)`
+    - if `x` is `+/-Inf`, the result is `(+/-0, +/-Inf)`
+    - if `x` is NaN, the result is `(NaN, NaN)`
+    """
+    if isnan(x):
+        ret = (NAN, NAN)
+    elif isinf(x):
+        ret = (copysign(0, x), x)
+    elif x == 0:
+        ret = (copysign(0, x), copysign(0, x))
+    else:
+        ret = split(x, -1)
+
+    return ret
+
+@fpy
+def isinteger(x: Real) -> bool:
+    """Checks if `x` is an integer."""
+    _, fpart = modf(x)
+    return isfinite(fpart) and fpart == 0
+
 @fpy
 def _logb_spec(x: Real):
     """
@@ -64,15 +92,39 @@ def logb(x: Float, ctx: Context):
     else:
         return Float.from_int(x.e, ctx=ctx)
 
-@fpy_prim
+@fpy
+def _ldexp_spec(x: Real, n: Real) -> Real:
+    """
+    Computes `x * 2**n` with correct rounding.
+
+    Special cases:
+    - If `x` is NaN, the result is NaN.
+    - If `x` is infinite, the result is infinite.
+
+    If `n` is not an integer, a `ValueError` is raised.
+    Under the `RealContext`, this function is the specification of ldexp.
+    """
+    assert isinteger(n)
+
+    if isnan(x):
+        ret = NAN
+    elif isinf(x):
+        ret = copysign(INFINITY, x)
+    else:
+        ret = x * pow(2, n)
+
+    return ret
+
+@fpy_prim(spec=_ldexp_spec)
 def ldexp(x: Float, n: Float, ctx: Context) -> Float:
     """
     Computes `x * 2**n` with correct rounding.
 
-    If `n` is not an integer, a `ValueError` is raised.
     Special cases:
     - If `x` is NaN, the result is NaN.
     - If `x` is infinite, the result is infinite.
+
+    If `n` is not an integer, a `ValueError` is raised.
     """
     if not n.is_integer():
         raise ValueError("n must be an integer")
@@ -85,28 +137,6 @@ def ldexp(x: Float, n: Float, ctx: Context) -> Float:
         xr = x.as_real()
         scale = RealFloat.power_of_2(int(n))
         return Float.from_real(xr * scale, ctx=ctx)
-
-@fpy(ctx=RealContext())
-def modf(x: Real) -> tuple[Real, Real]:
-    """
-    Decomposes `x` into its integral and fractional parts.
-    The operation is performed exactly.
-
-    Mirroring the behavior of C/C++ `modf`:
-    - if `x` is `+/-0`, the result is `(+/-0, +/-0)`
-    - if `x` is `+/-Inf`, the result is `(+/-0, +/-Inf)`
-    - if `x` is NaN, the result is `(NaN, NaN)`
-    """
-    if isnan(x):
-        ret = (NAN, NAN)
-    elif isinf(x):
-        ret = (copysign(0, x), x)
-    elif x == 0:
-        ret = (copysign(0, x), copysign(0, x))
-    else:
-        ret = split(x, -1)
-
-    return ret
 
 @fpy
 def max_e(xs: tuple[Real, ...]) -> tuple[Real, bool]:

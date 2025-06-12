@@ -1,7 +1,7 @@
 import unittest
 
 from fpy2 import *
-from fpy2.libraries.core import split, logb, modf, ldexp
+from fpy2.libraries.core import split, logb, modf, ldexp, isinteger
 
 class TestCore(unittest.TestCase):
     """Testing core functionality"""
@@ -64,3 +64,12 @@ class TestCore(unittest.TestCase):
         self.assertNumEqual(ldexp(Float(isnan=True), Float.from_int(0)), Float(isnan=True))
         self.assertNumEqual(ldexp(Float(isinf=True), Float.from_int(0)), Float(isinf=True))
         self.assertNumEqual(ldexp(Float(s=True, isinf=True), Float.from_int(0)), Float(s=True, isinf=True))
+
+    def test_isinteger(self):
+        """Testing `isinteger` function"""
+        self.assertTrue(isinteger(Float.from_int(0)))
+        self.assertTrue(isinteger(Float.from_int(1)))
+        self.assertFalse(isinteger(Float.from_float(1.5)))
+        self.assertFalse(isinteger(Float(isnan=True)))
+        self.assertFalse(isinteger(Float(isinf=True)))
+        self.assertFalse(isinteger(Float(s=True, isinf=True)))
