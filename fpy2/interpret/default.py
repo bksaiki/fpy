@@ -16,6 +16,7 @@ from ..number import Context, Float
 from ..number.gmp import mpfr_constant
 from ..env import ForeignEnv
 from ..function import Function
+from ..primitive import Primitive
 from ..utils import decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
 
 from .interpreter import Interpreter, FunctionReturnException
@@ -392,15 +393,19 @@ class _Interpreter(DefaultVisitor):
     def _visit_call(self, e: Call, ctx: _EvalCtx):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         fn = self.foreign[e.name]
-        if isinstance(fn, Function):
-            # calling FPy function
-            rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
-            return rt.eval(fn.ast, args, ctx.round_ctx)
-        elif callable(fn):
-            # calling foreign function
-            return fn(*args)
-        else:
-            raise RuntimeError(f'not a function {fn}')
+        match fn:
+            case Function():
+                # calling FPy function
+                rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
+                return rt.eval(fn.ast, args, ctx.round_ctx)
+            case Primitive():
+                # calling FPy primitive
+                return fn(*args, ctx=ctx.round_ctx)
+            case _:
+                # calling foreign function
+                if not callable(fn):
+                    raise RuntimeError(f'unknown function {e.name}')
+                return fn(*args)
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:

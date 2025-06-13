@@ -54,7 +54,7 @@ from .number import (
 
 from .fpc_context import FPCoreContext, NoSuchContextError
 
-from .decorator import fpy, pattern
+from .decorator import fpy, pattern, fpy_prim
 
 from .backend import (
     Backend,
@@ -78,6 +78,11 @@ from .utils import (
     decnum_to_fraction as decnum,
     hexnum_to_fraction as hexnum,
 )
+
+###########################################################
+# Re-exports
+
+from titanfp.titanic.ndarray import NDArray
 
 ###########################################################
 # typing hints

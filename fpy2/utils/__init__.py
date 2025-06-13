@@ -20,6 +20,7 @@ from .float_params import (
 from .fractions import fraction, digits_to_fraction, decnum_to_fraction, hexnum_to_fraction
 from .gensym import Gensym
 from .identifier import Id, NamedId, UnderscoreId, SourceId
+from .inspect import has_keyword
 from .iterator import sliding_window
 from .location import Location
 from .ordering import Ordering

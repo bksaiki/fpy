@@ -20,6 +20,7 @@ from .ast import EffectStmt, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function
+from .primitive import Primitive
 from .rewrite import ExprPattern, StmtPattern
 
 
@@ -50,9 +51,9 @@ def fpy(
     """
     if func is None:
         # create a new decorator to be applied directly
-        return lambda func: _apply_decorator(func, kwargs)
+        return lambda func: _apply_fpy_decorator(func, kwargs)
     else:
-        return _apply_decorator(func, kwargs)
+        return _apply_fpy_decorator(func, kwargs)
 
 
 ###########################################################
@@ -65,7 +66,7 @@ def pattern(func: Callable[P, R]):
     FPy is a stricter subset of Python, so this decorator will reject
     any function that is not valid in FPy.
     """
-    fn = _apply_decorator(func, {}, decorator=pattern, is_pattern=True)
+    fn = _apply_fpy_decorator(func, {}, decorator=pattern, is_pattern=True)
 
     # check which pattern it is
     # TODO: should there be separate decorators?
@@ -74,6 +75,34 @@ def pattern(func: Callable[P, R]):
         return ExprPattern(fn.ast)
     else:
         return StmtPattern(fn.ast)
+
+############################################################
+# @fpy_prim decorator
+
+@overload
+def fpy_prim(func: Callable[P, R]) -> Primitive:
+    ...
+
+@overload
+def fpy_prim(**kwargs) -> Callable[[Callable[P, R]], Primitive]:
+    ...
+
+def fpy_prim(
+    func: Optional[Callable[P, R]] = None,
+    **kwargs
+):
+    """
+    Decorator to parse a Python function into an FPy primitive.
+    Constructs an FPy `Primitive` from a Python function.
+
+    Primitives are Python functions that can be called from the FPy runtime.
+    """
+    if func is None:
+        # create a new decorator to be applied directly
+        return lambda func: _apply_fpy_prim_decorator(func, kwargs)
+    else:
+        # parse the function as an FPy primitive
+        return _apply_fpy_prim_decorator(func, kwargs)
 
 ###########################################################
 # Utilities
@@ -96,7 +125,7 @@ def _function_env(func: Callable) -> ForeignEnv:
 
     return ForeignEnv(globs, nonlocals, built_ins)
 
-def _apply_decorator(
+def _apply_fpy_decorator(
     func: Callable[P, R],
     kwargs: dict[str, Any],
     *,
@@ -156,3 +185,13 @@ def _apply_decorator(
 
     # wrap the IR in a Function
     return Function(ast, env)
+
+
+def _apply_fpy_prim_decorator(
+    func: Callable[P, R],
+    kwargs: dict[str, Any]
+):
+    """
+    Applies the `@fpy_prim` decorator to a function.
+    """
+    return Primitive(func, kwargs)

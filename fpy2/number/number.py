@@ -372,11 +372,13 @@ class RealFloat(numbers.Rational):
 
         if self.exp >= 0:
             # `self.c` consists of integer digits
-            return self.c << self.exp
+            c = self.c << self.exp
         else:
             # `self.c` consists of fractional digits
             # but safe to just shift them off
-            return self.c >> -self.exp
+            c = self.c >> -self.exp
+
+        return (-1 if self.s else 1) * c
 
     @staticmethod
     def from_int(x: int):
