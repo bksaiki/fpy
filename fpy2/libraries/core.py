@@ -53,7 +53,6 @@ def _modf_spec(x: Real) -> tuple[Real, Real]:
 
     return ret
 
-
 @fpy_prim(spec=_modf_spec)
 def modf(x: Float) -> tuple[Float, Float]:
     """
@@ -159,6 +158,28 @@ def ldexp(x: Float, n: Float, ctx: Context) -> Float:
         xr = x.as_real()
         scale = RealFloat.power_of_2(int(n))
         return Float.from_real(xr * scale, ctx=ctx)
+
+@fpy_prim
+def frexp(x: Float, ctx: Context) -> tuple[Float, Float]:
+    """
+    Decomposes `x` into its mantissa and exponent.
+    
+    Mirroring the behavior of C/C++ `frexp`:
+    - if `x` is NaN, the result is `(NaN, NaN)`.
+    - if `x` is infinity, the result is `(x, NaN)`.
+    - if `x` is zero, the result is `(x, 0)`.
+    """
+    if x.isnan:
+        return (Float(isnan=True, ctx=ctx), Float(isnan=True, ctx=ctx))
+    elif x.isinf:
+        return (Float(s=x.s, isinf=True, ctx=ctx), Float(isnan=True, ctx=ctx))
+    elif x.is_zero():
+        return (Float(x=x, ctx=ctx), Float(ctx=ctx))
+    else:
+        x = x.normalize()
+        mant = Float(s=x.s, e=0, c=x.c, ctx=ctx)
+        e = Float.from_int(x.e, ctx=ctx)
+        return (mant, e)
 
 @fpy
 def max_e(xs: tuple[Real, ...]) -> tuple[Real, bool]:
