@@ -31,8 +31,8 @@ def split(x: Float, n: Float):
         hi, lo = x.as_real().split(int(n))
         return NDArray((Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)))
 
-@fpy(ctx=RealContext())
-def modf(x: Real) -> tuple[Real, Real]:
+@fpy
+def _modf_spec(x: Real) -> tuple[Real, Real]:
     """
     Decomposes `x` into its integral and fractional parts.
     The operation is performed exactly.
@@ -52,6 +52,28 @@ def modf(x: Real) -> tuple[Real, Real]:
         ret = split(x, -1)
 
     return ret
+
+
+@fpy_prim(spec=_modf_spec)
+def modf(x: Float) -> tuple[Float, Float]:
+    """
+    Decomposes `x` into its integral and fractional parts.
+    The operation is performed exactly.
+
+    Mirroring the behavior of C/C++ `modf`:
+    - if `x` is `+/-0`, the result is `(+/-0, +/-0)`
+    - if `x` is `+/-Inf`, the result is `(+/-0, +/-Inf)`
+    - if `x` is NaN, the result is `(NaN, NaN)`
+    """
+    if x.isnan:
+        return (Float(x=x, ctx=x.ctx), Float(x=x, ctx=x.ctx))
+    elif x.isinf:
+        return (Float(x=x, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx))
+    elif x.is_zero():
+        return (Float(s=x.s, ctx=x.ctx), Float(s=x.s, ctx=x.ctx))
+    else:
+        hi, lo = x.as_real().split(-1)
+        return (Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx))
 
 @fpy
 def isinteger(x: Real) -> bool:
