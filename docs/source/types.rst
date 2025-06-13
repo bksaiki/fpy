@@ -173,3 +173,34 @@ Context expressions (:math:`\text{T-Ctx}`) change
 the rounding context: if :math:`R_2` is the rounding context
 of the expression, then :math:`R_1` is the new rounding context
 for the body expression :math:`e`.
+
+Tuples may only be destructured by pattern matching;
+let expressions in FPy are extended to
+:math:`\text{let}\; p = e_1 \;\text{in}\; e_2`
+where :math:`p` is the usual pattern matching syntax.
+The typing rules for let expressions must be altered accordingly.
+
+.. patterns
+.. math::
+
+    \begin{array}{rcl}
+    p & ::= & x \\
+      & \mid & (p_1, \ldots, p_n) \\
+    \end{array}
+
+On the other hand, tensor expressions have no syntax for
+destructuring since tensor are parameterized by a size :math:`d`.
+Rather, :math:`\lambda_{\text{FPy}}` provides some
+primitive tensor operations:
+
+.. math::
+
+    \begin{array}{rcl}
+    \texttt{dim}  &:& \texttt{Tensor}\; d\; T \overset{\small R}{\rightarrow} \texttt{Real}\; R \\
+    \texttt{ref}  &:& \texttt{Tensor}\; d\; T \overset{\small \varepsilon}{\rightarrow} \texttt{Real}\; R_2 \overset{\small \varepsilon}{\rightarrow} T \\
+    \texttt{size} &:& \texttt{Tensor}\; d\; T \overset{\small \varepsilon}{\rightarrow} \texttt{Real}\; R_2 \overset{\small R_1}{\rightarrow} \texttt{Real}\; R_1 \\
+    \end{array}
+
+The :math:`\texttt{dim}` operation returns the number of dimensions of the tensor.
+The :math:`\texttt{ref}` operation returns the value at a specific index in the tensor.
+The :math:`\texttt{size}` operation returns the size of the tensor at a particular dimension.
