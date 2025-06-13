@@ -8,9 +8,14 @@ a typed lambda calculus demonstrating the core features of FPy.
 :math:`\lambda_{FPy}`
 ^^^^^^^^^^^^^^^^^^^^^^
 
-The :math:`\lambda_{FPy}` language consists of the usual
-terms found in the simply typed lambda calculus (STLC).
-The terminals of :math:`\lambda_{FPy}` consists of
+The :math:`\lambda_{FPy}` language extends the simply typed lambda calculus (STLC)
+with *tuple expressions* :math:`(\; e_1, \ldots, e_n \;)`,
+*tensor expressions* :math:`[\; e_1, \ldots, e_n \;]`,
+and *context expressions* :math:`\text{with}\; R\; \text{in}\; e`.
+All expressions in :math:`\lambda_{FPy}` have an implicit *rounding context*
+which defines how real numbers (or real-valued operations) should be rounded.
+The context expression allows explicit control over the current context.
+The terminals of :math:`\lambda_{FPy}` include
 boolean values, :math:`\texttt{true}` and :math:`\texttt{false}`,
 real number constants, :math:`n`, and variables, :math:`x`.
 
@@ -23,27 +28,32 @@ real number constants, :math:`n`, and variables, :math:`x`.
       & \mid & x \\
       & \mid & \lambda x : T. e \\
       & \mid & e_1\; e_2 \\
+      & \mid & \text{let}\; x = e_1 \; \text{in} \; e_2 \\
+      & \mid & (\; e_1, \ldots, e_n \;) \\
+      & \mid & [\; e_1, \ldots, e_n \;] \\
       & \mid & \text{with}\; R \;\text{in}\; e \\
     \end{array}
 
-All expressions in :math:`\lambda_{FPy}` have an implcit *rounding context*
-which defines how real numbers (or real-valued operations) should be rounded.
-The *context expression* :math:`\text{with}\; R\; \text{in}\; e`
-allows explicit control over the rounding context.
-
-Like the STLC, types in :math:`\lambda_{FPy}` consist of
-base types (boolean and real types) and function types.
+The types of :math:`\lambda_{FPy}` include two base types and three compound types.
+The base types include a boolean type (:math:`\texttt{Bool}`) and
+a real number type (:math:`\texttt{Real}\; R`).
+The compound types include function types (:math:`T_1 \overset{\small R}{\rightarrow} T_2`),
+product types (:math:`T_1 \times \cdots \times T_n`),
+and tensor types (:math:`\texttt{Tensor}\; d\; T`),
+where :math:`d` is a non-negative integer.
 
 .. math::
 
     \begin{array}{rcl}
     T & ::= & \texttt{Bool} \\
       & \mid & \texttt{Real}\; R \\
-      & \mid & T_1 \overset{\small R}{\rightarrow} T_2
+      & \mid & T_1 \overset{\small R}{\rightarrow} T_2 \\
+      & \mid & T_1 \times \cdots \times T_n \\
+      & \mid & \texttt{Tensor}\; d\; T \\
     \end{array}
 
 The real number type is parameterized by the rounding context, :math:`R`.
-Thus the type :math:`\texttt{Real}\; R` may be read as the type
+Thus, the type :math:`\texttt{Real}\; R` may be read as the type
 of real numbers rounded under the rounding context :math:`R`.
 Function type are also parameterized by a rounding context,
 which may be viewed as a *coeffect* in the type system:
@@ -51,6 +61,8 @@ functions in :math:`\lambda_{FPy}` require a rounding context from the caller.
 Unlike other coeffect systems,
 a coeffect in this system consists of at most one rounding context:
 rounding contexts are not additive.
+A product type represents the usual heterogeneous tuple type,
+while a tensor type represents a homogeneous tuple type of some size :math:`d`.
 
 .. T-True
 .. math::
@@ -95,6 +107,28 @@ rounding contexts are not additive.
          {\Gamma\Coeff R \vdash e_1\; e_2 : T_2}
     \quad\text{(T-App)}\\
 
+.. T-Let
+.. math::
+
+    \frac{\Gamma\Coeff R \vdash e_1 : T_1
+         \qquad \Gamma, x : T_1 \Coeff R \vdash e_2 : T_2}
+         {\Gamma\Coeff R \vdash \text{let}\; x = e_1 \; \text{in} \; e_2 : T_2}
+    \quad\text{(T-Let)}\\
+
+.. T-Tuple
+.. math::
+
+    \frac{\Gamma\Coeff R \vdash e_1 : T_1 \qquad \ldots \qquad \Gamma\Coeff R \vdash e_n : T_n}
+         {\Gamma\Coeff R \vdash (\; e_1, \ldots, e_n \;) : T_1 \times \cdots \times T_n}
+    \quad\text{(T-Tuple)}\\
+
+.. T-Tensor
+.. math::
+
+    \frac{\Gamma\Coeff R \vdash e_1 : T \qquad \ldots \qquad \Gamma\Coeff R \vdash e_d : T}
+         {\Gamma\Coeff R \vdash [\; e_1, \ldots, e_d \;] : \texttt{Tensor}\; d\; T}
+    \quad\text{(T-Tensor)}\\
+
 .. T-Ctx
 .. math::
 
@@ -107,154 +141,35 @@ with a coeffect annotation, :math:`R`, denoted with :math:`\Gamma \Coeff R`.
 We represent the lack of a rounding context with :math:`\varepsilon`.
 At any point, the rounding context may be dropped.
 
+Despite the presence of rounding contexts,
+most of the typing rules are similar to those of the STLC.
 Boolean constants (:math:`\text{T-True}`, :math:`\text{T-False}`)
-and variables (:math:`\text{T-Var}`) are unchanged from the STLC
-as they require no rounding context.
-Real numbers (:math:`\text{T-Real}`) are always rounded
-under the rounding context :math:`R`.
-For abstraction (:math:`\text{T-Abs}`),
-the abstraction body :math:`e` is typed under some
-rounding context :math:`R_1` that may be different
+are not real-valued so rounding does not apply.
+Similarly, variables (:math:`\text{T-Var}`) require no rounding context
+since during evaluation, the value of the variable is sustituted as-is, without rounding.
+Let expressions (:math:`\text{T-Let}`) are typed
+under the same rounding context as their value and body.
+Similarly, tuple expressions (:math:`\text{T-Tuple}`) and tensor expressions (:math:`\text{T-Tensor}`)
+are also typed under the same rounding context as their elements;
+the only difference between the tuple and tensor expressions
+is that elements of a tuple may have different types,
+while the tensor expressions must have the same type.
+
+The typing rules that involve rounding contexts
+are real number constants (:math:`\text{T-Real}`),
+function abstractions (:math:`\text{T-Abs}`),
+and function applications (:math:`\text{T-App}`).
+For a real number constant,
+the constant is always rounded under the local rounding context :math:`R`.
+For abstraction,
+the abstraction body :math:`e` is typed under
+a fresh rounding context :math:`R_1` that may be different
 from the rounding context :math:`R_2` outside the abstraction.
-At any call site of the function, :math:`\lambda x : T_1. e`,
-the coeffect is handled by the local rounding context:
-for application (:math:`\text{T-App}`),
-the local rounding context :math:`R`
-matches the rounding context of the function type.
+For a function :math:`f`,
+the coeffect :math:`R_1` is handled at each application site:
+:math:`f` is instantiated using the local rounding context :math:`R`,
+and the return type is :math:`[R_1 \rightarrow R]\; T_2`.
 Context expressions (:math:`\text{T-Ctx}`) change
-the rounding context of the expression :math:`e`.
-
-
-.. FPy features a polymorphic Hindley-Milner type system
-.. like languages such as Haskell or OCaml.
-
-.. For brevity, the type system is described using
-.. a simplified grammar of the full FPy language.
-.. An FPy program consists of statements :math:`s`, expressions :math:`e`,
-.. rounding contexts :math:`R`, and function symbols :math:`f`.
-.. The terminals of an expression are variables :math:`x`,
-.. real number constants :math:`n`, and boolean constants
-.. :math:`\text{true}` and :math:`\text{false}`.
-.. All functions are assumed to be unary.
-
-.. .. math::
-
-..     \begin{array}{rcl}
-..     e & ::= & \text{true} \\
-..       & \mid & \text{false} \\
-..       & \mid & n \\
-..       & \mid & x \\
-..       & \mid & f\; e
-..     \end{array}
-
-.. .. math::
-
-..     \begin{array}{rcl}
-..     s & ::= & x = e \\
-..       & \mid & s_1 ; s_2 \\
-..       & \mid & \text{if}\; e\; \text{then}\; s_1\; \text{else}\; s_2 \\
-..       & \mid & \text{while}\; e\; \text{then}\; s \\
-..       & \mid & \text{with}\; R\; \text{do}\; s \\
-..       & \mid & \text{ret}\; e\\
-..     \end{array}
-
-.. Expressions in FPy have a type, :math:`T`,
-.. which is one of the following:
-
-.. .. math::
-
-..     \begin{array}{rcl}
-..     T & ::= & \text{Unit} \\
-..       & \mid & \text{Bool} \\
-..       & \mid & \text{Real}\; R \\
-..       & \mid & T_1 \to T_2
-..     \end{array}
-
-.. The typing judgements for the core language of FPy are below.
-.. The symbol :math:`\Gamma` is a typing context and the judgement
-.. :math:`\rho : T` means the return type of the current function is :math:`T`.
-
-.. .. math::
-
-..     \frac{}
-..          {\Gamma; R \vdash \text{true} : \text{Bool}}
-..     \quad\text{(T-True)}\\
-
-.. .. math::
-
-..     \frac{}
-..          {\Gamma; R \vdash \text{false} : \text{Bool}}
-..     \quad\text{(T-False)}\\
-
-.. .. math::
-
-..     \frac{}
-..          {\Gamma; R \vdash n : \text{Real}\; R}
-..     \quad\text{(T-Real)}\\
-
-.. .. math::
-
-..     \frac{x : T \in \Gamma}
-..          {\Gamma; R \vdash x : T}
-..     \quad \text{(T-Var)}
-
-.. .. math::
-
-..     \frac{\Gamma; R \vdash f : T \to \text{Bool}
-..          \qquad \Gamma; R \vdash e : T }
-..          {\Gamma; R \vdash f\; e : \text{Bool}}
-..     \quad\text{(T-BoolApp)}
-
-.. .. math::
-
-..     \frac{\Gamma; R_1 \vdash f : T \to \text{Real}\; R_2
-..          \qquad \Gamma; R_1 \vdash e : T }
-..          {\Gamma; R_1 \vdash f\; e : \text{Real}\; R_2}
-..     \quad\text{(T-RealApp)}
-
-.. .. math::
-
-..     \frac{\Gamma; R \vdash x : T
-..          \qquad \Gamma; R \vdash e : T }
-..          {\Gamma; R \vdash x = e : \text{Unit}}
-..     \quad\text{(T-Assign)}
-
-.. .. math::
-
-..     \frac{\Gamma; R \vdash s_1 : \text{Unit}
-..          \qquad \Gamma; R \vdash s_2 : \text{Unit} }
-..          {\Gamma; R \vdash s_1 ; s_2 : \text{Unit}}
-..     \quad\text{(T-Seq)}
-
-.. .. math::
-
-..     \frac{\Gamma; R \vdash e : \text{Bool}
-..          \qquad \Gamma; R \vdash s_1 : \text{Unit}
-..          \qquad \Gamma; R \vdash s_2 : \text{Unit} }
-..          {\Gamma; R \vdash \text{if}\; e\; \text{then}\; s_1\; \text{else}\; s_2 : \text{Unit} }
-..     \quad\text{(T-If)}
-
-.. .. math::
-
-..     \frac{\Gamma; R \vdash e : \text{Bool}
-..          \qquad \Gamma; R \vdash s : \text{Unit} }
-..          {\Gamma; R \vdash \text{while}\; e\; \text{then}\; s : \text{Unit}  }
-..     \quad\text{(T-While)}
-
-.. .. math::
-
-..     \frac{\Gamma; R_2 \vdash s : \text{Unit}}
-..          {\Gamma; R_1 \vdash \text{with}\; R_2\; \text{then}\; s : \text{Unit} }
-..     \quad\text{(T-Context)}
-
-.. .. math::
-
-..     \frac{\Gamma; R \vdash e : T}
-..          {\Gamma; R \vdash \text{ret}\; e : \text{Unit} }
-..     \quad\text{(T-Ret)}
-
-.. .. math::
-
-..     \frac{\Gamma; R \vdash e : T}
-..          {\Gamma, \rho : T; R \vdash \text{ret}\; e : \text{Unit} }
-..     \quad\text{(T-Ret)}
+the rounding context: if :math:`R_2` is the rounding context
+of the expression, then :math:`R_1` is the new rounding context
+for the body expression :math:`e`.
