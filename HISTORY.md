@@ -1,6 +1,29 @@
 # Version History
 
-## [0.0.3] - ???
+## [0.0.4] - 2025-06-12
+### Features
+ - Numbers library
+    - number types
+      - `RealContext` - a context for real numbers
+      - `MPFixedContext` - a fixed-point context with unbounded precision
+      - `MPBFixedContext` - a bounded fixed-point context
+      - `MPFixed` - the usual finite-width, fixed-point number
+      - renamed floating-point contexts to have `Float` in their names
+ - Frontend
+   - support for `zip`
+   - tuple unpacking in `for` loops
+   - context in `@fpy` decorator
+   - added `@fpy_prim` decorator to specify Python-backed primitives
+ - Middleend
+   - removed the IR
+   - add copy-propagation pass
+   - add context-inlining pass
+ - Standard library
+   - small set of primitives under `fpy2.libraries.core`
+ - Infrastructure
+   - fuzzing tests against FPCore (Titanic)
+
+## [0.0.3] - 2025-05-22
 ### Features
  - Numbers library
    - number types
