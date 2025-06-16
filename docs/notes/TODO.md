@@ -7,6 +7,11 @@ Frontend:
    - fix ISSUE#1
    - underscore arguments to function
    - f-string
+ - float:
+   - context type parameter
+ - arrays:
+   - support slicing
+   - remove NumPy style indexing
  - language:
    - support for vector addition/multiplication
  - formatter:
