@@ -212,11 +212,8 @@ class _MatcherInst(Visitor):
             self._visit_expr(c1, c2)
 
     def _visit_tuple_ref(self, e: TupleRef, pat: TupleRef):
-        if len(e.slices) != len(pat.slices):
-            raise _MatchFailure(f'matching {pat} against {e}')
         self._visit_expr(e.value, pat.value)
-        for s1, s2 in zip(e.slices, pat.slices):
-            self._visit_expr(s1, s2)
+        self._visit_expr(e.index, pat.index)
 
     def _visit_tuple_set(self, e: TupleSet, pat: TupleSet):
         if len(e.slices) != len(pat.slices):

@@ -251,8 +251,8 @@ class _FPCore2FPy:
 
     def _visit_ref(self, e: fpc.Ref, ctx: _Ctx) -> Expr:
         value = self._visit(e.children[0], ctx)
-        slices = [self._visit(e, ctx) for e in e.children[1:]]
-        return TupleRef(value, slices, None)
+        index = self._visit(e.children[1], ctx)
+        return TupleRef(value, index, None)
 
     def _visit_if(self, e: fpc.If, ctx: _Ctx) -> Expr:
         # create new blocks

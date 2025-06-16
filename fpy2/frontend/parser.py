@@ -370,7 +370,7 @@ class Parser:
 
     def _parse_slice(self, slice: ast.expr, e: ast.expr):
         match slice:
-            case ast.slice():
+            case ast.Slice():
                 loc = self._parse_location(e)
                 raise  FPyParserError(loc, 'Slices unsupported', e, slice)
             case ast.Tuple():
@@ -379,13 +379,14 @@ class Parser:
                 return [self._parse_expr(slice)]
 
     def _parse_subscript(self, e: ast.Subscript):
-        value = self._parse_expr(e.value)
-        slices = self._parse_slice(e.slice, e)
-        while isinstance(value, TupleRef):
-            v_value, v_slices = value.value, value.slices
-            value = v_value
-            slices = v_slices + slices
-        return (value, slices)
+        # value = self._parse_expr(e.value)
+        # slices = self._parse_slice(e.slice, e)
+        raise NotImplementedError(ast.dump(e))
+        # while isinstance(value, TupleRef):
+        #     v_value, v_slices = value.value, value.index
+        #     value = v_value
+        #     slices = v_slices + slices
+        # return (value, slices)
 
     def _is_foreign_val(self, e: ast.expr):
         match e:

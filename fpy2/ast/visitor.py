@@ -295,8 +295,7 @@ class DefaultVisitor(Visitor):
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
         self._visit_expr(e.value, ctx)
-        for s in e.slices:
-            self._visit_expr(s, ctx)
+        self._visit_expr(e.index, ctx)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: Any):
         self._visit_expr(e.array, ctx)
@@ -430,8 +429,8 @@ class DefaultTransformVisitor(Visitor):
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
         value = self._visit_expr(e.value, ctx)
-        slices = [self._visit_expr(s, ctx) for s in e.slices]
-        return TupleRef(value, slices, e.loc)
+        index = self._visit_expr(e.index, ctx)
+        return TupleRef(value, index, e.loc)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: Any):
         array = self._visit_expr(e.array, ctx)

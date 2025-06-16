@@ -196,8 +196,7 @@ class SyntaxCheckInstance(Visitor):
     def _visit_tuple_ref(self, e: TupleRef, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(e.value, ctx)
-        for s in e.slices:
-            self._visit_expr(s, ctx)
+        self._visit_expr(e.index, ctx)
         return env
 
     def _visit_tuple_set(self, e: TupleSet, ctx: _Ctx):

@@ -353,8 +353,8 @@ class FPCoreCompileInstance(Visitor):
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> fpc.Expr:
         value = self._visit_expr(e.value, ctx)
-        slices = [self._visit_expr(s, ctx) for s in e.slices]
-        return fpc.Ref(value, *slices)
+        index = self._visit_expr(e.index, ctx)
+        return fpc.Ref(value, index)
 
     def _generate_tuple_set(self, tuple_id: str, iter_id: str, idx_ids: list[str], val_id: str):
         # dimension bindings

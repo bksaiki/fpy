@@ -95,8 +95,7 @@ class LiveVarsInstance(Visitor):
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.value, ctx)
-        for s in e.slices:
-            live |= self._visit_expr(s, ctx)
+        live |= self._visit_expr(e.index, ctx)
         return live
 
     def _visit_tuple_set(self, e: TupleSet, ctx: None) -> _LiveSet:

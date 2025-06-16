@@ -783,19 +783,18 @@ class TupleSet(Expr):
 class TupleRef(Expr):
     """FPy AST: tuple indexing expression"""
     value: Expr
-    slices: list[Expr]
+    index: Expr
 
-    def __init__(self, value: Expr, slices: Sequence[Expr], loc: Optional[Location]):
+    def __init__(self, value: Expr, index: Expr, loc: Optional[Location]):
         super().__init__(loc)
         self.value = value
-        self.slices = list(slices)
+        self.index = index
 
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, TupleRef)
             and self.value.is_equiv(other.value)
-            and len(self.slices) == len(other.slices)
-            and all(slice.is_equiv(other_slice) for slice, other_slice in zip(self.slices, other.slices))
+            and self.index.is_equiv(other.index)
         )
 
 class IfExpr(Expr):
