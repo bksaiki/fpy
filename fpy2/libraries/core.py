@@ -111,7 +111,7 @@ def logb(x: Float, ctx: Context):
     elif x.is_zero():
         return Float(s=True, isinf=True, ctx=ctx)
     else:
-        return Float.from_int(x.e, ctx=ctx)
+        return ctx.round(x.e)
 
 @fpy
 def _ldexp_spec(x: Real, n: Real) -> Real:
@@ -157,28 +157,28 @@ def ldexp(x: Float, n: Float, ctx: Context) -> Float:
     else:
         xr = x.as_real()
         scale = RealFloat.power_of_2(int(n))
-        return Float.from_real(xr * scale, ctx=ctx)
+        return ctx.round(xr * scale)
 
 @fpy_prim
-def frexp(x: Float, ctx: Context) -> tuple[Float, Float]:
+def frexp(x: Float) -> tuple[Float, Float]:
     """
     Decomposes `x` into its mantissa and exponent.
-    
+
     Mirroring the behavior of C/C++ `frexp`:
     - if `x` is NaN, the result is `(NaN, NaN)`.
     - if `x` is infinity, the result is `(x, NaN)`.
     - if `x` is zero, the result is `(x, 0)`.
     """
     if x.isnan:
-        return (Float(isnan=True, ctx=ctx), Float(isnan=True, ctx=ctx))
+        return (Float(isnan=True, ctx=x.ctx), Float(isnan=True, ctx=x.ctx))
     elif x.isinf:
-        return (Float(s=x.s, isinf=True, ctx=ctx), Float(isnan=True, ctx=ctx))
+        return (Float(s=x.s, isinf=True, ctx=x.ctx), Float(isnan=True, ctx=x.ctx))
     elif x.is_zero():
-        return (Float(x=x, ctx=ctx), Float(ctx=ctx))
+        return (Float(x=x, ctx=x.ctx), Float(ctx=x.ctx))
     else:
         x = x.normalize()
-        mant = Float(s=x.s, e=0, c=x.c, ctx=ctx)
-        e = Float.from_int(x.e, ctx=ctx)
+        mant = Float(s=x.s, e=0, c=x.c, ctx=x.ctx)
+        e = Float.from_int(x.e, ctx=x.ctx)
         return (mant, e)
 
 @fpy
