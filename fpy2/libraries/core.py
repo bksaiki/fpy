@@ -65,14 +65,14 @@ def modf(x: Float) -> tuple[Float, Float]:
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
     if x.isnan:
-        return (Float(x=x, ctx=x.ctx), Float(x=x, ctx=x.ctx))
+        return NDArray((Float(x=x, ctx=x.ctx), Float(x=x, ctx=x.ctx)))
     elif x.isinf:
-        return (Float(x=x, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx))
+        return NDArray((Float(s=x.s, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)))
     elif x.is_zero():
-        return (Float(s=x.s, ctx=x.ctx), Float(s=x.s, ctx=x.ctx))
+        return NDArray((Float(s=x.s, ctx=x.ctx), Float(s=x.s, ctx=x.ctx)))
     else:
         hi, lo = x.as_real().split(-1)
-        return (Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx))
+        return NDArray((Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)))
 
 @fpy
 def isinteger(x: Real) -> bool:

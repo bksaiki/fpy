@@ -11,7 +11,7 @@ class TestCore(unittest.TestCase):
         if a.isnan or b.isnan:
             self.assertEqual(a.isnan, b.isnan)
         else:
-            self.assertEqual(a, b)
+            self.assertEqual(a, b, f"Expected {a} to be equal to {b}")
 
     def assertArrayEqual(self, a: NDArray, b: NDArray):
         """Assert that two arrays are equal, handling NaN and Inf"""

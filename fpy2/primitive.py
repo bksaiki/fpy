@@ -1,9 +1,9 @@
 """FPy primitives are the result of `@fpy_prim` decorators."""
 
-from typing import Any, Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable
 
 from .utils import has_keyword
-from .number import Context
+from .number import Context, FP64
 
 class Primitive:
     """
@@ -26,7 +26,7 @@ class Primitive:
     def __repr__(self):
         return f'{self.__class__.__name__}(func={self.func}, ...)'
 
-    def __call__(self, *args, ctx: Optional[Context] = None):
+    def __call__(self, *args, ctx: Context = FP64):
         if has_keyword(self.func, 'ctx'):
             return self.func(*args, ctx=ctx)
         else:
