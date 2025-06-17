@@ -449,7 +449,37 @@ class _Interpreter(Visitor):
         return arr[int(idx)]
 
     def _visit_tuple_slice(self, e: TupleSlice, ctx: _EvalCtx):
-        raise NotImplementedError(e)
+        arr = self._visit_expr(e.value, ctx)
+        if not isinstance(arr, NDArray):
+            raise TypeError(f'expected a tensor, got {arr}')
+
+        if e.start is None:
+            start = 0
+        else:
+            val = self._visit_expr(e.start, ctx)
+            if not isinstance(val, Float):
+                raise TypeError(f'expected a real number start index, got {val}')
+            if not val.is_integer():
+                raise TypeError(f'expected an integer start index, got {val}')
+            start = int(val)
+
+        if e.stop is None:
+            stop = len(arr)
+        else:
+            val = self._visit_expr(e.stop, ctx)
+            if not isinstance(val, Float):
+                raise TypeError(f'expected a real number stop index, got {val}')
+            if not val.is_integer():
+                raise TypeError(f'expected an integer stop index, got {val}')
+            stop = int(val)
+
+        if start < 0 or stop > len(arr):
+            return NDArray([])  # empty slice
+        else:
+            sliced: list = []
+            for i in range(start, stop):
+                sliced.append(arr[i])
+            return NDArray(sliced)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
         value = self._visit_expr(e.array, ctx)
@@ -545,8 +575,6 @@ class _Interpreter(Visitor):
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
             slices.append(int(val))
-
-        print(slices)
 
         # evaluate and update array
         val = self._visit_expr(stmt.expr, ctx)

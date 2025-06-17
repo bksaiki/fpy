@@ -417,10 +417,31 @@ class _Interpreter(Visitor):
         return arr[int(idx)]
 
     def _visit_tuple_slice(self, e: TupleSlice, ctx: _EvalCtx):
-        raise NotImplementedError(e)
+        arr = self._visit_expr(e.value, ctx)
+        if not isinstance(arr, list):
+            raise TypeError(f'expected a tensor, got {arr}')
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
-        raise NotImplementedError
+        if e.start is None:
+            start = 0
+        else:
+            val = self._visit_expr(e.start, ctx)
+            if not isinstance(val, float):
+                raise TypeError(f'expected a real number start index, got {val}')
+            if not val.is_integer():
+                raise TypeError(f'expected an integer start index, got {val}')
+            start = int(val)
+
+        if e.stop is None:
+            stop = len(arr)
+        else:
+            val = self._visit_expr(e.stop, ctx)
+            if not isinstance(val, float):
+                raise TypeError(f'expected a real number stop index, got {val}')
+            if not val.is_integer():
+                raise TypeError(f'expected an integer stop index, got {val}')
+            stop = int(val)
+
+        return arr[start:stop]
 
     def _apply_comp(
         self,
