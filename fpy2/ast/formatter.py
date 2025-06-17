@@ -156,9 +156,14 @@ class _FormatterInstance(Visitor):
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: _Ctx):
         value = self._visit_expr(e.value, ctx)
-        slices = [self._visit_expr(slice, ctx) for slice in e.slices]
-        ref_str = ''.join(f'[{slice}]' for slice in slices)
-        return f'{value}{ref_str}'
+        index = self._visit_expr(e.index, ctx)
+        return f'{value}[{index}]'
+
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: _Ctx):
+        value = self._visit_expr(e.value, ctx)
+        start = '' if e.start is None else self._visit_expr(e.start, ctx)
+        stop = '' if e.stop is None else self._visit_expr(e.stop, ctx)
+        return f'{value}[{start}:{stop}]'
 
     def _visit_tuple_set(self, e: TupleSet, ctx: _Ctx):
         array = self._visit_expr(e.array, ctx)

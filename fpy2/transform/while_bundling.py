@@ -72,7 +72,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
             stmts.append(s)
 
             # apply substitution to the condition
-            cond_ctx = { var: TupleRef(Var(t, None), (Integer(i, None),), None) for i, var in enumerate(mutated) }
+            cond_ctx = { var: TupleRef(Var(t, None), Integer(i, None), None) for i, var in enumerate(mutated) }
             cond = self._visit_expr(stmt.cond, cond_ctx)
 
             # compile the body and apply the renaming

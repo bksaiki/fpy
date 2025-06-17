@@ -10,10 +10,11 @@ Frontend:
  - float:
    - context type parameter
  - arrays:
-   - support slicing
-   - remove NumPy style indexing
+   - enumerate
  - language:
    - support for vector addition/multiplication
+   - support "enumerate"
+   - support "range" with start
  - formatter:
    - use IndentCtx
 

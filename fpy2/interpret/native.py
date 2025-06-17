@@ -405,23 +405,46 @@ class _Interpreter(Visitor):
         return list([self._visit_expr(x, ctx) for x in e.args])
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: _EvalCtx):
-        value = self._visit_expr(e.value, ctx)
-        if not isinstance(value, list):
-            raise TypeError(f'expected a tensor, got {value}')
+        arr = self._visit_expr(e.value, ctx)
+        if not isinstance(arr, list):
+            raise TypeError(f'expected a tensor, got {arr}')
 
-        elt = value
-        for s in e.slices:
-            val = self._visit_expr(s, ctx)
+        idx = self._visit_expr(e.index, ctx)
+        if not isinstance(idx, float):
+            raise TypeError(f'expected a real number index, got {idx}')
+        if not idx.is_integer():
+            raise TypeError(f'expected an integer index, got {idx}')
+        return arr[int(idx)]
+
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: _EvalCtx):
+        arr = self._visit_expr(e.value, ctx)
+        if not isinstance(arr, list):
+            raise TypeError(f'expected a tensor, got {arr}')
+
+        if e.start is None:
+            start = 0
+        else:
+            val = self._visit_expr(e.start, ctx)
             if not isinstance(val, float):
-                raise TypeError(f'expected a real number slice, got {val}')
+                raise TypeError(f'expected a real number start index, got {val}')
             if not val.is_integer():
-                raise TypeError(f'expected an integer slice, got {val}')
-            elt = elt[int(val)]
+                raise TypeError(f'expected an integer start index, got {val}')
+            start = int(val)
 
-        return elt
+        if e.stop is None:
+            stop = len(arr)
+        else:
+            val = self._visit_expr(e.stop, ctx)
+            if not isinstance(val, float):
+                raise TypeError(f'expected a real number stop index, got {val}')
+            if not val.is_integer():
+                raise TypeError(f'expected an integer stop index, got {val}')
+            stop = int(val)
+
+        return arr[start:stop]
 
     def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
-        raise NotImplementedError
+        raise NotImplementedError(e)
 
     def _apply_comp(
         self,
