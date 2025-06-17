@@ -377,18 +377,21 @@ class Parser:
                 raise FPyParserError(loc, 'FPy does not support slices', e)
             case _:
                 slice =  self._parse_expr(e.slice)
+                if not isinstance(slice, ValueExpr):
+                    raise FPyParserError(loc, 'FPy expects a value expression for subscript slice', e)
                 return TupleRef(value, slice, loc)
 
     def _parse_subscript_target(self, e: ast.Subscript):
         """Parsing a subscript slice that is the LHS of an assignment."""
-        value = e.value
+        t: ast.expr = e
         slices: list[Expr] = []
-        while isinstance(value, ast.Subscript):
-            slices.append(self._parse_expr(value.slice))
-            value = value.value
+        while isinstance(t, ast.Subscript):
+            slices.append(self._parse_expr(t.slice))
+            t = t.value
 
-        target = self._parse_expr(value)
+        target = self._parse_expr(t)
         slices.reverse()
+
         return target, slices
 
     def _is_foreign_val(self, e: ast.expr):
@@ -645,7 +648,6 @@ class Parser:
                         return Assign(binding, None, value, loc)
                     case ast.Subscript():
                         var, slices = self._parse_subscript_target(target)
-                        print(slices)
                         if not isinstance(var, Var):
                             raise FPyParserError(loc, 'FPy expects a variable', target, stmt)
                         value = self._parse_expr(stmt.value)

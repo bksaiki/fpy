@@ -543,6 +543,8 @@ class _Interpreter(DefaultVisitor):
                 raise TypeError(f'expected an integer slice, got {val}')
             slices.append(int(val))
 
+        print(slices)
+
         # evaluate and update array
         val = self._visit_expr(stmt.expr, ctx)
         array[slices] = val

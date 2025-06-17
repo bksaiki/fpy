@@ -224,11 +224,6 @@ def test_list_ref2():
     x = [[1.0, 2.0, 3.0]]
     return x[0][0]
 
-@fpy(name='Test list ref (3/3)')
-def test_list_ref3():
-    x = [[1.0, 2.0], [3.0, 4.0]]
-    return x[0, 1]
-
 @fpy(name='Test list set (1/3)')
 def test_list_set1():
     x = [1.0, 2.0, 3.0]
@@ -596,7 +591,6 @@ tests = [
     test_list_comp3,
     test_list_ref1,
     test_list_ref2,
-    test_list_ref3,
     test_list_set1,
     test_list_set2,
     test_list_set3,
