@@ -13,6 +13,8 @@ Frontend:
    - enumerate
  - language:
    - support for vector addition/multiplication
+   - support "enumerate"
+   - support "range" with start
  - formatter:
    - use IndentCtx
 
