@@ -250,9 +250,15 @@ class _FPCore2FPy:
         return TupleExpr(exprs, None)
 
     def _visit_ref(self, e: fpc.Ref, ctx: _Ctx) -> Expr:
-        value = self._visit(e.children[0], ctx)
-        index = self._visit(e.children[1], ctx)
-        return TupleRef(value, index, None)
+        # (ref <array> <index> ...)
+        # => <array>[<index>][...]
+        arr = self._visit(e.children[0], ctx)
+        indices = [self._visit(e, ctx) for e in e.children[1:]]
+
+        val: fpc.Expr = arr
+        for index in indices:
+            val = TupleRef(val, index, None)
+        return val
 
     def _visit_if(self, e: fpc.If, ctx: _Ctx) -> Expr:
         # create new blocks

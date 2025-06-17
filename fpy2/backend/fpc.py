@@ -352,9 +352,15 @@ class FPCoreCompileInstance(Visitor):
         return fpc.Array(*[self._visit_expr(c, ctx) for c in e.args])
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> fpc.Expr:
-        value = self._visit_expr(e.value, ctx)
-        index = self._visit_expr(e.index, ctx)
-        return fpc.Ref(value, index)
+        t: Expr = e
+        indices: list[fpc.Expr] = []
+        while isinstance(t, TupleRef):
+            index = self._visit_expr(t.index, ctx)
+            indices.append(index)
+            t = t.value
+
+        value = self._visit_expr(t, ctx)
+        return fpc.Ref(value, *reversed(indices))
 
     def _visit_tuple_slice(self, e: TupleSlice, ctx: None) -> fpc.Expr:
         value = self._visit_expr(e.value, ctx)
