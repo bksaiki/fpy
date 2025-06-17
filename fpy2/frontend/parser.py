@@ -368,25 +368,28 @@ class Parser:
             raise FPyParserError(loc, 'Unsupported call expression', e)
         return e.func.id
 
-    def _parse_slice(self, slice: ast.expr, e: ast.expr):
-        match slice:
-            case ast.Slice():
-                loc = self._parse_location(e)
-                raise  FPyParserError(loc, 'Slices unsupported', e, slice)
-            case ast.Tuple():
-                return [self._parse_expr(s) for s in slice.elts]
-            case _:
-                return [self._parse_expr(slice)]
-
     def _parse_subscript(self, e: ast.Subscript):
-        # value = self._parse_expr(e.value)
-        # slices = self._parse_slice(e.slice, e)
-        raise NotImplementedError(ast.dump(e))
-        # while isinstance(value, TupleRef):
-        #     v_value, v_slices = value.value, value.index
-        #     value = v_value
-        #     slices = v_slices + slices
-        # return (value, slices)
+        """Parsing a subscript slice that is an expression"""
+        loc = self._parse_location(e)
+        value = self._parse_expr(e.value)
+        match e.slice:
+            case ast.Slice():
+                raise FPyParserError(loc, 'FPy does not support slices', e)
+            case _:
+                slice =  self._parse_expr(e.slice)
+                return TupleRef(value, slice, loc)
+
+    def _parse_subscript_target(self, e: ast.Subscript):
+        """Parsing a subscript slice that is the LHS of an assignment."""
+        value = e.value
+        slices: list[Expr] = []
+        while isinstance(value, ast.Subscript):
+            slices.append(self._parse_expr(value.slice))
+            value = value.value
+
+        target = self._parse_expr(value)
+        slices.reverse()
+        return target, slices
 
     def _is_foreign_val(self, e: ast.expr):
         match e:
@@ -487,8 +490,7 @@ class Parser:
                 elt = self._parse_expr(e.elt)
                 return CompExpr(targets, iterables, elt, loc)
             case ast.Subscript():
-                value, slices = self._parse_subscript(e)
-                return TupleRef(value, slices, loc)
+                return self._parse_subscript(e)
             case ast.IfExp():
                 cond = self._parse_expr(e.test)
                 ift = self._parse_expr(e.body)
@@ -642,7 +644,8 @@ class Parser:
                         value = self._parse_expr(stmt.value)
                         return Assign(binding, None, value, loc)
                     case ast.Subscript():
-                        var, slices = self._parse_subscript(target)
+                        var, slices = self._parse_subscript_target(target)
+                        print(slices)
                         if not isinstance(var, Var):
                             raise FPyParserError(loc, 'FPy expects a variable', target, stmt)
                         value = self._parse_expr(stmt.value)
