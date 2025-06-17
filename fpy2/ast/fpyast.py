@@ -797,6 +797,40 @@ class TupleRef(Expr):
             and self.index.is_equiv(other.index)
         )
 
+class TupleSlice(Expr):
+    """FPy AST: tuple slicing expression"""
+    value: Expr
+    start: Expr | None
+    stop: Expr | None
+
+    def __init__(
+        self,
+        value: Expr,
+        start: Optional[Expr],
+        stop: Optional[Expr],
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.value = value
+        self.start = start
+        self.stop = stop
+
+    def is_equiv(self, other) -> bool:
+        if not isinstance(other, TupleSlice):
+            return False
+
+        if not self.value.is_equiv(other.value):
+            return False
+
+        match self.start, other.start:
+            case Expr(), Expr():
+                return self.start.is_equiv(other.start)
+            case None, None:
+                return True
+            case _:
+                return False
+
+
 class IfExpr(Expr):
     """FPy AST: if expression"""
     cond: Expr

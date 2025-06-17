@@ -118,7 +118,7 @@ class _EvalCtx:
     """rounding context for evaluation"""
 
 
-class _Interpreter(DefaultVisitor):
+class _Interpreter(Visitor):
     """Single-use interpreter for a function"""
 
     foreign: ForeignEnv
@@ -447,6 +447,9 @@ class _Interpreter(DefaultVisitor):
         if not idx.is_integer():
             raise TypeError(f'expected an integer index, got {idx}')
         return arr[int(idx)]
+
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: _EvalCtx):
+        raise NotImplementedError(e)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
         value = self._visit_expr(e.array, ctx)

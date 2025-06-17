@@ -199,6 +199,15 @@ class SyntaxCheckInstance(Visitor):
         self._visit_expr(e.index, ctx)
         return env
 
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: _Ctx):
+        env, _ = ctx
+        self._visit_expr(e.value, ctx)
+        if e.start is not None:
+            self._visit_expr(e.start, ctx)
+        if e.stop is not None:
+            self._visit_expr(e.stop, ctx)
+        return env
+
     def _visit_tuple_set(self, e: TupleSet, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(e.array, ctx)

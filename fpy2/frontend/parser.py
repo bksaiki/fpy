@@ -368,13 +368,38 @@ class Parser:
             raise FPyParserError(loc, 'Unsupported call expression', e)
         return e.func.id
 
+    def _parse_slice(self, e: ast.Slice):
+        """Parse a Python slice expression."""
+        if e.lower is None:
+            lower = None
+        else:
+            lower = self._parse_expr(e.lower)
+            if not isinstance(lower, ValueExpr):
+                loc = self._parse_location(e.lower)
+                raise FPyParserError(loc, 'FPy expects a value expression for slice lower bound', e.lower)
+
+        if e.upper is None:
+            upper = None
+        else:
+            upper = self._parse_expr(e.upper)
+            if not isinstance(upper, ValueExpr):
+                loc = self._parse_location(e.upper)
+                raise FPyParserError(loc, 'FPy expects a value expression for slice upper bound', e.upper)
+
+        if e.step is not None:
+            loc = self._parse_location(e.step)
+            raise FPyParserError(loc, 'FPy does not support slice step', e.step)
+
+        return lower, upper
+
     def _parse_subscript(self, e: ast.Subscript):
         """Parsing a subscript slice that is an expression"""
         loc = self._parse_location(e)
         value = self._parse_expr(e.value)
         match e.slice:
             case ast.Slice():
-                raise FPyParserError(loc, 'FPy does not support slices', e)
+                lower, upper = self._parse_slice(e.slice)
+                return TupleSlice(value, lower, upper, loc)
             case _:
                 slice =  self._parse_expr(e.slice)
                 if not isinstance(slice, ValueExpr):

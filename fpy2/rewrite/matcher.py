@@ -215,6 +215,23 @@ class _MatcherInst(Visitor):
         self._visit_expr(e.value, pat.value)
         self._visit_expr(e.index, pat.index)
 
+    def _visit_tuple_slice(self, e: TupleSlice, pat: TupleSlice):
+        self._visit_expr(e.value, pat.value)
+        match e.start, pat.start:
+            case None, None:
+                pass
+            case Expr(), Expr():
+                self._visit_expr(e.start, pat.start)
+            case _:
+                raise _MatchFailure(f'matching {pat} against {e}')
+        match e.stop, pat.stop:
+            case None, None:
+                pass
+            case Expr(), Expr():
+                self._visit_expr(e.stop, pat.stop)
+            case _:
+                raise _MatchFailure(f'matching {pat} against {e}')
+
     def _visit_tuple_set(self, e: TupleSet, pat: TupleSet):
         if len(e.slices) != len(pat.slices):
             raise _MatchFailure(f'matching {pat} against {e}')

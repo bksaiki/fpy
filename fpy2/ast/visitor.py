@@ -86,6 +86,10 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: Any) -> Any:
+        ...
+
+    @abstractmethod
     def _visit_tuple_set(self, e: TupleSet, ctx: Any) -> Any:
         ...
 
@@ -197,6 +201,8 @@ class Visitor(ABC):
                 return self._visit_comp_expr(e, ctx)
             case TupleRef():
                 return self._visit_tuple_ref(e, ctx)
+            case TupleSlice():
+                return self._visit_tuple_slice(e, ctx)
             case TupleSet():
                 return self._visit_tuple_set(e, ctx)
             case IfExpr():
@@ -296,6 +302,13 @@ class DefaultVisitor(Visitor):
     def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
         self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
+
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: Any):
+        self._visit_expr(e.value, ctx)
+        if e.start is not None:
+            self._visit_expr(e.start, ctx)
+        if e.stop is not None:
+            self._visit_expr(e.stop, ctx)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: Any):
         self._visit_expr(e.array, ctx)
@@ -431,6 +444,12 @@ class DefaultTransformVisitor(Visitor):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
         return TupleRef(value, index, e.loc)
+
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: Any):
+        value = self._visit_expr(e.value, ctx)
+        start = None if e.start is None else self._visit_expr(e.start, ctx)
+        stop = None if e.stop is None else self._visit_expr(e.stop, ctx)
+        return TupleSlice(value, start, stop, e.loc)
 
     def _visit_tuple_set(self, e: TupleSet, ctx: Any):
         array = self._visit_expr(e.array, ctx)

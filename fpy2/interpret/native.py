@@ -416,6 +416,9 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected an integer index, got {idx}')
         return arr[int(idx)]
 
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: _EvalCtx):
+        raise NotImplementedError(e)
+
     def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
         raise NotImplementedError
 
