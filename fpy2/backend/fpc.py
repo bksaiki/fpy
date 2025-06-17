@@ -357,7 +357,68 @@ class FPCoreCompileInstance(Visitor):
         return fpc.Ref(value, index)
 
     def _visit_tuple_slice(self, e: TupleSlice, ctx: None) -> fpc.Expr:
-        raise NotImplementedError(e)
+        value = self._visit_expr(e.value, ctx)
+        match e.start, e.stop:
+            case None, None:
+                # produce a copy
+                # (let ([t <value>])
+                #   (tensor ([i (size t 0)]) (ref t i)))
+                tuple_id = str(self.gensym.fresh('t'))
+                iter_id = str(self.gensym.fresh('i'))
+                return fpc.Let(
+                    [(tuple_id, value)],
+                    fpc.Tensor([(iter_id, _size0_expr(tuple_id))],
+                        fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))
+                )
+            case None, _:
+                # produce a truncated copy
+                # (let ([t <value>])
+                #   (tensor ([i <stop>]) (ref t i)))
+                assert isinstance(e.stop, Expr) # mypy doesn't like this match statement
+                tuple_id = str(self.gensym.fresh('t'))
+                iter_id = str(self.gensym.fresh('i'))
+                stop = self._visit_expr(e.stop, ctx)
+                return fpc.Let(
+                    [(tuple_id, value)],
+                    fpc.Tensor([(iter_id, stop)],
+                        fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))
+                )
+            case _:
+                # default case
+                # (let ([t <value>]
+                #   (let ([len (size t 0)])
+                #     (let ([start (max 0 (min start len))]
+                #           [stop (max 0 (min stop len))])
+                #       (tensor ([i (fdim end start)]) (ref x (+ i start)))))
+                tuple_id = str(self.gensym.fresh('t'))
+                len_id = str(self.gensym.fresh('len'))
+                start_id = str(self.gensym.fresh('start'))
+                stop_id = str(self.gensym.fresh('stop'))
+                iter_id = str(self.gensym.fresh('i'))
+
+                assert e.start is not None
+                start = self._visit_expr(e.start, ctx)
+                if e.stop is None:
+                    stop = fpc.Size(fpc.Var(tuple_id), fpc.Integer(0))
+                else:
+                    stop = self._visit_expr(e.stop, ctx)
+
+                return fpc.Let(
+                    [(tuple_id, value)],
+                    fpc.Let(
+                        [(len_id, _size0_expr(tuple_id))],
+                        fpc.Let(
+                            [
+                                (start_id, fpc.Fmax(fpc.Integer(0), fpc.Fmin(start, fpc.Var(len_id)))),
+                                (stop_id, fpc.Fmax(fpc.Integer(0), fpc.Fmin(stop, fpc.Var(len_id))))
+                            ],
+                            fpc.Tensor(
+                                [(iter_id, fpc.Fdim(fpc.Var(stop_id), fpc.Var(start_id)))],
+                                fpc.Ref(fpc.Var(tuple_id), fpc.Add(fpc.Var(iter_id), fpc.Var(start_id)))
+                            )
+                        )
+                    )
+                )
 
     def _generate_tuple_set(self, tuple_id: str, iter_id: str, idx_ids: list[str], val_id: str):
         # dimension bindings

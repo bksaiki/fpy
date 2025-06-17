@@ -214,28 +214,33 @@ def test_list_comp2():
 def test_list_comp3():
     return [x + y for x, y in zip([0, 1, 2], [3, 4, 5])]
 
-@fpy(name='Test list ref (1/5)')
+@fpy(name='Test list ref (1/6)')
 def test_list_ref1():
     x = [1.0, 2.0, 3.0]
     return x[0]
 
-@fpy(name='Test list ref (2/5)')
+@fpy(name='Test list ref (2/6)')
 def test_list_ref2():
     x = [[1.0, 2.0, 3.0]]
     return x[0][0]
 
-@fpy(name='Test list ref (3/5)')
+@fpy(name='Test list ref (3/6)')
 def test_list_ref3():
+    x = [1.0, 2.0, 3.0, 4.0, 5.0]
+    return x[:]
+
+@fpy(name='Test list ref (4/6)')
+def test_list_ref4():
     x = [1.0, 2.0, 3.0, 4.0, 5.0]
     return x[1:]
 
-@fpy(name='Test list ref (4/5)')
-def test_list_ref4():
+@fpy(name='Test list ref (5/6)')
+def test_list_ref5():
     x = [1.0, 2.0, 3.0, 4.0, 5.0]
     return x[:3]
 
-@fpy(name='Test list ref (5/5)')
-def test_list_ref5():
+@fpy(name='Test list ref (6/6)')
+def test_list_ref6():
     x = [1.0, 2.0, 3.0, 4.0, 5.0]
     return x[1:3]
 
@@ -609,6 +614,7 @@ tests = [
     test_list_ref3,
     test_list_ref4,
     test_list_ref5,
+    test_list_ref6,
     test_list_set1,
     test_list_set2,
     test_list_set3,

@@ -443,6 +443,9 @@ class _Interpreter(Visitor):
 
         return arr[start:stop]
 
+    def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
+        raise NotImplementedError(e)
+
     def _apply_comp(
         self,
         bindings: list[tuple[Id | TupleBinding, Expr]],
