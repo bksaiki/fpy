@@ -607,10 +607,6 @@ class Cast(UnaryOp):
 
 # Tensor operators
 
-class Shape(UnaryOp):
-    """FPy node: tensor shape"""
-    name: str = 'shape'
-
 class Range(UnaryOp):
     """FPy node: range constructor"""
     name: str = 'range'

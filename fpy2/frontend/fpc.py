@@ -679,33 +679,33 @@ class _FPCore2FPy:
         # compile arguments
         args: list[Argument] = []
         for name, _, shape in f.inputs:
+            # argument id
             t = self.gensym.fresh(name)
             match shape:
                 case tuple() | list():
                     # tensor argument
+                    # bind named tensor dimensions
                     dims: list[int | NamedId] = []
-                    dim_ids: list[Id] = []
-                    for dim in shape:
-                        if isinstance(dim, str):
-                            d = self.gensym.fresh(dim)
-                            dims.append(d)
-                            dim_ids.append(d)
-                        else:
-                            dims.append(dim)
-                            dim_ids.append(UnderscoreId())
+                    for i, dim in enumerate(shape):
+                        match dim:
+                            case int():
+                                # definite size dimension
+                                dims.append(dim)
+                            case str():
+                                # named dimension
+                                dim_id = self.gensym.fresh(dim)
+                                stmt = Assign(dim_id, None, Size(Var(t, None), Integer(i, None), None), None)
+                                ctx.stmts.append(stmt)
+                                # TODO: duplicate dimension names means a runtime check
+                                # How should this be expressed in FPy?
+                                ctx.env[dim] = dim_id
+                                dims.append(dim_id)
+                            case _:
+                                raise RuntimeError(f'unsupported shape {shape} for argument {name}')
 
                     arg = Argument(t, SizedTensorTypeAnn(dims, AnyTypeAnn(None), None), None)
                     args.append(arg)
                     ctx.env[name] = t
-
-                    # bind tensor dimensions
-                    shape_e = Shape(Var(t, None), None)
-                    stmt = Assign(TupleBinding(dim_ids, None), None, shape_e, None)
-                    ctx.stmts.append(stmt)
-                    for dim, dim_id in zip(shape, dim_ids):
-                        if isinstance(dim, str):
-                            assert isinstance(dim_id, NamedId), "must be a NamedId"
-                            ctx.env[dim] = dim_id
                 case None:
                     # scalar argument
                     arg = Argument(t, None, None)
@@ -746,5 +746,6 @@ def fpcore_to_fpy(
     ignore_unknown: bool = False
 ):
     ast = _FPCore2FPy(core, default_name).convert()
+    print(ast.format())
     SyntaxCheck.check(ast, ignore_unknown=ignore_unknown)
     return ast

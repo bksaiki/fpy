@@ -172,15 +172,15 @@ def test_list_len2():
     x = [[1.0, 2.0, 3.0]]
     return len(x)
 
-@fpy(name='Test shape (1/2)')
-def test_list_shape1():
-    x = [1.0, 2.0, 3.0]
-    return shape(x)
+# @fpy(name='Test shape (1/2)')
+# def test_list_shape1():
+#     x = [1.0, 2.0, 3.0]
+#     return shape(x)
 
-@fpy(name='Test shape (2/2)')
-def test_list_shape2():
-    x = [[1.0, 2.0], [3.0, 4.0]]
-    return shape(x)
+# @fpy(name='Test shape (2/2)')
+# def test_list_shape2():
+#     x = [[1.0, 2.0], [3.0, 4.0]]
+#     return shape(x)
 
 @fpy(name='Test dim (1/2)')
 def test_list_dim1():
@@ -600,8 +600,6 @@ tests = [
     test_list2,
     test_list_len1,
     test_list_len2,
-    test_list_shape1,
-    test_list_shape2,
     test_list_dim1,
     test_list_dim2,
     test_list_size1,
