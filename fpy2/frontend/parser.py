@@ -80,7 +80,6 @@ _unary_table: dict[str, type[UnaryOp]] = {
     'not': Not,
     'cast': Cast,
     'range': Range,
-    'shape': Shape,
     'dim': Dim,
 }
 

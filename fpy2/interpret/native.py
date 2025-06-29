@@ -279,14 +279,6 @@ class _Interpreter(Visitor):
                 v = v[0] # assuming a flat structure for simplicity
         return tuple(shape)
 
-    def _apply_shape(self, arg: Expr, ctx: _EvalCtx):
-        v = self._visit_expr(arg, ctx)
-        if not isinstance(v, list):
-            raise TypeError(f'expected a tensor, got {v}')
-        # compute shape of tensor
-        shape = self._tensor_shape(v)
-        return list([float(s) for s in shape])
-
     def _apply_dim(self, arg: Expr, ctx: _EvalCtx):
         v = self._visit_expr(arg, ctx)
         if not isinstance(v, list):
@@ -336,8 +328,6 @@ class _Interpreter(Visitor):
                     return self._apply_not(e.arg, ctx)
                 case Range():
                     return self._apply_range(e.arg, ctx)
-                case Shape():
-                    return self._apply_shape(e.arg, ctx)
                 case Dim():
                     return self._apply_dim(e.arg, ctx)
                 case _:
