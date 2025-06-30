@@ -4,7 +4,7 @@ This module contains the parser for the FPy language.
 
 import ast
 
-from typing import Mapping
+from typing import Any, Mapping, Optional
 from types import FunctionType
 
 from ..ast.fpyast import *
@@ -81,6 +81,7 @@ _unary_table: dict[str, type[UnaryOp]] = {
     'cast': Cast,
     'range': Range,
     'dim': Dim,
+    'enumerate': Enumerate
 }
 
 _binary_table: dict[str, type[BinaryOp]] = {

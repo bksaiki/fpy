@@ -4,11 +4,12 @@ Defines a range table, a map from variable to interval.
 
 import math
 
+from typing import Optional
+
 from fractions import Fraction
 from titanfp.titanic.gmpmath import compute_constant
 
 from ..ast import *
-from ..utils import digits_to_fraction, hexnum_to_fraction
 
 _POS_INF = math.inf
 _NEG_INF = -math.inf
@@ -223,9 +224,9 @@ def _parse_number(e: RealVal) -> Fraction | float:
         case Decnum() | Integer():
             return Fraction(e.val)
         case Hexnum():
-            return hexnum_to_fraction(e.val)
+            return e.as_rational()
         case Digits():
-            return digits_to_fraction(e.m, e.e, e.b)
+            return e.as_rational()
         case Rational():
             return Fraction(e.p, e.q)
         case Constant():

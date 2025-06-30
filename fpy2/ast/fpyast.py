@@ -4,10 +4,187 @@ This module contains the AST for FPy programs.
 
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Self, Sequence
+from fractions import Fraction
 
 from ..fpc_context import FPCoreContext
 from ..number import Context
-from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location, default_repr
+from ..utils import (
+    CompareOp,
+    Id, NamedId, UnderscoreId,
+    Location,
+    default_repr,
+    decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
+)
+
+__all__ = [
+    # Re-exports
+    'Id',
+    'NamedId',
+    'UnderscoreId',
+    'CompareOp',
+    'Location',
+    'Context',
+
+    # Base classes
+    'Ast',
+    'TypeAnn',
+    'Expr',
+    'Stmt',
+    'ValueExpr',
+    'NaryExpr',
+
+    # Type annotations
+    'AnyTypeAnn',
+    'ScalarTypeAnn',
+    'RealTypeAnn',
+    'BoolTypeAnn',
+    'TensorTypeAnn',
+    'TupleTypeAnn',
+    'SizedTensorTypeAnn',
+
+    # Value expressions
+    'Var',
+    'BoolVal',
+    'RealVal',
+    'RationalVal',
+    'Decnum',
+    'Hexnum',
+    'Integer',
+    'Rational',
+    'Digits',
+    'Constant',
+    'ForeignVal',
+
+    # N-ary operations
+    'UnaryOp',
+    'BinaryOp',
+    'TernaryOp',
+    'NaryOp',
+
+    # IEEE 754 arithmetic
+    'Add',
+    'Sub',
+    'Mul',
+    'Div',
+    'Fabs',
+    'Sqrt',
+    'Fma',
+
+    # Sign operations
+    'Neg',
+    'Copysign',
+
+    # Composite arithmetic
+    'Fdim',
+    'Fmax',
+    'Fmin',
+    'Fmod',
+    'Remainder',
+    'Hypot',
+
+    # Other arithmetic
+    'Cbrt',
+
+    # Rounding and truncation
+    'Ceil',
+    'Floor',
+    'NearbyInt',
+    'Round',
+    'Trunc',
+
+    # Trigonometric functions
+    'Acos',
+    'Asin',
+    'Atan',
+    'Atan2',
+    'Cos',
+    'Sin',
+    'Tan',
+
+    # Hyperbolic functions
+    'Acosh',
+    'Asinh',
+    'Atanh',
+    'Cosh',
+    'Sinh',
+    'Tanh',
+
+    # Exponential/logarithmic functions
+    'Exp',
+    'Exp2',
+    'Expm1',
+    'Log',
+    'Log10',
+    'Log1p',
+    'Log2',
+    'Pow',
+
+    # Integral functions
+    'Erf',
+    'Erfc',
+    'Lgamma',
+    'Tgamma',
+
+    # Classification
+    'IsFinite',
+    'IsInf',
+    'IsNan',
+    'IsNormal',
+    'Signbit',
+
+    # Logical operators
+    'Not',
+    'Or',
+    'And',
+
+    # Rounding operator
+    'Cast',
+
+    # Tensor operators
+    'Range',
+    'Dim',
+    'Size',
+    'Zip',
+    'Enumerate',
+
+    # Other expressions
+    'Call',
+    'Compare',
+    'TupleExpr',
+    'TupleBinding',
+    'CompExpr',
+    'TupleSet',
+    'TupleRef',
+    'TupleSlice',
+    'IfExpr',
+    'ForeignAttribute',
+    'ContextExpr',
+    'ContextAttribute',
+    'ContextUpdate',
+
+    # Statements
+    'StmtBlock',
+    'Assign',
+    'IndexedAssign',
+    'If1Stmt',
+    'IfStmt',
+    'WhileStmt',
+    'ForStmt',
+    'ContextStmt',
+    'AssertStmt',
+    'EffectStmt',
+    'ReturnStmt',
+
+    # Function definition
+    'Argument',
+    'FuncDef',
+
+    # Formatter
+    'BaseFormatter',
+    'get_default_formatter',
+    'set_default_formatter',
+]
+
 
 @default_repr
 class Ast(ABC):
@@ -185,18 +362,18 @@ class RealVal(ValueExpr):
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
-class ForeignVal(ValueExpr):
-    """FPy AST: native Python value"""
-    val: Any
+class RationalVal(RealVal):
+    """FPy AST: abstract rational value"""
 
-    def __init__(self, val: Any, loc: Optional[Location]):
+    def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
-        self.val = val
 
-    def is_equiv(self, other) -> bool:
-        return isinstance(other, ForeignVal) and self.val == other.val
+    @abstractmethod
+    def as_rational(self) -> Fraction:
+        """Returns the represented rational value as a Fraction in simplest form."""
+        ...
 
-class Decnum(RealVal):
+class Decnum(RationalVal):
     """FPy AST: decimal number"""
     val: str
 
@@ -207,7 +384,10 @@ class Decnum(RealVal):
     def is_equiv(self, other) -> bool:
         return isinstance(other, Decnum) and self.val == other.val
 
-class Hexnum(RealVal):
+    def as_rational(self) -> Fraction:
+        return decnum_to_fraction(self.val)
+
+class Hexnum(RationalVal):
     """FPy AST: hexadecimal number"""
     val: str
 
@@ -218,7 +398,10 @@ class Hexnum(RealVal):
     def is_equiv(self, other) -> bool:
         return isinstance(other, Hexnum) and self.val == other.val
 
-class Integer(RealVal):
+    def as_rational(self) -> Fraction:
+        return hexnum_to_fraction(self.val)
+
+class Integer(RationalVal):
     """FPy AST: integer"""
     val: int
 
@@ -229,7 +412,10 @@ class Integer(RealVal):
     def is_equiv(self, other) -> bool:
         return isinstance(other, Integer) and self.val == other.val
 
-class Rational(RealVal):
+    def as_rational(self) -> Fraction:
+        return Fraction(self.val)
+
+class Rational(RationalVal):
     """FPy AST: rational number"""
     p: int
     q: int
@@ -242,7 +428,10 @@ class Rational(RealVal):
     def is_equiv(self, other) -> bool:
         return isinstance(other, Rational) and self.p == other.p and self.q == other.q
 
-class Digits(RealVal):
+    def as_rational(self) -> Fraction:
+        return Fraction(self.p, self.q)
+
+class Digits(RationalVal):
     """FPy AST: scientific notation"""
     m: int
     e: int
@@ -262,6 +451,9 @@ class Digits(RealVal):
             and self.b == other.b
         )
 
+    def as_rational(self) -> Fraction:
+        return digits_to_fraction(self.m, self.e, self.b)
+
 class Constant(RealVal):
     """FPy AST: constant expression"""
     val: str
@@ -272,6 +464,17 @@ class Constant(RealVal):
 
     def is_equiv(self, other) -> bool:
         return isinstance(other, Constant) and self.val == other.val
+
+class ForeignVal(ValueExpr):
+    """FPy AST: native Python value"""
+    val: Any
+
+    def __init__(self, val: Any, loc: Optional[Location]):
+        super().__init__(loc)
+        self.val = val
+
+    def is_equiv(self, other) -> bool:
+        return isinstance(other, ForeignVal) and self.val == other.val
 
 class NaryExpr(Expr):
     """FPy AST: expression with N arguments"""
@@ -623,6 +826,9 @@ class Zip(NaryOp):
     """FPy node: zip operator"""
     name: str = 'zip'
 
+class Enumerate(UnaryOp):
+    """FPy node: enumerate operator"""
+    name: str = 'enumerate'
 
 class Call(NaryExpr):
     """FPy AST: function call"""

@@ -143,13 +143,26 @@ def real_mul(x: Float, y: Float) -> Float:
         r = x.as_real() * y.as_real()
         return Float(x=r, ctx=RealContext())
 
+def real_fma(x: Float, y: Float, z: Float) -> Float:
+    """
+    Fused multiply-add operation for real numbers, exactly.
+    Computes x * y + z.
+    """
+    if not isinstance(x, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    if not isinstance(y, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for y={y}')
+    if not isinstance(z, Float):
+        raise TypeError(f'Expected \'Float\', got \'{type(z)}\' for z={z}')
+    return real_add(real_mul(x, y), z)
+
 def real_ceil(x: Float) -> Float:
     """
     Round a real number up to the nearest integer.
     """
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    
+
     if x.is_nar():
         # special value
         return Float(x=x, ctx=RealContext())

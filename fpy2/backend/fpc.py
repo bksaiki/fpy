@@ -213,6 +213,21 @@ class FPCoreCompileInstance(Visitor):
         tup = self._visit_expr(arr, ctx)
         return fpc.Dim(tup)
 
+    def _visit_enumerate(self, arr: Expr, ctx: None) -> fpc.Expr:
+        # (let ([t <tuple>])
+        #  (tensor ([i (size t 0)])
+        #    (array i (ref t i))))
+        tuple_id = str(self.gensym.fresh('i'))
+        iter_id = str(self.gensym.fresh('i'))
+        tup = self._visit_expr(arr, ctx)
+        return fpc.Let(
+            [(tuple_id, tup)],
+            fpc.Tensor(
+                [(iter_id, _size0_expr(tuple_id))],
+                fpc.Array(fpc.Var(iter_id), fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))
+            )
+        )
+
     def _visit_zip(self, args: list[Expr], ctx: None) -> fpc.Expr:
         # expand zip expression (for N=2)
         #  (let ([t0 <tuple0>] [t1 <tuple1>])
@@ -247,6 +262,9 @@ class FPCoreCompileInstance(Visitor):
                 case Dim():
                     # dim expression
                     return self._visit_dim(e.arg, ctx)
+                case Enumerate():
+                    # enumerate expression
+                    return self._visit_enumerate(e.arg, ctx)
                 case _:
                     raise NotImplementedError('no FPCore operator for', e)
 
