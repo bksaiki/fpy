@@ -145,6 +145,7 @@ __all__ = [
     'Dim',
     'Size',
     'Zip',
+    'Enumerate',
 
     # Other expressions
     'Call',
@@ -825,6 +826,9 @@ class Zip(NaryOp):
     """FPy node: zip operator"""
     name: str = 'zip'
 
+class Enumerate(UnaryOp):
+    """FPy node: enumerate operator"""
+    name: str = 'enumerate'
 
 class Call(NaryExpr):
     """FPy AST: function call"""

@@ -172,16 +172,6 @@ def test_list_len2():
     x = [[1.0, 2.0, 3.0]]
     return len(x)
 
-# @fpy(name='Test shape (1/2)')
-# def test_list_shape1():
-#     x = [1.0, 2.0, 3.0]
-#     return shape(x)
-
-# @fpy(name='Test shape (2/2)')
-# def test_list_shape2():
-#     x = [[1.0, 2.0], [3.0, 4.0]]
-#     return shape(x)
-
 @fpy(name='Test dim (1/2)')
 def test_list_dim1():
     x = [1.0, 2.0, 3.0]
@@ -201,6 +191,33 @@ def test_list_size1():
 def test_list_size2():
     x = [[1.0, 2.0], [3.0, 4.0]]
     return size(x, 1)
+
+@fpy(name='Test enumerate (1/1)')
+def test_enumerate():
+    xs = [1.0, 2.0, 3.0]
+    return enumerate(xs)
+
+# @fpy(name='Test zip (1/4)')
+# def test_list_zip1():
+#     return zip()
+
+@fpy(name='Test zip (2/4)')
+def test_list_zip2():
+    xs = [1.0, 2.0, 3.0]
+    return zip(xs)
+
+@fpy(name='Test zip (3/4)')
+def test_list_zip3():
+    xs = [1.0, 2.0, 3.0]
+    ys = [4.0, 5.0, 6.0]
+    return zip(xs, ys)
+
+@fpy(name='Test zip (4/4)')
+def test_list_zip4():
+    xs = [1.0, 2.0, 3.0]
+    ys = [4.0, 5.0, 6.0]
+    zs = [7.0, 8.0, 9.0]
+    return zip(xs, ys, zs)
 
 @fpy
 def test_list_comp1():
@@ -604,6 +621,11 @@ tests = [
     test_list_dim2,
     test_list_size1,
     test_list_size2,
+    test_enumerate,
+    # test_list_zip1,
+    test_list_zip2,
+    test_list_zip3,
+    test_list_zip4,
     test_list_comp1,
     test_list_comp2,
     test_list_comp3,

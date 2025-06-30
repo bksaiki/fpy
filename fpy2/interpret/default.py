@@ -304,6 +304,16 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a tensor, got {v}')
         return Float.from_int(len(v.shape), ctx=ctx.round_ctx)
 
+    def _apply_enumerate(self, arg: Expr, ctx: _EvalCtx):
+        v = self._visit_expr(arg, ctx)
+        if not isinstance(v, NDArray):
+            raise TypeError(f'expected a tensor, got {v}')
+
+        elts: list[NDArray] = []
+        for i, val in enumerate(v):
+            elts.append(NDArray([Float.from_int(i, ctx=ctx.round_ctx), val], shape=(2,)))
+        return NDArray(elts, shape=(len(elts),))
+
     def _apply_size(self, arr: Expr, idx: Expr, ctx: _EvalCtx):
         v = self._visit_expr(arr, ctx)
         if not isinstance(v, NDArray):
@@ -318,7 +328,9 @@ class _Interpreter(Visitor):
     def _apply_zip(self, args: Sequence[Expr], ctx: _EvalCtx):
         """Apply the `zip` method to the given n-ary expression."""
         if len(args) == 0:
-            return NDArray([])
+            # TODO: how to fix this?
+            # return NDArray([], shape=())
+            raise NotImplementedError('zip() with 0 size not supported')
 
         # evaluate all children
         arrays: list[NDArray] = []
@@ -345,6 +357,8 @@ class _Interpreter(Visitor):
                     return self._apply_range(e.arg, ctx)
                 case Dim():
                     return self._apply_dim(e.arg, ctx)
+                case Enumerate():
+                    return self._apply_enumerate(e.arg, ctx)
                 case _:
                     raise RuntimeError('unknown operator', e)
 

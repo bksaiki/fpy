@@ -81,6 +81,7 @@ _unary_table: dict[str, type[UnaryOp]] = {
     'cast': Cast,
     'range': Range,
     'dim': Dim,
+    'enumerate': Enumerate
 }
 
 _binary_table: dict[str, type[BinaryOp]] = {

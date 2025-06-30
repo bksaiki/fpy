@@ -286,6 +286,16 @@ class _Interpreter(Visitor):
         shape = self._tensor_shape(v)
         return float(len(shape))
 
+    def _apply_enumerate(self, arg: Expr, ctx: _EvalCtx):
+        v = self._visit_expr(arg, ctx)
+        if not isinstance(v, list):
+            raise TypeError(f'expected a tensor, got {v}')
+
+        elts: list[list] = []
+        for i, val in enumerate(v):
+            elts.append([float(i), val])
+        return elts
+
     def _apply_size(self, arr: Expr, idx: Expr, ctx: _EvalCtx):
         v = self._visit_expr(arr, ctx)
         if not isinstance(v, list):
@@ -329,6 +339,8 @@ class _Interpreter(Visitor):
                     return self._apply_range(e.arg, ctx)
                 case Dim():
                     return self._apply_dim(e.arg, ctx)
+                case Enumerate():
+                    return self._apply_enumerate(e.arg, ctx)
                 case _:
                     raise RuntimeError('unknown operator', e)
 
