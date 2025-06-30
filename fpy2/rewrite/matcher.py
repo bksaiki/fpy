@@ -6,13 +6,7 @@ from fractions import Fraction
 
 from ..ast import *
 from ..function import Function
-from ..utils import (
-    default_repr,
-    decnum_to_fraction,
-    digits_to_fraction,
-    hexnum_to_fraction,
-    sliding_window
-)
+from ..utils import default_repr, sliding_window
 
 from .pattern import Pattern, ExprPattern, StmtPattern
 from .subst import Subst
@@ -136,12 +130,12 @@ class _MatcherInst(Visitor):
 
     def _visit_decnum(self, e: Decnum, pat: Decnum):
         # this is a semantic match, not a syntactic match!
-        if decnum_to_fraction(e.val) != decnum_to_fraction(pat.val):
+        if e.as_rational() != pat.as_rational():
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_hexnum(self, e: Hexnum, pat: Hexnum):
         # this is a semantic match, not a syntactic match!
-        if hexnum_to_fraction(e.val) != hexnum_to_fraction(pat.val):
+        if e.as_rational() != pat.as_rational():
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_integer(self, e: Integer, pat: Integer):
@@ -150,7 +144,7 @@ class _MatcherInst(Visitor):
 
     def _visit_rational(self, e: Rational, pat: Rational):
         # this is a semantic match, not a syntactic match!
-        if Fraction(e.p, e.q) != Fraction(pat.p, pat.q):
+        if e.as_rational() != pat.as_rational():
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_constant(self, e: Constant, pat: Constant):
@@ -159,9 +153,7 @@ class _MatcherInst(Visitor):
 
     def _visit_digits(self, e: Digits, pat: Digits):
         # this is a semantic match, not a syntactic match!
-        f1 = digits_to_fraction(e.m, e.e, e.b)
-        f2 = digits_to_fraction(e.m, e.e, e.b)
-        if f1 != f2:
+        if e.as_rational() != pat.as_rational():
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_unaryop(self, e: UnaryOp, pat: UnaryOp):

@@ -189,10 +189,15 @@ class BoolVal(ValueExpr):
 
 class RealVal(ValueExpr):
     """FPy AST: real value"""
-    pass
 
-class RationalVal(ValueExpr):
+    def __init__(self, loc: Optional[Location]):
+        super().__init__(loc)
+
+class RationalVal(RealVal):
     """FPy AST: abstract rational value"""
+
+    def __init__(self, loc: Optional[Location]):
+        super().__init__(loc)
 
     @abstractmethod
     def as_rational(self) -> Fraction:

@@ -12,7 +12,6 @@ from ..number import Context, Float, IEEEContext, RM
 from ..number.gmp import mpfr_constant
 from ..function import Function
 from ..env import ForeignEnv
-from ..utils import digits_to_fraction
 
 from .interpreter import Interpreter, FunctionReturnException
 
@@ -202,7 +201,7 @@ class _Interpreter(Visitor):
         return float(_PY_CTX.round(x))
 
     def _visit_digits(self, e: Digits, ctx: _EvalCtx):
-        return float(digits_to_fraction(e.m, e.e, e.b))
+        return float(e.as_rational())
 
     def _visit_call(self, e: Call, ctx: _EvalCtx):
         raise NotImplementedError('unknown call', e)

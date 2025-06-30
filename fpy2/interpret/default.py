@@ -17,7 +17,6 @@ from ..number.gmp import mpfr_constant
 from ..env import ForeignEnv
 from ..function import Function
 from ..primitive import Primitive
-from ..utils import decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
 
 from .interpreter import Interpreter, FunctionReturnException
 
@@ -225,28 +224,24 @@ class _Interpreter(Visitor):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: _EvalCtx):
-        x = decnum_to_fraction(e.val)
-        return ctx.round_ctx.round(x)
+        return ctx.round_ctx.round(e.as_rational())
 
     def _visit_integer(self, e: Integer, ctx: _EvalCtx):
         return ctx.round_ctx.round(e.val)
 
     def _visit_hexnum(self, e: Hexnum, ctx: _EvalCtx):
-        x = hexnum_to_fraction(e.val)
-        return ctx.round_ctx.round(x)
+        return ctx.round_ctx.round(e.as_rational())
 
     def _visit_rational(self, e: Rational, ctx: _EvalCtx):
-        x = Fraction(e.p, e.q)
-        return ctx.round_ctx.round(x)
+        return ctx.round_ctx.round(e.as_rational())
+
+    def _visit_digits(self, e: Digits, ctx: _EvalCtx):
+        return ctx.round_ctx.round(e.as_rational())
 
     def _visit_constant(self, e: Constant, ctx: _EvalCtx):
         prec, _ = ctx.round_ctx.round_params()
         assert isinstance(prec, int) # TODO: not every context produces has a known precision
         x = mpfr_constant(e.val, prec=prec)
-        return ctx.round_ctx.round(x)
-
-    def _visit_digits(self, e: Digits, ctx: _EvalCtx):
-        x = digits_to_fraction(e.m, e.e, e.b)
         return ctx.round_ctx.round(x)
 
     def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: _EvalCtx):
