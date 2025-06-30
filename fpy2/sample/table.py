@@ -4,6 +4,8 @@ Defines a range table, a map from variable to interval.
 
 import math
 
+from typing import Optional
+
 from fractions import Fraction
 from titanfp.titanic.gmpmath import compute_constant
 

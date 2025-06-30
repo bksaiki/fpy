@@ -1,5 +1,7 @@
 """Context inlining for FPy ASTs"""
 
+from typing import Any
+
 from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..env import ForeignEnv

@@ -2,7 +2,7 @@
 FPy parsing from FPCore.
 """
 
-from typing import TypeAlias
+from typing import Any, Optional, TypeAlias
 
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
