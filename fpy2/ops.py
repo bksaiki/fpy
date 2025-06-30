@@ -2,9 +2,10 @@
 Mathematical functions under rounding contexts.
 """
 
+from fractions import Fraction
 from typing import Any, Callable, TypeAlias
 
-from .number import Context, Float
+from .number import Context, Float, RoundingMode
 from .number.gmp import *
 from .number.real import (
     RealContext,
@@ -12,7 +13,8 @@ from .number.real import (
     real_ceil, real_floor, real_trunc, real_round,
     real_fma
 )
-from .number.round import RoundingMode
+
+from .utils import digits_to_fraction, hexnum_to_fraction
 
 __all__ = [
     # Types
@@ -71,7 +73,11 @@ __all__ = [
     'isinf',
     'isfinite',
     'isnormal',
-    'signbit'
+    'signbit',
+    # Constants
+    'digits',
+    'hexfloat',
+    'fraction'
 ]
 
 
@@ -139,14 +145,14 @@ def acos(x: Real, ctx: Optional[Context] = None):
     """Computes the inverse cosine of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_acos, x, ctx=ctx)
 
 def acosh(x: Real, ctx: Optional[Context] = None):
     """Computes the inverse hyperbolic cosine of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_acosh, x, ctx=ctx)
 
 def add(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -154,28 +160,28 @@ def add(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_add, x, y, ctx=ctx)
 
 def asin(x: Real, ctx: Optional[Context] = None):
     """Computes the inverse sine of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_asin, x, ctx=ctx)
 
 def asinh(x: Real, ctx: Optional[Context] = None):
     """Computes the inverse hyperbolic sine of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_asinh, x, ctx=ctx)
 
 def atan(x: Real, ctx: Optional[Context] = None):
     """Computes the inverse tangent of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_atan, x, ctx=ctx)
 
 def atan2(y: Real, x: Real, ctx: Optional[Context] = None):
@@ -186,21 +192,21 @@ def atan2(y: Real, x: Real, ctx: Optional[Context] = None):
     y = _real_to_float(y)
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_atan2, y, x, ctx=ctx)
 
 def atanh(x: Real, ctx: Optional[Context] = None):
     """Computes the inverse hyperbolic tangent of `x` under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_atanh, x, ctx=ctx)
 
 def cbrt(x: Real, ctx: Optional[Context] = None):
     """Computes the cube root of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_cbrt, x, ctx=ctx)
 
 def copysign(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -208,21 +214,21 @@ def copysign(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_copysign, x, y, ctx=ctx)
 
 def cos(x: Real, ctx: Optional[Context] = None):
     """Computes the cosine of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_cos, x, ctx=ctx)
 
 def cosh(x: Real, ctx: Optional[Context] = None):
     """Computes the hyperbolic cosine `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_cosh, x, ctx=ctx)
 
 def div(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -230,56 +236,56 @@ def div(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_div, x, y, ctx=ctx)
 
 def erf(x: Real, ctx: Optional[Context] = None):
     """Computes the error function of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_erf, x, ctx=ctx)
 
 def erfc(x: Real, ctx: Optional[Context] = None):
     """Computes `1 - erf(x)` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_erfc, x, ctx=ctx)
 
 def exp(x: Real, ctx: Optional[Context] = None):
     """Computes `e ** x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_exp, x, ctx=ctx)
 
 def exp2(x: Real, ctx: Optional[Context] = None):
     """Computes `2 ** x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_exp2, x, ctx=ctx)
 
 def exp10(x: Real, ctx: Optional[Context] = None):
     """Computes `10 *** x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_exp10, x, ctx=ctx)
 
 def expm1(x: Real, ctx: Optional[Context] = None):
     """Computes `exp(x) - 1` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_expm1, x, ctx=ctx)
 
 def fabs(x: Real, ctx: Optional[Context] = None):
     """Computes `|x|` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_fabs, x, ctx=ctx)
 
 def fdim(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -287,7 +293,7 @@ def fdim(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_fdim, x, y, ctx=ctx)
 
 def fma(x: Real, y: Real, z: Real, ctx: Optional[Context] = None):
@@ -296,7 +302,7 @@ def fma(x: Real, y: Real, z: Real, ctx: Optional[Context] = None):
     y = _real_to_float(y)
     z = _real_to_float(z)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_fma, x, y, z, ctx=ctx)
 
 def fmax(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -304,7 +310,7 @@ def fmax(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_fmax, x, y, ctx=ctx)
 
 def fmin(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -312,7 +318,7 @@ def fmin(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_fmin, x, y, ctx=ctx)
 
 def fmod(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -325,7 +331,7 @@ def fmod(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_fmod, x, y, ctx=ctx)
 
 def hypot(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -333,42 +339,42 @@ def hypot(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_hypot, x, y, ctx=ctx)
 
 def lgamma(x: Real, ctx: Optional[Context] = None):
     """Computes the log-gamma of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_lgamma, x, ctx=ctx)
 
 def log(x: Real, ctx: Optional[Context] = None):
     """Computes `log(x)` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_log, x, ctx=ctx)
 
 def log10(x: Real, ctx: Optional[Context] = None):
     """Computes `log10(x)` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_log10, x, ctx=ctx)
 
 def log1p(x: Real, ctx: Optional[Context] = None):
     """Computes `log1p(x)` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_log1p, x, ctx=ctx)
 
 def log2(x: Real, ctx: Optional[Context] = None):
     """Computes `log2(x)` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_log2, x, ctx=ctx)
 
 def mul(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -376,14 +382,14 @@ def mul(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_mul, x, y, ctx=ctx)
 
 def neg(x: Real, ctx: Optional[Context] = None):
     """Computes `-x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for ctx={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
     return _apply_mpfr(mpfr_neg, x, ctx=ctx)
 
 def pow(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -391,7 +397,7 @@ def pow(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_pow, x, y, ctx=ctx)
 
 def remainder(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -404,28 +410,28 @@ def remainder(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_remainder, x, y, ctx=ctx)
 
 def sin(x: Real, ctx: Optional[Context] = None):
     """Computes the sine of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_sin, x, ctx=ctx)
 
 def sinh(x: Real, ctx: Optional[Context] = None):
     """Computes the hyperbolic sine of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_sinh, x, ctx=ctx)
 
 def sqrt(x: Real, ctx: Optional[Context] = None):
     """Computes square-root of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_sqrt, x, ctx=ctx)
 
 def sub(x: Real, y: Real, ctx: Optional[Context] = None):
@@ -433,28 +439,28 @@ def sub(x: Real, y: Real, ctx: Optional[Context] = None):
     x = _real_to_float(x)
     y = _real_to_float(y)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_sub, x, y, ctx=ctx)
 
 def tan(x: Real, ctx: Optional[Context] = None):
     """Computes the tangent of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_tan, x, ctx=ctx)
 
 def tanh(x: Real, ctx: Optional[Context] = None):
     """Computes the hyperbolic tangent of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_tanh, x, ctx=ctx)
 
 def tgamma(x: Real, ctx: Optional[Context] = None):
     """Computes gamma of `x` rounded under `ctx`."""
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_tgamma, x, ctx=ctx)
 
 #############################################################################
@@ -469,7 +475,7 @@ def ceil(x: Real, ctx: Optional[Context] = None):
     """
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     match ctx:
         case None | RealContext():
             # use rounding primitives
@@ -486,7 +492,7 @@ def floor(x: Real, ctx: Optional[Context] = None):
     """
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     match ctx:
         case None | RealContext():
             # use rounding primitives
@@ -504,7 +510,7 @@ def trunc(x: Real, ctx: Optional[Context] = None):
     """
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     match ctx:
         case None | RealContext():
             # use rounding primitives
@@ -521,7 +527,7 @@ def nearbyint(x: Real, ctx: Optional[Context] = None):
     """
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     match ctx:
         case None | RealContext():
             raise RuntimeError('nearbyint() not supported in RealContext')
@@ -537,7 +543,7 @@ def round(x: Real, ctx: Optional[Context] = None):
     """
     x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\', got \'{type(ctx)}\' for x={ctx}')
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     match ctx:
         case None | RealContext():
             # use rounding primitives
@@ -573,3 +579,60 @@ def signbit(x: Real) -> bool:
     x = _real_to_float(x)
     # TODO: should all Floats have this property?
     return x.s
+
+#############################################################################
+# Constants
+
+def digits(m: int, e: int, b: int, ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` with the given number of digits, exponent, and base.
+    The result is rounded under the given context.
+    """
+    match ctx:
+        case None | RealContext():
+            # real computation; no rounding
+            x = digits_to_fraction(m, e, b)
+            # TODO: can convert any number with a power of two denominator
+            raise NotImplementedError(f'cannot evaluate exactly: digits(m={m}, e={e}, b={b})')
+        case Context():
+            x = digits_to_fraction(m, e, b)
+            return ctx.round(x)
+        case _:
+            raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
+
+def hexfloat(s: str, ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` from a hexadecimal floating-point string `s`.
+    The result is rounded under the given context.
+    """
+    match ctx:
+        case None | RealContext():
+            # real computation; no rounding
+            x = hexnum_to_fraction(s)
+            # TODO: can convert any number with a power of two denominator
+            raise NotImplementedError(f'cannot evaluate exactly: hexfloat(s={s})')
+        case Context():
+            x = hexnum_to_fraction(s)
+            return ctx.round(x)
+        case _:
+            raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
+
+def fraction(n: int, d: int, ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` from a fraction with the given numerator and denominator.
+    The result is rounded under the given context.
+    """
+    if d == 0:
+        return Float(isnan=True, ctx=ctx)
+
+    match ctx:
+        case None | RealContext():
+            # real computation; no rounding
+            x = Fraction(n, d)
+            # TODO: can convert any number with a power of two denominator
+            raise NotImplementedError(f'cannot evaluate exactly: hexfloat(s={s})')
+        case Context():
+            x = Fraction(n, d)
+            return ctx.round(x)
+        case _:
+            raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')

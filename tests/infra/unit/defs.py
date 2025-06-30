@@ -1,4 +1,4 @@
-from fpy2 import fpy, IEEEContext, RM, RealContext, Real
+from fpy2 import *
 
 ### Simple tests
 
