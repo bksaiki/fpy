@@ -49,7 +49,8 @@ from .number import (
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
     INTEGER,
     SINT8, SINT16, SINT32, SINT64,
-    UINT8, UINT16, UINT32, UINT64
+    UINT8, UINT16, UINT32, UINT64,
+    Real
 )
 
 from .ops import *

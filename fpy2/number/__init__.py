@@ -1,7 +1,7 @@
 from typing import TypeAlias
 
 # Numbers
-from .number import RealFloat, Float
+from .number import RealFloat, Float, Real
 
 # Contexts
 from .context import Context, OrdinalContext, SizedContext, EncodableContext

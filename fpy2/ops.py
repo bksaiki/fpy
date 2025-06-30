@@ -5,7 +5,7 @@ Mathematical functions under rounding contexts.
 from fractions import Fraction
 from typing import Any, Callable, TypeAlias
 
-from .number import Context, Float, RoundingMode
+from .number import Context, Float, Real, RoundingMode
 from .number.gmp import *
 from .number.real import (
     RealContext,
@@ -17,8 +17,6 @@ from .number.real import (
 from .utils import digits_to_fraction, hexnum_to_fraction
 
 __all__ = [
-    # Types
-    'Real',
     # General operations
     'acos',
     'acosh',
@@ -123,9 +121,6 @@ def _apply_mpfr(fn: Callable[..., Float], *args: Float, ctx: Optional[Context] =
 
 ################################################################################
 # Types
-
-Real: TypeAlias = Float | int | float
-"""all accepted "number" types in FPy."""
 
 def _real_to_float(x: Real) -> Float:
     match x:
