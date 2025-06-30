@@ -3,7 +3,6 @@ FPy runtime backed by the Titanic library.
 """
 
 from dataclasses import dataclass
-from fractions import Fraction
 from typing import Any, Callable, Optional, Sequence, TypeAlias
 
 from titanfp.titanic.ndarray import NDArray

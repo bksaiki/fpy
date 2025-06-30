@@ -1,8 +1,8 @@
 import random
 import unittest
 
-from fpy2 import IEEEContext, MPFixedContext, FixedContext, RM, OF, FP64, FP32, FP16
-from fpy2.math import *
+from fpy2 import IEEEContext, MPFixedContext, FixedContext, Float, RM, OF, FP64, FP32, FP16
+from fpy2.ops import *
 
 _unary_ops = [
     acos,
@@ -93,7 +93,7 @@ class MathIEEENoExceptTestCase(unittest.TestCase):
                         i = random.randint(0, 1 << ctx.nbits - 1)
                         x = ctx.decode(i)
                         # evaluate
-                        op(x, ctx)
+                        op(x, ctx=ctx)
 
 
     def test_fuzz_binary(self, num_inputs: int = 256):
@@ -108,7 +108,7 @@ class MathIEEENoExceptTestCase(unittest.TestCase):
                         x = ctx.decode(i)
                         y = ctx.decode(j)
                         # evaluate
-                        op(x, y, ctx)
+                        op(x, y, ctx=ctx)
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
         for op in _ternary_ops:
@@ -124,7 +124,7 @@ class MathIEEENoExceptTestCase(unittest.TestCase):
                         y = ctx.decode(j)
                         z = ctx.decode(k)
                         # evaluate
-                        op(x, y, z, ctx)
+                        op(x, y, z, ctx=ctx)
 
 class MathIntegerNoExceptTestCase(unittest.TestCase):
     """
@@ -157,7 +157,7 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
                     i *= random.choice([-1, 1])
                     x = Float.from_int(i, ctx)
                     # evaluate
-                    op(x, ctx)
+                    op(x, ctx=ctx)
 
     def test_fuzz_binary(self, num_inputs: int = 256):
         for op in _binary_ops:
@@ -171,7 +171,7 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
                     x = Float.from_int(i, ctx)
                     y = Float.from_int(j, ctx)
                     # evaluate
-                    op(x, y, ctx)
+                    op(x, y, ctx=ctx)
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
         for op in _ternary_ops:
@@ -187,7 +187,7 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
                     y = Float.from_int(j, ctx)
                     z = Float.from_int(k, ctx)
                     # evaluate
-                    op(x, y, z, ctx)
+                    op(x, y, z, ctx=ctx)
 
 class MathInt64NoExceptTestCase(unittest.TestCase):
     """
@@ -221,7 +221,7 @@ class MathInt64NoExceptTestCase(unittest.TestCase):
                     i *= random.choice([-1, 1])
                     x = Float.from_int(i, INT64)
                     # evaluate
-                    op(x, INT64)
+                    op(x, ctx=INT64)
 
     def test_fuzz_binary(self, num_inputs: int = 256):
         INT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP)
@@ -237,7 +237,7 @@ class MathInt64NoExceptTestCase(unittest.TestCase):
                     x = Float.from_int(i, ctx)
                     y = Float.from_int(j, ctx)
                     # evaluate
-                    op(x, y, ctx)
+                    op(x, y, ctx=ctx)
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
         INT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP)
@@ -255,4 +255,4 @@ class MathInt64NoExceptTestCase(unittest.TestCase):
                     y = Float.from_int(j, ctx)
                     z = Float.from_int(k, ctx)
                     # evaluate
-                    op(x, y, z, ctx)
+                    op(x, y, z, ctx=ctx)

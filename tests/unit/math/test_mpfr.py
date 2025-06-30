@@ -2,10 +2,10 @@ import gmpy2 as gmp
 import random
 import unittest
 
-from typing import Any, Callable
+from typing import Callable
 
-from fpy2 import IEEEContext, RM
-from fpy2.math import *
+from fpy2 import IEEEContext, Float, RM
+from fpy2.ops import *
 from fpy2.number.gmp import float_to_mpfr, mpfr_to_float
 
 def _gmp_neg(x):
@@ -157,7 +157,7 @@ class MPFREquivTestCase(unittest.TestCase):
                         i = random.randint(0, 1 << ctx.nbits - 1)
                         x = ctx.decode(i)
                         # evaluate operation
-                        fl = op(x, ctx)
+                        fl = op(x, ctx=ctx)
                         # evaluate equivalent operation
                         r = _mpfr_apply(mpfr, (x,), ctx)
                         ref = ctx.round(r)
@@ -181,7 +181,7 @@ class MPFREquivTestCase(unittest.TestCase):
                         x = ctx.decode(i)
                         y = ctx.decode(j)
                         # evaluate operation
-                        fl = op(x, y, ctx)
+                        fl = op(x, y, ctx=ctx)
                         # evaluate equivalent operation
                         r = _mpfr_apply(mpfr, (x, y), ctx)
                         ref = ctx.round(r)
@@ -207,7 +207,7 @@ class MPFREquivTestCase(unittest.TestCase):
                         y = ctx.decode(j)
                         z = ctx.decode(k)
                         # evaluate operation
-                        fl = op(x, y, z, ctx)
+                        fl = op(x, y, z, ctx=ctx)
                         # evaluate equivalent operation
                         r = _mpfr_apply(mpfr, (x, y, z), ctx)
                         ref = ctx.round(r)
