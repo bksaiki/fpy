@@ -4,10 +4,18 @@ This module contains the AST for FPy programs.
 
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Self, Sequence
+from fractions import Fraction
 
 from ..fpc_context import FPCoreContext
 from ..number import Context
-from ..utils import CompareOp, Id, NamedId, UnderscoreId, Location, default_repr
+from ..utils import (
+    CompareOp,
+    Id, NamedId, UnderscoreId,
+    Location,
+    default_repr,
+    decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
+)
+
 
 @default_repr
 class Ast(ABC):
@@ -181,22 +189,17 @@ class BoolVal(ValueExpr):
 
 class RealVal(ValueExpr):
     """FPy AST: real value"""
+    pass
 
-    def __init__(self, loc: Optional[Location]):
-        super().__init__(loc)
+class RationalVal(ValueExpr):
+    """FPy AST: abstract rational value"""
 
-class ForeignVal(ValueExpr):
-    """FPy AST: native Python value"""
-    val: Any
+    @abstractmethod
+    def as_rational(self) -> Fraction:
+        """Returns the represented rational value as a Fraction in simplest form."""
+        ...
 
-    def __init__(self, val: Any, loc: Optional[Location]):
-        super().__init__(loc)
-        self.val = val
-
-    def is_equiv(self, other) -> bool:
-        return isinstance(other, ForeignVal) and self.val == other.val
-
-class Decnum(RealVal):
+class Decnum(RationalVal):
     """FPy AST: decimal number"""
     val: str
 
@@ -207,7 +210,10 @@ class Decnum(RealVal):
     def is_equiv(self, other) -> bool:
         return isinstance(other, Decnum) and self.val == other.val
 
-class Hexnum(RealVal):
+    def as_rational(self) -> Fraction:
+        return decnum_to_fraction(self.val)
+
+class Hexnum(RationalVal):
     """FPy AST: hexadecimal number"""
     val: str
 
@@ -218,7 +224,10 @@ class Hexnum(RealVal):
     def is_equiv(self, other) -> bool:
         return isinstance(other, Hexnum) and self.val == other.val
 
-class Integer(RealVal):
+    def as_rational(self) -> Fraction:
+        return hexnum_to_fraction(self.val)
+
+class Integer(RationalVal):
     """FPy AST: integer"""
     val: int
 
@@ -229,7 +238,10 @@ class Integer(RealVal):
     def is_equiv(self, other) -> bool:
         return isinstance(other, Integer) and self.val == other.val
 
-class Rational(RealVal):
+    def as_rational(self) -> Fraction:
+        return Fraction(self.val)
+
+class Rational(RationalVal):
     """FPy AST: rational number"""
     p: int
     q: int
@@ -242,7 +254,10 @@ class Rational(RealVal):
     def is_equiv(self, other) -> bool:
         return isinstance(other, Rational) and self.p == other.p and self.q == other.q
 
-class Digits(RealVal):
+    def as_rational(self) -> Fraction:
+        return Fraction(self.p, self.q)
+
+class Digits(RationalVal):
     """FPy AST: scientific notation"""
     m: int
     e: int
@@ -262,6 +277,9 @@ class Digits(RealVal):
             and self.b == other.b
         )
 
+    def as_rational(self) -> Fraction:
+        return digits_to_fraction(self.m, self.e, self.b)
+
 class Constant(RealVal):
     """FPy AST: constant expression"""
     val: str
@@ -272,6 +290,17 @@ class Constant(RealVal):
 
     def is_equiv(self, other) -> bool:
         return isinstance(other, Constant) and self.val == other.val
+
+class ForeignVal(ValueExpr):
+    """FPy AST: native Python value"""
+    val: Any
+
+    def __init__(self, val: Any, loc: Optional[Location]):
+        super().__init__(loc)
+        self.val = val
+
+    def is_equiv(self, other) -> bool:
+        return isinstance(other, ForeignVal) and self.val == other.val
 
 class NaryExpr(Expr):
     """FPy AST: expression with N arguments"""
