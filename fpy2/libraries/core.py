@@ -3,7 +3,6 @@ Core numerical functions.
 """
 
 from fpy2 import *
-from fpy2.typing import *
 
 @fpy_prim
 def split(x: Float, n: Float):

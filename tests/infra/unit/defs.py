@@ -1,5 +1,4 @@
-from fpy2 import fpy, IEEEContext, RM, RealContext
-from fpy2.typing import *
+from fpy2 import fpy, IEEEContext, RM, RealContext, Real
 
 ### Simple tests
 

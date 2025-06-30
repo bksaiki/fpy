@@ -2,7 +2,6 @@
 Mathematical functions under rounding contexts.
 """
 
-from numbers import Rational
 from typing import Any, Callable, TypeAlias
 
 from .number import Context, Float
@@ -66,7 +65,13 @@ __all__ = [
     'floor',
     'trunc',
     'nearbyint',
-    'round'
+    'round',
+    # Classification
+    'isnan',
+    'isinf',
+    'isfinite',
+    'isnormal',
+    'signbit'
 ]
 
 
@@ -113,7 +118,7 @@ def _apply_mpfr(fn: Callable[..., Float], *args: Float, ctx: Optional[Context] =
 ################################################################################
 # Types
 
-Real: TypeAlias = Float | Rational | int | float
+Real: TypeAlias = Float | int | float
 """all accepted "number" types in FPy."""
 
 def _real_to_float(x: Real) -> Float:
@@ -539,3 +544,32 @@ def round(x: Real, ctx: Optional[Context] = None):
             return real_round(x)
         case _:
             return ctx.with_rm(RoundingMode.RNA).round_integer(x)
+
+#############################################################################
+# Classification
+
+def isnan(x: Real) -> bool:
+    """Checks if `x` is NaN."""
+    x = _real_to_float(x)
+    return x.isnan
+
+def isinf(x: Real) -> bool:
+    """Checks if `x` is infinite."""
+    x = _real_to_float(x)
+    return x.isinf
+
+def isfinite(x: Real) -> bool:
+    """Checks if `x` is finite."""
+    x = _real_to_float(x)
+    return not x.is_nar()
+
+def isnormal(x: Real) -> bool:
+    """Checks if `x` is normal (not subnormal, zero, or NaN)."""
+    x = _real_to_float(x)
+    return x.is_normal()
+
+def signbit(x: Real) -> bool:
+    """Checks if the sign bit of `x` is set (i.e., `x` is negative)."""
+    x = _real_to_float(x)
+    # TODO: should all Floats have this property?
+    return x.s

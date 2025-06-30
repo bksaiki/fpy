@@ -76,10 +76,12 @@ from .env import ForeignEnv
 
 from .utils import (
     fraction,
-    digits_to_fraction as digits,
-    decnum_to_fraction as decnum,
-    hexnum_to_fraction as hexnum,
+    digits_to_fraction,
+    decnum_to_fraction,
+    hexnum_to_fraction
 )
+
+from .typing import *
 
 ###########################################################
 # Re-exports
