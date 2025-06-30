@@ -630,7 +630,7 @@ def fraction(n: int, d: int, ctx: Optional[Context] = None) -> Float:
             # real computation; no rounding
             x = Fraction(n, d)
             # TODO: can convert any number with a power of two denominator
-            raise NotImplementedError(f'cannot evaluate exactly: hexfloat(s={s})')
+            raise NotImplementedError(f'cannot evaluate exactly: fraction(n={n}, d={d})')
         case Context():
             x = Fraction(n, d)
             return ctx.round(x)

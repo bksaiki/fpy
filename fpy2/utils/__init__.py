@@ -16,7 +16,7 @@ from .float_params import (
     FP64_BIAS,
 )
 
-from .fractions import fraction, digits_to_fraction, decnum_to_fraction, hexnum_to_fraction
+from .fractions import digits_to_fraction, decnum_to_fraction, hexnum_to_fraction
 from .gensym import Gensym
 from .identifier import Id, NamedId, UnderscoreId, SourceId
 from .inspect import has_keyword

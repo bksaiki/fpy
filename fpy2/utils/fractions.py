@@ -10,16 +10,6 @@ from typing import Optional
 _DECIMAL_PATTERN = re.compile(r'([-+])?([0-9]+(\.[0-9]+)?|\.[0-9]+)(e([-+]?[0-9]+))?')
 _HEXNUM_PATTERN = re.compile(r'([-+])?0x([0-9a-f]+(\.[0-9a-f]+)?|\.[0-9a-f]+)(p([-+]?[0-9]+))?')
 
-def fraction(numerator: int, denominator: int):
-    """Creates a fraction from a numerator and denominator."""
-    if not isinstance(numerator, int):
-        raise TypeError(f'Expected \'int\', got \'{type(numerator)}\' for numerator={numerator}')
-    if not isinstance(denominator, int):
-        raise TypeError(f'Expected \'int\', got \'{type(denominator)}\' for denominator={denominator}')
-    if denominator == 0:
-        raise ZeroDivisionError('denominator cannot be zero')
-    return Fraction(numerator, denominator)
-
 def digits_to_fraction(m: int, e: int, b: int):
     """Converts a mantissa, exponent, and base to a fraction."""
     if not isinstance(m, int):
