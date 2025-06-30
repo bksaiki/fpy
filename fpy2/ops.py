@@ -75,7 +75,7 @@ __all__ = [
     # Constants
     'digits',
     'hexfloat',
-    'fraction'
+    'rational'
 ]
 
 
@@ -612,7 +612,7 @@ def hexfloat(s: str, ctx: Optional[Context] = None) -> Float:
         case _:
             raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
 
-def fraction(n: int, d: int, ctx: Optional[Context] = None) -> Float:
+def rational(n: int, d: int, ctx: Optional[Context] = None) -> Float:
     """
     Creates a `Float` from a fraction with the given numerator and denominator.
     The result is rounded under the given context.

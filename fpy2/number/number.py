@@ -1491,61 +1491,61 @@ class Float(numbers.Rational):
         else:
             raise TypeError(f'expected Float or RealFloat, got {type(other)}')
 
-    def __add__(self, other: Real):
+    def __add__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __radd__(self, other: Real):
+    def __radd__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __neg__(self):
+    def __neg__(self) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __pos__(self):
+    def __pos__(self) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __mul__(self, other: Real):
+    def __mul__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rmul__(self, other: Real):
+    def __rmul__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __truediv__(self, other: Real):
+    def __truediv__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rtruediv__(self, other: Real):
+    def __rtruediv__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __pow__(self, exponent: Real):
+    def __pow__(self, exponent: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rpow__(self, base: Real):
+    def __rpow__(self, base: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __abs__(self):
+    def __abs__(self) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __trunc__(self):
+    def __trunc__(self) -> int:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __floor__(self):
+    def __floor__(self) -> int:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __ceil__(self):
+    def __ceil__(self) -> int:
         raise RuntimeError('FPy runtime: do not call directly')
 
     def __round__(self, *args, **kwargs):
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __floordiv__(self, other: Real):
+    def __floordiv__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rfloordiv__(self, other: Real):
+    def __rfloordiv__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __mod__(self, other: Real):
+    def __mod__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rmod__(self, other: Real):
+    def __rmod__(self, other: Real) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
     @property
