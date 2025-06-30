@@ -14,6 +14,59 @@ from .number.real import (
 )
 from .number.round import RoundingMode
 
+__all__ = [
+    # General operations
+    'acos',
+    'acosh',
+    'add',
+    'asin',
+    'asinh',
+    'atan',
+    'atan2',
+    'atanh',
+    'cbrt',
+    'copysign',
+    'cos',
+    'cosh',
+    'div',
+    'erf',
+    'erfc',
+    'exp',
+    'exp2',
+    'exp10',
+    'expm1',
+    'fabs',
+    'fdim',
+    'fma',
+    'fmax',
+    'fmin',
+    'fmod',
+    'hypot',
+    'lgamma',
+    'log',
+    'log10',
+    'log1p',
+    'log2',
+    'mul',
+    'neg',
+    'pow',
+    'remainder',
+    'sin',
+    'sinh',
+    'sqrt',
+    'sub',
+    'tan',
+    'tanh',
+    'tgamma',
+    # Round-to-integer operations
+    'ceil',
+    'floor',
+    'trunc',
+    'nearbyint',
+    'round'
+]
+
+
 _real_ops: dict[Any, Callable[..., Float]] = {
     mpfr_fabs: real_abs,
     mpfr_neg: real_neg,

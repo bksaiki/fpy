@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional, Sequence, TypeAlias
 
 from titanfp.titanic.ndarray import NDArray
 
-from .. import math
+from .. import ops
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
@@ -47,38 +47,38 @@ def _signbit(x: Float, ctx: Context) -> bool:
     return x.s
 
 _unary_table: dict[type[UnaryOp], Callable[[Float, Context], Any]] = {
-    Fabs: math.fabs,
-    Sqrt: math.sqrt,
-    Neg: math.neg,
-    Cbrt: math.cbrt,
-    Ceil: math.ceil,
-    Floor: math.floor,
-    NearbyInt: math.nearbyint,
-    Round: math.round,
-    Trunc: math.trunc,
-    Acos: math.acos,
-    Asin: math.asin,
-    Atan: math.atan,
-    Cos: math.cos,
-    Sin: math.sin,
-    Tan: math.tan,
-    Acosh: math.acosh,
-    Asinh: math.asinh,
-    Atanh: math.atanh,
-    Cosh: math.cosh,
-    Sinh: math.sinh,
-    Tanh: math.tanh,
-    Exp: math.exp,
-    Exp2: math.exp2,
-    Expm1: math.expm1,
-    Log: math.log,
-    Log10: math.log10,
-    Log1p: math.log1p,
-    Log2: math.log2,
-    Erf: math.erf,
-    Erfc: math.erfc,
-    Lgamma: math.lgamma,
-    Tgamma: math.tgamma,
+    Fabs: ops.fabs,
+    Sqrt: ops.sqrt,
+    Neg: ops.neg,
+    Cbrt: ops.cbrt,
+    Ceil: ops.ceil,
+    Floor: ops.floor,
+    NearbyInt: ops.nearbyint,
+    Round: ops.round,
+    Trunc: ops.trunc,
+    Acos: ops.acos,
+    Asin: ops.asin,
+    Atan: ops.atan,
+    Cos: ops.cos,
+    Sin: ops.sin,
+    Tan: ops.tan,
+    Acosh: ops.acosh,
+    Asinh: ops.asinh,
+    Atanh: ops.atanh,
+    Cosh: ops.cosh,
+    Sinh: ops.sinh,
+    Tanh: ops.tanh,
+    Exp: ops.exp,
+    Exp2: ops.exp2,
+    Expm1: ops.expm1,
+    Log: ops.log,
+    Log10: ops.log10,
+    Log1p: ops.log1p,
+    Log2: ops.log2,
+    Erf: ops.erf,
+    Erfc: ops.erfc,
+    Lgamma: ops.lgamma,
+    Tgamma: ops.tgamma,
     IsFinite: _isfinite,
     IsInf: _isinf,
     IsNan: _isnan,
@@ -87,23 +87,23 @@ _unary_table: dict[type[UnaryOp], Callable[[Float, Context], Any]] = {
 }
 
 _binary_table: dict[type[BinaryOp], Callable[[Float, Float, Context], Any]] = {
-    Add: math.add,
-    Sub: math.sub,
-    Mul: math.mul,
-    Div: math.div,
-    Copysign: math.copysign,
-    Fdim: math.fdim,
-    Fmax: math.fmax,
-    Fmin: math.fmin,
-    Fmod: math.fmod,
-    Remainder: math.remainder,
-    Hypot: math.hypot,
-    Atan2: math.atan2,
-    Pow: math.pow,
+    Add: ops.add,
+    Sub: ops.sub,
+    Mul: ops.mul,
+    Div: ops.div,
+    Copysign: ops.copysign,
+    Fdim: ops.fdim,
+    Fmax: ops.fmax,
+    Fmin: ops.fmin,
+    Fmod: ops.fmod,
+    Remainder: ops.remainder,
+    Hypot: ops.hypot,
+    Atan2: ops.atan2,
+    Pow: ops.pow,
 }
 
 _ternary_table: dict[type[TernaryOp], Callable[[Float, Float, Float, Context], Any]] = {
-    Fma: math.fma,
+    Fma: ops.fma,
 }
 
 _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]

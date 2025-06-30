@@ -52,6 +52,8 @@ from .number import (
     UINT8, UINT16, UINT32, UINT64
 )
 
+from .ops import *
+
 from .fpc_context import FPCoreContext, NoSuchContextError
 
 from .decorator import fpy, pattern, fpy_prim
