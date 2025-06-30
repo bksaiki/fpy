@@ -2,14 +2,15 @@
 Mathematical functions under rounding contexts.
 """
 
-from typing import Any, Callable, TypeAlias
+from typing import Any, Callable
 
 from .number import Context, Float
 from .number.gmp import *
 from .number.real import (
     RealContext,
     real_add, real_sub, real_mul, real_neg, real_abs,
-    real_ceil, real_floor, real_trunc, real_round
+    real_ceil, real_floor, real_trunc, real_round,
+    real_fma
 )
 from .number.round import RoundingMode
 
@@ -19,6 +20,7 @@ _real_ops: dict[Any, Callable[..., Float]] = {
     mpfr_add: real_add,
     mpfr_sub: real_sub,
     mpfr_mul: real_mul,
+    mpfr_fma: real_fma
 }
 
 def _apply_mpfr(fn: Callable[..., Float], *args: Float, ctx: Context) -> Float:
