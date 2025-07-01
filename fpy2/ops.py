@@ -60,6 +60,8 @@ __all__ = [
     'tan',
     'tanh',
     'tgamma',
+    # Rounding operations
+    'cast',
     # Round-to-integer operations
     'ceil',
     'floor',
@@ -72,6 +74,9 @@ __all__ = [
     'isfinite',
     'isnormal',
     'signbit',
+    # Tensor
+    'dim',
+    'size',
     # Constants
     'digits',
     'hexfloat',
@@ -459,6 +464,25 @@ def tgamma(x: Real, ctx: Optional[Context] = None):
     return _apply_mpfr(mpfr_tgamma, x, ctx=ctx)
 
 #############################################################################
+# Rounding operations
+
+def cast(x: Real, ctx: Optional[Context] = None) -> Float:
+    """
+    Rounds `x` under the given context `ctx`.
+
+    If `ctx` is `None`, this operation is the identity operation.
+    """
+    x = _real_to_float(x)
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    match ctx:
+        case None | RealContext():
+            # real computation; no rounding
+            return x
+        case _:
+            return ctx.round(x)
+
+#############################################################################
 # Round-to-integer operations
 
 def ceil(x: Real, ctx: Optional[Context] = None):
@@ -574,6 +598,16 @@ def signbit(x: Real) -> bool:
     x = _real_to_float(x)
     # TODO: should all Floats have this property?
     return x.s
+
+#############################################################################
+# Tensor
+# TODO: should these be implemented
+
+def dim(x: list | tuple, ctx: Optional[Context] = None) -> int:
+    raise NotImplementedError('FPy runtime: do not call directly')
+
+def size(x: list | tuple, ctx: Optional[Context] = None) -> int:
+    raise NotImplementedError('FPy runtime: do not call directly')
 
 #############################################################################
 # Constants

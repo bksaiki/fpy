@@ -39,86 +39,6 @@ _constants: set[str] = {
     'SQRT1_2'
 }
 
-_unary_table: dict[str, type[UnaryOp]] = {
-    'abs': Fabs,
-    'fabs': Fabs,
-    'sqrt': Sqrt,
-    'cbrt': Cbrt,
-    'ceil': Ceil,
-    'floor': Floor,
-    'nearbyint': NearbyInt,
-    'round': Round,
-    'trunc': Trunc,
-    'acos': Acos,
-    'asin': Asin,
-    'atan': Atan,
-    'cos': Cos,
-    'sin': Sin,
-    'tan': Tan,
-    'acosh': Acosh,
-    'asinh': Asinh,
-    'atanh': Atanh,
-    'cosh': Cosh,
-    'sinh': Sinh,
-    'tanh': Tanh,
-    'exp': Exp,
-    'exp2': Exp2,
-    'expm1': Expm1,
-    'log': Log,
-    'log10': Log10,
-    'log1p': Log1p,
-    'log2': Log2,
-    'erf': Erf,
-    'erfc': Erfc,
-    'lgamma': Lgamma,
-    'tgamma': Tgamma,
-    'isfinite': IsFinite,
-    'isinf': IsInf,
-    'isnan': IsNan,
-    'isnormal': IsNormal,
-    'signbit': Signbit,
-    'not': Not,
-    'cast': Cast,
-    'range': Range,
-    'dim': Dim,
-    'enumerate': Enumerate
-}
-
-_binary_table: dict[str, type[BinaryOp]] = {
-    'add': Add,
-    'sub': Sub,
-    'mul': Mul,
-    'div': Div,
-    'copysign': Copysign,
-    'fdim': Fdim,
-    'fmax': Fmax,
-    'min': Fmin,
-    'max': Fmax,
-    'fmin': Fmin,
-    'fmod': Fmod,
-    'remainder': Remainder,
-    'hypot': Hypot,
-    'atan2': Atan2,
-    'pow': Pow,
-    'size': Size
-}
-
-_ternary_table: dict[str, type[TernaryOp]] = {
-    'fma': Fma
-}
-
-_nary_table: dict[str, type[NaryOp]] = {
-    'and': And,
-    'or': Or,
-    'zip': Zip,
-}
-
-_special_functions = {
-    'digits',
-    'hexfloat',
-    'rational'
-}
-
 class FPyParserError(Exception):
     """Parser error for FPy"""
     loc: Location
@@ -243,42 +163,6 @@ class Parser:
                 return ForeignVal(e.value, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
-
-    def _parse_hexfloat(self, e: ast.Call):
-        loc = self._parse_location(e)
-        if len(e.args) != 1:
-            raise FPyParserError(loc, 'FPy `hexfloat` expects one argument', e)
-        arg = self._parse_expr(e.args[0])
-        if not isinstance(arg, ForeignVal):
-            raise FPyParserError(loc, 'FPy `hexfloat` expects a string', e)
-        return Hexnum(arg.val, loc)
-
-    def _parse_rational(self, e: ast.Call):
-        loc = self._parse_location(e)
-        if len(e.args) != 2:
-            raise FPyParserError(loc, 'FPy `rational` expects two arguments', e)
-        p = self._parse_expr(e.args[0])
-        if not isinstance(p, Integer):
-            raise FPyParserError(loc, 'FPy `rational` expects an integer as first argument', e)
-        q = self._parse_expr(e.args[1])
-        if not isinstance(q, Integer):
-            raise FPyParserError(loc, 'FPy `rational` expects an integer as second argument', e)
-        return Rational(p.val, q.val, loc)
-
-    def _parse_digits(self, e: ast.Call):
-        loc = self._parse_location(e)
-        if len(e.args) != 3:
-            raise FPyParserError(loc, 'FPy `digits` expects three arguments', e)
-        m_e = self._parse_expr(e.args[0])
-        if not isinstance(m_e, Integer):
-            raise FPyParserError(loc, 'FPy `digits` expects an integer as first argument', e)
-        e_e = self._parse_expr(e.args[1])
-        if not isinstance(e_e, Integer):
-            raise FPyParserError(loc, 'FPy `digits` expects an integer as second argument', e)
-        b_e = self._parse_expr(e.args[2])
-        if not isinstance(b_e, Integer):
-            raise FPyParserError(loc, 'FPy `digits` expects an integer as third argument', e)
-        return Digits(m_e.val, e_e.val, b_e.val, loc)
 
     def _parse_boolop(self, e: ast.BoolOp):
         loc = self._parse_location(e)
@@ -478,42 +362,6 @@ class Parser:
                 func = self._parse_call(e.func)
                 args = [self._parse_expr(arg) for arg in e.args]
                 return Call(func, args, loc)
-                # if name in _unary_table:
-                #     if len(e.args) != 1:
-                #         raise FPyParserError(loc, 'FPy unary operator expects one argument', e)
-                #     arg = self._parse_expr(e.args[0])
-                #     cls1 = _unary_table[name]
-                #     return cls1(arg, loc)
-                # elif name in _binary_table:
-                #     if len(e.args) != 2:
-                #         raise FPyParserError(loc, 'FPy binary operator expects two arguments', e)
-                #     lhs = self._parse_expr(e.args[0])
-                #     rhs = self._parse_expr(e.args[1])
-                #     cls2 = _binary_table[name]
-                #     return cls2(lhs, rhs, loc)
-                # elif name in _ternary_table:
-                #     if len(e.args) != 3:
-                #         raise FPyParserError(loc, 'FPy ternary operator expects three arguments', e)
-                #     arg0 = self._parse_expr(e.args[0])
-                #     arg1 = self._parse_expr(e.args[1])
-                #     arg2 = self._parse_expr(e.args[2])
-                #     cls3 = _ternary_table[name]
-                #     return cls3(arg0, arg1, arg2, loc)
-                # elif name in _nary_table:
-                #     args = [self._parse_expr(arg) for arg in e.args]
-                #     clsN = _nary_table[name]
-                #     return clsN(args, loc)
-                # elif name == 'len':
-                #     arg = self._parse_expr(e.args[0])
-                #     return Size(arg, Integer(0, loc), loc)
-                # elif name == 'rational':
-                #     return self._parse_rational(e)
-                # elif name == 'hexfloat':
-                #     return self._parse_hexfloat(e)
-                # elif name == 'digits':
-                #     return self._parse_digits(e)
-                # else:
-                #     return Call(name, [self._parse_expr(arg) for arg in e.args], loc)
             case ast.Tuple():
                 return TupleExpr([self._parse_expr(e) for e in e.elts], loc)
             case ast.List():

@@ -393,9 +393,8 @@ class _Interpreter(Visitor):
     def _visit_call(self, e: Call, ctx: _EvalCtx):
         match e.func:
             case NamedId():
-                fn = self.foreign[e.func]
+                fn = self.foreign[e.func.base]
             case ForeignAttribute():
-                print(e.func)
                 fn = self._visit_foreign_attr(e.func, ctx)
             case _:
                 raise RuntimeError('unreachable', e.func)
