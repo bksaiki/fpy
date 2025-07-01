@@ -195,8 +195,15 @@ class FPCoreCompileInstance(Visitor):
         return fpc.Digits(e.m, e.e, e.b)
 
     def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
+        match e.func:
+            case NamedId():
+                name = str(e.func)
+            case ForeignAttribute():
+                raise NotImplementedError(e.func)
+            case _:
+                raise RuntimeError('unreachable', e.func)
         args = [self._visit_expr(c, ctx) for c in e.args]
-        return fpc.UnknownOperator(*args, name=e.name)
+        return fpc.UnknownOperator(*args, name=name)
 
     def _visit_range(self, arg: Expr, ctx: None) -> fpc.Expr:
         # expand range expression

@@ -1052,8 +1052,6 @@ class RealFloat(numbers.Rational):
 ###########################################################
 # Float
 
-Real: TypeAlias = 'Float' | int | float
-
 @rcomparable(RealFloat)
 class Float(numbers.Rational):
     """
@@ -1491,10 +1489,10 @@ class Float(numbers.Rational):
         else:
             raise TypeError(f'expected Float or RealFloat, got {type(other)}')
 
-    def __add__(self, other: Real) -> Self:
+    def __add__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __radd__(self, other: Real) -> Self:
+    def __radd__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
     def __neg__(self) -> Self:
@@ -1503,22 +1501,22 @@ class Float(numbers.Rational):
     def __pos__(self) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __mul__(self, other: Real) -> Self:
+    def __mul__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rmul__(self, other: Real) -> Self:
+    def __rmul__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __truediv__(self, other: Real) -> Self:
+    def __truediv__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rtruediv__(self, other: Real) -> Self:
+    def __rtruediv__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __pow__(self, exponent: Real) -> Self:
+    def __pow__(self, exponent: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rpow__(self, base: Real) -> Self:
+    def __rpow__(self, base: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
     def __abs__(self) -> Self:
@@ -1536,16 +1534,16 @@ class Float(numbers.Rational):
     def __round__(self, *args, **kwargs):
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __floordiv__(self, other: Real) -> Self:
+    def __floordiv__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rfloordiv__(self, other: Real) -> Self:
+    def __rfloordiv__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __mod__(self, other: Real) -> Self:
+    def __mod__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rmod__(self, other: Real) -> Self:
+    def __rmod__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
     @property
@@ -1559,3 +1557,7 @@ class Float(numbers.Rational):
         if self.is_nar():
             raise ValueError('cannot compute denominator of infinity or NaN')
         return self._real.as_rational().denominator
+
+
+Real: TypeAlias = Float | int | float
+"""Type of real numbers in FPy."""

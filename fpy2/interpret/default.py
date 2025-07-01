@@ -391,8 +391,16 @@ class _Interpreter(Visitor):
                 raise RuntimeError('unknown operator', e)
 
     def _visit_call(self, e: Call, ctx: _EvalCtx):
+        match e.func:
+            case NamedId():
+                fn = self.foreign[e.func]
+            case ForeignAttribute():
+                print(e.func)
+                fn = self._visit_foreign_attr(e.func, ctx)
+            case _:
+                raise RuntimeError('unreachable', e.func)
+
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        fn = self.foreign[e.name]
         match fn:
             case Function():
                 # calling FPy function
@@ -404,7 +412,7 @@ class _Interpreter(Visitor):
             case _:
                 # calling foreign function
                 if not callable(fn):
-                    raise RuntimeError(f'unknown function {e.name}')
+                    raise RuntimeError(f'unknown function {e.func}')
                 return fn(*args)
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):

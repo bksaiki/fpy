@@ -239,9 +239,9 @@ class _FPCore2FPy:
                 arg1 = self._visit(e.children[1], ctx)
                 return Size(arg0, arg1, None)
             case fpc.UnknownOperator():
-                name = pythonize_id(e.name)
+                ident = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
-                return Call(name, exprs, None)
+                return Call(NamedId(ident), exprs, None)
             case _:
                 raise NotImplementedError('unexpected FPCore expression', e)
 

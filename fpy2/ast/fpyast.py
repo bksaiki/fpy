@@ -830,24 +830,52 @@ class Enumerate(UnaryOp):
     """FPy node: enumerate operator"""
     name: str = 'enumerate'
 
-class Call(NaryExpr):
+class ForeignAttribute(Ast):
+    """
+    FPy AST: attribute of a foreign object, e.g., `x.y`
+    Attributes may be nested, e.g., `x.y.z`.
+    """
+    name: NamedId
+    attrs: list[NamedId]
+
+    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
+        super().__init__(loc)
+        self.name = name
+        self.attrs = list(attrs)
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, ForeignAttribute)
+            and self.name == other.name
+            and len(self.attrs) == len(other.attrs)
+            and all(a == b for a, b in zip(self.attrs, other.attrs))
+        )
+
+    def __hash__(self):
+        return hash((self.name, tuple(self.attrs)))
+
+    def is_equiv(self, other) -> bool:
+        return self == other
+
+class Call(Expr):
     """FPy AST: function call"""
+    func: NamedId | ForeignAttribute
     args: list[Expr]
 
     def __init__(
         self,
-        name: str,
+        ident: NamedId | ForeignAttribute,
         args: Sequence[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.name = name
+        self.func = ident
         self.args = list(args)
 
     def is_equiv(self, other):
         return (
             isinstance(other, Call)
-            and self.name == other.name
+            and self.func == other.func
             and len(self.args) == len(other.args)
             and all(a.is_equiv(b) for a, b in zip(self.args, other.args))
         )
@@ -1058,28 +1086,6 @@ class IfExpr(Expr):
             and self.ift.is_equiv(other.ift)
             and self.iff.is_equiv(other.iff)
         )
-
-class ForeignAttribute(Ast):
-    """
-    FPy AST: attribute of a foreign object, e.g., `x.y`
-    Attributes may be nested, e.g., `x.y.z`.
-    """
-    name: NamedId
-    attrs: list[NamedId]
-
-    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
-        super().__init__(loc)
-        self.name = name
-        self.attrs = list(attrs)
-
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, ForeignAttribute)
-            and self.name == other.name
-            and len(self.attrs) == len(other.attrs)
-            and all(a == b for a, b in zip(self.attrs, other.attrs))
-        )
-
 
 class ContextExpr(Expr):
     """FPy AST: context constructor"""

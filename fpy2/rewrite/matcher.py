@@ -181,7 +181,7 @@ class _MatcherInst(Visitor):
             self._visit_expr(c1, c2)
 
     def _visit_call(self, e: Call, pat: Call):
-        if e.name != pat.name or len(e.args) != len(pat.args):
+        if e.func != pat.func or len(e.args) != len(pat.args):
             raise _MatchFailure(f'matching {pat} against {e}')
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)

@@ -124,9 +124,16 @@ class _FormatterInstance(Visitor):
         return f'{first} {s}'
 
     def _visit_call(self, e: Call, ctx: _Ctx):
+        match e.func:
+            case NamedId():
+                name = str(e.func)
+            case ForeignAttribute():
+                name = self._visit_foreign_attr(e.func, ctx)
+            case _:
+                raise RuntimeError('unreachable', e.func)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         arg_str = ', '.join(args)
-        return f'{e.name}({arg_str})'
+        return f'{name}({arg_str})'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
         num_elts = len(e.args)

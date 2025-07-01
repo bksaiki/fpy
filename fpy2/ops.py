@@ -3,7 +3,7 @@ Mathematical functions under rounding contexts.
 """
 
 from fractions import Fraction
-from typing import Any, Callable, TypeAlias
+from typing import Any, Callable
 
 from .number import Context, Float, Real, RoundingMode
 from .number.gmp import *
