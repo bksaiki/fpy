@@ -330,10 +330,9 @@ class ExtFloatContext(EncodableContext):
             # Inf: placement of Inf depends on NaN encoding
             match self.nan_kind:
                 case ExtFloatNanKind.IEEE_754:
-                    if self.enable_inf:
-                        # usual IEEE 754 encoding
-                        ebits = bitmask(self.es)
-                        mbits = 0
+                    # usual IEEE 754 encoding
+                    ebits = bitmask(self.es)
+                    mbits = 0
                 case ExtFloatNanKind.MAX_VAL:
                     # Inf one before the maximum encoding
                     if self.pmax == 1:
