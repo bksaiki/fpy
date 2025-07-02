@@ -9,6 +9,7 @@ from types import FunctionType
 
 from ..ast.fpyast import *
 from ..env import ForeignEnv
+from ..number import Float, Real
 from ..utils import NamedId, UnderscoreId, SourceId
 from ..ops import *
 
@@ -202,18 +203,29 @@ class Parser:
     def _parse_type_annotation(self, ann: ast.expr) -> TypeAnn:
         loc = self._parse_location(ann)
         match ann:
-            case ast.Name('Real'):
-                return RealTypeAnn(loc)
-            case ast.Name('int'):
-                # TODO: more specific type
-                return RealTypeAnn(loc)
-            case ast.Name('float'):
-                return RealTypeAnn(loc)
-            case ast.Name('bool'):
-                return RealTypeAnn(loc)
+            case ast.Attribute():
+                attrib = self._parse_foreign_attribute(ann)
+                ty = self._eval_foreign_attribute(attrib, ann, loc)
+            case ast.Name():
+                ident = self._parse_id(ann)
+                if isinstance(ident, UnderscoreId):
+                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', ann)
+                if ident.base not in self.env:
+                    raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', ann)
+                ty = self.env[ident.base]
             case _:
-                # TODO: implement
-                return AnyTypeAnn(loc)
+                raise RuntimeError('unreachable')
+
+        if ty == bool:
+            return BoolTypeAnn(loc)
+        elif ty == int or ty == float:
+            # TODO: more specific type
+            return RealTypeAnn(loc)
+        elif ty == Float or ty == Real:
+            return RealTypeAnn(loc)
+        else:
+            # TODO: implement
+            return AnyTypeAnn(loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':
