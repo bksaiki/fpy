@@ -14,7 +14,7 @@ from .number.real import (
     real_fma
 )
 
-from .utils import digits_to_fraction, hexnum_to_fraction
+from .utils import digits_to_fraction, hexnum_to_fraction, is_dyadic
 
 __all__ = [
     # General operations
@@ -621,8 +621,11 @@ def digits(m: int, e: int, b: int, ctx: Optional[Context] = None) -> Float:
         case None | RealContext():
             # real computation; no rounding
             x = digits_to_fraction(m, e, b)
-            # TODO: can convert any number with a power of two denominator
-            raise NotImplementedError(f'cannot evaluate exactly: digits(m={m}, e={e}, b={b})')
+            if not is_dyadic(x):
+                raise ValueError(f'cannot evaluate exactly: digits(m={m}, e={e}, b={b})')
+            m = x.numerator
+            exp = 1 - x.denominator.bit_length()
+            return Float(m=m, exp=exp)
         case Context():
             x = digits_to_fraction(m, e, b)
             return ctx.round(x)
@@ -638,8 +641,11 @@ def hexfloat(s: str, ctx: Optional[Context] = None) -> Float:
         case None | RealContext():
             # real computation; no rounding
             x = hexnum_to_fraction(s)
-            # TODO: can convert any number with a power of two denominator
-            raise NotImplementedError(f'cannot evaluate exactly: hexfloat(s={s})')
+            if not is_dyadic(x):
+                raise ValueError(f'cannot evaluate exactly: hexfloat(s={s})')
+            m = x.numerator
+            exp = 1 - x.denominator.bit_length()
+            return Float(m=m, exp=exp)
         case Context():
             x = hexnum_to_fraction(s)
             return ctx.round(x)
@@ -658,8 +664,11 @@ def rational(n: int, d: int, ctx: Optional[Context] = None) -> Float:
         case None | RealContext():
             # real computation; no rounding
             x = Fraction(n, d)
-            # TODO: can convert any number with a power of two denominator
-            raise NotImplementedError(f'cannot evaluate exactly: fraction(n={n}, d={d})')
+            if not is_dyadic(x):
+                raise ValueError(f'cannot evaluate exactly: fraction(n={n}, d={d})')
+            m = x.numerator
+            exp = 1 - x.denominator.bit_length()
+            return Float(m=m, exp=exp)
         case Context():
             x = Fraction(n, d)
             return ctx.round(x)

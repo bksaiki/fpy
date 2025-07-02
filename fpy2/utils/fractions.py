@@ -7,6 +7,8 @@ import re
 from fractions import Fraction
 from typing import Optional
 
+from .bits import is_power_of_two
+
 _DECIMAL_PATTERN = re.compile(r'([-+])?([0-9]+(\.[0-9]+)?|\.[0-9]+)(e([-+]?[0-9]+))?')
 _HEXNUM_PATTERN = re.compile(r'([-+])?0x([0-9a-f]+(\.[0-9a-f]+)?|\.[0-9a-f]+)(p([-+]?[0-9]+))?')
 
@@ -124,3 +126,10 @@ def hexnum_to_fraction(s: str):
         f = None
 
     return _sci_to_fraction(sign, i, f, exp, 16, 2)
+
+def is_dyadic(x: Fraction) -> bool:
+    """
+    Check if the fraction is dyadic, i.e., can be expressed as a
+    fraction with a power of two in the denominator.
+    """
+    return is_power_of_two(abs(x.denominator))
