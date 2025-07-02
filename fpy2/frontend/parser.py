@@ -214,15 +214,22 @@ class Parser:
                     raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', ann)
                 ty = self.env[ident.base]
             case _:
-                raise RuntimeError('unreachable')
+                # TODO: implement
+                return AnyTypeAnn(loc)
 
-        if ty == bool:
-            return BoolTypeAnn(loc)
-        elif ty == int or ty == float:
-            # TODO: more specific type
+        if ty == Real:
             return RealTypeAnn(loc)
-        elif ty == Float or ty == Real:
-            return RealTypeAnn(loc)
+        elif isinstance(ty, type):
+            if issubclass(ty, bool):
+                return BoolTypeAnn(loc)
+            elif issubclass(ty, int) or issubclass(ty, float):
+                # TODO: more specific type
+                return RealTypeAnn(loc)
+            elif issubclass(ty, Float):
+                return RealTypeAnn(loc)
+            else:
+                # TODO: implement
+                return AnyTypeAnn(loc)
         else:
             # TODO: implement
             return AnyTypeAnn(loc)
@@ -443,6 +450,11 @@ class Parser:
             return self._parse_hexfloat(e, func)
         elif fn == digits:
             return self._parse_digits(e, func)
+        elif fn == len:
+            if len(e.args) != 1:
+                raise FPyParserError(loc, 'FPy expects 1 argument for `len`', e)
+            arg = self._parse_expr(e.args[0])
+            return Size(func, arg, Integer(0, None), loc)
         else:
             args = [self._parse_expr(arg) for arg in e.args]
             return Call(func, fn, args, loc)
