@@ -8,6 +8,8 @@
    - support Python-style slicing
    - function identifiers are resolved to the objects they map to in Python
    - FPy builtins are objects
+   - cannot call arbitrary Python functions
+   - renamed `@fpy_prim` to `@fpy_primitive`
 
 ### Fixes
  - Numbers library
