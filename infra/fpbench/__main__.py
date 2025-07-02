@@ -63,6 +63,5 @@ else:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
         print('from fpy2 import *', file=f)
-        print('from fpy2.typing import *', file=f)
         print('', file=f)
         _write_cores(cores, f)
