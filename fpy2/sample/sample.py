@@ -89,7 +89,7 @@ def _sample_rejection_one(
         rt = DefaultInterpreter()
 
         assert 'pre' in fun.ast.metadata, 'missing precondition'
-        pre = Function(fun.ast.metadata['pre'], ForeignEnv.empty())
+        pre: Function[..., bool] = Function(fun.ast.metadata['pre'], ForeignEnv.empty())
 
         start_fuel = fuel
         while fuel > 0:

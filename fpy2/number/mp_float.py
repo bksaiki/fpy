@@ -124,7 +124,8 @@ class MPFloatContext(Context):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        return x.round(max_p=self.pmax, min_n=n, rm=self.rm)
+        xr = x.round(max_p=self.pmax, min_n=n, rm=self.rm)
+        return Float(x=xr, ctx=self)
 
     def round_params(self):
         return (self.pmax, None)
