@@ -410,9 +410,13 @@ class _Interpreter(Visitor):
                 return fn(*args, ctx=ctx.round_ctx)
             case _:
                 # calling foreign function
-                if not callable(fn):
-                    raise RuntimeError(f'unknown function {e.func}')
-                return fn(*args)
+                # only `print` is allowed
+                if fn == print:
+                    fn(*args)
+                    # TODO: should we allow `None` to return
+                    return None
+                else:
+                    raise RuntimeError(f'attempting to call a Python function: `{fn}` at `{e.format()}`')
 
     def _apply_cmp2(self, op: CompareOp, lhs, rhs):
         match op:
