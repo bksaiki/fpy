@@ -75,6 +75,13 @@ def h(lst):
         sum += n
     return sum
 
+@fpy
+def accum(lst):
+    sum = 0
+    for x in lst:
+        sum += x
+    return sum
+
 @pattern
 def insert_sum_l(xs):
     y = 0
@@ -83,7 +90,7 @@ def insert_sum_l(xs):
 
 @pattern
 def insert_sum_r(xs):
-    y = sum(xs)
+    y = accum(xs)
 
 class ApplierStmtTestCase(_ApplierTestCase):
     """Testing `Applier` for sum expressions"""
@@ -100,7 +107,7 @@ class ApplierStmtTestCase(_ApplierTestCase):
                 Assign(
                     NamedId('sum'),
                     None,
-                    Call(NamedId('sum'), None, [Var(NamedId('lst'), None)], None),
+                    Call(NamedId('accum'), accum, [Var(NamedId('lst'), None)], None),
                     None),
             ])
         )
