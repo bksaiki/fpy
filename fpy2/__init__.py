@@ -75,12 +75,6 @@ from .interpret import (
 from .function import Function
 from .env import ForeignEnv
 
-from .utils import (
-    digits_to_fraction,
-    decnum_to_fraction,
-    hexnum_to_fraction
-)
-
 from .typing import *
 
 ###########################################################

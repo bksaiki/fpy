@@ -395,19 +395,19 @@ class DefaultTransformVisitor(Visitor):
         return Decnum(e.val, e.loc)
 
     def _visit_hexnum(self, e: Hexnum, ctx: Any):
-        return Hexnum(e.val, e.loc)
+        return Hexnum(e.func, e.val, e.loc)
 
     def _visit_integer(self, e: Integer, ctx: Any):
         return Integer(e.val, e.loc)
 
     def _visit_rational(self, e: Rational, ctx: Any):
-        return Rational(e.p, e.q, e.loc)
+        return Rational(e.func, e.p, e.q, e.loc)
 
     def _visit_constant(self, e: Constant, ctx: Any):
         return Constant(e.val, e.loc)
 
     def _visit_digits(self, e: Digits, ctx: Any):
-        return Digits(e.m, e.e, e.b, e.loc)
+        return Digits(e.func, e.m, e.e, e.b, e.loc)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Any):
         arg = self._visit_expr(e.arg, ctx)

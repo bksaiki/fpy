@@ -36,6 +36,15 @@ class _FormatterInstance(Visitor):
     def _add_line(self, line: str, indent: int):
         self.fmt += '    ' * indent + line + '\n'
 
+    def _visit_function_name(self, func: NamedId | ForeignAttribute, ctx: _Ctx) -> str:
+        match func:
+            case NamedId():
+                return str(func)
+            case ForeignAttribute():
+                return self._visit_foreign_attr(func, ctx)
+            case _:
+                raise RuntimeError('unreachable', func)
+
     def _visit_var(self, e: Var, ctx: _Ctx) -> str:
         return str(e.name)
 
@@ -58,16 +67,19 @@ class _FormatterInstance(Visitor):
         return e.val
 
     def _visit_hexnum(self, e: Hexnum, ctx: _Ctx):
-        return f'hexfloat(\'{e.val}\')'
+        name = self._visit_function_name(e.func, ctx)
+        return f'{name}(\'{e.val}\')'
 
     def _visit_integer(self, e: Integer, ctx: _Ctx):
         return str(e.val)
 
     def _visit_rational(self, e: Rational, ctx: _Ctx):
-        return f'rational({e.p}, {e.q})'
+        name = self._visit_function_name(e.func, ctx)
+        return f'{name}({e.p}, {e.q})'
 
     def _visit_digits(self, e: Digits, ctx: _Ctx):
-        return f'digits({e.m}, {e.e}, {e.b})'
+        name = self._visit_function_name(e.func, ctx)
+        return f'{name}({e.m}, {e.e}, {e.b})'
 
     def _visit_constant(self, e: Constant, ctx: _Ctx):
         return e.val
@@ -76,13 +88,7 @@ class _FormatterInstance(Visitor):
         arg = self._visit_expr(e.arg, ctx)
         match e:
             case NamedUnaryOp():
-                match e.func:
-                    case NamedId():
-                        name = str(e.func)
-                    case ForeignAttribute():
-                        name = self._visit_foreign_attr(e.func, ctx)
-                    case _:
-                        raise RuntimeError('unreachable', e.func)
+                name = self._visit_function_name(e.func, ctx)
                 return f'{name}({arg})'
             case Neg():
                 return f'-{arg}'
@@ -96,13 +102,7 @@ class _FormatterInstance(Visitor):
         rhs = self._visit_expr(e.second, ctx)
         match e:
             case NamedBinaryOp():
-                match e.func:
-                    case NamedId():
-                        name = str(e.func)
-                    case ForeignAttribute():
-                        name = self._visit_foreign_attr(e.func, ctx)
-                    case _:
-                        raise RuntimeError('unreachable', e.func)
+                name = self._visit_function_name(e.func, ctx)
                 return f'{name}({lhs}, {rhs})'
             case Add():
                 return f'({lhs} + {rhs})'
@@ -121,13 +121,7 @@ class _FormatterInstance(Visitor):
         arg2 = self._visit_expr(e.third, ctx)
         match e:
             case NamedTernaryOp():
-                match e.func:
-                    case NamedId():
-                        name = str(e.func)
-                    case ForeignAttribute():
-                        name = self._visit_foreign_attr(e.func, ctx)
-                    case _:
-                        raise RuntimeError('unreachable', e.func)
+                name = self._visit_function_name(e.func, ctx)
                 return f'{name}({arg0}, {arg1}, {arg2})'
             case _:
                 raise RuntimeError('unreachable', e)
@@ -136,13 +130,7 @@ class _FormatterInstance(Visitor):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case NamedNaryOp():
-                match e.func:
-                    case NamedId():
-                        name = str(e.func)
-                    case ForeignAttribute():
-                        name = self._visit_foreign_attr(e.func, ctx)
-                    case _:
-                        raise RuntimeError('unreachable', e.func)
+                name = self._visit_function_name(e.func, ctx)
                 return f'{name}({", ".join(args)})'
             case And():
                 return ' and '.join(args)
@@ -158,13 +146,7 @@ class _FormatterInstance(Visitor):
         return f'{first} {s}'
 
     def _visit_call(self, e: Call, ctx: _Ctx):
-        match e.func:
-            case NamedId():
-                name = str(e.func)
-            case ForeignAttribute():
-                name = self._visit_foreign_attr(e.func, ctx)
-            case _:
-                raise RuntimeError('unreachable', e.func)
+        name = self._visit_function_name(e.func, ctx)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         arg_str = ', '.join(args)
         return f'{name}({arg_str})'

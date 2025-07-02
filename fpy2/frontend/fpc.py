@@ -141,16 +141,16 @@ class _FPCore2FPy:
         return Decnum(str(e.value), None)
 
     def _visit_hexnum(self, e: fpc.Hexnum, ctx: _Ctx) -> Expr:
-        return Hexnum(str(e.value), None)
+        return Hexnum(NamedId('hexnum'), str(e.value), None)
 
     def _visit_integer(self, e: fpc.Integer, ctx: _Ctx) -> Expr:
         return Integer(int(e.value), None)
 
     def _visit_rational(self, e: fpc.Rational, ctx: _Ctx) -> Expr:
-        return Rational(e.p, e.q, None)
+        return Rational(NamedId('rational'), e.p, e.q, None)
 
     def _visit_digits(self, e: fpc.Digits, ctx: _Ctx) -> Expr:
-        return Digits(e.m, e.e, e.b, None)
+        return Digits(NamedId('digits'), e.m, e.e, e.b, None)
 
     def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
         match e.value:

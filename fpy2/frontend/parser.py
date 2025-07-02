@@ -240,16 +240,16 @@ class Parser:
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
 
-    def _parse_hexfloat(self, e: ast.Call):
+    def _parse_hexfloat(self, e: ast.Call, func: NamedId | ForeignAttribute):
         loc = self._parse_location(e)
         if len(e.args) != 1:
             raise FPyParserError(loc, 'FPy `hexfloat` expects one argument', e)
         arg = self._parse_expr(e.args[0])
         if not isinstance(arg, ForeignVal):
             raise FPyParserError(loc, 'FPy `hexfloat` expects a string', e)
-        return Hexnum(arg.val, loc)
+        return Hexnum(func, arg.val, loc)
 
-    def _parse_rational(self, e: ast.Call):
+    def _parse_rational(self, e: ast.Call, func: NamedId | ForeignAttribute):
         loc = self._parse_location(e)
         if len(e.args) != 2:
             raise FPyParserError(loc, 'FPy `rational` expects two arguments', e)
@@ -259,9 +259,9 @@ class Parser:
         q = self._parse_expr(e.args[1])
         if not isinstance(q, Integer):
             raise FPyParserError(loc, 'FPy `rational` expects an integer as second argument', e)
-        return Rational(p.val, q.val, loc)
+        return Rational(func, p.val, q.val, loc)
 
-    def _parse_digits(self, e: ast.Call):
+    def _parse_digits(self, e: ast.Call, func: NamedId | ForeignAttribute):
         loc = self._parse_location(e)
         if len(e.args) != 3:
             raise FPyParserError(loc, 'FPy `digits` expects three arguments', e)
@@ -274,7 +274,7 @@ class Parser:
         b_e = self._parse_expr(e.args[2])
         if not isinstance(b_e, Integer):
             raise FPyParserError(loc, 'FPy `digits` expects an integer as third argument', e)
-        return Digits(m_e.val, e_e.val, b_e.val, loc)
+        return Digits(func, m_e.val, e_e.val, b_e.val, loc)
 
     def _parse_boolop(self, e: ast.BoolOp):
         loc = self._parse_location(e)
@@ -426,11 +426,11 @@ class Parser:
             else:
                 return cls(args, loc)
         elif fn == rational:
-            return self._parse_rational(e)
+            return self._parse_rational(e, func)
         elif fn == hexfloat:
-            return self._parse_hexfloat(e)
+            return self._parse_hexfloat(e, func)
         elif fn == digits:
-            return self._parse_digits(e)
+            return self._parse_digits(e, func)
         else:
             args = [self._parse_expr(arg) for arg in e.args]
             return Call(func, fn, args, loc)

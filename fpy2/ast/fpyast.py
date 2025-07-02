@@ -297,6 +297,32 @@ class SizedTensorTypeAnn(TensorTypeAnn):
     def __hash__(self) -> int:
         return hash((tuple(self.dims), self.elt))
 
+class ForeignAttribute(Ast):
+    """
+    FPy AST: attribute of a foreign object, e.g., `x.y`
+    Attributes may be nested, e.g., `x.y.z`.
+    """
+    name: NamedId
+    attrs: list[NamedId]
+
+    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
+        super().__init__(loc)
+        self.name = name
+        self.attrs = list(attrs)
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, ForeignAttribute)
+            and self.name == other.name
+            and len(self.attrs) == len(other.attrs)
+            and all(a == b for a, b in zip(self.attrs, other.attrs))
+        )
+
+    def __hash__(self):
+        return hash((self.name, tuple(self.attrs)))
+
+    def is_equiv(self, other) -> bool:
+        return self == other
 
 class Expr(Ast):
     """FPy AST: expression"""
@@ -393,10 +419,12 @@ class Decnum(RationalVal):
 
 class Hexnum(RationalVal):
     """FPy AST: hexadecimal number"""
+    func: NamedId | ForeignAttribute
     val: str
 
-    def __init__(self, val: str, loc: Optional[Location]):
+    def __init__(self, func: NamedId | ForeignAttribute, val: str, loc: Optional[Location]):
         super().__init__(loc)
+        self.func = func
         self.val = val
 
     def is_equiv(self, other) -> bool:
@@ -421,11 +449,13 @@ class Integer(RationalVal):
 
 class Rational(RationalVal):
     """FPy AST: rational number"""
+    func: NamedId | ForeignAttribute
     p: int
     q: int
 
-    def __init__(self, p: int, q: int, loc: Optional[Location]):
+    def __init__(self, func: NamedId | ForeignAttribute, p: int, q: int, loc: Optional[Location]):
         super().__init__(loc)
+        self.func = func
         self.p = p
         self.q = q
 
@@ -437,12 +467,14 @@ class Rational(RationalVal):
 
 class Digits(RationalVal):
     """FPy AST: scientific notation"""
+    func: NamedId | ForeignAttribute
     m: int
     e: int
     b: int
 
-    def __init__(self, m: int, e: int, b: int, loc: Optional[Location]):
+    def __init__(self, func: NamedId | ForeignAttribute, m: int, e: int, b: int, loc: Optional[Location]):
         super().__init__(loc)
+        self.func = func
         self.m = m
         self.e = e
         self.b = b
@@ -479,33 +511,6 @@ class ForeignVal(ValueExpr):
 
     def is_equiv(self, other) -> bool:
         return isinstance(other, ForeignVal) and self.val == other.val
-
-class ForeignAttribute(Ast):
-    """
-    FPy AST: attribute of a foreign object, e.g., `x.y`
-    Attributes may be nested, e.g., `x.y.z`.
-    """
-    name: NamedId
-    attrs: list[NamedId]
-
-    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
-        super().__init__(loc)
-        self.name = name
-        self.attrs = list(attrs)
-
-    def __eq__(self, other):
-        return (
-            isinstance(other, ForeignAttribute)
-            and self.name == other.name
-            and len(self.attrs) == len(other.attrs)
-            and all(a == b for a, b in zip(self.attrs, other.attrs))
-        )
-
-    def __hash__(self):
-        return hash((self.name, tuple(self.attrs)))
-
-    def is_equiv(self, other) -> bool:
-        return self == other
 
 class NaryExpr(Expr):
     """FPy AST: expression with N arguments"""
