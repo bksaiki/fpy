@@ -27,7 +27,15 @@ install-dev:
 
 lint:
 	@echo "Running linters..."
+	$(MAKE) mypy
+	$(MAKE) ruff
+
+mypy:
+	@echo "Running mypy..."
 	mypy fpy2
+
+ruff:
+	@echo "Running ruff..."
 	ruff check fpy2
 
 tests: 
@@ -53,6 +61,8 @@ help:
 	@echo "  make infratest     Run infrastructure testing"
 	@echo "  make unittest      Run unit tests"
 	@echo "  make lint          Run linters"
+	@echo "   - make mypy       Run mypy type checker"
+	@echo "   - make ruff       Run ruff linter"
 	@echo ""
 	@echo "Install / Build"
 	@echo "  make build         Build the fpy2 package"

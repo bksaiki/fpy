@@ -1,6 +1,4 @@
-from fpy2 import fpy
-from fpy2.typing import *
-
+from fpy2 import *
 #
 # Utilities
 #

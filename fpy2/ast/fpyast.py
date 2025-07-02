@@ -875,10 +875,19 @@ class Call(NaryExpr):
         self.args = list(args)
 
     def is_equiv(self, other):
+        if not isinstance(other, Call):
+            return False
+
+        match self.fn, other.fn:
+            case None, None:
+                if self.func != other.func:
+                    return False
+            case _, _:
+                if self.fn != other.fn:
+                    return False
+
         return (
-            isinstance(other, Call)
-            and self.fn == other.fn
-            and len(self.args) == len(other.args)
+            len(self.args) == len(other.args)
             and all(a.is_equiv(b) for a, b in zip(self.args, other.args))
         )
 

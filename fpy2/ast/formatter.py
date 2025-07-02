@@ -145,9 +145,9 @@ class _FormatterInstance(Visitor):
                         raise RuntimeError('unreachable', e.func)
                 return f'{name}({", ".join(args)})'
             case And():
-                return f' and '.join(args)
+                return ' and '.join(args)
             case Or():
-                return f' or '.join(args)
+                return ' or '.join(args)
             case _:
                 raise RuntimeError('unreachable', e)
 

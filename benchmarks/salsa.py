@@ -4,9 +4,7 @@ Benchmarks from Salsa.
 - "Intra-procedural Optimization of the Numerical Accuracy of Programs" (FMICS '15)
 """
 
-from fpy2 import fpy
-from fpy2.typing import *
-
+from fpy2 import *
 
 @fpy(cite=['salsa-fmics15'])
 def odometry(sl: Real, sr: Real):

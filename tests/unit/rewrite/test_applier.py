@@ -1,10 +1,9 @@
 import unittest
 
-from fpy2 import fpy, pattern, Function
+from fpy2 import *
 from fpy2.ast import Expr, Stmt, StmtBlock, FuncDef, Fma, Var, NamedId, Assign, Call
 from fpy2.rewrite.applier import Applier
 from fpy2.rewrite.matcher import Matcher
-from fpy2.typing import *
 
 
 @pattern
@@ -47,6 +46,7 @@ class ApplierExprTestCase(_ApplierTestCase):
         matches = m.match(f)
         f2 = a.apply(matches[0])
         self.assertAstEqual(f2, Fma(
+            NamedId('fma'),
             Var(NamedId('x'), None),
             Var(NamedId('y'), None),
             Var(NamedId('z'), None),
@@ -60,6 +60,7 @@ class ApplierExprTestCase(_ApplierTestCase):
         matches = m.match(g)
         f2 = a.apply(matches[0])
         self.assertAstEqual(f2, Fma(
+            NamedId('fma'),
             Var(NamedId('x'), None),
             Var(NamedId('y'), None),
             Var(NamedId('z'), None),
@@ -99,7 +100,7 @@ class ApplierStmtTestCase(_ApplierTestCase):
                 Assign(
                     NamedId('sum'),
                     None,
-                    Call('sum', [Var(NamedId('lst'), None)], None),
+                    Call(NamedId('sum'), None, [Var(NamedId('lst'), None)], None),
                     None),
             ])
         )

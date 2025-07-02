@@ -1,5 +1,4 @@
 from fpy2 import *
-from fpy2.typing import *
 
 @fpy
 def I_2x2():

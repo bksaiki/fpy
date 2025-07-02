@@ -1,5 +1,4 @@
 from fpy2 import *
-from fpy2.typing import *
 
 @fpy(context=IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE))
 def f0():

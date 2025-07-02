@@ -1,8 +1,7 @@
 import unittest
 
-from fpy2 import pattern
+from fpy2 import *
 from fpy2.rewrite.pattern import Pattern
-from fpy2.typing import *
 
 class ParseSimpleTestCase(unittest.TestCase):
     """Testing `Pattern` parsing"""
