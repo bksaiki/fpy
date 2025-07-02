@@ -49,8 +49,11 @@ from .number import (
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
     INTEGER,
     SINT8, SINT16, SINT32, SINT64,
-    UINT8, UINT16, UINT32, UINT64
+    UINT8, UINT16, UINT32, UINT64,
+    Real
 )
+
+from .ops import *
 
 from .fpc_context import FPCoreContext, NoSuchContextError
 
@@ -72,12 +75,7 @@ from .interpret import (
 from .function import Function
 from .env import ForeignEnv
 
-from .utils import (
-    fraction,
-    digits_to_fraction as digits,
-    decnum_to_fraction as decnum,
-    hexnum_to_fraction as hexnum,
-)
+from .typing import *
 
 ###########################################################
 # Re-exports

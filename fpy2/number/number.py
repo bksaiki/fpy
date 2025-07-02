@@ -8,7 +8,8 @@ This module defines two floating-point number types.
 import math
 import numbers
 
-from typing import Optional, Self
+from fractions import Fraction
+from typing import Optional, Self, TypeAlias, TYPE_CHECKING
 
 from ..utils import (
     bitmask,
@@ -379,6 +380,12 @@ class RealFloat(numbers.Rational):
             c = self.c >> -self.exp
 
         return (-1 if self.s else 1) * c
+
+    def as_rational(self) -> Fraction:
+        if self.is_zero():
+            return Fraction(0)
+        else:
+            return self.c * (Fraction(2) ** self.exp)
 
     @staticmethod
     def from_int(x: int):
@@ -1046,7 +1053,7 @@ class RealFloat(numbers.Rational):
 # Float
 
 @rcomparable(RealFloat)
-class Float:
+class Float(numbers.Rational):
     """
     The basic floating-point number extended with infinities and NaN.
 
@@ -1207,6 +1214,16 @@ class Float:
         if not self.is_integer():
             raise ValueError(f'{self} is not an integer')
         return int(self._real)
+
+    def as_rational(self) -> Fraction:
+        """
+        Converts this value to a `Fraction` representing the same value.
+
+        If the value is not representable, a `ValueError` is raised.
+        """
+        if self.is_nar():
+            raise ValueError(f'{self} is not representable as a rational number')
+        return self._real.as_rational()
 
     @staticmethod
     def from_real(x: RealFloat, ctx: Optional[Context] = None) -> 'Float':
@@ -1471,3 +1488,149 @@ class Float:
                 return self._real.compare(other._real)
         else:
             raise TypeError(f'expected Float or RealFloat, got {type(other)}')
+
+    def __add__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __radd__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __sub__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rsub__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __neg__(self):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __pos__(self):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __mul__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rmul__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __truediv__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rtruediv__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __pow__(self, exponent: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rpow__(self, base: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __abs__(self):
+        # these guards are due to a limitation of mypy
+        # we cannot just add `Float` as the return type.
+        # In the case of `x : Float | int`, mypy will determine
+        # that `abs(x) : Join[Float, int] = object` which is incorrect.
+        # pyright does not join but unions instead
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __trunc__(self):
+        if TYPE_CHECKING:
+            return 0
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __floor__(self):
+        if TYPE_CHECKING:
+            return 0
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __ceil__(self):
+        if TYPE_CHECKING:
+            return 0
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __round__(self, *args, **kwargs):
+        if TYPE_CHECKING:
+            return 0
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __floordiv__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rfloordiv__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __mod__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rmod__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    @property
+    def numerator(self):
+        if self.is_nar():
+            raise ValueError('cannot compute numerator of infinity or NaN')
+        return self._real.as_rational().numerator
+
+    @property
+    def denominator(self):
+        if self.is_nar():
+            raise ValueError('cannot compute denominator of infinity or NaN')
+        return self._real.as_rational().denominator
+
+
+Real: TypeAlias = int | float | Float

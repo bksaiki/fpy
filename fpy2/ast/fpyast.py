@@ -57,9 +57,13 @@ __all__ = [
 
     # N-ary operations
     'UnaryOp',
+    'NamedUnaryOp',
     'BinaryOp',
+    'NamedBinaryOp',
     'TernaryOp',
+    'NamedTernaryOp',
     'NaryOp',
+    'NamedNaryOp',
 
     # IEEE 754 arithmetic
     'Add',
@@ -293,6 +297,32 @@ class SizedTensorTypeAnn(TensorTypeAnn):
     def __hash__(self) -> int:
         return hash((tuple(self.dims), self.elt))
 
+class ForeignAttribute(Ast):
+    """
+    FPy AST: attribute of a foreign object, e.g., `x.y`
+    Attributes may be nested, e.g., `x.y.z`.
+    """
+    name: NamedId
+    attrs: list[NamedId]
+
+    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
+        super().__init__(loc)
+        self.name = name
+        self.attrs = list(attrs)
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, ForeignAttribute)
+            and self.name == other.name
+            and len(self.attrs) == len(other.attrs)
+            and all(a == b for a, b in zip(self.attrs, other.attrs))
+        )
+
+    def __hash__(self):
+        return hash((self.name, tuple(self.attrs)))
+
+    def is_equiv(self, other) -> bool:
+        return self == other
 
 class Expr(Ast):
     """FPy AST: expression"""
@@ -389,10 +419,12 @@ class Decnum(RationalVal):
 
 class Hexnum(RationalVal):
     """FPy AST: hexadecimal number"""
+    func: NamedId | ForeignAttribute
     val: str
 
-    def __init__(self, val: str, loc: Optional[Location]):
+    def __init__(self, func: NamedId | ForeignAttribute, val: str, loc: Optional[Location]):
         super().__init__(loc)
+        self.func = func
         self.val = val
 
     def is_equiv(self, other) -> bool:
@@ -417,11 +449,13 @@ class Integer(RationalVal):
 
 class Rational(RationalVal):
     """FPy AST: rational number"""
+    func: NamedId | ForeignAttribute
     p: int
     q: int
 
-    def __init__(self, p: int, q: int, loc: Optional[Location]):
+    def __init__(self, func: NamedId | ForeignAttribute, p: int, q: int, loc: Optional[Location]):
         super().__init__(loc)
+        self.func = func
         self.p = p
         self.q = q
 
@@ -433,12 +467,14 @@ class Rational(RationalVal):
 
 class Digits(RationalVal):
     """FPy AST: scientific notation"""
+    func: NamedId | ForeignAttribute
     m: int
     e: int
     b: int
 
-    def __init__(self, m: int, e: int, b: int, loc: Optional[Location]):
+    def __init__(self, func: NamedId | ForeignAttribute, m: int, e: int, b: int, loc: Optional[Location]):
         super().__init__(loc)
+        self.func = func
         self.m = m
         self.e = e
         self.b = b
@@ -478,25 +514,38 @@ class ForeignVal(ValueExpr):
 
 class NaryExpr(Expr):
     """FPy AST: expression with N arguments"""
-    name: str
-
-    def __init__(self, loc: Optional[Location]):
-        super().__init__(loc)
 
 class UnaryOp(NaryExpr):
     """FPy AST: unary operation"""
     arg: Expr
 
-    def __init__(self, arg: Expr, loc: Optional[Location]):
+    def __init__(
+        self,
+        arg: Expr,
+        loc: Optional[Location]
+    ):
         super().__init__(loc)
         self.arg = arg
 
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, UnaryOp)
-            and self.name == other.name
+            and type(self) is type(other)
             and self.arg.is_equiv(other.arg)
         )
+
+class NamedUnaryOp(UnaryOp):
+    """FPy AST: unary operation with a named function"""
+    func: NamedId | ForeignAttribute
+
+    def __init__(
+        self,
+        func: NamedId | ForeignAttribute,
+        arg: Expr,
+        loc: Optional[Location]
+    ):
+        super().__init__(arg, loc)
+        self.func = func
 
 class BinaryOp(NaryExpr):
     """FPy AST: binary operation"""
@@ -516,10 +565,24 @@ class BinaryOp(NaryExpr):
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, BinaryOp)
-            and self.name == other.name
+            and type(self) is type(other)
             and self.first.is_equiv(other.first)
             and self.second.is_equiv(other.second)
         )
+
+class NamedBinaryOp(BinaryOp):
+    """FPy AST: binary operation with a named function"""
+    func: NamedId | ForeignAttribute
+
+    def __init__(
+        self,
+        func: NamedId | ForeignAttribute,
+        first: Expr,
+        second: Expr,
+        loc: Optional[Location]
+    ):
+        super().__init__(first, second, loc)
+        self.func = func
 
 class TernaryOp(NaryExpr):
     """FPy AST: ternary operation"""
@@ -542,313 +605,294 @@ class TernaryOp(NaryExpr):
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, TernaryOp)
-            and self.name == other.name
+            and type(self) is type(other)
             and self.first.is_equiv(other.first)
             and self.second.is_equiv(other.second)
             and self.third.is_equiv(other.third)
         )
 
+class NamedTernaryOp(TernaryOp):
+    """FPy AST: ternary operation with a named function"""
+    func: NamedId | ForeignAttribute
+
+    def __init__(
+        self,
+        func: NamedId | ForeignAttribute,
+        first: Expr,
+        second: Expr,
+        third: Expr,
+        loc: Optional[Location]
+    ):
+        super().__init__(first, second, third, loc)
+        self.func = func
+
 class NaryOp(NaryExpr):
     """FPy AST: n-ary operation"""
     args: list[Expr]
 
-    def __init__(self, args: list[Expr], loc: Optional[Location]):
+    def __init__(self, args: Sequence[Expr], loc: Optional[Location]):
         super().__init__(loc)
-        self.args = args
+        self.args = list(args)
 
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, NaryOp)
-            and self.name == other.name
+            and type(self) is type(other)
             and all(a.is_equiv(b) for a, b in zip(self.args, other.args))
         )
+
+class NamedNaryOp(NaryOp):
+    """FPy AST: n-ary operation with a named function"""
+    func: NamedId | ForeignAttribute
+
+    def __init__(
+        self,
+        func: NamedId | ForeignAttribute,
+        args: Sequence[Expr],
+        loc: Optional[Location]
+    ):
+        super().__init__(args, loc)
+        self.func = func
 
 # IEEE 754 required arithmetic
 
 class Add(BinaryOp):
     """FPy node: addition"""
-    name: str = '+'
 
 class Sub(BinaryOp):
     """FPy node: subtraction"""
-    name: str = '-'
 
 class Mul(BinaryOp):
     """FPy node: subtraction"""
-    name: str = '*'
-    
+
 class Div(BinaryOp):
     """FPy node: subtraction"""
-    name: str = '/'
 
-class Fabs(UnaryOp):
+class Fabs(NamedUnaryOp):
     """FPy node: absolute value"""
-    name: str = 'fabs'
 
-class Sqrt(UnaryOp):
+class Sqrt(NamedUnaryOp):
     """FPy node: square-root"""
-    name: str = 'sqrt'
 
-class Fma(TernaryOp):
-    """FPy node: square-root"""
-    name: str = 'fma'
+class Fma(NamedTernaryOp):
+    """FPy node: fused-multiply add"""
 
 # Sign operations
 
 class Neg(UnaryOp):
     """FPy node: negation"""
-    # to avoid confusion with subtraction
-    # this should not be the display name
-    name: str = 'neg'
 
-class Copysign(BinaryOp):
+class Copysign(NamedBinaryOp):
     """FPy node: copysign"""
-    name: str = 'copysign'
 
 # Composite arithmetic
 
-class Fdim(BinaryOp):
+class Fdim(NamedBinaryOp):
     """FPy node: `max(x - y, 0)`"""
-    name: str = 'fdim'
 
-class Fmax(BinaryOp):
+class Fmax(NamedBinaryOp):
     """FPy node: `max(x, y)`"""
-    name: str = 'fmax'
 
-class Fmin(BinaryOp):
+class Fmin(NamedBinaryOp):
     """FPy node: `min(x, y)`"""
-    name: str = 'fmin'
 
-class Fmod(BinaryOp):
-    name: str = 'fmod'
+class Fmod(NamedBinaryOp):
+    """FPy node: modulus"""
 
-class Remainder(BinaryOp):
-    name: str = 'remainder'
+class Remainder(NamedBinaryOp):
+    """FPy node: remainder"""
 
-class Hypot(BinaryOp):
+class Hypot(NamedBinaryOp):
     """FPy node: `sqrt(x ** 2 + y ** 2)`"""
-    name: str = 'hypot'
 
 # Other arithmetic
 
-class Cbrt(UnaryOp):
+class Cbrt(NamedUnaryOp):
     """FPy node: cube-root"""
-    name: str = 'cbrt'
 
 # Rounding and truncation
 
-class Ceil(UnaryOp):
+class Ceil(NamedUnaryOp):
     """FPy node: ceiling"""
-    name: str = 'ceil'
 
-class Floor(UnaryOp):
+class Floor(NamedUnaryOp):
     """FPy node: floor"""
-    name: str = 'floor'
 
-class NearbyInt(UnaryOp):
+class NearbyInt(NamedUnaryOp):
     """FPy node: nearest integer"""
-    name: str = 'nearbyint'
 
-class Round(UnaryOp):
+class Round(NamedUnaryOp):
     """FPy node: round"""
-    name: str = 'round'
 
-class Trunc(UnaryOp):
+class Trunc(NamedUnaryOp):
     """FPy node: truncation"""
-    name: str = 'trunc'
 
 # Trigonometric functions
 
-class Acos(UnaryOp):
+class Acos(NamedUnaryOp):
     """FPy node: inverse cosine"""
-    name: str = 'acos'
 
-class Asin(UnaryOp):
+class Asin(NamedUnaryOp):
     """FPy node: inverse sine"""
-    name: str = 'asin'
 
-class Atan(UnaryOp):
+class Atan(NamedUnaryOp):
     """FPy node: inverse tangent"""
-    name: str = 'atan'
 
-class Atan2(BinaryOp):
+class Atan2(NamedBinaryOp):
     """FPy node: `atan(y / x)` with correct quadrant"""
-    name: str = 'atan2'
 
-class Cos(UnaryOp):
+class Cos(NamedUnaryOp):
     """FPy node: cosine"""
-    name: str = 'cos'
 
-class Sin(UnaryOp):
+class Sin(NamedUnaryOp):
     """FPy node: sine"""
-    name: str = 'sin'
 
-class Tan(UnaryOp):
+class Tan(NamedUnaryOp):
     """FPy node: tangent"""
-    name: str = 'tan'
 
 # Hyperbolic functions
 
-class Acosh(UnaryOp):
+class Acosh(NamedUnaryOp):
     """FPy node: inverse hyperbolic cosine"""
-    name: str = 'acosh'
 
-class Asinh(UnaryOp):
+class Asinh(NamedUnaryOp):
     """FPy node: inverse hyperbolic sine"""
-    name: str = 'asinh'
 
-class Atanh(UnaryOp):
+class Atanh(NamedUnaryOp):
     """FPy node: inverse hyperbolic tangent"""
-    name: str = 'atanh'
 
-class Cosh(UnaryOp):
+class Cosh(NamedUnaryOp):
     """FPy node: hyperbolic cosine"""
-    name: str = 'cosh'
 
-class Sinh(UnaryOp):
+class Sinh(NamedUnaryOp):
     """FPy node: hyperbolic sine"""
-    name: str = 'sinh'
 
-class Tanh(UnaryOp):
+class Tanh(NamedUnaryOp):
     """FPy node: hyperbolic tangent"""
-    name: str = 'tanh'
 
 # Exponential / logarithmic functions
 
-class Exp(UnaryOp):
+class Exp(NamedUnaryOp):
     """FPy node: exponential (base e)"""
-    name: str = 'exp'
 
-class Exp2(UnaryOp):
+class Exp2(NamedUnaryOp):
     """FPy node: exponential (base 2)"""
-    name: str = 'exp2'
 
-class Expm1(UnaryOp):
+class Expm1(NamedUnaryOp):
     """FPy node: `exp(x) - 1`"""
-    name: str = 'expm1'
 
-class Log(UnaryOp):
+class Log(NamedUnaryOp):
     """FPy node: logarithm (base e)"""
-    name: str = 'log'
 
-class Log10(UnaryOp):
+class Log10(NamedUnaryOp):
     """FPy node: logarithm (base 10)"""
-    name: str = 'log10'
 
-class Log1p(UnaryOp):
+class Log1p(NamedUnaryOp):
     """FPy node: `log(x + 1)`"""
-    name: str = 'log1p'
 
-class Log2(UnaryOp):
+class Log2(NamedUnaryOp):
     """FPy node: logarithm (base 2)"""
-    name: str = 'log2'
 
-class Pow(BinaryOp):
+class Pow(NamedBinaryOp):
     """FPy node: `x ** y`"""
-    name: str = 'pow'
 
 # Integral functions
 
-class Erf(UnaryOp):
+class Erf(NamedUnaryOp):
     """FPy node: error function"""
-    name: str = 'erf'
 
-class Erfc(UnaryOp):
+class Erfc(NamedUnaryOp):
     """FPy node: complementary error function"""
-    name: str = 'erfc'
 
-class Lgamma(UnaryOp):
+class Lgamma(NamedUnaryOp):
     """FPy node: logarithm of the absolute value of the gamma function"""
-    name: str = 'lgamma'
 
-class Tgamma(UnaryOp):
+class Tgamma(NamedUnaryOp):
     """FPy node: gamma function"""
-    name: str = 'tgamma'
 
 
 # Classification
 
-class IsFinite(UnaryOp):
+class IsFinite(NamedUnaryOp):
     """FPy node: is the value finite?"""
-    name: str = 'isfinite'
 
-class IsInf(UnaryOp):
+class IsInf(NamedUnaryOp):
     """FPy node: is the value infinite?"""
-    name: str = 'isinf'
 
-class IsNan(UnaryOp):
+class IsNan(NamedUnaryOp):
     """FPy node: is the value NaN?"""
-    name: str = 'isnan'
 
-class IsNormal(UnaryOp):
+class IsNormal(NamedUnaryOp):
     """FPy node: is the value normal?"""
-    name: str = 'isnormal'
 
-class Signbit(UnaryOp):
+class Signbit(NamedUnaryOp):
     """FPy node: is the signbit 1?"""
-    name: str = 'signbit'
 
 # Logical operators
 
 class Not(UnaryOp):
     """FPy node: logical negation"""
-    name: str = 'not'
 
 class Or(NaryOp):
     """FPy node: logical disjunction"""
-    name: str = 'or'
 
 class And(NaryOp):
     """FPy node: logical conjunction"""
-    name: str = 'and'
 
 # Rounding operator
 
-class Cast(UnaryOp):
+class Cast(NamedUnaryOp):
     """FPy node: inter-format rounding"""
-    name: str = 'cast'
 
 # Tensor operators
 
-class Range(UnaryOp):
+class Range(NamedUnaryOp):
     """FPy node: range constructor"""
-    name: str = 'range'
 
-class Dim(UnaryOp):
+class Dim(NamedUnaryOp):
     """FPy node: dimension operator"""
-    name: str = 'dim'
 
-class Size(BinaryOp):
+class Size(NamedBinaryOp):
     """FPy node: size operator"""
-    name: str = 'size'
 
-class Zip(NaryOp):
+class Zip(NamedNaryOp):
     """FPy node: zip operator"""
-    name: str = 'zip'
 
-class Enumerate(UnaryOp):
+class Enumerate(NamedUnaryOp):
     """FPy node: enumerate operator"""
-    name: str = 'enumerate'
 
 class Call(NaryExpr):
     """FPy AST: function call"""
+    func: NamedId | ForeignAttribute
+    fn: object
     args: list[Expr]
 
     def __init__(
         self,
-        name: str,
+        func: NamedId | ForeignAttribute,
+        fn: object,
         args: Sequence[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.name = name
+        self.func = func
+        self.fn = fn
         self.args = list(args)
 
     def is_equiv(self, other):
+        if not isinstance(other, Call):
+            return False
+
+        match self.fn, other.fn:
+            case None, None:
+                if self.func != other.func:
+                    return False
+            case _, _:
+                if self.fn != other.fn:
+                    return False
+
         return (
-            isinstance(other, Call)
-            and self.name == other.name
-            and len(self.args) == len(other.args)
+            len(self.args) == len(other.args)
             and all(a.is_equiv(b) for a, b in zip(self.args, other.args))
         )
 
@@ -1058,28 +1102,6 @@ class IfExpr(Expr):
             and self.ift.is_equiv(other.ift)
             and self.iff.is_equiv(other.iff)
         )
-
-class ForeignAttribute(Ast):
-    """
-    FPy AST: attribute of a foreign object, e.g., `x.y`
-    Attributes may be nested, e.g., `x.y.z`.
-    """
-    name: NamedId
-    attrs: list[NamedId]
-
-    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
-        super().__init__(loc)
-        self.name = name
-        self.attrs = list(attrs)
-
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, ForeignAttribute)
-            and self.name == other.name
-            and len(self.attrs) == len(other.attrs)
-            and all(a == b for a, b in zip(self.attrs, other.attrs))
-        )
-
 
 class ContextExpr(Expr):
     """FPy AST: context constructor"""

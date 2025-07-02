@@ -176,7 +176,14 @@ class SyntaxCheckInstance(Visitor):
 
     def _visit_call(self, e: Call, ctx: _Ctx):
         env, _ = ctx
-        self._mark_use(NamedId(e.name), env, ignore_missing=self.ignore_unknown)
+        match e.func:
+            case NamedId():
+                self._mark_use(e.func, env, ignore_missing=self.ignore_unknown)
+            case ForeignAttribute():
+                # TODO: should `ignore_unknown` be passed here?
+                self._visit_foreign_attr(e.func, ctx)
+            case _:
+                raise RuntimeError('unreachable', e.func)
         for c in e.args:
             self._visit_expr(c, ctx)
         return env

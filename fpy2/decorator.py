@@ -146,7 +146,7 @@ def _apply_fpy_decorator(
     free_vars = { NamedId(name) for name in cfree_vars }
 
     # parse the source as an FPy function
-    parser = Parser(src_name, src, start_line)
+    parser = Parser(src_name, src, env, start_line=start_line)
     ast, decorator_list = parser.parse_function()
 
     # try to reparse the @fpy decorator

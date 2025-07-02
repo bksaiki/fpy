@@ -4,23 +4,13 @@ This module contains the parser for the FPy language.
 
 import ast
 
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 from types import FunctionType
 
 from ..ast.fpyast import *
+from ..env import ForeignEnv
 from ..utils import NamedId, UnderscoreId, SourceId
-
-def _ipow(expr: Expr, n: int, loc: Location):
-    assert n >= 0, "must be a non-negative integer"
-    if n == 0:
-        return Integer(1, loc)
-    elif n == 1:
-        return expr
-    else:
-        e = Mul(expr, expr, loc)
-        for _ in range(2, n):
-            e = Mul(e, expr, loc)
-        return e
+from ..ops import *
 
 _constants: set[str] = {
     'PI',
@@ -39,85 +29,76 @@ _constants: set[str] = {
     'SQRT1_2'
 }
 
-_unary_table: dict[str, type[UnaryOp]] = {
-    'abs': Fabs,
-    'fabs': Fabs,
-    'sqrt': Sqrt,
-    'cbrt': Cbrt,
-    'ceil': Ceil,
-    'floor': Floor,
-    'nearbyint': NearbyInt,
-    'round': Round,
-    'trunc': Trunc,
-    'acos': Acos,
-    'asin': Asin,
-    'atan': Atan,
-    'cos': Cos,
-    'sin': Sin,
-    'tan': Tan,
-    'acosh': Acosh,
-    'asinh': Asinh,
-    'atanh': Atanh,
-    'cosh': Cosh,
-    'sinh': Sinh,
-    'tanh': Tanh,
-    'exp': Exp,
-    'exp2': Exp2,
-    'expm1': Expm1,
-    'log': Log,
-    'log10': Log10,
-    'log1p': Log1p,
-    'log2': Log2,
-    'erf': Erf,
-    'erfc': Erfc,
-    'lgamma': Lgamma,
-    'tgamma': Tgamma,
-    'isfinite': IsFinite,
-    'isinf': IsInf,
-    'isnan': IsNan,
-    'isnormal': IsNormal,
-    'signbit': Signbit,
-    'not': Not,
-    'cast': Cast,
-    'range': Range,
-    'dim': Dim,
-    'enumerate': Enumerate
+_unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
+    fabs: Fabs,
+    sqrt: Sqrt,
+    cbrt: Cbrt,
+    ceil: Ceil,
+    floor: Floor,
+    nearbyint: NearbyInt,
+    round: Round,
+    trunc: Trunc,
+    acos: Acos,
+    asin: Asin,
+    atan: Atan,
+    cos: Cos,
+    sin: Sin,
+    tan: Tan,
+    acosh: Acosh,
+    asinh: Asinh,
+    atanh: Atanh,
+    cosh: Cosh,
+    sinh: Sinh,
+    tanh: Tanh,
+    exp: Exp,
+    exp2: Exp2,
+    expm1: Expm1,
+    log: Log,
+    log10: Log10,
+    log1p: Log1p,
+    log2: Log2,
+    erf: Erf,
+    erfc: Erfc,
+    lgamma: Lgamma,
+    tgamma: Tgamma,
+    isfinite: IsFinite,
+    isinf: IsInf,
+    isnan: IsNan,
+    isnormal: IsNormal,
+    signbit: Signbit,
+    cast: Cast,
+    range: Range,
+    dim: Dim,
+    enumerate: Enumerate
 }
 
-_binary_table: dict[str, type[BinaryOp]] = {
-    'add': Add,
-    'sub': Sub,
-    'mul': Mul,
-    'div': Div,
-    'copysign': Copysign,
-    'fdim': Fdim,
-    'fmax': Fmax,
-    'min': Fmin,
-    'max': Fmax,
-    'fmin': Fmin,
-    'fmod': Fmod,
-    'remainder': Remainder,
-    'hypot': Hypot,
-    'atan2': Atan2,
-    'pow': Pow,
-    'size': Size
+_binary_table: dict[Callable, type[BinaryOp] | type[NamedBinaryOp]] = {
+    add: Add,
+    sub: Sub,
+    mul: Mul,
+    div: Div,
+    copysign: Copysign,
+    fdim: Fdim,
+    fmax: Fmax,
+    min: Fmin,
+    max: Fmax,
+    fmin: Fmin,
+    fmod: Fmod,
+    remainder: Remainder,
+    hypot: Hypot,
+    atan2: Atan2,
+    pow: Pow,
+    size: Size
 }
 
-_ternary_table: dict[str, type[TernaryOp]] = {
-    'fma': Fma
+_ternary_table: dict[Callable, type[TernaryOp] | type[NamedTernaryOp]] = {
+    fma: Fma
 }
 
-_nary_table: dict[str, type[NaryOp]] = {
-    'and': And,
-    'or': Or,
-    'zip': Zip,
+_nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
+    zip: Zip,
 }
 
-_special_functions = {
-    'digits',
-    'hexfloat',
-    'rational'
-}
 
 class FPyParserError(Exception):
     """Parser error for FPy"""
@@ -153,6 +134,18 @@ class FPyParserError(Exception):
         self.ctx = ctx
 
 
+def _ipow(expr: Expr, n: int, loc: Location):
+    assert n >= 0, "must be a non-negative integer"
+    if n == 0:
+        return Integer(1, loc)
+    elif n == 1:
+        return expr
+    else:
+        e = Mul(expr, expr, loc)
+        for _ in range(2, n):
+            e = Mul(e, expr, loc)
+        return e
+
 class Parser:
     """
     FPy parser.
@@ -162,6 +155,7 @@ class Parser:
 
     name: str
     source: str
+    env: ForeignEnv
     lines: list[str]
     start_line: int
 
@@ -169,10 +163,12 @@ class Parser:
         self,
         name: str, 
         source: str,
+        env: ForeignEnv,
         start_line: int = 1
     ):
         self.name = name
         self.source = source
+        self.env = env
         self.lines = source.splitlines()
         self.start_line = start_line
 
@@ -244,16 +240,16 @@ class Parser:
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
 
-    def _parse_hexfloat(self, e: ast.Call):
+    def _parse_hexfloat(self, e: ast.Call, func: NamedId | ForeignAttribute):
         loc = self._parse_location(e)
         if len(e.args) != 1:
             raise FPyParserError(loc, 'FPy `hexfloat` expects one argument', e)
         arg = self._parse_expr(e.args[0])
         if not isinstance(arg, ForeignVal):
             raise FPyParserError(loc, 'FPy `hexfloat` expects a string', e)
-        return Hexnum(arg.val, loc)
+        return Hexnum(func, arg.val, loc)
 
-    def _parse_rational(self, e: ast.Call):
+    def _parse_rational(self, e: ast.Call, func: NamedId | ForeignAttribute):
         loc = self._parse_location(e)
         if len(e.args) != 2:
             raise FPyParserError(loc, 'FPy `rational` expects two arguments', e)
@@ -263,9 +259,9 @@ class Parser:
         q = self._parse_expr(e.args[1])
         if not isinstance(q, Integer):
             raise FPyParserError(loc, 'FPy `rational` expects an integer as second argument', e)
-        return Rational(p.val, q.val, loc)
+        return Rational(func, p.val, q.val, loc)
 
-    def _parse_digits(self, e: ast.Call):
+    def _parse_digits(self, e: ast.Call, func: NamedId | ForeignAttribute):
         loc = self._parse_location(e)
         if len(e.args) != 3:
             raise FPyParserError(loc, 'FPy `digits` expects three arguments', e)
@@ -278,7 +274,7 @@ class Parser:
         b_e = self._parse_expr(e.args[2])
         if not isinstance(b_e, Integer):
             raise FPyParserError(loc, 'FPy `digits` expects an integer as third argument', e)
-        return Digits(m_e.val, e_e.val, b_e.val, loc)
+        return Digits(func, m_e.val, e_e.val, b_e.val, loc)
 
     def _parse_boolop(self, e: ast.BoolOp):
         loc = self._parse_location(e)
@@ -361,12 +357,83 @@ class Parser:
         args = [self._parse_expr(e) for e in [e.left, *e.comparators]]
         return Compare(ops, args, loc)
 
-    def _parse_call(self, e: ast.Call) -> str:
-        """Parse a Python call expression."""
-        loc = self._parse_location(e)
-        if not isinstance(e.func, ast.Name):
-            raise FPyParserError(loc, 'Unsupported call expression', e)
-        return e.func.id
+    def _eval_foreign_attribute(self, a: ForeignAttribute, e: ast.expr, loc: Location):
+        # lookup the root value (should be captured)
+        if a.name.base not in self.env:
+            raise FPyParserError(loc, f'name \'{a.name.base}\' not defined:', e)
+        val = self.env[a.name.base]
+        # walk the attribute chain
+        for attr_id in a.attrs:
+            # need to manually lookup the attribute
+            attr = str(attr_id)
+            if not hasattr(val, attr):
+                raise FPyParserError(loc, f'unknown attribute \'{attr}\' for {val}', e)
+            val = getattr(val, attr)
+        return val
+
+    def _parse_call(self, e: ast.Call):
+        """Parse a Python call function."""
+        loc = self._parse_location(e.func)
+        match e.func:
+            case ast.Attribute():
+                func = self._parse_foreign_attribute(e.func)
+                fn = self._eval_foreign_attribute(func, e, loc)
+            case ast.Name():
+                func = self._parse_id(e.func)
+                if isinstance(func, UnderscoreId):
+                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', e)
+                if func.base not in self.env:
+                    raise FPyParserError(loc, f'name \'{func.base}\' not defined:', e)
+                fn = self.env[func.base]
+            case _:
+                raise RuntimeError('unreachable')
+
+        if fn in _unary_table:
+            cls1 = _unary_table[fn]
+            if len(e.args) != 1:
+                raise FPyParserError(loc, f'FPy expects 1 argument for `{fn}`, got {len(e.args)}', e)
+            arg = self._parse_expr(e.args[0])
+            if issubclass(cls1, NamedUnaryOp):
+                return cls1(func, arg, loc)
+            else:
+                return cls1(arg, loc)
+        elif fn in _binary_table:
+            cls2 = _binary_table[fn]
+            if len(e.args) != 2:
+                raise FPyParserError(loc, f'FPy expects 2 arguments for `{fn}`, got {len(e.args)}', e)
+            left = self._parse_expr(e.args[0])
+            right = self._parse_expr(e.args[1])
+            if issubclass(cls2, NamedBinaryOp):
+                return cls2(func, left, right, loc)
+            else:
+                return cls2(left, right, loc)
+        elif fn in _ternary_table:
+            cls3 = _ternary_table[fn]
+            if len(e.args) != 3:
+                raise FPyParserError(loc, f'FPy expects 3 arguments for `{fn}`, got {len(e.args)}', e)
+            first = self._parse_expr(e.args[0])
+            second = self._parse_expr(e.args[1])
+            third = self._parse_expr(e.args[2])
+            if issubclass(cls3, NamedTernaryOp):
+                return cls3(func, first, second, third, loc)
+            else:
+                return cls3(first, second, third, loc)
+        elif fn in _nary_table:
+            cls = _nary_table[fn]
+            args = [self._parse_expr(arg) for arg in e.args]
+            if issubclass(cls, NamedNaryOp):
+                return cls(func, args, loc)
+            else:
+                return cls(args, loc)
+        elif fn == rational:
+            return self._parse_rational(e, func)
+        elif fn == hexfloat:
+            return self._parse_hexfloat(e, func)
+        elif fn == digits:
+            return self._parse_digits(e, func)
+        else:
+            args = [self._parse_expr(arg) for arg in e.args]
+            return Call(func, fn, args, loc)
 
     def _parse_slice(self, e: ast.Slice):
         """Parse a Python slice expression."""
@@ -435,7 +502,8 @@ class Parser:
                 match e.value:
                     case ast.Attribute():
                         val = self._parse_foreign_attribute(e.value)
-                        return ForeignAttribute(val.name, [NamedId(e.attr)] + val.attrs, loc)
+                        val.attrs.append(NamedId(e.attr))
+                        return val
                     case ast.Name():
                         name = self._parse_id(e.value)
                         if isinstance(name, UnderscoreId):
@@ -467,43 +535,7 @@ class Parser:
             case ast.Compare():
                 return self._parse_compare(e)
             case ast.Call():
-                name = self._parse_call(e)
-                if name in _unary_table:
-                    if len(e.args) != 1:
-                        raise FPyParserError(loc, 'FPy unary operator expects one argument', e)
-                    arg = self._parse_expr(e.args[0])
-                    cls1 = _unary_table[name]
-                    return cls1(arg, loc)
-                elif name in _binary_table:
-                    if len(e.args) != 2:
-                        raise FPyParserError(loc, 'FPy binary operator expects two arguments', e)
-                    lhs = self._parse_expr(e.args[0])
-                    rhs = self._parse_expr(e.args[1])
-                    cls2 = _binary_table[name]
-                    return cls2(lhs, rhs, loc)
-                elif name in _ternary_table:
-                    if len(e.args) != 3:
-                        raise FPyParserError(loc, 'FPy ternary operator expects three arguments', e)
-                    arg0 = self._parse_expr(e.args[0])
-                    arg1 = self._parse_expr(e.args[1])
-                    arg2 = self._parse_expr(e.args[2])
-                    cls3 = _ternary_table[name]
-                    return cls3(arg0, arg1, arg2, loc)
-                elif name in _nary_table:
-                    args = [self._parse_expr(arg) for arg in e.args]
-                    clsN = _nary_table[name]
-                    return clsN(args, loc)
-                elif name == 'len':
-                    arg = self._parse_expr(e.args[0])
-                    return Size(arg, Integer(0, loc), loc)
-                elif name == 'rational':
-                    return self._parse_rational(e)
-                elif name == 'hexfloat':
-                    return self._parse_hexfloat(e)
-                elif name == 'digits':
-                    return self._parse_digits(e)
-                else:
-                    return Call(name, [self._parse_expr(arg) for arg in e.args], loc)
+                return self._parse_call(e)
             case ast.Tuple():
                 return TupleExpr([self._parse_expr(e) for e in e.elts], loc)
             case ast.List():
@@ -624,20 +656,20 @@ class Parser:
 
         match stmt.op:
             case ast.Add():
-                cls: type[BinaryOp] = Add
+                value = self._parse_expr(stmt.value)
+                e: Expr = Add(Var(ident, loc), value, loc)
             case ast.Sub():
-                cls = Sub
+                value = self._parse_expr(stmt.value)
+                e = Sub(Var(ident, loc), value, loc)
             case ast.Mult():
-                cls = Mul
+                value = self._parse_expr(stmt.value)
+                e = Mul(Var(ident, loc), value, loc)
             case ast.Div():
-                cls = Div
-            case ast.Mod():
-                cls = Fmod
+                value = self._parse_expr(stmt.value)
+                e = Div(Var(ident, loc), value, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported operator-assignment in FPy', stmt)
 
-        value = self._parse_expr(stmt.value)
-        e = cls(Var(ident, loc), value, loc)
         return Assign(ident, None, e, loc)
 
     def _parse_statement(self, stmt: ast.stmt) -> Stmt:
@@ -802,7 +834,7 @@ class Parser:
                     f = self._eval(dec.func, globals=globals, locals=locals)
                     if isinstance(f, FunctionType) and f == decorator:
                         return dec
-                case ast.Name():
+                case ast.Name() | ast.Attribute():
                     f = self._eval(dec, globals=globals, locals=locals)
                     if isinstance(f, FunctionType) and f == decorator:
                         return dec
@@ -820,7 +852,7 @@ class Parser:
         - `pre`: a precondition expression
         """
         match decorator:
-            case ast.Name():
+            case ast.Name() | ast.Attribute():
                 return {}
             case ast.Call():
                 if decorator.args != []:

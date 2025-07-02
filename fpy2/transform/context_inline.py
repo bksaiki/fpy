@@ -10,7 +10,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 
 class _ContextInlineInstance(DefaultTransformVisitor):
-    """Per-IR instance of context inlining"""
+    """Single-use instance of context inlining"""
     ast: FuncDef
     env: ForeignEnv
 

@@ -3,7 +3,6 @@ import unittest
 from fpy2 import fpy, pattern, Function
 from fpy2.ast import Add, Var, NamedId, Integer, Expr, Stmt, StmtBlock, FuncDef
 from fpy2.rewrite.matcher import Matcher
-from fpy2.typing import *
 
 
 @pattern

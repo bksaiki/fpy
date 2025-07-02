@@ -1,6 +1,6 @@
 """Common utilities for the FPy infrastructure."""
 
-from .bits import bitmask, float_to_bits, bits_to_float
+from .bits import bitmask, is_power_of_two, float_to_bits, bits_to_float
 from .compare import CompareOp
 from .decorator import default_repr, rcomparable, enum_repr
 
@@ -16,7 +16,7 @@ from .float_params import (
     FP64_BIAS,
 )
 
-from .fractions import fraction, digits_to_fraction, decnum_to_fraction, hexnum_to_fraction
+from .fractions import digits_to_fraction, decnum_to_fraction, hexnum_to_fraction, is_dyadic
 from .gensym import Gensym
 from .identifier import Id, NamedId, UnderscoreId, SourceId
 from .inspect import has_keyword

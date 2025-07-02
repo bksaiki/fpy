@@ -3,7 +3,6 @@ import unittest
 from typing import TypeAlias
 
 from fpy2 import *
-from fpy2.typing import *
 from fpy2.ast import *
 from fpy2.rewrite.rewrite import Rewrite
 

@@ -15,7 +15,7 @@ from ..utils import Gensym, pythonize_id
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 
-_unary_table: dict[str, type[UnaryOp]] = {
+_unary_table: dict[str, type[UnaryOp] | type[NamedUnaryOp]] = {
     'neg': Neg,
     'not': Not,
     'fabs': Fabs,
@@ -59,7 +59,7 @@ _unary_table: dict[str, type[UnaryOp]] = {
     'dim': Dim,
 }
 
-_binary_table: dict[str, type[BinaryOp]] = {
+_binary_table: dict[str, type[BinaryOp] | type[NamedBinaryOp]] = {
     '+': Add,
     '-': Sub,
     '*': Mul,
@@ -75,7 +75,7 @@ _binary_table: dict[str, type[BinaryOp]] = {
     'pow': Pow,
 }
 
-_ternary_table: dict[str, type[TernaryOp]] = {
+_ternary_table: dict[str, type[TernaryOp] | type[NamedTernaryOp]] = {
     'fma': Fma
 }
 
@@ -83,7 +83,7 @@ def _zeros(ns: list[Expr]) -> Expr:
     assert len(ns) >= 1
     v: Expr = Integer(0, None)
     for n in reversed(ns):
-        v = CompExpr([UnderscoreId()], [Range(n, None)], v, None)
+        v = CompExpr([UnderscoreId()], [Range(NamedId('range'), n, None)], v, None)
     return v
 
 
@@ -141,16 +141,16 @@ class _FPCore2FPy:
         return Decnum(str(e.value), None)
 
     def _visit_hexnum(self, e: fpc.Hexnum, ctx: _Ctx) -> Expr:
-        return Hexnum(str(e.value), None)
+        return Hexnum(NamedId('hexnum'), str(e.value), None)
 
     def _visit_integer(self, e: fpc.Integer, ctx: _Ctx) -> Expr:
         return Integer(int(e.value), None)
 
     def _visit_rational(self, e: fpc.Rational, ctx: _Ctx) -> Expr:
-        return Rational(e.p, e.q, None)
+        return Rational(NamedId('rational'), e.p, e.q, None)
 
     def _visit_digits(self, e: fpc.Digits, ctx: _Ctx) -> Expr:
-        return Digits(e.m, e.e, e.b, None)
+        return Digits(NamedId('digits'), e.m, e.e, e.b, None)
 
     def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
         match e.value:
@@ -163,13 +163,15 @@ class _FPCore2FPy:
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         if e.name == '-':
-            cls = _unary_table['neg']
             arg = self._visit(e.children[0], ctx)
-            return cls(arg, None)
+            return Neg(arg, None)
         elif e.name in _unary_table:
             cls = _unary_table[e.name]
             arg = self._visit(e.children[0], ctx)
-            return cls(arg, None)
+            if issubclass(cls, NamedUnaryOp):
+                return cls(NamedId(e.name), arg, None)
+            else:
+                return cls(arg, None)
         else:
             raise NotImplementedError(f'unsupported unary operation {e.name}')
 
@@ -178,7 +180,10 @@ class _FPCore2FPy:
             cls = _binary_table[e.name]
             left = self._visit(e.children[0], ctx)
             right = self._visit(e.children[1], ctx)
-            return cls(left, right, None)
+            if issubclass(cls, NamedBinaryOp):
+                return cls(NamedId(e.name), left, right, None)
+            else:
+                return cls(left, right, None)
         else:
             raise NotImplementedError(f'unsupported binary operation {e.name}')
 
@@ -188,7 +193,10 @@ class _FPCore2FPy:
             arg0 = self._visit(e.children[0], ctx)
             arg1 = self._visit(e.children[1], ctx)
             arg2 = self._visit(e.children[2], ctx)
-            return cls(arg0, arg1, arg2, None)
+            if issubclass(cls, NamedTernaryOp):
+                return cls(NamedId(e.name), arg0, arg1, arg2, None)
+            else:
+                return cls(arg0, arg1, arg2, None)
         else:
             raise NotImplementedError(f'unsupported ternary operation {e.name}')
 
@@ -237,11 +245,11 @@ class _FPCore2FPy:
                     raise ValueError('size operator expects 2 arguments')
                 arg0 = self._visit(e.children[0], ctx)
                 arg1 = self._visit(e.children[1], ctx)
-                return Size(arg0, arg1, None)
+                return Size(NamedId('size'), arg0, arg1, None)
             case fpc.UnknownOperator():
-                name = pythonize_id(e.name)
+                ident = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
-                return Call(name, exprs, None)
+                return Call(NamedId(ident), None, exprs, None)
             case _:
                 raise NotImplementedError('unexpected FPCore expression', e)
 
@@ -386,7 +394,7 @@ class _FPCore2FPy:
             t = iter_vars[0]
             n = range_vars[0]
             inner_stmts: list[Stmt] = []
-            e = Range(Var(n, None), None)
+            e = Range(NamedId('range'), Var(n, None), None)
             stmt = ForStmt(t, e, StmtBlock(inner_stmts), None)
             stmts.append(stmt)
             return self._make_tensor_body(iter_vars[1:], range_vars[1:], inner_stmts)
@@ -694,7 +702,8 @@ class _FPCore2FPy:
                             case str():
                                 # named dimension
                                 dim_id = self.gensym.fresh(dim)
-                                stmt = Assign(dim_id, None, Size(Var(t, None), Integer(i, None), None), None)
+                                size_e = Size(NamedId('size'), Var(t, None), Integer(i, None), None)
+                                stmt = Assign(dim_id, None, size_e, None)
                                 ctx.stmts.append(stmt)
                                 # TODO: duplicate dimension names means a runtime check
                                 # How should this be expressed in FPy?
@@ -745,7 +754,8 @@ def fpcore_to_fpy(
     default_name: str = 'f',
     ignore_unknown: bool = False
 ):
+    # TODO: support `prefix` argument to list how
+    # FPy builtins are printed
     ast = _FPCore2FPy(core, default_name).convert()
-    print(ast.format())
     SyntaxCheck.check(ast, ignore_unknown=ignore_unknown)
     return ast

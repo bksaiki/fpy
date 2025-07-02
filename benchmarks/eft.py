@@ -2,9 +2,7 @@
 Error-free transformation (EFT) benchmarks.
 """
 
-from fpy2 import fpy
-from fpy2.typing import *
-
+from fpy2 import *
 
 def two_sum(a: Real, b: Real):
     """

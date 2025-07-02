@@ -36,6 +36,15 @@ class _FormatterInstance(Visitor):
     def _add_line(self, line: str, indent: int):
         self.fmt += '    ' * indent + line + '\n'
 
+    def _visit_function_name(self, func: NamedId | ForeignAttribute, ctx: _Ctx) -> str:
+        match func:
+            case NamedId():
+                return str(func)
+            case ForeignAttribute():
+                return self._visit_foreign_attr(func, ctx)
+            case _:
+                raise RuntimeError('unreachable', func)
+
     def _visit_var(self, e: Var, ctx: _Ctx) -> str:
         return str(e.name)
 
@@ -58,16 +67,19 @@ class _FormatterInstance(Visitor):
         return e.val
 
     def _visit_hexnum(self, e: Hexnum, ctx: _Ctx):
-        return f'hexfloat(\'{e.val}\')'
+        name = self._visit_function_name(e.func, ctx)
+        return f'{name}(\'{e.val}\')'
 
     def _visit_integer(self, e: Integer, ctx: _Ctx):
         return str(e.val)
 
     def _visit_rational(self, e: Rational, ctx: _Ctx):
-        return f'rational({e.p}, {e.q})'
+        name = self._visit_function_name(e.func, ctx)
+        return f'{name}({e.p}, {e.q})'
 
     def _visit_digits(self, e: Digits, ctx: _Ctx):
-        return f'digits({e.m}, {e.e}, {e.b})'
+        name = self._visit_function_name(e.func, ctx)
+        return f'{name}({e.m}, {e.e}, {e.b})'
 
     def _visit_constant(self, e: Constant, ctx: _Ctx):
         return e.val
@@ -75,17 +87,23 @@ class _FormatterInstance(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
         arg = self._visit_expr(e.arg, ctx)
         match e:
+            case NamedUnaryOp():
+                name = self._visit_function_name(e.func, ctx)
+                return f'{name}({arg})'
             case Neg():
                 return f'-{arg}'
             case Not():
                 return f'not {arg}'
             case _:
-                return f'{e.name}({arg})'
+                raise RuntimeError('unreachable', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx):
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
         match e:
+            case NamedBinaryOp():
+                name = self._visit_function_name(e.func, ctx)
+                return f'{name}({lhs}, {rhs})'
             case Add():
                 return f'({lhs} + {rhs})'
             case Sub():
@@ -95,25 +113,29 @@ class _FormatterInstance(Visitor):
             case Div():
                 return f'({lhs} / {rhs})'
             case _:
-                return f'{e.name}({lhs}, {rhs})'
+                raise RuntimeError('unreachable', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx):
         arg0 = self._visit_expr(e.first, ctx)
         arg1 = self._visit_expr(e.second, ctx)
         arg2 = self._visit_expr(e.third, ctx)
         match e:
-            case Fma():
-                return f'fma({arg0}, {arg1}, {arg2})'
+            case NamedTernaryOp():
+                name = self._visit_function_name(e.func, ctx)
+                return f'{name}({arg0}, {arg1}, {arg2})'
             case _:
-                return f'{e.name}({arg0}, {arg1}, {arg2})'
+                raise RuntimeError('unreachable', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
-            case And() | Or():
-                return f' {e.name} '.join(args)
-            case Zip():
-                return f'zip({", ".join(args)})'
+            case NamedNaryOp():
+                name = self._visit_function_name(e.func, ctx)
+                return f'{name}({", ".join(args)})'
+            case And():
+                return ' and '.join(args)
+            case Or():
+                return ' or '.join(args)
             case _:
                 raise RuntimeError('unreachable', e)
 
@@ -124,9 +146,10 @@ class _FormatterInstance(Visitor):
         return f'{first} {s}'
 
     def _visit_call(self, e: Call, ctx: _Ctx):
+        name = self._visit_function_name(e.func, ctx)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         arg_str = ', '.join(args)
-        return f'{e.name}({arg_str})'
+        return f'{name}({arg_str})'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
         num_elts = len(e.args)

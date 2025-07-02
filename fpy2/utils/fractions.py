@@ -7,18 +7,10 @@ import re
 from fractions import Fraction
 from typing import Optional
 
+from .bits import is_power_of_two
+
 _DECIMAL_PATTERN = re.compile(r'([-+])?([0-9]+(\.[0-9]+)?|\.[0-9]+)(e([-+]?[0-9]+))?')
 _HEXNUM_PATTERN = re.compile(r'([-+])?0x([0-9a-f]+(\.[0-9a-f]+)?|\.[0-9a-f]+)(p([-+]?[0-9]+))?')
-
-def fraction(numerator: int, denominator: int):
-    """Creates a fraction from a numerator and denominator."""
-    if not isinstance(numerator, int):
-        raise TypeError(f'Expected \'int\', got \'{type(numerator)}\' for numerator={numerator}')
-    if not isinstance(denominator, int):
-        raise TypeError(f'Expected \'int\', got \'{type(denominator)}\' for denominator={denominator}')
-    if denominator == 0:
-        raise ZeroDivisionError('denominator cannot be zero')
-    return Fraction(numerator, denominator)
 
 def digits_to_fraction(m: int, e: int, b: int):
     """Converts a mantissa, exponent, and base to a fraction."""
@@ -134,3 +126,10 @@ def hexnum_to_fraction(s: str):
         f = None
 
     return _sci_to_fraction(sign, i, f, exp, 16, 2)
+
+def is_dyadic(x: Fraction) -> bool:
+    """
+    Check if the fraction is dyadic, i.e., can be expressed as a
+    fraction with a power of two in the denominator.
+    """
+    return is_power_of_two(abs(x.denominator))

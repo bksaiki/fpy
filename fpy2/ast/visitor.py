@@ -395,38 +395,50 @@ class DefaultTransformVisitor(Visitor):
         return Decnum(e.val, e.loc)
 
     def _visit_hexnum(self, e: Hexnum, ctx: Any):
-        return Hexnum(e.val, e.loc)
+        return Hexnum(e.func, e.val, e.loc)
 
     def _visit_integer(self, e: Integer, ctx: Any):
         return Integer(e.val, e.loc)
 
     def _visit_rational(self, e: Rational, ctx: Any):
-        return Rational(e.p, e.q, e.loc)
+        return Rational(e.func, e.p, e.q, e.loc)
 
     def _visit_constant(self, e: Constant, ctx: Any):
         return Constant(e.val, e.loc)
 
     def _visit_digits(self, e: Digits, ctx: Any):
-        return Digits(e.m, e.e, e.b, e.loc)
+        return Digits(e.func, e.m, e.e, e.b, e.loc)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Any):
         arg = self._visit_expr(e.arg, ctx)
-        return type(e)(arg, e.loc)
+        if isinstance(e, NamedUnaryOp):
+            return type(e)(e.func, arg, e.loc)
+        else:
+            return type(e)(arg, e.loc)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Any):
         first = self._visit_expr(e.first, ctx)
         second = self._visit_expr(e.second, ctx)
-        return type(e)(first, second, e.loc)
+        if isinstance(e, NamedBinaryOp):
+            return type(e)(e.func, first, second, e.loc)
+        else:
+            return type(e)(first, second, e.loc)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Any):
         first = self._visit_expr(e.first, ctx)
         second = self._visit_expr(e.second, ctx)
         third = self._visit_expr(e.third, ctx)
-        return type(e)(first, second, third, e.loc)
+        if isinstance(e, NamedTernaryOp):
+            return type(e)(e.func, first, second, third, e.loc)
+        else:
+            return type(e)(first, second, third, e.loc)
 
     def _visit_naryop(self, e: NaryOp, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        return type(e)(args, e.loc)
+        if isinstance(e, NamedNaryOp):
+            return type(e)(e.func, args, e.loc)
+        else:
+            return type(e)(args, e.loc)
 
     def _visit_compare(self, e: Compare, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
@@ -434,7 +446,7 @@ class DefaultTransformVisitor(Visitor):
 
     def _visit_call(self, e: Call, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        return Call(e.name, args, e.loc)
+        return Call(e.func, e.fn, args, e.loc)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
