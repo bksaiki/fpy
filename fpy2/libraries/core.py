@@ -4,7 +4,7 @@ Core numerical functions.
 
 from fpy2 import *
 
-@fpy_prim
+@fpy_primitive
 def split(x: Float, n: Float):
     """
     Splits `x` into two parts:
@@ -52,7 +52,7 @@ def _modf_spec(x: Real) -> tuple[Real, Real]:
 
     return ret
 
-@fpy_prim(spec=_modf_spec)
+@fpy_primitive(spec=_modf_spec)
 def modf(x: Float) -> tuple[Float, Float]:
     """
     Decomposes `x` into its integral and fractional parts.
@@ -93,7 +93,7 @@ def _logb_spec(x: Real):
     """
     return floor(log2(abs(x)))
 
-@fpy_prim(spec=_logb_spec)
+@fpy_primitive(spec=_logb_spec)
 def logb(x: Float, ctx: Context):
     """
     Returns the normalized exponent of `x`.
@@ -135,7 +135,7 @@ def _ldexp_spec(x: Real, n: Real) -> Real:
 
     return ret
 
-@fpy_prim(spec=_ldexp_spec)
+@fpy_primitive(spec=_ldexp_spec)
 def ldexp(x: Float, n: Float, ctx: Context) -> Float:
     """
     Computes `x * 2**n` with correct rounding.
@@ -158,7 +158,7 @@ def ldexp(x: Float, n: Float, ctx: Context) -> Float:
         scale = RealFloat.power_of_2(int(n))
         return ctx.round(xr * scale)
 
-@fpy_prim
+@fpy_primitive
 def frexp(x: Float) -> tuple[Float, Float]:
     """
     Decomposes `x` into its mantissa and exponent.

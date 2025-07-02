@@ -1,11 +1,11 @@
 """FPy primitives are the result of `@fpy_prim` decorators."""
 
-from typing import Any, Callable
+from typing import Any, Callable, Generic, ParamSpec, TypeVar
 
 from .utils import has_keyword
 from .number import Context, FP64
 
-class Primitive:
+class Primitive():
     """
     FPy primitive.
 
@@ -15,7 +15,6 @@ class Primitive:
     """
 
     func: Callable
-    """the function implementing the primitive"""
 
     metadata: dict[str, Any]
 

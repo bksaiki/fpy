@@ -80,14 +80,14 @@ def pattern(func: Callable[P, R]):
 # @fpy_prim decorator
 
 @overload
-def fpy_prim(func: Callable[P, R]) -> Primitive:
+def fpy_primitive(func: Callable[P, R]) -> Primitive:
     ...
 
 @overload
-def fpy_prim(**kwargs) -> Callable[[Callable[P, R]], Primitive]:
+def fpy_primitive(**kwargs) -> Callable[[Callable[P, R]], Primitive]:
     ...
 
-def fpy_prim(
+def fpy_primitive(
     func: Optional[Callable[P, R]] = None,
     **kwargs
 ):
