@@ -1,7 +1,6 @@
-import fpy2.math
 import types
 
-from fpy2 import Float, IEEEContext, RoundingMode
+from fpy2 import Float, IEEEContext, RoundingMode, nearbyint
 from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
@@ -81,7 +80,7 @@ def to_fpy_context(ctx: EvalCtx):
 
 def _eval_nearbyint(rt: Interpreter, e: Nearbyint, ctx: EvalCtx):
     arg = rt.evaluate(e.children[0], ctx)
-    v = fpy2.math.nearbyint(mpmf_to_fpy(arg), ctx=to_fpy_context(ctx))
+    v = nearbyint(mpmf_to_fpy(arg), ctx=to_fpy_context(ctx))
     result = fpy_to_mpmf(v)
     return [v], result
 
