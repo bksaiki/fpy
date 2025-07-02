@@ -1,6 +1,6 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKING
 from titanfp.fpbench.fpcast import FPCore
 from . import ast as fpyast
 
@@ -12,8 +12,11 @@ from .number import Context
 if TYPE_CHECKING:
     from .interpret import Interpreter
 
+P = ParamSpec('P')
+R = TypeVar('R')
 
-class Function:
+
+class Function(Generic[P, R]):
     """
     FPy function.
 
@@ -24,7 +27,7 @@ class Function:
     env: ForeignEnv
     runtime: Optional['Interpreter']
 
-    _func: Optional[Callable]
+    _func: Optional[Callable[P, R]]
     """original native function"""
 
     def __init__(
@@ -32,7 +35,7 @@ class Function:
         ast: fpyast.FuncDef,
         env: ForeignEnv,
         runtime: Optional['Interpreter'] = None,
-        func: Optional[Callable] = None
+        func: Optional[Callable[P, R]] = None
     ):
         self.ast = ast
         self.env = env
@@ -46,7 +49,7 @@ class Function:
     def __str__(self):
         return self.ast.format()
 
-    def __call__(self, *args, ctx: Optional[Context] = None):
+    def __call__(self, *args, ctx: Optional[Context] = None) -> R:
         fn = get_default_function_call()
         return fn(self, *args, ctx=ctx)
 
