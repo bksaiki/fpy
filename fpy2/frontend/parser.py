@@ -12,18 +12,6 @@ from ..env import ForeignEnv
 from ..utils import NamedId, UnderscoreId, SourceId
 from ..ops import *
 
-def _ipow(expr: Expr, n: int, loc: Location):
-    assert n >= 0, "must be a non-negative integer"
-    if n == 0:
-        return Integer(1, loc)
-    elif n == 1:
-        return expr
-    else:
-        e = Mul(expr, expr, loc)
-        for _ in range(2, n):
-            e = Mul(e, expr, loc)
-        return e
-
 _constants: set[str] = {
     'PI',
     'E',
@@ -41,7 +29,7 @@ _constants: set[str] = {
     'SQRT1_2'
 }
 
-_unary_table: dict[Callable, type[UnaryOp]] = {
+_unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     fabs: Fabs,
     sqrt: Sqrt,
     cbrt: Cbrt,
@@ -84,7 +72,7 @@ _unary_table: dict[Callable, type[UnaryOp]] = {
     enumerate: Enumerate
 }
 
-_binary_table: dict[Callable, type[BinaryOp]] = {
+_binary_table: dict[Callable, type[BinaryOp] | type[NamedBinaryOp]] = {
     add: Add,
     sub: Sub,
     mul: Mul,
@@ -103,13 +91,14 @@ _binary_table: dict[Callable, type[BinaryOp]] = {
     size: Size
 }
 
-_ternary_table: dict[Callable, type[TernaryOp]] = {
+_ternary_table: dict[Callable, type[TernaryOp] | type[NamedTernaryOp]] = {
     fma: Fma
 }
 
-_nary_table: dict[Callable, type[NaryOp]] = {
+_nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
     zip: Zip,
 }
+
 
 class FPyParserError(Exception):
     """Parser error for FPy"""
@@ -144,6 +133,18 @@ class FPyParserError(Exception):
         self.where = where
         self.ctx = ctx
 
+
+def _ipow(expr: Expr, n: int, loc: Location):
+    assert n >= 0, "must be a non-negative integer"
+    if n == 0:
+        return Integer(1, loc)
+    elif n == 1:
+        return expr
+    else:
+        e = Mul(expr, expr, loc)
+        for _ in range(2, n):
+            e = Mul(e, expr, loc)
+        return e
 
 class Parser:
     """
@@ -378,12 +379,12 @@ class Parser:
                 func = self._parse_foreign_attribute(e.func)
                 fn = self._eval_foreign_attribute(func, e, loc)
             case ast.Name():
-                ident = self._parse_id(e.func)
-                if isinstance(ident, UnderscoreId):
+                func = self._parse_id(e.func)
+                if isinstance(func, UnderscoreId):
                     raise FPyParserError(loc, 'FPy function call must begin with a named identifier', e)
-                if ident.base not in self.env:
-                    raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', e)
-                fn = self.env[ident.base]
+                if func.base not in self.env:
+                    raise FPyParserError(loc, f'name \'{func.base}\' not defined:', e)
+                fn = self.env[func.base]
             case _:
                 raise RuntimeError('unreachable')
 
@@ -392,14 +393,20 @@ class Parser:
             if len(e.args) != 1:
                 raise FPyParserError(loc, f'FPy expects 1 argument for `{fn}`, got {len(e.args)}', e)
             arg = self._parse_expr(e.args[0])
-            return cls1(func, arg, loc)
+            if issubclass(cls1, NamedUnaryOp):
+                return cls1(func, arg, loc)
+            else:
+                return cls1(arg, loc)
         elif fn in _binary_table:
             cls2 = _binary_table[fn]
             if len(e.args) != 2:
                 raise FPyParserError(loc, f'FPy expects 2 arguments for `{fn}`, got {len(e.args)}', e)
             left = self._parse_expr(e.args[0])
             right = self._parse_expr(e.args[1])
-            return cls2(func, left, right, loc)
+            if issubclass(cls2, NamedBinaryOp):
+                return cls2(func, left, right, loc)
+            else:
+                return cls2(left, right, loc)
         elif fn in _ternary_table:
             cls3 = _ternary_table[fn]
             if len(e.args) != 3:
@@ -407,11 +414,17 @@ class Parser:
             first = self._parse_expr(e.args[0])
             second = self._parse_expr(e.args[1])
             third = self._parse_expr(e.args[2])
-            return cls3(func, first, second, third, loc)
+            if issubclass(cls3, NamedTernaryOp):
+                return cls3(func, first, second, third, loc)
+            else:
+                return cls3(first, second, third, loc)
         elif fn in _nary_table:
             cls = _nary_table[fn]
             args = [self._parse_expr(arg) for arg in e.args]
-            return cls(func, args, loc)
+            if issubclass(cls, NamedNaryOp):
+                return cls(func, args, loc)
+            else:
+                return cls(args, loc)
         elif fn == rational:
             return self._parse_rational(e)
         elif fn == hexfloat:
@@ -640,7 +653,7 @@ class Parser:
         ident = self._parse_id(stmt.target)
         if not isinstance(ident, NamedId):
             raise FPyParserError(loc, 'Not a valid FPy identifier', stmt)
-        
+
         match stmt.op:
             case ast.Add():
                 value = self._parse_expr(stmt.value)
@@ -654,9 +667,6 @@ class Parser:
             case ast.Div():
                 value = self._parse_expr(stmt.value)
                 e = Div(Var(ident, loc), value, loc)
-            case ast.Mod():
-                value = self._parse_expr(stmt.value)
-                e = Fmod(None, Var(ident, loc), value, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported operator-assignment in FPy', stmt)
 

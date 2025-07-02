@@ -83,7 +83,7 @@ def _zeros(ns: list[Expr]) -> Expr:
     assert len(ns) >= 1
     v: Expr = Integer(0, None)
     for n in reversed(ns):
-        v = CompExpr([UnderscoreId()], [Range(n, None)], v, None)
+        v = CompExpr([UnderscoreId()], [Range(NamedId('range'), n, None)], v, None)
     return v
 
 
@@ -237,11 +237,11 @@ class _FPCore2FPy:
                     raise ValueError('size operator expects 2 arguments')
                 arg0 = self._visit(e.children[0], ctx)
                 arg1 = self._visit(e.children[1], ctx)
-                return Size(arg0, arg1, None)
+                return Size(NamedId('size'), arg0, arg1, None)
             case fpc.UnknownOperator():
                 ident = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
-                return Call(NamedId(ident), exprs, None)
+                return Call(NamedId(ident), None, exprs, None)
             case _:
                 raise NotImplementedError('unexpected FPCore expression', e)
 
@@ -386,7 +386,7 @@ class _FPCore2FPy:
             t = iter_vars[0]
             n = range_vars[0]
             inner_stmts: list[Stmt] = []
-            e = Range(Var(n, None), None)
+            e = Range(NamedId('range'), Var(n, None), None)
             stmt = ForStmt(t, e, StmtBlock(inner_stmts), None)
             stmts.append(stmt)
             return self._make_tensor_body(iter_vars[1:], range_vars[1:], inner_stmts)
@@ -694,7 +694,8 @@ class _FPCore2FPy:
                             case str():
                                 # named dimension
                                 dim_id = self.gensym.fresh(dim)
-                                stmt = Assign(dim_id, None, Size(Var(t, None), Integer(i, None), None), None)
+                                size_e = Size(NamedId('size'), Var(t, None), Integer(i, None), None)
+                                stmt = Assign(dim_id, None, size_e, None)
                                 ctx.stmts.append(stmt)
                                 # TODO: duplicate dimension names means a runtime check
                                 # How should this be expressed in FPy?

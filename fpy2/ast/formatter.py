@@ -75,17 +75,35 @@ class _FormatterInstance(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
         arg = self._visit_expr(e.arg, ctx)
         match e:
+            case NamedUnaryOp():
+                match e.func:
+                    case NamedId():
+                        name = str(e.func)
+                    case ForeignAttribute():
+                        name = self._visit_foreign_attr(e.func, ctx)
+                    case _:
+                        raise RuntimeError('unreachable', e.func)
+                return f'{name}({arg})'
             case Neg():
                 return f'-{arg}'
             case Not():
                 return f'not {arg}'
             case _:
-                return f'{e.name}({arg})'
+                raise RuntimeError('unreachable', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx):
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
         match e:
+            case NamedBinaryOp():
+                match e.func:
+                    case NamedId():
+                        name = str(e.func)
+                    case ForeignAttribute():
+                        name = self._visit_foreign_attr(e.func, ctx)
+                    case _:
+                        raise RuntimeError('unreachable', e.func)
+                return f'{name}({lhs}, {rhs})'
             case Add():
                 return f'({lhs} + {rhs})'
             case Sub():
@@ -95,25 +113,41 @@ class _FormatterInstance(Visitor):
             case Div():
                 return f'({lhs} / {rhs})'
             case _:
-                return f'{e.name}({lhs}, {rhs})'
+                raise RuntimeError('unreachable', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx):
         arg0 = self._visit_expr(e.first, ctx)
         arg1 = self._visit_expr(e.second, ctx)
         arg2 = self._visit_expr(e.third, ctx)
         match e:
-            case Fma():
-                return f'fma({arg0}, {arg1}, {arg2})'
+            case NamedTernaryOp():
+                match e.func:
+                    case NamedId():
+                        name = str(e.func)
+                    case ForeignAttribute():
+                        name = self._visit_foreign_attr(e.func, ctx)
+                    case _:
+                        raise RuntimeError('unreachable', e.func)
+                return f'{name}({arg0}, {arg1}, {arg2})'
             case _:
-                return f'{e.name}({arg0}, {arg1}, {arg2})'
+                raise RuntimeError('unreachable', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
-            case And() | Or():
-                return f' {e.name} '.join(args)
-            case Zip():
-                return f'zip({", ".join(args)})'
+            case NamedNaryOp():
+                match e.func:
+                    case NamedId():
+                        name = str(e.func)
+                    case ForeignAttribute():
+                        name = self._visit_foreign_attr(e.func, ctx)
+                    case _:
+                        raise RuntimeError('unreachable', e.func)
+                return f'{name}({", ".join(args)})'
+            case And():
+                return f' and '.join(args)
+            case Or():
+                return f' or '.join(args)
             case _:
                 raise RuntimeError('unreachable', e)
 

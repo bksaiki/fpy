@@ -606,7 +606,7 @@ def signbit(x: Real) -> bool:
 def dim(x: list | tuple, ctx: Optional[Context] = None) -> int:
     raise NotImplementedError('FPy runtime: do not call directly')
 
-def size(x: list | tuple, ctx: Optional[Context] = None) -> int:
+def size(x: list | tuple, idx: Float, ctx: Optional[Context] = None) -> int:
     raise NotImplementedError('FPy runtime: do not call directly')
 
 #############################################################################

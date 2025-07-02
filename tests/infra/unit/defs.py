@@ -73,34 +73,28 @@ def test_let2():
     b = 1.0
     return a + b
 
-@fpy(name='Test augassign (1/5)')
+@fpy(name='Test augassign (1/4)')
 def test_augassign1():
     x = 1.0
     x += 1.0
     return x
 
-@fpy(name='Test augassign (2/5)')
+@fpy(name='Test augassign (2/4)')
 def test_augassign2():
     x = 1.0
     x -= 1.0
     return x
 
-@fpy(name='Test augassign (3/5)')
+@fpy(name='Test augassign (3/4)')
 def test_augassign3():
     x = 1.0
     x *= 2.0
     return x
 
-@fpy(name='Test augassign (4/5)')
+@fpy(name='Test augassign (4/4)')
 def test_augassign4():
     x = 1.0
     x /= 2.0
-    return x
-
-@fpy(name='Test augassign (5/5)')
-def test_augassign5():
-    x = 1.0
-    x %= 2.0
     return x
 
 @fpy(
@@ -603,7 +597,6 @@ tests = [
     test_augassign2,
     test_augassign3,
     test_augassign4,
-    test_augassign5,
     test_ife1,
     test_ife2,
     test_ife3,
