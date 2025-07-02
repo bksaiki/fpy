@@ -9,6 +9,5 @@ from .for_unpack import ForUnpack
 from .func_update import FuncUpdate
 from .if_bundling import IfBundling
 from .rename_target import RenameTarget
-from .resolve_prims import ResolvePrims
 from .simplify_if import SimplifyIf
 from .while_bundling import WhileBundling

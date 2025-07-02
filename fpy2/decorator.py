@@ -21,7 +21,6 @@ from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function
 from .primitive import Primitive
-from .transform import ResolvePrims
 from .rewrite import ExprPattern, StmtPattern
 
 
@@ -147,7 +146,7 @@ def _apply_fpy_decorator(
     free_vars = { NamedId(name) for name in cfree_vars }
 
     # parse the source as an FPy function
-    parser = Parser(src_name, src, start_line)
+    parser = Parser(src_name, src, env, start_line=start_line)
     ast, decorator_list = parser.parse_function()
 
     # try to reparse the @fpy decorator
@@ -183,10 +182,6 @@ def _apply_fpy_decorator(
         )
     else:
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
-
-    # resolve reserved primitives
-    # TODO: should free variables be recomputed?
-    ast = ResolvePrims.apply(ast, env)
 
     # wrap the IR in a Function
     return Function(ast, env)

@@ -1495,6 +1495,12 @@ class Float(numbers.Rational):
     def __radd__(self, other: 'Real') -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
+    def __sub__(self, other: 'Real') -> Self:
+        raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rsub__(self, other: 'Real') -> Self:
+        raise RuntimeError('FPy runtime: do not call directly')
+
     def __neg__(self) -> Self:
         raise RuntimeError('FPy runtime: do not call directly')
 
