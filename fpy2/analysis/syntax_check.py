@@ -178,8 +178,9 @@ class SyntaxCheckInstance(Visitor):
         env, _ = ctx
         match e.func:
             case NamedId():
-                self._mark_use(e.func, env)
+                self._mark_use(e.func, env, ignore_missing=self.ignore_unknown)
             case ForeignAttribute():
+                # TODO: should `ignore_unknown` be passed here?
                 self._visit_foreign_attr(e.func, ctx)
             case _:
                 raise RuntimeError('unreachable', e.func)

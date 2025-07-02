@@ -15,7 +15,7 @@ from ..utils import Gensym, pythonize_id
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 
-_unary_table: dict[str, type[UnaryOp]] = {
+_unary_table: dict[str, type[UnaryOp] | type[NamedUnaryOp]] = {
     'neg': Neg,
     'not': Not,
     'fabs': Fabs,
@@ -59,7 +59,7 @@ _unary_table: dict[str, type[UnaryOp]] = {
     'dim': Dim,
 }
 
-_binary_table: dict[str, type[BinaryOp]] = {
+_binary_table: dict[str, type[BinaryOp] | type[NamedBinaryOp]] = {
     '+': Add,
     '-': Sub,
     '*': Mul,
@@ -75,7 +75,7 @@ _binary_table: dict[str, type[BinaryOp]] = {
     'pow': Pow,
 }
 
-_ternary_table: dict[str, type[TernaryOp]] = {
+_ternary_table: dict[str, type[TernaryOp] | type[NamedTernaryOp]] = {
     'fma': Fma
 }
 
@@ -163,13 +163,15 @@ class _FPCore2FPy:
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         if e.name == '-':
-            cls = _unary_table['neg']
             arg = self._visit(e.children[0], ctx)
-            return cls(arg, None)
+            return Neg(arg, None)
         elif e.name in _unary_table:
             cls = _unary_table[e.name]
             arg = self._visit(e.children[0], ctx)
-            return cls(arg, None)
+            if issubclass(cls, NamedUnaryOp):
+                return cls(NamedId(e.name), arg, None)
+            else:
+                return cls(arg, None)
         else:
             raise NotImplementedError(f'unsupported unary operation {e.name}')
 
@@ -178,7 +180,10 @@ class _FPCore2FPy:
             cls = _binary_table[e.name]
             left = self._visit(e.children[0], ctx)
             right = self._visit(e.children[1], ctx)
-            return cls(left, right, None)
+            if issubclass(cls, NamedBinaryOp):
+                return cls(NamedId(e.name), left, right, None)
+            else:
+                return cls(left, right, None)
         else:
             raise NotImplementedError(f'unsupported binary operation {e.name}')
 
@@ -188,7 +193,10 @@ class _FPCore2FPy:
             arg0 = self._visit(e.children[0], ctx)
             arg1 = self._visit(e.children[1], ctx)
             arg2 = self._visit(e.children[2], ctx)
-            return cls(arg0, arg1, arg2, None)
+            if issubclass(cls, NamedTernaryOp):
+                return cls(NamedId(e.name), arg0, arg1, arg2, None)
+            else:
+                return cls(arg0, arg1, arg2, None)
         else:
             raise NotImplementedError(f'unsupported ternary operation {e.name}')
 
@@ -746,7 +754,8 @@ def fpcore_to_fpy(
     default_name: str = 'f',
     ignore_unknown: bool = False
 ):
+    # TODO: support `prefix` argument to list how
+    # FPy builtins are printed
     ast = _FPCore2FPy(core, default_name).convert()
-    print(ast.format())
     SyntaxCheck.check(ast, ignore_unknown=ignore_unknown)
     return ast
