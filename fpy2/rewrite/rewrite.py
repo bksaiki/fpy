@@ -115,7 +115,7 @@ class _RewriteEngine(DefaultTransformVisitor):
             try:
                 # termination guaranteed by finitely-sized iterator
                 while True:
-                    stmts = next(iterator)
+                    stmts = list(next(iterator))
                     pmatch = self.matcher.match_exact(StmtBlock(stmts))
                     if pmatch:
                         if not isinstance(pmatch, StmtMatch):

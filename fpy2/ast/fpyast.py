@@ -1155,7 +1155,7 @@ class StmtBlock(Ast):
     """FPy AST: list of statements"""
     stmts: list[Stmt]
 
-    def __init__(self, stmts: Sequence[Stmt]):
+    def __init__(self, stmts: list[Stmt]):
         if stmts == []:
             loc = None
         else:
@@ -1173,7 +1173,7 @@ class StmtBlock(Ast):
                 )
 
         super().__init__(loc)
-        self.stmts = list(stmts)
+        self.stmts = stmts
 
     def is_equiv(self, other):
         return (

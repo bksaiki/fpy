@@ -419,7 +419,7 @@ class _StmtMatcherEngine(DefaultVisitor):
         pattern_block = self.pattern.block
         for i, stmts in enumerate(sliding_window(block.stmts, len(pattern_block.stmts))):
             # check if the pattern matches
-            m = _MatcherInst(self.pattern, StmtBlock(stmts))
+            m = _MatcherInst(self.pattern, StmtBlock(list(stmts)))
             pmatch = m.match()
             if pmatch is not None:
                 if not isinstance(pmatch, StmtMatch):
