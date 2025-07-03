@@ -1,5 +1,21 @@
 # Version History
 
+## [0.0.5] - 2025-07-02
+### Features
+ - Frontend
+   - support for `enumerate`
+   - remove support for `shape`
+   - support Python-style slicing
+   - function identifiers are resolved to the objects they map to in Python
+   - FPy builtins are objects
+   - cannot call arbitrary Python functions
+   - renamed `@fpy_prim` to `@fpy_primitive`
+
+### Fixes
+ - Numbers library
+   - removed `__round__` (and friends) from `RealFloat
+   - fixed `round()` for `MPFloatContext` and `MPSFloatContext`
+
 ## [0.0.4] - 2025-06-12
 ### Features
  - Numbers library

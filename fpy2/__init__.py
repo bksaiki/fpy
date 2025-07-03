@@ -57,7 +57,7 @@ from .ops import *
 
 from .fpc_context import FPCoreContext, NoSuchContextError
 
-from .decorator import fpy, pattern, fpy_prim
+from .decorator import fpy, pattern, fpy_primitive
 
 from .backend import (
     Backend,

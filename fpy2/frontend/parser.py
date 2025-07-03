@@ -9,6 +9,7 @@ from types import FunctionType
 
 from ..ast.fpyast import *
 from ..env import ForeignEnv
+from ..number import Float, Real
 from ..utils import NamedId, UnderscoreId, SourceId
 from ..ops import *
 
@@ -202,18 +203,36 @@ class Parser:
     def _parse_type_annotation(self, ann: ast.expr) -> TypeAnn:
         loc = self._parse_location(ann)
         match ann:
-            case ast.Name('Real'):
-                return RealTypeAnn(loc)
-            case ast.Name('int'):
-                # TODO: more specific type
-                return RealTypeAnn(loc)
-            case ast.Name('float'):
-                return RealTypeAnn(loc)
-            case ast.Name('bool'):
-                return RealTypeAnn(loc)
+            case ast.Attribute():
+                attrib = self._parse_foreign_attribute(ann)
+                ty = self._eval_foreign_attribute(attrib, ann, loc)
+            case ast.Name():
+                ident = self._parse_id(ann)
+                if isinstance(ident, UnderscoreId):
+                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', ann)
+                if ident.base not in self.env:
+                    raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', ann)
+                ty = self.env[ident.base]
             case _:
                 # TODO: implement
                 return AnyTypeAnn(loc)
+
+        if ty == Real:
+            return RealTypeAnn(loc)
+        elif isinstance(ty, type):
+            if issubclass(ty, bool):
+                return BoolTypeAnn(loc)
+            elif issubclass(ty, int) or issubclass(ty, float):
+                # TODO: more specific type
+                return RealTypeAnn(loc)
+            elif issubclass(ty, Float):
+                return RealTypeAnn(loc)
+            else:
+                # TODO: implement
+                return AnyTypeAnn(loc)
+        else:
+            # TODO: implement
+            return AnyTypeAnn(loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':
@@ -431,6 +450,11 @@ class Parser:
             return self._parse_hexfloat(e, func)
         elif fn == digits:
             return self._parse_digits(e, func)
+        elif fn == len:
+            if len(e.args) != 1:
+                raise FPyParserError(loc, 'FPy expects 1 argument for `len`', e)
+            arg = self._parse_expr(e.args[0])
+            return Size(func, arg, Integer(0, None), loc)
         else:
             args = [self._parse_expr(arg) for arg in e.args]
             return Call(func, fn, args, loc)

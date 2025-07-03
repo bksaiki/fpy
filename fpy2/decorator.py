@@ -31,11 +31,11 @@ R = TypeVar('R')
 # @fpy decorator
 
 @overload
-def fpy(func: Callable[P, R]) -> Function:
+def fpy(func: Callable[P, R]) -> Function[P, R]:
     ...
 
 @overload
-def fpy(**kwargs) -> Callable[[Callable[P, R]], Function]:
+def fpy(**kwargs) -> Callable[[Callable[P, R]], Function[P, R]]:
     ...
 
 def fpy(
@@ -77,17 +77,17 @@ def pattern(func: Callable[P, R]):
         return StmtPattern(fn.ast)
 
 ############################################################
-# @fpy_prim decorator
+# @fpy_primitive decorator
 
 @overload
-def fpy_prim(func: Callable[P, R]) -> Primitive:
+def fpy_primitive(func: Callable[P, R]) -> Primitive[P, R]:
     ...
 
 @overload
-def fpy_prim(**kwargs) -> Callable[[Callable[P, R]], Primitive]:
+def fpy_primitive(**kwargs) -> Callable[[Callable[P, R]], Primitive[P, R]]:
     ...
 
-def fpy_prim(
+def fpy_primitive(
     func: Optional[Callable[P, R]] = None,
     **kwargs
 ):

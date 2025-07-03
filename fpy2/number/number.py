@@ -318,24 +318,17 @@ class RealFloat(numbers.Rational):
         """
         return RealFloat(s=False, x=self)
 
-    def __trunc__(self):
-        return self.round(min_n=-1, rm=RoundingMode.RTZ)
+    def __trunc__(self) -> int:
+        raise NotImplementedError('do not call directly')
 
-    def __floor__(self):
-        return self.round(min_n=-1, rm=RoundingMode.RTN)
+    def __floor__(self) -> int:
+        raise NotImplementedError('do not call directly')
 
-    def __ceil__(self):
-        return self.round(min_n=-1, rm=RoundingMode.RTP)
+    def __ceil__(self) -> int:
+        raise NotImplementedError('do not call directly')
 
-    def __round__(self, ndigits=None):
-        if ndigits is not None:
-            if not isinstance(ndigits, int):
-                raise TypeError(f'Expected \'int\' for ndigits, got {type(ndigits)}')
-            if ndigits != 0:
-                raise ValueError('Non-zero ndigits not supported')
-            return self.round(max_p=ndigits, rm=RoundingMode.RNE)
-
-        return self.round(min_n=-1, rm=RoundingMode.RNE)
+    def __round__(self, ndigits=None) -> int:
+        raise NotImplementedError('do not call directly')
 
     def __floordiv__(self, other):
         raise NotImplementedError('division cannot be implemented exactly')
@@ -939,6 +932,8 @@ class RealFloat(numbers.Rational):
                 # the value is guaranteed to be a power of two
                 kept.c >>= 1
                 kept.exp += 1
+
+                assert interval_size is not None, 'interval_size is None when rounding is exact'
                 interval_size -= 1
 
         # interval direction is opposite of if we incremented

@@ -161,7 +161,8 @@ class MPSFloatContext(OrdinalContext):
             n = self.nmin
 
         # step 3. round value based on rounding parameters
-        return x.round(self.pmax, n, self.rm)
+        xr = x.round(self.pmax, n, self.rm)
+        return Float(x=xr, ctx=self)
 
     def _round_at(self, x, n: Optional[int]) -> Float:
         match x:
