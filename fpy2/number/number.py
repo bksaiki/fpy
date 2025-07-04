@@ -1266,7 +1266,15 @@ class Float(numbers.Rational):
         if not isinstance(x, float):
             raise TypeError(f'expected int, got {type(x)}')
 
-        return Float.from_real(RealFloat.from_float(x), ctx)
+        if math.isnan(x):
+            s = math.copysign(1, x) < 0
+            return Float(s=s, isnan=True, ctx=ctx)
+        elif math.isinf(x):
+            s = x < 0
+            return Float(s=s, isinf=True, ctx=ctx)
+        else:
+            xr = RealFloat.from_float(x)
+            return Float.from_real(xr, ctx)
 
     @property
     def base(self):
