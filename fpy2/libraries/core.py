@@ -4,6 +4,16 @@ Core numerical functions.
 
 from fpy2 import *
 
+__all__ = [
+    "split",
+    "modf",
+    "isinteger",
+    "logb",
+    "ldexp",
+    "frexp",
+    "max_e",
+]
+
 @fpy_primitive
 def split(x: Float, n: Float):
     """

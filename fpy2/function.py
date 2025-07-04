@@ -34,6 +34,7 @@ class Function(Generic[P, R]):
         self,
         ast: fpyast.FuncDef,
         env: ForeignEnv,
+        *,
         runtime: Optional['Interpreter'] = None,
         func: Optional[Callable[P, R]] = None
     ):

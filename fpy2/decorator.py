@@ -184,8 +184,7 @@ def _apply_fpy_decorator(
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
 
     # wrap the IR in a Function
-    return Function(ast, env)
-
+    return Function(ast, env, func=func)
 
 def _apply_fpy_prim_decorator(
     func: Callable[P, R],

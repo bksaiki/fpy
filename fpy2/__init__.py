@@ -77,6 +77,8 @@ from .env import ForeignEnv
 
 from .typing import *
 
+from . import libraries
+
 ###########################################################
 # Re-exports
 
