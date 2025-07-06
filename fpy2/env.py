@@ -1,11 +1,12 @@
 from dataclasses import dataclass
 from typing import Any
+from types import CellType
 
 @dataclass
 class ForeignEnv:
     """Python environment of an FPy function."""
     globals: dict[str, Any]
-    nonlocals: dict[str, Any]
+    nonlocals: dict[str, CellType]
     builtins: dict[str, Any]
 
     @staticmethod
