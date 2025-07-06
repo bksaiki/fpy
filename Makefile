@@ -13,10 +13,6 @@ docs:
 	@echo "Building documentation..."
 	make html -C docs/
 
-clean-docs:
-	@echo "Cleaning documentation..."
-	make clean -C docs/
-
 install:
 	@echo "Installing fpy2..."
 	pip install .
@@ -24,6 +20,10 @@ install:
 install-dev:
 	@echo "Installing fpy2 in development mode..."
 	pip install -e .[dev]
+
+uninstall:
+	@echo "Uninstalling fpy2..."
+	pip uninstall -y fpy2
 
 lint:
 	@echo "Running linters..."
@@ -53,6 +53,15 @@ unittest:
 	@echo "Running unit tests..."
 	python3 -m unittest -v -k $(UNITTEST_PATTERN)
 
+clean: clean-docs
+	@echo "Cleaning build artifacts..."
+	rm -rf build/ dist/ *.egg-info
+
+clean-docs:
+	@echo "Cleaning documentation..."
+	make clean -C docs/
+
+
 help:
 	@echo "FPy Make targets"
 	@echo ""
@@ -68,14 +77,15 @@ help:
 	@echo "  make build         Build the fpy2 package"
 	@echo "  make install       Install the fpy2 package"
 	@echo "  make install-dev   Install the fpy2 package in development mode"
+	@echo "  make uninstall     Uninstall the fpy2 package"
 	@echo ""
 	@echo "Documentation"
-	@echo ""
 	@echo "  make docs          Build the documentation"
-	@echo "  make clean-docs    Clean the HTML documentation"
 	@echo ""
 	@echo "Miscellaneous"
 	@echo "  make help          Show this help message"
-	@echo
+	@echo "  make clean         Clean build artifacts"
+	@echo "  make clean-docs    Clean documentation build artifacts"
+	@echo ""
 
 .PHONY: docs tests

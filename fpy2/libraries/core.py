@@ -4,6 +4,16 @@ Core numerical functions.
 
 from fpy2 import *
 
+__all__ = [
+    "split",
+    "modf",
+    "isinteger",
+    "logb",
+    "ldexp",
+    "frexp",
+    "max_e",
+]
+
 @fpy_primitive
 def split(x: Float, n: Float):
     """
@@ -180,21 +190,25 @@ def frexp(x: Float) -> tuple[Float, Float]:
         e = Float.from_int(x.e, ctx=x.ctx)
         return (mant, e)
 
-@fpy
+@fpy(ctx=INTEGER)
 def max_e(xs: tuple[Real, ...]) -> tuple[Real, bool]:
     """
     Computes the largest (normalized) exponent of the
     subset of finite, non-zero elements of `xs`.
 
     Returns the largest exponent and whether any such element exists.
-    If all elements are zero, infinite, or NaN, the exponent is `-INFINITY`.
+    If all elements are zero, infinite, or NaN, the exponent is `0`.
     """
-    largest_e = -INFINITY
+    largest_e = 0
     any_non_zero = False
     for x in xs:
         if isfinite(x) and x != 0:
-            any_non_zero = True
-            largest_e = max(largest_e, logb(x))
+            if any_non_zero:
+                largest_e = max(largest_e, logb(x))
+            else:
+                # First non-zero finite element found
+                largest_e = logb(x)
+                any_non_zero = True
 
     return (largest_e, any_non_zero)
 

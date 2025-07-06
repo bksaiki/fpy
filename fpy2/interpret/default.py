@@ -11,7 +11,7 @@ from .. import ops
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
-from ..number import Context, Float
+from ..number import Context, Float, FP64, INTEGER
 from ..number.gmp import mpfr_constant
 from ..env import ForeignEnv
 from ..function import Function
@@ -144,17 +144,16 @@ class _Interpreter(Visitor):
             case _:
                 raise TypeError(f'Expected `Context` or `FPCoreContext`, got {ctx}')
 
-    # TODO: what are the semantics of arguments
-    def _arg_to_mpmf(self, arg: Any, ctx: _EvalCtx):
+    def _arg_to_value(self, arg: Any):
         match arg:
             case int():
-                return Float.from_int(arg, ctx=ctx.round_ctx)
+                return Float.from_int(arg, ctx=INTEGER)
             case float():
-                return Float.from_float(arg, ctx=ctx.round_ctx)
+                return Float.from_float(arg, ctx=FP64)
             case Float():
-                return arg.round(ctx.round_ctx)
+                return arg
             case tuple() | list():
-                return NDArray([self._arg_to_mpmf(x, ctx) for x in arg])
+                return NDArray([self._arg_to_value(x) for x in arg])
             case _:
                 return arg
 
@@ -177,18 +176,18 @@ class _Interpreter(Visitor):
         for val, arg in zip(args, func.args):
             match arg.type:
                 case AnyTypeAnn() | None:
-                    x = self._arg_to_mpmf(val, eval_ctx)
+                    x = self._arg_to_value(val)
                     if isinstance(arg.name, NamedId):
                         eval_ctx.env[arg.name] = x
                 case RealTypeAnn():
-                    x = self._arg_to_mpmf(val, eval_ctx)
+                    x = self._arg_to_value(val)
                     if not isinstance(x, Float):
                         raise NotImplementedError(f'argument is a scalar, got data {val}')
                     if isinstance(arg.name, NamedId):
                         eval_ctx.env[arg.name] = x
                 case TensorTypeAnn():
                     # TODO: check shape
-                    x = self._arg_to_mpmf(val, eval_ctx)
+                    x = self._arg_to_value(val)
                     if not isinstance(x, NDArray):
                         raise NotImplementedError(f'argument is a tensor, got data {val}')
                     if isinstance(arg.name, NamedId):
@@ -198,7 +197,7 @@ class _Interpreter(Visitor):
 
         # process free variables
         for var in func.free_vars:
-            x = self._arg_to_mpmf(self.foreign[var.base], eval_ctx)
+            x = self._arg_to_value(self.foreign[var.base])
             eval_ctx.env[var] = x
 
         # evaluation
@@ -710,7 +709,11 @@ class _Interpreter(Visitor):
         return ctor(*args, **kwargs)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _EvalCtx):
-        round_ctx = self._visit_expr(stmt.ctx, ctx)
+        match stmt.ctx:
+            case ForeignAttribute():
+                round_ctx = self._visit_foreign_attr(stmt.ctx, ctx)
+            case _:
+                round_ctx = self._visit_expr(stmt.ctx, ctx)
         block_ctx = self._visit_block(stmt.body, self._eval_ctx(ctx.env, round_ctx))
         ctx.env = block_ctx.env
 

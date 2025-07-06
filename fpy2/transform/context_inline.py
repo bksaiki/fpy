@@ -97,6 +97,11 @@ class _ContextInlineInstance(DefaultTransformVisitor):
                 context = ForeignVal(v, None)
             case ForeignVal():
                 context = stmt.ctx
+            case ForeignAttribute():
+                v = self._eval_foreign_attr(stmt.ctx)
+                if not isinstance(v, Context | FPCoreContext):
+                    raise TypeError(f'Expected `Context` or `FPCoreContext`, got {type(v)} for {v}')
+                context = ForeignVal(v, None)
             case _:
                 raise RuntimeError('unreachable', stmt.ctx)
 

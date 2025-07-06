@@ -135,12 +135,12 @@ class MPFloatContext(Context):
             case Float() | RealFloat():
                 xr = x
             case int():
-                xr = RealFloat(c=x)
+                xr = RealFloat(m=x)
             case float() | str():
                 xr = mpfr_value(x, prec=self.pmax)
             case Fraction():
                 if x.denominator == 1:
-                    xr = RealFloat(c=int(x))
+                    xr = RealFloat(m=int(x))
                 else:
                     xr = mpfr_value(x, prec=self.pmax)
             case _:

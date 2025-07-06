@@ -50,7 +50,9 @@ from .number import (
     INTEGER,
     SINT8, SINT16, SINT32, SINT64,
     UINT8, UINT16, UINT32, UINT64,
-    Real
+    Real,
+    # re-exports
+    NDArray,
 )
 
 from .ops import *
@@ -77,10 +79,9 @@ from .env import ForeignEnv
 
 from .typing import *
 
-###########################################################
-# Re-exports
-
-from titanfp.titanic.ndarray import NDArray
+# TODO: this makes a circular dependency since
+# libraries depend on `fpy2` even when it's not fully loaded
+from . import libraries
 
 ###########################################################
 # typing hints

@@ -1,4 +1,5 @@
 from fpy2 import *
+import fpy2 as fp
 
 ### Simple tests
 
@@ -439,6 +440,11 @@ def test_context2():
     with IEEEContext(8, 32, RM.RNE):
         return x + 1
 
+@fp.fpy
+def test_context3(x: fp.Real):
+    with fp.INTEGER:
+        return x + 1
+
 # @fpy(name='Test context statement (3/3)')
 # def test_context3(x: Real, y: Real):
 #     with IEEEContext(8, 32, RM.RNE) as ctx:
@@ -648,7 +654,7 @@ tests = [
     test_for4,
     test_context1,
     test_context2,
-    # test_context3,
+    test_context3,
     test_assert,
 ]
 
