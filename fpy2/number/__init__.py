@@ -22,6 +22,11 @@ from .round import RoundingMode, RoundingDirection
 from .native import default_float_convert, default_str_convert
 
 ###########################################################
+# Re-exports
+
+from titanfp.titanic.ndarray import NDArray
+
+###########################################################
 # Type aliases
 
 RM: TypeAlias = RoundingMode

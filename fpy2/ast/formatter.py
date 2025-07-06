@@ -292,7 +292,10 @@ class _FormatterInstance(Visitor):
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
-        context = self._visit_expr(stmt.ctx, ctx)
+        if isinstance(stmt.ctx, ForeignAttribute):
+            context = self._visit_foreign_attr(stmt.ctx, ctx)
+        else:
+            context = self._visit_expr(stmt.ctx, ctx)
         self._add_line(f'with {context} as {str(stmt.name)}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 

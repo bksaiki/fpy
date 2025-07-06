@@ -314,7 +314,11 @@ class SyntaxCheckInstance(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env, is_top = ctx
-        self._visit_expr(stmt.ctx, ctx)
+        match stmt.ctx:
+            case ForeignAttribute():
+                self._visit_foreign_attr(stmt.ctx, ctx)
+            case _:
+                self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.name, NamedId):
             env = env.extend(stmt.name)
         return self._visit_block(stmt.body, (env, is_top))

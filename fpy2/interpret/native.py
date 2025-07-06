@@ -642,7 +642,11 @@ class _Interpreter(Visitor):
         return ctor(*args)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _EvalCtx):
-        round_ctx = self._visit_expr(stmt.ctx, ctx)
+        match stmt.ctx:
+            case ForeignAttribute():
+                round_ctx = self._visit_foreign_attr(stmt.ctx, ctx)
+            case _:
+                round_ctx = self._visit_expr(stmt.ctx, ctx)
         if not self._is_python_ctx(round_ctx):
             raise RuntimeError(f'Unsupported context {round_ctx}, expected {_PY_CTX}')
         return self._visit_block(stmt.body, ctx)

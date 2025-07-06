@@ -175,7 +175,8 @@ class LiveVarsInstance(Visitor):
         live = self._visit_block(stmt.body, live)
         if isinstance(stmt.name, NamedId):
             live -= { stmt.name }
-        live |= self._visit_expr(stmt.ctx, None)
+        if not isinstance(stmt.ctx, ForeignAttribute):
+            live |= self._visit_expr(stmt.ctx, None)
         return live
 
     def _visit_assert(self, stmt: AssertStmt, live: _LiveSet) -> _LiveSet:

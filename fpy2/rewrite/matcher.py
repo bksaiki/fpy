@@ -330,7 +330,14 @@ class _MatcherInst(Visitor):
         self._visit_block(stmt.body, pat.body)
 
     def _visit_context(self, stmt: ContextStmt, pat: ContextStmt):
-        self._visit_expr(stmt.ctx, pat.ctx)
+        match stmt.ctx, pat.ctx:
+            case ForeignAttribute(), ForeignAttribute():
+                if stmt.ctx != pat.ctx:
+                    raise _MatchFailure(f'matching {pat} against {stmt}')
+            case Expr(), Expr():
+                self._visit_expr(stmt.ctx, pat.ctx)
+            case _:
+                raise _MatchFailure(f'matching {pat} against {stmt}')
         self._visit_block(stmt.body, pat.body)
 
     def _visit_assert(self, stmt: AssertStmt, pat: AssertStmt):

@@ -638,6 +638,8 @@ class Parser:
             case ast.Name():
                 name = self._parse_id(e)
                 return Var(name, loc)
+            case ast.Attribute():
+                return self._parse_foreign_attribute(e)
             case ast.Call():
                 # parse constructor
                 match e.func:

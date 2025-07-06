@@ -709,7 +709,11 @@ class _Interpreter(Visitor):
         return ctor(*args, **kwargs)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _EvalCtx):
-        round_ctx = self._visit_expr(stmt.ctx, ctx)
+        match stmt.ctx:
+            case ForeignAttribute():
+                round_ctx = self._visit_foreign_attr(stmt.ctx, ctx)
+            case _:
+                round_ctx = self._visit_expr(stmt.ctx, ctx)
         block_ctx = self._visit_block(stmt.body, self._eval_ctx(ctx.env, round_ctx))
         ctx.env = block_ctx.env
 

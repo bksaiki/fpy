@@ -357,7 +357,8 @@ class DefaultVisitor(Visitor):
         self._visit_block(stmt.body, ctx)
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
-        self._visit_expr(stmt.ctx, ctx)
+        if not isinstance(stmt.ctx, ForeignAttribute):
+            self._visit_expr(stmt.ctx, ctx)
         self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
