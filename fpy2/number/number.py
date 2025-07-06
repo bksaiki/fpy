@@ -20,7 +20,7 @@ from ..utils import (
     FP64_NBITS,
     FP64_ES,
     FP64_M,
-    FP64_EXPMIN
+    FP64_EXPMIN,
 )
 
 from .context import Context

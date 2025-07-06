@@ -1,4 +1,4 @@
-from fpy2 import Function, ForeignEnv, Float, NoSuchContextError
+from fpy2 import Function, ForeignEnv, Float, FP64, NoSuchContextError
 from titanfp.arithmetic.mpmf import Interpreter
 from titanfp.fpbench.fpcast import FPCore
 from titanfp.titanic.ndarray import NDArray
@@ -57,10 +57,8 @@ def eval(
                 if shape is None:
                     # scalar argument
                     # TODO: sampling
-                    input.append(Float.from_float(1.0, None))
+                    input.append(Float.from_float(1.0, FP64))
                 else:
-                    # tensor argument
-                    # Replace symbolic dimensions with N=3
                     dims = []
                     for dim in shape:
                         if isinstance(dim, int):
@@ -69,7 +67,7 @@ def eval(
                             dims.append(3)
                     def make_tensor(dims):
                         if not dims:
-                            return Float.from_float(1.0, None)
+                            return Float.from_float(1.0, FP64)
                         return NDArray([make_tensor(dims[1:]) for _ in range(dims[0])])
                     input.append(make_tensor(dims))
             inputs.append(input)
