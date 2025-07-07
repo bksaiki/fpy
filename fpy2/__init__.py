@@ -68,7 +68,6 @@ from .backend import (
 
 from .interpret import (
     Interpreter,
-    PythonInterpreter,
     DefaultInterpreter,
     set_default_interpreter,
     get_default_interpreter,
