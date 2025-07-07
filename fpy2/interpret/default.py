@@ -321,9 +321,7 @@ class _Interpreter(Visitor):
     def _apply_zip(self, args: Sequence[Expr], ctx: _EvalCtx):
         """Apply the `zip` method to the given n-ary expression."""
         if len(args) == 0:
-            # TODO: how to fix this?
-            # return NDArray([], shape=())
-            raise NotImplementedError('zip() with 0 size not supported')
+            return []
 
         # evaluate all children
         arrays: list[list] = []

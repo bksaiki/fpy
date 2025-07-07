@@ -1,7 +1,6 @@
 from fpy2 import Function, ForeignEnv, Float, FP64, NoSuchContextError
 from titanfp.arithmetic.mpmf import Interpreter
 from titanfp.fpbench.fpcast import FPCore
-from titanfp.titanic.ndarray import NDArray
 
 from .fetch import fetch_cores
 from .shim import fpy_to_mpmf, mpmf_to_fpy, mpmf_interpreter, compare

@@ -1,7 +1,6 @@
 from fpy2 import Function, ForeignEnv, Float, NoSuchContextError, FPCoreCompiler
 from titanfp.arithmetic.mpmf import Interpreter
 from titanfp.fpbench.fpcast import FPCore
-from titanfp.titanic.ndarray import NDArray
 
 from .fetch import fetch_cores, read_file
 from .shim import fpy_to_mpmf, mpmf_to_fpy, mpmf_interpreter, compare
@@ -83,7 +82,7 @@ def eval(
                     def make_tensor(dims):
                         if not dims:
                             return Float.from_float(1.0, None)
-                        return NDArray([make_tensor(dims[1:]) for _ in range(dims[0])])
+                        return [make_tensor(dims[1:]) for _ in range(dims[0])]
                     input.append(make_tensor(dims))
             inputs.append(input)
 
