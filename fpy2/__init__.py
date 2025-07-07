@@ -51,8 +51,6 @@ from .number import (
     SINT8, SINT16, SINT32, SINT64,
     UINT8, UINT16, UINT32, UINT64,
     Real,
-    # re-exports
-    NDArray,
 )
 
 from .ops import *
