@@ -68,7 +68,7 @@ def eval(
                     def make_tensor(dims):
                         if not dims:
                             return Float.from_float(1.0, FP64)
-                        return NDArray([make_tensor(dims[1:]) for _ in range(dims[0])])
+                        return [make_tensor(dims[1:]) for _ in range(dims[0])]
                     input.append(make_tensor(dims))
             inputs.append(input)
 

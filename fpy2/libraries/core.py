@@ -78,7 +78,7 @@ def modf(x: Float):
     elif x.isinf:
         return [Float(s=x.s, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)]
     elif x.is_zero():
-        return [(Float(s=x.s, ctx=x.ctx), Float(s=x.s, ctx=x.ctx))]
+        return [Float(s=x.s, ctx=x.ctx), Float(s=x.s, ctx=x.ctx)]
     else:
         hi, lo = x.as_real().split(-1)
         return [Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)]
