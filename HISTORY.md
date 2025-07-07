@@ -1,5 +1,20 @@
 # Version History
 
+## [next] - ?
+### Features
+
+### Removed
+ - `fpy2.PythonInterpreter` has been removed. Use `fpy2.DefaultInterpreter` instead.
+
+### Fixes
+ - Runtime
+   - interpreted arguments are not rounded under the body rounding context
+ - Standard library
+   - `libraries.core.max_e` always computes under an integer context
+ - Numbers library
+   - fix `round()` and `round_at()` for integer arguments
+   - fix `from_float()` for NaN and infinities
+
 ## [0.0.5] - 2025-07-02
 ### Features
  - Frontend
