@@ -24,19 +24,15 @@ FPy programs are represented by the :py:class:`fpy2.Function` class.
 Interpreters
 ------------------
 
-FPy programs are interpreted by any implementor of the :py:class:`fpy2.Interpreter` class.
+FPy programs are interpreted by any implementation of the :py:class:`fpy2.Interpreter` class.
 
 .. autoclass:: fpy2.Interpreter
    :members:
    :show-inheritance:
 
-FPy provides a number of concrete interpreters.
+FPy provides a single interpreter:
 
 .. autoclass:: fpy2.DefaultInterpreter
-   :members:
-   :show-inheritance:
-
-.. autoclass:: fpy2.PythonInterpreter
    :members:
    :show-inheritance:
 
