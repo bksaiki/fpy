@@ -33,12 +33,12 @@ def split(x: Float, n: Float):
         raise ValueError("n must be an integer")
 
     if x.isnan:
-        return NDArray((Float(isnan=True, ctx=x.ctx), Float(isnan=True, ctx=x.ctx)))
+        return [Float(isnan=True, ctx=x.ctx), Float(isnan=True, ctx=x.ctx)]
     elif x.isinf:
-        return NDArray((Float(s=x.s, isinf=True, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)))
+        return [Float(s=x.s, isinf=True, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)]
     else:
         hi, lo = x.as_real().split(int(n))
-        return NDArray((Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)))
+        return [Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)]
 
 @fpy
 def _modf_spec(x: Real) -> tuple[Real, Real]:
@@ -63,7 +63,7 @@ def _modf_spec(x: Real) -> tuple[Real, Real]:
     return ret
 
 @fpy_primitive(spec=_modf_spec)
-def modf(x: Float) -> tuple[Float, Float]:
+def modf(x: Float):
     """
     Decomposes `x` into its integral and fractional parts.
     The operation is performed exactly.
@@ -74,14 +74,14 @@ def modf(x: Float) -> tuple[Float, Float]:
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
     if x.isnan:
-        return NDArray((Float(x=x, ctx=x.ctx), Float(x=x, ctx=x.ctx)))
+        return [Float(x=x, ctx=x.ctx), Float(x=x, ctx=x.ctx)]
     elif x.isinf:
-        return NDArray((Float(s=x.s, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)))
+        return [Float(s=x.s, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)]
     elif x.is_zero():
-        return NDArray((Float(s=x.s, ctx=x.ctx), Float(s=x.s, ctx=x.ctx)))
+        return [(Float(s=x.s, ctx=x.ctx), Float(s=x.s, ctx=x.ctx))]
     else:
         hi, lo = x.as_real().split(-1)
-        return NDArray((Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)))
+        return [Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)]
 
 @fpy
 def isinteger(x: Real) -> bool:
