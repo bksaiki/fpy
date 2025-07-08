@@ -5,7 +5,7 @@ from typing import Any
 
 from .fpyast import *
 
-_expr_dispatch = {
+_expr_dispatch: dict[type[Expr], str] = {
     Var: "_visit_var",
     BoolVal: "_visit_bool",
     ForeignVal: "_visit_foreign",
@@ -30,7 +30,7 @@ _expr_dispatch = {
     ContextExpr: "_visit_context_expr",
 }
 
-_stmt_dispatch = {
+_stmt_dispatch: dict[type[Stmt], str] = {
     Assign: "_visit_assign",
     IndexedAssign: "_visit_indexed_assign",
     If1Stmt: "_visit_if1",
@@ -41,7 +41,6 @@ _stmt_dispatch = {
     AssertStmt: "_visit_assert",
     EffectStmt: "_visit_effect",
     ReturnStmt: "_visit_return",
-    StmtBlock: "_visit_block",
 }
 
 class Visitor(ABC):
@@ -209,11 +208,9 @@ class Visitor(ABC):
                 break
             method = _expr_dispatch.get(cls, None)
             if method is not None:
-                break
-        else:
-            raise NotImplementedError(f'no dispatch method for `{e}`')
-        func = getattr(self, method)
-        return func(e, ctx)
+                func = getattr(self, method)
+                return func(e, ctx)
+        raise NotImplementedError(f'no dispatch method for `{e}`')
 
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         """Dispatch to the appropriate visit method for a statement."""
@@ -222,11 +219,9 @@ class Visitor(ABC):
                 break
             method = _stmt_dispatch.get(cls, None)
             if method is not None:
-                break
-        else:
-            raise NotImplementedError(f'no dispatch method for `{stmt}`')
-        func = getattr(self, method)
-        return func(stmt, ctx)
+                func = getattr(self, method)
+                return func(stmt, ctx)
+        raise NotImplementedError(f'no dispatch method for `{stmt}`')
 
 #####################################################################
 # Default visitor
