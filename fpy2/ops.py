@@ -603,7 +603,7 @@ def signbit(x: Real) -> bool:
 # Tensor
 # TODO: should these be implemented
 
-def dim(x: list | tuple, ctx: Optional[Context] = None) -> int:
+def dim(x: list | tuple, ctx: Optional[Context] = None):
     """
     Returns the number of dimensions of the tensor `x`.
 
@@ -613,19 +613,20 @@ def dim(x: list | tuple, ctx: Optional[Context] = None) -> int:
     while isinstance(x, (list, tuple)):
         dim += 1
         x = x[0]
-    return dim
+    return Float.from_int(dim, ctx=ctx)
 
-def size(x: list | tuple, dim: Float, ctx: Optional[Context] = None) -> int:
+def size(x: list | tuple, dim: Real, ctx: Optional[Context] = None):
     """
     Returns the size of the dimension `dim` of the tensor `x`.
 
     Assumes that `x` is not a ragged tensor.
     """
+    dim = _real_to_float(dim)
     for _ in range(int(dim)):
         x = x[0]
         if not isinstance(x, (list, tuple)):
             raise ValueError(f'dimension `{dim}` is out of bounds for the tensor `{x}`')
-    return len(x)
+    return Float.from_int(len(x), ctx=ctx)
 
 #############################################################################
 # Constants

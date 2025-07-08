@@ -46,7 +46,7 @@ def eval(
         return
 
     # sample inputs
-    if core.inputs == []:
+    if len(core.inputs) == 0:
         inputs: list[list] = [[]]
     else:
         inputs = []
@@ -63,7 +63,7 @@ def eval(
                         if isinstance(dim, int):
                             dims.append(dim)
                         else:
-                            dims.append(3)
+                            dims.append(2)
                     def make_tensor(dims):
                         if not dims:
                             return Float.from_float(1.0, FP64)
@@ -71,13 +71,14 @@ def eval(
                     input.append(make_tensor(dims))
             inputs.append(input)
 
-    print('evaluating', core.name, 'with', len(inputs), 'inputs', end='')
+    print('evaluating', core.name, 'with', len(inputs), 'inputs', end='', flush=True)
 
     # evaluate both FPy and FPCore functions
     for input in inputs:
         # evaluate functions on point
         try:
-            fpcore = mpmf_to_fpy(rt.interpret(core, list(map(fpy_to_mpmf, input))))
+            fpcore_args = [fpy_to_mpmf(arg) for arg in input]
+            fpcore = mpmf_to_fpy(rt.interpret(core, fpcore_args))
             fpy = fun(*input)
         except NoSuchContextError:
             # TODO: implement integer contexts

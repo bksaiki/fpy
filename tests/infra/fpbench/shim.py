@@ -4,7 +4,8 @@ from fpy2 import Float, IEEEContext, RoundingMode, nearbyint
 from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
-from titanfp.fpbench.fpcast import Nearbyint
+from titanfp.fpbench.fpcast import Array, Nearbyint
+from titanfp.titanic import ndarray
 
 def fpy_to_mpmf(x: bool | Float | list):
     match x:
@@ -15,18 +16,18 @@ def fpy_to_mpmf(x: bool | Float | list):
         case list():
             return [fpy_to_mpmf(v) for v in x]
         case _:
-            raise TypeError(f'Expected Float or list, got {x}')
+            raise TypeError(f'Expected Float or ndarray.NDArray, got {x}')
 
-def mpmf_to_fpy(x: bool | MPMF | list):
+def mpmf_to_fpy(x: bool | MPMF | ndarray.NDArray):
     match x:
         case bool():
             return x
         case MPMF():
             return Float(s=x.negative, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
-        case list():
+        case ndarray.NDArray():
             return [mpmf_to_fpy(v) for v in x]
         case _:
-            raise TypeError(f'Expected MPMF or list, got {x}')
+            raise TypeError(f'Expected MPMF or ndarray.NDArray, got {x}')
 
 def compare(
     expect: bool | Float | list,
@@ -83,6 +84,15 @@ def _eval_nearbyint(rt: Interpreter, e: Nearbyint, ctx: EvalCtx):
     result = fpy_to_mpmf(v)
     return [v], result
 
+def make_check_offset(check_offset):
+    def _check_offset(data, shape, start, strides):
+        # bail for empty tensors
+        for dim in shape:
+            if dim == 0:
+                return
+        return check_offset(data, shape, start, strides)
+    return _check_offset
+
 def mpmf_interpreter():
     """
     Creates a hacked version of the MPMF interpreter and
@@ -94,4 +104,5 @@ def mpmf_interpreter():
     """
     rt = Interpreter()
     rt._eval_nearbyint = types.MethodType(_eval_nearbyint, rt)
+    ndarray.check_offset = make_check_offset(ndarray.check_offset)
     return rt
