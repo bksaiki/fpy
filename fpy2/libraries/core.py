@@ -2,7 +2,7 @@
 Core numerical functions.
 """
 
-from fpy2 import *
+from .base import *
 
 __all__ = [
     "split",
