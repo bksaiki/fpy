@@ -1,11 +1,13 @@
 # Version History
 
-## [next] - ?
+## [0.0.6] - 2025-07-08
 ### Features:
  - Added `fpy2.libraries.base` to contain all builtins (automatically imported).
 
 ### Changes:
  - Named constants, e.g., `NAN`, changed to constant functions, e.g., `nan()`.
+ - Performance improvements for AST visitors
+ - Performance improvements for interpreters
 
 ### Removed
  - `fpy2.PythonInterpreter` has been removed. Use `fpy2.DefaultInterpreter` instead.
