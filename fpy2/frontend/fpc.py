@@ -15,6 +15,25 @@ from ..utils import Gensym, pythonize_id
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 
+_constants: dict[str, Expr] = {
+    'TRUE': BoolVal(True, None),
+    'FALSE': BoolVal(False, None),
+    'NAN': ConstNan(None),
+    'INFINITY': ConstInf(None),
+    'PI': ConstPi(None),
+    'E': ConstE(None),
+    'LOG2E': ConstLog2E(None),
+    'LOG10E': ConstLog10E(None),
+    'LN2': ConstLn2(None),
+    'PI_2': ConstPi_2(None),
+    'PI_4': ConstPi_4(None),
+    'M_1_PI': Const1_Pi(None),
+    'M_2_PI': Const2_Pi(None),
+    'M_2_SQRTPI': Const2_SqrtPi(None),
+    'SQRT2': ConstSqrt2(None),
+    'SQRT1_2': ConstSqrt1_2(None),
+}
+
 _unary_table: dict[str, type[UnaryOp] | type[NamedUnaryOp]] = {
     'neg': Neg,
     'not': Not,
@@ -136,6 +155,11 @@ class _FPCore2FPy:
         if e.value not in ctx.env:
             raise ValueError(f'variable {e.value} not in scope')
         return Var(ctx.env[e.value], None)
+
+    def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
+        if e.name not in _constants:
+            raise ValueError(f'unknown constant {e.name}')
+        return _constants[e.name]
 
     def _visit_decnum(self, e: fpc.Decnum, ctx: _Ctx) -> Expr:
         return Decnum(str(e.value), None)
@@ -606,6 +630,8 @@ class _FPCore2FPy:
         match e:
             case fpc.Var():
                 return self._visit_var(e, ctx)
+            case fpc.Constant():
+                return self._visit_constant(e, ctx)
             case fpc.Decnum():
                 return self._visit_decnum(e, ctx)
             case fpc.Hexnum():

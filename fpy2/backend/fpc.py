@@ -16,7 +16,7 @@ from .backend import Backend
 
 _nullary_table: dict[type[NullaryOp], fpc.Expr] = {
     ConstNan: fpc.Constant('NAN'),
-    ConstInf: fpc.Constant('INF'),
+    ConstInf: fpc.Constant('INFINITY'),
     ConstPi: fpc.Constant('PI'),
     ConstE: fpc.Constant('E'),
     ConstLog2E: fpc.Constant('LOG2E'),

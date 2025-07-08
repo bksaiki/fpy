@@ -3,7 +3,6 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
-from enum import IntEnum
 from typing import Any, Optional, Self, Sequence
 from fractions import Fraction
 
