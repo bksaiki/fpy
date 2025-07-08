@@ -4,17 +4,17 @@ from fpy2 import Float, IEEEContext, RoundingMode, nearbyint
 from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
-from titanfp.fpbench.fpcast import Nearbyint
+from titanfp.fpbench.fpcast import Array, Nearbyint
 from titanfp.titanic import ndarray
 
-def fpy_to_mpmf(x: bool | Float | ndarray.NDArray):
+def fpy_to_mpmf(x: bool | Float | list):
     match x:
         case bool():
             return x
         case Float():
             return MPMF(negative=x.s, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
-        case ndarray.NDArray():
-            return ndarray.NDArray([fpy_to_mpmf(v) for v in x])
+        case list():
+            return [fpy_to_mpmf(v) for v in x]
         case _:
             raise TypeError(f'Expected Float or ndarray.NDArray, got {x}')
 
@@ -25,13 +25,13 @@ def mpmf_to_fpy(x: bool | MPMF | ndarray.NDArray):
         case MPMF():
             return Float(s=x.negative, exp=x.exp, c=x.c, isinf=x.isinf, isnan=x.isnan)
         case ndarray.NDArray():
-            return ndarray.NDArray([mpmf_to_fpy(v) for v in x])
+            return [mpmf_to_fpy(v) for v in x]
         case _:
             raise TypeError(f'Expected MPMF or ndarray.NDArray, got {x}')
 
 def compare(
-    expect: bool | Float | ndarray.NDArray,
-    actual: bool | Float | ndarray.NDArray,
+    expect: bool | Float | list,
+    actual: bool | Float | list,
     **kwargs
 ):
     match expect, actual:
@@ -43,7 +43,7 @@ def compare(
             if not actual.isnan if expect.isnan else expect != actual:
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
-        case ndarray.NDArray(), ndarray.NDArray():
+        case list(), list():
             if len(expect) != len(actual):
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')

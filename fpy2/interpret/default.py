@@ -2,10 +2,10 @@
 FPy runtime backed by the Titanic library.
 """
 
+import copy
+
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence, TypeAlias
-
-from titanfp.titanic.ndarray import NDArray
 
 from .. import ops
 
@@ -21,12 +21,12 @@ from .interpreter import Interpreter, FunctionReturnException
 
 ScalarVal: TypeAlias = bool | Float
 """Type of scalar values in FPy programs."""
-TensorVal: TypeAlias = NDArray
+TensorVal: TypeAlias = list
 """Type of tensor values in FPy programs."""
 
 ScalarArg: TypeAlias = ScalarVal | str | int | float
 """Type of scalar arguments in FPy programs; includes native Python types"""
-TensorArg: TypeAlias = NDArray | tuple | list
+TensorArg: TypeAlias = tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
 def _isfinite(x: Float, ctx: Context) -> bool:
@@ -153,7 +153,7 @@ class _Interpreter(Visitor):
             case Float():
                 return arg
             case tuple() | list():
-                return NDArray([self._arg_to_value(x) for x in arg])
+                return [self._arg_to_value(x) for x in arg]
             case _:
                 return arg
 
@@ -188,7 +188,7 @@ class _Interpreter(Visitor):
                 case TensorTypeAnn():
                     # TODO: check shape
                     x = self._arg_to_value(val)
-                    if not isinstance(x, NDArray):
+                    if not isinstance(x, list):
                         raise NotImplementedError(f'argument is a tensor, got data {val}')
                     if isinstance(arg.name, NamedId):
                         eval_ctx.env[arg.name] = x
@@ -290,56 +290,49 @@ class _Interpreter(Visitor):
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
         n = int(stop)
-
-        elts: list[Float] = []
-        for i in range(n):
-            elts.append(Float.from_int(i, ctx=ctx.round_ctx))
-        return NDArray(elts, shape=(n,))
+        return [Float.from_int(i, ctx=ctx.round_ctx) for i in range(n)]
 
     def _apply_dim(self, arg: Expr, ctx: _EvalCtx):
         v = self._visit_expr(arg, ctx)
-        if not isinstance(v, NDArray):
+        if not isinstance(v, list):
             raise TypeError(f'expected a tensor, got {v}')
-        return Float.from_int(len(v.shape), ctx=ctx.round_ctx)
+        return ops.dim(v, ctx.round_ctx)
 
     def _apply_enumerate(self, arg: Expr, ctx: _EvalCtx):
         v = self._visit_expr(arg, ctx)
-        if not isinstance(v, NDArray):
+        if not isinstance(v, list):
             raise TypeError(f'expected a tensor, got {v}')
-
-        elts: list[NDArray] = []
-        for i, val in enumerate(v):
-            elts.append(NDArray([Float.from_int(i, ctx=ctx.round_ctx), val], shape=(2,)))
-        return NDArray(elts, shape=(len(elts),))
+        return [
+            [Float.from_int(i, ctx=ctx.round_ctx), val]
+            for i, val in enumerate(v)
+        ]
 
     def _apply_size(self, arr: Expr, idx: Expr, ctx: _EvalCtx):
         v = self._visit_expr(arr, ctx)
-        if not isinstance(v, NDArray):
+        if not isinstance(v, list):
             raise TypeError(f'expected a tensor, got {v}')
         dim = self._visit_expr(idx, ctx)
         if not isinstance(dim, Float):
             raise TypeError(f'expected a real number argument, got {dim}')
         if not dim.is_integer():
             raise TypeError(f'expected an integer argument, got {dim}')
-        return Float.from_int(v.shape[int(dim)], ctx=ctx.round_ctx)
+        return ops.size(v, dim, ctx.round_ctx)
 
     def _apply_zip(self, args: Sequence[Expr], ctx: _EvalCtx):
         """Apply the `zip` method to the given n-ary expression."""
         if len(args) == 0:
-            # TODO: how to fix this?
-            # return NDArray([], shape=())
-            raise NotImplementedError('zip() with 0 size not supported')
+            return []
 
         # evaluate all children
-        arrays: list[NDArray] = []
+        arrays: list[list] = []
         for arg in args:
             val = self._visit_expr(arg, ctx)
-            if not isinstance(val, NDArray):
+            if not isinstance(val, list):
                 raise TypeError(f'expected a tensor argument, got {val}')
             arrays.append(val)
 
         # zip the arrays
-        return NDArray(zip(*arrays))
+        return list(zip(*arrays))
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _EvalCtx):
         fn = _unary_table.get(type(e))
@@ -444,11 +437,11 @@ class _Interpreter(Visitor):
         return True
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _EvalCtx):
-        return NDArray([self._visit_expr(x, ctx) for x in e.args])
+        return [self._visit_expr(x, ctx) for x in e.args]
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: _EvalCtx):
         arr = self._visit_expr(e.value, ctx)
-        if not isinstance(arr, NDArray):
+        if not isinstance(arr, list):
             raise TypeError(f'expected a tensor, got {arr}')
 
         idx = self._visit_expr(e.index, ctx)
@@ -460,7 +453,7 @@ class _Interpreter(Visitor):
 
     def _visit_tuple_slice(self, e: TupleSlice, ctx: _EvalCtx):
         arr = self._visit_expr(e.value, ctx)
-        if not isinstance(arr, NDArray):
+        if not isinstance(arr, list):
             raise TypeError(f'expected a tensor, got {arr}')
 
         if e.start is None:
@@ -484,19 +477,16 @@ class _Interpreter(Visitor):
             stop = int(val)
 
         if start < 0 or stop > len(arr):
-            return NDArray([])  # empty slice
+            return []
         else:
-            sliced: list = []
-            for i in range(start, stop):
-                sliced.append(arr[i])
-            return NDArray(sliced)
+            return [arr[i] for i in range(start, stop)]
 
     def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
         value = self._visit_expr(e.array, ctx)
-        if not isinstance(value, NDArray):
+        if not isinstance(value, list):
             raise TypeError(f'expected a tensor, got {value}')
-        value = NDArray(value) # make a copy
 
+        array = copy.deepcopy(value) # make a copy
         slices: list[int] = []
         for s in e.slices:
             val = self._visit_expr(s, ctx)
@@ -507,8 +497,14 @@ class _Interpreter(Visitor):
             slices.append(int(val))
 
         val = self._visit_expr(e.value, ctx)
-        value[slices] = val
-        return value
+        for idx in slices[:-1]:
+            if not isinstance(array, list):
+                raise TypeError(f'index {idx} is out of bounds for `{array}`')
+            array = array[idx]
+
+        array[slices[-1]] = val
+        return array
+
 
     def _apply_comp(
         self,
@@ -522,7 +518,7 @@ class _Interpreter(Visitor):
         else:
             target, iterable = bindings[0]
             array = self._visit_expr(iterable, ctx)
-            if not isinstance(array, NDArray):
+            if not isinstance(array, list):
                 raise TypeError(f'expected a tensor, got {array}')
             for val in array:
                 match target:
@@ -542,7 +538,7 @@ class _Interpreter(Visitor):
         for target in e.targets:
             for name in target.names():
                 del ctx.env[name]
-        return NDArray(elts)
+        return elts
 
     def _visit_if_expr(self, e: IfExpr, ctx: _EvalCtx):
         cond = self._visit_expr(e.cond, ctx)
@@ -550,7 +546,7 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _unpack_tuple(self, binding: TupleBinding, val: NDArray, ctx: _EvalCtx) -> None:
+    def _unpack_tuple(self, binding: TupleBinding, val: list, ctx: _EvalCtx) -> None:
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
         for elt, v in zip(binding.elts, val):
@@ -588,7 +584,11 @@ class _Interpreter(Visitor):
 
         # evaluate and update array
         val = self._visit_expr(stmt.expr, ctx)
-        array[slices] = val
+        for idx in slices[:-1]:
+            if not isinstance(array, list):
+                raise TypeError(f'index {idx} is out of bounds for `{array}`')
+            array = array[idx]
+        array[slices[-1]] = val
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _EvalCtx):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -639,7 +639,7 @@ class _Interpreter(Visitor):
     def _visit_for(self, stmt: ForStmt, ctx: _EvalCtx) -> None:
         # evaluate the iterable data
         iterable = self._visit_expr(stmt.iterable, ctx)
-        if not isinstance(iterable, NDArray):
+        if not isinstance(iterable, list):
             raise TypeError(f'expected a tensor, got {iterable}')
         # iterate over each element
         for val in iterable:
@@ -754,8 +754,8 @@ class DefaultInterpreter(Interpreter):
 
     Values:
      - booleans are Python `bool` values,
-     - real numbers are FPy `float` values,
-     - tensors are Titanic `NDArray` values.
+     - real numbers are FPy `Float` values,
+     - tensors are Python `list` values.
 
     All operations are correctly-rounded.
     """
