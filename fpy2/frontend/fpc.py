@@ -18,20 +18,20 @@ DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 _constants: dict[str, Expr] = {
     'TRUE': BoolVal(True, None),
     'FALSE': BoolVal(False, None),
-    'NAN': ConstNan(None),
-    'INFINITY': ConstInf(None),
-    'PI': ConstPi(None),
-    'E': ConstE(None),
-    'LOG2E': ConstLog2E(None),
-    'LOG10E': ConstLog10E(None),
-    'LN2': ConstLn2(None),
-    'PI_2': ConstPi_2(None),
-    'PI_4': ConstPi_4(None),
-    'M_1_PI': Const1_Pi(None),
-    'M_2_PI': Const2_Pi(None),
-    'M_2_SQRTPI': Const2_SqrtPi(None),
-    'SQRT2': ConstSqrt2(None),
-    'SQRT1_2': ConstSqrt1_2(None),
+    'NAN': ConstNan(NamedId('nan'), None),
+    'INFINITY': ConstInf(NamedId('inf'), None),
+    'PI': ConstPi(NamedId('const_pi'), None),
+    'E': ConstE(NamedId('const_e'), None),
+    'LOG2E': ConstLog2E(NamedId('const_log2e'), None),
+    'LOG10E': ConstLog10E(NamedId('const_log10e'), None),
+    'LN2': ConstLn2(NamedId('const_ln2'), None),
+    'PI_2': ConstPi_2(NamedId('const_pi_2'), None),
+    'PI_4': ConstPi_4(NamedId('const_pi_4'), None),
+    'M_1_PI': Const1_Pi(NamedId('const_1_pi'), None),
+    'M_2_PI': Const2_Pi(NamedId('const_2_pi'), None),
+    'M_2_SQRTPI': Const2_SqrtPi(NamedId('const_2_sqrtpi'), None),
+    'SQRT2': ConstSqrt2(NamedId('const_sqrt2'), None),
+    'SQRT1_2': ConstSqrt1_2(NamedId('const_sqrt1_2'), None),
 }
 
 _unary_table: dict[str, type[UnaryOp] | type[NamedUnaryOp]] = {
@@ -157,9 +157,9 @@ class _FPCore2FPy:
         return Var(ctx.env[e.value], None)
 
     def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
-        if e.name not in _constants:
+        if e.value not in _constants:
             raise ValueError(f'unknown constant {e.name}')
-        return _constants[e.name]
+        return _constants[e.value]
 
     def _visit_decnum(self, e: fpc.Decnum, ctx: _Ctx) -> Expr:
         return Decnum(str(e.value), None)
