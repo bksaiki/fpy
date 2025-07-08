@@ -29,22 +29,6 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
-def _isfinite(x: Float, ctx: Context) -> bool:
-    return x.is_finite()
-
-def _isinf(x: Float, ctx: Context) -> bool:
-    return x.isinf
-
-def _isnan(x: Float, ctx: Context) -> bool:
-    return x.isnan
-
-def _isnormal(x: Float, ctx: Context) -> bool:
-    return x.is_normal()
-
-def _signbit(x: Float, ctx: Context) -> bool:
-    # TODO: should all Floats have this property?
-    return x.s
-
 _nullary_table: dict[type[NullaryOp], Callable[[Context], Any]] = {
     ConstNan: ops.nan,
     ConstInf: ops.inf,
@@ -95,11 +79,11 @@ _unary_table: dict[type[UnaryOp], Callable[[Float, Context], Any]] = {
     Erfc: ops.erfc,
     Lgamma: ops.lgamma,
     Tgamma: ops.tgamma,
-    IsFinite: _isfinite,
-    IsInf: _isinf,
-    IsNan: _isnan,
-    IsNormal: _isnormal,
-    Signbit: _signbit,
+    IsFinite: ops.isfinite,
+    IsInf: ops.isinf,
+    IsNan: ops.isnan,
+    IsNormal: ops.isnormal,
+    Signbit: ops.signbit,
 }
 
 _binary_table: dict[type[BinaryOp], Callable[[Float, Float, Context], Any]] = {
@@ -600,12 +584,20 @@ class _Interpreter(Visitor):
         array[slices[-1]] = val
 
     def _visit_if1(self, stmt: If1Stmt, ctx: Context):
+        names = set(self.env.keys())
+
+        # evaluate the condition
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
             # evaluate the if-true branch
             self._visit_block(stmt.body, ctx)
+            # remove any newly introduced variable
+            # (they are out of scope)
+            for name in tuple(self.env.keys()):
+                if name not in names:
+                    del self.env[name]
 
     def _visit_if(self, stmt: IfStmt, ctx: Context) -> None:
         cond = self._visit_expr(stmt.cond, ctx)
@@ -620,6 +612,8 @@ class _Interpreter(Visitor):
             self._visit_block(stmt.iff, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Context) -> None:
+        names = set(self.env.keys())
+
         # evaluate the condition
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
@@ -633,7 +627,15 @@ class _Interpreter(Visitor):
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
+        # remove any newly introduced variable
+        # (they are out of scope)
+        for name in tuple(self.env.keys()):
+            if name not in names:
+                del self.env[name]
+
     def _visit_for(self, stmt: ForStmt, ctx: Context) -> None:
+        names = set(self.env.keys())
+
         # evaluate the iterable data
         iterable = self._visit_expr(stmt.iterable, ctx)
         if not isinstance(iterable, list):
@@ -647,6 +649,12 @@ class _Interpreter(Visitor):
                     self._unpack_tuple(stmt.target, val, ctx)
             # evaluate the body of the loop
             self._visit_block(stmt.body, ctx)
+
+        # remove any newly introduced variable
+        # (they are out of scope)
+        for name in tuple(self.env.keys()):
+            if name not in names:
+                del self.env[name]
 
     def _visit_foreign_attr(self, e: ForeignAttribute, ctx: Context):
         # lookup the root value (should be captured)

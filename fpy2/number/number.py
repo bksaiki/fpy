@@ -727,9 +727,9 @@ class RealFloat(numbers.Rational):
                     cmp = Ordering.LESS
                 case Ordering.EQUAL:
                     # need to actual compare the significands
-                    n = min(self.n, other.n)
-                    c1 = self.c << (self.n - n)
-                    c2 = other.c << (other.n - n)
+                    exp = min(self.exp, other.exp)
+                    c1 = self.c << (self.exp - exp)
+                    c2 = other.c << (other.exp - exp)
                     cmp = Ordering.from_compare(c1, c2)
 
             # adjust for the sign
@@ -1231,13 +1231,11 @@ class Float(numbers.Rational):
         if not isinstance(x, RealFloat):
             raise TypeError(f'expected RealFloat, got {type(x)}')
 
-        f = Float(x=x, ctx=ctx)
-        if ctx is None:
-            return f
+        if ctx is not None and not ctx.is_representable(x):
+            # context specified, but `x` is not representable under it
+            raise ValueError(f'{x} is not representable under {ctx}')
         else:
-            if not f.is_representable():
-                raise ValueError(f'{x} is not representable under {ctx}')
-            return f
+            return Float(x=x, ctx=ctx)
 
     @staticmethod
     def from_int(x: int, ctx: Optional[Context] = None) -> 'Float':

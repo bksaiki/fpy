@@ -617,27 +617,27 @@ def round(x: Real, ctx: Optional[Context] = None):
 #############################################################################
 # Classification
 
-def isnan(x: Real) -> bool:
+def isnan(x: Real, ctx: Optional[Context] = None) -> bool:
     """Checks if `x` is NaN."""
     x = _real_to_float(x)
     return x.isnan
 
-def isinf(x: Real) -> bool:
+def isinf(x: Real, ctx: Optional[Context] = None) -> bool:
     """Checks if `x` is infinite."""
     x = _real_to_float(x)
     return x.isinf
 
-def isfinite(x: Real) -> bool:
+def isfinite(x: Real, ctx: Optional[Context] = None) -> bool:
     """Checks if `x` is finite."""
     x = _real_to_float(x)
     return not x.is_nar()
 
-def isnormal(x: Real) -> bool:
+def isnormal(x: Real, ctx: Optional[Context] = None) -> bool:
     """Checks if `x` is normal (not subnormal, zero, or NaN)."""
     x = _real_to_float(x)
     return x.is_normal()
 
-def signbit(x: Real) -> bool:
+def signbit(x: Real, ctx: Optional[Context] = None) -> bool:
     """Checks if the sign bit of `x` is set (i.e., `x` is negative)."""
     x = _real_to_float(x)
     # TODO: should all Floats have this property?

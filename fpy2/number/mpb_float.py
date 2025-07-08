@@ -142,7 +142,6 @@ class MPBFloatContext(SizedContext):
             return True
         elif x.s:
             # check bounded (negative values)
-            # TODO: don't call maxval just use self.XXX_maxval directly
             return self.neg_maxval <= x
         else:
             # check bounded (non-negative values)
