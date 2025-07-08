@@ -408,7 +408,7 @@ class DefaultTransformVisitor(Visitor):
         return Digits(e.func, e.m, e.e, e.b, e.loc)
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Any):
-        return NullaryOp(e.func, e.loc)
+        return type(e)(e.func, e.loc)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Any):
         arg = self._visit_expr(e.arg, ctx)
