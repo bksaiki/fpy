@@ -45,6 +45,23 @@ def _signbit(x: Float, ctx: Context) -> bool:
     # TODO: should all Floats have this property?
     return x.s
 
+_nullary_table: dict[type[NullaryOp], Callable[[Context], Any]] = {
+    ConstNan: ops.nan,
+    ConstInf: ops.inf,
+    ConstPi: ops.const_pi,
+    ConstE: ops.const_e,
+    ConstLog2E: ops.const_log2e,
+    ConstLog10E: ops.const_log10e,
+    ConstLn2: ops.const_ln2,
+    ConstPi_2: ops.const_pi_2,
+    ConstPi_4: ops.const_pi_4,
+    Const1_Pi: ops.const_1_pi,
+    Const2_Pi: ops.const_2_pi,
+    Const2_SqrtPi: ops.const_2_sqrt_pi,
+    ConstSqrt2: ops.const_sqrt2,
+    ConstSqrt1_2: ops.const_sqrt1_2,
+}
+
 _unary_table: dict[type[UnaryOp], Callable[[Float, Context], Any]] = {
     Fabs: ops.fabs,
     Sqrt: ops.sqrt,
@@ -236,12 +253,6 @@ class _Interpreter(Visitor):
     def _visit_digits(self, e: Digits, ctx: _EvalCtx):
         return ctx.round_ctx.round(e.as_rational())
 
-    def _visit_constant(self, e: Constant, ctx: _EvalCtx):
-        prec, _ = ctx.round_ctx.round_params()
-        assert isinstance(prec, int) # TODO: not every context produces has a known precision
-        x = mpfr_constant(e.val, prec=prec)
-        return ctx.round_ctx.round(x)
-
     def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: _EvalCtx):
         # fn: Callable[[Float, ..., Context], Float]
         vals: list[Float] = []
@@ -333,6 +344,13 @@ class _Interpreter(Visitor):
 
         # zip the arrays
         return list(zip(*arrays))
+
+    def _visit_nullaryop(self, e: NullaryOp, ctx: _EvalCtx):
+        fn = _nullary_table.get(type(e))
+        if fn is not None:
+            return self._apply_method(fn, (), ctx)
+        else:
+            raise RuntimeError('unknown operator', e)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _EvalCtx):
         fn = _unary_table.get(type(e))

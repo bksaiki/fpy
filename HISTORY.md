@@ -1,10 +1,15 @@
 # Version History
 
 ## [next] - ?
-### Features
+### Features:
+ - Added `fpy2.libraries.base` to contain all builtins (automatically imported).
+
+### Changes:
+ - Named constants, e.g., `NAN`, changed to constant functions, e.g., `nan()`.
 
 ### Removed
  - `fpy2.PythonInterpreter` has been removed. Use `fpy2.DefaultInterpreter` instead.
+ - `NDArray` has been removed from runtime. Use `list` or `tuple` instead.
 
 ### Fixes
  - Runtime

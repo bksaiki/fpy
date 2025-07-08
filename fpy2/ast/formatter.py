@@ -81,8 +81,9 @@ class _FormatterInstance(Visitor):
         name = self._visit_function_name(e.func, ctx)
         return f'{name}({e.m}, {e.e}, {e.b})'
 
-    def _visit_constant(self, e: Constant, ctx: _Ctx):
-        return e.val
+    def _visit_nullaryop(self, e: NullaryOp, ctx: _Ctx):
+        name = self._visit_function_name(e.func, ctx)
+        return f'{name}()'
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
         arg = self._visit_expr(e.arg, ctx)

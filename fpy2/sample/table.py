@@ -229,13 +229,6 @@ def _parse_number(e: RealVal) -> Fraction | float:
             return e.as_rational()
         case Rational():
             return Fraction(e.p, e.q)
-        case Constant():
-            if e.val == 'PI':
-                # TODO: this is definitely unsound
-                d = compute_constant(e.val, 1024)
-                return (-1 if d.negative else 1) * d.c * (Fraction(2) ** d.exp)
-            else:
-                raise RangeTableParseError(f'cannot represent {e} as a fraction')
         case _:
             raise RangeTableParseError(f'cannot represent {e} as a fraction')
 

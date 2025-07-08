@@ -15,6 +15,25 @@ from ..utils import Gensym, pythonize_id
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 
+_constants: dict[str, Expr] = {
+    'TRUE': BoolVal(True, None),
+    'FALSE': BoolVal(False, None),
+    'NAN': ConstNan(NamedId('nan'), None),
+    'INFINITY': ConstInf(NamedId('inf'), None),
+    'PI': ConstPi(NamedId('const_pi'), None),
+    'E': ConstE(NamedId('const_e'), None),
+    'LOG2E': ConstLog2E(NamedId('const_log2e'), None),
+    'LOG10E': ConstLog10E(NamedId('const_log10e'), None),
+    'LN2': ConstLn2(NamedId('const_ln2'), None),
+    'PI_2': ConstPi_2(NamedId('const_pi_2'), None),
+    'PI_4': ConstPi_4(NamedId('const_pi_4'), None),
+    'M_1_PI': Const1_Pi(NamedId('const_1_pi'), None),
+    'M_2_PI': Const2_Pi(NamedId('const_2_pi'), None),
+    'M_2_SQRTPI': Const2_SqrtPi(NamedId('const_2_sqrtpi'), None),
+    'SQRT2': ConstSqrt2(NamedId('const_sqrt2'), None),
+    'SQRT1_2': ConstSqrt1_2(NamedId('const_sqrt1_2'), None),
+}
+
 _unary_table: dict[str, type[UnaryOp] | type[NamedUnaryOp]] = {
     'neg': Neg,
     'not': Not,
@@ -137,6 +156,11 @@ class _FPCore2FPy:
             raise ValueError(f'variable {e.value} not in scope')
         return Var(ctx.env[e.value], None)
 
+    def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
+        if e.value not in _constants:
+            raise ValueError(f'unknown constant {e.name}')
+        return _constants[e.value]
+
     def _visit_decnum(self, e: fpc.Decnum, ctx: _Ctx) -> Expr:
         return Decnum(str(e.value), None)
 
@@ -151,15 +175,6 @@ class _FPCore2FPy:
 
     def _visit_digits(self, e: fpc.Digits, ctx: _Ctx) -> Expr:
         return Digits(NamedId('digits'), e.m, e.e, e.b, None)
-
-    def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
-        match e.value:
-            case 'TRUE':
-                return BoolVal(True, None)
-            case 'FALSE':
-                return BoolVal(False, None)
-            case _:
-                return Constant(str(e.value), None)
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         if e.name == '-':
@@ -615,6 +630,8 @@ class _FPCore2FPy:
         match e:
             case fpc.Var():
                 return self._visit_var(e, ctx)
+            case fpc.Constant():
+                return self._visit_constant(e, ctx)
             case fpc.Decnum():
                 return self._visit_decnum(e, ctx)
             case fpc.Hexnum():
@@ -625,8 +642,6 @@ class _FPCore2FPy:
                 return self._visit_rational(e, ctx)
             case fpc.Digits():
                 return self._visit_digits(e, ctx)
-            case fpc.Constant():
-                return self._visit_constant(e, ctx)
             case fpc.UnaryExpr():
                 return self._visit_unary(e, ctx)
             case fpc.BinaryExpr():

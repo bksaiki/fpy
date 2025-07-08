@@ -13,21 +13,21 @@ from ..number import Float, Real
 from ..utils import NamedId, UnderscoreId, SourceId
 from ..ops import *
 
-_constants: set[str] = {
-    'PI',
-    'E',
-    'NAN',
-    'INFINITY',
-    'LOG2E',
-    'LOG10E',
-    'LN2',
-    'PI_2',
-    'PI_4',
-    'M_1_PI',
-    'M_2_PI',
-    'M_2_SQRTPI',
-    'SQRT2',
-    'SQRT1_2'
+_nullary_table: dict[Callable, type[NullaryOp]] = {
+    nan: ConstNan,
+    inf: ConstInf,
+    const_pi: ConstPi,
+    const_e: ConstE,
+    const_log2e: ConstLog2E,
+    const_log10e: ConstLog10E,
+    const_ln2: ConstLn2,
+    const_pi_2: ConstPi_2,
+    const_pi_4: ConstPi_4,
+    const_1_pi: Const1_Pi,
+    const_2_pi: Const2_Pi,
+    const_2_sqrt_pi: Const2_SqrtPi,
+    const_sqrt2: ConstSqrt2,
+    const_sqrt1_2: ConstSqrt1_2,
 }
 
 _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
@@ -407,7 +407,12 @@ class Parser:
             case _:
                 raise RuntimeError('unreachable')
 
-        if fn in _unary_table:
+        if fn in _nullary_table:
+            cls0 = _nullary_table[fn]
+            if len(e.args) != 0:
+                raise FPyParserError(loc, f'FPy expects 0 arguments for `{fn}`, got {len(e.args)}', e)
+            return cls0(func, loc)
+        elif fn in _unary_table:
             cls1 = _unary_table[fn]
             if len(e.args) != 1:
                 raise FPyParserError(loc, f'FPy expects 1 argument for `{fn}`, got {len(e.args)}', e)
@@ -543,11 +548,8 @@ class Parser:
         loc = self._parse_location(e)
         match e:
             case ast.Name():
-                if e.id in _constants:
-                    return Constant(e.id, loc)
-                else:
-                    ident = self._parse_id(e)
-                    return Var(ident, loc)
+                ident = self._parse_id(e)
+                return Var(ident, loc)
             case ast.Constant():
                 return self._parse_constant(e)
             case ast.BoolOp():

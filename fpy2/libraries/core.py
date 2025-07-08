@@ -2,7 +2,7 @@
 Core numerical functions.
 """
 
-from fpy2 import *
+from . import base as fp
 
 __all__ = [
     "split",
@@ -14,8 +14,8 @@ __all__ = [
     "max_e",
 ]
 
-@fpy_primitive
-def split(x: Float, n: Float):
+@fp.fpy_primitive
+def split(x: fp.Float, n: fp.Float):
     """
     Splits `x` into two parts:
     - all digits of `x` that are above the `n`th digit
@@ -33,15 +33,15 @@ def split(x: Float, n: Float):
         raise ValueError("n must be an integer")
 
     if x.isnan:
-        return [Float(isnan=True, ctx=x.ctx), Float(isnan=True, ctx=x.ctx)]
+        return [fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx)]
     elif x.isinf:
-        return [Float(s=x.s, isinf=True, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)]
+        return [fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx)]
     else:
         hi, lo = x.as_real().split(int(n))
-        return [Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)]
+        return [fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx)]
 
-@fpy
-def _modf_spec(x: Real) -> tuple[Real, Real]:
+@fp.fpy
+def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
     """
     Decomposes `x` into its integral and fractional parts.
     The operation is performed exactly.
@@ -51,19 +51,19 @@ def _modf_spec(x: Real) -> tuple[Real, Real]:
     - if `x` is `+/-Inf`, the result is `(+/-0, +/-Inf)`
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
-    if isnan(x):
-        ret = (NAN, NAN)
-    elif isinf(x):
-        ret = (copysign(0, x), x)
+    if fp.isnan(x):
+        ret: tuple[fp.Real, fp.Real] = (fp.nan(), fp.nan())
+    elif fp.isinf(x):
+        ret = (fp.copysign(0, x), x)
     elif x == 0:
-        ret = (copysign(0, x), copysign(0, x))
+        ret = (fp.copysign(0, x), fp.copysign(0, x))
     else:
         ret = split(x, -1)
 
     return ret
 
-@fpy_primitive(spec=_modf_spec)
-def modf(x: Float):
+@fp.fpy_primitive(spec=_modf_spec)
+def modf(x: fp.Float):
     """
     Decomposes `x` into its integral and fractional parts.
     The operation is performed exactly.
@@ -74,23 +74,23 @@ def modf(x: Float):
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
     if x.isnan:
-        return [Float(x=x, ctx=x.ctx), Float(x=x, ctx=x.ctx)]
+        return [fp.Float(x=x, ctx=x.ctx), fp.Float(x=x, ctx=x.ctx)]
     elif x.isinf:
-        return [Float(s=x.s, ctx=x.ctx), Float(s=x.s, isinf=True, ctx=x.ctx)]
+        return [fp.Float(s=x.s, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx)]
     elif x.is_zero():
-        return [Float(s=x.s, ctx=x.ctx), Float(s=x.s, ctx=x.ctx)]
+        return [fp.Float(s=x.s, ctx=x.ctx), fp.Float(s=x.s, ctx=x.ctx)]
     else:
         hi, lo = x.as_real().split(-1)
-        return [Float.from_real(hi, ctx=x.ctx), Float.from_real(lo, ctx=x.ctx)]
+        return [fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx)]
 
-@fpy
-def isinteger(x: Real) -> bool:
+@fp.fpy
+def isinteger(x: fp.Real) -> bool:
     """Checks if `x` is an integer."""
     _, fpart = modf(x)
-    return isfinite(fpart) and fpart == 0
+    return fp.isfinite(fpart) and fpart == 0
 
-@fpy
-def _logb_spec(x: Real):
+@fp.fpy
+def _logb_spec(x: fp.Real):
     """
     Returns the normalized exponent of `x`.
 
@@ -101,10 +101,10 @@ def _logb_spec(x: Real):
 
     Under the `RealContext`, this function is the specification of logb.
     """
-    return floor(log2(abs(x)))
+    return fp.floor(fp.log2(abs(x)))
 
-@fpy_primitive(spec=_logb_spec)
-def logb(x: Float, ctx: Context):
+@fp.fpy_primitive(spec=_logb_spec)
+def logb(x: fp.Float, ctx: fp.Context):
     """
     Returns the normalized exponent of `x`.
 
@@ -114,16 +114,16 @@ def logb(x: Float, ctx: Context):
     - If `x` is infinite, the result is `INFINITY`.
     """
     if x.isnan:
-        return Float(isnan=True, ctx=ctx)
+        return fp.Float(isnan=True, ctx=ctx)
     elif x.isinf:
-        return Float(isinf=True, ctx=ctx)
+        return fp.Float(isinf=True, ctx=ctx)
     elif x.is_zero():
-        return Float(s=True, isinf=True, ctx=ctx)
+        return fp.Float(s=True, isinf=True, ctx=ctx)
     else:
         return ctx.round(x.e)
 
-@fpy
-def _ldexp_spec(x: Real, n: Real) -> Real:
+@fp.fpy
+def _ldexp_spec(x: fp.Real, n: fp.Real) -> fp.Real:
     """
     Computes `x * 2**n` with correct rounding.
 
@@ -136,17 +136,17 @@ def _ldexp_spec(x: Real, n: Real) -> Real:
     """
     assert isinteger(n)
 
-    if isnan(x):
-        ret = NAN
-    elif isinf(x):
-        ret = copysign(INFINITY, x)
+    if fp.isnan(x):
+        ret: fp.Real = fp.nan()
+    elif fp.isinf(x):
+        ret = fp.copysign(fp.inf(), x)
     else:
         ret = x * pow(2, n)
 
     return ret
 
-@fpy_primitive(spec=_ldexp_spec)
-def ldexp(x: Float, n: Float, ctx: Context) -> Float:
+@fp.fpy_primitive(spec=_ldexp_spec)
+def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
     """
     Computes `x * 2**n` with correct rounding.
 
@@ -160,16 +160,16 @@ def ldexp(x: Float, n: Float, ctx: Context) -> Float:
         raise ValueError("n must be an integer")
 
     if x.isnan:
-        return Float(isnan=True, ctx=ctx)
+        return fp.Float(isnan=True, ctx=ctx)
     elif x.isinf:
-        return Float(s=x.s, isinf=True, ctx=ctx)
+        return fp.Float(s=x.s, isinf=True, ctx=ctx)
     else:
         xr = x.as_real()
-        scale = RealFloat.power_of_2(int(n))
+        scale = fp.RealFloat.power_of_2(int(n))
         return ctx.round(xr * scale)
 
-@fpy_primitive
-def frexp(x: Float) -> tuple[Float, Float]:
+@fp.fpy_primitive
+def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
     """
     Decomposes `x` into its mantissa and exponent.
 
@@ -179,19 +179,19 @@ def frexp(x: Float) -> tuple[Float, Float]:
     - if `x` is zero, the result is `(x, 0)`.
     """
     if x.isnan:
-        return (Float(isnan=True, ctx=x.ctx), Float(isnan=True, ctx=x.ctx))
+        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
     elif x.isinf:
-        return (Float(s=x.s, isinf=True, ctx=x.ctx), Float(isnan=True, ctx=x.ctx))
+        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
     elif x.is_zero():
-        return (Float(x=x, ctx=x.ctx), Float(ctx=x.ctx))
+        return (fp.Float(x=x, ctx=x.ctx), fp.Float(ctx=x.ctx))
     else:
         x = x.normalize()
-        mant = Float(s=x.s, e=0, c=x.c, ctx=x.ctx)
-        e = Float.from_int(x.e, ctx=x.ctx)
+        mant = fp.Float(s=x.s, e=0, c=x.c, ctx=x.ctx)
+        e = fp.Float.from_int(x.e, ctx=x.ctx)
         return (mant, e)
 
-@fpy(ctx=INTEGER)
-def max_e(xs: tuple[Real, ...]) -> tuple[Real, bool]:
+@fp.fpy(ctx=fp.INTEGER)
+def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:
     """
     Computes the largest (normalized) exponent of the
     subset of finite, non-zero elements of `xs`.
@@ -202,7 +202,7 @@ def max_e(xs: tuple[Real, ...]) -> tuple[Real, bool]:
     largest_e = 0
     any_non_zero = False
     for x in xs:
-        if isfinite(x) and x != 0:
+        if fp.isfinite(x) and x != 0:
             if any_non_zero:
                 largest_e = max(largest_e, logb(x))
             else:

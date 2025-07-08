@@ -16,54 +16,14 @@ The numbers library supports many different number types including:
 These number systems guarantee correct rounding via MPFR.
 """
 
-from .number import (
-    # number types
-    Float,
-    RealFloat,
-    # abstract context types
-    Context,
-    OrdinalContext,
-    SizedContext,
-    EncodableContext,
-    # concrete context types
-    ExtFloatContext,
-    FixedContext,
-    MPFixedContext,
-    MPFloatContext,
-    MPBFixedContext,
-    MPBFloatContext,
-    MPSFloatContext,
-    IEEEContext,
-    RealContext,
-    # rounding utilities
-    RoundingMode,
-    RoundingDirection, RM,
-    # encoding utilities
-    ExtFloatNanKind,
-    FixedOverflowKind, OF,
-    # type aliases
-    FP256, FP128, FP64, FP32, FP16,
-    TF32, BF16,
-    S1E5M2, S1E4M3,
-    MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
-    FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
-    INTEGER,
-    SINT8, SINT16, SINT32, SINT64,
-    UINT8, UINT16, UINT32, UINT64,
-    Real,
-)
+# base library
+from .libraries.base import *
 
-from .ops import *
+# standard library
+from . import libraries
 
+# runtime support
 from .fpc_context import FPCoreContext, NoSuchContextError
-
-from .decorator import fpy, pattern, fpy_primitive
-
-from .backend import (
-    Backend,
-    FPCoreCompiler
-)
-
 from .interpret import (
     Interpreter,
     DefaultInterpreter,
@@ -71,14 +31,11 @@ from .interpret import (
     get_default_interpreter,
 )
 
-from .function import Function
-from .env import ForeignEnv
-
-from .typing import *
-
-# TODO: this makes a circular dependency since
-# libraries depend on `fpy2` even when it's not fully loaded
-from . import libraries
+# compiler
+from .backend import (
+    Backend,
+    FPCoreCompiler
+)
 
 ###########################################################
 # typing hints

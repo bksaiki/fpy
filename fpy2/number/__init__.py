@@ -33,6 +33,13 @@ OF: TypeAlias = FixedOverflowKind
 ###########################################################
 # Format aliases
 
+REAL = RealContext()
+"""
+Alias for exact computation.
+Operations are never rounded under this context.
+"""
+
+
 FP256 = IEEEContext(19, 256, RM.RNE)
 """
 Alias for the IEEE 754 octuple precision (256-bit) floating point format

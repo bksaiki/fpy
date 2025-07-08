@@ -140,7 +140,7 @@ class SyntaxCheckInstance(Visitor):
         env, _ = ctx
         return env
 
-    def _visit_constant(self, e: Constant, ctx: _Ctx):
+    def _visit_nullaryop(self, e: NullaryOp, ctx: _Ctx):
         env, _ = ctx
         return env
 
