@@ -125,17 +125,12 @@ _ternary_table: dict[type[TernaryOp], Callable[[Float, Float, Float, Context], A
 _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 """Type of the environment used by the interpreter."""
 
-@dataclass
-class _EvalCtx:
-    env: _Env
-    """mapping from variable names to values"""
-    round_ctx: Context
-    """rounding context for evaluation"""
-
 
 class _Interpreter(Visitor):
     """Single-use interpreter for a function"""
 
+    env: _Env
+    """mapping from variable names to values"""
     foreign: ForeignEnv
     """foreign environment"""
     override_ctx: Optional[Context]
@@ -147,17 +142,18 @@ class _Interpreter(Visitor):
         *,
         override_ctx: Optional[Context] = None,
     ):
+        self.env = {}
         self.foreign = foreign
         self.override_ctx = override_ctx
 
-    def _eval_ctx(self, env: _Env, ctx: Context | FPCoreContext):
+    def _eval_ctx(self, ctx: Context | FPCoreContext):
         if self.override_ctx is not None:
-            return _EvalCtx(env, self.override_ctx)
+            return self.override_ctx
         match ctx:
             case Context():
-                return _EvalCtx(env, ctx)
+                return ctx
             case FPCoreContext():
-                return _EvalCtx(env, ctx.to_context())
+                return ctx.to_context()
             case _:
                 raise TypeError(f'Expected `Context` or `FPCoreContext`, got {ctx}')
 
@@ -186,7 +182,7 @@ class _Interpreter(Visitor):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
         # possibly override the context
-        eval_ctx = self._eval_ctx({}, ctx)
+        eval_ctx = self._eval_ctx(ctx)
         assert isinstance(ctx, Context)
 
         # process arguments and add to environment
@@ -195,27 +191,27 @@ class _Interpreter(Visitor):
                 case AnyTypeAnn() | None:
                     x = self._arg_to_value(val)
                     if isinstance(arg.name, NamedId):
-                        eval_ctx.env[arg.name] = x
+                        self.env[arg.name] = x
                 case RealTypeAnn():
                     x = self._arg_to_value(val)
                     if not isinstance(x, Float):
                         raise NotImplementedError(f'argument is a scalar, got data {val}')
                     if isinstance(arg.name, NamedId):
-                        eval_ctx.env[arg.name] = x
+                        self.env[arg.name] = x
                 case TensorTypeAnn():
                     # TODO: check shape
                     x = self._arg_to_value(val)
                     if not isinstance(x, list):
                         raise NotImplementedError(f'argument is a tensor, got data {val}')
                     if isinstance(arg.name, NamedId):
-                        eval_ctx.env[arg.name] = x
+                        self.env[arg.name] = x
                 case _:
                     raise NotImplementedError(f'unknown argument type {arg.type}')
 
         # process free variables
         for var in func.free_vars:
             x = self._arg_to_value(self.foreign[var.base])
-            eval_ctx.env[var] = x
+            self.env[var] = x
 
         # evaluation
         try:
@@ -224,12 +220,12 @@ class _Interpreter(Visitor):
         except FunctionReturnException as e:
             return e.value
 
-    def _lookup(self, name: NamedId, ctx: _EvalCtx):
-        if name not in ctx.env:
+    def _lookup(self, name: NamedId, ctx: Context):
+        if name not in self.env:
             raise RuntimeError(f'unbound variable {name}')
-        return ctx.env[name]
+        return self.env[name]
 
-    def _visit_var(self, e: Var, ctx: _EvalCtx):
+    def _visit_var(self, e: Var, ctx: Context):
         return self._lookup(e.name, ctx)
 
     def _visit_bool(self, e: BoolVal, ctx: Any):
@@ -238,22 +234,22 @@ class _Interpreter(Visitor):
     def _visit_foreign(self, e: ForeignVal, ctx: None):
         return e.val
 
-    def _visit_decnum(self, e: Decnum, ctx: _EvalCtx):
-        return ctx.round_ctx.round(e.as_rational())
+    def _visit_decnum(self, e: Decnum, ctx: Context):
+        return ctx.round(e.as_rational())
 
-    def _visit_integer(self, e: Integer, ctx: _EvalCtx):
-        return ctx.round_ctx.round(e.val)
+    def _visit_integer(self, e: Integer, ctx: Context):
+        return ctx.round(e.val)
 
-    def _visit_hexnum(self, e: Hexnum, ctx: _EvalCtx):
-        return ctx.round_ctx.round(e.as_rational())
+    def _visit_hexnum(self, e: Hexnum, ctx: Context):
+        return ctx.round(e.as_rational())
 
-    def _visit_rational(self, e: Rational, ctx: _EvalCtx):
-        return ctx.round_ctx.round(e.as_rational())
+    def _visit_rational(self, e: Rational, ctx: Context):
+        return ctx.round(e.as_rational())
 
-    def _visit_digits(self, e: Digits, ctx: _EvalCtx):
-        return ctx.round_ctx.round(e.as_rational())
+    def _visit_digits(self, e: Digits, ctx: Context):
+        return ctx.round(e.as_rational())
 
-    def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: _EvalCtx):
+    def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: Context):
         # fn: Callable[[Float, ..., Context], Float]
         vals: list[Float] = []
         for arg in args:
@@ -262,21 +258,21 @@ class _Interpreter(Visitor):
                 raise TypeError(f'expected a real number argument, got {val}')
             vals.append(val)
         # compute the result
-        return fn(*vals, ctx=ctx.round_ctx)
+        return fn(*vals, ctx=ctx)
 
-    def _apply_cast(self, arg: Expr, ctx: _EvalCtx):
+    def _apply_cast(self, arg: Expr, ctx: Context):
         x = self._visit_expr(arg, ctx)
         if not isinstance(x, Float):
             raise TypeError(f'expected a real number argument, got {x}')
-        return ctx.round_ctx.round(x)
+        return ctx.round(x)
 
-    def _apply_not(self, arg: Expr, ctx: _EvalCtx):
+    def _apply_not(self, arg: Expr, ctx: Context):
         arg = self._visit_expr(arg, ctx)
         if not isinstance(arg, bool):
             raise TypeError(f'expected a boolean argument, got {arg}')
         return not arg
 
-    def _apply_and(self, args: Sequence[Expr], ctx: _EvalCtx):
+    def _apply_and(self, args: Sequence[Expr], ctx: Context):
         vals: list[bool] = []
         for arg in args:
             val = self._visit_expr(arg, ctx)
@@ -285,7 +281,7 @@ class _Interpreter(Visitor):
             vals.append(val)
         return all(vals)
 
-    def _apply_or(self, args: Sequence[Expr], ctx: _EvalCtx):
+    def _apply_or(self, args: Sequence[Expr], ctx: Context):
         vals: list[bool] = []
         for arg in args:
             val = self._visit_expr(arg, ctx)
@@ -294,31 +290,31 @@ class _Interpreter(Visitor):
             vals.append(val)
         return any(vals)
 
-    def _apply_range(self, arg: Expr, ctx: _EvalCtx):
+    def _apply_range(self, arg: Expr, ctx: Context):
         stop = self._visit_expr(arg, ctx)
         if not isinstance(stop, Float):
             raise TypeError(f'expected a real number argument, got {stop}')
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
         n = int(stop)
-        return [Float.from_int(i, ctx=ctx.round_ctx) for i in range(n)]
+        return [Float.from_int(i, ctx=ctx) for i in range(n)]
 
-    def _apply_dim(self, arg: Expr, ctx: _EvalCtx):
+    def _apply_dim(self, arg: Expr, ctx: Context):
         v = self._visit_expr(arg, ctx)
         if not isinstance(v, list):
             raise TypeError(f'expected a tensor, got {v}')
-        return ops.dim(v, ctx.round_ctx)
+        return ops.dim(v, ctx)
 
-    def _apply_enumerate(self, arg: Expr, ctx: _EvalCtx):
+    def _apply_enumerate(self, arg: Expr, ctx: Context):
         v = self._visit_expr(arg, ctx)
         if not isinstance(v, list):
             raise TypeError(f'expected a tensor, got {v}')
         return [
-            [Float.from_int(i, ctx=ctx.round_ctx), val]
+            [Float.from_int(i, ctx=ctx), val]
             for i, val in enumerate(v)
         ]
 
-    def _apply_size(self, arr: Expr, idx: Expr, ctx: _EvalCtx):
+    def _apply_size(self, arr: Expr, idx: Expr, ctx: Context):
         v = self._visit_expr(arr, ctx)
         if not isinstance(v, list):
             raise TypeError(f'expected a tensor, got {v}')
@@ -327,9 +323,9 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a real number argument, got {dim}')
         if not dim.is_integer():
             raise TypeError(f'expected an integer argument, got {dim}')
-        return ops.size(v, dim, ctx.round_ctx)
+        return ops.size(v, dim, ctx)
 
-    def _apply_zip(self, args: Sequence[Expr], ctx: _EvalCtx):
+    def _apply_zip(self, args: Sequence[Expr], ctx: Context):
         """Apply the `zip` method to the given n-ary expression."""
         if len(args) == 0:
             return []
@@ -345,14 +341,14 @@ class _Interpreter(Visitor):
         # zip the arrays
         return list(zip(*arrays))
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx: _EvalCtx):
+    def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         fn = _nullary_table.get(type(e))
         if fn is not None:
             return self._apply_method(fn, (), ctx)
         else:
             raise RuntimeError('unknown operator', e)
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: _EvalCtx):
+    def _visit_unaryop(self, e: UnaryOp, ctx: Context):
         fn = _unary_table.get(type(e))
         if fn is not None:
             return self._apply_method(fn, (e.arg,), ctx)
@@ -371,7 +367,7 @@ class _Interpreter(Visitor):
                 case _:
                     raise RuntimeError('unknown operator', e)
 
-    def _visit_binaryop(self, e: BinaryOp, ctx: _EvalCtx):
+    def _visit_binaryop(self, e: BinaryOp, ctx: Context):
         fn = _binary_table.get(type(e))
         if fn is not None:
             return self._apply_method(fn, (e.first, e.second), ctx)
@@ -382,14 +378,14 @@ class _Interpreter(Visitor):
                 case _:
                     raise RuntimeError('unknown operator', e)
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx: _EvalCtx):
+    def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
         fn = _ternary_table.get(type(e))
         if fn is not None:
             return self._apply_method(fn, (e.first, e.second, e.third), ctx)
         else:
             raise RuntimeError('unknown operator', e)
 
-    def _visit_naryop(self, e: NaryOp, ctx: _EvalCtx):
+    def _visit_naryop(self, e: NaryOp, ctx: Context):
         match e:
             case And():
                 return self._apply_and(e.args, ctx)
@@ -400,7 +396,7 @@ class _Interpreter(Visitor):
             case _:
                 raise RuntimeError('unknown operator', e)
 
-    def _visit_call(self, e: Call, ctx: _EvalCtx):
+    def _visit_call(self, e: Call, ctx: Context):
         match e.func:
             case NamedId():
                 fn = self.foreign[e.func.base]
@@ -414,15 +410,15 @@ class _Interpreter(Visitor):
             case Function():
                 # calling FPy function
                 rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
-                return rt.eval(fn.ast, args, ctx.round_ctx)
+                return rt.eval(fn.ast, args, ctx)
             case Primitive():
                 # calling FPy primitive
-                return fn(*args, ctx=ctx.round_ctx)
+                return fn(*args, ctx=ctx)
             case _:
                 # calling foreign function
                 # only `print` is allowed
                 if fn == print:
-                    fn(*args)
+                    print(*args)
                     # TODO: should we allow `None` to return
                     return None
                 else:
@@ -445,7 +441,7 @@ class _Interpreter(Visitor):
             case _:
                 raise NotImplementedError('unknown comparison operator', op)
 
-    def _visit_compare(self, e: Compare, ctx: _EvalCtx):
+    def _visit_compare(self, e: Compare, ctx: Context):
         lhs = self._visit_expr(e.args[0], ctx)
         for op, arg in zip(e.ops, e.args[1:]):
             rhs = self._visit_expr(arg, ctx)
@@ -454,10 +450,10 @@ class _Interpreter(Visitor):
             lhs = rhs
         return True
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: _EvalCtx):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
         return [self._visit_expr(x, ctx) for x in e.args]
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: _EvalCtx):
+    def _visit_tuple_ref(self, e: TupleRef, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a tensor, got {arr}')
@@ -469,7 +465,7 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected an integer index, got {idx}')
         return arr[int(idx)]
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: _EvalCtx):
+    def _visit_tuple_slice(self, e: TupleSlice, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a tensor, got {arr}')
@@ -499,7 +495,7 @@ class _Interpreter(Visitor):
         else:
             return [arr[i] for i in range(start, stop)]
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: _EvalCtx):
+    def _visit_tuple_set(self, e: TupleSet, ctx: Context):
         value = self._visit_expr(e.array, ctx)
         if not isinstance(value, list):
             raise TypeError(f'expected a tensor, got {value}')
@@ -528,7 +524,7 @@ class _Interpreter(Visitor):
         self,
         bindings: list[tuple[Id | TupleBinding, Expr]],
         elt: Expr,
-        ctx: _EvalCtx,
+        ctx: Context,
         elts: list[Any]
     ):
         if bindings == []:
@@ -541,36 +537,31 @@ class _Interpreter(Visitor):
             for val in array:
                 match target:
                     case NamedId():
-                        ctx.env[target] = val
+                        self.env[target] = val
                     case TupleBinding():
                         self._unpack_tuple(target, val, ctx)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: _EvalCtx):
+    def _visit_comp_expr(self, e: CompExpr, ctx: Context):
         # evaluate comprehension
         elts: list[Any] = []
         bindings = list(zip(e.targets, e.iterables))
         self._apply_comp(bindings, e.elt, ctx, elts)
-
-        # remove temporarily bound variables
-        for target in e.targets:
-            for name in target.names():
-                del ctx.env[name]
         return elts
 
-    def _visit_if_expr(self, e: IfExpr, ctx: _EvalCtx):
+    def _visit_if_expr(self, e: IfExpr, ctx: Context):
         cond = self._visit_expr(e.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _unpack_tuple(self, binding: TupleBinding, val: list, ctx: _EvalCtx) -> None:
+    def _unpack_tuple(self, binding: TupleBinding, val: list, ctx: Context) -> None:
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
         for elt, v in zip(binding.elts, val):
             match elt:
                 case NamedId():
-                    ctx.env[elt] = v
+                    self.env[elt] = v
                 case UnderscoreId():
                     pass
                 case TupleBinding():
@@ -578,15 +569,15 @@ class _Interpreter(Visitor):
                 case _:
                     raise NotImplementedError('unknown tuple element', elt)
 
-    def _visit_assign(self, stmt: Assign, ctx: _EvalCtx) -> None:
+    def _visit_assign(self, stmt: Assign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)
         match stmt.binding:
             case NamedId():
-                ctx.env[stmt.binding] = val
+                self.env[stmt.binding] = val
             case TupleBinding():
                 self._unpack_tuple(stmt.binding, val, ctx)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _EvalCtx) -> None:
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context) -> None:
         # lookup the array
         array = self._lookup(stmt.var, ctx)
 
@@ -608,35 +599,27 @@ class _Interpreter(Visitor):
             array = array[idx]
         array[slices[-1]] = val
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: _EvalCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: Context):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
         elif cond:
             # evaluate the if-true branch
-            ift_ctx = self._visit_block(stmt.body, ctx)
-            # update the environment with the values from the ift context
-            # a variable cannot be introduced within the branch
-            for var in ctx.env:
-                ctx.env[var] = ift_ctx.env[var]
+            self._visit_block(stmt.body, ctx)
 
-    def _visit_if(self, stmt: IfStmt, ctx: _EvalCtx) -> None:
+    def _visit_if(self, stmt: IfStmt, ctx: Context) -> None:
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
 
         if cond:
             # evaluate the if-true branch
-            ift_ctx = self._visit_block(stmt.ift, ctx)
-            # TODO: we should take the intserction of defined variables on either branch
-            ctx.env = ift_ctx.env
+            self._visit_block(stmt.ift, ctx)
         else:
             # evaluate the if-false branch
-            iff_ctx = self._visit_block(stmt.iff, ctx)
-            # TODO: we should take the intserction of defined variables on either branch
-            ctx.env = iff_ctx.env
+            self._visit_block(stmt.iff, ctx)
 
-    def _visit_while(self, stmt: WhileStmt, ctx: _EvalCtx) -> None:
+    def _visit_while(self, stmt: WhileStmt, ctx: Context) -> None:
         # evaluate the condition
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
@@ -644,38 +627,28 @@ class _Interpreter(Visitor):
 
         while cond:
             # evaluate the while body
-            while_ctx = self._visit_block(stmt.body, ctx)
-            # update the environment with the values from the while context
-            # a variable cannot be introduced within the body
-            for var in ctx.env:
-                ctx.env[var] = while_ctx.env[var]
+            self._visit_block(stmt.body, ctx)
             # evaluate the condition
             cond = self._visit_expr(stmt.cond, ctx)
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
-    def _visit_for(self, stmt: ForStmt, ctx: _EvalCtx) -> None:
+    def _visit_for(self, stmt: ForStmt, ctx: Context) -> None:
         # evaluate the iterable data
         iterable = self._visit_expr(stmt.iterable, ctx)
         if not isinstance(iterable, list):
             raise TypeError(f'expected a tensor, got {iterable}')
         # iterate over each element
         for val in iterable:
-            # bind the value to the target variable
-            body_ctx = _EvalCtx(ctx.env.copy(), ctx.round_ctx)
             match stmt.target:
                 case NamedId():
-                    body_ctx.env[stmt.target] = val
+                    self.env[stmt.target] = val
                 case TupleBinding():
-                    self._unpack_tuple(stmt.target, val, body_ctx)
+                    self._unpack_tuple(stmt.target, val, ctx)
             # evaluate the body of the loop
-            body_ctx = self._visit_block(stmt.body, body_ctx)
-            # update the environment with the values from the body context
-            # a variable cannot be introduced within the body
-            for var in ctx.env:
-                ctx.env[var] = body_ctx.env[var]
+            self._visit_block(stmt.body, ctx)
 
-    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: _EvalCtx):
+    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: Context):
         # lookup the root value (should be captured)
         val = self._lookup(e.name, ctx)
         # walk the attribute chain
@@ -692,7 +665,7 @@ class _Interpreter(Visitor):
                 raise RuntimeError(f'unknown attribute {attr} for {val}')
         return val
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: _EvalCtx):
+    def _visit_context_expr(self, e: ContextExpr, ctx: Context):
         match e.ctor:
             case ForeignAttribute():
                 ctor = self._visit_foreign_attr(e.ctor, ctx)
@@ -726,43 +699,39 @@ class _Interpreter(Visitor):
 
         return ctor(*args, **kwargs)
 
-    def _visit_context(self, stmt: ContextStmt, ctx: _EvalCtx):
+    def _visit_context(self, stmt: ContextStmt, ctx: Context):
         match stmt.ctx:
             case ForeignAttribute():
                 round_ctx = self._visit_foreign_attr(stmt.ctx, ctx)
             case _:
                 round_ctx = self._visit_expr(stmt.ctx, ctx)
-        block_ctx = self._visit_block(stmt.body, self._eval_ctx(ctx.env, round_ctx))
-        ctx.env = block_ctx.env
+        self._visit_block(stmt.body, round_ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: _EvalCtx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: Context):
         test = self._visit_expr(stmt.test, ctx)
         if not isinstance(test, bool):
             raise TypeError(f'expected a boolean, got {test}')
         if not test:
             raise AssertionError(stmt.msg)
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: _EvalCtx):
+    def _visit_effect(self, stmt: EffectStmt, ctx: Context):
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: _EvalCtx):
-
+    def _visit_return(self, stmt: ReturnStmt, ctx: Context):
         return self._visit_expr(stmt.expr, ctx)
 
-    def _visit_block(self, block: StmtBlock, ctx: _EvalCtx):
-        ctx = _EvalCtx(ctx.env.copy(), ctx.round_ctx)
+    def _visit_block(self, block: StmtBlock, ctx: Context):
         for stmt in block.stmts:
             if isinstance(stmt, ReturnStmt):
                 x = self._visit_return(stmt, ctx)
                 raise FunctionReturnException(x)
             self._visit_statement(stmt, ctx)
-        return ctx
 
-    def _visit_function(self, func: FuncDef, ctx: _EvalCtx):
+    def _visit_function(self, func: FuncDef, ctx: Context):
         raise NotImplementedError('do not call directly')
 
     # override typing hint
-    def _visit_statement(self, stmt, ctx: _EvalCtx) -> None:
+    def _visit_statement(self, stmt, ctx: Context) -> None:
         return super()._visit_statement(stmt, ctx)
 
 

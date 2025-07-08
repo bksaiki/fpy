@@ -1635,6 +1635,8 @@ class Float(numbers.Rational):
             raise ValueError('cannot compute denominator of infinity or NaN')
         return self._real.as_rational().denominator
 
+###########################################################
+# Type Aliases
 
 Real: TypeAlias = int | float | Float
 
