@@ -80,7 +80,21 @@ __all__ = [
     # Constants
     'digits',
     'hexfloat',
-    'rational'
+    'rational',
+    'nan',
+    'inf',
+    'const_pi',
+    'const_e',
+    'const_log2e',
+    'const_log10e',
+    'const_ln2',
+    'const_pi_2',
+    'const_pi_4',
+    'const_1_pi',
+    'const_2_pi',
+    'const_2_sqrt_pi',
+    'const_sqrt2',
+    'const_sqrt1_2',
 ]
 
 
@@ -123,6 +137,36 @@ def _apply_mpfr(fn: Callable[..., Float], *args: Float, ctx: Optional[Context] =
             case _:
                 # real computation; no rounding
                 return _apply_real(fn, args)
+
+def _real_constant(name: str, ctx: Optional[Context] = None) -> Float:
+    if name == 'NAN':
+        return Float(isnan=True, ctx=ctx)
+    elif name == 'INFINITY':
+        return Float(isinf=True, ctx=ctx)
+    else:
+        raise NotImplementedError(f'cannot evaluate exactly: name={name}')
+
+def _apply_mpfr_constant(name: str, ctx: Optional[Context] = None) -> Float:
+    """
+    Computes an MPFR constant function with the given context.
+    """
+    if ctx is None:
+        # real computation; no rounding
+        return _real_constant(name)
+    else:
+        p, n = ctx.round_params()
+        match p, n:
+            case int(), _:
+                # floating-point style rounding
+                r = mpfr_constant(name, prec=p)  # compute with round-to-odd (safe at p digits)
+                return ctx.round(r)  # re-round under desired rounding mode
+            case _, int():
+                # fixed-point style rounding
+                r = mpfr_constant(name, n=n)
+                return ctx.round(r)  # re-round under desired rounding mode
+            case _:
+                # real computation; no rounding
+                return _real_constant(name)
 
 ################################################################################
 # Types
@@ -633,7 +677,9 @@ def size(x: list | tuple, dim: Real, ctx: Optional[Context] = None):
 
 def digits(m: int, e: int, b: int, ctx: Optional[Context] = None) -> Float:
     """
-    Creates a `Float` with the given number of digits, exponent, and base.
+    Creates a `Float` of the form `m * b**e`, where `m` is the
+    significand, `e` is the exponent, and `b` is the base.
+
     The result is rounded under the given context.
     """
     match ctx:
@@ -693,3 +739,129 @@ def rational(n: int, d: int, ctx: Optional[Context] = None) -> Float:
             return ctx.round(x)
         case _:
             raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
+
+def nan(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing NaN (Not a Number).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return Float(isnan=True, ctx=ctx)
+
+def inf(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing (positive) infinity.
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return Float(isinf=True, ctx=ctx)
+
+def const_pi(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing π (pi).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('PI', ctx=ctx)
+
+def const_e(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing e (Euler's number).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('E', ctx=ctx)
+
+def const_log2e(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing log2(e) (the logarithm of e base 2).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('LOG2E', ctx=ctx)
+
+def const_log10e(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing log10(e) (the logarithm of e base 10).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('LOG10E', ctx=ctx)
+
+def const_ln2(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing ln(2) (the natural logarithm of 2).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('LN2', ctx=ctx)
+
+def const_pi_2(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing π/2 (pi divided by 2).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('PI_2', ctx=ctx)
+
+def const_pi_4(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing π/4 (pi divided by 4).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('PI_4', ctx=ctx)
+
+def const_1_pi(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing 1/π (one divided by pi).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('M_1_PI', ctx=ctx)
+
+def const_2_pi(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing 2/π (two divided by pi).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('M_2_PI', ctx=ctx)
+
+def const_2_sqrt_pi(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing 2/sqrt(π) (two divided by the square root of pi).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('M_2_SQRTPI', ctx=ctx)
+
+def const_sqrt2(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing sqrt(2) (the square root of 2).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('SQRT2', ctx=ctx)
+
+def const_sqrt1_2(ctx: Optional[Context] = None) -> Float:
+    """
+    Creates a `Float` representing sqrt(1/2) (the square root of 1/2).
+    The result is rounded under the given context.
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr_constant('SQRT1_2', ctx=ctx)

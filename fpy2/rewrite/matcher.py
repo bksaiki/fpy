@@ -147,13 +147,13 @@ class _MatcherInst(Visitor):
         if e.as_rational() != pat.as_rational():
             raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_constant(self, e: Constant, pat: Constant):
-        if e.val != pat.val:
-            raise _MatchFailure(f'matching {pat} against {e}')
-
     def _visit_digits(self, e: Digits, pat: Digits):
         # this is a semantic match, not a syntactic match!
         if e.as_rational() != pat.as_rational():
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+    def _visit_nullaryop(self, e: NullaryOp, pat: NullaryOp):
+        if type(e) is not type(pat):
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_unaryop(self, e: UnaryOp, pat: UnaryOp):

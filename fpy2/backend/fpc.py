@@ -14,6 +14,23 @@ from ..utils import Gensym
 
 from .backend import Backend
 
+_nullary_table: dict[type[NullaryOp], fpc.Expr] = {
+    ConstNan: fpc.Constant('NAN'),
+    ConstInf: fpc.Constant('INF'),
+    ConstPi: fpc.Constant('PI'),
+    ConstE: fpc.Constant('E'),
+    ConstLog2E: fpc.Constant('LOG2E'),
+    ConstLog10E: fpc.Constant('LOG10E'),
+    ConstLn2: fpc.Constant('LN2'),
+    ConstPi_2: fpc.Constant('PI_2'),
+    ConstPi_4: fpc.Constant('PI_4'),
+    Const1_Pi: fpc.Constant('M_1_PI'),
+    Const2_Pi: fpc.Constant('M_2_PI'),
+    Const2_SqrtPi: fpc.Constant('M_2_SQRTPI'),
+    ConstSqrt2: fpc.Constant('SQRT2'),
+    ConstSqrt1_2: fpc.Constant('SQRT1_2'),
+}
+
 _unary_table: dict[type[UnaryOp], type[fpc.Expr]] = {
     Fabs: fpc.Fabs,
     Sqrt: fpc.Sqrt,
@@ -188,9 +205,6 @@ class FPCoreCompileInstance(Visitor):
     def _visit_rational(self, e: Rational, ctx: None):
         return fpc.Rational(e.p, e.q)
 
-    def _visit_constant(self, e: Constant, ctx: None):
-        return fpc.Constant(e.val)
-
     def _visit_digits(self, e: Digits, ctx: None) -> fpc.Expr:
         return fpc.Digits(e.m, e.e, e.b)
 
@@ -254,6 +268,12 @@ class FPCoreCompileInstance(Visitor):
                     fpc.Array(*[fpc.Ref(fpc.Var(tid), fpc.Var(iter_id)) for tid in tuple_ids])
                 )
             )
+
+    def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
+        if type(e) not in _nullary_table:
+            # unknown operator
+            raise NotImplementedError('no FPCore operator for', e)
+        return _nullary_table[type(e)]
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> fpc.Expr:
         cls = _unary_table.get(type(e))

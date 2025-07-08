@@ -46,7 +46,7 @@ class LiveVarsInstance(Visitor):
     def _visit_digits(self, e: Digits, ctx: None) -> _LiveSet:
         return set()
 
-    def _visit_constant(self, e: Constant, ctx: None) -> _LiveSet:
+    def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> _LiveSet:
         return set()
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> _LiveSet:

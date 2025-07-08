@@ -46,7 +46,7 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
-    def _visit_constant(self, e: Constant, ctx: Any) -> Any:
+    def _visit_nullaryop(self, e: NullaryOp, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -181,8 +181,8 @@ class Visitor(ABC):
                 return self._visit_rational(e, ctx)
             case Digits():
                 return self._visit_digits(e, ctx)
-            case Constant():
-                return self._visit_constant(e, ctx)
+            case NullaryOp():
+                return self._visit_nullaryop(e, ctx)
             case UnaryOp():
                 return self._visit_unaryop(e, ctx)
             case BinaryOp():
@@ -265,10 +265,10 @@ class DefaultVisitor(Visitor):
     def _visit_rational(self, e: Rational, ctx: Any):
         pass
 
-    def _visit_constant(self, e: Constant, ctx: Any):
+    def _visit_digits(self, e: Digits, ctx: Any):
         pass
 
-    def _visit_digits(self, e: Digits, ctx: Any):
+    def _visit_nullaryop(self, e: NullaryOp, ctx: Any):
         pass
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Any):
@@ -404,11 +404,11 @@ class DefaultTransformVisitor(Visitor):
     def _visit_rational(self, e: Rational, ctx: Any):
         return Rational(e.func, e.p, e.q, e.loc)
 
-    def _visit_constant(self, e: Constant, ctx: Any):
-        return Constant(e.val, e.loc)
-
     def _visit_digits(self, e: Digits, ctx: Any):
         return Digits(e.func, e.m, e.e, e.b, e.loc)
+
+    def _visit_nullaryop(self, e: NullaryOp, ctx: Any):
+        return NullaryOp(e.func, e.loc)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Any):
         arg = self._visit_expr(e.arg, ctx)

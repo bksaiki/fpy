@@ -152,15 +152,6 @@ class _FPCore2FPy:
     def _visit_digits(self, e: fpc.Digits, ctx: _Ctx) -> Expr:
         return Digits(NamedId('digits'), e.m, e.e, e.b, None)
 
-    def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
-        match e.value:
-            case 'TRUE':
-                return BoolVal(True, None)
-            case 'FALSE':
-                return BoolVal(False, None)
-            case _:
-                return Constant(str(e.value), None)
-
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         if e.name == '-':
             arg = self._visit(e.children[0], ctx)
@@ -625,8 +616,6 @@ class _FPCore2FPy:
                 return self._visit_rational(e, ctx)
             case fpc.Digits():
                 return self._visit_digits(e, ctx)
-            case fpc.Constant():
-                return self._visit_constant(e, ctx)
             case fpc.UnaryExpr():
                 return self._visit_unary(e, ctx)
             case fpc.BinaryExpr():

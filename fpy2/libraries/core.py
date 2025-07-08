@@ -3,7 +3,6 @@ Core numerical functions.
 """
 
 from . import base as fp
-from ..typing import *
 
 __all__ = [
     "split",
@@ -53,7 +52,7 @@ def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
     if fp.isnan(x):
-        ret = (NAN, NAN)
+        ret: tuple[fp.Real, fp.Real] = (fp.nan(), fp.nan())
     elif fp.isinf(x):
         ret = (fp.copysign(0, x), x)
     elif x == 0:
@@ -138,9 +137,9 @@ def _ldexp_spec(x: fp.Real, n: fp.Real) -> fp.Real:
     assert isinteger(n)
 
     if fp.isnan(x):
-        ret = NAN
+        ret: fp.Real = fp.nan()
     elif fp.isinf(x):
-        ret = fp.copysign(INFINITY, x)
+        ret = fp.copysign(fp.inf(), x)
     else:
         ret = x * pow(2, n)
 

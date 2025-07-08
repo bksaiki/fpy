@@ -1462,35 +1462,36 @@ class Float(numbers.Rational):
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
         """
-        if isinstance(other, RealFloat):
-            if self.isnan:
-                return None
-            elif self.isnan:
-                if self.s:
-                    return Ordering.LESS
+        match other:
+            case RealFloat():
+                if self.isnan:
+                    return None
+                elif self.isnan:
+                    if self.s:
+                        return Ordering.LESS
+                    else:
+                        return Ordering.GREATER
                 else:
-                    return Ordering.GREATER
-            else:
-                return self._real.compare(other)
-        elif isinstance(other, Float):
-            if self.isnan or other.isnan:
-                return None
-            elif self.isinf:
-                if other.isinf and self.s == other.s:
-                    return Ordering.EQUAL
-                elif self.s:
-                    return Ordering.LESS
+                    return self._real.compare(other)
+            case Float():
+                if self.isnan or other.isnan:
+                    return None
+                elif self.isinf:
+                    if other.isinf and self.s == other.s:
+                        return Ordering.EQUAL
+                    elif self.s:
+                        return Ordering.LESS
+                    else:
+                        return Ordering.GREATER
+                elif other.isinf:
+                    if other.s:
+                        return Ordering.GREATER
+                    else:
+                        return Ordering.LESS
                 else:
-                    return Ordering.GREATER
-            elif other.isinf:
-                if other.s:
-                    return Ordering.GREATER
-                else:
-                    return Ordering.LESS
-            else:
-                return self._real.compare(other._real)
-        else:
-            raise TypeError(f'expected Float or RealFloat, got {type(other)}')
+                    return self._real.compare(other._real)
+            case _:
+                return False
 
     def __add__(self, other: 'Real'):
         if TYPE_CHECKING:
@@ -1637,3 +1638,4 @@ class Float(numbers.Rational):
 
 
 Real: TypeAlias = int | float | Float
+

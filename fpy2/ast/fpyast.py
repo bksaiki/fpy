@@ -3,6 +3,7 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
+from enum import IntEnum
 from typing import Any, Optional, Self, Sequence
 from fractions import Fraction
 
@@ -52,10 +53,10 @@ __all__ = [
     'Integer',
     'Rational',
     'Digits',
-    'Constant',
     'ForeignVal',
 
     # N-ary operations
+    'NullaryOp',
     'UnaryOp',
     'NamedUnaryOp',
     'BinaryOp',
@@ -64,6 +65,22 @@ __all__ = [
     'NamedTernaryOp',
     'NaryOp',
     'NamedNaryOp',
+
+    # Constants
+    'ConstNan',
+    'ConstInf',
+    'ConstPi',
+    'ConstE',
+    'ConstLog2E',
+    'ConstLog10E',
+    'ConstLn2',
+    'ConstPi_2',
+    'ConstPi_4',
+    'Const1_Pi',
+    'Const2_Pi',
+    'Const2_SqrtPi',
+    'ConstSqrt2',
+    'ConstSqrt1_2',
 
     # IEEE 754 arithmetic
     'Add',
@@ -186,7 +203,7 @@ __all__ = [
     # Formatter
     'BaseFormatter',
     'get_default_formatter',
-    'set_default_formatter',
+    'set_default_formatter'
 ]
 
 
@@ -490,17 +507,6 @@ class Digits(RationalVal):
     def as_rational(self) -> Fraction:
         return digits_to_fraction(self.m, self.e, self.b)
 
-class Constant(RealVal):
-    """FPy AST: constant expression"""
-    val: str
-
-    def __init__(self, val: str, loc: Optional[Location]):
-        super().__init__(loc)
-        self.val = val
-
-    def is_equiv(self, other) -> bool:
-        return isinstance(other, Constant) and self.val == other.val
-
 class ForeignVal(ValueExpr):
     """FPy AST: native Python value"""
     val: Any
@@ -514,6 +520,17 @@ class ForeignVal(ValueExpr):
 
 class NaryExpr(Expr):
     """FPy AST: expression with N arguments"""
+
+class NullaryOp(NaryExpr):
+    """FPy AST: (named) nullary operation"""
+    func: NamedId | ForeignAttribute
+
+    def __init__(self, func: NamedId | ForeignAttribute, loc: Optional[Location]):
+        super().__init__(loc)
+        self.func = func
+
+    def is_equiv(self, other) -> bool:
+        return isinstance(other, NullaryOp) and type(self) is type(other)
 
 class UnaryOp(NaryExpr):
     """FPy AST: unary operation"""
@@ -653,6 +670,50 @@ class NamedNaryOp(NaryOp):
     ):
         super().__init__(args, loc)
         self.func = func
+
+# Constants
+
+class ConstNan(NullaryOp):
+    """FPy node: NaN (constant)"""
+
+class ConstInf(NullaryOp):
+    """FPy node: infinity (constant)"""
+
+class ConstPi(NullaryOp):
+    """FPy node: π (constant)"""
+
+class ConstE(NullaryOp):
+    """FPy node: e (constant)"""
+
+class ConstLog2E(NullaryOp):
+    """FPy node: log₂(e) (constant)"""
+
+class ConstLog10E(NullaryOp):
+    """FPy node: log₁₀(e) (constant)"""
+
+class ConstLn2(NullaryOp):
+    """FPy node: ln(2) (constant)"""
+
+class ConstPi_2(NullaryOp):
+    """FPy node: π/2 (constant)"""
+
+class ConstPi_4(NullaryOp):
+    """FPy node: π/4 (constant)"""
+
+class Const1_Pi(NullaryOp):
+    """FPy node: 1/π (constant)"""
+
+class Const2_Pi(NullaryOp):
+    """FPy node: 2/π (constant)"""
+
+class Const2_SqrtPi(NullaryOp):
+    """FPy node: 2/√π (constant)"""
+
+class ConstSqrt2(NullaryOp):
+    """FPy node: √2 (constant)"""
+
+class ConstSqrt1_2(NullaryOp):
+    """FPy node: √(1/2) (constant)"""
 
 # IEEE 754 required arithmetic
 
