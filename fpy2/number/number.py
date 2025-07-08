@@ -403,6 +403,8 @@ class RealFloat(numbers.Rational):
         """
         if not isinstance(x, float):
             raise TypeError(f'expected float, got {type(x)}')
+        if math.isnan(x) or math.isinf(x):
+            raise ValueError(f'expected finite float, got x={x}')
 
         # convert to bits
         b = float_to_bits(x)
@@ -417,9 +419,6 @@ class RealFloat(numbers.Rational):
         if ebits == 0:
             # zero / subnormal
             return RealFloat(s=s, exp=FP64_EXPMIN, c=mbits)
-        elif ebits == bitmask(FP64_ES):
-            # infinity / NaN
-            raise ValueError(f'expected finite float, got x={x}')
         else:
             # normal
             exp = FP64_EXPMIN + (ebits - 1)
