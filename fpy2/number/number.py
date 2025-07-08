@@ -1238,7 +1238,7 @@ class Float(numbers.Rational):
         else:
             if not f.is_representable():
                 raise ValueError(f'{x} is not representable under {ctx}')
-            return f.normalize()
+            return f
 
     @staticmethod
     def from_int(x: int, ctx: Optional[Context] = None) -> 'Float':

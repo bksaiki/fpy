@@ -115,10 +115,7 @@ class MPSFloatContext(OrdinalContext):
             # normal
             return x.p == self.pmax
 
-    def normalize(self, x):
-        if not isinstance(x, Float) or not self.is_representable(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
+    def _normalize(self, x: Float) -> Float:
         # case split by class
         if x.isnan:
             # NaN
@@ -133,6 +130,11 @@ class MPSFloatContext(OrdinalContext):
             # non-zero
             xr = x._real.normalize(self.pmax, self.nmin)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
+
+    def normalize(self, x):
+        if not isinstance(x, Float) or not self.is_representable(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return self._normalize(x)
 
     def is_normal(self, x: Float):
         if not isinstance(x, Float) or not self.is_representable(x):
