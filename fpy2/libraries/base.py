@@ -58,3 +58,7 @@ from ..ops import *
 from ..decorator import fpy, pattern, fpy_primitive
 from ..env import ForeignEnv
 from ..function import Function
+
+###########################################################
+# constants
+
