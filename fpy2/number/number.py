@@ -403,6 +403,8 @@ class RealFloat(numbers.Rational):
         """
         if not isinstance(x, float):
             raise TypeError(f'expected float, got {type(x)}')
+        if math.isnan(x) or math.isinf(x):
+            raise ValueError(f'expected finite float, got x={x}')
 
         # convert to bits
         b = float_to_bits(x)
@@ -417,9 +419,6 @@ class RealFloat(numbers.Rational):
         if ebits == 0:
             # zero / subnormal
             return RealFloat(s=s, exp=FP64_EXPMIN, c=mbits)
-        elif ebits == bitmask(FP64_ES):
-            # infinity / NaN
-            raise ValueError(f'expected finite float, got x={x}')
         else:
             # normal
             exp = FP64_EXPMIN + (ebits - 1)
@@ -728,9 +727,9 @@ class RealFloat(numbers.Rational):
                     cmp = Ordering.LESS
                 case Ordering.EQUAL:
                     # need to actual compare the significands
-                    n = min(self.n, other.n)
-                    c1 = self.c << (self.n - n)
-                    c2 = other.c << (other.n - n)
+                    exp = min(self.exp, other.exp)
+                    c1 = self.c << (self.exp - exp)
+                    c2 = other.c << (other.exp - exp)
                     cmp = Ordering.from_compare(c1, c2)
 
             # adjust for the sign
@@ -1232,13 +1231,11 @@ class Float(numbers.Rational):
         if not isinstance(x, RealFloat):
             raise TypeError(f'expected RealFloat, got {type(x)}')
 
-        f = Float(x=x, ctx=ctx)
-        if ctx is None:
-            return f
+        if ctx is not None and not ctx.is_representable(x):
+            # context specified, but `x` is not representable under it
+            raise ValueError(f'{x} is not representable under {ctx}')
         else:
-            if not f.is_representable():
-                raise ValueError(f'{x} is not representable under {ctx}')
-            return f.normalize()
+            return Float(x=x, ctx=ctx)
 
     @staticmethod
     def from_int(x: int, ctx: Optional[Context] = None) -> 'Float':
@@ -1636,6 +1633,8 @@ class Float(numbers.Rational):
             raise ValueError('cannot compute denominator of infinity or NaN')
         return self._real.as_rational().denominator
 
+###########################################################
+# Type Aliases
 
 Real: TypeAlias = int | float | Float
 

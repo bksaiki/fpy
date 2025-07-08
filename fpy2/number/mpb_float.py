@@ -142,11 +142,10 @@ class MPBFloatContext(SizedContext):
             return True
         elif x.s:
             # check bounded (negative values)
-            # TODO: don't call maxval just use self.XXX_maxval directly
-            return self.maxval(True) <= x
+            return self.neg_maxval <= x
         else:
             # check bounded (non-negative values)
-            return x <= self.maxval(False)
+            return x <= self.pos_maxval
 
     def is_canonical(self, x: Float):
         if not isinstance(x, Float) or not self.is_representable(x):
@@ -158,10 +157,13 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mps_ctx.is_normal(x)
 
+    def _normalize(self, x: Float) -> Float:
+        return self._mps_ctx._normalize(x)
+
     def normalize(self, x: Float):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        x = self._mps_ctx.normalize(x)
+        x = self._normalize(x)
         x.ctx = self
         return x
 

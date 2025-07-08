@@ -44,23 +44,25 @@ class MPFloatContext(Context):
         return MPFloatContext(self.pmax, rm)
 
     def is_representable(self, x: RealFloat | Float) -> bool:
-        if not isinstance(x, RealFloat | Float):
-            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        match x:
+            case Float():
+                if x.is_nar() or x.is_zero():
+                    # special values or zeros are valid
+                    return True
+            case RealFloat():
+                if x.is_zero():
+                    # zeros are valid
+                    return True
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        # case split on class
-        if isinstance(x, Float) and x.is_nar():
-            # special value
-            return True
-        elif x.is_zero():
-            # special values and zeros are valid
-            return True
-        elif x.p <= self.pmax:
-            # precision is within bounds:
+        # precision is possibly out of bounds
+        # check if the value can be normalized with fewer digits
+        p_over = x.p - self.pmax
+        if p_over < 0:
+            # precision is within bounds
             return True
         else:
-            # precision is possibly out of bounds
-            # check if the value can be normalized with fewer digits
-            p_over = x.p - self.pmax
             c_lost = x.c & bitmask(p_over) # bits that would be lost via normalization
             return c_lost == 0
 
