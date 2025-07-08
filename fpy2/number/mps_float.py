@@ -39,6 +39,12 @@ class MPSFloatContext(OrdinalContext):
     _mp_ctx: MPFloatContext
     """this context without subnormalization"""
 
+    _pos_minval: Float
+    """minimum positive value"""
+
+    _neg_minval: Float
+    """minimum negative value"""
+
     rm: RoundingMode
     """rounding mode"""
 
@@ -56,6 +62,8 @@ class MPSFloatContext(OrdinalContext):
         self.emin = emin
         self.rm = rm
         self._mp_ctx = MPFloatContext(pmax, rm)
+        self._pos_minval = Float(s=False, c=1, exp=self.expmin, ctx=self)
+        self._neg_minval = Float(s=True, c=1, exp=self.expmin, ctx=self)
 
     @property
     def expmin(self):
@@ -84,10 +92,10 @@ class MPSFloatContext(OrdinalContext):
             return True
         elif x.s:
             # tight check (negative values)
-            return x <= self.minval(True)
+            return x <= self._neg_minval
         else:
             # tight check (non-negative values)
-            return self.minval(False) <= x
+            return self._pos_minval <= x
 
     def is_canonical(self, x):
         if not isinstance(x, Float) or not self.is_representable(x):
@@ -274,7 +282,7 @@ class MPSFloatContext(OrdinalContext):
         """Returns the smallest non-zero value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        return Float(s=s, c=1, exp=self.expmin, ctx=self)
+        return Float(x=self._neg_minval) if s else Float(x=self._pos_minval)
 
     def min_subnormal(self, s: bool = False) -> Float:
         """Returns the smallest subnormal value with sign `s` under this context."""

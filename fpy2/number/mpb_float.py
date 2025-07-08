@@ -143,10 +143,10 @@ class MPBFloatContext(SizedContext):
         elif x.s:
             # check bounded (negative values)
             # TODO: don't call maxval just use self.XXX_maxval directly
-            return self.maxval(True) <= x
+            return self.neg_maxval <= x
         else:
             # check bounded (non-negative values)
-            return x <= self.maxval(False)
+            return x <= self.pos_maxval
 
     def is_canonical(self, x: Float):
         if not isinstance(x, Float) or not self.is_representable(x):

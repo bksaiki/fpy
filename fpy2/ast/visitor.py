@@ -5,6 +5,45 @@ from typing import Any
 
 from .fpyast import *
 
+_expr_dispatch = {
+    Var: "_visit_var",
+    BoolVal: "_visit_bool",
+    ForeignVal: "_visit_foreign",
+    Decnum: "_visit_decnum",
+    Hexnum: "_visit_hexnum",
+    Integer: "_visit_integer",
+    Rational: "_visit_rational",
+    Digits: "_visit_digits",
+    NullaryOp: "_visit_nullaryop",
+    UnaryOp: "_visit_unaryop",
+    BinaryOp: "_visit_binaryop",
+    TernaryOp: "_visit_ternaryop",
+    NaryOp: "_visit_naryop",
+    Compare: "_visit_compare",
+    Call: "_visit_call",
+    TupleExpr: "_visit_tuple_expr",
+    CompExpr: "_visit_comp_expr",
+    TupleRef: "_visit_tuple_ref",
+    TupleSlice: "_visit_tuple_slice",
+    TupleSet: "_visit_tuple_set",
+    IfExpr: "_visit_if_expr",
+    ContextExpr: "_visit_context_expr",
+}
+
+_stmt_dispatch = {
+    Assign: "_visit_assign",
+    IndexedAssign: "_visit_indexed_assign",
+    If1Stmt: "_visit_if1",
+    IfStmt: "_visit_if",
+    WhileStmt: "_visit_while",
+    ForStmt: "_visit_for",
+    ContextStmt: "_visit_context",
+    AssertStmt: "_visit_assert",
+    EffectStmt: "_visit_effect",
+    ReturnStmt: "_visit_return",
+    StmtBlock: "_visit_block",
+}
+
 class Visitor(ABC):
     """
     Visitor base class for FPy AST nodes.
@@ -164,79 +203,30 @@ class Visitor(ABC):
 
     def _visit_expr(self, e: Expr, ctx: Any) -> Any:
         """Dispatch to the appropriate visit method for an expression."""
-        match e:
-            case Var():
-                return self._visit_var(e, ctx)
-            case BoolVal():
-                return self._visit_bool(e, ctx)
-            case ForeignVal():
-                return self._visit_foreign(e, ctx)
-            case Decnum():
-                return self._visit_decnum(e, ctx)
-            case Hexnum():
-                return self._visit_hexnum(e, ctx)
-            case Integer():
-                return self._visit_integer(e, ctx)
-            case Rational():
-                return self._visit_rational(e, ctx)
-            case Digits():
-                return self._visit_digits(e, ctx)
-            case NullaryOp():
-                return self._visit_nullaryop(e, ctx)
-            case UnaryOp():
-                return self._visit_unaryop(e, ctx)
-            case BinaryOp():
-                return self._visit_binaryop(e, ctx)
-            case TernaryOp():
-                return self._visit_ternaryop(e, ctx)
-            case NaryOp():
-                return self._visit_naryop(e, ctx)
-            case Compare():
-                return self._visit_compare(e, ctx)
-            case Call():
-                return self._visit_call(e, ctx)
-            case TupleExpr():
-                return self._visit_tuple_expr(e, ctx)
-            case CompExpr():
-                return self._visit_comp_expr(e, ctx)
-            case TupleRef():
-                return self._visit_tuple_ref(e, ctx)
-            case TupleSlice():
-                return self._visit_tuple_slice(e, ctx)
-            case TupleSet():
-                return self._visit_tuple_set(e, ctx)
-            case IfExpr():
-                return self._visit_if_expr(e, ctx)
-            case ContextExpr():
-                return self._visit_context_expr(e, ctx)
-            case _:
-                raise NotImplementedError(f'unreachable {e}')
+        # Walk the inheritance chain until we find a dispatch method or reach Expr
+        for cls in type(e).__mro__:
+            if cls is Expr:
+                break
+            method = _expr_dispatch.get(cls, None)
+            if method is not None:
+                break
+        else:
+            raise NotImplementedError(f'no dispatch method for `{e}`')
+        func = getattr(self, method)
+        return func(e, ctx)
 
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         """Dispatch to the appropriate visit method for a statement."""
-        match stmt:
-            case Assign():
-                return self._visit_assign(stmt, ctx)
-            case IndexedAssign():
-                return self._visit_indexed_assign(stmt, ctx)
-            case If1Stmt():
-                return self._visit_if1(stmt, ctx)
-            case IfStmt():
-                return self._visit_if(stmt, ctx)
-            case WhileStmt():
-                return self._visit_while(stmt, ctx)
-            case ForStmt():
-                return self._visit_for(stmt, ctx)
-            case ContextStmt():
-                return self._visit_context(stmt, ctx)
-            case AssertStmt():
-                return self._visit_assert(stmt, ctx)
-            case EffectStmt():
-                return self._visit_effect(stmt, ctx)
-            case ReturnStmt():
-                return self._visit_return(stmt, ctx)
-            case _:
-                raise NotImplementedError(f'unreachable: {stmt}')
+        for cls in type(stmt).__mro__:
+            if cls is Expr:
+                break
+            method = _stmt_dispatch.get(cls, None)
+            if method is not None:
+                break
+        else:
+            raise NotImplementedError(f'no dispatch method for `{stmt}`')
+        func = getattr(self, method)
+        return func(stmt, ctx)
 
 #####################################################################
 # Default visitor
