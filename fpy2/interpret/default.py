@@ -4,7 +4,6 @@ FPy runtime backed by the Titanic library.
 
 import copy
 
-from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence, TypeAlias
 
 from .. import ops
@@ -12,7 +11,6 @@ from .. import ops
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..number import Context, Float, FP64, INTEGER
-from ..number.gmp import mpfr_constant
 from ..env import ForeignEnv
 from ..function import Function
 from ..primitive import Primitive
@@ -151,9 +149,9 @@ class _Interpreter(Visitor):
     def _arg_to_value(self, arg: Any):
         match arg:
             case int():
-                return Float.from_int(arg, ctx=INTEGER)
+                return Float.from_int(arg, ctx=INTEGER, checked=False)
             case float():
-                return Float.from_float(arg, ctx=FP64)
+                return Float.from_float(arg, ctx=FP64, checked=False)
             case Float():
                 return arg
             case tuple() | list():
@@ -161,12 +159,7 @@ class _Interpreter(Visitor):
             case _:
                 return arg
 
-    def eval(
-        self,
-        func: FuncDef,
-        args: Sequence[Any],
-        ctx: Context
-    ):
+    def eval(self, func: FuncDef, args: Sequence[Any], ctx: Context):
         # check arity
         args = tuple(args)
         if len(args) != len(func.args):
