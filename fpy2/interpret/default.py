@@ -546,12 +546,8 @@ class _Interpreter(Visitor):
             match elt:
                 case NamedId():
                     self.env[elt] = v
-                case UnderscoreId():
-                    pass
                 case TupleBinding():
                     self._unpack_tuple(elt, v, ctx)
-                case _:
-                    raise NotImplementedError('unknown tuple element', elt)
 
     def _visit_assign(self, stmt: Assign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)

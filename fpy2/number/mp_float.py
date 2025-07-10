@@ -61,6 +61,9 @@ class MPFloatContext(Context):
     def is_representable(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
+                if x.ctx is not None and self.is_equiv(x.ctx):
+                    # same context, so representable
+                    return True
                 if x.is_nar() or x.is_zero():
                     # special values or zeros are valid
                     return True

@@ -172,12 +172,19 @@ class ExtFloatContext(EncodableContext):
             and self.enable_inf == other.enable_inf
             and self.nan_kind == other.nan_kind
             and self.eoffset == other.eoffset
-            and self.rm == other.rm
         )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
-        if not isinstance(x, RealFloat | Float):
-            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        match x:
+            case Float():
+                if x.ctx is not None and self.is_equiv(x.ctx):
+                    # same context, so representable
+                    return True
+            case RealFloat():
+                pass
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+
         if x.is_zero() and x.s and self.nan_kind == ExtFloatNanKind.NEG_ZERO:
             # -0 is not representable in this context
             return False

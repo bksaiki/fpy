@@ -21,6 +21,9 @@ from ..utils import (
     FP64_ES,
     FP64_M,
     FP64_EXPMIN,
+    FP64_SMASK,
+    FP64_EMASK,
+    FP64_MMASK,
 )
 
 from .context import Context
@@ -408,9 +411,9 @@ class RealFloat(numbers.Rational):
 
         # convert to bits
         b = float_to_bits(x)
-        sbits = b >> (FP64_NBITS - 1)
-        ebits = (b >> FP64_M) & bitmask(FP64_ES)
-        mbits = b & bitmask(FP64_M)
+        sbits = b & FP64_SMASK
+        ebits = (b & FP64_EMASK) >> FP64_M
+        mbits = b & FP64_MMASK
 
         # sign
         s = sbits != 0
@@ -1230,12 +1233,15 @@ class Float(numbers.Rational):
         """
         if not isinstance(x, RealFloat):
             raise TypeError(f'expected RealFloat, got {type(x)}')
-
-        if ctx is not None and not ctx.is_representable(x):
-            # context specified, but `x` is not representable under it
-            raise ValueError(f'{x} is not representable under {ctx}')
-        else:
+        if ctx is None:
+            # no context specified, so its rounded exactly
             return Float(x=x, ctx=ctx)
+        else:
+            y = Float(x=x, ctx=ctx)
+            if not y.is_representable():
+                # context specified, but `x` is not representable under it
+                raise ValueError(f'{x} is not representable under {ctx}')
+            return y
 
     @staticmethod
     def from_int(x: int, ctx: Optional[Context] = None) -> 'Float':
