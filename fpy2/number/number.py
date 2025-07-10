@@ -17,8 +17,6 @@ from ..utils import (
     float_to_bits,
     rcomparable,
     Ordering,
-    FP64_NBITS,
-    FP64_ES,
     FP64_M,
     FP64_EXPMIN,
     FP64_SMASK,
@@ -59,18 +57,24 @@ class RealFloat(numbers.Rational):
     It must be the case that `interval_size <= 0`.
     """
 
-    s: bool = False
+    __slots__ = (
+        's', 'exp', 'c',
+        'interval_size', 'interval_down', 'interval_closed',
+        '__dict__', '__weakref__'
+    )
+
+    s: bool
     """is the sign negative?"""
-    exp: int = 0
+    exp: int
     """absolute position of the LSB"""
-    c: int = 0
+    c: int
     """integer significand"""
 
-    interval_size: Optional[int] = None
+    interval_size: Optional[int]
     """rounding envelope: size relative to `2**exp`"""
-    interval_down: bool = False
+    interval_down: bool
     """rounding envelope: does the interval extend towards zero?"""
-    interval_closed: bool = False
+    interval_closed: bool
     """rounding envelope: is the interval closed at the other endpoint?"""
 
     def __init__(
@@ -109,7 +113,7 @@ class RealFloat(numbers.Rational):
             elif x is not None:
                 self.s = x.s
             else:
-                self.s = type(self).s
+                self.s = False
         elif m is not None:
             if s is not None:
                 raise ValueError(f'cannot specify both m={m} and s={s}')
@@ -122,11 +126,11 @@ class RealFloat(numbers.Rational):
             else:
                 self.s = x.s
         else:
-            self.c = type(self).c
+            self.c = 0
             if s is not None:
                 self.s = s
             else:
-                self.s = type(self).s
+                self.s = False
 
         # exp
         if exp is not None:
@@ -138,7 +142,7 @@ class RealFloat(numbers.Rational):
         elif x is not None:
             self.exp = x.exp
         else:
-            self.exp = type(self).exp
+            self.exp = 0
 
         # rounding envelope size
         if interval_size is not None:
@@ -148,7 +152,7 @@ class RealFloat(numbers.Rational):
         elif x is not None:
             self.interval_size = x.interval_size
         else:
-            self.interval_size = type(self).interval_size
+            self.interval_size = None
 
         # rounding envelope direction
         if interval_down is not None:
@@ -156,7 +160,7 @@ class RealFloat(numbers.Rational):
         elif x is not None:
             self.interval_down = x.interval_down
         else:
-            self.interval_down = type(self).interval_down
+            self.interval_down = False
 
         # rounding envelope endpoint
         if interval_closed is not None:
@@ -164,7 +168,7 @@ class RealFloat(numbers.Rational):
         elif x is not None:
             self.interval_closed = x.interval_closed
         else:
-            self.interval_closed = type(self).interval_closed
+            self.interval_closed = False
 
     def __str__(self):
         fn = get_current_str_converter()
@@ -1081,13 +1085,15 @@ class Float(numbers.Rational):
     but rather through context-based constructors.
     """
 
-    isinf: bool = False
+    __slots__ = ('isinf', 'isnan', 'ctx', '_real')
+
+    isinf: bool
     """is this number is infinite?"""
 
-    isnan: bool = False
+    isnan: bool
     """is this number is NaN?"""
 
-    ctx: Optional[Context] = None
+    ctx: Optional[Context]
     """rounding context during construction"""
 
     _real: RealFloat
@@ -1117,14 +1123,14 @@ class Float(numbers.Rational):
         elif isinstance(x, Float):
             self.isinf = x.isinf
         else:
-            self.isinf = type(self).isinf
+            self.isinf = False
 
         if isnan is not None:
             self.isnan = isnan
         elif isinstance(x, Float):
             self.isnan = x.isnan
         else:
-            self.isnan = type(self).isnan
+            self.isnan = False
 
         if self.isinf and self.isnan:
             raise ValueError('cannot be both infinite and NaN')
@@ -1134,7 +1140,7 @@ class Float(numbers.Rational):
         elif isinstance(x, Float):
             self.ctx = x.ctx
         else:
-            self.ctx = type(self).ctx
+            self.ctx = None
 
         if isinstance(x, RealFloat):
             real = x
