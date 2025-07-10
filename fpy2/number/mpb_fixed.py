@@ -261,9 +261,7 @@ class MPBFixedContext(SizedContext):
     def normalize(self, x: Float) -> Float:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        x = self._mp_ctx.normalize(x)
-        x.ctx = self
-        return x
+        return Float(x=self._mp_ctx.normalize(x), ctx=self)
 
     def is_normal(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.is_representable(x):
@@ -415,16 +413,12 @@ class MPBFixedContext(SizedContext):
             return Float(isinf=True, s=True, ctx=self)
         else:
             # finite, real
-            v = self._mp_ctx.from_ordinal(x)
-            v.ctx = self
-            return v
+            return Float(x=self._mp_ctx.from_ordinal(x), ctx=self)
 
     def minval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mp_ctx.minval(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mp_ctx.minval(s=s), ctx=self)
 
     def maxval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):

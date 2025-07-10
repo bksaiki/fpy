@@ -192,9 +192,7 @@ class MPBFloatContext(SizedContext):
     def normalize(self, x: Float):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        x = self._normalize(x)
-        x.ctx = self
-        return x
+        return Float(x=self._normalize(x), ctx=self)
 
     def round_params(self):
         return self._mps_ctx.round_params()
@@ -337,49 +335,37 @@ class MPBFloatContext(SizedContext):
                 return Float(s=True, isinf=True, ctx=self)
         else:
             # must be a finite number
-            v = self._mps_ctx.from_ordinal(x)
-            v.ctx = self
-            return v
+            return Float(x=self._mps_ctx.from_ordinal(x), ctx=self)
 
     def zero(self, s: bool = False) -> Float:
         """Returns a signed 0 under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.zero(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.zero(s=s), ctx=self)
 
     def minval(self, s = False) -> Float:
         """Returns the smallest non-zero value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.minval(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.minval(s=s), ctx=self)
 
     def min_subnormal(self, s = False) -> Float:
         """Returns the smallest subnormal value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.min_subnormal(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.min_subnormal(s=s), ctx=self)
 
     def max_subnormal(self, s = False) -> Float:
         """Returns the largest subnormal value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.max_subnormal(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.max_subnormal(s=s), ctx=self)
 
     def min_normal(self, s = False) -> Float:
         """Returns the smallest normal value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.min_normal(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.min_normal(s=s), ctx=self)
 
     def max_normal(self, s: bool = False) -> Float:
         """Returns the largest normal value with sign `s` under this context."""

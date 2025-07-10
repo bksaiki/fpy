@@ -1179,17 +1179,34 @@ class Float(numbers.Rational):
         else:
             real = None
 
-        self._real = RealFloat(
-            s=s,
-            exp=exp,
-            c=c,
-            x=real,
-            e=e,
-            m=m,
-            interval_size=interval_size,
-            interval_down=interval_down,
-            interval_closed=interval_closed
-        )
+        # create a new RealFloat instance if any field is overriden
+        if (s is None
+            and exp is None
+            and c is None
+            and e is None
+            and m is None
+            and interval_size is None
+            and interval_down is None
+            and interval_closed is None):
+            # no fields are overriden
+            if real is None:
+                # use the default `RealFloat`
+                self._real = RealFloat()
+            else:
+                # use the `real` value exactly
+                self._real = real
+        else:
+            self._real = RealFloat(
+                s=s,
+                exp=exp,
+                c=c,
+                x=real,
+                e=e,
+                m=m,
+                interval_size=interval_size,
+                interval_down=interval_down,
+                interval_closed=interval_closed
+            )
 
     def __repr__(self):
         return (f'{self.__class__.__name__}('
