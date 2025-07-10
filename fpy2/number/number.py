@@ -1477,7 +1477,7 @@ class Float(numbers.Rational):
         return Float.from_real(RealFloat.zero(s), ctx)
 
     @staticmethod
-    def from_real(x: RealFloat, ctx: Optional[Context] = None, checked: bool = False) -> 'Float':
+    def from_real(x: RealFloat, ctx: Optional[Context] = None, checked: bool = True) -> 'Float':
         """
         Converts a `RealFloat` number to a `Float` number.
 

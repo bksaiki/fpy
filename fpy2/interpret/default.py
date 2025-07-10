@@ -159,12 +159,7 @@ class _Interpreter(Visitor):
             case _:
                 return arg
 
-    def eval(
-        self,
-        func: FuncDef,
-        args: Sequence[Any],
-        ctx: Context
-    ):
+    def eval(self, func: FuncDef, args: Sequence[Any], ctx: Context):
         # check arity
         args = tuple(args)
         if len(args) != len(func.args):
