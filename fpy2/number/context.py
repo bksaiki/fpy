@@ -44,6 +44,15 @@ class Context(ABC):
         ...
 
     @abstractmethod
+    def is_equiv(self, other: 'Context') -> bool:
+        """
+        Returns if this context and another context round values to
+        the same set of representable values. Two contexts are equivalent
+        if they produce the same set of representable values.
+        """
+        ...
+
+    @abstractmethod
     def is_representable(self, x: Union[Float, RealFloat]) -> bool:
         """
         Returns if `x` is representable under this context.

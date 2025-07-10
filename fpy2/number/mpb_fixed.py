@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..utils import default_repr, enum_repr
 
-from .context import SizedContext
+from .context import Context, SizedContext
 from .mp_fixed import MPFixedContext
 from .number import RealFloat, Float
 from .round import RoundingMode
@@ -179,6 +179,33 @@ class MPBFixedContext(SizedContext):
         self._pos_maxval_ord = self._mp_ctx.to_ordinal(pos_maxval_mp)
         self._neg_maxval_ord = self._mp_ctx.to_ordinal(neg_maxval_mp)
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPBFixedContext)
+            and self.nmin == other.nmin
+            and self.pos_maxval == other.pos_maxval
+            and self.neg_maxval == other.neg_maxval
+            and self.rm == other.rm
+            and self.overflow == other.overflow
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
+            and self.nan_value == other.nan_value
+            and self.inf_value == other.inf_value
+        )
+    
+    def __hash__(self):
+        return hash((
+            self.nmin,
+            self.pos_maxval,
+            self.neg_maxval,
+            self.rm,
+            self.overflow,
+            self.enable_nan,
+            self.enable_inf,
+            self.nan_value,
+            self.inf_value
+        ))
+
     def with_rm(self, rm: RoundingMode):
         return MPBFixedContext(
             nmin=self.nmin,
@@ -190,6 +217,16 @@ class MPBFixedContext(SizedContext):
             enable_inf=self.enable_inf,
             nan_value=self.nan_value,
             inf_value=self.inf_value
+        )
+
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return (
+            isinstance(other, MPBFixedContext)
+            and self.nmin == other.nmin
+            and self.pos_maxval == other.pos_maxval
+            and self.neg_maxval == other.neg_maxval
         )
 
     def is_representable(self, x: RealFloat | Float) -> bool:

@@ -4,7 +4,7 @@ from ..utils import default_repr, enum_repr, bitmask
 
 from enum import IntEnum
 
-from .context import EncodableContext
+from .context import Context, EncodableContext
 from .number import RealFloat, Float
 from .mpb_float import MPBFloatContext
 from .round import RoundingMode
@@ -96,6 +96,27 @@ class ExtFloatContext(EncodableContext):
         self.rm = rm
         self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm)
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, ExtFloatContext)
+            and self.es == other.es
+            and self.nbits == other.nbits
+            and self.enable_inf == other.enable_inf
+            and self.nan_kind == other.nan_kind
+            and self.eoffset == other.eoffset
+            and self.rm == other.rm
+        )
+
+    def __hash__(self):
+        return hash((
+            self.es,
+            self.nbits,
+            self.enable_inf,
+            self.nan_kind,
+            self.eoffset,
+            self.rm
+        ))
+
     @property
     def pmax(self):
         """Maximum allowable precision."""
@@ -140,6 +161,19 @@ class ExtFloatContext(EncodableContext):
 
     def with_rm(self, rm):
         return ExtFloatContext(self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset, rm)
+
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return (
+            isinstance(other, ExtFloatContext)
+            and self.es == other.es
+            and self.nbits == other.nbits
+            and self.enable_inf == other.enable_inf
+            and self.nan_kind == other.nan_kind
+            and self.eoffset == other.eoffset
+            and self.rm == other.rm
+        )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):

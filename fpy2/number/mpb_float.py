@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..utils import default_repr
 
-from .context import SizedContext
+from .context import Context, SizedContext
 from .number import RealFloat, Float
 from .mps_float import MPSFloatContext
 from .round import RoundingMode, RoundingDirection
@@ -102,6 +102,18 @@ class MPBFloatContext(SizedContext):
         self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_mps)
         self._neg_maxval_ord = self._mps_ctx.to_ordinal(neg_maxval_mps)
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPBFloatContext)
+            and self.pmax == other.pmax
+            and self.emin == other.emin
+            and self.pos_maxval == other.pos_maxval
+            and self.neg_maxval == other.neg_maxval
+            and self.rm == other.rm
+        )
+
+    def __hash__(self):
+        return hash((self.pmax, self.emin, self.pos_maxval, self.neg_maxval, self.rm))
 
     @property
     def emax(self):
@@ -129,6 +141,16 @@ class MPBFloatContext(SizedContext):
 
     def with_rm(self, rm: RoundingMode):
         return MPBFloatContext(self.pmax, self.emin, self.pos_maxval, rm, neg_maxval=self.neg_maxval)
+
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return (
+            isinstance(other, MPBFloatContext)
+            and self.nmin == other.nmin
+            and self.pos_maxval == other.pos_maxval
+            and self.neg_maxval == other.neg_maxval
+        )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
         if not isinstance(x, RealFloat | Float):

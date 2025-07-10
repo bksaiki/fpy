@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..utils import default_repr
 
-from .context import OrdinalContext
+from .context import Context, OrdinalContext
 from .number import Float
 from .real import RealFloat
 from .round import RoundingMode
@@ -111,6 +111,28 @@ class MPFixedContext(OrdinalContext):
         self.nan_value = nan_value
         self.inf_value = inf_value
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPFixedContext)
+            and self.nmin == other.nmin
+            and self.rm == other.rm
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
+            and self.nan_value == other.nan_value
+            and self.inf_value == other.inf_value
+        )
+
+    def __hash__(self):
+        return hash((
+            self.nmin,
+            self.rm,
+            self.enable_nan,
+            self.enable_inf,
+            self.nan_value,
+            self.inf_value
+        ))
+
+
     @property
     def expmin(self) -> int:
         """
@@ -127,6 +149,19 @@ class MPFixedContext(OrdinalContext):
             enable_inf=self.enable_inf,
             nan_value=self.nan_value,
             inf_value=self.inf_value
+        )
+
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return (
+            isinstance(other, MPFixedContext)
+            and self.nmin == other.nmin
+            and self.rm == other.rm
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
+            and self.nan_value == other.nan_value
+            and self.inf_value == other.inf_value
         )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
