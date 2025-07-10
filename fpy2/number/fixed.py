@@ -85,42 +85,30 @@ class FixedContext(MPBFixedContext, EncodableContext):
     def normalize(self, x: Float):
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got x={x}')
-        x = super().normalize(x)
-        x.ctx = self
-        return x
+        return Float(x=super().normalize(x), ctx=self)
 
     def round(self, x) -> Float:
-        x = super().round(x)
-        x.ctx = self
-        return x
+        return Float(x=super().round(x), ctx=self)
 
     def round_at(self, x, n: int) -> Float:
         if not isinstance(n, int):
             raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
-        x = super().round_at(x, n)
-        x.ctx = self
-        return x
+        return Float(x=super().round_at(x, n), ctx=self)
 
     def minval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = super().minval(s)
-        x.ctx = self
-        return x
+        return Float(x=super().minval(s), ctx=self)
 
     def maxval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = super().maxval(s)
-        x.ctx = self
-        return x
+        return Float(x=super().maxval(s), ctx=self)
 
     def from_ordinal(self, x: int, infval: bool = False) -> Float:
         if not isinstance(x, int):
             raise TypeError(f'Expected \'int\', got x={x}')
-        y = super().from_ordinal(x, infval)
-        y.ctx = self
-        return y
+        return Float(x=super().from_ordinal(x, infval), ctx=self)
 
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):

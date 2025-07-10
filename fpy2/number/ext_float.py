@@ -4,7 +4,7 @@ from ..utils import default_repr, enum_repr, bitmask
 
 from enum import IntEnum
 
-from .context import EncodableContext
+from .context import Context, EncodableContext
 from .number import RealFloat, Float
 from .mpb_float import MPBFloatContext
 from .round import RoundingMode
@@ -96,6 +96,27 @@ class ExtFloatContext(EncodableContext):
         self.rm = rm
         self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm)
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, ExtFloatContext)
+            and self.es == other.es
+            and self.nbits == other.nbits
+            and self.enable_inf == other.enable_inf
+            and self.nan_kind == other.nan_kind
+            and self.eoffset == other.eoffset
+            and self.rm == other.rm
+        )
+
+    def __hash__(self):
+        return hash((
+            self.es,
+            self.nbits,
+            self.enable_inf,
+            self.nan_kind,
+            self.eoffset,
+            self.rm
+        ))
+
     @property
     def pmax(self):
         """Maximum allowable precision."""
@@ -141,9 +162,29 @@ class ExtFloatContext(EncodableContext):
     def with_rm(self, rm):
         return ExtFloatContext(self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset, rm)
 
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return (
+            isinstance(other, ExtFloatContext)
+            and self.es == other.es
+            and self.nbits == other.nbits
+            and self.enable_inf == other.enable_inf
+            and self.nan_kind == other.nan_kind
+            and self.eoffset == other.eoffset
+        )
+
     def is_representable(self, x: RealFloat | Float) -> bool:
-        if not isinstance(x, RealFloat | Float):
-            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        match x:
+            case Float():
+                if x.ctx is not None and self.is_equiv(x.ctx):
+                    # same context, so representable
+                    return True
+            case RealFloat():
+                pass
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+
         if x.is_zero() and x.s and self.nan_kind == ExtFloatNanKind.NEG_ZERO:
             # -0 is not representable in this context
             return False
@@ -160,9 +201,7 @@ class ExtFloatContext(EncodableContext):
     def normalize(self, x: Float) -> Float:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        x = self._normalize(x)
-        x.ctx = self
-        return x
+        return Float(x=self._normalize(x), ctx=self)
 
     def is_normal(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.is_representable(x):
@@ -173,14 +212,10 @@ class ExtFloatContext(EncodableContext):
         return self._mpb_ctx.round_params()
 
     def round(self, x):
-        rounded = self._mpb_ctx.round(x)
-        rounded.ctx = self
-        return rounded
+        return Float(x=self._mpb_ctx.round(x), ctx=self)
 
     def round_at(self, x, n):
-        rounded = self._mpb_ctx.round_at(x, n)
-        rounded.ctx = self
-        return rounded
+        return Float(x=self._mpb_ctx.round_at(x, n), ctx=self)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):
@@ -188,7 +223,7 @@ class ExtFloatContext(EncodableContext):
         return self._mpb_ctx.to_ordinal(x, infval=infval)
 
     def from_ordinal(self, x: int, infval = False) -> Float:
-        return self._mpb_ctx.from_ordinal(x, infval=infval)
+        return Float(x=self._mpb_ctx.from_ordinal(x, infval=infval), ctx=self)
 
     def zero(self, s: bool = False):
         """
@@ -198,10 +233,10 @@ class ExtFloatContext(EncodableContext):
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = Float(s=s, ctx=self)
-        if not self.is_representable(x):
+        zero = Float(x=self._mpb_ctx.zero(s), ctx=self)
+        if not self.is_representable(zero):
             raise ValueError(f'not representable in this context: s={s}')
-        return x
+        return zero
 
     def minval(self, s: bool = False) -> Float:
         """
@@ -211,8 +246,7 @@ class ExtFloatContext(EncodableContext):
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        minval = self._mpb_ctx.minval(s)
-        minval.ctx = self
+        minval = Float(x=self._mpb_ctx.minval(s), ctx=self)
         if not self.is_representable(minval):
             raise ValueError(f'not representable in this context: s={s}')
         return minval
@@ -225,8 +259,7 @@ class ExtFloatContext(EncodableContext):
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        minval = self._mpb_ctx.min_subnormal(s)
-        minval.ctx = self
+        minval = Float(x=self._mpb_ctx.min_subnormal(s), ctx=self)
         if not self.is_representable(minval):
             raise ValueError(f'not representable in this context: s={s}')
         return minval
@@ -239,8 +272,7 @@ class ExtFloatContext(EncodableContext):
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        maxval = self._mpb_ctx.max_subnormal(s)
-        maxval.ctx = self
+        maxval = Float(x=self._mpb_ctx.max_subnormal(s), ctx=self)
         if not self.is_representable(maxval):
             raise ValueError(f'not representable in this context: s={s}')
         return maxval
@@ -253,8 +285,7 @@ class ExtFloatContext(EncodableContext):
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        minval = self._mpb_ctx.min_normal(s)
-        minval.ctx = self
+        minval = Float(x=self._mpb_ctx.min_normal(s), ctx=self)
         if not self.is_representable(minval):
             raise ValueError(f'not representable in this context: s={s}')
         return minval
@@ -267,8 +298,7 @@ class ExtFloatContext(EncodableContext):
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        maxval = self._mpb_ctx.max_normal(s)
-        maxval.ctx = self
+        maxval = Float(x=self._mpb_ctx.max_normal(s), ctx=self)
         if not self.is_representable(maxval):
             raise ValueError(f'not representable in this context: s={s}')
         return maxval
@@ -281,8 +311,7 @@ class ExtFloatContext(EncodableContext):
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        maxval = self._mpb_ctx.maxval(s)
-        maxval.ctx = self
+        maxval = Float(x=self._mpb_ctx.maxval(s), ctx=self)
         if not self.is_representable(maxval):
             raise ValueError(f'Not representable in this context: s={s}')
         return maxval

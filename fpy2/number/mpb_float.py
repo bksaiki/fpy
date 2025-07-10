@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..utils import default_repr
 
-from .context import SizedContext
+from .context import Context, SizedContext
 from .number import RealFloat, Float
 from .mps_float import MPSFloatContext
 from .round import RoundingMode, RoundingDirection
@@ -102,6 +102,18 @@ class MPBFloatContext(SizedContext):
         self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_mps)
         self._neg_maxval_ord = self._mps_ctx.to_ordinal(neg_maxval_mps)
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPBFloatContext)
+            and self.pmax == other.pmax
+            and self.emin == other.emin
+            and self.pos_maxval == other.pos_maxval
+            and self.neg_maxval == other.neg_maxval
+            and self.rm == other.rm
+        )
+
+    def __hash__(self):
+        return hash((self.pmax, self.emin, self.pos_maxval, self.neg_maxval, self.rm))
 
     @property
     def emax(self):
@@ -130,9 +142,26 @@ class MPBFloatContext(SizedContext):
     def with_rm(self, rm: RoundingMode):
         return MPBFloatContext(self.pmax, self.emin, self.pos_maxval, rm, neg_maxval=self.neg_maxval)
 
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return (
+            isinstance(other, MPBFloatContext)
+            and self.nmin == other.nmin
+            and self.pos_maxval == other.pos_maxval
+            and self.neg_maxval == other.neg_maxval
+        )
+
     def is_representable(self, x: RealFloat | Float) -> bool:
-        if not isinstance(x, RealFloat | Float):
-            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        match x:
+            case Float():
+                if x.ctx is not None and self.is_equiv(x.ctx):
+                    # same context, so representable
+                    return True
+            case RealFloat():
+                pass
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
         if not self._mps_ctx.is_representable(x):
             # not representable even without a maximum value
@@ -163,9 +192,7 @@ class MPBFloatContext(SizedContext):
     def normalize(self, x: Float):
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        x = self._normalize(x)
-        x.ctx = self
-        return x
+        return Float(x=self._normalize(x), ctx=self)
 
     def round_params(self):
         return self._mps_ctx.round_params()
@@ -264,8 +291,10 @@ class MPBFloatContext(SizedContext):
         return self._round_at(x, n)
 
     def to_ordinal(self, x: Float, infval = False):
-        if not isinstance(x, Float) or not self.is_representable(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
+        if not self.is_representable(x):
+            raise ValueError(f'Expected a representable \'Float\', got x={x} (x.ctx={x.ctx})')
 
         # case split by class
         if x.isnan:
@@ -308,49 +337,37 @@ class MPBFloatContext(SizedContext):
                 return Float(s=True, isinf=True, ctx=self)
         else:
             # must be a finite number
-            v = self._mps_ctx.from_ordinal(x)
-            v.ctx = self
-            return v
+            return Float(x=self._mps_ctx.from_ordinal(x), ctx=self)
 
     def zero(self, s: bool = False) -> Float:
         """Returns a signed 0 under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.zero(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.zero(s=s), ctx=self)
 
     def minval(self, s = False) -> Float:
         """Returns the smallest non-zero value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.minval(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.minval(s=s), ctx=self)
 
     def min_subnormal(self, s = False) -> Float:
         """Returns the smallest subnormal value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.min_subnormal(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.min_subnormal(s=s), ctx=self)
 
     def max_subnormal(self, s = False) -> Float:
         """Returns the largest subnormal value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.max_subnormal(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.max_subnormal(s=s), ctx=self)
 
     def min_normal(self, s = False) -> Float:
         """Returns the smallest normal value with sign `s` under this context."""
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mps_ctx.min_normal(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mps_ctx.min_normal(s=s), ctx=self)
 
     def max_normal(self, s: bool = False) -> Float:
         """Returns the largest normal value with sign `s` under this context."""

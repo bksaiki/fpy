@@ -40,12 +40,30 @@ class MPFloatContext(Context):
         self.pmax = pmax
         self.rm = rm
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPFloatContext)
+            and self.pmax == other.pmax
+            and self.rm == other.rm
+        )
+
+    def __hash__(self):
+        return hash((self.__class__, self.pmax, self.rm))
+
     def with_rm(self, rm: RoundingMode):
         return MPFloatContext(self.pmax, rm)
+
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return isinstance(other, MPFloatContext) and self.pmax == other.pmax
 
     def is_representable(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
+                if x.ctx is not None and self.is_equiv(x.ctx):
+                    # same context, so representable
+                    return True
                 if x.is_nar() or x.is_zero():
                     # special values or zeros are valid
                     return True

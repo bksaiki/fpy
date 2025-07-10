@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..utils import default_repr, bitmask
 
-from .context import OrdinalContext
+from .context import Context, OrdinalContext
 from .number import RealFloat, Float
 from .mp_float import MPFloatContext
 from .round import RoundingMode
@@ -65,6 +65,17 @@ class MPSFloatContext(OrdinalContext):
         self._pos_minval = Float(s=False, c=1, exp=self.expmin, ctx=self)
         self._neg_minval = Float(s=True, c=1, exp=self.expmin, ctx=self)
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPSFloatContext)
+            and self.pmax == other.pmax
+            and self.emin == other.emin
+            and self.rm == other.rm
+        )
+
+    def __hash__(self):
+        return hash((self.pmax, self.emin, self.rm))
+
     @property
     def expmin(self):
         """Minimum unnormalized exponent."""
@@ -80,9 +91,25 @@ class MPSFloatContext(OrdinalContext):
     def with_rm(self, rm: RoundingMode):
         return MPSFloatContext(self.pmax, self.emin, rm)
 
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return (
+            isinstance(other, MPSFloatContext)
+            and self.pmax == other.pmax
+            and self.emin == other.emin
+        )
+
     def is_representable(self, x: RealFloat | Float) -> bool:
-        if not isinstance(x, RealFloat | Float):
-            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        match x:
+            case Float():
+                if x.ctx is not None and self.is_equiv(x.ctx):
+                    # same context, so representable
+                    return True
+            case RealFloat():
+                pass
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
         if not self._mp_ctx.is_representable(x):
             # not representable even without subnormalization

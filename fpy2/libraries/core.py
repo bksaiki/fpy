@@ -114,11 +114,11 @@ def logb(x: fp.Float, ctx: fp.Context):
     - If `x` is infinite, the result is `INFINITY`.
     """
     if x.isnan:
-        return fp.Float(isnan=True, ctx=ctx)
+        return ctx.round(fp.Float.nan())
     elif x.isinf:
-        return fp.Float(isinf=True, ctx=ctx)
+        return ctx.round(fp.Float.inf())
     elif x.is_zero():
-        return fp.Float(s=True, isinf=True, ctx=ctx)
+        return ctx.round(fp.Float.inf(True))
     else:
         return ctx.round(x.e)
 
@@ -159,19 +159,18 @@ def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
     if not n.is_integer():
         raise ValueError("n must be an integer")
 
-    if x.isnan:
-        return fp.Float(isnan=True, ctx=ctx)
-    elif x.isinf:
-        return fp.Float(s=x.s, isinf=True, ctx=ctx)
+    if x.isnan or x.isinf:
+        return ctx.round(x)
     else:
         xr = x.as_real()
         scale = fp.RealFloat.power_of_2(int(n))
         return ctx.round(xr * scale)
 
 @fp.fpy_primitive
-def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
+def frexp(x: fp.Float):
     """
     Decomposes `x` into its mantissa and exponent.
+    The computation is performed exactly.
 
     Mirroring the behavior of C/C++ `frexp`:
     - if `x` is NaN, the result is `(NaN, NaN)`.
@@ -179,16 +178,16 @@ def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
     - if `x` is zero, the result is `(x, 0)`.
     """
     if x.isnan:
-        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
+        return [fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx)]
     elif x.isinf:
-        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
+        return [fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx)]
     elif x.is_zero():
-        return (fp.Float(x=x, ctx=x.ctx), fp.Float(ctx=x.ctx))
+        return [fp.Float(x=x, ctx=x.ctx), fp.Float(ctx=x.ctx)]
     else:
         x = x.normalize()
         mant = fp.Float(s=x.s, e=0, c=x.c, ctx=x.ctx)
         e = fp.Float.from_int(x.e, ctx=x.ctx)
-        return (mant, e)
+        return [mant, e]
 
 @fp.fpy(ctx=fp.INTEGER)
 def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:

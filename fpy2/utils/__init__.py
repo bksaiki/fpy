@@ -14,6 +14,9 @@ from .float_params import (
     FP64_EXPMAX,
     FP64_EXPMIN,
     FP64_BIAS,
+    FP64_SMASK,
+    FP64_EMASK,
+    FP64_MMASK,
 )
 
 from .fractions import digits_to_fraction, decnum_to_fraction, hexnum_to_fraction, is_dyadic

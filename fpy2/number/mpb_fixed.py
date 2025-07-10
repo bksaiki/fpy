@@ -9,7 +9,7 @@ from typing import Optional
 
 from ..utils import default_repr, enum_repr
 
-from .context import SizedContext
+from .context import Context, SizedContext
 from .mp_fixed import MPFixedContext
 from .number import RealFloat, Float
 from .round import RoundingMode
@@ -179,6 +179,33 @@ class MPBFixedContext(SizedContext):
         self._pos_maxval_ord = self._mp_ctx.to_ordinal(pos_maxval_mp)
         self._neg_maxval_ord = self._mp_ctx.to_ordinal(neg_maxval_mp)
 
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPBFixedContext)
+            and self.nmin == other.nmin
+            and self.pos_maxval == other.pos_maxval
+            and self.neg_maxval == other.neg_maxval
+            and self.rm == other.rm
+            and self.overflow == other.overflow
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
+            and self.nan_value == other.nan_value
+            and self.inf_value == other.inf_value
+        )
+    
+    def __hash__(self):
+        return hash((
+            self.nmin,
+            self.pos_maxval,
+            self.neg_maxval,
+            self.rm,
+            self.overflow,
+            self.enable_nan,
+            self.enable_inf,
+            self.nan_value,
+            self.inf_value
+        ))
+
     def with_rm(self, rm: RoundingMode):
         return MPBFixedContext(
             nmin=self.nmin,
@@ -192,9 +219,27 @@ class MPBFixedContext(SizedContext):
             inf_value=self.inf_value
         )
 
+    def is_equiv(self, other):
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        return (
+            isinstance(other, MPBFixedContext)
+            and self.nmin == other.nmin
+            and self.pos_maxval == other.pos_maxval
+            and self.neg_maxval == other.neg_maxval
+        )
+
     def is_representable(self, x: RealFloat | Float) -> bool:
-        if not isinstance(x, RealFloat | Float):
-            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        match x:
+            case Float():
+                if x.ctx is not None and self.is_equiv(x.ctx):
+                    # same context, so representable
+                    return True
+            case RealFloat():
+                pass
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+
         if not self._mp_ctx.is_representable(x):
             # not representable even without a maximum value
             return False
@@ -216,9 +261,7 @@ class MPBFixedContext(SizedContext):
     def normalize(self, x: Float) -> Float:
         if not isinstance(x, Float) or not self.is_representable(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        x = self._mp_ctx.normalize(x)
-        x.ctx = self
-        return x
+        return Float(x=self._mp_ctx.normalize(x), ctx=self)
 
     def is_normal(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.is_representable(x):
@@ -370,16 +413,12 @@ class MPBFixedContext(SizedContext):
             return Float(isinf=True, s=True, ctx=self)
         else:
             # finite, real
-            v = self._mp_ctx.from_ordinal(x)
-            v.ctx = self
-            return v
+            return Float(x=self._mp_ctx.from_ordinal(x), ctx=self)
 
     def minval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = self._mp_ctx.minval(s=s)
-        x.ctx = self
-        return x
+        return Float(x=self._mp_ctx.minval(s=s), ctx=self)
 
     def maxval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):

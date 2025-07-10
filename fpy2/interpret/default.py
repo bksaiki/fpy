@@ -110,6 +110,13 @@ _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 """Type of the environment used by the interpreter."""
 
 
+class _NoValue():
+    """Marker class for no value."""
+    __slots__ = ()
+
+_NO_VALUE = _NoValue()
+
+
 class _Interpreter(Visitor):
     """Single-use interpreter for a function"""
 
@@ -205,9 +212,10 @@ class _Interpreter(Visitor):
             return e.value
 
     def _lookup(self, name: NamedId, ctx: Context):
-        if name not in self.env:
+        val = self.env.get(name, _NO_VALUE)
+        if val is _NO_VALUE:
             raise RuntimeError(f'unbound variable {name}')
-        return self.env[name]
+        return val
 
     def _visit_var(self, e: Var, ctx: Context):
         return self._lookup(e.name, ctx)
@@ -546,12 +554,8 @@ class _Interpreter(Visitor):
             match elt:
                 case NamedId():
                     self.env[elt] = v
-                case UnderscoreId():
-                    pass
                 case TupleBinding():
                     self._unpack_tuple(elt, v, ctx)
-                case _:
-                    raise NotImplementedError('unknown tuple element', elt)
 
     def _visit_assign(self, stmt: Assign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)

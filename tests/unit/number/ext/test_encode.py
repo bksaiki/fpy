@@ -2,7 +2,7 @@ import unittest
 
 from fpy2 import (
     ExtFloatContext,
-    Float,
+    RealFloat, Float,
     S1E5M2, S1E4M3,
     MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7
@@ -40,9 +40,9 @@ class EncodeTestCase(unittest.TestCase):
                 expmax = ctx.expmin if ctx.expmax < ctx.expmin else ctx.expmax
                 for exp in range(ctx.expmin, expmax + 1):
                     for c in range(0, 1 << ctx.pmax - 1):
-                        x = Float(s, exp, c, ctx=ctx)
-                        if x.is_representable():
-                            xs.append(x)
+                        xr = RealFloat(s, exp, c)
+                        if ctx.is_representable(xr):
+                            xs.append(Float(x=xr, ctx=ctx))
             # run encoding
             for x in xs:
                 i = ctx.encode(x)
