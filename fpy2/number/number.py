@@ -1265,73 +1265,6 @@ class Float(numbers.Rational):
             raise ValueError(f'{self} is not an integer')
         return int(self._real)
 
-    def as_rational(self) -> Fraction:
-        """
-        Converts this value to a `Fraction` representing the same value.
-
-        If the value is not representable, a `ValueError` is raised.
-        """
-        if self.is_nar():
-            raise ValueError(f'{self} is not representable as a rational number')
-        return self._real.as_rational()
-
-    @staticmethod
-    def from_real(x: RealFloat, ctx: Optional[Context] = None) -> 'Float':
-        """
-        Converts a `RealFloat` number to a `Float` number.
-
-        Optionally specify a rounding context under which to
-        construct this value. If a rounding context is specified,
-        `x` must be representable under `ctx`.
-        """
-        if not isinstance(x, RealFloat):
-            raise TypeError(f'expected RealFloat, got {type(x)}')
-        if ctx is None:
-            # no context specified, so its rounded exactly
-            return Float(x=x, ctx=ctx)
-        else:
-            y = Float(x=x, ctx=ctx)
-            if not y.is_representable():
-                # context specified, but `x` is not representable under it
-                raise ValueError(f'{x} is not representable under {ctx}')
-            return y
-
-    @staticmethod
-    def from_int(x: int, ctx: Optional[Context] = None) -> 'Float':
-        """
-        Converts an integer to a `Float` number.
-
-        Optionally specify a rounding context under which to
-        construct this value. If a rounding context is specified,
-        `x` must be representable under `ctx`.
-        """
-        if not isinstance(x, int):
-            raise TypeError(f'expected int, got {type(x)}')
-
-        return Float.from_real(RealFloat.from_int(x), ctx)
-
-    @staticmethod
-    def from_float(x: float, ctx: Optional[Context] = None) -> 'Float':
-        """
-        Converts a native Python float to a `Float` number.
-
-        Optionally specify a rounding context under which to
-        construct this value. If a rounding context is specified,
-        `x` must be representable under `ctx`.
-        """
-        if not isinstance(x, float):
-            raise TypeError(f'expected int, got {type(x)}')
-
-        if math.isnan(x):
-            s = math.copysign(1, x) < 0
-            return Float(s=s, isnan=True, ctx=ctx)
-        elif math.isinf(x):
-            s = x < 0
-            return Float(s=s, isinf=True, ctx=ctx)
-        else:
-            xr = RealFloat.from_float(x)
-            return Float.from_real(xr, ctx)
-
     @property
     def isinf(self) -> bool:
         """Is this number infinite?"""
@@ -1499,6 +1432,106 @@ class Float(numbers.Rational):
         if self._ctx is None:
             raise ValueError(f'Float values without a context cannot be normalized: self={self}')
         return self._ctx.is_normal(self)
+
+    def as_rational(self) -> Fraction:
+        """
+        Converts this value to a `Fraction` representing the same value.
+
+        If the value is not representable, a `ValueError` is raised.
+        """
+        if self.is_nar():
+            raise ValueError(f'{self} is not representable as a rational number')
+        return self._real.as_rational()
+
+    @staticmethod
+    def nan(s: bool = False, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Returns a `Float` representation of NaN.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        return Float(isnan=True, s=s, ctx=ctx)
+
+    @staticmethod
+    def inf(s: bool = False, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Returns a `Float` representation of infinity.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        return Float(isinf=True, s=s, ctx=ctx)
+
+    @staticmethod
+    def zero(s: bool = False, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Returns a `Float` representation of zero.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        return Float.from_real(RealFloat.zero(s), ctx)
+
+    @staticmethod
+    def from_real(x: RealFloat, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts a `RealFloat` number to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, RealFloat):
+            raise TypeError(f'expected RealFloat, got {type(x)}')
+        if ctx is None:
+            # no context specified, so its rounded exactly
+            return Float(x=x, ctx=ctx)
+        else:
+            y = Float(x=x, ctx=ctx)
+            if not y.is_representable():
+                # context specified, but `x` is not representable under it
+                raise ValueError(f'{x} is not representable under {ctx}')
+            return y
+
+    @staticmethod
+    def from_int(x: int, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts an integer to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, int):
+            raise TypeError(f'expected int, got {type(x)}')
+
+        return Float.from_real(RealFloat.from_int(x), ctx)
+
+    @staticmethod
+    def from_float(x: float, ctx: Optional[Context] = None) -> 'Float':
+        """
+        Converts a native Python float to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx`.
+        """
+        if not isinstance(x, float):
+            raise TypeError(f'expected int, got {type(x)}')
+
+        if math.isnan(x):
+            s = math.copysign(1, x) < 0
+            return Float(s=s, isnan=True, ctx=ctx)
+        elif math.isinf(x):
+            s = x < 0
+            return Float(s=s, isinf=True, ctx=ctx)
+        else:
+            xr = RealFloat.from_float(x)
+            return Float.from_real(xr, ctx)
 
     def as_real(self) -> RealFloat:
         """Returns the real part of this number."""

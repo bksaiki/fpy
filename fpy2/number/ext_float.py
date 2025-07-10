@@ -233,10 +233,10 @@ class ExtFloatContext(EncodableContext):
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        x = Float(s=s, ctx=self)
-        if not self.is_representable(x):
+        zero = Float(x=self._mpb_ctx.zero(s), ctx=self)
+        if not self.is_representable(zero):
             raise ValueError(f'not representable in this context: s={s}')
-        return x
+        return zero
 
     def minval(self, s: bool = False) -> Float:
         """

@@ -657,7 +657,10 @@ def dim(x: list | tuple, ctx: Optional[Context] = None):
     while isinstance(x, (list, tuple)):
         dim += 1
         x = x[0]
-    return Float.from_int(dim, ctx=ctx)
+    if ctx is None:
+        return Float.from_int(dim)
+    else:
+        return ctx.round(dim)
 
 def size(x: list | tuple, dim: Real, ctx: Optional[Context] = None):
     """
@@ -670,7 +673,10 @@ def size(x: list | tuple, dim: Real, ctx: Optional[Context] = None):
         x = x[0]
         if not isinstance(x, (list, tuple)):
             raise ValueError(f'dimension `{dim}` is out of bounds for the tensor `{x}`')
-    return Float.from_int(len(x), ctx=ctx)
+    if ctx is None:
+        return Float.from_int(len(x))
+    else:
+        return ctx.round(len(x))
 
 #############################################################################
 # Constants
