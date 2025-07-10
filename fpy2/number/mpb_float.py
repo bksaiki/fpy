@@ -291,8 +291,10 @@ class MPBFloatContext(SizedContext):
         return self._round_at(x, n)
 
     def to_ordinal(self, x: Float, infval = False):
-        if not isinstance(x, Float) or not self.is_representable(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
+        if not self.is_representable(x):
+            raise ValueError(f'Expected a representable \'Float\', got x={x} (x.ctx={x.ctx})')
 
         # case split by class
         if x.isnan:

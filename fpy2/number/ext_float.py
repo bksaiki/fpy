@@ -223,7 +223,7 @@ class ExtFloatContext(EncodableContext):
         return self._mpb_ctx.to_ordinal(x, infval=infval)
 
     def from_ordinal(self, x: int, infval = False) -> Float:
-        return self._mpb_ctx.from_ordinal(x, infval=infval)
+        return Float(x=self._mpb_ctx.from_ordinal(x, infval=infval), ctx=self)
 
     def zero(self, s: bool = False):
         """
