@@ -185,10 +185,14 @@ class ExtFloatContext(EncodableContext):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        if x.is_zero() and x.s and self.nan_kind == ExtFloatNanKind.NEG_ZERO:
+        if not self._mpb_ctx.is_representable(x):
+            return False
+        elif self.nan_kind == ExtFloatNanKind.NEG_ZERO and x.s and x.is_zero():
             # -0 is not representable in this context
             return False
-        return self._mpb_ctx.is_representable(x)
+        else:
+            # otherwise, it is representable
+            return True
 
     def is_canonical(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.is_representable(x):
