@@ -735,10 +735,6 @@ class _Interpreter(Visitor):
     def _visit_function(self, func: FuncDef, ctx: Context):
         raise NotImplementedError('do not call directly')
 
-    # override typing hint
-    def _visit_statement(self, stmt, ctx: Context) -> None:
-        return super()._visit_statement(stmt, ctx)
-
 
 class DefaultInterpreter(Interpreter):
     """
