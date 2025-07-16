@@ -82,6 +82,8 @@ _unary_table: dict[type[UnaryOp], Callable[[Float, Context], Any]] = {
     IsNan: ops.isnan,
     IsNormal: ops.isnormal,
     Signbit: ops.signbit,
+    Round: ops.round,
+    RoundExact: ops.round_exact
 }
 
 _binary_table: dict[type[BinaryOp], Callable[[Float, Float, Context], Any]] = {
@@ -236,20 +238,12 @@ class _Interpreter(Visitor):
 
     def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: Context):
         # fn: Callable[[Float, ..., Context], Float]
-        vals: list[Float] = []
-        for arg in args:
-            val = self._visit_expr(arg, ctx)
+        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
+        for val in vals:
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number argument, got {val}')
-            vals.append(val)
         # compute the result
         return fn(*vals, ctx=ctx)
-
-    def _apply_cast(self, arg: Expr, ctx: Context):
-        x = self._visit_expr(arg, ctx)
-        if not isinstance(x, Float):
-            raise TypeError(f'expected a real number argument, got {x}')
-        return ctx.round(x)
 
     def _apply_not(self, arg: Expr, ctx: Context):
         arg = self._visit_expr(arg, ctx)
@@ -258,21 +252,17 @@ class _Interpreter(Visitor):
         return not arg
 
     def _apply_and(self, args: Sequence[Expr], ctx: Context):
-        vals: list[bool] = []
-        for arg in args:
-            val = self._visit_expr(arg, ctx)
+        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
+        for val in vals:
             if not isinstance(val, bool):
                 raise TypeError(f'expected a boolean argument, got {val}')
-            vals.append(val)
         return all(vals)
 
     def _apply_or(self, args: Sequence[Expr], ctx: Context):
-        vals: list[bool] = []
-        for arg in args:
-            val = self._visit_expr(arg, ctx)
+        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
+        for val in vals:
             if not isinstance(val, bool):
                 raise TypeError(f'expected a boolean argument, got {val}')
-            vals.append(val)
         return any(vals)
 
     def _apply_range(self, arg: Expr, ctx: Context):
@@ -316,12 +306,10 @@ class _Interpreter(Visitor):
             return []
 
         # evaluate all children
-        arrays: list[list] = []
-        for arg in args:
-            val = self._visit_expr(arg, ctx)
+        arrays = tuple(self._visit_expr(arg, ctx) for arg in args)
+        for val in arrays:
             if not isinstance(val, list):
                 raise TypeError(f'expected a tensor argument, got {val}')
-            arrays.append(val)
 
         # zip the arrays
         return list(zip(*arrays))
@@ -339,8 +327,6 @@ class _Interpreter(Visitor):
             return self._apply_method(fn, (e.arg,), ctx)
         else:
             match e:
-                case Round():
-                    return self._apply_cast(e.arg, ctx)
                 case Not():
                     return self._apply_not(e.arg, ctx)
                 case Range():
@@ -486,14 +472,12 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a tensor, got {value}')
 
         array = copy.deepcopy(value) # make a copy
-        slices: list[int] = []
-        for s in e.slices:
-            val = self._visit_expr(s, ctx)
+        slices = tuple(self._visit_expr(s, ctx) for s in e.slices)
+        for val in slices:
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
-            slices.append(int(val))
 
         val = self._visit_expr(e.value, ctx)
         for idx in slices[:-1]:
@@ -563,14 +547,12 @@ class _Interpreter(Visitor):
         array = self._lookup(stmt.var, ctx)
 
         # evaluate indices
-        slices: list[int] = []
-        for s in stmt.slices:
-            val = self._visit_expr(s, ctx)
+        slices = tuple(self._visit_expr(s, ctx) for s in stmt.slices)
+        for val in slices:
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
-            slices.append(int(val))
 
         # evaluate and update array
         val = self._visit_expr(stmt.expr, ctx)
