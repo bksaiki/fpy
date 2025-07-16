@@ -54,7 +54,7 @@ class RealContext(Context):
     def round_params(self):
         return (None, None)
 
-    def round(self, x):
+    def round(self, x, *, exact: bool = False):
         match x:
             case Float() | RealFloat():
                 return Float(x=x, ctx=self)
@@ -68,7 +68,7 @@ class RealContext(Context):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-    def round_at(self, x, n):
+    def round_at(self, x, n: int, *, exact: bool = False):
         raise RuntimeError('cannot round at a specific position in real context')
 
 
@@ -188,7 +188,7 @@ def real_floor(x: Float) -> Float:
     """
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    
+
     if x.is_nar():
         # special value
         return Float(x=x, ctx=RealContext())
@@ -204,7 +204,7 @@ def real_trunc(x: Float) -> Float:
     """
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    
+
     if x.is_nar():
         # special value
         return Float(x=x, ctx=RealContext())
@@ -213,14 +213,14 @@ def real_trunc(x: Float) -> Float:
         r = x.as_real().round(None, -1, RoundingMode.RTZ)
         return Float(x=r, ctx=RealContext())
 
-def real_round(x: Float) -> Float:
+def real_roundint(x: Float) -> Float:
     """
     Round a real number to the nearest integer,
     rounding ties away from zero in halfway cases.
     """
     if not isinstance(x, Float):
         raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    
+
     if x.is_nar():
         # special value
         return Float(x=x, ctx=RealContext())

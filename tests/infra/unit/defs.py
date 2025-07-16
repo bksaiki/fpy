@@ -475,7 +475,7 @@ def dpN(xs: tuple[Real, ...], ys: tuple[Real, ...]) -> Real:
     with RealContext():
         for x, y in zip(xs, ys):
             sum += x * y
-    return round(sum)
+    return roundint(sum)
 
 @fpy(
     name='NMSE example 3.1',

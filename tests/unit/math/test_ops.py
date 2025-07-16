@@ -37,7 +37,7 @@ _unary_ops = [
     floor,
     trunc,
     nearbyint,
-    round
+    roundint
 ]
 
 _binary_ops = [

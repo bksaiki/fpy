@@ -215,11 +215,11 @@ class ExtFloatContext(EncodableContext):
     def round_params(self):
         return self._mpb_ctx.round_params()
 
-    def round(self, x):
-        return Float(x=self._mpb_ctx.round(x), ctx=self)
+    def round(self, x, *, exact: bool = False) -> Float:
+        return Float(x=self._mpb_ctx.round(x, exact=exact), ctx=self)
 
-    def round_at(self, x, n):
-        return Float(x=self._mpb_ctx.round_at(x, n), ctx=self)
+    def round_at(self, x, n, *, exact: bool = False) -> Float:
+        return Float(x=self._mpb_ctx.round_at(x, n, exact=exact), ctx=self)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):

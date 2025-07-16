@@ -87,13 +87,13 @@ class FixedContext(MPBFixedContext, EncodableContext):
             raise TypeError(f'Expected \'Float\', got x={x}')
         return Float(x=super().normalize(x), ctx=self)
 
-    def round(self, x) -> Float:
-        return Float(x=super().round(x), ctx=self)
+    def round(self, x, *, exact: bool = False) -> Float:
+        return Float(x=super().round(x, exact=exact), ctx=self)
 
-    def round_at(self, x, n: int) -> Float:
+    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
         if not isinstance(n, int):
             raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
-        return Float(x=super().round_at(x, n), ctx=self)
+        return Float(x=super().round_at(x, n, exact=exact), ctx=self)
 
     def minval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):

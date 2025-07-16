@@ -172,7 +172,7 @@ def intro_example_mixed(t):
         with IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE) as _:
             t0 = (t + 1)
         t1 = (t / t0)
-    return cast(t1)
+    return round(t1)
 
 @fpy(
     name='delta4',

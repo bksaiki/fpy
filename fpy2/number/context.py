@@ -106,12 +106,17 @@ class Context(ABC):
         ...
 
     @abstractmethod
-    def round(self, x) -> Float:
-        """Rounds any digital number according to this context."""
+    def round(self, x, *, exact: bool = False) -> Float:
+        """
+        Rounds any digital number according to this context.
+
+        If `exact=True`, then the rounding operation will raise a `ValueError`
+        if rounding produces an inexact result.
+        """
         ...
 
     @abstractmethod
-    def round_at(self, x, n: int) -> Float:
+    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
         """
         Rounding any digital number of a representable value with
         an unnormalized exponent of at minimum `n + 1`.
@@ -125,6 +130,8 @@ class Context(ABC):
           minimum `n + 1`,  then the context information determines
           which value is returned.
 
+        If `exact=True`, then the rounding operation will raise a `ValueError`
+        if rounding produces an inexact result.
         """
         ...
 

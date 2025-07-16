@@ -39,7 +39,7 @@ _unary_table: dict[type[UnaryOp], type[fpc.Expr]] = {
     Ceil: fpc.Ceil,
     Floor: fpc.Floor,
     NearbyInt: fpc.Nearbyint,
-    Round: fpc.Round,
+    RoundInt: fpc.Round,
     Trunc: fpc.Trunc,
     Acos: fpc.Acos,
     Asin: fpc.Asin,
@@ -71,7 +71,8 @@ _unary_table: dict[type[UnaryOp], type[fpc.Expr]] = {
     Signbit: fpc.Signbit,
     Not: fpc.Not,
     # rounding
-    Cast: fpc.Cast,
+    Round: fpc.Cast,
+    RoundExact: fpc.Cast # TODO: does this have an FPCore translation?
 }
 
 _binary_table: dict[type[BinaryOp], type[fpc.Expr]] = {

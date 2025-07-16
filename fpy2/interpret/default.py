@@ -52,7 +52,7 @@ _unary_table: dict[type[UnaryOp], Callable[[Float, Context], Any]] = {
     Ceil: ops.ceil,
     Floor: ops.floor,
     NearbyInt: ops.nearbyint,
-    Round: ops.round,
+    RoundInt: ops.roundint,
     Trunc: ops.trunc,
     Acos: ops.acos,
     Asin: ops.asin,
@@ -339,7 +339,7 @@ class _Interpreter(Visitor):
             return self._apply_method(fn, (e.arg,), ctx)
         else:
             match e:
-                case Cast():
+                case Round():
                     return self._apply_cast(e.arg, ctx)
                 case Not():
                     return self._apply_not(e.arg, ctx)
