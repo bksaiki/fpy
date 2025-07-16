@@ -250,7 +250,7 @@ class FPCoreCompileInstance(Visitor):
             )
         )
 
-    def _visit_zip(self, args: list[Expr], ctx: None) -> fpc.Expr:
+    def _visit_zip(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
         # expand zip expression (for N=2)
         #  (let ([t0 <tuple0>] [t1 <tuple1>])
         #    (tensor ([i (size t0 0)])
