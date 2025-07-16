@@ -83,9 +83,11 @@ class NamedId(Id):
             return f'{self.base}{self.count}'
 
     def __eq__(self, other):
-        if not isinstance(other, NamedId):
-            return False
-        return self.base == other.base and self.count == other.count
+        return (
+            isinstance(other, NamedId)
+            and self.base == other.base
+            and self.count == other.count
+        )
 
     def __hash__(self):
         return hash((self.base, self.count))
@@ -111,11 +113,6 @@ class SourceId(NamedId):
 
     def __repr__(self):
         return f'SourceId(\'{str(self)}\')'
-
-    def __eq__(self, other):
-        if not isinstance(other, NamedId | SourceId):
-            return False
-        return self.base == other.base and self.count == other.count
 
     def __hash__(self):
         return hash((self.base, self.count))
