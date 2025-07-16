@@ -7,10 +7,30 @@ from enum import Enum
 ###########################################################
 # Default __repr__ decorator
 
+def _get_slots(cls):
+    """
+    Get all slots from the class and its base classes.
+    """
+    slots = set()
+    for c in cls.__mro__:
+        if hasattr(c, '__slots__'):
+            slots.update(c.__slots__)
+    return slots
+
 def __default_repr__(x: object):
-    cls_name = x.__class__.__name__
-    items = ', '.join(f'{k}={v!r}' for k, v in x.__dict__.items() if not k.startswith('_'))
-    return f'{cls_name}({items})'
+    # get attributes from __dict__ if available
+    items: list[str] = []
+    if hasattr(x, '__dict__'):
+        for k, v in x.__dict__.items():
+            if not k.startswith('_'):
+                items.append(f'{k}={v!r}')
+    # get attributes from __slots__ if available, including inherited slots
+    for slot in _get_slots(type(x)):
+        if not slot.startswith('_') and hasattr(x, slot):
+            value = getattr(x, slot)
+            items.append(f'{slot}={value!r}')
+
+    return f'{x.__class__.__name__}({" ".join(items)})'
 
 def default_repr(cls):
     """Default __repr__ implementation for a class."""
