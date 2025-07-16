@@ -54,7 +54,7 @@ class RealContext(Context):
     def round_params(self):
         return (None, None)
 
-    def round(self, x):
+    def round(self, x, *, exact: bool = False):
         match x:
             case Float() | RealFloat():
                 return Float(x=x, ctx=self)
@@ -68,7 +68,7 @@ class RealContext(Context):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-    def round_at(self, x, n):
+    def round_at(self, x, n: int, *, exact: bool = False):
         raise RuntimeError('cannot round at a specific position in real context')
 
 

@@ -123,7 +123,7 @@ class MPFloatContext(Context):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero()
 
-    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
 
@@ -144,13 +144,15 @@ class MPFloatContext(Context):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        xr = x.round(max_p=self.pmax, min_n=n, rm=self.rm)
+        xr = x.round(self.pmax, n, self.rm, exact=exact)
+
+        # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)
 
     def round_params(self):
         return (self.pmax, None)
 
-    def _round_at(self, x, n: Optional[int]) -> Float:
+    def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x
@@ -166,10 +168,10 @@ class MPFloatContext(Context):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float_at(xr, n)
+        return self._round_float_at(xr, n, exact)
 
-    def round(self, x) -> Float:
-        return self._round_at(x, None)
+    def round(self, x, *, exact: bool = False) -> Float:
+        return self._round_at(x, None, exact)
 
-    def round_at(self, x, n: int) -> Float:
-        return self._round_at(x, n)
+    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
+        return self._round_at(x, n, exact)

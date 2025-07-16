@@ -171,7 +171,7 @@ class MPSFloatContext(OrdinalContext):
     def round_params(self):
         return (self.pmax, self.nmin)
 
-    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
 
@@ -198,10 +198,12 @@ class MPSFloatContext(OrdinalContext):
             n = self.nmin
 
         # step 3. round value based on rounding parameters
-        xr = x.round(self.pmax, n, self.rm)
+        xr = x.round(self.pmax, n, self.rm, exact=exact)
+
+        # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)
 
-    def _round_at(self, x, n: Optional[int]) -> Float:
+    def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x
@@ -217,13 +219,13 @@ class MPSFloatContext(OrdinalContext):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float_at(xr, n)
+        return self._round_float_at(xr, n, exact)
 
-    def round(self, x) -> Float:
-        return self._round_at(x, None)
+    def round(self, x, *, exact: bool = False) -> Float:
+        return self._round_at(x, None, exact)
 
-    def round_at(self, x, n: int) -> Float:
-        return self._round_at(x, n)
+    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
+        return self._round_at(x, n, exact)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):

@@ -278,7 +278,7 @@ class MPBFixedContext(SizedContext):
         else:
             return x > self.pos_maxval
 
-    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
         """
         Like `self.round_at()` but only for `RealFloat` or `Float` instances.
 
@@ -320,10 +320,14 @@ class MPBFixedContext(SizedContext):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        xr = xr.round(min_n=n, rm=self.rm)
+        xr = xr.round(min_n=n, rm=self.rm, exact=exact)
 
         # step 4. check for overflow
         if self._is_overflowing(xr):
+            # check if overflow is allowed
+            if exact:
+                raise ValueError(f'Rounding {x} under self={self} with n={n} would overflow')
+
             # overflow
             match self.overflow:
                 case FixedOverflowKind.OVERFLOW:
@@ -342,7 +346,7 @@ class MPBFixedContext(SizedContext):
         # step 5. return the rounded value
         return Float(x=xr, ctx=self)
 
-    def _round_at(self, x, n: Optional[int]) -> Float:
+    def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x
@@ -358,15 +362,15 @@ class MPBFixedContext(SizedContext):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float_at(xr, n)
+        return self._round_float_at(xr, n, exact)
 
-    def round(self, x):
-        return self._round_at(x, None)
+    def round(self, x, *, exact: bool = False):
+        return self._round_at(x, None, exact)
 
-    def round_at(self, x, n: int):
+    def round_at(self, x, n: int, *, exact: bool = False):
         if not isinstance(n, int):
             raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
-        return self._round_at(x, n)
+        return self._round_at(x, n, exact)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float) or not self.is_representable(x):

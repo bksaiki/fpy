@@ -223,7 +223,7 @@ class MPBFloatContext(SizedContext):
             case _:
                 raise RuntimeError(f'unrechable {direction}')
 
-    def _round_float_at(self, x: RealFloat | Float, n: Optional[int]) -> Float:
+    def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
 
@@ -250,10 +250,14 @@ class MPBFloatContext(SizedContext):
             n = self.nmin
 
         # step 4. round value based on rounding parameters
-        rounded = x.round(self.pmax, n, self.rm)
+        rounded = x.round(self.pmax, n, self.rm, exact=exact)
 
         # step 5. check for overflow
         if self._is_overflowing(rounded):
+            # check if overflow is allowed
+            if exact:
+                raise ValueError(f'Rounding {x} under self={self} with n={n} would overflow')
+
             # overflowing => check which way to round
             if self._overflow_to_infinity(rounded):
                 # overflow to infinity
@@ -266,7 +270,7 @@ class MPBFloatContext(SizedContext):
         # step 6. return rounded result
         return Float(x=rounded, ctx=self)
 
-    def _round_at(self, x, n: Optional[int]) -> Float:
+    def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x
@@ -282,13 +286,13 @@ class MPBFloatContext(SizedContext):
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
-        return self._round_float_at(xr, n)
+        return self._round_float_at(xr, n, exact)
 
-    def round(self, x) -> Float:
-        return self._round_at(x, None)
+    def round(self, x, *, exact: bool = False) -> Float:
+        return self._round_at(x, None, exact)
 
-    def round_at(self, x, n: int) -> Float:
-        return self._round_at(x, n)
+    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
+        return self._round_at(x, n, exact)
 
     def to_ordinal(self, x: Float, infval = False):
         if not isinstance(x, Float):
