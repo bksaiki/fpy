@@ -10,7 +10,7 @@ from .number.gmp import *
 from .number.real import (
     RealContext,
     real_add, real_sub, real_mul, real_neg, real_abs,
-    real_ceil, real_floor, real_trunc, real_round,
+    real_ceil, real_floor, real_trunc, real_roundint,
     real_fma
 )
 
@@ -61,13 +61,14 @@ __all__ = [
     'tanh',
     'tgamma',
     # Rounding operations
-    'cast',
+    'round',
+    'round_exact',
     # Round-to-integer operations
     'ceil',
     'floor',
     'trunc',
     'nearbyint',
-    'round',
+    'roundint',
     # Classification
     'isnan',
     'isinf',
@@ -510,7 +511,7 @@ def tgamma(x: Real, ctx: Optional[Context] = None):
 #############################################################################
 # Rounding operations
 
-def cast(x: Real, ctx: Optional[Context] = None) -> Float:
+def round(x: Real, ctx: Optional[Context] = None) -> Float:
     """
     Rounds `x` under the given context `ctx`.
 
@@ -525,6 +526,23 @@ def cast(x: Real, ctx: Optional[Context] = None) -> Float:
             return x
         case _:
             return ctx.round(x)
+
+def round_exact(x: Real, ctx: Optional[Context] = None) -> Float:
+    """
+    Rounds `x` under the given context `ctx`.
+
+    If `ctx` is `None`, this operation is the identity operation.
+    If the operation is not exact, it raises a ValueError.
+    """
+    x = _real_to_float(x)
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    match ctx:
+        case None | RealContext():
+            # real computation; no rounding
+            return x
+        case _:
+            return ctx.round(x, exact=True)
 
 #############################################################################
 # Round-to-integer operations
@@ -597,7 +615,7 @@ def nearbyint(x: Real, ctx: Optional[Context] = None):
         case _:
             return ctx.round_integer(x)
 
-def round(x: Real, ctx: Optional[Context] = None):
+def roundint(x: Real, ctx: Optional[Context] = None):
     """
     Rounds `x` to the nearest representable integer,
     rounding ties away from zero in halfway cases.
@@ -610,7 +628,7 @@ def round(x: Real, ctx: Optional[Context] = None):
     match ctx:
         case None | RealContext():
             # use rounding primitives
-            return real_round(x)
+            return real_roundint(x)
         case _:
             return ctx.with_rm(RoundingMode.RNA).round_integer(x)
 

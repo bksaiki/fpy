@@ -658,11 +658,11 @@ def f163(arg1):
 
 @fpy(context=IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE))
 def f164():
-    return round(1.0)
+    return roundint(1.0)
 
 @fpy(context=IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE))
 def f165(arg1):
-    return round(arg1)
+    return roundint(arg1)
 
 @fpy(context=IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE))
 def f166():
@@ -674,11 +674,11 @@ def f167(arg1):
 
 @fpy(context=IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE))
 def f168():
-    return cast(1.0)
+    return round(1.0)
 
 @fpy(context=IEEEContext(es=8, nbits=32, rm=RoundingMode.RNE))
 def f169(arg1):
-    return cast(arg1)
+    return round(arg1)
 
 @fpy(context=IEEEContext(es=15, nbits=80, rm=RoundingMode.RNE))
 def f170():
@@ -1330,11 +1330,11 @@ def f331(arg1):
 
 @fpy(context=IEEEContext(es=15, nbits=80, rm=RoundingMode.RNE))
 def f332():
-    return round(1.0)
+    return roundint(1.0)
 
 @fpy(context=IEEEContext(es=15, nbits=80, rm=RoundingMode.RNE))
 def f333(arg1):
-    return round(arg1)
+    return roundint(arg1)
 
 @fpy(context=IEEEContext(es=15, nbits=80, rm=RoundingMode.RNE))
 def f334():
@@ -1346,11 +1346,11 @@ def f335(arg1):
 
 @fpy(context=IEEEContext(es=15, nbits=80, rm=RoundingMode.RNE))
 def f336():
-    return cast(1.0)
+    return round(1.0)
 
 @fpy(context=IEEEContext(es=15, nbits=80, rm=RoundingMode.RNE))
 def f337(arg1):
-    return cast(arg1)
+    return round(arg1)
 
 @fpy(context=IEEEContext(es=15, nbits=80, rm=RoundingMode.RNE))
 def f338():
@@ -3122,11 +3122,11 @@ def f641(arg1):
 
 @fpy
 def f642():
-    return round(1.0)
+    return roundint(1.0)
 
 @fpy
 def f643(arg1):
-    return round(arg1)
+    return roundint(arg1)
 
 @fpy
 def f644():
@@ -3138,11 +3138,11 @@ def f645(arg1):
 
 @fpy
 def f646():
-    return cast(1.0)
+    return round(1.0)
 
 @fpy
 def f647(arg1):
-    return cast(arg1)
+    return round(arg1)
 
 @fpy(spec=lambda a, b: (b - a))
 def f648(a, b):

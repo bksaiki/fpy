@@ -37,7 +37,7 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     ceil: Ceil,
     floor: Floor,
     nearbyint: NearbyInt,
-    round: Round,
+    roundint: RoundInt,
     trunc: Trunc,
     acos: Acos,
     asin: Asin,
@@ -67,7 +67,8 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     isnan: IsNan,
     isnormal: IsNormal,
     signbit: Signbit,
-    cast: Cast,
+    round: Round,
+    round_exact: RoundExact,
     range: Range,
     dim: Dim,
     enumerate: Enumerate

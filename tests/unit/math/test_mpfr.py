@@ -66,7 +66,7 @@ _unary_ops = {
     floor : gmp.floor,
     trunc : gmp.trunc,
     nearbyint : gmp.rint,
-    round : gmp.round_away
+    roundint : gmp.round_away
 }
 
 _binary_ops = {

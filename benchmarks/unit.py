@@ -1488,7 +1488,7 @@ def Test_if__u40_6_u47_6_u41_():
     spec=lambda : 1.0,
 )
 def Test_cast__u40_1_u47_1_u41_():
-    return cast(1.0)
+    return round(1.0)
 
 @fpy(
     name='Test ! (1/1)',
@@ -2393,28 +2393,28 @@ def Test_trunc__u40_4_u47_4_u41_():
     spec=lambda : 0.0,
 )
 def Test_round__u40_1_u47_4_u41_():
-    return round(0.0)
+    return roundint(0.0)
 
 @fpy(
     name='Test round (2/4)',
     spec=lambda : 0.0,
 )
 def Test_round__u40_2_u47_4_u41_():
-    return round(0.25)
+    return roundint(0.25)
 
 @fpy(
     name='Test round (3/4)',
     spec=lambda : 1.0,
 )
 def Test_round__u40_3_u47_4_u41_():
-    return round(0.75)
+    return roundint(0.75)
 
 @fpy(
     name='Test round (4/4)',
     spec=lambda : 1.0,
 )
 def Test_round__u40_4_u47_4_u41_():
-    return round(1.0)
+    return roundint(1.0)
 
 @fpy(
     name='Test nearbyint (1/4)',

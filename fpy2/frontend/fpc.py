@@ -43,7 +43,7 @@ _unary_table: dict[str, type[UnaryOp] | type[NamedUnaryOp]] = {
     'ceil': Ceil,
     'floor': Floor,
     'nearbyint': NearbyInt,
-    'round': Round,
+    'round': RoundInt,
     'trunc': Trunc,
     'acos': Acos,
     'asin': Asin,
@@ -73,7 +73,7 @@ _unary_table: dict[str, type[UnaryOp] | type[NamedUnaryOp]] = {
     'isnan': IsNan,
     'isnormal': IsNormal,
     'signbit': Signbit,
-    'cast': Cast,
+    'cast': Round,
     'range': Range,
     'dim': Dim,
 }

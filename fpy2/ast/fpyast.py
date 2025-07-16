@@ -109,7 +109,7 @@ __all__ = [
     'Ceil',
     'Floor',
     'NearbyInt',
-    'Round',
+    'RoundInt',
     'Trunc',
 
     # Trigonometric functions
@@ -158,7 +158,8 @@ __all__ = [
     'And',
 
     # Rounding operator
-    'Cast',
+    'Round',
+    'RoundExact',
 
     # Tensor operators
     'Range',
@@ -781,7 +782,7 @@ class Floor(NamedUnaryOp):
 class NearbyInt(NamedUnaryOp):
     """FPy node: nearest integer"""
 
-class Round(NamedUnaryOp):
+class RoundInt(NamedUnaryOp):
     """FPy node: round"""
 
 class Trunc(NamedUnaryOp):
@@ -901,7 +902,10 @@ class And(NaryOp):
 
 # Rounding operator
 
-class Cast(NamedUnaryOp):
+class Round(NamedUnaryOp):
+    """FPy node: inter-format rounding"""
+
+class RoundExact(NamedUnaryOp):
     """FPy node: inter-format rounding"""
 
 # Tensor operators
