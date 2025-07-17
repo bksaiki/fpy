@@ -12,7 +12,7 @@ from ..utils import default_repr
 from .context import Context, SizedContext
 from .number import RealFloat, Float
 from .mps_float import MPSFloatContext
-from .round import RoundingMode, RoundingDirection
+from .round import RoundingMode, RoundingDirection, OverflowMode
 from .gmp import mpfr_value
 
 
@@ -48,6 +48,9 @@ class MPBFloatContext(SizedContext):
     rm: RoundingMode
     """rounding mode"""
 
+    overflow: OverflowMode
+    """overflow behavior"""
+
     _mps_ctx: MPSFloatContext
     """this context without maximum values"""
 
@@ -62,7 +65,9 @@ class MPBFloatContext(SizedContext):
         pmax: int,
         emin: int,
         maxval: RealFloat, 
-        rm: RoundingMode, *,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: OverflowMode = OverflowMode.OVERFLOW,
+        *,
         neg_maxval: Optional[RealFloat] = None
     ):
         if not isinstance(pmax, int):
@@ -75,6 +80,11 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'RealFloat\' for maxval={maxval}, got {type(maxval)}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if not isinstance(overflow, OverflowMode):
+            raise TypeError(f'Expected \'OverflowMode\' for overflow={overflow}, got {type(overflow)}')
+
+        if overflow == OverflowMode.WRAP:
+            raise ValueError('OverflowMode.WRAP is not supported for MPBFloatContext')
 
         if maxval.s:
             raise ValueError(f'Expected positive maxval={maxval}, got {maxval}')
@@ -95,6 +105,7 @@ class MPBFloatContext(SizedContext):
         self.pos_maxval = maxval
         self.neg_maxval = neg_maxval
         self.rm = rm
+        self.overflow = overflow
 
         self._mps_ctx = MPSFloatContext(pmax, emin, rm)
         pos_maxval_mps = Float(x=self.pos_maxval, ctx=self._mps_ctx)
@@ -139,8 +150,31 @@ class MPBFloatContext(SizedContext):
         """
         return self._mps_ctx.nmin
 
-    def with_rm(self, rm: RoundingMode):
-        return MPBFloatContext(self.pmax, self.emin, self.pos_maxval, rm, neg_maxval=self.neg_maxval)
+    def with_params(
+        self, *,
+        pmax: Optional[int] = None,
+        emin: Optional[int] = None,
+        maxval: Optional[RealFloat] = None,
+        rm: Optional[RoundingMode] = None,
+        overflow: Optional[OverflowMode] = None,
+        neg_maxval: Optional[RealFloat] = None,
+        **kwargs
+    ) -> 'MPBFloatContext':
+        if pmax is None:
+            pmax = self.pmax
+        if emin is None:
+            emin = self.emin
+        if maxval is None:
+            maxval = self.pos_maxval
+        if rm is None:
+            rm = self.rm
+        if overflow is None:
+            overflow = self.overflow
+        if neg_maxval is None:
+            neg_maxval = self.neg_maxval
+        if kwargs:
+            raise TypeError(f'Unexpected keyword arguments: {kwargs}')
+        return MPBFloatContext(pmax, emin, maxval, rm, overflow, neg_maxval=neg_maxval)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
@@ -258,14 +292,23 @@ class MPBFloatContext(SizedContext):
             if exact:
                 raise ValueError(f'Rounding {x} under self={self} with n={n} would overflow')
 
-            # overflowing => check which way to round
-            if self._overflow_to_infinity(rounded):
-                # overflow to infinity
-                return Float(x=x, isinf=True, ctx=self)
-            else:
-                # overflow to MAX_VAL
-                max_val = self.maxval(rounded.s)
-                return Float(x=max_val, ctx=self)
+            # case split on overflow behavior
+            match self.overflow:
+                case OverflowMode.OVERFLOW:
+                    # overflowing => check which way to round
+                    if self._overflow_to_infinity(rounded):
+                        # overflow to infinity
+                        return Float(x=x, isinf=True, ctx=self)
+                    else:
+                        # overflow to MAX_VAL
+                        max_val = self.maxval(rounded.s)
+                        return Float(x=max_val, ctx=self)
+                case OverflowMode.SATURATE:
+                    # always produce the maximum value
+                    max_val = self.maxval(rounded.s)
+                    return Float(x=max_val, ctx=self)
+                case _:
+                    raise RuntimeError(f'unreachable: {self.overflow}')
 
         # step 6. return rounded result
         return Float(x=rounded, ctx=self)

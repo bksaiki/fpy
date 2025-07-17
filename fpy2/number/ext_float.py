@@ -7,7 +7,7 @@ from enum import IntEnum
 from .context import Context, EncodableContext
 from .number import RealFloat, Float
 from .mpb_float import MPBFloatContext
-from .round import RoundingMode
+from .round import RoundingMode, OverflowMode
 
 @enum_repr
 class ExtFloatNanKind(IntEnum):
@@ -56,6 +56,9 @@ class ExtFloatContext(EncodableContext):
     rm: RoundingMode
     """rounding mode"""
 
+    overflow: OverflowMode
+    """overflow behavior"""
+
     _mpb_ctx: MPBFloatContext
     """this context as an `MPBFloatContext`"""
 
@@ -66,7 +69,8 @@ class ExtFloatContext(EncodableContext):
         enable_inf: bool,
         nan_kind: ExtFloatNanKind,
         eoffset: int,
-        rm: RoundingMode,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: OverflowMode = OverflowMode.OVERFLOW,
     ):
         if not isinstance(es, int):
             raise TypeError(f'Expected \'int\', got \'{type(es)}\' for es={es}')
@@ -74,6 +78,8 @@ class ExtFloatContext(EncodableContext):
             raise TypeError(f'Expected \'int\', got \'{type(nbits)}\' for nbits={nbits}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\', got \'{type(rm)}\' for rm={rm}')
+        if not isinstance(overflow, OverflowMode):
+            raise TypeError(f'Expected \'OverflowMode\', got \'{type(overflow)}\' for overflow={overflow}')
         if not isinstance(enable_inf, bool):
             raise TypeError(f'Expected \'bool\', got \'{type(enable_inf)}\' for enable_inf={enable_inf}')
         if not isinstance(nan_kind, ExtFloatNanKind):
@@ -88,13 +94,17 @@ class ExtFloatContext(EncodableContext):
                 f'nan_kind={nan_kind}, eoffset={eoffset}'
             )
 
+        if overflow == OverflowMode.WRAP:
+            raise ValueError('OverflowMode.WRAP is not supported for ExtFloatContext')
+
         self.es = es
         self.nbits = nbits
         self.enable_inf = enable_inf
         self.nan_kind = nan_kind
         self.eoffset = eoffset
         self.rm = rm
-        self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm)
+        self.overflow = overflow
+        self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow)
 
     def __eq__(self, other):
         return (
@@ -159,8 +169,34 @@ class ExtFloatContext(EncodableContext):
         """The exponent "bias" when encoding / decoding values."""
         return self.emax - self.eoffset
 
-    def with_rm(self, rm):
-        return ExtFloatContext(self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset, rm)
+    def with_params(
+        self, *,
+        es: int | None = None,
+        nbits: int | None = None,
+        enable_inf: bool | None = None,
+        nan_kind: ExtFloatNanKind | None = None,
+        eoffset: int | None = None,
+        rm: RoundingMode | None = None,
+        overflow: OverflowMode | None = None,
+        **kwargs
+    ) -> 'ExtFloatContext':
+        if es is None:
+            es = self.es
+        if nbits is None:
+            nbits = self.nbits
+        if enable_inf is None:
+            enable_inf = self.enable_inf
+        if nan_kind is None:
+            nan_kind = self.nan_kind
+        if eoffset is None:
+            eoffset = self.eoffset
+        if rm is None:
+            rm = self.rm
+        if overflow is None:
+            overflow = self.overflow
+        if kwargs:
+            raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')
+        return ExtFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
@@ -570,7 +606,8 @@ def _ext_to_mpb(
     enable_inf: bool,
     nan_kind: ExtFloatNanKind,
     eoffset: int,
-    rm: RoundingMode
+    rm: RoundingMode,
+    overflow: OverflowMode
 ) -> MPBFloatContext:
     """Converts between `ExtFloatContext` and `MPBFloatContext` parameters."""
     # IEEE 754 derived parameters
@@ -645,4 +682,4 @@ def _ext_to_mpb(
     maxval = maxval.normalize(p, expmin - 1)
 
     # create the related MPB context
-    return MPBFloatContext(p, emin, maxval, rm)
+    return MPBFloatContext(p, emin, maxval, rm, overflow)

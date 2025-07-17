@@ -4,7 +4,7 @@ by the IEEE 754 standard.
 """
 
 from .ext_float import ExtFloatContext, ExtFloatNanKind
-from .round import RoundingMode
+from .round import RoundingMode, OverflowMode
 
 class IEEEContext(ExtFloatContext):
     """
@@ -19,11 +19,34 @@ class IEEEContext(ExtFloatContext):
     By inheritance, `IEEEContext` implements `EncodingContext`.
     """
 
-    def __init__(self, es: int, nbits: int, rm: RoundingMode):
-        super().__init__(es, nbits, True, ExtFloatNanKind.IEEE_754, 0, rm)
+    def __init__(
+        self,
+        es: int,
+        nbits: int,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: OverflowMode = OverflowMode.OVERFLOW
+    ):
+        super().__init__(es, nbits, True, ExtFloatNanKind.IEEE_754, 0, rm, overflow)
 
     def __repr__(self):
-        return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r})'
+        return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r}, overflow={self.overflow!r})'
 
-    def with_rm(self, rm: RoundingMode):
-        return IEEEContext(self.es, self.nbits, rm)
+    def with_params(
+        self, *,
+        es: int | None = None,
+        nbits: int | None = None,
+        rm: RoundingMode | None = None,
+        overflow: OverflowMode | None = None,
+        **kwargs
+    ) -> 'IEEEContext':
+        if es is None:
+            es = self.es
+        if nbits is None:
+            nbits = self.nbits
+        if rm is None:
+            rm = self.rm
+        if overflow is None:
+            overflow = self.overflow
+        if kwargs:
+            raise TypeError(f'Unexpected parameters {kwargs} for IEEEContext')
+        return IEEEContext(es, nbits, rm, overflow)

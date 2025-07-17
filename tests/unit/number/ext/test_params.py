@@ -1,7 +1,5 @@
 import unittest
 
-import unittest
-
 from fpy2 import (
     S1E5M2, S1E4M3,
     MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,

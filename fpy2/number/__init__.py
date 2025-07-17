@@ -10,13 +10,13 @@ from .fixed import FixedContext
 from .ieee754 import IEEEContext
 from .mp_fixed import MPFixedContext
 from .mp_float import MPFloatContext
-from .mpb_fixed import MPBFixedContext, FixedOverflowKind
+from .mpb_fixed import MPBFixedContext
 from .mpb_float import MPBFloatContext
 from .mps_float import MPSFloatContext
 from .real import RealContext
 
 # Rounding
-from .round import RoundingMode, RoundingDirection
+from .round import RoundingMode, RoundingDirection, OverflowMode
 
 # Miscellaneous
 from .native import default_float_convert, default_str_convert
@@ -27,8 +27,8 @@ from .native import default_float_convert, default_str_convert
 RM: TypeAlias = RoundingMode
 """alias for `RoundingMode`"""
 
-OF: TypeAlias = FixedOverflowKind
-"""alias for `FixedOverflowKind`"""
+OV: TypeAlias = OverflowMode
+"""alias for `OverflowMode`"""
 
 ###########################################################
 # Format aliases
@@ -38,7 +38,6 @@ REAL = RealContext()
 Alias for exact computation.
 Operations are never rounded under this context.
 """
-
 
 FP256 = IEEEContext(19, 256, RM.RNE)
 """
@@ -237,7 +236,7 @@ round towards zero rounding mode.
 Numbers rounded under this context behave like Python's native `int` type.
 """
 
-SINT8 = FixedContext(True, 0, 8, RM.RTZ, OF.WRAP)
+SINT8 = FixedContext(True, 0, 8, RM.RTZ, OV.WRAP)
 """
 Alias for a signed 8-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.
@@ -245,7 +244,7 @@ round towards zero rounding mode and wrapping overflow behavior.
 Rounding infinity or NaN under this context produces an OverflowError.
 """
 
-SINT16 = FixedContext(True, 0, 16, RM.RTZ, OF.WRAP)
+SINT16 = FixedContext(True, 0, 16, RM.RTZ, OV.WRAP)
 """
 Alias for a signed 16-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.
@@ -253,7 +252,7 @@ round towards zero rounding mode and wrapping overflow behavior.
 Rounding infinity or NaN under this context produces an OverflowError.
 """
 
-SINT32 = FixedContext(True, 0, 32, RM.RTZ, OF.WRAP)
+SINT32 = FixedContext(True, 0, 32, RM.RTZ, OV.WRAP)
 """
 Alias for a signed 32-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.
@@ -261,7 +260,7 @@ round towards zero rounding mode and wrapping overflow behavior.
 Rounding infinity or NaN under this context produces an OverflowError.
 """
 
-SINT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP)
+SINT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP)
 """
 Alias for a signed 64-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.
@@ -269,7 +268,7 @@ round towards zero rounding mode and wrapping overflow behavior.
 Rounding infinity or NaN under this context produces an OverflowError.
 """
 
-UINT8 = FixedContext(False, 0, 8, RM.RTZ, OF.WRAP)
+UINT8 = FixedContext(False, 0, 8, RM.RTZ, OV.WRAP)
 """
 Alias for an unsigned 8-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.
@@ -277,7 +276,7 @@ round towards zero rounding mode and wrapping overflow behavior.
 Rounding infinity or NaN under this context produces an OverflowError.
 """
 
-UINT16 = FixedContext(False, 0, 16, RM.RTZ, OF.WRAP)
+UINT16 = FixedContext(False, 0, 16, RM.RTZ, OV.WRAP)
 """
 Alias for an unsigned 16-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.
@@ -285,7 +284,7 @@ round towards zero rounding mode and wrapping overflow behavior.
 Rounding infinity or NaN under this context produces an OverflowError.
 """
 
-UINT32 = FixedContext(False, 0, 32, RM.RTZ, OF.WRAP)
+UINT32 = FixedContext(False, 0, 32, RM.RTZ, OV.WRAP)
 """
 Alias for an unsigned 32-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.
@@ -293,7 +292,7 @@ round towards zero rounding mode and wrapping overflow behavior.
 Rounding infinity or NaN under this context produces an OverflowError.
 """
 
-UINT64 = FixedContext(False, 0, 64, RM.RTZ, OF.WRAP)
+UINT64 = FixedContext(False, 0, 64, RM.RTZ, OV.WRAP)
 """
 Alias for an unsigned 64-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.

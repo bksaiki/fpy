@@ -562,7 +562,7 @@ def ceil(x: Real, ctx: Optional[Context] = None):
             # use rounding primitives
             return real_ceil(x)
         case _:
-            return ctx.with_rm(RoundingMode.RTP).round_integer(x)
+            return ctx.with_params(rm=RoundingMode.RTP).round_integer(x)
 
 def floor(x: Real, ctx: Optional[Context] = None):
     """
@@ -579,7 +579,7 @@ def floor(x: Real, ctx: Optional[Context] = None):
             # use rounding primitives
             return real_floor(x)
         case _:
-            return ctx.with_rm(RoundingMode.RTN).round_integer(x)
+            return ctx.with_params(rm=RoundingMode.RTN).round_integer(x)
 
 def trunc(x: Real, ctx: Optional[Context] = None):
     """
@@ -597,7 +597,7 @@ def trunc(x: Real, ctx: Optional[Context] = None):
             # use rounding primitives
             return real_trunc(x)
         case _:
-            return ctx.with_rm(RoundingMode.RTZ).round_integer(x)
+            return ctx.with_params(rm=RoundingMode.RTZ).round_integer(x)
 
 def nearbyint(x: Real, ctx: Optional[Context] = None):
     """
@@ -630,7 +630,7 @@ def roundint(x: Real, ctx: Optional[Context] = None):
             # use rounding primitives
             return real_roundint(x)
         case _:
-            return ctx.with_rm(RoundingMode.RNA).round_integer(x)
+            return ctx.with_params(rm=RoundingMode.RNA).round_integer(x)
 
 #############################################################################
 # Classification

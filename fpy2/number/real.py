@@ -25,8 +25,10 @@ class RealContext(Context):
     def __hash__(self):
         return hash(self.__class__)
 
-    def with_rm(self, rm: RoundingMode):
-        raise RuntimeError('cannot set rounding mode for real context')
+    def with_params(self, **kwargs) -> 'RealContext':
+        if kwargs:
+            raise TypeError(f'Unexpected parameters {kwargs} for RealContext')
+        return self
 
     def is_equiv(self, other: Context) -> bool:
         if not isinstance(other, Context):

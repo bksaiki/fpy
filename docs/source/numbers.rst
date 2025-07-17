@@ -387,10 +387,10 @@ Additional types for specifying rounding operations.
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.ExtFloatNanKind
+.. autoclass:: fpy2.OverflowMode
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.FixedOverflowKind
+.. autoclass:: fpy2.ExtFloatNanKind
    :members:
    :show-inheritance:

@@ -29,7 +29,7 @@ class MPFloatContext(Context):
     rm: RoundingMode
     """rounding mode"""
 
-    def __init__(self, pmax: int, rm: RoundingMode):
+    def __init__(self, pmax: int, rm: RoundingMode = RoundingMode.RNE):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -50,8 +50,19 @@ class MPFloatContext(Context):
     def __hash__(self):
         return hash((self.__class__, self.pmax, self.rm))
 
-    def with_rm(self, rm: RoundingMode):
-        return MPFloatContext(self.pmax, rm)
+    def with_params(
+        self, *, 
+        pmax: Optional[int] = None,
+        rm: Optional[RoundingMode] = None,
+        **kwargs
+    ) -> 'MPFloatContext':
+        if pmax is None:
+            pmax = self.pmax
+        if rm is None:
+            rm = self.rm
+        if kwargs:
+            raise TypeError(f'Unexpected keyword arguments: {kwargs}')
+        return MPFloatContext(pmax, rm)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
