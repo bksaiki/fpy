@@ -17,16 +17,16 @@ class Context(ABC):
     """
     Rounding context type.
 
-    Most mathematical operators on digital numbers
+    Most mathematical operators on numbers
     can be decomposed into two steps:
 
     1. a mathematically-correct operation over real numbers,
-    interpreting digital numbers as real numbers;
+    interpreting numbers as real numbers;
 
     2. a rounding operation to limit the number significant digits
     and decide how the "lost" digits will affect the final output.
 
-    Thus, rounding enforces a particular "format" for digital numbers,
+    Thus, rounding enforces a particular "format" for numbers,
     but they should just be considered unbounded real numbers
     when in isolation. The characteristics of the rounding operation are
     summarized by this type.
@@ -108,7 +108,7 @@ class Context(ABC):
     @abstractmethod
     def round(self, x, *, exact: bool = False) -> Float:
         """
-        Rounds any digital number according to this context.
+        Rounds any number according to this context.
 
         If `exact=True`, then the rounding operation will raise a `ValueError`
         if rounding produces an inexact result.
@@ -118,7 +118,7 @@ class Context(ABC):
     @abstractmethod
     def round_at(self, x, n: int, *, exact: bool = False) -> Float:
         """
-        Rounding any digital number of a representable value with
+        Rounding any number of a representable value with
         an unnormalized exponent of at minimum `n + 1`.
 
         Rounding is done by the following rules:
@@ -137,7 +137,7 @@ class Context(ABC):
 
     def round_integer(self, x) -> Float:
         """
-        Rounds any digital number to an integer according to this context.
+        Rounds any number to an integer according to this context.
 
         Rounding is done by the following rules:
 
@@ -163,7 +163,7 @@ class OrdinalContext(Context):
     @abstractmethod
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         """
-        Maps a digital number to an ordinal number.
+        Maps a number to an ordinal number.
 
         When `infval=True`, infinities are mapped to the next (or previous)
         logical ordinal value after +/-MAX_VAL. This option is only
@@ -174,7 +174,7 @@ class OrdinalContext(Context):
     @abstractmethod
     def from_ordinal(self, x: int, infval: bool = False) -> Float:
         """
-        Maps an ordinal number to a digital number.
+        Maps an ordinal number to a number.
 
         When `infval=True`, infinities are mapped to the next (or previous)
         logical ordinal value after +/-MAX_VAL. This option is only
@@ -221,7 +221,7 @@ class EncodableContext(SizedContext):
     @abstractmethod
     def encode(self, x: Float) -> int:
         """
-        Encodes a digital number constructed under this context as a bitstring.
+        Encodes a number constructed under this context as a bitstring.
         This operation is context dependent.
         """
         ...
@@ -229,7 +229,7 @@ class EncodableContext(SizedContext):
     @abstractmethod
     def decode(self, x: int) -> Float:
         """
-        Decodes a bitstring as a a digital number constructed under this context.
+        Decodes a bitstring as a a number constructed under this context.
         This operation is context dependent.
         """
         ...
