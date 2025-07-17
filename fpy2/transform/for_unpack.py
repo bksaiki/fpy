@@ -26,15 +26,17 @@ class _ForUnpackInstance(DefaultTransformVisitor):
                 # compile iterable and body
                 iterable = self._visit_expr(stmt.iterable, None)
                 body, _ = self._visit_block(stmt.body, None)
+                body_stmts = list(body.stmts)
 
                 # create a fresh variable for the tuple
                 t = self.gensym.fresh('t')
                 binding = self._visit_tuple_binding(stmt.target, ctx)
 
                 # insert tuple unpacking at the beginning of the body
-                body.stmts.insert(0, Assign(binding, None, Var(t, None), None))
+                body_stmts.insert(0, Assign(binding, None, Var(t, None), None))
 
                 # create the for statement with the fresh variable
+                body.stmts = tuple(body_stmts)
                 s = ForStmt(t, iterable, body, None)
                 return s, None
             case _:

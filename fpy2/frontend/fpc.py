@@ -55,7 +55,7 @@ def _get_unary_table():
             'ceil': Ceil,
             'floor': Floor,
             'nearbyint': NearbyInt,
-            'round': Round,
+            'round': RoundInt,
             'trunc': Trunc,
             'acos': Acos,
             'asin': Asin,

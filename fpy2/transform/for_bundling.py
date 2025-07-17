@@ -111,18 +111,20 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             iterable = self._visit_expr(stmt.iterable, None)
             body, _ = self._visit_block(stmt.body, None)
             body = RenameTarget.apply_block(body, rename)
+            body_stmts = list(body.stmts)
 
             # unpack the tuple at the start of the body
             # replace any variable in the target with `_`
             binding = TupleBinding([UnderscoreId() if var in target_names else rename[var] for var in mutated], None)
             s = Assign(binding, None, Var(t, None), None)
-            body.stmts.insert(0, s)
+            body_stmts.insert(0, s)
 
             # repack the tuple at the end of the body
             s = Assign(t, None, TupleExpr([Var(rename[v], None) for v in mutated], None), None)
-            body.stmts.append(s)
+            body_stmts.append(s)
 
             # append the for statement
+            body.stmts = tuple(body_stmts)
             s = ForStmt(target, iterable, body, None)
             stmts.append(s)
 

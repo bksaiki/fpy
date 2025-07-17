@@ -62,31 +62,33 @@ class _RewriteEngine(DefaultTransformVisitor):
         return ast, self.times_applied
 
     def _nested_applier(self, num_times: int):
-            if num_times == 1:
-                return self.applier
-            else:
-                pattern = self.applier.pattern
-                for _ in range(1, num_times):
-                    match pattern:
-                        case ExprPattern():
-                            # run the matcher on the applier pattern
-                            # this is a hacky way to emulate taint
-                            repeat_opt = _RewriteContext(0, 1, is_nested=True)
-                            expr = self._visit_expr(pattern.expr, repeat_opt)
-                            # TODO: this is a bit messy
-                            ast = pattern.to_ast()
-                            ast.body.stmts[0] = EffectStmt(expr, None)
-                            pattern = ExprPattern(ast)
-                        case StmtPattern():
-                            repeat_opt = _RewriteContext(0, 1, is_nested=True)
-                            block, _ = self._visit_block(pattern.block, repeat_opt)
-                            # TODO: this is a bit messy
-                            ast = pattern.to_ast()
-                            ast.body = block
-                            pattern = StmtPattern(ast)
-                        case _:
-                            raise RuntimeError(f'unreachable case: {pattern}')
-                return Applier(pattern)
+        if num_times == 1:
+            return self.applier
+        else:
+            pattern = self.applier.pattern
+            for _ in range(1, num_times):
+                match pattern:
+                    case ExprPattern():
+                        # run the matcher on the applier pattern
+                        # this is a hacky way to emulate taint
+                        repeat_opt = _RewriteContext(0, 1, is_nested=True)
+                        expr = self._visit_expr(pattern.expr, repeat_opt)
+                        # TODO: this is a bit messy
+                        ast = pattern.to_ast()
+                        body_stmts = list(ast.body.stmts)
+                        body_stmts[0] = EffectStmt(expr, None)
+                        ast.body.stmts = tuple(body_stmts)
+                        pattern = ExprPattern(ast)
+                    case StmtPattern():
+                        repeat_opt = _RewriteContext(0, 1, is_nested=True)
+                        block, _ = self._visit_block(pattern.block, repeat_opt)
+                        # TODO: this is a bit messy
+                        ast = pattern.to_ast()
+                        ast.body = block
+                        pattern = StmtPattern(ast)
+                    case _:
+                        raise RuntimeError(f'unreachable case: {pattern}')
+            return Applier(pattern)
 
     def _visit_expr(self, e: Expr, ctx: _RewriteContext):
         e = super()._visit_expr(e, ctx)

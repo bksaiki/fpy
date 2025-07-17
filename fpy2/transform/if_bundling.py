@@ -3,6 +3,8 @@ Transformation pass to pack mutated variables in an if statement
 into a single mutated variable.
 """
 
+from typing import overload
+
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
@@ -77,16 +79,18 @@ class _IfBundlingInstance(DefaultTransformVisitor):
             # compile the body and apply the renaming
             body, _ = self._visit_block(stmt.body, ctx)
             body = RenameTarget.apply_block(body, rename)
+            body_stmts = list(body.stmts)
 
             # unpack the tuple at the start of the body
             s = Assign(TupleBinding([rename[v] for v in mutated], None), None, Var(t, None), None)
-            body.stmts.insert(0, s)
+            body_stmts.insert(0, s)
 
             # repack the tuple at the end of the body
             s = Assign(t, None, TupleExpr([Var(rename[v], None) for v in mutated], None), None)
-            body.stmts.append(s)
+            body_stmts.append(s)
 
             # append the if statement
+            body.stmts = tuple(body_stmts)
             s = If1Stmt(cond, body, None)
             stmts.append(s)
 
@@ -159,6 +163,8 @@ class _IfBundlingInstance(DefaultTransformVisitor):
         iff, _ = self._visit_block(stmt.iff, ctx)
         ift = RenameTarget.apply_block(ift, rename_ift)
         iff = RenameTarget.apply_block(iff, rename_iff)
+        ift_stmts = list(ift.stmts)
+        iff_stmts = list(iff.stmts)
 
         num_mutated = len(mutated)
         if num_mutated > 1:
@@ -174,8 +180,8 @@ class _IfBundlingInstance(DefaultTransformVisitor):
             cond = self._visit_expr(stmt.cond, cond_ctx)
 
             # unpack the tuple at the start of each body
-            ift.stmts.insert(0, Assign(TupleBinding([rename_ift[v] for v in mutated], None), None, Var(t, None), None))
-            iff.stmts.insert(0, Assign(TupleBinding([rename_iff[v] for v in mutated], None), None, Var(t, None), None))
+            ift_stmts.insert(0, Assign(TupleBinding([rename_ift[v] for v in mutated], None), None, Var(t, None), None))
+            iff_stmts.insert(0, Assign(TupleBinding([rename_iff[v] for v in mutated], None), None, Var(t, None), None))
         elif num_mutated == 1:
             # only a single mutated variable
             # need to reassign in each body
@@ -185,8 +191,8 @@ class _IfBundlingInstance(DefaultTransformVisitor):
 
             # reassign the mutated variable in each body
             mut = mutated[0]
-            ift.stmts.insert(0, Assign(rename_ift[mut], None, Var(mut, None), None))
-            iff.stmts.insert(0, Assign(rename_iff[mut], None, Var(mut, None), None))
+            ift_stmts.insert(0, Assign(rename_ift[mut], None, Var(mut, None), None))
+            iff_stmts.insert(0, Assign(rename_iff[mut], None, Var(mut, None), None))
         else:
             # compile the condition
             cond = self._visit_expr(stmt.cond, ctx)
@@ -201,8 +207,8 @@ class _IfBundlingInstance(DefaultTransformVisitor):
             t = self.gensym.fresh('t')
 
             # repack the tuple at the end of each body
-            ift.stmts.append(Assign(t, None, TupleExpr([Var(rename_ift[v], None) for v in mutated + intros], None), None))
-            iff.stmts.append(Assign(t, None, TupleExpr([Var(rename_iff[v], None) for v in mutated + intros], None), None))
+            ift_stmts.append(Assign(t, None, TupleExpr([Var(rename_ift[v], None) for v in mutated + intros], None), None))
+            iff_stmts.append(Assign(t, None, TupleExpr([Var(rename_iff[v], None) for v in mutated + intros], None), None))
 
             # unpack the tuple after the if statement
             s = Assign(TupleBinding(mutated + intros, None), None, Var(t, None), None)
@@ -212,11 +218,12 @@ class _IfBundlingInstance(DefaultTransformVisitor):
             name = changed[0]
 
             # reassign the mutated variable at the end of each body
-            ift.stmts.append(Assign(name, None, Var(rename_ift[name], None), None))
-            iff.stmts.append(Assign(name, None, Var(rename_iff[name], None), None))
+            ift_stmts.append(Assign(name, None, Var(rename_ift[name], None), None))
+            iff_stmts.append(Assign(name, None, Var(rename_iff[name], None), None))
 
+        ift.stmts = tuple(ift_stmts)
+        iff.stmts = tuple(iff_stmts)
         return StmtBlock(stmts)
-
 
     def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         stmts: list[Stmt] = []

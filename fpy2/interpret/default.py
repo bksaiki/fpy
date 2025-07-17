@@ -163,7 +163,6 @@ class _Interpreter(Visitor):
 
     def eval(self, func: FuncDef, args: Sequence[Any], ctx: Context):
         # check arity
-        args = tuple(args)
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
 
@@ -470,14 +469,16 @@ class _Interpreter(Visitor):
         value = self._visit_expr(e.array, ctx)
         if not isinstance(value, list):
             raise TypeError(f'expected a tensor, got {value}')
-
         array = copy.deepcopy(value) # make a copy
-        slices = tuple(self._visit_expr(s, ctx) for s in e.slices)
-        for val in slices:
+
+        slices = []
+        for s in e.slices:
+            val = self._visit_expr(s, ctx)
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
+            slices.append(int(val))
 
         val = self._visit_expr(e.value, ctx)
         for idx in slices[:-1]:
@@ -547,12 +548,14 @@ class _Interpreter(Visitor):
         array = self._lookup(stmt.var, ctx)
 
         # evaluate indices
-        slices = tuple(self._visit_expr(s, ctx) for s in stmt.slices)
-        for val in slices:
+        slices: list[int] = []
+        for slice in stmt.slices:
+            val = self._visit_expr(slice, ctx)
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
+            slices.append(int(val))
 
         # evaluate and update array
         val = self._visit_expr(stmt.expr, ctx)
