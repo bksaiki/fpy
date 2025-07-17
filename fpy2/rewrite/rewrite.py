@@ -62,31 +62,31 @@ class _RewriteEngine(DefaultTransformVisitor):
         return ast, self.times_applied
 
     def _nested_applier(self, num_times: int):
-            if num_times == 1:
-                return self.applier
-            else:
-                pattern = self.applier.pattern
-                for _ in range(1, num_times):
-                    match pattern:
-                        case ExprPattern():
-                            # run the matcher on the applier pattern
-                            # this is a hacky way to emulate taint
-                            repeat_opt = _RewriteContext(0, 1, is_nested=True)
-                            expr = self._visit_expr(pattern.expr, repeat_opt)
-                            # TODO: this is a bit messy
-                            ast = pattern.to_ast()
-                            ast.body.stmts[0] = EffectStmt(expr, None)
-                            pattern = ExprPattern(ast)
-                        case StmtPattern():
-                            repeat_opt = _RewriteContext(0, 1, is_nested=True)
-                            block, _ = self._visit_block(pattern.block, repeat_opt)
-                            # TODO: this is a bit messy
-                            ast = pattern.to_ast()
-                            ast.body = block
-                            pattern = StmtPattern(ast)
-                        case _:
-                            raise RuntimeError(f'unreachable case: {pattern}')
-                return Applier(pattern)
+        if num_times == 1:
+            return self.applier
+        else:
+            pattern = self.applier.pattern
+            for _ in range(1, num_times):
+                match pattern:
+                    case ExprPattern():
+                        # run the matcher on the applier pattern
+                        # this is a hacky way to emulate taint
+                        repeat_opt = _RewriteContext(0, 1, is_nested=True)
+                        expr = self._visit_expr(pattern.expr, repeat_opt)
+                        # TODO: this is a bit messy
+                        ast = pattern.to_ast()
+                        ast.body.stmts[0] = EffectStmt(expr, None)
+                        pattern = ExprPattern(ast)
+                    case StmtPattern():
+                        repeat_opt = _RewriteContext(0, 1, is_nested=True)
+                        block, _ = self._visit_block(pattern.block, repeat_opt)
+                        # TODO: this is a bit messy
+                        ast = pattern.to_ast()
+                        ast.body = block
+                        pattern = StmtPattern(ast)
+                    case _:
+                        raise RuntimeError(f'unreachable case: {pattern}')
+            return Applier(pattern)
 
     def _visit_expr(self, e: Expr, ctx: _RewriteContext):
         e = super()._visit_expr(e, ctx)
@@ -111,7 +111,7 @@ class _RewriteEngine(DefaultTransformVisitor):
             # check if rewrite applies here
             pattern_size = len(pattern.block.stmts)
             iterator = sliding_window(block.stmts, pattern_size)
-            new_block = StmtBlock([])
+            new_stmts: list[Stmt] = []
             try:
                 # termination guaranteed by finitely-sized iterator
                 while True:
@@ -126,7 +126,7 @@ class _RewriteEngine(DefaultTransformVisitor):
                             rw = applier.apply(pmatch)
                             if not isinstance(rw, StmtBlock):
                                 raise TypeError(f'Substitution produced \'StmtBlock\', got {type(rw)} for {rw}')
-                            new_block.stmts.extend(rw.stmts)
+                            new_stmts.extend(rw.stmts)
                             self.times_applied += 1
                             # skip rest of the block
                             for _ in range(pattern_size - 1):
@@ -134,7 +134,7 @@ class _RewriteEngine(DefaultTransformVisitor):
                         ctx.times_matched += 1
                     else:
                         # rewrite does not apply
-                        new_block.stmts.append(stmts[0])
+                        new_stmts.append(stmts[0])
             except StopIteration:
                 # end of the block to check
                 # we are missing the last N - 1 statements
@@ -144,7 +144,9 @@ class _RewriteEngine(DefaultTransformVisitor):
                     end_stmts = block.stmts[-(pattern_size - 1):]
                     assert len(end_stmts) == pattern_size - 1
                     # add the last N - 1 statements
-                    new_block.stmts.extend(end_stmts)
+                    new_stmts.extend(end_stmts)
+
+            new_block = StmtBlock(new_stmts)
             return new_block, None
         else:
             # pattern does not apply

@@ -210,6 +210,7 @@ __all__ = [
 @default_repr
 class Ast(ABC):
     """FPy AST: abstract base class for all AST nodes."""
+    __slots__ = ('_loc',)
     _loc: Optional[Location]
 
     def __init__(self, loc: Optional[Location]):
@@ -228,12 +229,14 @@ class Ast(ABC):
 
 class TypeAnn(Ast):
     """FPy AST: typing annotation"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
 class AnyTypeAnn(TypeAnn):
     """FPy AST: any type annotation"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
@@ -246,12 +249,14 @@ class AnyTypeAnn(TypeAnn):
 
 class ScalarTypeAnn(TypeAnn):
     """FPy AST: scalar type annotation"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
 class RealTypeAnn(TypeAnn):
     """FPy AST: real type annotation"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
@@ -264,6 +269,7 @@ class RealTypeAnn(TypeAnn):
 
 class BoolTypeAnn(TypeAnn):
     """FPy AST: boolean type annotation"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
@@ -276,17 +282,19 @@ class BoolTypeAnn(TypeAnn):
 
 class TensorTypeAnn(TypeAnn):
     """FPy AST: tensor type annotation"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
 class TupleTypeAnn(TensorTypeAnn):
     """FPy AST: native tuple type annotation"""
-    elts: list[TypeAnn]
+    __slots__ = ('elts',)
+    elts: tuple[TypeAnn, ...]
 
     def __init__(self, elts: list[TypeAnn], loc: Optional[Location]):
         super().__init__(loc)
-        self.elts = elts
+        self.elts = tuple(elts)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, TupleTypeAnn):
@@ -294,16 +302,17 @@ class TupleTypeAnn(TensorTypeAnn):
         return self.elts == other.elts
 
     def __hash__(self) -> int:
-        return hash(tuple(self.elts))
+        return hash(self.elts)
 
 class SizedTensorTypeAnn(TensorTypeAnn):
     """FPy AST: sized, homogenous tensor type annotation"""
-    dims: list[int | NamedId]
+    __slots__ = ('dims', 'elt')
+    dims: tuple[int | NamedId, ...]
     elt: TypeAnn
 
     def __init__(self, dims: list[int | NamedId], elt: TypeAnn, loc: Optional[Location]):
         super().__init__(loc)
-        self.dims = dims
+        self.dims = tuple(dims)
         self.elt = elt
 
     def __eq__(self, other: object) -> bool:
@@ -312,20 +321,21 @@ class SizedTensorTypeAnn(TensorTypeAnn):
         return self.dims == other.dims and self.elt == other.elt
 
     def __hash__(self) -> int:
-        return hash((tuple(self.dims), self.elt))
+        return hash((self.dims, self.elt))
 
 class ForeignAttribute(Ast):
     """
     FPy AST: attribute of a foreign object, e.g., `x.y`
     Attributes may be nested, e.g., `x.y.z`.
     """
+    __slots__ = ('name', 'attrs')
     name: NamedId
-    attrs: list[NamedId]
+    attrs: tuple[NamedId, ...]
 
     def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
         super().__init__(loc)
         self.name = name
-        self.attrs = list(attrs)
+        self.attrs = tuple(attrs)
 
     def __eq__(self, other):
         return (
@@ -336,13 +346,14 @@ class ForeignAttribute(Ast):
         )
 
     def __hash__(self):
-        return hash((self.name, tuple(self.attrs)))
+        return hash((self.name, self.attrs))
 
     def is_equiv(self, other) -> bool:
         return self == other
 
 class Expr(Ast):
     """FPy AST: expression"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
@@ -360,6 +371,7 @@ class Expr(Ast):
 
 class Stmt(Ast):
     """FPy AST: statement"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
@@ -377,12 +389,14 @@ class Stmt(Ast):
 
 class ValueExpr(Expr):
     """FPy Ast: terminal expression"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
 class Var(ValueExpr):
     """FPy AST: variable"""
+    __slots__ = ('name',)
     name: NamedId
 
     def __init__(self, name: NamedId, loc: Optional[Location]):
@@ -394,6 +408,7 @@ class Var(ValueExpr):
 
 class BoolVal(ValueExpr):
     """FPy AST: boolean value"""
+    __slots__ = ('val',)
     val: bool
 
     def __init__(self, val: bool, loc: Optional[Location]):
@@ -405,12 +420,14 @@ class BoolVal(ValueExpr):
 
 class RealVal(ValueExpr):
     """FPy AST: real value"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
 
 class RationalVal(RealVal):
     """FPy AST: abstract rational value"""
+    __slots__ = ()
 
     def __init__(self, loc: Optional[Location]):
         super().__init__(loc)
@@ -422,6 +439,7 @@ class RationalVal(RealVal):
 
 class Decnum(RationalVal):
     """FPy AST: decimal number"""
+    __slots__ = ('val',)
     val: str
 
     def __init__(self, val: str, loc: Optional[Location]):
@@ -436,6 +454,7 @@ class Decnum(RationalVal):
 
 class Hexnum(RationalVal):
     """FPy AST: hexadecimal number"""
+    __slots__ = ('func', 'val')
     func: NamedId | ForeignAttribute
     val: str
 
@@ -452,6 +471,7 @@ class Hexnum(RationalVal):
 
 class Integer(RationalVal):
     """FPy AST: integer"""
+    __slots__ = ('val',)
     val: int
 
     def __init__(self, val: int, loc: Optional[Location]):
@@ -466,6 +486,7 @@ class Integer(RationalVal):
 
 class Rational(RationalVal):
     """FPy AST: rational number"""
+    __slots__ = ('func', 'p', 'q')
     func: NamedId | ForeignAttribute
     p: int
     q: int
@@ -484,6 +505,7 @@ class Rational(RationalVal):
 
 class Digits(RationalVal):
     """FPy AST: scientific notation"""
+    __slots__ = ('func', 'm', 'e', 'b')
     func: NamedId | ForeignAttribute
     m: int
     e: int
@@ -509,6 +531,7 @@ class Digits(RationalVal):
 
 class ForeignVal(ValueExpr):
     """FPy AST: native Python value"""
+    __slots__ = ('val',)
     val: Any
 
     def __init__(self, val: Any, loc: Optional[Location]):
@@ -520,9 +543,11 @@ class ForeignVal(ValueExpr):
 
 class NaryExpr(Expr):
     """FPy AST: expression with N arguments"""
+    __slots__ = ()
 
 class NullaryOp(NaryExpr):
     """FPy AST: (named) nullary operation"""
+    __slots__ = ('func',)
     func: NamedId | ForeignAttribute
 
     def __init__(self, func: NamedId | ForeignAttribute, loc: Optional[Location]):
@@ -534,6 +559,7 @@ class NullaryOp(NaryExpr):
 
 class UnaryOp(NaryExpr):
     """FPy AST: unary operation"""
+    __slots__ = ('arg',)
     arg: Expr
 
     def __init__(
@@ -553,6 +579,7 @@ class UnaryOp(NaryExpr):
 
 class NamedUnaryOp(UnaryOp):
     """FPy AST: unary operation with a named function"""
+    __slots__ = ('func',)
     func: NamedId | ForeignAttribute
 
     def __init__(
@@ -566,6 +593,7 @@ class NamedUnaryOp(UnaryOp):
 
 class BinaryOp(NaryExpr):
     """FPy AST: binary operation"""
+    __slots__ = ('first', 'second')
     first: Expr
     second: Expr
 
@@ -589,6 +617,7 @@ class BinaryOp(NaryExpr):
 
 class NamedBinaryOp(BinaryOp):
     """FPy AST: binary operation with a named function"""
+    __slots__ = ('func',)
     func: NamedId | ForeignAttribute
 
     def __init__(
@@ -603,6 +632,7 @@ class NamedBinaryOp(BinaryOp):
 
 class TernaryOp(NaryExpr):
     """FPy AST: ternary operation"""
+    __slots__ = ('first', 'second', 'third')
     first: Expr
     second: Expr
     third: Expr
@@ -630,6 +660,7 @@ class TernaryOp(NaryExpr):
 
 class NamedTernaryOp(TernaryOp):
     """FPy AST: ternary operation with a named function"""
+    __slots__ = ('func',)
     func: NamedId | ForeignAttribute
 
     def __init__(
@@ -645,11 +676,12 @@ class NamedTernaryOp(TernaryOp):
 
 class NaryOp(NaryExpr):
     """FPy AST: n-ary operation"""
-    args: list[Expr]
+    __slots__ = ('args',)
+    args: tuple[Expr, ...]
 
     def __init__(self, args: Sequence[Expr], loc: Optional[Location]):
         super().__init__(loc)
-        self.args = list(args)
+        self.args = tuple(args)
 
     def is_equiv(self, other) -> bool:
         return (
@@ -660,6 +692,7 @@ class NaryOp(NaryExpr):
 
 class NamedNaryOp(NaryOp):
     """FPy AST: n-ary operation with a named function"""
+    __slots__ = ('func',)
     func: NamedId | ForeignAttribute
 
     def __init__(
@@ -675,230 +708,298 @@ class NamedNaryOp(NaryOp):
 
 class ConstNan(NullaryOp):
     """FPy node: NaN (constant)"""
+    __slots__ = ()
 
 class ConstInf(NullaryOp):
     """FPy node: infinity (constant)"""
+    __slots__ = ()
 
 class ConstPi(NullaryOp):
     """FPy node: π (constant)"""
+    __slots__ = ()
 
 class ConstE(NullaryOp):
     """FPy node: e (constant)"""
+    __slots__ = ()
 
 class ConstLog2E(NullaryOp):
     """FPy node: log₂(e) (constant)"""
+    __slots__ = ()
 
 class ConstLog10E(NullaryOp):
     """FPy node: log₁₀(e) (constant)"""
+    __slots__ = ()
 
 class ConstLn2(NullaryOp):
     """FPy node: ln(2) (constant)"""
+    __slots__ = ()
 
 class ConstPi_2(NullaryOp):
     """FPy node: π/2 (constant)"""
+    __slots__ = ()
 
 class ConstPi_4(NullaryOp):
     """FPy node: π/4 (constant)"""
+    __slots__ = ()
 
 class Const1_Pi(NullaryOp):
     """FPy node: 1/π (constant)"""
+    __slots__ = ()
 
 class Const2_Pi(NullaryOp):
     """FPy node: 2/π (constant)"""
+    __slots__ = ()
 
 class Const2_SqrtPi(NullaryOp):
     """FPy node: 2/√π (constant)"""
+    __slots__ = ()
 
 class ConstSqrt2(NullaryOp):
     """FPy node: √2 (constant)"""
+    __slots__ = ()
 
 class ConstSqrt1_2(NullaryOp):
     """FPy node: √(1/2) (constant)"""
+    __slots__ = ()
 
 # IEEE 754 required arithmetic
 
 class Add(BinaryOp):
     """FPy node: addition"""
+    __slots__ = ()
 
 class Sub(BinaryOp):
     """FPy node: subtraction"""
+    __slots__ = ()
 
 class Mul(BinaryOp):
     """FPy node: subtraction"""
+    __slots__ = ()
 
 class Div(BinaryOp):
     """FPy node: subtraction"""
+    __slots__ = ()
 
 class Fabs(NamedUnaryOp):
     """FPy node: absolute value"""
+    __slots__ = ()
 
 class Sqrt(NamedUnaryOp):
     """FPy node: square-root"""
+    __slots__ = ()
 
 class Fma(NamedTernaryOp):
     """FPy node: fused-multiply add"""
+    __slots__ = ()
 
 # Sign operations
 
 class Neg(UnaryOp):
     """FPy node: negation"""
+    __slots__ = ()
 
 class Copysign(NamedBinaryOp):
     """FPy node: copysign"""
+    __slots__ = ()
 
 # Composite arithmetic
 
 class Fdim(NamedBinaryOp):
     """FPy node: `max(x - y, 0)`"""
+    __slots__ = ()
 
 class Fmax(NamedBinaryOp):
     """FPy node: `max(x, y)`"""
+    __slots__ = ()
 
 class Fmin(NamedBinaryOp):
     """FPy node: `min(x, y)`"""
+    __slots__ = ()
 
 class Fmod(NamedBinaryOp):
     """FPy node: modulus"""
+    __slots__ = ()
 
 class Remainder(NamedBinaryOp):
     """FPy node: remainder"""
+    __slots__ = ()
 
 class Hypot(NamedBinaryOp):
     """FPy node: `sqrt(x ** 2 + y ** 2)`"""
+    __slots__ = ()
 
 # Other arithmetic
 
 class Cbrt(NamedUnaryOp):
     """FPy node: cube-root"""
+    __slots__ = ()
 
 # Rounding and truncation
 
 class Ceil(NamedUnaryOp):
     """FPy node: ceiling"""
+    __slots__ = ()
 
 class Floor(NamedUnaryOp):
     """FPy node: floor"""
+    __slots__ = ()
 
 class NearbyInt(NamedUnaryOp):
     """FPy node: nearest integer"""
+    __slots__ = ()
 
 class RoundInt(NamedUnaryOp):
     """FPy node: round"""
+    __slots__ = ()
 
 class Trunc(NamedUnaryOp):
     """FPy node: truncation"""
+    __slots__ = ()
 
 # Trigonometric functions
 
 class Acos(NamedUnaryOp):
     """FPy node: inverse cosine"""
+    __slots__ = ()
 
 class Asin(NamedUnaryOp):
     """FPy node: inverse sine"""
+    __slots__ = ()
 
 class Atan(NamedUnaryOp):
     """FPy node: inverse tangent"""
+    __slots__ = ()
 
 class Atan2(NamedBinaryOp):
     """FPy node: `atan(y / x)` with correct quadrant"""
+    __slots__ = ()
 
 class Cos(NamedUnaryOp):
     """FPy node: cosine"""
+    __slots__ = ()
 
 class Sin(NamedUnaryOp):
     """FPy node: sine"""
+    __slots__ = ()
 
 class Tan(NamedUnaryOp):
     """FPy node: tangent"""
+    __slots__ = ()
 
 # Hyperbolic functions
 
 class Acosh(NamedUnaryOp):
     """FPy node: inverse hyperbolic cosine"""
+    __slots__ = ()
 
 class Asinh(NamedUnaryOp):
     """FPy node: inverse hyperbolic sine"""
+    __slots__ = ()
 
 class Atanh(NamedUnaryOp):
     """FPy node: inverse hyperbolic tangent"""
+    __slots__ = ()
 
 class Cosh(NamedUnaryOp):
     """FPy node: hyperbolic cosine"""
+    __slots__ = ()
 
 class Sinh(NamedUnaryOp):
     """FPy node: hyperbolic sine"""
+    __slots__ = ()
 
 class Tanh(NamedUnaryOp):
     """FPy node: hyperbolic tangent"""
+    __slots__ = ()
 
 # Exponential / logarithmic functions
 
 class Exp(NamedUnaryOp):
     """FPy node: exponential (base e)"""
+    __slots__ = ()
 
 class Exp2(NamedUnaryOp):
     """FPy node: exponential (base 2)"""
+    __slots__ = ()
 
 class Expm1(NamedUnaryOp):
     """FPy node: `exp(x) - 1`"""
+    __slots__ = ()
 
 class Log(NamedUnaryOp):
     """FPy node: logarithm (base e)"""
+    __slots__ = ()
 
 class Log10(NamedUnaryOp):
     """FPy node: logarithm (base 10)"""
+    __slots__ = ()
 
 class Log1p(NamedUnaryOp):
     """FPy node: `log(x + 1)`"""
+    __slots__ = ()
 
 class Log2(NamedUnaryOp):
     """FPy node: logarithm (base 2)"""
+    __slots__ = ()
 
 class Pow(NamedBinaryOp):
     """FPy node: `x ** y`"""
+    __slots__ = ()
 
 # Integral functions
 
 class Erf(NamedUnaryOp):
     """FPy node: error function"""
+    __slots__ = ()
 
 class Erfc(NamedUnaryOp):
     """FPy node: complementary error function"""
+    __slots__ = ()
 
 class Lgamma(NamedUnaryOp):
     """FPy node: logarithm of the absolute value of the gamma function"""
+    __slots__ = ()
 
 class Tgamma(NamedUnaryOp):
     """FPy node: gamma function"""
+    __slots__ = ()
 
 
 # Classification
 
 class IsFinite(NamedUnaryOp):
     """FPy node: is the value finite?"""
+    __slots__ = ()
 
 class IsInf(NamedUnaryOp):
     """FPy node: is the value infinite?"""
+    __slots__ = ()
 
 class IsNan(NamedUnaryOp):
     """FPy node: is the value NaN?"""
+    __slots__ = ()
 
 class IsNormal(NamedUnaryOp):
     """FPy node: is the value normal?"""
+    __slots__ = ()
 
 class Signbit(NamedUnaryOp):
     """FPy node: is the signbit 1?"""
+    __slots__ = ()
 
 # Logical operators
 
 class Not(UnaryOp):
     """FPy node: logical negation"""
+    __slots__ = ()
 
 class Or(NaryOp):
     """FPy node: logical disjunction"""
+    __slots__ = ()
 
 class And(NaryOp):
     """FPy node: logical conjunction"""
+    __slots__ = ()
 
 # Rounding operator
 
@@ -907,29 +1008,36 @@ class Round(NamedUnaryOp):
 
 class RoundExact(NamedUnaryOp):
     """FPy node: inter-format rounding"""
+    __slots__ = ()
 
 # Tensor operators
 
 class Range(NamedUnaryOp):
     """FPy node: range constructor"""
+    __slots__ = ()
 
 class Dim(NamedUnaryOp):
     """FPy node: dimension operator"""
+    __slots__ = ()
 
 class Size(NamedBinaryOp):
     """FPy node: size operator"""
+    __slots__ = ()
 
 class Zip(NamedNaryOp):
     """FPy node: zip operator"""
+    __slots__ = ()
 
 class Enumerate(NamedUnaryOp):
     """FPy node: enumerate operator"""
+    __slots__ = ()
 
 class Call(NaryExpr):
     """FPy AST: function call"""
+    __slots__ = ('func', 'fn', 'args')
     func: NamedId | ForeignAttribute
     fn: object
-    args: list[Expr]
+    args: tuple[Expr, ...]
 
     def __init__(
         self,
@@ -941,7 +1049,7 @@ class Call(NaryExpr):
         super().__init__(loc)
         self.func = func
         self.fn = fn
-        self.args = list(args)
+        self.args = tuple(args)
 
     def is_equiv(self, other):
         if not isinstance(other, Call):
@@ -962,8 +1070,9 @@ class Call(NaryExpr):
 
 class Compare(Expr):
     """FPy AST: comparison chain"""
-    ops: list[CompareOp]
-    args: list[Expr]
+    __slots__ = ('ops', 'args')
+    ops: tuple[CompareOp, ...]
+    args: tuple[Expr, ...]
 
     def __init__(
         self,
@@ -972,8 +1081,8 @@ class Compare(Expr):
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.ops = list(ops)
-        self.args = list(args)
+        self.ops = tuple(ops)
+        self.args = tuple(args)
 
     def is_equiv(self, other) -> bool:
         return (
@@ -985,7 +1094,8 @@ class Compare(Expr):
 
 class TupleExpr(Expr):
     """FPy AST: tuple expression"""
-    args: list[Expr]
+    __slots__ = ('args',)
+    args: tuple[Expr, ...]
 
     def __init__(
         self,
@@ -993,7 +1103,7 @@ class TupleExpr(Expr):
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.args = list(args)
+        self.args = tuple(args)
 
     def is_equiv(self, other) -> bool:
         return (
@@ -1004,7 +1114,8 @@ class TupleExpr(Expr):
 
 class TupleBinding(Ast):
     """FPy AST: tuple binding"""
-    elts: list[Id | Self]
+    __slots__ = ('elts',)
+    elts: tuple[Id | Self, ...]
 
     def __init__(
         self,
@@ -1012,7 +1123,7 @@ class TupleBinding(Ast):
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.elts = list(elts)
+        self.elts = tuple(elts)
 
     def __iter__(self):
         return iter(self.elts)
@@ -1039,8 +1150,9 @@ class TupleBinding(Ast):
 
 class CompExpr(Expr):
     """FPy AST: comprehension expression"""
-    targets: list[Id | TupleBinding]
-    iterables: list[Expr]
+    __slots__ = ('targets', 'iterables', 'elt')
+    targets: tuple[Id | TupleBinding, ...]
+    iterables: tuple[Expr, ...]
     elt: Expr
 
     def __init__(
@@ -1052,8 +1164,8 @@ class CompExpr(Expr):
     ):
         assert len(targets) == len(iterables)
         super().__init__(loc)
-        self.targets = list(targets)
-        self.iterables = list(iterables)
+        self.targets = tuple(targets)
+        self.iterables = tuple(iterables)
         self.elt = elt
 
     def is_equiv(self, other) -> bool:
@@ -1071,14 +1183,15 @@ class TupleSet(Expr):
 
     Generated by the `FuncUpdate` transform.
     """
+    __slots__ = ('array', 'slices', 'value')
     array: Expr
-    slices: list[Expr]
+    slices: tuple[Expr, ...]
     value: Expr
 
     def __init__(self, array: Expr, slices: Sequence[Expr], value: Expr, loc: Optional[Location]):
         super().__init__(loc)
         self.array = array
-        self.slices = list(slices)
+        self.slices = tuple(slices)
         self.value = value
 
     def is_equiv(self, other) -> bool:
@@ -1092,6 +1205,7 @@ class TupleSet(Expr):
 
 class TupleRef(Expr):
     """FPy AST: tuple indexing expression"""
+    __slots__ = ('value', 'index')
     value: Expr
     index: Expr
 
@@ -1109,6 +1223,7 @@ class TupleRef(Expr):
 
 class TupleSlice(Expr):
     """FPy AST: tuple slicing expression"""
+    __slots__ = ('value', 'start', 'stop')
     value: Expr
     start: Expr | None
     stop: Expr | None
@@ -1143,6 +1258,7 @@ class TupleSlice(Expr):
 
 class IfExpr(Expr):
     """FPy AST: if expression"""
+    __slots__ = ('cond', 'ift', 'iff')
     cond: Expr
     ift: Expr
     iff: Expr
@@ -1169,9 +1285,10 @@ class IfExpr(Expr):
 
 class ContextExpr(Expr):
     """FPy AST: context constructor"""
+    __slots__ = ('ctor', 'args', 'kwargs')
     ctor: Var | ForeignAttribute
-    args: list[Expr | ForeignAttribute]
-    kwargs: list[tuple[str, Expr | ForeignAttribute]]
+    args: tuple[Expr | ForeignAttribute, ...]
+    kwargs: tuple[tuple[str, Expr | ForeignAttribute], ...]
 
     def __init__(
         self,
@@ -1182,8 +1299,8 @@ class ContextExpr(Expr):
     ):
         super().__init__(loc)
         self.ctor = ctor
-        self.args = list(args)
-        self.kwargs = list(kwargs)
+        self.args = tuple(args)
+        self.kwargs = tuple(kwargs)
 
     def is_equiv(self, other):
         return (
@@ -1197,6 +1314,7 @@ class ContextExpr(Expr):
 
 class ContextAttribute(Ast):
     """FPy AST: context attribute"""
+    __slots__ = ('expr', 'name')
     expr: Expr
     name: str
 
@@ -1207,6 +1325,7 @@ class ContextAttribute(Ast):
 
 class ContextUpdate(Ast):
     """FPy AST: context update"""
+    __slots__ = ('expr', 'kwargs')
     expr: Expr
     kwargs: dict[str, Expr]
 
@@ -1217,6 +1336,10 @@ class ContextUpdate(Ast):
 
 class StmtBlock(Ast):
     """FPy AST: list of statements"""
+    __slots__ = ('stmts',)
+
+    # list makes it easier to modify in-place
+    # not ideal since it's ideally immutable, but it simplifies the code
     stmts: list[Stmt]
 
     def __init__(self, stmts: list[Stmt]):
@@ -1248,6 +1371,7 @@ class StmtBlock(Ast):
 
 class Assign(Stmt):
     """FPy AST: variable assignment"""
+    __slots__ = ('binding', 'type', 'expr')
     binding: Id | TupleBinding
     type: Optional[TypeAnn]
     expr: Expr
@@ -1273,8 +1397,9 @@ class Assign(Stmt):
 
 class IndexedAssign(Stmt):
     """FPy AST: assignment to tuple indexing"""
+    __slots__ = ('var', 'slices', 'expr')
     var: NamedId
-    slices: list[Expr]
+    slices: tuple[Expr, ...]
     expr: Expr
 
     def __init__(
@@ -1286,7 +1411,7 @@ class IndexedAssign(Stmt):
     ):
         super().__init__(loc)
         self.var = var
-        self.slices = list(slices)
+        self.slices = tuple(slices)
         self.expr = expr
 
     def is_equiv(self, other) -> bool:
@@ -1300,6 +1425,7 @@ class IndexedAssign(Stmt):
 
 class If1Stmt(Stmt):
     """FPy AST: if statement with one branch"""
+    __slots__ = ('cond', 'body')
     cond: Expr
     body: StmtBlock
 
@@ -1322,6 +1448,7 @@ class If1Stmt(Stmt):
 
 class IfStmt(Stmt):
     """FPy AST: if statement (with two branhces)"""
+    __slots__ = ('cond', 'ift', 'iff')
     cond: Expr
     ift: StmtBlock
     iff: StmtBlock
@@ -1348,6 +1475,7 @@ class IfStmt(Stmt):
 
 class WhileStmt(Stmt):
     """FPy AST: while statement"""
+    __slots__ = ('cond', 'body')
     cond: Expr
     body: StmtBlock
 
@@ -1370,6 +1498,7 @@ class WhileStmt(Stmt):
 
 class ForStmt(Stmt):
     """FPy AST: for statement"""
+    __slots__ = ('target', 'iterable', 'body')
     target: Id | TupleBinding
     iterable: Expr
     body: StmtBlock
@@ -1396,6 +1525,7 @@ class ForStmt(Stmt):
 
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
+    __slots__ = ('name', 'ctx', 'body')
     name: Id
     ctx: Var | ForeignVal | ForeignAttribute | ContextExpr
     body: StmtBlock
@@ -1422,6 +1552,7 @@ class ContextStmt(Stmt):
 
 class AssertStmt(Stmt):
     """FPy AST: assert statement"""
+    __slots__ = ('test', 'msg')
     test: Expr
     msg: Optional[str]
 
@@ -1444,6 +1575,7 @@ class AssertStmt(Stmt):
 
 class EffectStmt(Stmt):
     """FPy AST: an expression without a result"""
+    __slots__ = ('expr',)
     expr: Expr
 
     def __init__(
@@ -1462,6 +1594,7 @@ class EffectStmt(Stmt):
 
 class ReturnStmt(Stmt):
     """FPy AST: return statement"""
+    __slots__ = ('expr',)
     expr: Expr
 
     def __init__(
@@ -1480,6 +1613,7 @@ class ReturnStmt(Stmt):
 
 class Argument(Ast):
     """FPy AST: function argument"""
+    __slots__ = ('name', 'type')
     name: Id
     type: Optional[TypeAnn]
 
@@ -1498,8 +1632,9 @@ class Argument(Ast):
 
 class FuncDef(Ast):
     """FPy AST: function definition"""
+    __slots__ = ('name', 'args', 'body', 'metadata', 'free_vars', 'ctx')
     name: str
-    args: list[Argument]
+    args: tuple[Argument, ...]
     body: StmtBlock
     metadata: dict[str, Any]
     free_vars: set[NamedId]
@@ -1528,7 +1663,7 @@ class FuncDef(Ast):
 
         super().__init__(loc)
         self.name = name
-        self.args = list(args)
+        self.args = tuple(args)
         self.body = body
         self.metadata = metadata
         self.free_vars = free_vars

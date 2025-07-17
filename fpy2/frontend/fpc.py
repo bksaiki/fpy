@@ -6,97 +6,118 @@ from typing import Any, Optional, TypeAlias
 
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
-
-from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..ast.fpyast import *
-from ..analysis.syntax_check import SyntaxCheck
+from ..analysis import SyntaxCheck
+from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..utils import Gensym, pythonize_id
 
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 
-_constants: dict[str, Expr] = {
-    'TRUE': BoolVal(True, None),
-    'FALSE': BoolVal(False, None),
-    'NAN': ConstNan(NamedId('nan'), None),
-    'INFINITY': ConstInf(NamedId('inf'), None),
-    'PI': ConstPi(NamedId('const_pi'), None),
-    'E': ConstE(NamedId('const_e'), None),
-    'LOG2E': ConstLog2E(NamedId('const_log2e'), None),
-    'LOG10E': ConstLog10E(NamedId('const_log10e'), None),
-    'LN2': ConstLn2(NamedId('const_ln2'), None),
-    'PI_2': ConstPi_2(NamedId('const_pi_2'), None),
-    'PI_4': ConstPi_4(NamedId('const_pi_4'), None),
-    'M_1_PI': Const1_Pi(NamedId('const_1_pi'), None),
-    'M_2_PI': Const2_Pi(NamedId('const_2_pi'), None),
-    'M_2_SQRTPI': Const2_SqrtPi(NamedId('const_2_sqrtpi'), None),
-    'SQRT2': ConstSqrt2(NamedId('const_sqrt2'), None),
-    'SQRT1_2': ConstSqrt1_2(NamedId('const_sqrt1_2'), None),
-}
+# Lazy lookup tables to avoid expensive initialization at import time
+_constants_cache = None
+_unary_table_cache = None
+_binary_table_cache = None
+_ternary_table_cache = None
 
-_unary_table: dict[str, type[UnaryOp] | type[NamedUnaryOp]] = {
-    'neg': Neg,
-    'not': Not,
-    'fabs': Fabs,
-    'sqrt': Sqrt,
-    'cbrt': Cbrt,
-    'ceil': Ceil,
-    'floor': Floor,
-    'nearbyint': NearbyInt,
-    'round': RoundInt,
-    'trunc': Trunc,
-    'acos': Acos,
-    'asin': Asin,
-    'atan': Atan,
-    'cos': Cos,
-    'sin': Sin,
-    'tan': Tan,
-    'acosh': Acosh,
-    'asinh': Asinh,
-    'atanh': Atanh,
-    'cosh': Cosh,
-    'sinh': Sinh,
-    'tanh': Tanh,
-    'exp': Exp,
-    'exp2': Exp2,
-    'expm1': Expm1,
-    'log': Log,
-    'log10': Log10,
-    'log1p': Log1p,
-    'log2': Log2,
-    'erf': Erf,
-    'erfc': Erfc,
-    'lgamma': Lgamma,
-    'tgamma': Tgamma,
-    'isfinite': IsFinite,
-    'isinf': IsInf,
-    'isnan': IsNan,
-    'isnormal': IsNormal,
-    'signbit': Signbit,
-    'cast': Round,
-    'range': Range,
-    'dim': Dim,
-}
+def _get_constants():
+    global _constants_cache
+    if _constants_cache is None:
+        _constants_cache = {
+            'TRUE': BoolVal(True, None),
+            'FALSE': BoolVal(False, None),
+            'NAN': ConstNan(NamedId('nan'), None),
+            'INFINITY': ConstInf(NamedId('inf'), None),
+            'PI': ConstPi(NamedId('const_pi'), None),
+            'E': ConstE(NamedId('const_e'), None),
+            'LOG2E': ConstLog2E(NamedId('const_log2e'), None),
+            'LOG10E': ConstLog10E(NamedId('const_log10e'), None),
+            'LN2': ConstLn2(NamedId('const_ln2'), None),
+            'PI_2': ConstPi_2(NamedId('const_pi_2'), None),
+            'PI_4': ConstPi_4(NamedId('const_pi_4'), None),
+            'M_1_PI': Const1_Pi(NamedId('const_1_pi'), None),
+            'M_2_PI': Const2_Pi(NamedId('const_2_pi'), None),
+            'M_2_SQRTPI': Const2_SqrtPi(NamedId('const_2_sqrtpi'), None),
+            'SQRT2': ConstSqrt2(NamedId('const_sqrt2'), None),
+            'SQRT1_2': ConstSqrt1_2(NamedId('const_sqrt1_2'), None),
+        }
+    return _constants_cache
 
-_binary_table: dict[str, type[BinaryOp] | type[NamedBinaryOp]] = {
-    '+': Add,
-    '-': Sub,
-    '*': Mul,
-    '/': Div,
-    'copysign': Copysign,
-    'fdim': Fdim,
-    'fmax': Fmax,
-    'fmin': Fmin,
-    'fmod': Fmod,
-    'remainder': Remainder,
-    'hypot': Hypot,
-    'atan2': Atan2,
-    'pow': Pow,
-}
+def _get_unary_table():
+    global _unary_table_cache
+    if _unary_table_cache is None:
+        _unary_table_cache = {
+            'neg': Neg,
+            'not': Not,
+            'fabs': Fabs,
+            'sqrt': Sqrt,
+            'cbrt': Cbrt,
+            'ceil': Ceil,
+            'floor': Floor,
+            'nearbyint': NearbyInt,
+            'round': RoundInt,
+            'trunc': Trunc,
+            'acos': Acos,
+            'asin': Asin,
+            'atan': Atan,
+            'cos': Cos,
+            'sin': Sin,
+            'tan': Tan,
+            'acosh': Acosh,
+            'asinh': Asinh,
+            'atanh': Atanh,
+            'cosh': Cosh,
+            'sinh': Sinh,
+            'tanh': Tanh,
+            'exp': Exp,
+            'exp2': Exp2,
+            'expm1': Expm1,
+            'log': Log,
+            'log10': Log10,
+            'log1p': Log1p,
+            'log2': Log2,
+            'erf': Erf,
+            'erfc': Erfc,
+            'lgamma': Lgamma,
+            'tgamma': Tgamma,
+            'isfinite': IsFinite,
+            'isinf': IsInf,
+            'isnan': IsNan,
+            'isnormal': IsNormal,
+            'signbit': Signbit,
+            'cast': Round,
+            'range': Range,
+            'dim': Dim,
+        }
+    return _unary_table_cache
 
-_ternary_table: dict[str, type[TernaryOp] | type[NamedTernaryOp]] = {
-    'fma': Fma
-}
+def _get_binary_table():
+    global _binary_table_cache
+    if _binary_table_cache is None:
+        _binary_table_cache = {
+            '+': Add,
+            '-': Sub,
+            '*': Mul,
+            '/': Div,
+            'copysign': Copysign,
+            'fdim': Fdim,
+            'fmax': Fmax,
+            'fmin': Fmin,
+            'fmod': Fmod,
+            'remainder': Remainder,
+            'hypot': Hypot,
+            'atan2': Atan2,
+            'pow': Pow,
+        }
+    return _binary_table_cache
+
+def _get_ternary_table():
+    global _ternary_table_cache
+    if _ternary_table_cache is None:
+        _ternary_table_cache = {
+            'fma': Fma
+        }
+    return _ternary_table_cache
 
 def _zeros(ns: list[Expr]) -> Expr:
     assert len(ns) >= 1
@@ -157,9 +178,10 @@ class _FPCore2FPy:
         return Var(ctx.env[e.value], None)
 
     def _visit_constant(self, e: fpc.Constant, ctx: _Ctx) -> Expr:
-        if e.value not in _constants:
+        constants = _get_constants()
+        if e.value not in constants:
             raise ValueError(f'unknown constant {e.name}')
-        return _constants[e.value]
+        return constants[e.value]
 
     def _visit_decnum(self, e: fpc.Decnum, ctx: _Ctx) -> Expr:
         return Decnum(str(e.value), None)
@@ -177,11 +199,12 @@ class _FPCore2FPy:
         return Digits(NamedId('digits'), e.m, e.e, e.b, None)
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
+        unary_table = _get_unary_table()
         if e.name == '-':
             arg = self._visit(e.children[0], ctx)
             return Neg(arg, None)
-        elif e.name in _unary_table:
-            cls = _unary_table[e.name]
+        elif e.name in unary_table:
+            cls = unary_table[e.name]
             arg = self._visit(e.children[0], ctx)
             if issubclass(cls, NamedUnaryOp):
                 return cls(NamedId(e.name), arg, None)
@@ -191,8 +214,9 @@ class _FPCore2FPy:
             raise NotImplementedError(f'unsupported unary operation {e.name}')
 
     def _visit_binary(self, e: fpc.BinaryExpr, ctx: _Ctx) -> Expr:
-        if e.name in _binary_table:
-            cls = _binary_table[e.name]
+        binary_table = _get_binary_table()
+        if e.name in binary_table:
+            cls = binary_table[e.name]
             left = self._visit(e.children[0], ctx)
             right = self._visit(e.children[1], ctx)
             if issubclass(cls, NamedBinaryOp):
@@ -203,8 +227,9 @@ class _FPCore2FPy:
             raise NotImplementedError(f'unsupported binary operation {e.name}')
 
     def _visit_ternary(self, e: fpc.TernaryExpr, ctx: _Ctx) -> Expr:
-        if e.name in _ternary_table:
-            cls = _ternary_table[e.name]
+        ternary_table = _get_ternary_table()
+        if e.name in ternary_table:
+            cls = ternary_table[e.name]
             arg0 = self._visit(e.children[0], ctx)
             arg1 = self._visit(e.children[1], ctx)
             arg2 = self._visit(e.children[2], ctx)

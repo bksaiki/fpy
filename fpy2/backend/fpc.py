@@ -14,91 +14,123 @@ from ..utils import Gensym
 
 from .backend import Backend
 
-_nullary_table: dict[type[NullaryOp], fpc.Expr] = {
-    ConstNan: fpc.Constant('NAN'),
-    ConstInf: fpc.Constant('INFINITY'),
-    ConstPi: fpc.Constant('PI'),
-    ConstE: fpc.Constant('E'),
-    ConstLog2E: fpc.Constant('LOG2E'),
-    ConstLog10E: fpc.Constant('LOG10E'),
-    ConstLn2: fpc.Constant('LN2'),
-    ConstPi_2: fpc.Constant('PI_2'),
-    ConstPi_4: fpc.Constant('PI_4'),
-    Const1_Pi: fpc.Constant('M_1_PI'),
-    Const2_Pi: fpc.Constant('M_2_PI'),
-    Const2_SqrtPi: fpc.Constant('M_2_SQRTPI'),
-    ConstSqrt2: fpc.Constant('SQRT2'),
-    ConstSqrt1_2: fpc.Constant('SQRT1_2'),
-}
+# Cached table storage
+_nullary_table_cache: Optional[dict[type[NullaryOp], fpc.Expr]] = None
+_unary_table_cache: Optional[dict[type[UnaryOp], type[fpc.Expr]]] = None
+_binary_table_cache: Optional[dict[type[BinaryOp], type[fpc.Expr]]] = None
+_ternary_table_cache: Optional[dict[type[TernaryOp], type[fpc.Expr]]] = None
+_nary_table_cache: Optional[dict[type[NaryOp], type[fpc.Expr]]] = None
 
-_unary_table: dict[type[UnaryOp], type[fpc.Expr]] = {
-    Fabs: fpc.Fabs,
-    Sqrt: fpc.Sqrt,
-    Neg: fpc.Neg,
-    Cbrt: fpc.Cbrt,
-    Ceil: fpc.Ceil,
-    Floor: fpc.Floor,
-    NearbyInt: fpc.Nearbyint,
-    RoundInt: fpc.Round,
-    Trunc: fpc.Trunc,
-    Acos: fpc.Acos,
-    Asin: fpc.Asin,
-    Atan: fpc.Atan,
-    Cos: fpc.Cos,
-    Sin: fpc.Sin,
-    Tan: fpc.Tan,
-    Acosh: fpc.Acosh,
-    Asinh: fpc.Asinh,
-    Atanh: fpc.Atanh,
-    Cosh: fpc.Cosh,
-    Sinh: fpc.Sinh,
-    Tanh: fpc.Tanh,
-    Exp: fpc.Exp,
-    Exp2: fpc.Exp2,
-    Expm1: fpc.Expm1,
-    Log: fpc.Log,
-    Log10: fpc.Log10,
-    Log1p: fpc.Log1p,
-    Log2: fpc.Log2,
-    Erf: fpc.Erf,
-    Erfc: fpc.Erfc,
-    Lgamma: fpc.Lgamma,
-    Tgamma: fpc.Tgamma,
-    IsFinite: fpc.Isfinite,
-    IsInf: fpc.Isinf,
-    IsNan: fpc.Isnan,
-    IsNormal: fpc.Isnormal,
-    Signbit: fpc.Signbit,
-    Not: fpc.Not,
-    # rounding
-    Round: fpc.Cast,
-    RoundExact: fpc.Cast # TODO: does this have an FPCore translation?
-}
+def _get_nullary_table() -> dict[type[NullaryOp], fpc.Expr]:
+    """Get the cached nullary operations table."""
+    global _nullary_table_cache
+    if _nullary_table_cache is None:
+        _nullary_table_cache = {
+            ConstNan: fpc.Constant('NAN'),
+            ConstInf: fpc.Constant('INFINITY'),
+            ConstPi: fpc.Constant('PI'),
+            ConstE: fpc.Constant('E'),
+            ConstLog2E: fpc.Constant('LOG2E'),
+            ConstLog10E: fpc.Constant('LOG10E'),
+            ConstLn2: fpc.Constant('LN2'),
+            ConstPi_2: fpc.Constant('PI_2'),
+            ConstPi_4: fpc.Constant('PI_4'),
+            Const1_Pi: fpc.Constant('M_1_PI'),
+            Const2_Pi: fpc.Constant('M_2_PI'),
+            Const2_SqrtPi: fpc.Constant('M_2_SQRTPI'),
+            ConstSqrt2: fpc.Constant('SQRT2'),
+            ConstSqrt1_2: fpc.Constant('SQRT1_2'),
+        }
+    return _nullary_table_cache
 
-_binary_table: dict[type[BinaryOp], type[fpc.Expr]] = {
-    Add: fpc.Add,
-    Sub: fpc.Sub,
-    Mul: fpc.Mul,
-    Div: fpc.Div,
-    Copysign: fpc.Copysign,
-    Fdim: fpc.Fdim,
-    Fmax: fpc.Fmax,
-    Fmin: fpc.Fmin,
-    Fmod: fpc.Fmod,
-    Remainder: fpc.Remainder,
-    Hypot: fpc.Hypot,
-    Atan2: fpc.Atan2,
-    Pow: fpc.Pow,
-}
+def _get_unary_table() -> dict[type[UnaryOp], type[fpc.Expr]]:
+    """Get the cached unary operations table."""
+    global _unary_table_cache
+    if _unary_table_cache is None:
+        _unary_table_cache = {
+            Fabs: fpc.Fabs,
+            Sqrt: fpc.Sqrt,
+            Neg: fpc.Neg,
+            Cbrt: fpc.Cbrt,
+            Ceil: fpc.Ceil,
+            Floor: fpc.Floor,
+            NearbyInt: fpc.Nearbyint,
+            RoundInt: fpc.Round,
+            Trunc: fpc.Trunc,
+            Acos: fpc.Acos,
+            Asin: fpc.Asin,
+            Atan: fpc.Atan,
+            Cos: fpc.Cos,
+            Sin: fpc.Sin,
+            Tan: fpc.Tan,
+            Acosh: fpc.Acosh,
+            Asinh: fpc.Asinh,
+            Atanh: fpc.Atanh,
+            Cosh: fpc.Cosh,
+            Sinh: fpc.Sinh,
+            Tanh: fpc.Tanh,
+            Exp: fpc.Exp,
+            Exp2: fpc.Exp2,
+            Expm1: fpc.Expm1,
+            Log: fpc.Log,
+            Log10: fpc.Log10,
+            Log1p: fpc.Log1p,
+            Log2: fpc.Log2,
+            Erf: fpc.Erf,
+            Erfc: fpc.Erfc,
+            Lgamma: fpc.Lgamma,
+            Tgamma: fpc.Tgamma,
+            IsFinite: fpc.Isfinite,
+            IsInf: fpc.Isinf,
+            IsNan: fpc.Isnan,
+            IsNormal: fpc.Isnormal,
+            Signbit: fpc.Signbit,
+            Not: fpc.Not,
+            # rounding
+            Round: fpc.Cast,
+            RoundExact: fpc.Cast # TODO: does this have an FPCore translation?
+        }
+    return _unary_table_cache
 
-_ternary_table: dict[type[TernaryOp], type[fpc.Expr]] = {
-    Fma: fpc.Fma,
-}
+def _get_binary_table() -> dict[type[BinaryOp], type[fpc.Expr]]:
+    """Get the cached binary operations table."""
+    global _binary_table_cache
+    if _binary_table_cache is None:
+        _binary_table_cache = {
+            Add: fpc.Add,
+            Sub: fpc.Sub,
+            Mul: fpc.Mul,
+            Div: fpc.Div,
+            Copysign: fpc.Copysign,
+            Fdim: fpc.Fdim,
+            Fmax: fpc.Fmax,
+            Fmin: fpc.Fmin,
+            Fmod: fpc.Fmod,
+            Remainder: fpc.Remainder,
+            Hypot: fpc.Hypot,
+            Atan2: fpc.Atan2,
+            Pow: fpc.Pow,
+        }
+    return _binary_table_cache
 
-_nary_table: dict[type[NaryOp], type[fpc.Expr]] = {
-    Or: fpc.Or,
-    And: fpc.And,
-}
+def _get_ternary_table() -> dict[type[TernaryOp], type[fpc.Expr]]:
+    """Get the cached ternary operations table."""
+    global _ternary_table_cache
+    if _ternary_table_cache is None:
+        _ternary_table_cache = {
+            Fma: fpc.Fma,
+        }
+    return _ternary_table_cache
+
+def _get_nary_table() -> dict[type[NaryOp], type[fpc.Expr]]:
+    """Get the cached n-ary operations table."""
+    global _nary_table_cache
+    if _nary_table_cache is None:
+        _nary_table_cache = {
+            Or: fpc.Or,
+            And: fpc.And,
+        }
+    return _nary_table_cache
 
 class FPCoreCompileError(Exception):
     """Any FPCore compilation error"""
@@ -250,7 +282,7 @@ class FPCoreCompileInstance(Visitor):
             )
         )
 
-    def _visit_zip(self, args: list[Expr], ctx: None) -> fpc.Expr:
+    def _visit_zip(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
         # expand zip expression (for N=2)
         #  (let ([t0 <tuple0>] [t1 <tuple1>])
         #    (tensor ([i (size t0 0)])
@@ -271,13 +303,15 @@ class FPCoreCompileInstance(Visitor):
             )
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
-        if type(e) not in _nullary_table:
+        nullary_table = _get_nullary_table()
+        if type(e) not in nullary_table:
             # unknown operator
             raise NotImplementedError('no FPCore operator for', e)
-        return _nullary_table[type(e)]
+        return nullary_table[type(e)]
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> fpc.Expr:
-        cls = _unary_table.get(type(e))
+        unary_table = _get_unary_table()
+        cls = unary_table.get(type(e))
         if cls is not None:
             # known unary operator
             arg = self._visit_expr(e.arg, ctx)
@@ -297,7 +331,8 @@ class FPCoreCompileInstance(Visitor):
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> fpc.Expr:
-        cls = _binary_table.get(type(e))
+        binary_table = _get_binary_table()
+        cls = binary_table.get(type(e))
         if cls is not None:
             # known binary operator
             arg0 = self._visit_expr(e.first, ctx)
@@ -313,7 +348,8 @@ class FPCoreCompileInstance(Visitor):
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> fpc.Expr:
-        cls = _ternary_table.get(type(e))
+        ternary_table = _get_ternary_table()
+        cls = ternary_table.get(type(e))
         if cls is not None:
             # known ternary operator
             arg0 = self._visit_expr(e.first, ctx)
@@ -325,7 +361,8 @@ class FPCoreCompileInstance(Visitor):
             raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> fpc.Expr:
-        cls = _nary_table.get(type(e))
+        nary_table = _get_nary_table()
+        cls = nary_table.get(type(e))
         if cls is not None:
             # known n-ary operator
             return cls(*[self._visit_expr(c, ctx) for c in e.args])

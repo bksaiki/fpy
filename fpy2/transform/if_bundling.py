@@ -3,6 +3,8 @@ Transformation pass to pack mutated variables in an if statement
 into a single mutated variable.
 """
 
+from typing import overload
+
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
@@ -77,6 +79,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
             # compile the body and apply the renaming
             body, _ = self._visit_block(stmt.body, ctx)
             body = RenameTarget.apply_block(body, rename)
+            body.stmts = list(body.stmts)
 
             # unpack the tuple at the start of the body
             s = Assign(TupleBinding([rename[v] for v in mutated], None), None, Var(t, None), None)
@@ -216,7 +219,6 @@ class _IfBundlingInstance(DefaultTransformVisitor):
             iff.stmts.append(Assign(name, None, Var(rename_iff[name], None), None))
 
         return StmtBlock(stmts)
-
 
     def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         stmts: list[Stmt] = []

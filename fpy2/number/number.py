@@ -31,7 +31,6 @@ from .round import RoundingMode, RoundingDirection
 ###########################################################
 # RealFloat
 
-@default_repr
 class RealFloat(numbers.Rational):
     """
     The basic floating-point number.
@@ -57,11 +56,7 @@ class RealFloat(numbers.Rational):
     It must be the case that `interval_size <= 0`.
     """
 
-    __slots__ = (
-        '_s', '_exp', '_c',
-        '_interval_size', '_interval_down', '_interval_closed',
-        '__dict__', '__weakref__'
-    )
+    __slots__ = ('_s', '_exp', '_c', '_interval_size', '_interval_down', '_interval_closed')
 
     _s: bool
     """is the sign negative?"""
@@ -169,6 +164,17 @@ class RealFloat(numbers.Rational):
             self._interval_closed = x._interval_closed
         else:
             self._interval_closed = False
+
+    def __repr__(self):
+        return (f'{self.__class__.__name__}('
+            + 's=' + repr(self._s)
+            + ', exp=' + repr(self._exp)
+            + ', c=' + repr(self._c)
+            + ', interval_size=' + repr(self._interval_size)
+            + ', interval_down=' + repr(self._interval_down)
+            + ', interval_closed=' + repr(self._interval_closed)
+            + ')'
+        )
 
     def __str__(self):
         fn = get_current_str_converter()
