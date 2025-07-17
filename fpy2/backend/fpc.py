@@ -55,6 +55,7 @@ def _get_unary_table() -> dict[type[UnaryOp], type[fpc.Expr]]:
             Ceil: fpc.Ceil,
             Floor: fpc.Floor,
             NearbyInt: fpc.Nearbyint,
+            RoundInt: fpc.Round,
             Trunc: fpc.Trunc,
             Acos: fpc.Acos,
             Asin: fpc.Asin,
