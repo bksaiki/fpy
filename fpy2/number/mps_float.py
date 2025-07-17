@@ -88,8 +88,22 @@ class MPSFloatContext(OrdinalContext):
         """
         return self.expmin - 1
 
-    def with_rm(self, rm: RoundingMode):
-        return MPSFloatContext(self.pmax, self.emin, rm)
+    def with_params(
+        self, *,
+        pmax: Optional[int] = None,
+        emin: Optional[int] = None,
+        rm: Optional[RoundingMode] = None,
+        **kwargs
+    ) -> 'MPSFloatContext':
+        if pmax is None:
+            pmax = self.pmax
+        if emin is None:
+            emin = self.emin
+        if rm is None:
+            rm = self.rm
+        if kwargs:
+            raise TypeError(f'Unexpected keyword arguments: {kwargs}')
+        return MPSFloatContext(pmax, emin, rm)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):

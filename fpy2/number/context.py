@@ -39,8 +39,8 @@ class Context(ABC):
         raise RuntimeError('do not call directly')
 
     @abstractmethod
-    def with_rm(self, rm: RoundingMode) -> Self:
-        """Returns `self` but with rounding mode `rm`."""
+    def with_params(self, **kwargs) -> Self:
+        """Returns `self` but with updated parameters."""
         ...
 
     @abstractmethod

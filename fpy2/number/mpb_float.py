@@ -150,8 +150,31 @@ class MPBFloatContext(SizedContext):
         """
         return self._mps_ctx.nmin
 
-    def with_rm(self, rm: RoundingMode):
-        return MPBFloatContext(self.pmax, self.emin, self.pos_maxval, rm, self.overflow, neg_maxval=self.neg_maxval)
+    def with_params(
+        self, *,
+        pmax: Optional[int] = None,
+        emin: Optional[int] = None,
+        maxval: Optional[RealFloat] = None,
+        rm: Optional[RoundingMode] = None,
+        overflow: Optional[OverflowMode] = None,
+        neg_maxval: Optional[RealFloat] = None,
+        **kwargs
+    ) -> 'MPBFloatContext':
+        if pmax is None:
+            pmax = self.pmax
+        if emin is None:
+            emin = self.emin
+        if maxval is None:
+            maxval = self.pos_maxval
+        if rm is None:
+            rm = self.rm
+        if overflow is None:
+            overflow = self.overflow
+        if neg_maxval is None:
+            neg_maxval = self.neg_maxval
+        if kwargs:
+            raise TypeError(f'Unexpected keyword arguments: {kwargs}')
+        return MPBFloatContext(pmax, emin, maxval, rm, overflow, neg_maxval=neg_maxval)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):

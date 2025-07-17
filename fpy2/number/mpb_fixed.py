@@ -190,17 +190,49 @@ class MPBFixedContext(SizedContext):
             self.inf_value
         ))
 
-    def with_rm(self, rm: RoundingMode):
+    def with_params(
+        self, *,
+        nmin: Optional[int] = None,
+        maxval: Optional[RealFloat] = None,
+        rm: Optional[RoundingMode] = None,
+        overflow: Optional[OverflowMode] = None,
+        neg_maxval: Optional[RealFloat] = None,
+        enable_nan: Optional[bool] = None,
+        enable_inf: Optional[bool] = None,
+        nan_value: Optional[Float] = None,
+        inf_value: Optional[Float] = None,
+        **kwargs
+    ) -> 'MPBFixedContext':
+        if nmin is None:
+            nmin = self.nmin
+        if maxval is None:
+            maxval = self.pos_maxval
+        if rm is None:
+            rm = self.rm
+        if overflow is None:
+            overflow = self.overflow
+        if neg_maxval is None:
+            neg_maxval = self.neg_maxval
+        if enable_nan is None:
+            enable_nan = self.enable_nan
+        if enable_inf is None:
+            enable_inf = self.enable_inf
+        if nan_value is None:
+            nan_value = self.nan_value
+        if inf_value is None:
+            inf_value = self.inf_value
+        if kwargs:
+            raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return MPBFixedContext(
-            nmin=self.nmin,
-            maxval=self.pos_maxval,
+            nmin=nmin,
+            maxval=maxval,
             rm=rm,
-            overflow=self.overflow,
-            neg_maxval=self.neg_maxval,
-            enable_nan=self.enable_nan,
-            enable_inf=self.enable_inf,
-            nan_value=self.nan_value,
-            inf_value=self.inf_value
+            overflow=overflow,
+            neg_maxval=neg_maxval,
+            enable_nan=enable_nan,
+            enable_inf=enable_inf,
+            nan_value=nan_value,
+            inf_value=inf_value
         )
 
     def is_equiv(self, other):

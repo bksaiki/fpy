@@ -70,16 +70,37 @@ class FixedContext(MPBFixedContext, EncodableContext):
         self.scale = scale
         self.nbits = nbits
 
-
-    def with_rm(self, rm: RoundingMode) -> 'FixedContext':
+    def with_params(
+        self, *,
+        signed: Optional[bool] = None,
+        scale: Optional[int] = None,
+        nbits: Optional[int] = None,
+        rm: Optional[RoundingMode] = None,
+        overflow: Optional[OverflowMode] = None,
+        nan_value: Optional[Float] = None,
+        inf_value: Optional[Float] = None,
+        **kwargs
+    ) -> 'FixedContext':
+        if signed is None:
+            signed = self.signed
+        if scale is None:
+            scale = self.scale
+        if nbits is None:
+            nbits = self.nbits
+        if rm is None:
+            rm = self.rm
+        if overflow is None:
+            overflow = self.overflow
+        if kwargs:
+            raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return FixedContext(
-            self.signed,
-            self.scale,
-            self.nbits,
+            signed,
+            scale,
+            nbits,
             rm,
-            self.overflow,
-            nan_value=self.nan_value,
-            inf_value=self.inf_value
+            overflow,
+            nan_value=nan_value,
+            inf_value=inf_value
         )
 
     def normalize(self, x: Float):

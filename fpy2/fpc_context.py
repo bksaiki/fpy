@@ -156,18 +156,18 @@ class FPCoreContext:
                     return IEEEContext(int(es), int(nbits), _round_mode_to_fpy(rnd))
                 # IEEE 754 shorthands
                 case 'binary128':
-                    return FP128.with_rm(_round_mode_to_fpy(rnd))
+                    return FP128.with_params(rm=_round_mode_to_fpy(rnd))
                 case 'binary80':
                     return IEEEContext(15, 79, _round_mode_to_fpy(rnd))
                 case 'binary64':
-                    return FP64.with_rm(_round_mode_to_fpy(rnd))
+                    return FP64.with_params(rm=_round_mode_to_fpy(rnd))
                 case 'binary32':
-                    return FP32.with_rm(_round_mode_to_fpy(rnd))
+                    return FP32.with_params(rm=_round_mode_to_fpy(rnd))
                 case 'binary16':
-                    return FP16.with_rm(_round_mode_to_fpy(rnd))
+                    return FP16.with_params(rm=_round_mode_to_fpy(rnd))
                 # integer context
                 case 'integer':
-                    return INTEGER.with_rm(_round_mode_to_fpy(rnd))
+                    return INTEGER.with_params(rm=_round_mode_to_fpy(rnd))
                 # real context
                 case 'real':
                     return RealContext()

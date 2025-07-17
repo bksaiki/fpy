@@ -169,8 +169,34 @@ class ExtFloatContext(EncodableContext):
         """The exponent "bias" when encoding / decoding values."""
         return self.emax - self.eoffset
 
-    def with_rm(self, rm):
-        return ExtFloatContext(self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset, rm, self.overflow)
+    def with_params(
+        self, *,
+        es: int | None = None,
+        nbits: int | None = None,
+        enable_inf: bool | None = None,
+        nan_kind: ExtFloatNanKind | None = None,
+        eoffset: int | None = None,
+        rm: RoundingMode | None = None,
+        overflow: OverflowMode | None = None,
+        **kwargs
+    ) -> 'ExtFloatContext':
+        if es is None:
+            es = self.es
+        if nbits is None:
+            nbits = self.nbits
+        if enable_inf is None:
+            enable_inf = self.enable_inf
+        if nan_kind is None:
+            nan_kind = self.nan_kind
+        if eoffset is None:
+            eoffset = self.eoffset
+        if rm is None:
+            rm = self.rm
+        if overflow is None:
+            overflow = self.overflow
+        if kwargs:
+            raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')
+        return ExtFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):

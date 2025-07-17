@@ -141,14 +141,37 @@ class MPFixedContext(OrdinalContext):
         """
         return self.nmin + 1
 
-    def with_rm(self, rm: RoundingMode):
+    def with_params(
+        self, *,
+        nmin: Optional[int] = None,
+        rm: Optional[RoundingMode] = None,
+        enable_nan: Optional[bool] = None,
+        enable_inf: Optional[bool] = None,
+        nan_value: Optional[Float] = None,
+        inf_value: Optional[Float] = None,
+        **kwargs
+    ) -> 'MPFixedContext':
+        if nmin is None:
+            nmin = self.nmin
+        if rm is None:
+            rm = self.rm
+        if enable_nan is None:
+            enable_nan = self.enable_nan
+        if enable_inf is None:
+            enable_inf = self.enable_inf
+        if nan_value is None:
+            nan_value = self.nan_value
+        if inf_value is None:
+            inf_value = self.inf_value
+        if kwargs:
+            raise TypeError(f'Unexpected parameters {kwargs} for MPFixedContext')
         return MPFixedContext(
-            self.nmin,
+            nmin,
             rm,
-            enable_nan=self.enable_nan,
-            enable_inf=self.enable_inf,
-            nan_value=self.nan_value,
-            inf_value=self.inf_value
+            enable_nan=enable_nan,
+            enable_inf=enable_inf,
+            nan_value=nan_value,
+            inf_value=inf_value
         )
 
     def is_equiv(self, other):
