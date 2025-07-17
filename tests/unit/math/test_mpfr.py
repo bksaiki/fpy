@@ -151,7 +151,7 @@ class MPFREquivTestCase(unittest.TestCase):
         for op, mpfr in _unary_ops.items():
             for ctx_base in _ctxs:
                 for rm in _rms:
-                    ctx = ctx_base.with_rm(rm)
+                    ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
                         i = random.randint(0, 1 << ctx.nbits - 1)
@@ -173,7 +173,7 @@ class MPFREquivTestCase(unittest.TestCase):
         for op, mpfr in _binary_ops.items():
             for ctx_base in _ctxs:
                 for rm in _rms:
-                    ctx = ctx_base.with_rm(rm)
+                    ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
                         i = random.randint(0, 1 << ctx.nbits - 1)
@@ -197,7 +197,7 @@ class MPFREquivTestCase(unittest.TestCase):
         for op, mpfr in _ternary_ops.items():
             for ctx_base in _ctxs:
                 for rm in _rms:
-                    ctx = ctx_base.with_rm(rm)
+                    ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
                         i = random.randint(0, 1 << ctx.nbits - 1)

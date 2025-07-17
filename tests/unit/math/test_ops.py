@@ -87,7 +87,7 @@ class MathIEEENoExceptTestCase(unittest.TestCase):
         for op in _unary_ops:
             for ctx_base in _ctxs:
                 for rm in _rms:
-                    ctx = ctx_base.with_rm(rm)
+                    ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
                         i = random.randint(0, 1 << ctx.nbits - 1)
@@ -100,7 +100,7 @@ class MathIEEENoExceptTestCase(unittest.TestCase):
         for op in _binary_ops:
             for ctx_base in _ctxs:
                 for rm in _rms:
-                    ctx = ctx_base.with_rm(rm)
+                    ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
                         i = random.randint(0, 1 << ctx.nbits - 1)
@@ -114,7 +114,7 @@ class MathIEEENoExceptTestCase(unittest.TestCase):
         for op in _ternary_ops:
             for ctx_base in _ctxs:
                 for rm in _rms:
-                    ctx = ctx_base.with_rm(rm)
+                    ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
                         i = random.randint(0, 1 << ctx.nbits - 1)
