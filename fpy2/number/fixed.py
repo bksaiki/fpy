@@ -7,9 +7,9 @@ from typing import Optional
 from ..utils import bitmask, default_repr
 
 from .context import EncodableContext
-from .mpb_fixed import MPBFixedContext, FixedOverflowKind
+from .mpb_fixed import MPBFixedContext
 from .number import RealFloat, Float
-from .round import RoundingMode
+from .round import RoundingMode, OverflowMode
 
 @default_repr
 class FixedContext(MPBFixedContext, EncodableContext):
@@ -45,8 +45,8 @@ class FixedContext(MPBFixedContext, EncodableContext):
         signed: bool,
         scale: int,
         nbits: int,
-        rm: RoundingMode,
-        overflow: FixedOverflowKind,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: OverflowMode = OverflowMode.WRAP,
         *,
         nan_value: Optional[Float] = None,
         inf_value: Optional[Float] = None

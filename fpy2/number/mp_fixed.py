@@ -64,7 +64,7 @@ class MPFixedContext(OrdinalContext):
     def __init__(
         self,
         nmin: int,
-        rm: RoundingMode,
+        rm: RoundingMode = RoundingMode.RNE,
         *,
         enable_nan: bool = False,
         enable_inf: bool = False,

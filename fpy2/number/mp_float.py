@@ -29,7 +29,7 @@ class MPFloatContext(Context):
     rm: RoundingMode
     """rounding mode"""
 
-    def __init__(self, pmax: int, rm: RoundingMode):
+    def __init__(self, pmax: int, rm: RoundingMode = RoundingMode.RNE):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:

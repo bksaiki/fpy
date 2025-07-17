@@ -19,7 +19,7 @@ class IEEEContext(ExtFloatContext):
     By inheritance, `IEEEContext` implements `EncodingContext`.
     """
 
-    def __init__(self, es: int, nbits: int, rm: RoundingMode):
+    def __init__(self, es: int, nbits: int, rm: RoundingMode = RoundingMode.RNE):
         super().__init__(es, nbits, True, ExtFloatNanKind.IEEE_754, 0, rm)
 
     def __repr__(self):

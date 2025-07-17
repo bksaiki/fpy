@@ -10,13 +10,13 @@ from .fixed import FixedContext
 from .ieee754 import IEEEContext
 from .mp_fixed import MPFixedContext
 from .mp_float import MPFloatContext
-from .mpb_fixed import MPBFixedContext, FixedOverflowKind
+from .mpb_fixed import MPBFixedContext
 from .mpb_float import MPBFloatContext
 from .mps_float import MPSFloatContext
 from .real import RealContext
 
 # Rounding
-from .round import RoundingMode, RoundingDirection
+from .round import RoundingMode, RoundingDirection, OverflowMode
 
 # Miscellaneous
 from .native import default_float_convert, default_str_convert
@@ -27,8 +27,8 @@ from .native import default_float_convert, default_str_convert
 RM: TypeAlias = RoundingMode
 """alias for `RoundingMode`"""
 
-OV: TypeAlias = FixedOverflowKind
-"""alias for `FixedOverflowKind`"""
+OV: TypeAlias = OverflowMode
+"""alias for `OverflowMode`"""
 
 ###########################################################
 # Format aliases

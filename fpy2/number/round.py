@@ -63,3 +63,18 @@ class RoundingMode(Enum):
                 return False, RoundingDirection.RTE
             case _:
                 raise ValueError('unsupported rounding mode', self)
+
+@enum_repr
+class OverflowMode(Enum):
+    """
+    Overflow behavior for rounding under bounded formats.
+
+    This is used to specify what value to produce when
+    a value is larger (in magnitude) than the maximum value.
+    - `OVERFLOW`: produces infinity or raise an OverflowError
+    - `SATURATE`: produce the (correctly signed) maximum value
+    - `WRAP`: produce the modulus over the ordinals
+    """
+    OVERFLOW = 0
+    SATURATE = 1
+    WRAP = 2

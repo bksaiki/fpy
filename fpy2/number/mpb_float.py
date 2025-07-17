@@ -62,7 +62,8 @@ class MPBFloatContext(SizedContext):
         pmax: int,
         emin: int,
         maxval: RealFloat, 
-        rm: RoundingMode, *,
+        rm: RoundingMode = RoundingMode.RNE,
+        *,
         neg_maxval: Optional[RealFloat] = None
     ):
         if not isinstance(pmax, int):

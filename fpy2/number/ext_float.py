@@ -66,7 +66,7 @@ class ExtFloatContext(EncodableContext):
         enable_inf: bool,
         nan_kind: ExtFloatNanKind,
         eoffset: int,
-        rm: RoundingMode,
+        rm: RoundingMode = RoundingMode.RNE,
     ):
         if not isinstance(es, int):
             raise TypeError(f'Expected \'int\', got \'{type(es)}\' for es={es}')
