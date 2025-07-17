@@ -56,7 +56,7 @@ class _CopyPropagateInstance(DefaultVisitor):
             if not isinstance(stmt, Assign) or stmt not in ctx:
                 self._visit_statement(stmt, ctx)
                 stmts.append(stmt)
-        block.stmts = tuple(stmts)
+        block.stmts = stmts
 
 
 class CopyPropagate:

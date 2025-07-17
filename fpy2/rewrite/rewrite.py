@@ -75,9 +75,7 @@ class _RewriteEngine(DefaultTransformVisitor):
                         expr = self._visit_expr(pattern.expr, repeat_opt)
                         # TODO: this is a bit messy
                         ast = pattern.to_ast()
-                        body_stmts = list(ast.body.stmts)
-                        body_stmts[0] = EffectStmt(expr, None)
-                        ast.body.stmts = tuple(body_stmts)
+                        ast.body.stmts[0] = EffectStmt(expr, None)
                         pattern = ExprPattern(ast)
                     case StmtPattern():
                         repeat_opt = _RewriteContext(0, 1, is_nested=True)

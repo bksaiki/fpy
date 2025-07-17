@@ -1337,7 +1337,10 @@ class ContextUpdate(Ast):
 class StmtBlock(Ast):
     """FPy AST: list of statements"""
     __slots__ = ('stmts',)
-    stmts: tuple[Stmt, ...]
+
+    # list makes it easier to modify in-place
+    # not ideal since it's ideally immutable, but it simplifies the code
+    stmts: list[Stmt]
 
     def __init__(self, stmts: Sequence[Stmt]):
         if stmts == []:
@@ -1357,7 +1360,7 @@ class StmtBlock(Ast):
                 )
 
         super().__init__(loc)
-        self.stmts = tuple(stmts)
+        self.stmts = list(stmts)
 
     def is_equiv(self, other):
         return (
