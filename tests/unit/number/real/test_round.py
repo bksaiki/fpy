@@ -5,7 +5,7 @@ import unittest
 class RoundTestCase(unittest.TestCase):
     """Testing `RealFloat.round()`"""
 
-    def test_round_float_p2(self):
+    def test_round(self):
         inputs = [
             # 8 * 2 ** -3 (representable)
             (-3, 8, -1, 2, fp.RM.RNE), # 8 * 2 ** -3 => 1 * 2 ** -1
@@ -49,3 +49,38 @@ class RoundTestCase(unittest.TestCase):
             x_rounded = x.round(max_p=2, rm=rm)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}')
+
+    def test_round_stochastic(self):
+        inputs = [
+            # 8 * 2 ** -3 (representable)
+            (-3, 8, -1, 2, 0), # 8 * 2 ** -3 => 1 * 2 ** -1 (0: down)
+            (-3, 8, -1, 2, 1), # 8 * 2 ** -3 => 1 * 2 ** -1 (1: down)
+            (-3, 8, -1, 2, 2), # 8 * 2 ** -3 => 1 * 2 ** -1 (2: down)
+            (-3, 8, -1, 2, 3), # 8 * 2 ** -3 => 1 * 2 ** -1 (3: down)
+            # 9 * 2 ** -3 (below halfway)
+            (-3, 9, -1, 3, 0), # 9 * 2 ** -3 => 1 * 2 ** -1 (0: up)
+            (-3, 9, -1, 2, 1), # 9 * 2 ** -3 => 1 * 2 ** -1 (1: down)
+            (-3, 9, -1, 2, 2), # 9 * 2 ** -3 => 1 * 3 ** -1 (2: down)
+            (-3, 9, -1, 2, 3), # 9 * 2 ** -3 => 1 * 2 ** -1 (3: down)
+            # 10 * 2 ** -3 (exactly halfway)
+            (-3, 10, -1, 3, 0), # 10 * 2 ** -3 => 1 * 2 ** -1 (0: up)
+            (-3, 10, -1, 3, 1), # 10 * 2 ** -3 => 1 * 3 ** -1 (1: up)
+            (-3, 10, -1, 2, 2), # 10 * 2 ** -3 => 1 * 3 ** -1 (2: down)
+            (-3, 10, -1, 2, 3), # 10 * 2 ** -3 => 1 * 2 ** -1 (3: down)
+            # 11 * 2 ** -3 (above halfway)
+            (-3, 11, -1, 3, 0), # 11 * 2 ** -3 => 1 * 3 ** -1 (0: up)
+            (-3, 11, -1, 3, 1), # 11 * 2 ** -3 => 1 * 3 ** -1 (1: up)
+            (-3, 11, -1, 3, 2), # 11 * 2 ** -3 => 1 * 3 ** -1 (2: up)
+            (-3, 11, -1, 2, 3), # 11 * 2 ** -3 => 1 * 2 ** -1 (3: down)
+            # 12 * 2 ** -3 (representable)
+            (-3, 12, -1, 3, 0), # 12 * 2 ** -3 => 1 * 3 ** -1 (0: down)
+            (-3, 12, -1, 3, 1), # 12 * 2 ** -3 => 1 * 3 ** -1 (1: down)
+            (-3, 12, -1, 3, 2), # 12 * 2 ** -3 => 1 * 3 ** -1 (2: down)
+            (-3, 12, -1, 3, 3), # 12 * 2 ** -3 => 1 * 3 ** -1 (3: down)
+        ]
+
+        for exp, c, exp_rounded, c_rounded, randbits in inputs:
+            x = fp.RealFloat(exp=exp, c=c)
+            x_rounded = x.round(max_p=2, num_randbits=2, randbits=randbits)
+            expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
+            self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')

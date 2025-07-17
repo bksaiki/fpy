@@ -7,6 +7,7 @@ This module defines two floating-point number types.
 
 import math
 import numbers
+import random
 
 from fractions import Fraction
 from typing import Optional, Self, TypeAlias, TYPE_CHECKING
@@ -1031,7 +1032,7 @@ class RealFloat(numbers.Rational):
         n: int,
         rm: RoundingMode,
         num_randbits: int,
-        randbits: int,
+        randbits: int | None,
         exact: bool
     ):
         """
@@ -1042,14 +1043,38 @@ class RealFloat(numbers.Rational):
         at most `p` bits. If `exact` is `True`, the result must be exact.
         """
 
+        # compute rounding parameters for extended-precision value
         n_rand = n - num_randbits
         if p is None:
             p_rand = None
         else:
             p_rand = p - num_randbits
 
+        if randbits is None:
+            randbits = random.getrandbits(num_randbits)
+
+        # step 1. round the number to obtain the extended-precision value
         xr = self._round_at(p_rand, n_rand, rm, exact)
-        raise NotImplementedError
+
+        # step 2. split the number at the rounding position to get the rounding bits
+        _, lost = xr.split(n)
+        assert lost.n >= n_rand
+
+        # step 3. normalize `lost` so that `lost.n == n_rand`
+        # by step 2, we know that `lost.n >= n_rand`
+        offset = lost._exp - (n_rand + 1)
+        if offset > 0:
+            lost_c = lost._c << offset
+        else:
+            lost_c = lost._c
+
+        # step 4. round down if the random bits are larger than the rounding bits
+        if randbits >= lost_c:
+            # round down
+            return self._round_at(p, n, RoundingMode.RTZ, exact)
+        else:
+            # round up
+            return self._round_at(p, n, RoundingMode.RAZ, exact)
 
 
     def round_at(
@@ -1077,14 +1102,14 @@ class RealFloat(numbers.Rational):
         if randbits is not None and not isinstance(randbits, int):
             raise TypeError(f'Expected \'int\' for randbits={randbits}, got {type(randbits)}')
 
-        if randbits is not None:
-            if num_randbits is None:
-                raise ValueError('must specify num_randbits when randbits is specified')
-            if not (0 <= randbits < (1 << num_randbits)):
+        if num_randbits is None:
+            # non-stochastic rounding
+            return self._round_at(p, n, rm, exact)
+        else:
+            # stochastic rounding
+            if randbits is not None and (randbits < 0 or randbits >= (1 << num_randbits)):
                 raise ValueError(f'randbits must be in [0, {1 << num_randbits}), got {randbits}')
-
-        return self._round_at(p, n, rm, exact)
-
+            return self._round_at_stochastic(p, n, rm, num_randbits, randbits, exact)
 
     def round(self,
         max_p: Optional[int] = None,
@@ -1142,16 +1167,13 @@ class RealFloat(numbers.Rational):
         p, n = self._round_params(max_p, min_n)
 
         # step 2. round at the specified position
-        if randbits is None:
+        if num_randbits is None:
             # non-stochastic rounding
             return self._round_at(p, n, rm, exact)
         else:
             # stochastic rounding
-            if num_randbits is None:
-                raise ValueError('must specify num_randbits when randbits is specified')
-            if not (0 <= randbits < (1 << num_randbits)):
+            if randbits is not None and (randbits < 0 or randbits >= (1 << num_randbits)):
                 raise ValueError(f'randbits must be in [0, {1 << num_randbits}), got {randbits}')
-
             return self._round_at_stochastic(p, n, rm, num_randbits, randbits, exact)
 
 
