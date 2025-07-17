@@ -170,7 +170,7 @@ class ExtFloatContext(EncodableContext):
         return self.emax - self.eoffset
 
     def with_rm(self, rm):
-        return ExtFloatContext(self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset, rm)
+        return ExtFloatContext(self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset, rm, self.overflow)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):

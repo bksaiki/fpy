@@ -151,7 +151,7 @@ class MPBFloatContext(SizedContext):
         return self._mps_ctx.nmin
 
     def with_rm(self, rm: RoundingMode):
-        return MPBFloatContext(self.pmax, self.emin, self.pos_maxval, rm, neg_maxval=self.neg_maxval)
+        return MPBFloatContext(self.pmax, self.emin, self.pos_maxval, rm, self.overflow, neg_maxval=self.neg_maxval)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):

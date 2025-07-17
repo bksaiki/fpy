@@ -34,7 +34,7 @@ from ..number import (
     RoundingDirection, RM,
     # encoding utilities
     ExtFloatNanKind,
-    FixedOverflowKind, OV,
+    OverflowMode, OV,
     # type aliases
     REAL,
     FP256, FP128, FP64, FP32, FP16,
