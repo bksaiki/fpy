@@ -1,11 +1,15 @@
 import fpy2 as fp
 import unittest
 
+from hypothesis import given, strategies as st
+
+from ...generators import real_floats, rounding_modes
+
 
 class RoundTestCase(unittest.TestCase):
     """Testing `RealFloat.round()`"""
 
-    def test_round(self):
+    def test_valid(self):
         inputs = [
             # 8 * 2 ** -3 (representable)
             (-3, 8, -1, 2, fp.RM.RNE), # 8 * 2 ** -3 => 1 * 2 ** -1
@@ -50,7 +54,22 @@ class RoundTestCase(unittest.TestCase):
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}')
 
-    def test_round_stochastic(self):
+    @given(
+        real_floats(2),
+        st.one_of(st.none(), st.integers(min_value=0)),
+        st.one_of(st.none(), st.integers()),
+        rounding_modes()
+    )
+    def test_fuzz(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RoundingMode):
+        if p is not None or n is not None:
+            rounded = x.round(max_p=p, min_n=n, rm=rm)
+            self.assertIsInstance(rounded, fp.RealFloat)
+
+
+class RoundStochasticTestCase(unittest.TestCase):
+    """Testing `RealFloat.round()` with stochastic rounding"""
+
+    def test_valid(self):
         inputs = [
             # 8 * 2 ** -3 (representable)
             (-3, 8, -1, 2, 0), # 8 * 2 ** -3 => 1 * 2 ** -1 (0: down)
@@ -84,3 +103,15 @@ class RoundTestCase(unittest.TestCase):
             x_rounded = x.round(max_p=2, num_randbits=2, randbits=randbits)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
+
+    @given(
+        real_floats(2),
+        st.one_of(st.none(), st.integers(min_value=0)),
+        st.one_of(st.none(), st.integers()),
+        st.integers(min_value=1, max_value=100),
+        rounding_modes()
+    )
+    def test_fuzz(self, x: fp.RealFloat, p: int | None, n: int | None, num_randbits: int, rm: fp.RoundingMode):
+        if p is not None or n is not None:
+            rounded = x.round(max_p=p, min_n=n, rm=rm, num_randbits=num_randbits)
+            self.assertIsInstance(rounded, fp.RealFloat)
