@@ -1342,7 +1342,7 @@ class StmtBlock(Ast):
     # not ideal since it's ideally immutable, but it simplifies the code
     stmts: list[Stmt]
 
-    def __init__(self, stmts: Sequence[Stmt]):
+    def __init__(self, stmts: list[Stmt]):
         if stmts == []:
             loc = None
         else:
@@ -1360,7 +1360,7 @@ class StmtBlock(Ast):
                 )
 
         super().__init__(loc)
-        self.stmts = list(stmts)
+        self.stmts = stmts
 
     def is_equiv(self, other):
         return (
