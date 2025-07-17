@@ -1,7 +1,7 @@
 import random
 import unittest
 
-from fpy2 import IEEEContext, MPFixedContext, FixedContext, Float, RM, OF, FP64, FP32, FP16
+from fpy2 import IEEEContext, MPFixedContext, FixedContext, Float, RM, OV, FP64, FP32, FP16
 from fpy2.ops import *
 
 _unary_ops = [
@@ -210,8 +210,8 @@ class MathInt64NoExceptTestCase(unittest.TestCase):
     }
 
     def test_fuzz_unary(self, num_inputs: int = 256):
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP)
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
+        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP)
+        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
         for op in _unary_ops:
             max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:
@@ -224,8 +224,8 @@ class MathInt64NoExceptTestCase(unittest.TestCase):
                     op(x, ctx=INT64)
 
     def test_fuzz_binary(self, num_inputs: int = 256):
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP)
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
+        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP)
+        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
         for op in _binary_ops:
             max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:
@@ -240,8 +240,8 @@ class MathInt64NoExceptTestCase(unittest.TestCase):
                     op(x, y, ctx=ctx)
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP)
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OF.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
+        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP)
+        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
         for op in _ternary_ops:
             max_value = self._max_integer.get(op, self._default_max_integer)
             for rm in _rms:

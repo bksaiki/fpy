@@ -1,7 +1,7 @@
 import random
 import unittest
 
-from fpy2 import MPBFixedContext, RealFloat, RM, OF
+from fpy2 import MPBFixedContext, RealFloat, RM, OV
 
 class RoundTestCase(unittest.TestCase):
     """Testing `MPBFixedContext.round()`"""
@@ -11,7 +11,7 @@ class RoundTestCase(unittest.TestCase):
         seed = 1
 
         # saturation
-        sat_ctx = MPBFixedContext(-1, limit, RM.RTZ, OF.SATURATE)
+        sat_ctx = MPBFixedContext(-1, limit, RM.RTZ, OV.SATURATE)
         random.seed(seed)
         for _ in range(num_values):
             s = random.choice([False, True])
@@ -21,7 +21,7 @@ class RoundTestCase(unittest.TestCase):
             sat_ctx.round(x)
 
         # wrap
-        wrap_ctx = MPBFixedContext(-1, limit, RM.RTZ, OF.WRAP)
+        wrap_ctx = MPBFixedContext(-1, limit, RM.RTZ, OV.WRAP)
         random.seed(seed)
         for _ in range(num_values):
             s = random.choice([False, True])
@@ -37,12 +37,12 @@ class RoundTestCase(unittest.TestCase):
         neg_x = RealFloat.from_int(-(2 ** 8 + 1))
 
         # saturation
-        sat_ctx = MPBFixedContext(-1, limit, RM.RTZ, OF.SATURATE)
+        sat_ctx = MPBFixedContext(-1, limit, RM.RTZ, OV.SATURATE)
         self.assertEqual(sat_ctx.round(x), limit)
         self.assertEqual(sat_ctx.round(neg_x), -limit)
 
         # wrap
-        wrap_ctx = MPBFixedContext(-1, limit, RM.RTZ, OF.WRAP)
+        wrap_ctx = MPBFixedContext(-1, limit, RM.RTZ, OV.WRAP)
         self.assertEqual(wrap_ctx.round(x), -limit)
         self.assertEqual(wrap_ctx.round(neg_x), limit)
 
