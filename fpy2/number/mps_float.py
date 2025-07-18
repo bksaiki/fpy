@@ -36,6 +36,12 @@ class MPSFloatContext(OrdinalContext):
     emin: int
     """minimum (normalized exponent)"""
 
+    rm: RoundingMode
+    """rounding mode"""
+
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     _mp_ctx: MPFloatContext
     """this context without subnormalization"""
 
@@ -45,10 +51,13 @@ class MPSFloatContext(OrdinalContext):
     _neg_minval: Float
     """minimum negative value"""
 
-    rm: RoundingMode
-    """rounding mode"""
-
-    def __init__(self, pmax: int, emin: int, rm: RoundingMode = RoundingMode.RNE):
+    def __init__(
+        self,
+        pmax: int,
+        emin: int,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: Optional[int] = None
+    ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -57,11 +66,14 @@ class MPSFloatContext(OrdinalContext):
             raise TypeError(f'Expected \'int\' for emin={emin}, got {type(emin)}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
 
         self.pmax = pmax
         self.emin = emin
         self.rm = rm
-        self._mp_ctx = MPFloatContext(pmax, rm)
+        self.num_randbits = num_randbits
+        self._mp_ctx = MPFloatContext(pmax, rm, num_randbits)
         self._pos_minval = Float(s=False, c=1, exp=self.expmin, ctx=self)
         self._neg_minval = Float(s=True, c=1, exp=self.expmin, ctx=self)
 
@@ -71,10 +83,11 @@ class MPSFloatContext(OrdinalContext):
             and self.pmax == other.pmax
             and self.emin == other.emin
             and self.rm == other.rm
+            and self.num_randbits == other.num_randbits
         )
 
     def __hash__(self):
-        return hash((self.pmax, self.emin, self.rm))
+        return hash((self.pmax, self.emin, self.rm, self.num_randbits))
 
     @property
     def expmin(self):
@@ -93,6 +106,7 @@ class MPSFloatContext(OrdinalContext):
         pmax: Optional[int] = None,
         emin: Optional[int] = None,
         rm: Optional[RoundingMode] = None,
+        num_randbits: Optional[int] = None,
         **kwargs
     ) -> 'MPSFloatContext':
         if pmax is None:
@@ -101,9 +115,11 @@ class MPSFloatContext(OrdinalContext):
             emin = self.emin
         if rm is None:
             rm = self.rm
+        if num_randbits is None:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
-        return MPSFloatContext(pmax, emin, rm)
+        return MPSFloatContext(pmax, emin, rm, num_randbits)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
@@ -183,7 +199,12 @@ class MPSFloatContext(OrdinalContext):
         return x.is_nonzero() and x.e >= self.emin
 
     def round_params(self):
-        return (self.pmax, self.nmin)
+        if self.num_randbits is None:
+            return None, None
+        else:
+            pmax = self.pmax + self.num_randbits
+            nmin = self.nmin - self.num_randbits
+            return pmax, nmin
 
     def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
         """
@@ -212,7 +233,7 @@ class MPSFloatContext(OrdinalContext):
             n = self.nmin
 
         # step 3. round value based on rounding parameters
-        xr = x.round(self.pmax, n, self.rm, exact=exact)
+        xr = x.round(self.pmax, n, self.rm, self.num_randbits, exact=exact)
 
         # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)

@@ -3,6 +3,8 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
+from typing import Optional
+
 from .ext_float import ExtFloatContext, ExtFloatNanKind
 from .round import RoundingMode, OverflowMode
 
@@ -24,12 +26,13 @@ class IEEEContext(ExtFloatContext):
         es: int,
         nbits: int,
         rm: RoundingMode = RoundingMode.RNE,
-        overflow: OverflowMode = OverflowMode.OVERFLOW
+        overflow: OverflowMode = OverflowMode.OVERFLOW,
+        num_randbits: Optional[int] = 0
     ):
-        super().__init__(es, nbits, True, ExtFloatNanKind.IEEE_754, 0, rm, overflow)
+        super().__init__(es, nbits, True, ExtFloatNanKind.IEEE_754, 0, rm, overflow, num_randbits)
 
     def __repr__(self):
-        return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r}, overflow={self.overflow!r})'
+        return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r}, overflow={self.overflow!r}, num_randbits={self.num_randbits!r})'
 
     def with_params(
         self, *,
@@ -37,6 +40,7 @@ class IEEEContext(ExtFloatContext):
         nbits: int | None = None,
         rm: RoundingMode | None = None,
         overflow: OverflowMode | None = None,
+        num_randbits: Optional[int] = 0,
         **kwargs
     ) -> 'IEEEContext':
         if es is None:
@@ -47,6 +51,8 @@ class IEEEContext(ExtFloatContext):
             rm = self.rm
         if overflow is None:
             overflow = self.overflow
+        if num_randbits is None:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for IEEEContext')
-        return IEEEContext(es, nbits, rm, overflow)
+        return IEEEContext(es, nbits, rm, overflow, num_randbits)

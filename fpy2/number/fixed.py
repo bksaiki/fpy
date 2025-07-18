@@ -47,6 +47,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
         nbits: int,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.WRAP,
+        num_randbits: Optional[int] = 0,
         *,
         nan_value: Optional[Float] = None,
         inf_value: Optional[Float] = None
@@ -59,6 +60,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
             pos_maxval,
             rm,
             overflow,
+            num_randbits,
             neg_maxval=neg_maxval,
             enable_nan=False,
             enable_inf=False,
@@ -77,6 +79,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
         nbits: Optional[int] = None,
         rm: Optional[RoundingMode] = None,
         overflow: Optional[OverflowMode] = None,
+        num_randbits: Optional[int] = None,
         nan_value: Optional[Float] = None,
         inf_value: Optional[Float] = None,
         **kwargs
@@ -91,6 +94,8 @@ class FixedContext(MPBFixedContext, EncodableContext):
             rm = self.rm
         if overflow is None:
             overflow = self.overflow
+        if num_randbits is None:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return FixedContext(
@@ -99,6 +104,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
             nbits,
             rm,
             overflow,
+            num_randbits,
             nan_value=nan_value,
             inf_value=inf_value
         )

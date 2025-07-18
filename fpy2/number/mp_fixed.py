@@ -43,6 +43,9 @@ class MPFixedContext(OrdinalContext):
     rm: RoundingMode
     """rounding mode"""
 
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     enable_nan: bool
     """is NaN representable?"""
 
@@ -65,6 +68,7 @@ class MPFixedContext(OrdinalContext):
         self,
         nmin: int,
         rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: Optional[int] = 0,
         *,
         enable_nan: bool = False,
         enable_inf: bool = False,
@@ -75,6 +79,8 @@ class MPFixedContext(OrdinalContext):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' or None for num_randbits={num_randbits}, got {type(num_randbits)}')
         if not isinstance(enable_nan, bool):
             raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
         if not isinstance(enable_inf, bool):
@@ -106,6 +112,7 @@ class MPFixedContext(OrdinalContext):
 
         self.nmin = nmin
         self.rm = rm
+        self.num_randbits = num_randbits
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
         self.nan_value = nan_value
@@ -116,6 +123,7 @@ class MPFixedContext(OrdinalContext):
             isinstance(other, MPFixedContext)
             and self.nmin == other.nmin
             and self.rm == other.rm
+            and self.num_randbits == other.num_randbits
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
             and self.nan_value == other.nan_value
@@ -126,6 +134,7 @@ class MPFixedContext(OrdinalContext):
         return hash((
             self.nmin,
             self.rm,
+            self.num_randbits,
             self.enable_nan,
             self.enable_inf,
             self.nan_value,
@@ -149,6 +158,7 @@ class MPFixedContext(OrdinalContext):
         enable_inf: Optional[bool] = None,
         nan_value: Optional[Float] = None,
         inf_value: Optional[Float] = None,
+        num_randbits: Optional[int] = None,
         **kwargs
     ) -> 'MPFixedContext':
         if nmin is None:
@@ -163,11 +173,14 @@ class MPFixedContext(OrdinalContext):
             nan_value = self.nan_value
         if inf_value is None:
             inf_value = self.inf_value
+        if num_randbits is None:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for MPFixedContext')
         return MPFixedContext(
             nmin,
             rm,
+            num_randbits,
             enable_nan=enable_nan,
             enable_inf=enable_inf,
             nan_value=nan_value,
@@ -180,11 +193,8 @@ class MPFixedContext(OrdinalContext):
         return (
             isinstance(other, MPFixedContext)
             and self.nmin == other.nmin
-            and self.rm == other.rm
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
-            and self.nan_value == other.nan_value
-            and self.inf_value == other.inf_value
         )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
@@ -243,7 +253,11 @@ class MPFixedContext(OrdinalContext):
         return x.is_nonzero()
 
     def round_params(self):
-        return None, self.nmin
+        if self.num_randbits is None:
+            return None, None
+        else:
+            nmin = self.nmin - self.num_randbits
+            return None, nmin
 
     def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
         """
@@ -287,7 +301,7 @@ class MPFixedContext(OrdinalContext):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        xr = xr.round(min_n=n, rm=self.rm, exact=exact)
+        xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, exact=exact)
 
         # step 4. wrap the value in a Float
         return Float(x=xr, ctx=self)

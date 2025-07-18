@@ -3,11 +3,10 @@ This module defines fixed-pont numbers with a maximum value,
 that is, multiprecision and bounded. Hence "MP-B".
 """
 
-from enum import IntEnum
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr, enum_repr
+from ..utils import default_repr
 
 from .context import Context, SizedContext
 from .mp_fixed import MPFixedContext
@@ -55,6 +54,9 @@ class MPBFixedContext(SizedContext):
     overflow: OverflowMode
     """overflow behavior"""
 
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     enable_nan: bool
     """is NaN representable?"""
 
@@ -89,6 +91,7 @@ class MPBFixedContext(SizedContext):
         maxval: RealFloat,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.WRAP,
+        num_randbits: Optional[int] = 0,
         *,
         neg_maxval: Optional[RealFloat] = None,
         enable_nan: bool = False,
@@ -104,6 +107,8 @@ class MPBFixedContext(SizedContext):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if not isinstance(overflow, OverflowMode):
             raise TypeError(f'Expected \'FixedOverflowKind\' for overflow={overflow}, got {type(overflow)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
         if not isinstance(enable_nan, bool):
             raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
         if not isinstance(enable_inf, bool):
@@ -152,12 +157,13 @@ class MPBFixedContext(SizedContext):
         self.neg_maxval = neg_maxval
         self.rm = rm
         self.overflow = overflow
+        self.num_randbits = num_randbits
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
         self.nan_value = nan_value
         self.inf_value = inf_value
 
-        self._mp_ctx = MPFixedContext(nmin, rm, enable_nan=enable_nan, enable_inf=enable_inf)
+        self._mp_ctx = MPFixedContext(nmin, rm, num_randbits, enable_nan=enable_nan, enable_inf=enable_inf)
         pos_maxval_mp = Float(x=self.pos_maxval, ctx=self._mp_ctx)
         neg_maxval_mp = Float(x=self.neg_maxval, ctx=self._mp_ctx)
         self._pos_maxval_ord = self._mp_ctx.to_ordinal(pos_maxval_mp)
@@ -171,6 +177,7 @@ class MPBFixedContext(SizedContext):
             and self.neg_maxval == other.neg_maxval
             and self.rm == other.rm
             and self.overflow == other.overflow
+            and self.num_randbits == other.num_randbits
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
             and self.nan_value == other.nan_value
@@ -184,6 +191,7 @@ class MPBFixedContext(SizedContext):
             self.neg_maxval,
             self.rm,
             self.overflow,
+            self.num_randbits,
             self.enable_nan,
             self.enable_inf,
             self.nan_value,
@@ -196,6 +204,7 @@ class MPBFixedContext(SizedContext):
         maxval: Optional[RealFloat] = None,
         rm: Optional[RoundingMode] = None,
         overflow: Optional[OverflowMode] = None,
+        num_randbits: Optional[int] = None,
         neg_maxval: Optional[RealFloat] = None,
         enable_nan: Optional[bool] = None,
         enable_inf: Optional[bool] = None,
@@ -213,6 +222,8 @@ class MPBFixedContext(SizedContext):
             overflow = self.overflow
         if neg_maxval is None:
             neg_maxval = self.neg_maxval
+        if neg_maxval is None:
+            neg_maxval = self.neg_maxval
         if enable_nan is None:
             enable_nan = self.enable_nan
         if enable_inf is None:
@@ -227,6 +238,7 @@ class MPBFixedContext(SizedContext):
             nmin=nmin,
             maxval=maxval,
             rm=rm,
+            num_randbits=num_randbits,
             overflow=overflow,
             neg_maxval=neg_maxval,
             enable_nan=enable_nan,
@@ -243,6 +255,8 @@ class MPBFixedContext(SizedContext):
             and self.nmin == other.nmin
             and self.pos_maxval == other.pos_maxval
             and self.neg_maxval == other.neg_maxval
+            and self.enable_inf == other.enable_inf
+            and self.enable_nan == other.enable_nan
         )
 
     def is_representable(self, x: RealFloat | Float) -> bool:
@@ -336,7 +350,7 @@ class MPBFixedContext(SizedContext):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        xr = xr.round(min_n=n, rm=self.rm, exact=exact)
+        xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, exact=exact)
 
         # step 4. check for overflow
         if self._is_overflowing(xr):

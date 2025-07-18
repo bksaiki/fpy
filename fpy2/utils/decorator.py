@@ -30,7 +30,7 @@ def __default_repr__(x: object):
             value = getattr(x, slot)
             items.append(f'{slot}={value!r}')
 
-    return f'{x.__class__.__name__}({" ".join(items)})'
+    return f'{x.__class__.__name__}({", ".join(items)})'
 
 def default_repr(cls):
     """Default __repr__ implementation for a class."""

@@ -51,6 +51,9 @@ class MPBFloatContext(SizedContext):
     overflow: OverflowMode
     """overflow behavior"""
 
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     _mps_ctx: MPSFloatContext
     """this context without maximum values"""
 
@@ -67,6 +70,7 @@ class MPBFloatContext(SizedContext):
         maxval: RealFloat, 
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
+        num_randbits: Optional[int] = 0,
         *,
         neg_maxval: Optional[RealFloat] = None
     ):
@@ -82,6 +86,8 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if not isinstance(overflow, OverflowMode):
             raise TypeError(f'Expected \'OverflowMode\' for overflow={overflow}, got {type(overflow)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
 
         if overflow == OverflowMode.WRAP:
             raise ValueError('OverflowMode.WRAP is not supported for MPBFloatContext')
@@ -106,8 +112,9 @@ class MPBFloatContext(SizedContext):
         self.neg_maxval = neg_maxval
         self.rm = rm
         self.overflow = overflow
+        self.num_randbits = num_randbits
 
-        self._mps_ctx = MPSFloatContext(pmax, emin, rm)
+        self._mps_ctx = MPSFloatContext(pmax, emin, rm, num_randbits)
         pos_maxval_mps = Float(x=self.pos_maxval, ctx=self._mps_ctx)
         neg_maxval_mps = Float(x=self.neg_maxval, ctx=self._mps_ctx)
         self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_mps)
@@ -121,10 +128,12 @@ class MPBFloatContext(SizedContext):
             and self.pos_maxval == other.pos_maxval
             and self.neg_maxval == other.neg_maxval
             and self.rm == other.rm
+            and self.overflow == other.overflow
+            and self.num_randbits == other.num_randbits
         )
 
     def __hash__(self):
-        return hash((self.pmax, self.emin, self.pos_maxval, self.neg_maxval, self.rm))
+        return hash((self.pmax, self.emin, self.pos_maxval, self.neg_maxval, self.rm, self.overflow, self.num_randbits))
 
     @property
     def emax(self):
@@ -158,6 +167,7 @@ class MPBFloatContext(SizedContext):
         rm: Optional[RoundingMode] = None,
         overflow: Optional[OverflowMode] = None,
         neg_maxval: Optional[RealFloat] = None,
+        num_randbits: Optional[int] = None,
         **kwargs
     ) -> 'MPBFloatContext':
         if pmax is None:
@@ -172,6 +182,8 @@ class MPBFloatContext(SizedContext):
             overflow = self.overflow
         if neg_maxval is None:
             neg_maxval = self.neg_maxval
+        if num_randbits is None:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return MPBFloatContext(pmax, emin, maxval, rm, overflow, neg_maxval=neg_maxval)
@@ -284,7 +296,7 @@ class MPBFloatContext(SizedContext):
             n = self.nmin
 
         # step 4. round value based on rounding parameters
-        rounded = x.round(self.pmax, n, self.rm, exact=exact)
+        rounded = x.round(self.pmax, n, self.rm, self.num_randbits, exact=exact)
 
         # step 5. check for overflow
         if self._is_overflowing(rounded):

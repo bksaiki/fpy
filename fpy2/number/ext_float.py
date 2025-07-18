@@ -1,8 +1,7 @@
-
+from enum import IntEnum
+from typing import Optional
 
 from ..utils import default_repr, enum_repr, bitmask
-
-from enum import IntEnum
 
 from .context import Context, EncodableContext
 from .number import RealFloat, Float
@@ -59,6 +58,9 @@ class ExtFloatContext(EncodableContext):
     overflow: OverflowMode
     """overflow behavior"""
 
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     _mpb_ctx: MPBFloatContext
     """this context as an `MPBFloatContext`"""
 
@@ -71,6 +73,7 @@ class ExtFloatContext(EncodableContext):
         eoffset: int,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
+        num_randbits: Optional[int] = 0,
     ):
         if not isinstance(es, int):
             raise TypeError(f'Expected \'int\', got \'{type(es)}\' for es={es}')
@@ -86,6 +89,8 @@ class ExtFloatContext(EncodableContext):
             raise TypeError(f'Expected \'NanEncoding\', got \'{type(nan_kind)}\' for nan_encoding={nan_kind}')
         if not isinstance(eoffset, int):
             raise TypeError(f'Expected \'int\', got \'{type(eoffset)}\' for eoffset={eoffset}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\', got \'{type(num_randbits)}\' for num_randbits={num_randbits}')
 
         # check validity
         if not _format_is_valid(es, nbits, enable_inf, nan_kind):
@@ -104,7 +109,8 @@ class ExtFloatContext(EncodableContext):
         self.eoffset = eoffset
         self.rm = rm
         self.overflow = overflow
-        self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow)
+        self.num_randbits = num_randbits
+        self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
 
     def __eq__(self, other):
         return (
@@ -115,6 +121,8 @@ class ExtFloatContext(EncodableContext):
             and self.nan_kind == other.nan_kind
             and self.eoffset == other.eoffset
             and self.rm == other.rm
+            and self.overflow == other.overflow
+            and self.num_randbits == other.num_randbits
         )
 
     def __hash__(self):
@@ -124,7 +132,9 @@ class ExtFloatContext(EncodableContext):
             self.enable_inf,
             self.nan_kind,
             self.eoffset,
-            self.rm
+            self.rm,
+            self.overflow,
+            self.num_randbits
         ))
 
     @property
@@ -178,6 +188,7 @@ class ExtFloatContext(EncodableContext):
         eoffset: int | None = None,
         rm: RoundingMode | None = None,
         overflow: OverflowMode | None = None,
+        num_randbits: Optional[int] = 0,
         **kwargs
     ) -> 'ExtFloatContext':
         if es is None:
@@ -194,9 +205,11 @@ class ExtFloatContext(EncodableContext):
             rm = self.rm
         if overflow is None:
             overflow = self.overflow
+        if num_randbits is None:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')
-        return ExtFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow)
+        return ExtFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
@@ -607,7 +620,8 @@ def _ext_to_mpb(
     nan_kind: ExtFloatNanKind,
     eoffset: int,
     rm: RoundingMode,
-    overflow: OverflowMode
+    overflow: OverflowMode,
+    num_randbits: Optional[int] = 0,
 ) -> MPBFloatContext:
     """Converts between `ExtFloatContext` and `MPBFloatContext` parameters."""
     # IEEE 754 derived parameters
@@ -682,4 +696,4 @@ def _ext_to_mpb(
     maxval = maxval.normalize(p, expmin - 1)
 
     # create the related MPB context
-    return MPBFloatContext(p, emin, maxval, rm, overflow)
+    return MPBFloatContext(p, emin, maxval, rm, overflow, num_randbits)
