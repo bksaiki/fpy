@@ -220,6 +220,8 @@ class MPBFixedContext(SizedContext):
             rm = self.rm
         if overflow is None:
             overflow = self.overflow
+        if num_randbits is None:
+            num_randbits = self.num_randbits
         if neg_maxval is None:
             neg_maxval = self.neg_maxval
         if neg_maxval is None:
@@ -350,6 +352,7 @@ class MPBFixedContext(SizedContext):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
+        print(self.num_randbits)
         xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, exact=exact)
 
         # step 4. check for overflow
@@ -385,7 +388,8 @@ class MPBFixedContext(SizedContext):
             case int():
                 xr = RealFloat.from_int(x)
             case str() | Fraction():
-                xr = mpfr_value(x, n=self.nmin)
+                p, n = self.round_params()
+                xr = mpfr_value(x, prec=p, n=n)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 

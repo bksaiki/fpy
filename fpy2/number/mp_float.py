@@ -191,7 +191,8 @@ class MPFloatContext(Context):
             case int():
                 xr = RealFloat.from_int(x)
             case str() | Fraction():
-                xr = mpfr_value(x, prec=self.pmax)
+                p, n = self.round_params()
+                xr = mpfr_value(x, prec=p, n=n)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 

@@ -1043,6 +1043,8 @@ class RealFloat(numbers.Rational):
         at most `p` bits. If `exact` is `True`, the result must be exact.
         """
 
+        print('stochastic')
+
         # step 1. compute the actual number of rounding bits to use
         if num_randbits is None:
             # use all the bits (in theory, `num_randbits == float('inf')`)
