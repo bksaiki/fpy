@@ -242,15 +242,12 @@ class MPSFloatContext(OrdinalContext):
         match x:
             case Float() | RealFloat():
                 xr = x
+            case float():
+                xr = RealFloat.from_float(x)
             case int():
-                xr = RealFloat(m=x)
-            case float() | str():
+                xr = RealFloat.from_int(x)
+            case str() | Fraction():
                 xr = mpfr_value(x, prec=self.pmax)
-            case Fraction():
-                if x.denominator == 1:
-                    xr = RealFloat(m=int(x))
-                else:
-                    xr = mpfr_value(x, prec=self.pmax)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
