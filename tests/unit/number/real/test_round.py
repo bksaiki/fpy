@@ -107,7 +107,7 @@ class RoundStochasticTestCase(unittest.TestCase):
         real_floats(100),
         st.one_of(st.none(), st.integers(min_value=0)),
         st.one_of(st.none(), st.integers()),
-        st.integers(min_value=1, max_value=100),
+        st.one_of(st.none(), st.integers(min_value=1, max_value=100)),
         rounding_modes()
     )
     def test_fuzz(self, x: fp.RealFloat, p: int | None, n: int | None, num_randbits: int, rm: fp.RoundingMode):
@@ -217,9 +217,9 @@ class RoundStochasticAtTestCase(unittest.TestCase):
     @given(
         real_floats(100),
         st.integers(),
-        st.integers(min_value=1, max_value=100),
+        st.one_of(st.none(), st.integers(min_value=1, max_value=100)),
         rounding_modes()
     )
-    def test_fuzz(self, x: fp.RealFloat, n: int, num_randbits: int, rm: fp.RoundingMode):
+    def test_fuzz(self, x: fp.RealFloat, n: int, num_randbits: int | None, rm: fp.RoundingMode):
         rounded = x.round_at(n=n, rm=rm, num_randbits=num_randbits)
         self.assertIsInstance(rounded, fp.RealFloat)
