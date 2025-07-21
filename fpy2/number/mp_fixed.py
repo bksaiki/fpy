@@ -7,7 +7,7 @@ Hence, "MP-F".
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import default_repr, DEFAULT, DefaultOr
 
 from .context import Context, OrdinalContext
 from .number import Float
@@ -43,6 +43,9 @@ class MPFixedContext(OrdinalContext):
     rm: RoundingMode
     """rounding mode"""
 
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     enable_nan: bool
     """is NaN representable?"""
 
@@ -65,6 +68,7 @@ class MPFixedContext(OrdinalContext):
         self,
         nmin: int,
         rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: Optional[int] = 0,
         *,
         enable_nan: bool = False,
         enable_inf: bool = False,
@@ -75,6 +79,8 @@ class MPFixedContext(OrdinalContext):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' or None for num_randbits={num_randbits}, got {type(num_randbits)}')
         if not isinstance(enable_nan, bool):
             raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
         if not isinstance(enable_inf, bool):
@@ -106,6 +112,7 @@ class MPFixedContext(OrdinalContext):
 
         self.nmin = nmin
         self.rm = rm
+        self.num_randbits = num_randbits
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
         self.nan_value = nan_value
@@ -116,6 +123,7 @@ class MPFixedContext(OrdinalContext):
             isinstance(other, MPFixedContext)
             and self.nmin == other.nmin
             and self.rm == other.rm
+            and self.num_randbits == other.num_randbits
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
             and self.nan_value == other.nan_value
@@ -126,6 +134,7 @@ class MPFixedContext(OrdinalContext):
         return hash((
             self.nmin,
             self.rm,
+            self.num_randbits,
             self.enable_nan,
             self.enable_inf,
             self.nan_value,
@@ -143,36 +152,43 @@ class MPFixedContext(OrdinalContext):
 
     def with_params(
         self, *,
-        nmin: Optional[int] = None,
-        rm: Optional[RoundingMode] = None,
-        enable_nan: Optional[bool] = None,
-        enable_inf: Optional[bool] = None,
-        nan_value: Optional[Float] = None,
-        inf_value: Optional[Float] = None,
+        nmin: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        enable_nan: DefaultOr[bool] = DEFAULT,
+        enable_inf: DefaultOr[bool] = DEFAULT,
+        nan_value: DefaultOr[Optional[Float]] = DEFAULT,
+        inf_value: DefaultOr[Optional[Float]] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'MPFixedContext':
-        if nmin is None:
+        if nmin is DEFAULT:
             nmin = self.nmin
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if enable_nan is None:
+        if enable_nan is DEFAULT:
             enable_nan = self.enable_nan
-        if enable_inf is None:
+        if enable_inf is DEFAULT:
             enable_inf = self.enable_inf
-        if nan_value is None:
+        if nan_value is DEFAULT:
             nan_value = self.nan_value
-        if inf_value is None:
+        if inf_value is DEFAULT:
             inf_value = self.inf_value
+        if num_randbits is DEFAULT:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for MPFixedContext')
         return MPFixedContext(
             nmin,
             rm,
+            num_randbits,
             enable_nan=enable_nan,
             enable_inf=enable_inf,
             nan_value=nan_value,
             inf_value=inf_value
         )
+
+    def is_stochastic(self) -> bool:
+        return self.num_randbits != 0
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
@@ -180,14 +196,11 @@ class MPFixedContext(OrdinalContext):
         return (
             isinstance(other, MPFixedContext)
             and self.nmin == other.nmin
-            and self.rm == other.rm
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
-            and self.nan_value == other.nan_value
-            and self.inf_value == other.inf_value
         )
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -213,13 +226,13 @@ class MPFixedContext(OrdinalContext):
 
         return xr.is_more_significant(self.nmin)
 
-    def is_canonical(self, x: Float):
-        if not isinstance(x, Float) and self.is_representable(x):
+    def canonical_under(self, x: Float):
+        if not isinstance(x, Float) and self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return x.exp == self.expmin
 
     def normalize(self, x: Float):
-        if not isinstance(x, Float) and self.is_representable(x):
+        if not isinstance(x, Float) and self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         offset = x.exp - self.expmin
@@ -237,13 +250,17 @@ class MPFixedContext(OrdinalContext):
 
         return Float(exp=exp, c=c, x=x, ctx=self)
 
-    def is_normal(self, x: Float) -> bool:
+    def normal_under(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero()
 
     def round_params(self):
-        return None, self.nmin
+        if self.num_randbits is None:
+            return None, None
+        else:
+            nmin = self.nmin - self.num_randbits
+            return None, nmin
 
     def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
         """
@@ -287,7 +304,7 @@ class MPFixedContext(OrdinalContext):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        xr = xr.round(min_n=n, rm=self.rm, exact=exact)
+        xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, exact=exact)
 
         # step 4. wrap the value in a Float
         return Float(x=xr, ctx=self)
@@ -296,15 +313,15 @@ class MPFixedContext(OrdinalContext):
         match x:
             case Float() | RealFloat():
                 xr = x
+            case float():
+                xr = Float.from_float(x)
             case int():
-                xr = RealFloat(m=x)
-            case float() | str():
-                xr = mpfr_value(x, n=self.nmin)
-            case Fraction():
-                if x.denominator == 1:
-                    xr = RealFloat(m=int(x))
-                else:
-                    xr = mpfr_value(x, n=self.nmin)
+                xr = RealFloat.from_int(x)
+            case Fraction() if x.denominator == 1:
+                xr = RealFloat.from_int(int(x))
+            case str() | Fraction():
+                p, n = self.round_params()
+                xr = mpfr_value(x, prec=p, n=n)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
@@ -319,7 +336,7 @@ class MPFixedContext(OrdinalContext):
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'Expected representable \'Float\', got x={x}')
         if infval:
             raise ValueError('infvalue=True is invalid for contexts without maximum value')

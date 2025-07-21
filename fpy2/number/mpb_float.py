@@ -7,7 +7,7 @@ and bounded. Hence, "MP-B."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import default_repr, DefaultOr, DEFAULT
 
 from .context import Context, SizedContext
 from .number import RealFloat, Float
@@ -51,6 +51,9 @@ class MPBFloatContext(SizedContext):
     overflow: OverflowMode
     """overflow behavior"""
 
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     _mps_ctx: MPSFloatContext
     """this context without maximum values"""
 
@@ -67,6 +70,7 @@ class MPBFloatContext(SizedContext):
         maxval: RealFloat, 
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
+        num_randbits: Optional[int] = 0,
         *,
         neg_maxval: Optional[RealFloat] = None
     ):
@@ -82,6 +86,8 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
         if not isinstance(overflow, OverflowMode):
             raise TypeError(f'Expected \'OverflowMode\' for overflow={overflow}, got {type(overflow)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
 
         if overflow == OverflowMode.WRAP:
             raise ValueError('OverflowMode.WRAP is not supported for MPBFloatContext')
@@ -106,8 +112,9 @@ class MPBFloatContext(SizedContext):
         self.neg_maxval = neg_maxval
         self.rm = rm
         self.overflow = overflow
+        self.num_randbits = num_randbits
 
-        self._mps_ctx = MPSFloatContext(pmax, emin, rm)
+        self._mps_ctx = MPSFloatContext(pmax, emin, rm, num_randbits)
         pos_maxval_mps = Float(x=self.pos_maxval, ctx=self._mps_ctx)
         neg_maxval_mps = Float(x=self.neg_maxval, ctx=self._mps_ctx)
         self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_mps)
@@ -121,10 +128,12 @@ class MPBFloatContext(SizedContext):
             and self.pos_maxval == other.pos_maxval
             and self.neg_maxval == other.neg_maxval
             and self.rm == other.rm
+            and self.overflow == other.overflow
+            and self.num_randbits == other.num_randbits
         )
 
     def __hash__(self):
-        return hash((self.pmax, self.emin, self.pos_maxval, self.neg_maxval, self.rm))
+        return hash((self.pmax, self.emin, self.pos_maxval, self.neg_maxval, self.rm, self.overflow, self.num_randbits))
 
     @property
     def emax(self):
@@ -152,29 +161,35 @@ class MPBFloatContext(SizedContext):
 
     def with_params(
         self, *,
-        pmax: Optional[int] = None,
-        emin: Optional[int] = None,
-        maxval: Optional[RealFloat] = None,
-        rm: Optional[RoundingMode] = None,
-        overflow: Optional[OverflowMode] = None,
-        neg_maxval: Optional[RealFloat] = None,
+        pmax: DefaultOr[int] = DEFAULT,
+        emin: DefaultOr[int] = DEFAULT,
+        maxval: DefaultOr[RealFloat] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        overflow: DefaultOr[OverflowMode] = DEFAULT,
+        neg_maxval: DefaultOr[RealFloat] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'MPBFloatContext':
-        if pmax is None:
+        if pmax is DEFAULT:
             pmax = self.pmax
-        if emin is None:
+        if emin is DEFAULT:
             emin = self.emin
-        if maxval is None:
+        if maxval is DEFAULT:
             maxval = self.pos_maxval
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if overflow is None:
+        if overflow is DEFAULT:
             overflow = self.overflow
-        if neg_maxval is None:
+        if neg_maxval is DEFAULT:
             neg_maxval = self.neg_maxval
+        if num_randbits is DEFAULT:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return MPBFloatContext(pmax, emin, maxval, rm, overflow, neg_maxval=neg_maxval)
+
+    def is_stochastic(self) -> bool:
+        return self.num_randbits != 0
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
@@ -186,7 +201,7 @@ class MPBFloatContext(SizedContext):
             and self.neg_maxval == other.neg_maxval
         )
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -197,7 +212,7 @@ class MPBFloatContext(SizedContext):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        if not self._mps_ctx.is_representable(x):
+        if not self._mps_ctx.representable_under(x):
             # not representable even without a maximum value
             return False
         elif not x.is_nonzero():
@@ -210,21 +225,21 @@ class MPBFloatContext(SizedContext):
             # check bounded (non-negative values)
             return x <= self.pos_maxval
 
-    def is_canonical(self, x: Float):
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def canonical_under(self, x: Float):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._mps_ctx.is_canonical(x)
+        return self._mps_ctx.canonical_under(x)
 
-    def is_normal(self, x: Float):
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def normal_under(self, x: Float):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._mps_ctx.is_normal(x)
+        return self._mps_ctx.normal_under(x)
 
     def _normalize(self, x: Float) -> Float:
         return self._mps_ctx._normalize(x)
 
     def normalize(self, x: Float):
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return Float(x=self._normalize(x), ctx=self)
 
@@ -284,7 +299,7 @@ class MPBFloatContext(SizedContext):
             n = self.nmin
 
         # step 4. round value based on rounding parameters
-        rounded = x.round(self.pmax, n, self.rm, exact=exact)
+        rounded = x.round(self.pmax, n, self.rm, self.num_randbits, exact=exact)
 
         # step 5. check for overflow
         if self._is_overflowing(rounded):
@@ -317,15 +332,15 @@ class MPBFloatContext(SizedContext):
         match x:
             case Float() | RealFloat():
                 xr = x
+            case float():
+                xr = Float.from_float(x)
             case int():
                 xr = RealFloat.from_int(x)
-            case float() | str():
-                xr = mpfr_value(x, prec=self.pmax)
-            case Fraction():
-                if x.denominator == 1:
-                    xr = RealFloat.from_int(int(x))
-                else:
-                    xr = mpfr_value(x, prec=self.pmax)
+            case Fraction() if x.denominator == 1:
+                xr = RealFloat.from_int(int(x))
+            case str() | Fraction():
+                p, n = self.round_params()
+                xr = mpfr_value(x, prec=p, n=n)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
@@ -340,7 +355,7 @@ class MPBFloatContext(SizedContext):
     def to_ordinal(self, x: Float, infval = False):
         if not isinstance(x, Float):
             raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'Expected a representable \'Float\', got x={x} (x.ctx={x.ctx})')
 
         # case split by class

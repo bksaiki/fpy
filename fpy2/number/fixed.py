@@ -4,7 +4,7 @@ This module defines the usual fixed-width fixed-point numbers.
 
 from typing import Optional
 
-from ..utils import bitmask, default_repr
+from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import EncodableContext
 from .mpb_fixed import MPBFixedContext
@@ -47,6 +47,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
         nbits: int,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.WRAP,
+        num_randbits: Optional[int] = 0,
         *,
         nan_value: Optional[Float] = None,
         inf_value: Optional[Float] = None
@@ -59,6 +60,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
             pos_maxval,
             rm,
             overflow,
+            num_randbits,
             neg_maxval=neg_maxval,
             enable_nan=False,
             enable_inf=False,
@@ -72,25 +74,32 @@ class FixedContext(MPBFixedContext, EncodableContext):
 
     def with_params(
         self, *,
-        signed: Optional[bool] = None,
-        scale: Optional[int] = None,
-        nbits: Optional[int] = None,
-        rm: Optional[RoundingMode] = None,
-        overflow: Optional[OverflowMode] = None,
-        nan_value: Optional[Float] = None,
-        inf_value: Optional[Float] = None,
+        signed: DefaultOr[bool] = DEFAULT,
+        scale: DefaultOr[int] = DEFAULT,
+        nbits: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        overflow: DefaultOr[OverflowMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
+        nan_value: DefaultOr[Optional[Float]] = DEFAULT,
+        inf_value: DefaultOr[Optional[Float]] = DEFAULT,
         **kwargs
     ) -> 'FixedContext':
-        if signed is None:
+        if signed is DEFAULT:
             signed = self.signed
-        if scale is None:
+        if scale is DEFAULT:
             scale = self.scale
-        if nbits is None:
+        if nbits is DEFAULT:
             nbits = self.nbits
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if overflow is None:
+        if overflow is DEFAULT:
             overflow = self.overflow
+        if num_randbits is DEFAULT:
+            num_randbits = self.num_randbits
+        if nan_value is DEFAULT:
+            nan_value = self.nan_value
+        if inf_value is DEFAULT:
+            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return FixedContext(
@@ -99,6 +108,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
             nbits,
             rm,
             overflow,
+            num_randbits,
             nan_value=nan_value,
             inf_value=inf_value
         )
@@ -134,7 +144,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got x={x}')
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'Expected representable value, got x={x} for self={self}')
         raise NotImplementedError
 

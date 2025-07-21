@@ -7,6 +7,7 @@ This module defines two floating-point number types.
 
 import math
 import numbers
+import random
 
 from fractions import Fraction
 from typing import Optional, Self, TypeAlias, TYPE_CHECKING
@@ -989,12 +990,20 @@ class RealFloat(numbers.Rational):
             interval_closed=interval_closed
         )
 
-    def round_at(self, n: int, rm: RoundingMode, *, p: int | None = None, exact: bool = False):
+    def _round_at(
+        self,
+        p: Optional[int],
+        n: int,
+        rm: RoundingMode,
+        exact: bool
+    ):
         """
-        Creates a copy of `self` rounded at absolute digit position `n`
-        using the rounding mode specified by `rm`. If `exact` is `True`,
-        the result must be exact.
+        Rounds `self` at absolute digit position `n` using the rounding mode
+        specified by `rm`. Optionally, specify `p` to limit the precision
+        of the result to at most `p` bits. If `exact` is `True`, the result
+        must be exact.
         """
+
         # step 1. split the number at the rounding position
         kept, lost = self.split(n)
 
@@ -1017,18 +1026,113 @@ class RealFloat(numbers.Rational):
 
         return self._round_finalize(kept, half_bit, lower_bits, p, rm)
 
+    def _round_at_stochastic(
+        self,
+        p: Optional[int],
+        n: int,
+        rm: RoundingMode,
+        num_randbits: Optional[int],
+        randbits: Optional[int],
+        exact: bool
+    ):
+        """
+        Rounds `self` stochastically at absolute digit position `n` using
+        `num_randbits` rounding digits. The rounding mode `rm` decides how to
+        round the extended precision value (with rounding digits).
+        Optionally, specify `p` to limit the precision of the result to
+        at most `p` bits. If `exact` is `True`, the result must be exact.
+        """
+    
+        # step 1. compute the actual number of rounding bits to use
+        if num_randbits is None:
+            # use all the bits (in theory, `num_randbits == float('inf')`)
+            # but the actual number of bits is limited by the precision of `self`
+            num_randbits = self.p
+
+        # step 2. compute rounding parameters for extended-precision value
+        n_rand = n - num_randbits
+        if p is None:
+            p_rand = None
+        else:
+            p_rand = p - num_randbits
+
+        if randbits is None:
+            randbits = random.getrandbits(num_randbits)
+
+        # step 1. round the number to obtain the extended-precision value
+        xr = self._round_at(p_rand, n_rand, rm, exact)
+
+        # step 2. split the number at the rounding position to get the rounding bits
+        _, lost = xr.split(n)
+
+        # step 3. normalize `lost` so that `lost.n == n_rand`
+        offset = lost._exp - (n_rand + 1)
+        if offset > 0:
+            lost_c = lost._c << offset
+        elif offset < 0:
+            lost_c = lost._c >> -offset
+        else:
+            lost_c = lost._c
+
+        # step 4. round down if the random bits are larger than the rounding bits
+        if randbits >= lost_c:
+            # round down
+            return self._round_at(p, n, RoundingMode.RTZ, exact)
+        else:
+            # round up
+            return self._round_at(p, n, RoundingMode.RAZ, exact)
+
+
+    def round_at(
+        self,
+        n: int,
+        p: Optional[int] = None,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: Optional[int] = 0,
+        *,
+        randbits: Optional[int] = None,
+        exact: bool = False):
+        """
+        Creates a copy of `self` rounded at absolute digit position `n`
+        using the rounding mode specified by `rm`. If `exact` is `True`,
+        the result must be exact.
+        """
+        if not isinstance(n, int):
+            raise TypeError(f'Expected \'int\' for n={n}, got {type(n)}')
+        if not isinstance(rm, RoundingMode):
+            raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if p is not None and not isinstance(p, int):
+            raise TypeError(f'Expected \'int\' for p={p}, got {type(p)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
+        if randbits is not None and not isinstance(randbits, int):
+            raise TypeError(f'Expected \'int\' for randbits={randbits}, got {type(randbits)}')
+
+        if (num_randbits is not None
+            and randbits is not None
+            and (randbits < 0 or randbits >= (1 << num_randbits))):
+            raise ValueError(f'randbits must be in [0, {1 << num_randbits}), got {randbits}')
+
+        if num_randbits == 0:
+            # non-stochastic rounding
+            return self._round_at(p, n, rm, exact)
+        else:
+            # stochastic rounding
+            return self._round_at_stochastic(p, n, rm, num_randbits, randbits, exact)
 
     def round(self,
         max_p: Optional[int] = None,
         min_n: Optional[int] = None,
         rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: Optional[int] = 0,
         *,
-        exact: bool = False
+        randbits: Optional[int] = None,
+        exact: bool = False,
     ):
         """
         Creates a copy of `self` rounded to at most `max_p` digits of precision
-        or a least absolute digit position `min_n`, whichever bound is encountered first,
-        using the rounding mode specified by `rm`.
+        or a least absolute digit position `min_n`, whichever bound
+        is encountered first.
 
         At least one of `max_p` or `min_n` must be specified:
         `max_p >= 0` while `min_n` may be any integer.
@@ -1042,16 +1146,47 @@ class RealFloat(numbers.Rational):
         If both are specified, rounding is performed like IEEE 754 floating-point
         arithmetic; `min_n` takes precedence, so the value may have
         less than `max_p` precision.
+
+        When `num_randbits=0`, the rounding is performed by rounding
+        using the rounding mode specified by `rm`.
+
+        When `randbits` is specified, the rounding is performed stochastically
+        using `randbits` rounding bits to decide which way to round. If `randbits=None`,
+        then all additional bits are considered rounding bits. The rounding mode specified
+        by `rm` decides how the additional rounding bits are themselves rounded.
+        If `randbits=None`, rounding is decided by Python's native `random` module,
+        otherwise the value is used as the "randomly" sampled bits.
         """
+
+        if max_p is not None and not isinstance(max_p, int):
+            raise TypeError(f'Expected \'int\' for max_p={max_p}, got {type(max_p)}')
+        if min_n is not None and not isinstance(min_n, int):
+            raise TypeError(f'Expected \'int\' for min_n={min_n}, got {type(min_n)}')
+        if not isinstance(rm, RoundingMode):
+            raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
+        if randbits is not None and not isinstance(randbits, int):
+            raise TypeError(f'Expected \'int\' for randbits={randbits}, got {type(randbits)}')
 
         if max_p is None and min_n is None:
             raise ValueError(f'must specify {max_p} or {min_n}')
+
+        if (num_randbits is not None
+            and randbits is not None
+            and (randbits < 0 or randbits >= (1 << num_randbits))):
+            raise ValueError(f'randbits must be in [0, {1 << num_randbits}), got {randbits}')
 
         # step 1. compute rounding parameters
         p, n = self._round_params(max_p, min_n)
 
         # step 2. round at the specified position
-        return self.round_at(n, rm, p=p, exact=exact)
+        if num_randbits == 0:
+            # non-stochastic rounding
+            return self._round_at(p, n, rm, exact)
+        else:
+            # stochastic rounding
+            return self._round_at_stochastic(p, n, rm, num_randbits, randbits, exact)
 
 
 ###########################################################
@@ -1379,7 +1514,7 @@ class Float(numbers.Rational):
         the rounding context during its construction.
         Usually just a sanity check.
         """
-        return self._ctx is None or self._ctx.is_representable(self)
+        return self._ctx is None or self._ctx.representable_under(self)
 
     def is_canonical(self) -> bool:
         """
@@ -1394,7 +1529,7 @@ class Float(numbers.Rational):
         """
         if self._ctx is None:
             raise ValueError(f'Float values without a context cannot be normalized: self={self}')
-        return self._ctx.is_canonical(self)
+        return self._ctx.canonical_under(self)
 
     def is_normal(self) -> bool:
         """
@@ -1405,7 +1540,7 @@ class Float(numbers.Rational):
         """
         if self._ctx is None:
             raise ValueError(f'Float values without a context cannot be normalized: self={self}')
-        return self._ctx.is_normal(self)
+        return self._ctx.normal_under(self)
 
     def as_rational(self) -> Fraction:
         """
@@ -1465,7 +1600,7 @@ class Float(numbers.Rational):
         if ctx is None:
             # no context specified, so its rounded exactly
             return Float(x=x, ctx=ctx)
-        elif checked and not ctx.is_representable(x):
+        elif checked and not ctx.representable_under(x):
             # context specified, but `x` is not representable under it
             raise ValueError(f'{x} is not representable under {ctx}')
         else:

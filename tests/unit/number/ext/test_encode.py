@@ -41,7 +41,7 @@ class EncodeTestCase(unittest.TestCase):
                 for exp in range(ctx.expmin, expmax + 1):
                     for c in range(0, 1 << ctx.pmax - 1):
                         xr = RealFloat(s, exp, c)
-                        if ctx.is_representable(xr):
+                        if ctx.representable_under(xr):
                             xs.append(Float(x=xr, ctx=ctx))
             # run encoding
             for x in xs:

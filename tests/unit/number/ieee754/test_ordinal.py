@@ -23,7 +23,7 @@ class ToOrdinalTestCase(unittest.TestCase):
             exp = random.randint(fp64.expmin, fp64.expmax)
             c = random.randint(0, 1 << fp64.pmax)
             x = Float(s, exp, c, ctx=fp64)
-            assert fp64.is_representable(x)
+            assert fp64.representable_under(x)
             xs.append(x)
         # run ordinal conversion
         for x in xs:
@@ -42,7 +42,7 @@ class ToOrdinalTestCase(unittest.TestCase):
                     for exp in range(ctx.expmin, ctx.expmax):
                         for c in range(0, 1 << ctx.pmax):
                             x = Float(s, exp, c, ctx=ctx)
-                            assert ctx.is_representable(x)
+                            assert ctx.representable_under(x)
 
                             i = ctx.to_ordinal(x)
                             self.assertIsInstance(i, int, f'x={x}, i={i}')
@@ -101,7 +101,7 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
             exp = random.randint(fp64.expmin, fp64.expmax)
             c = random.randint(0, 1 << fp64.pmax)
             x = Float(s, exp, c, ctx=fp64)
-            assert fp64.is_representable(x)
+            assert fp64.representable_under(x)
             xs.append(x)
         # run ordinal conversion
         for x in xs:
@@ -120,7 +120,7 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
                     for exp in range(ctx.expmin, ctx.expmax):
                         for c in range(0, 1 << ctx.pmax):
                             x = Float(s, exp, c, ctx=ctx)
-                            assert ctx.is_representable(x)
+                            assert ctx.representable_under(x)
 
                             # run ordinal conversion
                             i = ctx.to_ordinal(x)

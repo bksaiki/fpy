@@ -4,6 +4,10 @@ import unittest
 from fractions import Fraction
 from hypothesis import given, strategies as st
 
+from ..generators import real_floats, floats
+
+_MAX_PRECISION = 100
+_EXP_LIMIT = 10_000
 
 def _all_contexts():
     common = [
@@ -42,13 +46,26 @@ class ContextRoundTestCase(unittest.TestCase):
                 self.assertIs(y.ctx, ctx)
 
     @given(st.floats(allow_nan=True, allow_infinity=True, allow_subnormal=True))
-    def test_round_float(self, x: float):
+    def test_round_python_float(self, x: float):
         for ctx in _all_contexts():
             if not isinstance(ctx, fp.MPFixedContext | fp.MPBFixedContext | fp.FixedContext):
                 y = ctx.round(x)
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
 
+    @given(real_floats(_MAX_PRECISION, -_EXP_LIMIT, _EXP_LIMIT))
+    def test_round_real_float(self, x: fp.RealFloat):
+        for ctx in _all_contexts():
+            y = ctx.round(x)
+            self.assertIsInstance(y, fp.Float)
+            self.assertIs(y.ctx, ctx)
+
+    @given(floats(53, allow_nan=False, allow_infinity=False, ctx=fp.FP64))
+    def test_round_float(self, x: fp.Float):
+        for ctx in _all_contexts():
+            y = ctx.round(x)
+            self.assertIsInstance(y, fp.Float)
+            self.assertIs(y.ctx, ctx)
 
 class ContextRoundAtTestCase(unittest.TestCase):
     """Testing `Context.round_at()`"""
@@ -70,9 +87,25 @@ class ContextRoundAtTestCase(unittest.TestCase):
                 self.assertIs(y.ctx, ctx)
 
     @given(st.floats(allow_nan=True, allow_infinity=True, allow_subnormal=True), st.integers())
-    def test_round_float(self, x: float, n: int):
+    def test_round_python_float(self, x: float, n: int):
         for ctx in _all_contexts():
             if not isinstance(ctx, fp.MPFixedContext | fp.MPBFixedContext | fp.FixedContext | fp.RealContext):
+                y = ctx.round_at(x, n)
+                self.assertIsInstance(y, fp.Float)
+                self.assertIs(y.ctx, ctx)
+
+    @given(real_floats(_MAX_PRECISION, -_EXP_LIMIT, _EXP_LIMIT), st.integers())
+    def test_round_real_float(self, x: fp.RealFloat, n: int):
+        for ctx in _all_contexts():
+            if not isinstance(ctx, fp.RealContext):
+                y = ctx.round_at(x, n)
+                self.assertIsInstance(y, fp.Float)
+                self.assertIs(y.ctx, ctx)
+
+    @given(floats(53, allow_nan=False, allow_infinity=False, ctx=fp.FP64), st.integers())
+    def test_round_float(self, x: fp.Float, n: int):
+        for ctx in _all_contexts():
+            if not isinstance(ctx, fp.RealContext):
                 y = ctx.round_at(x, n)
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)

@@ -25,7 +25,7 @@ class ToOrdinalTestCase(unittest.TestCase):
                 for exp in range(ctx.expmin, ctx.expmax + 1):
                     for c in range(0, 1 << ctx.pmax):
                         xr = RealFloat(s, exp, c)
-                        if ctx.is_representable(xr):
+                        if ctx.representable_under(xr):
                             x = Float(x=xr, ctx=ctx)
                             i = ctx.to_ordinal(x)
                             self.assertIsInstance(i, int, f'x={x}, i={i}')
@@ -44,7 +44,7 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
                 for exp in range(ctx.expmin, ctx.expmax + 1):
                     for c in range(0, 1 << ctx.pmax):
                         xr = RealFloat(s, exp, c)
-                        if ctx.is_representable(xr):
+                        if ctx.representable_under(xr):
                             # run ordinal conversion
                             x = Float(x=xr, ctx=ctx)
                             i = ctx.to_ordinal(x)

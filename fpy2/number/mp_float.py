@@ -6,7 +6,7 @@ that is, multi-precision floating-point numbers. Hence, "MP."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr, bitmask
+from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import Context
 from .number import RealFloat, Float
@@ -29,47 +29,65 @@ class MPFloatContext(Context):
     rm: RoundingMode
     """rounding mode"""
 
-    def __init__(self, pmax: int, rm: RoundingMode = RoundingMode.RNE):
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
+    def __init__(
+        self,
+        pmax: int,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: Optional[int] = 0
+    ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
             raise TypeError(f'Expected integer p < 1 for p={pmax}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
 
         self.pmax = pmax
         self.rm = rm
+        self.num_randbits = num_randbits
 
     def __eq__(self, other):
         return (
             isinstance(other, MPFloatContext)
             and self.pmax == other.pmax
             and self.rm == other.rm
+            and self.num_randbits == other.num_randbits
         )
 
     def __hash__(self):
-        return hash((self.__class__, self.pmax, self.rm))
+        return hash((self.__class__, self.pmax, self.rm, self.num_randbits))
 
     def with_params(
         self, *, 
-        pmax: Optional[int] = None,
-        rm: Optional[RoundingMode] = None,
+        pmax: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'MPFloatContext':
-        if pmax is None:
+        if pmax is DEFAULT:
             pmax = self.pmax
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
+        if num_randbits is DEFAULT:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
-        return MPFloatContext(pmax, rm)
+        return MPFloatContext(pmax, rm, num_randbits)
+
+    def is_stochastic(self) -> bool:
+        return self.num_randbits != 0
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
         return isinstance(other, MPFloatContext) and self.pmax == other.pmax
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -95,8 +113,8 @@ class MPFloatContext(Context):
             c_lost = x.c & bitmask(p_over) # bits that would be lost via normalization
             return c_lost == 0
 
-    def is_canonical(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def canonical_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split on class
@@ -111,7 +129,7 @@ class MPFloatContext(Context):
             return x.p == self.pmax
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split by class
@@ -129,7 +147,7 @@ class MPFloatContext(Context):
             xr = x._real.normalize(self.pmax, None)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
-    def is_normal(self, x: Float) -> bool:
+    def normal_under(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero()
@@ -155,27 +173,31 @@ class MPFloatContext(Context):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        xr = x.round(self.pmax, n, self.rm, exact=exact)
+        xr = x.round(self.pmax, n, self.rm, self.num_randbits, exact=exact)
 
         # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)
 
-    def round_params(self):
-        return (self.pmax, None)
+    def round_params(self) -> tuple[Optional[int], Optional[int]]:
+        if self.num_randbits is None:
+            return None, None
+        else:
+            pmax = self.pmax + self.num_randbits
+            return pmax, None
 
     def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x
+            case float():
+                xr = Float.from_float(x)
             case int():
-                xr = RealFloat(m=x)
-            case float() | str():
-                xr = mpfr_value(x, prec=self.pmax)
-            case Fraction():
-                if x.denominator == 1:
-                    xr = RealFloat(m=int(x))
-                else:
-                    xr = mpfr_value(x, prec=self.pmax)
+                xr = RealFloat.from_int(x)
+            case Fraction() if x.denominator == 1:
+                xr = RealFloat.from_int(int(x))
+            case str() | Fraction():
+                p, n = self.round_params()
+                xr = mpfr_value(x, prec=p, n=n)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 

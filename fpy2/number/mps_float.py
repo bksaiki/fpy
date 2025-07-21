@@ -7,7 +7,7 @@ numbers with subnormals. Hence, "MP-S."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr, bitmask
+from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import Context, OrdinalContext
 from .number import RealFloat, Float
@@ -36,6 +36,12 @@ class MPSFloatContext(OrdinalContext):
     emin: int
     """minimum (normalized exponent)"""
 
+    rm: RoundingMode
+    """rounding mode"""
+
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     _mp_ctx: MPFloatContext
     """this context without subnormalization"""
 
@@ -45,10 +51,13 @@ class MPSFloatContext(OrdinalContext):
     _neg_minval: Float
     """minimum negative value"""
 
-    rm: RoundingMode
-    """rounding mode"""
-
-    def __init__(self, pmax: int, emin: int, rm: RoundingMode = RoundingMode.RNE):
+    def __init__(
+        self,
+        pmax: int,
+        emin: int,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: Optional[int] = 0
+    ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -57,11 +66,14 @@ class MPSFloatContext(OrdinalContext):
             raise TypeError(f'Expected \'int\' for emin={emin}, got {type(emin)}')
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
 
         self.pmax = pmax
         self.emin = emin
         self.rm = rm
-        self._mp_ctx = MPFloatContext(pmax, rm)
+        self.num_randbits = num_randbits
+        self._mp_ctx = MPFloatContext(pmax, rm, num_randbits)
         self._pos_minval = Float(s=False, c=1, exp=self.expmin, ctx=self)
         self._neg_minval = Float(s=True, c=1, exp=self.expmin, ctx=self)
 
@@ -71,10 +83,11 @@ class MPSFloatContext(OrdinalContext):
             and self.pmax == other.pmax
             and self.emin == other.emin
             and self.rm == other.rm
+            and self.num_randbits == other.num_randbits
         )
 
     def __hash__(self):
-        return hash((self.pmax, self.emin, self.rm))
+        return hash((self.pmax, self.emin, self.rm, self.num_randbits))
 
     @property
     def expmin(self):
@@ -90,20 +103,26 @@ class MPSFloatContext(OrdinalContext):
 
     def with_params(
         self, *,
-        pmax: Optional[int] = None,
-        emin: Optional[int] = None,
-        rm: Optional[RoundingMode] = None,
+        pmax: DefaultOr[int] = DEFAULT,
+        emin: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'MPSFloatContext':
-        if pmax is None:
+        if pmax is DEFAULT:
             pmax = self.pmax
-        if emin is None:
+        if emin is DEFAULT:
             emin = self.emin
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
+        if num_randbits is DEFAULT:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
-        return MPSFloatContext(pmax, emin, rm)
+        return MPSFloatContext(pmax, emin, rm, num_randbits)
+
+    def is_stochastic(self) -> bool:
+        return self.num_randbits != 0
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
@@ -114,7 +133,7 @@ class MPSFloatContext(OrdinalContext):
             and self.emin == other.emin
         )
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -125,7 +144,7 @@ class MPSFloatContext(OrdinalContext):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        if not self._mp_ctx.is_representable(x):
+        if not self._mp_ctx.representable_under(x):
             # not representable even without subnormalization
             return False
         elif not x.is_nonzero():
@@ -138,8 +157,8 @@ class MPSFloatContext(OrdinalContext):
             # tight check (non-negative values)
             return self._pos_minval <= x
 
-    def is_canonical(self, x):
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def canonical_under(self, x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split by class
@@ -173,17 +192,22 @@ class MPSFloatContext(OrdinalContext):
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
     def normalize(self, x):
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._normalize(x)
 
-    def is_normal(self, x: Float):
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def normal_under(self, x: Float):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero() and x.e >= self.emin
 
     def round_params(self):
-        return (self.pmax, self.nmin)
+        if self.num_randbits is None:
+            return None, None
+        else:
+            pmax = self.pmax + self.num_randbits
+            nmin = self.nmin - self.num_randbits
+            return pmax, nmin
 
     def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
         """
@@ -212,7 +236,7 @@ class MPSFloatContext(OrdinalContext):
             n = self.nmin
 
         # step 3. round value based on rounding parameters
-        xr = x.round(self.pmax, n, self.rm, exact=exact)
+        xr = x.round(self.pmax, n, self.rm, self.num_randbits, exact=exact)
 
         # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)
@@ -221,15 +245,15 @@ class MPSFloatContext(OrdinalContext):
         match x:
             case Float() | RealFloat():
                 xr = x
+            case float():
+                xr = Float.from_float(x)
             case int():
-                xr = RealFloat(m=x)
-            case float() | str():
-                xr = mpfr_value(x, prec=self.pmax)
-            case Fraction():
-                if x.denominator == 1:
-                    xr = RealFloat(m=int(x))
-                else:
-                    xr = mpfr_value(x, prec=self.pmax)
+                xr = RealFloat.from_int(x)
+            case Fraction() if x.denominator == 1:
+                xr = RealFloat.from_int(int(x))
+            case str() | Fraction():
+                p, n = self.round_params()
+                xr = mpfr_value(x, prec=p, n=n)
             case _:
                 raise TypeError(f'not valid argument x={x}')
 
@@ -242,7 +266,7 @@ class MPSFloatContext(OrdinalContext):
         return self._round_at(x, n, exact)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         if infval:
             raise ValueError('infval=True is invalid for contexts without a maximum value')

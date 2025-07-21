@@ -1,8 +1,7 @@
-
-
-from ..utils import default_repr, enum_repr, bitmask
-
 from enum import IntEnum
+from typing import Optional
+
+from ..utils import default_repr, enum_repr, bitmask, DefaultOr, DEFAULT
 
 from .context import Context, EncodableContext
 from .number import RealFloat, Float
@@ -59,6 +58,9 @@ class ExtFloatContext(EncodableContext):
     overflow: OverflowMode
     """overflow behavior"""
 
+    num_randbits: Optional[int]
+    """number of random bits for stochastic rounding, if applicable"""
+
     _mpb_ctx: MPBFloatContext
     """this context as an `MPBFloatContext`"""
 
@@ -71,6 +73,7 @@ class ExtFloatContext(EncodableContext):
         eoffset: int,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
+        num_randbits: Optional[int] = 0,
     ):
         if not isinstance(es, int):
             raise TypeError(f'Expected \'int\', got \'{type(es)}\' for es={es}')
@@ -86,6 +89,8 @@ class ExtFloatContext(EncodableContext):
             raise TypeError(f'Expected \'NanEncoding\', got \'{type(nan_kind)}\' for nan_encoding={nan_kind}')
         if not isinstance(eoffset, int):
             raise TypeError(f'Expected \'int\', got \'{type(eoffset)}\' for eoffset={eoffset}')
+        if num_randbits is not None and not isinstance(num_randbits, int):
+            raise TypeError(f'Expected \'int\', got \'{type(num_randbits)}\' for num_randbits={num_randbits}')
 
         # check validity
         if not _format_is_valid(es, nbits, enable_inf, nan_kind):
@@ -104,7 +109,8 @@ class ExtFloatContext(EncodableContext):
         self.eoffset = eoffset
         self.rm = rm
         self.overflow = overflow
-        self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow)
+        self.num_randbits = num_randbits
+        self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
 
     def __eq__(self, other):
         return (
@@ -115,6 +121,8 @@ class ExtFloatContext(EncodableContext):
             and self.nan_kind == other.nan_kind
             and self.eoffset == other.eoffset
             and self.rm == other.rm
+            and self.overflow == other.overflow
+            and self.num_randbits == other.num_randbits
         )
 
     def __hash__(self):
@@ -124,7 +132,9 @@ class ExtFloatContext(EncodableContext):
             self.enable_inf,
             self.nan_kind,
             self.eoffset,
-            self.rm
+            self.rm,
+            self.overflow,
+            self.num_randbits
         ))
 
     @property
@@ -171,32 +181,38 @@ class ExtFloatContext(EncodableContext):
 
     def with_params(
         self, *,
-        es: int | None = None,
-        nbits: int | None = None,
-        enable_inf: bool | None = None,
-        nan_kind: ExtFloatNanKind | None = None,
-        eoffset: int | None = None,
-        rm: RoundingMode | None = None,
-        overflow: OverflowMode | None = None,
+        es: DefaultOr[int] = DEFAULT,
+        nbits: DefaultOr[int] = DEFAULT,
+        enable_inf: DefaultOr[bool] = DEFAULT,
+        nan_kind: DefaultOr[ExtFloatNanKind] = DEFAULT,
+        eoffset: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        overflow: DefaultOr[OverflowMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'ExtFloatContext':
-        if es is None:
+        if es is DEFAULT:
             es = self.es
-        if nbits is None:
+        if nbits is DEFAULT:
             nbits = self.nbits
-        if enable_inf is None:
+        if enable_inf is DEFAULT:
             enable_inf = self.enable_inf
-        if nan_kind is None:
+        if nan_kind is DEFAULT:
             nan_kind = self.nan_kind
-        if eoffset is None:
+        if eoffset is DEFAULT:
             eoffset = self.eoffset
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if overflow is None:
+        if overflow is DEFAULT:
             overflow = self.overflow
+        if num_randbits is DEFAULT:
+            num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')
-        return ExtFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow)
+        return ExtFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
+
+    def is_stochastic(self) -> bool:
+        return self.num_randbits != 0
 
     def is_equiv(self, other):
         if not isinstance(other, Context):
@@ -210,7 +226,7 @@ class ExtFloatContext(EncodableContext):
             and self.eoffset == other.eoffset
         )
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -221,7 +237,7 @@ class ExtFloatContext(EncodableContext):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        if not self._mpb_ctx.is_representable(x):
+        if not self._mpb_ctx.representable_under(x):
             return False
         elif self.nan_kind == ExtFloatNanKind.NEG_ZERO and x.s and x.is_zero():
             # -0 is not representable in this context
@@ -230,23 +246,23 @@ class ExtFloatContext(EncodableContext):
             # otherwise, it is representable
             return True
 
-    def is_canonical(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def canonical_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._mpb_ctx.is_canonical(x)
+        return self._mpb_ctx.canonical_under(x)
 
     def _normalize(self, x: Float) -> Float:
         return self._mpb_ctx._normalize(x)
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return Float(x=self._normalize(x), ctx=self)
 
-    def is_normal(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def normal_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._mpb_ctx.is_normal(x)
+        return self._mpb_ctx.normal_under(x)
 
     def round_params(self):
         return self._mpb_ctx.round_params()
@@ -258,7 +274,7 @@ class ExtFloatContext(EncodableContext):
         return Float(x=self._mpb_ctx.round_at(x, n, exact=exact), ctx=self)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_ctx.to_ordinal(x, infval=infval)
 
@@ -274,7 +290,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = Float(x=self._mpb_ctx.zero(s), ctx=self)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return x
 
@@ -287,7 +303,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.minval(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -300,7 +316,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.min_subnormal(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -313,7 +329,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.max_subnormal(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -326,7 +342,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.min_normal(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -339,7 +355,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.max_normal(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -352,7 +368,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.maxval(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'Not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -368,7 +384,7 @@ class ExtFloatContext(EncodableContext):
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x!r}')
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable under this context: x={x!r}, ctx={self!r}')
 
         # sign bit
@@ -607,7 +623,8 @@ def _ext_to_mpb(
     nan_kind: ExtFloatNanKind,
     eoffset: int,
     rm: RoundingMode,
-    overflow: OverflowMode
+    overflow: OverflowMode,
+    num_randbits: Optional[int] = 0,
 ) -> MPBFloatContext:
     """Converts between `ExtFloatContext` and `MPBFloatContext` parameters."""
     # IEEE 754 derived parameters
@@ -682,4 +699,4 @@ def _ext_to_mpb(
     maxval = maxval.normalize(p, expmin - 1)
 
     # create the related MPB context
-    return MPBFloatContext(p, emin, maxval, rm, overflow)
+    return MPBFloatContext(p, emin, maxval, rm, overflow, num_randbits)

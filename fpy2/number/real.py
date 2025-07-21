@@ -30,17 +30,20 @@ class RealContext(Context):
             raise TypeError(f'Unexpected parameters {kwargs} for RealContext')
         return self
 
+    def is_stochastic(self) -> bool:
+        return False
+
     def is_equiv(self, other: Context) -> bool:
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
         return isinstance(other, RealContext)
 
-    def is_representable(self, x: RealFloat | Float):
+    def representable_under(self, x: RealFloat | Float):
         if not isinstance(x, RealFloat | Float):
             raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
         return True
 
-    def is_canonical(self, x: Float):
+    def canonical_under(self, x: Float):
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return True
@@ -48,7 +51,7 @@ class RealContext(Context):
     def normalize(self, x: Float) -> Float:
         return Float(x=x, ctx=self)
 
-    def is_normal(self, x: Float) -> bool:
+    def normal_under(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero()
