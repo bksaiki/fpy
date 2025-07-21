@@ -6,7 +6,7 @@ that is, multi-precision floating-point numbers. Hence, "MP."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr, bitmask
+from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import Context
 from .number import RealFloat, Float
@@ -64,16 +64,16 @@ class MPFloatContext(Context):
 
     def with_params(
         self, *, 
-        pmax: Optional[int] = None,
-        rm: Optional[RoundingMode] = None,
-        num_randbits: Optional[int] = None,
+        pmax: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'MPFloatContext':
-        if pmax is None:
+        if pmax is DEFAULT:
             pmax = self.pmax
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if num_randbits is None:
+        if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')

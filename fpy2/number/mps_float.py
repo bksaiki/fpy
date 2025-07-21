@@ -7,7 +7,7 @@ numbers with subnormals. Hence, "MP-S."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr, bitmask
+from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import Context, OrdinalContext
 from .number import RealFloat, Float
@@ -103,19 +103,19 @@ class MPSFloatContext(OrdinalContext):
 
     def with_params(
         self, *,
-        pmax: Optional[int] = None,
-        emin: Optional[int] = None,
-        rm: Optional[RoundingMode] = None,
-        num_randbits: Optional[int] = None,
+        pmax: DefaultOr[int] = DEFAULT,
+        emin: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'MPSFloatContext':
-        if pmax is None:
+        if pmax is DEFAULT:
             pmax = self.pmax
-        if emin is None:
+        if emin is DEFAULT:
             emin = self.emin
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if num_randbits is None:
+        if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')

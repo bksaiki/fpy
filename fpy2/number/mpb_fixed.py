@@ -6,7 +6,7 @@ that is, multiprecision and bounded. Hence "MP-B".
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import default_repr, DefaultOr, DEFAULT
 
 from .context import Context, SizedContext
 from .mp_fixed import MPFixedContext
@@ -200,39 +200,39 @@ class MPBFixedContext(SizedContext):
 
     def with_params(
         self, *,
-        nmin: Optional[int] = None,
-        maxval: Optional[RealFloat] = None,
-        rm: Optional[RoundingMode] = None,
-        overflow: Optional[OverflowMode] = None,
-        num_randbits: Optional[int] = None,
-        neg_maxval: Optional[RealFloat] = None,
-        enable_nan: Optional[bool] = None,
-        enable_inf: Optional[bool] = None,
-        nan_value: Optional[Float] = None,
-        inf_value: Optional[Float] = None,
+        nmin: DefaultOr[int] = DEFAULT,
+        maxval: DefaultOr[RealFloat] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        overflow: DefaultOr[OverflowMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
+        neg_maxval: DefaultOr[RealFloat] = DEFAULT,
+        enable_nan: DefaultOr[bool] = DEFAULT,
+        enable_inf: DefaultOr[bool] = DEFAULT,
+        nan_value: DefaultOr[Float | None] = DEFAULT,
+        inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
     ) -> 'MPBFixedContext':
-        if nmin is None:
+        if nmin is DEFAULT:
             nmin = self.nmin
-        if maxval is None:
+        if maxval is DEFAULT:
             maxval = self.pos_maxval
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if overflow is None:
+        if overflow is DEFAULT:
             overflow = self.overflow
-        if num_randbits is None:
+        if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
-        if neg_maxval is None:
+        if neg_maxval is DEFAULT:
             neg_maxval = self.neg_maxval
-        if neg_maxval is None:
+        if neg_maxval is DEFAULT:
             neg_maxval = self.neg_maxval
-        if enable_nan is None:
+        if enable_nan is DEFAULT:
             enable_nan = self.enable_nan
-        if enable_inf is None:
+        if enable_inf is DEFAULT:
             enable_inf = self.enable_inf
-        if nan_value is None:
+        if nan_value is DEFAULT:
             nan_value = self.nan_value
-        if inf_value is None:
+        if inf_value is DEFAULT:
             inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
@@ -352,7 +352,6 @@ class MPBFixedContext(SizedContext):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        print(self.num_randbits)
         xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, exact=exact)
 
         # step 4. check for overflow

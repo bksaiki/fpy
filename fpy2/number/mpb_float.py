@@ -7,7 +7,7 @@ and bounded. Hence, "MP-B."
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import default_repr, DefaultOr, DEFAULT
 
 from .context import Context, SizedContext
 from .number import RealFloat, Float
@@ -161,28 +161,28 @@ class MPBFloatContext(SizedContext):
 
     def with_params(
         self, *,
-        pmax: Optional[int] = None,
-        emin: Optional[int] = None,
-        maxval: Optional[RealFloat] = None,
-        rm: Optional[RoundingMode] = None,
-        overflow: Optional[OverflowMode] = None,
-        neg_maxval: Optional[RealFloat] = None,
-        num_randbits: Optional[int] = None,
+        pmax: DefaultOr[int] = DEFAULT,
+        emin: DefaultOr[int] = DEFAULT,
+        maxval: DefaultOr[RealFloat] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        overflow: DefaultOr[OverflowMode] = DEFAULT,
+        neg_maxval: DefaultOr[RealFloat] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'MPBFloatContext':
-        if pmax is None:
+        if pmax is DEFAULT:
             pmax = self.pmax
-        if emin is None:
+        if emin is DEFAULT:
             emin = self.emin
-        if maxval is None:
+        if maxval is DEFAULT:
             maxval = self.pos_maxval
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if overflow is None:
+        if overflow is DEFAULT:
             overflow = self.overflow
-        if neg_maxval is None:
+        if neg_maxval is DEFAULT:
             neg_maxval = self.neg_maxval
-        if num_randbits is None:
+        if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')

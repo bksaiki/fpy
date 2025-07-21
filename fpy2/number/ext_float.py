@@ -1,7 +1,7 @@
 from enum import IntEnum
 from typing import Optional
 
-from ..utils import default_repr, enum_repr, bitmask
+from ..utils import default_repr, enum_repr, bitmask, DefaultOr, DEFAULT
 
 from .context import Context, EncodableContext
 from .number import RealFloat, Float
@@ -181,31 +181,31 @@ class ExtFloatContext(EncodableContext):
 
     def with_params(
         self, *,
-        es: int | None = None,
-        nbits: int | None = None,
-        enable_inf: bool | None = None,
-        nan_kind: ExtFloatNanKind | None = None,
-        eoffset: int | None = None,
-        rm: RoundingMode | None = None,
-        overflow: OverflowMode | None = None,
-        num_randbits: Optional[int] = 0,
+        es: DefaultOr[int] = DEFAULT,
+        nbits: DefaultOr[int] = DEFAULT,
+        enable_inf: DefaultOr[bool] = DEFAULT,
+        nan_kind: DefaultOr[ExtFloatNanKind] = DEFAULT,
+        eoffset: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        overflow: DefaultOr[OverflowMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'ExtFloatContext':
-        if es is None:
+        if es is DEFAULT:
             es = self.es
-        if nbits is None:
+        if nbits is DEFAULT:
             nbits = self.nbits
-        if enable_inf is None:
+        if enable_inf is DEFAULT:
             enable_inf = self.enable_inf
-        if nan_kind is None:
+        if nan_kind is DEFAULT:
             nan_kind = self.nan_kind
-        if eoffset is None:
+        if eoffset is DEFAULT:
             eoffset = self.eoffset
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if overflow is None:
+        if overflow is DEFAULT:
             overflow = self.overflow
-        if num_randbits is None:
+        if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')

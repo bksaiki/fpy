@@ -5,6 +5,7 @@ by the IEEE 754 standard.
 
 from typing import Optional
 
+from ..utils import DEFAULT, DefaultOr
 from .ext_float import ExtFloatContext, ExtFloatNanKind
 from .round import RoundingMode, OverflowMode
 
@@ -36,22 +37,22 @@ class IEEEContext(ExtFloatContext):
 
     def with_params(
         self, *,
-        es: int | None = None,
-        nbits: int | None = None,
-        rm: RoundingMode | None = None,
-        overflow: OverflowMode | None = None,
-        num_randbits: Optional[int] = 0,
+        es: DefaultOr[int] = DEFAULT,
+        nbits: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        overflow: DefaultOr[OverflowMode] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'IEEEContext':
-        if es is None:
+        if es is DEFAULT:
             es = self.es
-        if nbits is None:
+        if nbits is DEFAULT:
             nbits = self.nbits
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if overflow is None:
+        if overflow is DEFAULT:
             overflow = self.overflow
-        if num_randbits is None:
+        if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for IEEEContext')

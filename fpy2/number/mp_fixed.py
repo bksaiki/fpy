@@ -7,7 +7,7 @@ Hence, "MP-F".
 from fractions import Fraction
 from typing import Optional
 
-from ..utils import default_repr
+from ..utils import default_repr, DEFAULT, DefaultOr
 
 from .context import Context, OrdinalContext
 from .number import Float
@@ -152,28 +152,28 @@ class MPFixedContext(OrdinalContext):
 
     def with_params(
         self, *,
-        nmin: Optional[int] = None,
-        rm: Optional[RoundingMode] = None,
-        enable_nan: Optional[bool] = None,
-        enable_inf: Optional[bool] = None,
-        nan_value: Optional[Float] = None,
-        inf_value: Optional[Float] = None,
-        num_randbits: Optional[int] = None,
+        nmin: DefaultOr[int] = DEFAULT,
+        rm: DefaultOr[RoundingMode] = DEFAULT,
+        enable_nan: DefaultOr[bool] = DEFAULT,
+        enable_inf: DefaultOr[bool] = DEFAULT,
+        nan_value: DefaultOr[Optional[Float]] = DEFAULT,
+        inf_value: DefaultOr[Optional[Float]] = DEFAULT,
+        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
         **kwargs
     ) -> 'MPFixedContext':
-        if nmin is None:
+        if nmin is DEFAULT:
             nmin = self.nmin
-        if rm is None:
+        if rm is DEFAULT:
             rm = self.rm
-        if enable_nan is None:
+        if enable_nan is DEFAULT:
             enable_nan = self.enable_nan
-        if enable_inf is None:
+        if enable_inf is DEFAULT:
             enable_inf = self.enable_inf
-        if nan_value is None:
+        if nan_value is DEFAULT:
             nan_value = self.nan_value
-        if inf_value is None:
+        if inf_value is DEFAULT:
             inf_value = self.inf_value
-        if num_randbits is None:
+        if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for MPFixedContext')

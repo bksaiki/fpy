@@ -3,6 +3,7 @@
 from .bits import bitmask, is_power_of_two, float_to_bits, bits_to_float
 from .compare import CompareOp
 from .decorator import default_repr, rcomparable, enum_repr
+from .default import DefaultOr, DEFAULT
 
 from .float_params import (
     FP64_NBITS,
