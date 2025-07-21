@@ -52,6 +52,19 @@ class FixedContext(MPBFixedContext, EncodableContext):
         nan_value: Optional[Float] = None,
         inf_value: Optional[Float] = None
     ):
+        if not isinstance(signed, bool):
+            raise TypeError(f'Expected \'bool\' for signed={signed}, got {type(signed)}')
+        if not isinstance(scale, int):
+            raise TypeError(f'Expected \'int\' for scale={scale}, got {type(scale)}')
+        if not isinstance(nbits, int):
+            raise TypeError(f'Expected \'int\' for nbits={nbits}, got {type(nbits)}')
+
+        if signed:
+            if nbits < 2:
+                raise ValueError(f'For signed representation, nbits={nbits} must be at least 2')
+        elif nbits < 1:
+            raise ValueError(f'For unsigned representation, nbits={nbits} must be at least 1')
+
         nmin = scale - 1
         pos_maxval, neg_maxval = _fixed_to_mpb_fixed(signed, scale, nbits)
 
@@ -146,12 +159,40 @@ class FixedContext(MPBFixedContext, EncodableContext):
             raise TypeError(f'Expected \'Float\', got x={x}')
         if not self.representable_under(x):
             raise ValueError(f'Expected representable value, got x={x} for self={self}')
-        raise NotImplementedError
+
+        # normalize the scale value within the representation
+        offset = x.exp - self.scale
+        if offset >= 0:
+            # padding the value with zeroes
+            c = x.c << offset
+        else:
+            # dropping lower bits
+            # should be safe since the value is representable
+            c = x.c >> -offset
+
+        if self.signed and x.s:
+            # apply 2's complement
+            c = (1 << (self.nbits - 1)) - c
+
+        # ensure the value fits in the bitmask
+        if c > bitmask(self.nbits):
+            raise OverflowError(f'Value {x} does not fit in {self.nbits} bits')
+        return c
 
     def decode(self, x: int) -> Float:
         if not isinstance(x, int):
             raise TypeError(f'Expected \'int\', got x={x}')
-        raise NotImplementedError
+
+        if self.signed and x >= (1 << (self.nbits - 1)):
+            # negative value encoded in 2's complement
+            c = x - (1 << (self.nbits - 1))
+            s = True
+        else:
+            # positive value
+            c = x
+            s = False
+
+        return Float(s=s, exp=self.scale, c=c, ctx=self)
 
 
 def _fixed_to_mpb_fixed(
