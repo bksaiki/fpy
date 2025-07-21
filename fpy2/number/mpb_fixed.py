@@ -264,7 +264,7 @@ class MPBFixedContext(SizedContext):
             and self.enable_nan == other.enable_nan
         )
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -275,7 +275,7 @@ class MPBFixedContext(SizedContext):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        if not self._mp_ctx.is_representable(x):
+        if not self._mp_ctx.representable_under(x):
             # not representable even without a maximum value
             return False
         elif not x.is_nonzero():
@@ -288,20 +288,20 @@ class MPBFixedContext(SizedContext):
             # check bounded (positive values)
             return x <= self.pos_maxval
 
-    def is_canonical(self, x: Float):
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def canonical_under(self, x: Float):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._mp_ctx.is_canonical(x)
+        return self._mp_ctx.canonical_under(x)
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return Float(x=self._mp_ctx.normalize(x), ctx=self)
 
-    def is_normal(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def normal_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._mp_ctx.is_normal(x)
+        return self._mp_ctx.normal_under(x)
 
     def round_params(self):
         return self._mp_ctx.round_params()
@@ -408,7 +408,7 @@ class MPBFixedContext(SizedContext):
         return self._round_at(x, n, exact)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected \'Float\' for x={x}, got {type(x)}')
 
         # case split by class

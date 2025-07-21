@@ -87,7 +87,7 @@ class MPFloatContext(Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
         return isinstance(other, MPFloatContext) and self.pmax == other.pmax
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -113,8 +113,8 @@ class MPFloatContext(Context):
             c_lost = x.c & bitmask(p_over) # bits that would be lost via normalization
             return c_lost == 0
 
-    def is_canonical(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def canonical_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split on class
@@ -129,7 +129,7 @@ class MPFloatContext(Context):
             return x.p == self.pmax
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split by class
@@ -147,7 +147,7 @@ class MPFloatContext(Context):
             xr = x._real.normalize(self.pmax, None)
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
-    def is_normal(self, x: Float) -> bool:
+    def normal_under(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero()

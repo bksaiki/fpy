@@ -226,7 +226,7 @@ class ExtFloatContext(EncodableContext):
             and self.eoffset == other.eoffset
         )
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -237,7 +237,7 @@ class ExtFloatContext(EncodableContext):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        if not self._mpb_ctx.is_representable(x):
+        if not self._mpb_ctx.representable_under(x):
             return False
         elif self.nan_kind == ExtFloatNanKind.NEG_ZERO and x.s and x.is_zero():
             # -0 is not representable in this context
@@ -246,23 +246,23 @@ class ExtFloatContext(EncodableContext):
             # otherwise, it is representable
             return True
 
-    def is_canonical(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def canonical_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._mpb_ctx.is_canonical(x)
+        return self._mpb_ctx.canonical_under(x)
 
     def _normalize(self, x: Float) -> Float:
         return self._mpb_ctx._normalize(x)
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return Float(x=self._normalize(x), ctx=self)
 
-    def is_normal(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def normal_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._mpb_ctx.is_normal(x)
+        return self._mpb_ctx.normal_under(x)
 
     def round_params(self):
         return self._mpb_ctx.round_params()
@@ -274,7 +274,7 @@ class ExtFloatContext(EncodableContext):
         return Float(x=self._mpb_ctx.round_at(x, n, exact=exact), ctx=self)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_ctx.to_ordinal(x, infval=infval)
 
@@ -290,7 +290,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = Float(x=self._mpb_ctx.zero(s), ctx=self)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return x
 
@@ -303,7 +303,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.minval(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -316,7 +316,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.min_subnormal(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -329,7 +329,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.max_subnormal(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -342,7 +342,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.min_normal(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -355,7 +355,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.max_normal(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -368,7 +368,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_ctx.maxval(s)
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'Not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
@@ -384,7 +384,7 @@ class ExtFloatContext(EncodableContext):
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x!r}')
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'not representable under this context: x={x!r}, ctx={self!r}')
 
         # sign bit

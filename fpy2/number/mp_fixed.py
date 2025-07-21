@@ -200,7 +200,7 @@ class MPFixedContext(OrdinalContext):
             and self.enable_inf == other.enable_inf
         )
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -226,13 +226,13 @@ class MPFixedContext(OrdinalContext):
 
         return xr.is_more_significant(self.nmin)
 
-    def is_canonical(self, x: Float):
-        if not isinstance(x, Float) and self.is_representable(x):
+    def canonical_under(self, x: Float):
+        if not isinstance(x, Float) and self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return x.exp == self.expmin
 
     def normalize(self, x: Float):
-        if not isinstance(x, Float) and self.is_representable(x):
+        if not isinstance(x, Float) and self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         offset = x.exp - self.expmin
@@ -250,7 +250,7 @@ class MPFixedContext(OrdinalContext):
 
         return Float(exp=exp, c=c, x=x, ctx=self)
 
-    def is_normal(self, x: Float) -> bool:
+    def normal_under(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero()
@@ -336,7 +336,7 @@ class MPFixedContext(OrdinalContext):
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'Expected representable \'Float\', got x={x}')
         if infval:
             raise ValueError('infvalue=True is invalid for contexts without maximum value')

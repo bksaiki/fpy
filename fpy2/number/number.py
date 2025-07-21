@@ -1514,7 +1514,7 @@ class Float(numbers.Rational):
         the rounding context during its construction.
         Usually just a sanity check.
         """
-        return self._ctx is None or self._ctx.is_representable(self)
+        return self._ctx is None or self._ctx.representable_under(self)
 
     def is_canonical(self) -> bool:
         """
@@ -1529,7 +1529,7 @@ class Float(numbers.Rational):
         """
         if self._ctx is None:
             raise ValueError(f'Float values without a context cannot be normalized: self={self}')
-        return self._ctx.is_canonical(self)
+        return self._ctx.canonical_under(self)
 
     def is_normal(self) -> bool:
         """
@@ -1540,7 +1540,7 @@ class Float(numbers.Rational):
         """
         if self._ctx is None:
             raise ValueError(f'Float values without a context cannot be normalized: self={self}')
-        return self._ctx.is_normal(self)
+        return self._ctx.normal_under(self)
 
     def as_rational(self) -> Fraction:
         """
@@ -1600,7 +1600,7 @@ class Float(numbers.Rational):
         if ctx is None:
             # no context specified, so its rounded exactly
             return Float(x=x, ctx=ctx)
-        elif checked and not ctx.is_representable(x):
+        elif checked and not ctx.representable_under(x):
             # context specified, but `x` is not representable under it
             raise ValueError(f'{x} is not representable under {ctx}')
         else:

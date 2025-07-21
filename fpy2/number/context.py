@@ -62,7 +62,7 @@ class Context(ABC):
         ...
 
     @abstractmethod
-    def is_representable(self, x: Union[Float, RealFloat]) -> bool:
+    def representable_under(self, x: Union[Float, RealFloat]) -> bool:
         """
         Returns if `x` is representable under this context.
 
@@ -72,7 +72,7 @@ class Context(ABC):
         ...
 
     @abstractmethod
-    def is_canonical(self, x: Float) -> bool:
+    def canonical_under(self, x: Float) -> bool:
         """
         Returns if `x` is canonical under this context.
 
@@ -84,18 +84,18 @@ class Context(ABC):
         ...
 
     @abstractmethod
-    def normalize(self, x: Float) -> Float:
-        """Returns the canonical form of `x` under this context."""
-        ...
-
-    @abstractmethod
-    def is_normal(self, x: Float) -> bool:
+    def normal_under(self, x: Float) -> bool:
         """
         Returns if `x` is "normal" under this context.
 
         For IEEE-style contexts, this means that `x` is finite, non-zero,
         and `x.normalize()` has full precision.
         """
+        ...
+
+    @abstractmethod
+    def normalize(self, x: Float) -> Float:
+        """Returns the canonical form of `x` under this context."""
         ...
 
     @abstractmethod

@@ -133,7 +133,7 @@ class MPSFloatContext(OrdinalContext):
             and self.emin == other.emin
         )
 
-    def is_representable(self, x: RealFloat | Float) -> bool:
+    def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.ctx is not None and self.is_equiv(x.ctx):
@@ -144,7 +144,7 @@ class MPSFloatContext(OrdinalContext):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        if not self._mp_ctx.is_representable(x):
+        if not self._mp_ctx.representable_under(x):
             # not representable even without subnormalization
             return False
         elif not x.is_nonzero():
@@ -157,8 +157,8 @@ class MPSFloatContext(OrdinalContext):
             # tight check (non-negative values)
             return self._pos_minval <= x
 
-    def is_canonical(self, x):
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def canonical_under(self, x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         # case split by class
@@ -192,12 +192,12 @@ class MPSFloatContext(OrdinalContext):
             return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
 
     def normalize(self, x):
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._normalize(x)
 
-    def is_normal(self, x: Float):
-        if not isinstance(x, Float) or not self.is_representable(x):
+    def normal_under(self, x: Float):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero() and x.e >= self.emin
 
@@ -266,7 +266,7 @@ class MPSFloatContext(OrdinalContext):
         return self._round_at(x, n, exact)
 
     def to_ordinal(self, x: Float, infval = False) -> int:
-        if not isinstance(x, Float) or not self.is_representable(x):
+        if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         if infval:
             raise ValueError('infval=True is invalid for contexts without a maximum value')

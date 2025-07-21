@@ -144,7 +144,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got x={x}')
-        if not self.is_representable(x):
+        if not self.representable_under(x):
             raise ValueError(f'Expected representable value, got x={x} for self={self}')
         raise NotImplementedError
 

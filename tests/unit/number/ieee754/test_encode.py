@@ -37,7 +37,7 @@ class EncodeTestCase(unittest.TestCase):
             exp = random.randint(FP64.expmin, FP64.expmax)
             c = random.randint(0, (1 << FP64.pmax) - 1)
             x = Float(s, exp, c, ctx=FP64)
-            assert FP64.is_representable(x)
+            assert FP64.representable_under(x)
             xs.append(x)
         # run encoding
         for x in xs:
@@ -56,7 +56,7 @@ class EncodeTestCase(unittest.TestCase):
                     for exp in range(ctx.expmin, ctx.expmax):
                         for c in range(0, 1 << ctx.pmax):
                             x = Float(s, exp, c, ctx=ctx)
-                            assert ctx.is_representable(x)
+                            assert ctx.representable_under(x)
 
                             i = ctx.encode(x)
                             self.assertIsInstance(i, int, f'x={x}, i={i}')
