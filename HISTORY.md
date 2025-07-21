@@ -1,5 +1,21 @@
 # Version History
 
+## [0.0.7] - 2025-07-21
+### Features:
+ - Numbers library
+   - added overflow modes `OV` for floating-point contexts.
+   - added stochasic rounding options to `round()` and `round_at()`.
+   - implements `encode()` and `decode()` methods for `FixedContext`
+ - Language
+   - added `round_exact` primitive
+
+### Changes:
+  - Runtime;
+    - performance improvements to AST nodes
+  - Language
+    - rename `round` to `roundint`
+    - rename `cast` to `round`
+
 ## [0.0.6] - 2025-07-08
 ### Features:
  - Added `fpy2.libraries.base` to contain all builtins (automatically imported).
