@@ -211,6 +211,9 @@ class ExtFloatContext(EncodableContext):
             raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')
         return ExtFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
 
+    def is_stochastic(self) -> bool:
+        return self.num_randbits != 0
+
     def is_equiv(self, other):
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')

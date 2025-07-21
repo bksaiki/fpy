@@ -30,6 +30,9 @@ class RealContext(Context):
             raise TypeError(f'Unexpected parameters {kwargs} for RealContext')
         return self
 
+    def is_stochastic(self) -> bool:
+        return False
+
     def is_equiv(self, other: Context) -> bool:
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')

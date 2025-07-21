@@ -44,6 +44,15 @@ class Context(ABC):
         ...
 
     @abstractmethod
+    def is_stochastic(self) -> bool:
+        """
+        Returns if this context is stochastic.
+
+        Stochastic contexts are used for probabilistic rounding.
+        """
+        ...
+
+    @abstractmethod
     def is_equiv(self, other: 'Context') -> bool:
         """
         Returns if this context and another context round values to

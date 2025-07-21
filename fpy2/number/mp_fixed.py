@@ -187,6 +187,9 @@ class MPFixedContext(OrdinalContext):
             inf_value=inf_value
         )
 
+    def is_stochastic(self) -> bool:
+        return self.num_randbits != 0
+
     def is_equiv(self, other):
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')

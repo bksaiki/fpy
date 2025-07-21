@@ -79,6 +79,9 @@ class MPFloatContext(Context):
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return MPFloatContext(pmax, rm, num_randbits)
 
+    def is_stochastic(self) -> bool:
+        return self.num_randbits != 0
+
     def is_equiv(self, other):
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
