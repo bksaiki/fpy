@@ -56,7 +56,7 @@ class MPSFloatContext(OrdinalContext):
         pmax: int,
         emin: int,
         rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: Optional[int] = None
+        num_randbits: Optional[int] = 0
     ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
@@ -243,9 +243,11 @@ class MPSFloatContext(OrdinalContext):
             case Float() | RealFloat():
                 xr = x
             case float():
-                xr = RealFloat.from_float(x)
+                xr = Float.from_float(x)
             case int():
                 xr = RealFloat.from_int(x)
+            case Fraction() if x.is_integer():
+                xr = RealFloat.from_int(int(x))
             case str() | Fraction():
                 p, n = self.round_params()
                 xr = mpfr_value(x, prec=p, n=n)
