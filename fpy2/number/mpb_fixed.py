@@ -389,7 +389,7 @@ class MPBFixedContext(SizedContext):
                 xr = Float.from_float(x)
             case int():
                 xr = RealFloat.from_int(x)
-            case Fraction() if x.is_integer():
+            case Fraction() if x.denominator == 1:
                 xr = RealFloat.from_int(int(x))
             case str() | Fraction():
                 p, n = self.round_params()
