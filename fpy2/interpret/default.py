@@ -447,7 +447,7 @@ class _Interpreter(Visitor):
     def _visit_list_expr(self, e: ListExpr, ctx: Context):
         return [self._visit_expr(x, ctx) for x in e.args]
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: Context):
+    def _visit_list_ref(self, e: ListRef, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a tensor, got {arr}')
@@ -459,7 +459,7 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected an integer index, got {idx}')
         return arr[int(idx)]
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: Context):
+    def _visit_list_slice(self, e: ListSlice, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a tensor, got {arr}')
@@ -489,7 +489,7 @@ class _Interpreter(Visitor):
         else:
             return [arr[i] for i in range(start, stop)]
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: Context):
+    def _visit_list_set(self, e: ListSet, ctx: Context):
         value = self._visit_expr(e.array, ctx)
         if not isinstance(value, list):
             raise TypeError(f'expected a tensor, got {value}')
@@ -536,7 +536,7 @@ class _Interpreter(Visitor):
                         self._unpack_tuple(target, val, ctx)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: Context):
+    def _visit_list_comp(self, e: ListComp, ctx: Context):
         # evaluate comprehension
         elts: list[Any] = []
         bindings = list(zip(e.targets, e.iterables))

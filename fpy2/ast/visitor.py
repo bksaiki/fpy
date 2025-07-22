@@ -23,10 +23,10 @@ _expr_dispatch: dict[type[Expr], str] = {
     Call: "_visit_call",
     TupleExpr: "_visit_tuple_expr",
     ListExpr: "_visit_list_expr",
-    CompExpr: "_visit_comp_expr",
-    TupleRef: "_visit_tuple_ref",
-    TupleSlice: "_visit_tuple_slice",
-    TupleSet: "_visit_tuple_set",
+    ListComp: "_visit_list_comp",
+    ListRef: "_visit_list_ref",
+    ListSlice: "_visit_list_slice",
+    ListSet: "_visit_list_set",
     IfExpr: "_visit_if_expr",
     ContextExpr: "_visit_context_expr",
 }
@@ -121,19 +121,19 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
-    def _visit_comp_expr(self, e: CompExpr, ctx: Any) -> Any:
+    def _visit_list_comp(self, e: ListComp, ctx: Any) -> Any:
         ...
 
     @abstractmethod
-    def _visit_tuple_ref(self, e: TupleRef, ctx: Any) -> Any:
+    def _visit_list_ref(self, e: ListRef, ctx: Any) -> Any:
         ...
 
     @abstractmethod
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: Any) -> Any:
+    def _visit_list_slice(self, e: ListSlice, ctx: Any) -> Any:
         ...
 
     @abstractmethod
-    def _visit_tuple_set(self, e: TupleSet, ctx: Any) -> Any:
+    def _visit_list_set(self, e: ListSet, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -293,24 +293,24 @@ class DefaultVisitor(Visitor):
         for c in e.args:
             self._visit_expr(c, ctx)
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
+    def _visit_list_ref(self, e: ListRef, ctx: Any):
         self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: Any):
+    def _visit_list_slice(self, e: ListSlice, ctx: Any):
         self._visit_expr(e.value, ctx)
         if e.start is not None:
             self._visit_expr(e.start, ctx)
         if e.stop is not None:
             self._visit_expr(e.stop, ctx)
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: Any):
+    def _visit_list_set(self, e: ListSet, ctx: Any):
         self._visit_expr(e.array, ctx)
         for s in e.slices:
             self._visit_expr(s, ctx)
         self._visit_expr(e.value, ctx)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: Any):
+    def _visit_list_comp(self, e: ListComp, ctx: Any):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
         self._visit_expr(e.elt, ctx)
@@ -451,28 +451,28 @@ class DefaultTransformVisitor(Visitor):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         return ListExpr(args, e.loc)
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
+    def _visit_list_ref(self, e: ListRef, ctx: Any):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
-        return TupleRef(value, index, e.loc)
+        return ListRef(value, index, e.loc)
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: Any):
+    def _visit_list_slice(self, e: ListSlice, ctx: Any):
         value = self._visit_expr(e.value, ctx)
         start = None if e.start is None else self._visit_expr(e.start, ctx)
         stop = None if e.stop is None else self._visit_expr(e.stop, ctx)
-        return TupleSlice(value, start, stop, e.loc)
+        return ListSlice(value, start, stop, e.loc)
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: Any):
+    def _visit_list_set(self, e: ListSet, ctx: Any):
         array = self._visit_expr(e.array, ctx)
         slices = [self._visit_expr(s, ctx) for s in e.slices]
         value = self._visit_expr(e.value, ctx)
-        return TupleSet(array, slices, value, e.loc)
+        return ListSet(array, slices, value, e.loc)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: Any):
+    def _visit_list_comp(self, e: ListComp, ctx: Any):
         targets = [self._visit_binding(target, ctx) for target in e.targets]
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return CompExpr(targets, iterables, elt, e.loc)
+        return ListComp(targets, iterables, elt, e.loc)
 
     def _visit_if_expr(self, e: IfExpr, ctx: Any):
         cond = self._visit_expr(e.cond, ctx)

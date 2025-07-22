@@ -418,10 +418,10 @@ class FPCoreCompileInstance(Visitor):
     def _visit_list_expr(self, e: ListExpr, ctx: None) -> fpc.Expr:
         return fpc.Array(*[self._visit_expr(c, ctx) for c in e.args])
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> fpc.Expr:
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> fpc.Expr:
         t: Expr = e
         indices: list[fpc.Expr] = []
-        while isinstance(t, TupleRef):
+        while isinstance(t, ListRef):
             index = self._visit_expr(t.index, ctx)
             indices.append(index)
             t = t.value
@@ -429,7 +429,7 @@ class FPCoreCompileInstance(Visitor):
         value = self._visit_expr(t, ctx)
         return fpc.Ref(value, *reversed(indices))
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: None) -> fpc.Expr:
+    def _visit_list_slice(self, e: ListSlice, ctx: None) -> fpc.Expr:
         value = self._visit_expr(e.value, ctx)
         match e.start, e.stop:
             case None, None:
@@ -509,7 +509,7 @@ class FPCoreCompileInstance(Visitor):
         if_expr = fpc.If(cond_expr, ift_expr, iff_expr)
         return fpc.Tensor(tensor_dims, if_expr)
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: None) -> fpc.Expr:
+    def _visit_list_set(self, e: ListSet, ctx: None) -> fpc.Expr:
         # general case:
         # 
         #   (let ([t <tuple>] [i0 <index>] ... [v <value>]))
@@ -555,7 +555,7 @@ class FPCoreCompileInstance(Visitor):
         return fpc.Let(let_bindings, tensor_expr)
 
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: None) -> fpc.Expr:
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> fpc.Expr:
         if len(e.targets) == 1:
             # simple case:
             # (let ([t <iterable>]) (tensor ([i (size t 0)]) (let ([<var> (ref t i)]) <elt>))

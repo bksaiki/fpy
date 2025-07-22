@@ -28,11 +28,11 @@ class _RenameTargetInstance(DefaultTransformVisitor):
         name = self.rename.get(var.name, var.name)
         return Var(name, var.loc)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: None):
+    def _visit_list_comp(self, e: ListComp, ctx: None):
         targets = [self._visit_binding(target, ctx) for target in e.targets]
         iterables = [self._visit_expr(iterable, ctx) for iterable in e.iterables]
         elt = self._visit_expr(e.elt, ctx)
-        return CompExpr(targets, iterables, elt, e.loc)
+        return ListComp(targets, iterables, elt, e.loc)
 
     def _visit_binding(self, binding: Id | TupleBinding, ctx: None):
         match binding:

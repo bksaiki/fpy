@@ -100,7 +100,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
             # variable is free in the pattern
             return Var(self.free[e.name], None)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: None):
+    def _visit_list_comp(self, e: ListComp, ctx: None):
         targets: list[Id | TupleBinding] = []
         for target in e.targets:
             match target:
@@ -113,7 +113,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
 
         iterables = [self._visit_expr(e, None) for e in e.iterables]
         elt = self._visit_expr(e.elt, None)
-        return CompExpr(targets, iterables, elt, None)
+        return ListComp(targets, iterables, elt, None)
 
     def _visit_binding(self, binding: Id | TupleBinding, ctx: None):
         match binding:

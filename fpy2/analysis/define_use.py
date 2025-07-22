@@ -7,7 +7,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
 
-Definition: TypeAlias = Argument | Stmt | CompExpr
+Definition: TypeAlias = Argument | Stmt | ListComp
 
 @default_repr
 class _DefineUnion:
@@ -125,7 +125,7 @@ class _DefineUseInstance(DefaultVisitor):
             raise NotImplementedError(f'undefined variable {e.name}')
         self._add_use(e.name, e, ctx)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: DefinitionCtx):
+    def _visit_list_comp(self, e: ListComp, ctx: DefinitionCtx):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
         ctx = ctx.copy()

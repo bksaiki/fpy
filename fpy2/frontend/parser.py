@@ -490,12 +490,12 @@ class Parser:
         match e.slice:
             case ast.Slice():
                 lower, upper = self._parse_slice(e.slice)
-                return TupleSlice(value, lower, upper, loc)
+                return ListSlice(value, lower, upper, loc)
             case _:
                 slice =  self._parse_expr(e.slice)
                 if not isinstance(slice, ValueExpr):
                     raise FPyParserError(loc, 'FPy expects a value expression for subscript slice', e)
-                return TupleRef(value, slice, loc)
+                return ListRef(value, slice, loc)
 
     def _parse_subscript_target(self, e: ast.Subscript):
         """Parsing a subscript slice that is the LHS of an assignment."""
@@ -569,7 +569,7 @@ class Parser:
                     targets.append(target)
                     iterables.append(iterable)
                 elt = self._parse_expr(e.elt)
-                return CompExpr(targets, iterables, elt, loc)
+                return ListComp(targets, iterables, elt, loc)
             case ast.Subscript():
                 return self._parse_subscript(e)
             case ast.IfExp():

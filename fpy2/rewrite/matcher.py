@@ -218,11 +218,11 @@ class _MatcherInst(Visitor):
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)
 
-    def _visit_tuple_ref(self, e: TupleRef, pat: TupleRef):
+    def _visit_list_ref(self, e: ListRef, pat: ListRef):
         self._visit_expr(e.value, pat.value)
         self._visit_expr(e.index, pat.index)
 
-    def _visit_tuple_slice(self, e: TupleSlice, pat: TupleSlice):
+    def _visit_list_slice(self, e: ListSlice, pat: ListSlice):
         self._visit_expr(e.value, pat.value)
         match e.start, pat.start:
             case None, None:
@@ -239,7 +239,7 @@ class _MatcherInst(Visitor):
             case _:
                 raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_tuple_set(self, e: TupleSet, pat: TupleSet):
+    def _visit_list_set(self, e: ListSet, pat: ListSet):
         if len(e.slices) != len(pat.slices):
             raise _MatchFailure(f'matching {pat} against {e}')
         self._visit_expr(e.array, pat.array)
@@ -247,7 +247,7 @@ class _MatcherInst(Visitor):
             self._visit_expr(s1, s2)
         self._visit_expr(e.value, pat.value)
 
-    def _visit_comp_expr(self, e: CompExpr, pat: CompExpr):
+    def _visit_list_comp(self, e: ListComp, pat: ListComp):
         if len(e.iterables) != len(pat.iterables):
             raise _MatchFailure(f'matching {pat} against {e}')
         for target, ptarget in zip(e.targets, pat.targets):

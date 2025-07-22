@@ -91,7 +91,7 @@ class LiveVarsInstance(Visitor):
             live |= self._visit_expr(arg, ctx)
         return live
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: None) -> _LiveSet:
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.elt, ctx)
         for target in e.targets:
             live |= target.names()
@@ -99,12 +99,12 @@ class LiveVarsInstance(Visitor):
             live |= self._visit_expr(iterable, ctx)
         return live
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> _LiveSet:
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.value, ctx)
         live |= self._visit_expr(e.index, ctx)
         return live
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: None) -> _LiveSet:
+    def _visit_list_slice(self, e: ListSlice, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.value, ctx)
         if e.start is not None:
             live |= self._visit_expr(e.start, ctx)
@@ -112,7 +112,7 @@ class LiveVarsInstance(Visitor):
             live |= self._visit_expr(e.stop, ctx)
         return live
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: None) -> _LiveSet:
+    def _visit_list_set(self, e: ListSet, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.array, ctx)
         for s in e.slices:
             live |= self._visit_expr(s, ctx)

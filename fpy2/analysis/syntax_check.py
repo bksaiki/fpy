@@ -200,7 +200,7 @@ class SyntaxCheckInstance(Visitor):
             self._visit_expr(c, ctx)
         return env
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: _Ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
         env, _ = ctx
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
@@ -209,13 +209,13 @@ class SyntaxCheckInstance(Visitor):
         self._visit_expr(e.elt, (env, False))
         return env
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: _Ctx):
+    def _visit_list_ref(self, e: ListRef, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
         return env
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: _Ctx):
+    def _visit_list_slice(self, e: ListSlice, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(e.value, ctx)
         if e.start is not None:
@@ -224,7 +224,7 @@ class SyntaxCheckInstance(Visitor):
             self._visit_expr(e.stop, ctx)
         return env
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: _Ctx):
+    def _visit_list_set(self, e: ListSet, ctx: _Ctx):
         env, _ = ctx
         self._visit_expr(e.array, ctx)
         for s in e.slices:
