@@ -39,3 +39,9 @@ FP64_EMASK = bitmask(FP64_ES) << FP64_M
 
 FP64_MMASK = bitmask(FP64_M)
 """bitmask for the mantissa bits of a `float`"""
+
+FP64_EONES = bitmask(FP64_ES)
+"""exponent field of all ones (infinity or NaN)"""
+
+FP64_IMPLICIT1 = 1 << FP64_M
+"""implicit leading 1 in the mantissa of a normalized `float`"""
