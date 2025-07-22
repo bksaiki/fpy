@@ -194,6 +194,12 @@ class SyntaxCheckInstance(Visitor):
             self._visit_expr(c, ctx)
         return env
 
+    def _visit_list_expr(self, e: ListExpr, ctx: _Ctx):
+        env, _ = ctx
+        for c in e.args:
+            self._visit_expr(c, ctx)
+        return env
+
     def _visit_comp_expr(self, e: CompExpr, ctx: _Ctx):
         env, _ = ctx
         for iterable in e.iterables:

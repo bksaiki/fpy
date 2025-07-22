@@ -22,6 +22,7 @@ _expr_dispatch: dict[type[Expr], str] = {
     Compare: "_visit_compare",
     Call: "_visit_call",
     TupleExpr: "_visit_tuple_expr",
+    ListExpr: "_visit_list_expr",
     CompExpr: "_visit_comp_expr",
     TupleRef: "_visit_tuple_ref",
     TupleSlice: "_visit_tuple_slice",
@@ -113,6 +114,10 @@ class Visitor(ABC):
 
     @abstractmethod
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any) -> Any:
+        ...
+
+    @abstractmethod
+    def _visit_list_expr(self, e: ListExpr, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -284,6 +289,10 @@ class DefaultVisitor(Visitor):
         for c in e.args:
             self._visit_expr(c, ctx)
 
+    def _visit_list_expr(self, e: ListExpr, ctx: Any):
+        for c in e.args:
+            self._visit_expr(c, ctx)
+
     def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
         self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
@@ -437,6 +446,10 @@ class DefaultTransformVisitor(Visitor):
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         return TupleExpr(args, e.loc)
+
+    def _visit_list_expr(self, e: ListExpr, ctx: Any):
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        return ListExpr(args, e.loc)
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: Any):
         value = self._visit_expr(e.value, ctx)

@@ -85,6 +85,12 @@ class LiveVarsInstance(Visitor):
             live |= self._visit_expr(arg, ctx)
         return live
 
+    def _visit_list_expr(self, e: ListExpr, ctx: None) -> _LiveSet:
+        live: set[NamedId] = set()
+        for arg in e.args:
+            live |= self._visit_expr(arg, ctx)
+        return live
+
     def _visit_comp_expr(self, e: CompExpr, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.elt, ctx)
         for target in e.targets:

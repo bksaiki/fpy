@@ -560,7 +560,7 @@ class Parser:
             case ast.Tuple():
                 return TupleExpr([self._parse_expr(e) for e in e.elts], loc)
             case ast.List():
-                return TupleExpr([self._parse_expr(e) for e in e.elts], loc)
+                return ListExpr([self._parse_expr(e) for e in e.elts], loc)
             case ast.ListComp():
                 targets: list[Id | TupleBinding] = []
                 iterables: list[Expr] = []

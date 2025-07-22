@@ -210,6 +210,14 @@ class _MatcherInst(Visitor):
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)
 
+    def _visit_list_expr(self, e: ListExpr, pat: ListExpr):
+        # check if #elements are the same
+        if len(e.args) != len(pat.args):
+            raise _MatchFailure(f'matching {pat} against {e}')
+        # check if elements are the same
+        for c1, c2 in zip(e.args, pat.args):
+            self._visit_expr(c1, c2)
+
     def _visit_tuple_ref(self, e: TupleRef, pat: TupleRef):
         self._visit_expr(e.value, pat.value)
         self._visit_expr(e.index, pat.index)

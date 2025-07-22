@@ -442,6 +442,9 @@ class _Interpreter(Visitor):
         return True
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
+        return tuple(self._visit_expr(x, ctx) for x in e.args)
+
+    def _visit_list_expr(self, e: ListExpr, ctx: Context):
         return [self._visit_expr(x, ctx) for x in e.args]
 
     def _visit_tuple_ref(self, e: TupleRef, ctx: Context):

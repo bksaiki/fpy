@@ -415,6 +415,9 @@ class FPCoreCompileInstance(Visitor):
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> fpc.Expr:
         return fpc.Array(*[self._visit_expr(c, ctx) for c in e.args])
 
+    def _visit_list_expr(self, e: ListExpr, ctx: None) -> fpc.Expr:
+        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.args])
+
     def _visit_tuple_ref(self, e: TupleRef, ctx: None) -> fpc.Expr:
         t: Expr = e
         indices: list[fpc.Expr] = []

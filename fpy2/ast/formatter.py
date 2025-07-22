@@ -163,6 +163,17 @@ class _FormatterInstance(Visitor):
             elts = [self._visit_expr(elt, ctx) for elt in e.args]
             return f'({", ".join(elts)})'
 
+    def _visit_list_expr(self, e: ListExpr, ctx: _Ctx):
+        num_elts = len(e.args)
+        if num_elts == 0:
+            return '[]'
+        elif num_elts == 1:
+            elt = self._visit_expr(e.args[0], ctx)
+            return f'[{elt}]'
+        else:
+            elts = [self._visit_expr(elt, ctx) for elt in e.args]
+            return f'[{", ".join(elts)}]'
+
     def _visit_comp_expr(self, e: CompExpr, ctx: _Ctx):
         targets: list[str] = []
         for target in e.targets:

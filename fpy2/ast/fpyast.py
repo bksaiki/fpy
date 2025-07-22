@@ -172,6 +172,7 @@ __all__ = [
     'Call',
     'Compare',
     'TupleExpr',
+    'ListExpr',
     'TupleBinding',
     'CompExpr',
     'TupleSet',
@@ -1094,6 +1095,26 @@ class Compare(Expr):
 
 class TupleExpr(Expr):
     """FPy AST: tuple expression"""
+    __slots__ = ('args',)
+    args: tuple[Expr, ...]
+
+    def __init__(
+        self,
+        args: Sequence[Expr],
+        loc: Optional[Location]
+    ):
+        super().__init__(loc)
+        self.args = tuple(args)
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, TupleExpr)
+            and len(self.args) == len(other.args)
+            and all(arg.is_equiv(other_arg) for arg, other_arg in zip(self.args, other.args))
+        )
+
+class ListExpr(Expr):
+    """FPy AST: list expression"""
     __slots__ = ('args',)
     args: tuple[Expr, ...]
 
