@@ -177,7 +177,9 @@ class _Interpreter(Visitor):
                 return Float.from_float(arg, ctx=FP64, checked=False)
             case Float():
                 return arg
-            case tuple() | list():
+            case tuple():
+                return tuple(self._arg_to_value(x) for x in arg)
+            case list():
                 return [self._arg_to_value(x) for x in arg]
             case _:
                 return arg
@@ -550,6 +552,8 @@ class _Interpreter(Visitor):
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
     def _unpack_tuple(self, binding: TupleBinding, val: list, ctx: Context) -> None:
+        if not isinstance(val, tuple):
+            raise TypeError(f'can only unpack tuples, got `{val}` for `{binding}`')
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
         for elt, v in zip(binding.elts, val):
