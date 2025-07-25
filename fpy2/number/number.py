@@ -10,7 +10,7 @@ import numbers
 import random
 
 from fractions import Fraction
-from typing import Optional, Self, TypeAlias, TYPE_CHECKING
+from typing import Optional, Self, TypeAlias, TYPE_CHECKING, override
 
 from ..utils import (
     bitmask,
@@ -180,6 +180,10 @@ class RealFloat(numbers.Rational):
     def __str__(self):
         fn = get_current_str_converter()
         return fn(self)
+
+    def __hash__(self): # type: ignore
+        # Complex has __hash__ = None, so mypy thinks there's a type mismatch.
+        return hash((self._s, self._exp, self._c))
 
     def __eq__(self, other):
         if not isinstance(other, RealFloat):
@@ -1334,6 +1338,10 @@ class Float(numbers.Rational):
     def __str__(self):
         fn = get_current_str_converter()
         return fn(self)
+
+    def __hash__(self): # type: ignore
+        # Complex has __hash__ = None, so mypy thinks there's a type mismatch.
+        return hash((self._isinf, self._isnan, self._real))
 
     def __eq__(self, other):
         ord = self.compare(other)
