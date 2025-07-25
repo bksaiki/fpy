@@ -10,11 +10,10 @@ import numbers
 import random
 
 from fractions import Fraction
-from typing import Optional, Self, TypeAlias, TYPE_CHECKING, override
+from typing import Optional, Self, TypeAlias, TYPE_CHECKING
 
 from ..utils import (
     bitmask,
-    default_repr,
     float_to_bits,
     rcomparable,
     Ordering,
