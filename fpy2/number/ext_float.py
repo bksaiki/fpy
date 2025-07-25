@@ -456,7 +456,7 @@ class ExtFloatContext(EncodableContext):
 
 
     def decode(self, x: int) -> Float:
-        if not isinstance(x, int) and x >= 0 and x < 2 ** self.nbits:
+        if not isinstance(x, int) or x < 0 or x >= (1 << self.nbits):
             raise TypeError(f'Expected integer x={x} on [0, 2 ** {self.nbits})')
 
         # bitmasks

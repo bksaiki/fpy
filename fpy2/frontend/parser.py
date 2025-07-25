@@ -471,17 +471,11 @@ class Parser:
             lower = None
         else:
             lower = self._parse_expr(e.lower)
-            if not isinstance(lower, ValueExpr):
-                loc = self._parse_location(e.lower)
-                raise FPyParserError(loc, 'FPy expects a value expression for slice lower bound', e.lower)
 
         if e.upper is None:
             upper = None
         else:
             upper = self._parse_expr(e.upper)
-            if not isinstance(upper, ValueExpr):
-                loc = self._parse_location(e.upper)
-                raise FPyParserError(loc, 'FPy expects a value expression for slice upper bound', e.upper)
 
         if e.step is not None:
             loc = self._parse_location(e.step)

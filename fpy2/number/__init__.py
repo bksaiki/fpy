@@ -77,7 +77,7 @@ Alias for Nvidia's TensorFloat-32 (TF32) floating point format
 with round nearest, ties-to-even rounding mode.
 """
 
-BF16 = IEEEContext(5, 16, RM.RNE)
+BF16 = IEEEContext(8, 16, RM.RNE)
 """
 Alias for Google's Brain Floating Point (BF16) floating point format
 with round nearest, ties-to-even rounding mode.

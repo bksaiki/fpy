@@ -105,7 +105,9 @@ _real_ops: dict[Any, Callable[..., Float]] = {
     mpfr_add: real_add,
     mpfr_sub: real_sub,
     mpfr_mul: real_mul,
-    mpfr_fma: real_fma
+    mpfr_fma: real_fma,
+    mpfr_fmin: min,
+    mpfr_fmax: max
 }
 
 def _apply_real(fn: Callable[..., Float], args: tuple[Float, ...]) -> Float:

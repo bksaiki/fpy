@@ -398,7 +398,7 @@ def mpfr_fmin(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int
     Computes `min(x, y)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
 
-    This is the same as computing `max(x, y)` exactly and 
+    This is the same as computing `min(x, y)` exactly and 
     then rounding the result to the desired precision.
     """
     return _mpfr_eval(gmp.minnum, x, y, prec=prec, n=n)
