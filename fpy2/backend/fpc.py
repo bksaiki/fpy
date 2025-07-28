@@ -287,7 +287,6 @@ class FPCoreCompileInstance(Visitor):
         #  (let ([t0 <tuple0>] [t1 <tuple1>])
         #    (tensor ([i (size t0 0)])
         #      (array (ref t0 i) (ref t1 i)))))
-
         if len(args) == 0:
             # no children => empty zip
             return fpc.Array()
@@ -301,6 +300,21 @@ class FPCoreCompileInstance(Visitor):
                     fpc.Array(*[fpc.Ref(fpc.Var(tid), fpc.Var(iter_id)) for tid in tuple_ids])
                 )
             )
+
+    def _visit_sum(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
+        # expand sum expression with left-associative addition
+        if len(args) == 0:
+            # no children => empty sum
+            return fpc.Integer(0)
+        elif len(args) == 1:
+            # single child => just compile it
+            return self._visit_expr(args[0], ctx)
+        else:
+            # multiple children => reduce with addition
+            accum = self._visit_expr(args[0], ctx)
+            for arg in args[1:]:
+                accum = fpc.Add(accum, self._visit_expr(arg, ctx))
+            return accum
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
         nullary_table = _get_nullary_table()
@@ -371,6 +385,9 @@ class FPCoreCompileInstance(Visitor):
                 case Zip():
                     # zip expression
                     return self._visit_zip(e.args, ctx)
+                case Sum():
+                    # sum expression
+                    return self._visit_sum(e.args, ctx)
                 case _:
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
