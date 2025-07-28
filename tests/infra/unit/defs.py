@@ -462,13 +462,17 @@ def fma_ctx(x: Real, y: Real, z: Real) -> Real:
     return prod + z
 
 @fpy
-def dpN(xs: tuple[Real, ...], ys: tuple[Real, ...]) -> Real:
+def dpN(xs: list[Real], ys: list[Real]) -> Real:
     assert len(xs) == len(ys)
     sum = 0.0
     with RealContext():
         for x, y in zip(xs, ys):
             sum += x * y
     return roundint(sum)
+
+@fpy
+def test_sum(xs: list[Real]) -> Real:
+    return sum(xs)
 
 @fpy(
     name='NMSE example 3.1',
@@ -654,6 +658,7 @@ tests = [
 examples = [
     fma_ctx,
     # dpN,
+    test_sum,
     nmse3_1,
     instCurrent,
     azimuth,

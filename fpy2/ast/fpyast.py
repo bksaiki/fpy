@@ -96,14 +96,15 @@ __all__ = [
 
     # Composite arithmetic
     'Fdim',
+    'Hypot',
+
+    # Other arithmetic
     'Fmax',
     'Fmin',
     'Fmod',
     'Remainder',
-    'Hypot',
-
-    # Other arithmetic
     'Cbrt',
+    'Sum',
 
     # Rounding and truncation
     'Ceil',
@@ -809,6 +810,12 @@ class Fdim(NamedBinaryOp):
     """FPy node: `max(x - y, 0)`"""
     __slots__ = ()
 
+class Hypot(NamedBinaryOp):
+    """FPy node: `sqrt(x ** 2 + y ** 2)`"""
+    __slots__ = ()
+
+# Other arithmetic
+
 class Fmax(NamedBinaryOp):
     """FPy node: `max(x, y)`"""
     __slots__ = ()
@@ -825,14 +832,12 @@ class Remainder(NamedBinaryOp):
     """FPy node: remainder"""
     __slots__ = ()
 
-class Hypot(NamedBinaryOp):
-    """FPy node: `sqrt(x ** 2 + y ** 2)`"""
-    __slots__ = ()
-
-# Other arithmetic
-
 class Cbrt(NamedUnaryOp):
     """FPy node: cube-root"""
+    __slots__ = ()
+
+class Sum(NamedNaryOp):
+    """FPy node: summation"""
     __slots__ = ()
 
 # Rounding and truncation
