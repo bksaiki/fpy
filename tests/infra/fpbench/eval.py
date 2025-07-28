@@ -35,6 +35,8 @@ def eval(
     fun = Function.from_fpcore(core, ignore_unknown=True)
     fun.env = env
 
+    print(fun.format())
+
     # register the function
     if core.ident is not None:
         rt.register_function(core)

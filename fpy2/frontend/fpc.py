@@ -295,7 +295,7 @@ class _FPCore2FPy:
 
     def _visit_array(self, e: fpc.Array, ctx: _Ctx) -> Expr:
         exprs = [self._visit(e, ctx) for e in e.children]
-        return TupleExpr(exprs, None)
+        return ListExpr(exprs, None)
 
     def _visit_ref(self, e: fpc.Ref, ctx: _Ctx) -> Expr:
         # (ref <array> <index> ...)
