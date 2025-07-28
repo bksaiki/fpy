@@ -665,7 +665,6 @@ def signbit(x: Real, ctx: Optional[Context] = None) -> bool:
 
 #############################################################################
 # Tensor
-# TODO: should these be implemented
 
 def dim(x: list | tuple, ctx: Optional[Context] = None):
     """

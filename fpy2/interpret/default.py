@@ -3,6 +3,7 @@ FPy runtime backed by the Titanic library.
 """
 
 import copy
+import functools
 
 from typing import Any, Callable, Optional, Sequence, TypeAlias
 
@@ -332,9 +333,18 @@ class _Interpreter(Visitor):
         for val in arrays:
             if not isinstance(val, list):
                 raise TypeError(f'expected a tensor argument, got {val}')
-
-        # zip the arrays
         return list(zip(*arrays))
+
+    def _apply_sum(self, args: Sequence[Expr], ctx: Context):
+        """Apply the `sum` method to the given n-ary expression."""
+        if len(args) == 0:
+            return Float.from_int(0, ctx=ctx)
+        # evaluate all children
+        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
+        for val in vals:
+            if not isinstance(val, Float):
+                raise TypeError(f'expected a real number argument, got {val}')
+        return functools.reduce(lambda accum, x: ops.add(accum, x, ctx=ctx), vals[1:], vals[0])
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         fn = _get_nullary_table().get(type(e))
@@ -386,6 +396,8 @@ class _Interpreter(Visitor):
                 return self._apply_or(e.args, ctx)
             case Zip():
                 return self._apply_zip(e.args, ctx)
+            case Sum():
+                return self._apply_sum(e.args, ctx)
             case _:
                 raise RuntimeError('unknown operator', e)
 

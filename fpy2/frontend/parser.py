@@ -99,6 +99,7 @@ _ternary_table: dict[Callable, type[TernaryOp] | type[NamedTernaryOp]] = {
 
 _nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
     zip: Zip,
+    sum: Sum
 }
 
 
