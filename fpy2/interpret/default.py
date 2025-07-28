@@ -110,8 +110,6 @@ def _get_binary_table() -> dict[type[BinaryOp], Callable[[Float, Float, Context]
             Div: ops.div,
             Copysign: ops.copysign,
             Fdim: ops.fdim,
-            Fmax: ops.fmax,
-            Fmin: ops.fmin,
             Fmod: ops.fmod,
             Remainder: ops.remainder,
             Hypot: ops.hypot,
@@ -335,6 +333,24 @@ class _Interpreter(Visitor):
                 raise TypeError(f'expected a list argument, got {val}')
         return list(zip(*arrays))
 
+    def _apply_min(self, args: Sequence[Expr], ctx: Context):
+        """Apply the `min` method to the given n-ary expression."""
+        # evaluate all children
+        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
+        for val in vals:
+            if not isinstance(val, Float):
+                raise TypeError(f'expected a real number argument, got {val}')
+        return min(*vals)
+
+    def _apply_max(self, args: Sequence[Expr], ctx: Context):
+        """Apply the `max` method to the given n-ary expression."""
+        # evaluate all children
+        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
+        for val in vals:
+            if not isinstance(val, Float):
+                raise TypeError(f'expected a real number argument, got {val}')
+        return min(*vals)
+
     def _apply_sum(self, arg: Expr, ctx: Context):
         """Apply the `sum` method to the given n-ary expression."""
         val = self._visit_expr(arg, ctx)
@@ -405,6 +421,10 @@ class _Interpreter(Visitor):
                 return self._apply_or(e.args, ctx)
             case Zip():
                 return self._apply_zip(e.args, ctx)
+            case Min():
+                return self._apply_min(e.args, ctx)
+            case Max():
+                return self._apply_max(e.args, ctx)
             case _:
                 raise RuntimeError('unknown operator', e)
 

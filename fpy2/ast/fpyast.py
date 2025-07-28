@@ -99,8 +99,8 @@ __all__ = [
     'Hypot',
 
     # Other arithmetic
-    'Fmax',
-    'Fmin',
+    'Max',
+    'Min',
     'Fmod',
     'Remainder',
     'Cbrt',
@@ -816,12 +816,12 @@ class Hypot(NamedBinaryOp):
 
 # Other arithmetic
 
-class Fmax(NamedBinaryOp):
-    """FPy node: `max(x, y)`"""
+class Max(NamedNaryOp):
+    """FPy node: `max(x, y, ...)`"""
     __slots__ = ()
 
-class Fmin(NamedBinaryOp):
-    """FPy node: `min(x, y)`"""
+class Min(NamedNaryOp):
+    """FPy node: `min(x, y, ...)`"""
     __slots__ = ()
 
 class Fmod(NamedBinaryOp):

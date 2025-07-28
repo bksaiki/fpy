@@ -101,8 +101,6 @@ def _get_binary_table():
             '/': Div,
             'copysign': Copysign,
             'fdim': Fdim,
-            'fmax': Fmax,
-            'fmin': Fmin,
             'fmod': Fmod,
             'remainder': Remainder,
             'hypot': Hypot,
@@ -224,7 +222,17 @@ class _FPCore2FPy:
             else:
                 return cls(left, right, None)
         else:
-            raise NotImplementedError(f'unsupported binary operation {e.name}')
+            match e.name:
+                case 'fmin':
+                    left = self._visit(e.children[0], ctx)
+                    right = self._visit(e.children[1], ctx)
+                    return Min(NamedId('min'), (left, right), None)
+                case 'fmax':
+                    left = self._visit(e.children[0], ctx)
+                    right = self._visit(e.children[1], ctx)
+                    return Max(NamedId('max'), (left, right), None)
+                case _:
+                    raise NotImplementedError(f'unsupported binary operation {e.name}')
 
     def _visit_ternary(self, e: fpc.TernaryExpr, ctx: _Ctx) -> Expr:
         ternary_table = _get_ternary_table()

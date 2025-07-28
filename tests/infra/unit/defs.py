@@ -214,6 +214,19 @@ def test_list_sum(x: fp.Real, y: fp.Real, z: fp.Real) -> Real:
     return t1 + t2 + t3
 
 @fpy
+def test_min(x: fp.Real, y: fp.Real, z: fp.Real) -> Real:
+    t2 = min(x, y)
+    t3 = min(x, y, z)
+    return t2 + t3
+
+@fpy
+def test_max(x: fp.Real, y: fp.Real, z: fp.Real) -> Real:
+    t2 = max(x, y)
+    t3 = max(x, y, z)
+    return t2 + t3
+
+
+@fpy
 def test_list_comp1():
     return [x + 1 for x in range(5)]
 
@@ -624,6 +637,8 @@ tests = [
     test_list_zip3,
     test_list_zip4,
     test_list_sum,
+    test_min,
+    test_max,
     test_list_comp1,
     test_list_comp2,
     test_list_comp3,

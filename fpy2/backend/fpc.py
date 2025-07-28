@@ -103,8 +103,6 @@ def _get_binary_table() -> dict[type[BinaryOp], type[fpc.Expr]]:
             Div: fpc.Div,
             Copysign: fpc.Copysign,
             Fdim: fpc.Fdim,
-            Fmax: fpc.Fmax,
-            Fmin: fpc.Fmin,
             Fmod: fpc.Fmod,
             Remainder: fpc.Remainder,
             Hypot: fpc.Hypot,
@@ -301,6 +299,26 @@ class FPCoreCompileInstance(Visitor):
                 )
             )
 
+    def _visit_min(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
+        # expand min expression by left associativity
+        # at least two arguments
+        # (fmin (fmin (fmin t1 t2) t3) ... tn)
+        vals = [self._visit_expr(arg, ctx) for arg in args]
+        min_expr = vals[0]
+        for val in vals[1:]:
+            min_expr = fpc.Fmin(min_expr, val)
+        return min_expr
+
+    def _visit_max(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
+        # expand max expression by left associativity
+        # at least two arguments
+        # (fmax (fmax (fmax t1 t2) t3) ... tn)
+        vals = [self._visit_expr(arg, ctx) for arg in args]
+        min_expr = vals[0]
+        for val in vals[1:]:
+            min_expr = fpc.Fmax(min_expr, val)
+        return min_expr
+
     def _visit_sum(self, arg: Expr, ctx: None) -> fpc.Expr:
         # expand sum expression by left associativity
         # the sum expression has at most one argument
@@ -400,9 +418,16 @@ class FPCoreCompileInstance(Visitor):
                 case Zip():
                     # zip expression
                     return self._visit_zip(e.args, ctx)
+                case Min():
+                    # min expression
+                    return self._visit_min(e.args, ctx)
+                case Max():
+                    # max expression
+                    return self._visit_max(e.args, ctx)
                 case _:
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
+
     def _visit_compare(self, e: Compare, ctx: None) -> fpc.Expr:
         assert e.ops != [], 'should not be empty'
         match e.ops:
