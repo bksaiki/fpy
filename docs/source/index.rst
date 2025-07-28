@@ -28,6 +28,7 @@ Important links:
    rewrite
    backend
    example
+   faq
    developers
 
 Indices and tables
