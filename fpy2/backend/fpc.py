@@ -305,15 +305,27 @@ class FPCoreCompileInstance(Visitor):
         # expand sum expression by left associativity
         # the sum expression has at most one argument
         # (let ([t <tuple>])
-        #   (for ([i (! :precision integer (- (size t 0) 1))])
+        #   (for ([i (! :precision integer (- (size t 0) 1))]
+        #         [accum (ref t i) (+ accum (ref t (! :precision integer (+ i 1))))])
+        #     accum))
         tuple_id = str(self.gensym.fresh('t'))
+        iter_id = str(self.gensym.fresh('i'))
+        accum_id = str(self.gensym.fresh('accum'))
+        idx_ctx = { 'precision': 'integer' }
+
         tup = self._visit_expr(arg, ctx)
-
-        accum = self._visit_expr(args[0], ctx)
-        for arg in args[1:]:
-            accum = fpc.Add(accum, self._visit_expr(arg, ctx))
-        return accum
-
+        return fpc.Let(
+            [(tuple_id, tup)],
+            fpc.For(
+                [(iter_id, fpc.Ctx(idx_ctx, fpc.Sub(fpc.Size(fpc.Var(tuple_id), fpc.Integer(0)), fpc.Integer(1))))],
+                [(
+                    accum_id,
+                    fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)),
+                    fpc.Ctx(idx_ctx, fpc.Add(accum_id, fpc.Ref(fpc.Var(tuple_id), fpc.Add(fpc.Var(iter_id), fpc.Integer(1)))))
+                )],
+                fpc.Var(accum_id)
+            )
+        )
 
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
