@@ -207,6 +207,13 @@ def test_list_zip4():
     return zip(xs, ys, zs)
 
 @fpy
+def test_list_sum(x: fp.Real, y: fp.Real, z: fp.Real) -> Real:
+    t1 = sum([x])
+    t2 = sum([x, y])
+    t3 = sum([x, y, z])
+    return t1 + t2 + t3
+
+@fpy
 def test_list_comp1():
     return [x + 1 for x in range(5)]
 
@@ -470,10 +477,6 @@ def dpN(xs: list[Real], ys: list[Real]) -> Real:
             sum += x * y
     return roundint(sum)
 
-@fpy
-def test_sum(xs: list[Real]) -> Real:
-    return sum(xs)
-
 @fpy(
     name='NMSE example 3.1',
     cite=['hamming-1987', 'herbie-2015'],
@@ -620,6 +623,7 @@ tests = [
     test_list_zip2,
     test_list_zip3,
     test_list_zip4,
+    test_list_sum,
     test_list_comp1,
     test_list_comp2,
     test_list_comp3,
@@ -658,7 +662,6 @@ tests = [
 examples = [
     fma_ctx,
     # dpN,
-    test_sum,
     nmse3_1,
     instCurrent,
     azimuth,

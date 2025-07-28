@@ -71,7 +71,8 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     round_exact: RoundExact,
     range: Range,
     dim: Dim,
-    enumerate: Enumerate
+    enumerate: Enumerate,
+    sum: Sum
 }
 
 _binary_table: dict[Callable, type[BinaryOp] | type[NamedBinaryOp]] = {
@@ -99,7 +100,6 @@ _ternary_table: dict[Callable, type[TernaryOp] | type[NamedTernaryOp]] = {
 
 _nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
     zip: Zip,
-    sum: Sum
 }
 
 

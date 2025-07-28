@@ -836,7 +836,7 @@ class Cbrt(NamedUnaryOp):
     """FPy node: cube-root"""
     __slots__ = ()
 
-class Sum(NamedNaryOp):
+class Sum(NamedUnaryOp):
     """FPy node: summation"""
     __slots__ = ()
 

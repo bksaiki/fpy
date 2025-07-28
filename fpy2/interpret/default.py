@@ -21,12 +21,12 @@ from .interpreter import Interpreter, FunctionReturnException
 ScalarVal: TypeAlias = bool | Float
 """Type of scalar values in FPy programs."""
 TensorVal: TypeAlias = list
-"""Type of tensor values in FPy programs."""
+"""Type of list values in FPy programs."""
 
 ScalarArg: TypeAlias = ScalarVal | str | int | float
 """Type of scalar arguments in FPy programs; includes native Python types"""
 TensorArg: TypeAlias = tuple | list
-"""Type of tensor arguments in FPy programs; includes native Python types"""
+"""Type of list arguments in FPy programs; includes native Python types"""
 
 _nullary_table: Optional[dict[type[NullaryOp], Callable[[Context], Any]]] = None
 _unary_table: Optional[dict[type[UnaryOp], Callable[[Float, Context], Any]]] = None
@@ -211,7 +211,7 @@ class _Interpreter(Visitor):
                     # TODO: check shape
                     x = self._arg_to_value(val)
                     if not isinstance(x, list):
-                        raise NotImplementedError(f'argument is a tensor, got data {val}')
+                        raise NotImplementedError(f'argument is a list, got data {val}')
                     if isinstance(arg.name, NamedId):
                         self.env[arg.name] = x
                 case _:
@@ -300,13 +300,13 @@ class _Interpreter(Visitor):
     def _apply_dim(self, arg: Expr, ctx: Context):
         v = self._visit_expr(arg, ctx)
         if not isinstance(v, list):
-            raise TypeError(f'expected a tensor, got {v}')
+            raise TypeError(f'expected a list, got {v}')
         return ops.dim(v, ctx)
 
     def _apply_enumerate(self, arg: Expr, ctx: Context):
         v = self._visit_expr(arg, ctx)
         if not isinstance(v, list):
-            raise TypeError(f'expected a tensor, got {v}')
+            raise TypeError(f'expected a list, got {v}')
         return [
             [Float.from_int(i, ctx=ctx), val]
             for i, val in enumerate(v)
@@ -315,7 +315,7 @@ class _Interpreter(Visitor):
     def _apply_size(self, arr: Expr, idx: Expr, ctx: Context):
         v = self._visit_expr(arr, ctx)
         if not isinstance(v, list):
-            raise TypeError(f'expected a tensor, got {v}')
+            raise TypeError(f'expected a list, got {v}')
         dim = self._visit_expr(idx, ctx)
         if not isinstance(dim, Float):
             raise TypeError(f'expected a real number argument, got {dim}')
@@ -332,19 +332,26 @@ class _Interpreter(Visitor):
         arrays = tuple(self._visit_expr(arg, ctx) for arg in args)
         for val in arrays:
             if not isinstance(val, list):
-                raise TypeError(f'expected a tensor argument, got {val}')
+                raise TypeError(f'expected a list argument, got {val}')
         return list(zip(*arrays))
 
-    def _apply_sum(self, args: Sequence[Expr], ctx: Context):
+    def _apply_sum(self, arg: Expr, ctx: Context):
         """Apply the `sum` method to the given n-ary expression."""
-        if len(args) == 0:
-            return Float.from_int(0, ctx=ctx)
-        # evaluate all children
-        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
-        for val in vals:
-            if not isinstance(val, Float):
-                raise TypeError(f'expected a real number argument, got {val}')
-        return functools.reduce(lambda accum, x: ops.add(accum, x, ctx=ctx), vals[1:], vals[0])
+        val = self._visit_expr(arg, ctx)
+        if not isinstance(val, list):
+            raise TypeError(f'expected a list, got {val}')
+        if not len(val) > 0:
+            raise ValueError('cannot sum an empty list')
+
+        if not isinstance(val[0], Float):
+            raise TypeError(f'expected a real number argument, got {val[0]}')
+        accum = val[0]
+
+        for x in val[1:]:
+            if not isinstance(x, Float):
+                raise TypeError(f'expected a real number argument, got {x}')
+            accum = ops.add(accum, x, ctx=ctx)
+        return accum
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         fn = _get_nullary_table().get(type(e))
@@ -367,6 +374,8 @@ class _Interpreter(Visitor):
                     return self._apply_dim(e.arg, ctx)
                 case Enumerate():
                     return self._apply_enumerate(e.arg, ctx)
+                case Sum():
+                    return self._apply_sum(e.arg, ctx)
                 case _:
                     raise RuntimeError('unknown operator', e)
 
@@ -396,8 +405,6 @@ class _Interpreter(Visitor):
                 return self._apply_or(e.args, ctx)
             case Zip():
                 return self._apply_zip(e.args, ctx)
-            case Sum():
-                return self._apply_sum(e.args, ctx)
             case _:
                 raise RuntimeError('unknown operator', e)
 
@@ -464,7 +471,7 @@ class _Interpreter(Visitor):
     def _visit_list_ref(self, e: ListRef, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
         if not isinstance(arr, list):
-            raise TypeError(f'expected a tensor, got {arr}')
+            raise TypeError(f'expected a list, got {arr}')
 
         idx = self._visit_expr(e.index, ctx)
         if not isinstance(idx, Float):
@@ -476,7 +483,7 @@ class _Interpreter(Visitor):
     def _visit_list_slice(self, e: ListSlice, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
         if not isinstance(arr, list):
-            raise TypeError(f'expected a tensor, got {arr}')
+            raise TypeError(f'expected a list, got {arr}')
 
         if e.start is None:
             start = 0
@@ -506,7 +513,7 @@ class _Interpreter(Visitor):
     def _visit_list_set(self, e: ListSet, ctx: Context):
         value = self._visit_expr(e.array, ctx)
         if not isinstance(value, list):
-            raise TypeError(f'expected a tensor, got {value}')
+            raise TypeError(f'expected a list, got {value}')
         array = copy.deepcopy(value) # make a copy
 
         slices = []
@@ -541,7 +548,7 @@ class _Interpreter(Visitor):
             target, iterable = bindings[0]
             array = self._visit_expr(iterable, ctx)
             if not isinstance(array, list):
-                raise TypeError(f'expected a tensor, got {array}')
+                raise TypeError(f'expected a list, got {array}')
             for val in array:
                 match target:
                     case NamedId():
@@ -661,7 +668,7 @@ class _Interpreter(Visitor):
         # evaluate the iterable data
         iterable = self._visit_expr(stmt.iterable, ctx)
         if not isinstance(iterable, list):
-            raise TypeError(f'expected a tensor, got {iterable}')
+            raise TypeError(f'expected a list, got {iterable}')
         # iterate over each element
         for val in iterable:
             match stmt.target:
@@ -768,7 +775,7 @@ class DefaultInterpreter(Interpreter):
     Values:
      - booleans are Python `bool` values,
      - real numbers are FPy `Float` values,
-     - tensors are Python `list` values.
+     - lists are Python `list` values.
 
     All operations are correctly-rounded.
     """

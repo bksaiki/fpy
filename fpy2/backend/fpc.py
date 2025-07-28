@@ -301,20 +301,20 @@ class FPCoreCompileInstance(Visitor):
                 )
             )
 
-    def _visit_sum(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
-        # expand sum expression with left-associative addition
-        if len(args) == 0:
-            # no children => empty sum
-            return fpc.Integer(0)
-        elif len(args) == 1:
-            # single child => just compile it
-            return self._visit_expr(args[0], ctx)
-        else:
-            # multiple children => reduce with addition
-            accum = self._visit_expr(args[0], ctx)
-            for arg in args[1:]:
-                accum = fpc.Add(accum, self._visit_expr(arg, ctx))
-            return accum
+    def _visit_sum(self, arg: Expr, ctx: None) -> fpc.Expr:
+        # expand sum expression by left associativity
+        # the sum expression has at most one argument
+        # (let ([t <tuple>])
+        #   (for ([i (! :precision integer (- (size t 0) 1))])
+        tuple_id = str(self.gensym.fresh('t'))
+        tup = self._visit_expr(arg, ctx)
+
+        accum = self._visit_expr(args[0], ctx)
+        for arg in args[1:]:
+            accum = fpc.Add(accum, self._visit_expr(arg, ctx))
+        return accum
+
+
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
         nullary_table = _get_nullary_table()
@@ -341,6 +341,9 @@ class FPCoreCompileInstance(Visitor):
                 case Enumerate():
                     # enumerate expression
                     return self._visit_enumerate(e.arg, ctx)
+                case Sum():
+                    # sum expression
+                    return self._visit_sum(e.arg, ctx)
                 case _:
                     raise NotImplementedError('no FPCore operator for', e)
 
@@ -385,9 +388,6 @@ class FPCoreCompileInstance(Visitor):
                 case Zip():
                     # zip expression
                     return self._visit_zip(e.args, ctx)
-                case Sum():
-                    # sum expression
-                    return self._visit_sum(e.args, ctx)
                 case _:
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
