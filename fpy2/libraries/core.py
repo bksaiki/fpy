@@ -63,7 +63,7 @@ def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
     return ret
 
 @fp.fpy_primitive(spec=_modf_spec)
-def modf(x: fp.Float):
+def modf(x: fp.Float) -> tuple[fp.Float, fp.Float]:
     """
     Decomposes `x` into its integral and fractional parts.
     The operation is performed exactly.
@@ -74,14 +74,14 @@ def modf(x: fp.Float):
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
     if x.isnan:
-        return [fp.Float(x=x, ctx=x.ctx), fp.Float(x=x, ctx=x.ctx)]
+        return (fp.Float(x=x, ctx=x.ctx), fp.Float(x=x, ctx=x.ctx))
     elif x.isinf:
-        return [fp.Float(s=x.s, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx)]
+        return (fp.Float(s=x.s, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx))
     elif x.is_zero():
-        return [fp.Float(s=x.s, ctx=x.ctx), fp.Float(s=x.s, ctx=x.ctx)]
+        return (fp.Float(s=x.s, ctx=x.ctx), fp.Float(s=x.s, ctx=x.ctx))
     else:
         hi, lo = x.as_real().split(-1)
-        return [fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx)]
+        return (fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx))
 
 @fp.fpy
 def isinteger(x: fp.Real) -> bool:
@@ -167,7 +167,7 @@ def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
         return ctx.round(xr * scale)
 
 @fp.fpy_primitive
-def frexp(x: fp.Float):
+def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
     """
     Decomposes `x` into its mantissa and exponent.
     The computation is performed exactly.
@@ -178,16 +178,16 @@ def frexp(x: fp.Float):
     - if `x` is zero, the result is `(x, 0)`.
     """
     if x.isnan:
-        return [fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx)]
+        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
     elif x.isinf:
-        return [fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx)]
+        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
     elif x.is_zero():
-        return [fp.Float(x=x, ctx=x.ctx), fp.Float(ctx=x.ctx)]
+        return (fp.Float(x=x, ctx=x.ctx), fp.Float(ctx=x.ctx))
     else:
         x = x.normalize()
         mant = fp.Float(s=x.s, e=0, c=x.c, ctx=x.ctx)
         e = fp.Float.from_int(x.e, ctx=x.ctx)
-        return [mant, e]
+        return (mant, e)
 
 @fp.fpy(ctx=fp.INTEGER)
 def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:

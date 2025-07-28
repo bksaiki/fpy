@@ -27,84 +27,105 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = tuple | list
 """Type of tensor arguments in FPy programs; includes native Python types"""
 
-_nullary_table: dict[type[NullaryOp], Callable[[Context], Any]] = {
-    ConstNan: ops.nan,
-    ConstInf: ops.inf,
-    ConstPi: ops.const_pi,
-    ConstE: ops.const_e,
-    ConstLog2E: ops.const_log2e,
-    ConstLog10E: ops.const_log10e,
-    ConstLn2: ops.const_ln2,
-    ConstPi_2: ops.const_pi_2,
-    ConstPi_4: ops.const_pi_4,
-    Const1_Pi: ops.const_1_pi,
-    Const2_Pi: ops.const_2_pi,
-    Const2_SqrtPi: ops.const_2_sqrt_pi,
-    ConstSqrt2: ops.const_sqrt2,
-    ConstSqrt1_2: ops.const_sqrt1_2,
-}
+_nullary_table: Optional[dict[type[NullaryOp], Callable[[Context], Any]]] = None
+_unary_table: Optional[dict[type[UnaryOp], Callable[[Float, Context], Any]]] = None
+_binary_table: Optional[dict[type[BinaryOp], Callable[[Float, Float, Context], Any]]] = None
+_ternary_table: Optional[dict[type[TernaryOp], Callable[[Float, Float, Float, Context], Any]]] = None
 
-_unary_table: dict[type[UnaryOp], Callable[[Float, Context], Any]] = {
-    Fabs: ops.fabs,
-    Sqrt: ops.sqrt,
-    Neg: ops.neg,
-    Cbrt: ops.cbrt,
-    Ceil: ops.ceil,
-    Floor: ops.floor,
-    NearbyInt: ops.nearbyint,
-    RoundInt: ops.roundint,
-    Trunc: ops.trunc,
-    Acos: ops.acos,
-    Asin: ops.asin,
-    Atan: ops.atan,
-    Cos: ops.cos,
-    Sin: ops.sin,
-    Tan: ops.tan,
-    Acosh: ops.acosh,
-    Asinh: ops.asinh,
-    Atanh: ops.atanh,
-    Cosh: ops.cosh,
-    Sinh: ops.sinh,
-    Tanh: ops.tanh,
-    Exp: ops.exp,
-    Exp2: ops.exp2,
-    Expm1: ops.expm1,
-    Log: ops.log,
-    Log10: ops.log10,
-    Log1p: ops.log1p,
-    Log2: ops.log2,
-    Erf: ops.erf,
-    Erfc: ops.erfc,
-    Lgamma: ops.lgamma,
-    Tgamma: ops.tgamma,
-    IsFinite: ops.isfinite,
-    IsInf: ops.isinf,
-    IsNan: ops.isnan,
-    IsNormal: ops.isnormal,
-    Signbit: ops.signbit,
-    Round: ops.round,
-    RoundExact: ops.round_exact
-}
+def _get_nullary_table() -> dict[type[NullaryOp], Callable[[Context], Any]]:
+    global _nullary_table
+    if _nullary_table is None:
+        _nullary_table = {
+            ConstNan: ops.nan,
+            ConstInf: ops.inf,
+            ConstPi: ops.const_pi,
+            ConstE: ops.const_e,
+            ConstLog2E: ops.const_log2e,
+            ConstLog10E: ops.const_log10e,
+            ConstLn2: ops.const_ln2,
+            ConstPi_2: ops.const_pi_2,
+            ConstPi_4: ops.const_pi_4,
+            Const1_Pi: ops.const_1_pi,
+            Const2_Pi: ops.const_2_pi,
+            Const2_SqrtPi: ops.const_2_sqrt_pi,
+            ConstSqrt2: ops.const_sqrt2,
+            ConstSqrt1_2: ops.const_sqrt1_2,
+        }
+    return _nullary_table
 
-_binary_table: dict[type[BinaryOp], Callable[[Float, Float, Context], Any]] = {
-    Add: ops.add,
-    Sub: ops.sub,
-    Mul: ops.mul,
-    Div: ops.div,
-    Copysign: ops.copysign,
-    Fdim: ops.fdim,
-    Fmax: ops.fmax,
-    Fmin: ops.fmin,
-    Fmod: ops.fmod,
-    Remainder: ops.remainder,
-    Hypot: ops.hypot,
-    Atan2: ops.atan2,
-    Pow: ops.pow,
-}
+def _get_unary_table() -> dict[type[UnaryOp], Callable[[Float, Context], Any]]:
+    global _unary_table
+    if _unary_table is None:
+        _unary_table = {
+            Fabs: ops.fabs,
+            Sqrt: ops.sqrt,
+            Neg: ops.neg,
+            Cbrt: ops.cbrt,
+            Ceil: ops.ceil,
+            Floor: ops.floor,
+            NearbyInt: ops.nearbyint,
+            RoundInt: ops.roundint,
+            Trunc: ops.trunc,
+            Acos: ops.acos,
+            Asin: ops.asin,
+            Atan: ops.atan,
+            Cos: ops.cos,
+            Sin: ops.sin,
+            Tan: ops.tan,
+            Acosh: ops.acosh,
+            Asinh: ops.asinh,
+            Atanh: ops.atanh,
+            Cosh: ops.cosh,
+            Sinh: ops.sinh,
+            Tanh: ops.tanh,
+            Exp: ops.exp,
+            Exp2: ops.exp2,
+            Expm1: ops.expm1,
+            Log: ops.log,
+            Log10: ops.log10,
+            Log1p: ops.log1p,
+            Log2: ops.log2,
+            Erf: ops.erf,
+            Erfc: ops.erfc,
+            Lgamma: ops.lgamma,
+            Tgamma: ops.tgamma,
+            IsFinite: ops.isfinite,
+            IsInf: ops.isinf,
+            IsNan: ops.isnan,
+            IsNormal: ops.isnormal,
+            Signbit: ops.signbit,
+            Round: ops.round,
+            RoundExact: ops.round_exact
+        }
+    return _unary_table
 
-_ternary_table: dict[type[TernaryOp], Callable[[Float, Float, Float, Context], Any]] = {
-    Fma: ops.fma,
-}
+def _get_binary_table() -> dict[type[BinaryOp], Callable[[Float, Float, Context], Any]]:
+    global _binary_table
+    if _binary_table is None:
+        _binary_table = {
+            Add: ops.add,
+            Sub: ops.sub,
+            Mul: ops.mul,
+            Div: ops.div,
+            Copysign: ops.copysign,
+            Fdim: ops.fdim,
+            Fmax: ops.fmax,
+            Fmin: ops.fmin,
+            Fmod: ops.fmod,
+            Remainder: ops.remainder,
+            Hypot: ops.hypot,
+            Atan2: ops.atan2,
+            Pow: ops.pow,
+        }
+    return _binary_table
+
+def _get_ternary_table() -> dict[type[TernaryOp], Callable[[Float, Float, Float, Context], Any]]:
+    global _ternary_table
+    if _ternary_table is None:
+        _ternary_table = {
+            Fma: ops.fma,
+        }
+    return _ternary_table
 
 _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 """Type of the environment used by the interpreter."""
@@ -156,7 +177,9 @@ class _Interpreter(Visitor):
                 return Float.from_float(arg, ctx=FP64, checked=False)
             case Float():
                 return arg
-            case tuple() | list():
+            case tuple():
+                return tuple(self._arg_to_value(x) for x in arg)
+            case list():
                 return [self._arg_to_value(x) for x in arg]
             case _:
                 return arg
@@ -314,14 +337,14 @@ class _Interpreter(Visitor):
         return list(zip(*arrays))
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
-        fn = _nullary_table.get(type(e))
+        fn = _get_nullary_table().get(type(e))
         if fn is not None:
             return self._apply_method(fn, (), ctx)
         else:
             raise RuntimeError('unknown operator', e)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Context):
-        fn = _unary_table.get(type(e))
+        fn = _get_unary_table().get(type(e))
         if fn is not None:
             return self._apply_method(fn, (e.arg,), ctx)
         else:
@@ -338,7 +361,7 @@ class _Interpreter(Visitor):
                     raise RuntimeError('unknown operator', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context):
-        fn = _binary_table.get(type(e))
+        fn = _get_binary_table().get(type(e))
         if fn is not None:
             return self._apply_method(fn, (e.first, e.second), ctx)
         else:
@@ -349,7 +372,7 @@ class _Interpreter(Visitor):
                     raise RuntimeError('unknown operator', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
-        fn = _ternary_table.get(type(e))
+        fn = _get_ternary_table().get(type(e))
         if fn is not None:
             return self._apply_method(fn, (e.first, e.second, e.third), ctx)
         else:
@@ -421,9 +444,12 @@ class _Interpreter(Visitor):
         return True
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
+        return tuple(self._visit_expr(x, ctx) for x in e.args)
+
+    def _visit_list_expr(self, e: ListExpr, ctx: Context):
         return [self._visit_expr(x, ctx) for x in e.args]
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: Context):
+    def _visit_list_ref(self, e: ListRef, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a tensor, got {arr}')
@@ -435,7 +461,7 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected an integer index, got {idx}')
         return arr[int(idx)]
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: Context):
+    def _visit_list_slice(self, e: ListSlice, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a tensor, got {arr}')
@@ -465,7 +491,7 @@ class _Interpreter(Visitor):
         else:
             return [arr[i] for i in range(start, stop)]
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: Context):
+    def _visit_list_set(self, e: ListSet, ctx: Context):
         value = self._visit_expr(e.array, ctx)
         if not isinstance(value, list):
             raise TypeError(f'expected a tensor, got {value}')
@@ -512,7 +538,7 @@ class _Interpreter(Visitor):
                         self._unpack_tuple(target, val, ctx)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: Context):
+    def _visit_list_comp(self, e: ListComp, ctx: Context):
         # evaluate comprehension
         elts: list[Any] = []
         bindings = list(zip(e.targets, e.iterables))
@@ -526,6 +552,8 @@ class _Interpreter(Visitor):
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
     def _unpack_tuple(self, binding: TupleBinding, val: list, ctx: Context) -> None:
+        if not isinstance(val, tuple):
+            raise TypeError(f'can only unpack tuples, got `{val}` for `{binding}`')
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
         for elt, v in zip(binding.elts, val):
@@ -566,7 +594,7 @@ class _Interpreter(Visitor):
         array[slices[-1]] = val
 
     def _visit_if1(self, stmt: If1Stmt, ctx: Context):
-        names = set(self.env.keys())
+        # names = set(self.env.keys())
 
         # evaluate the condition
         cond = self._visit_expr(stmt.cond, ctx)
@@ -577,9 +605,9 @@ class _Interpreter(Visitor):
             self._visit_block(stmt.body, ctx)
             # remove any newly introduced variable
             # (they are out of scope)
-            for name in tuple(self.env.keys()):
-                if name not in names:
-                    del self.env[name]
+            # for name in tuple(self.env.keys()):
+            #     if name not in names:
+            #         del self.env[name]
 
     def _visit_if(self, stmt: IfStmt, ctx: Context) -> None:
         cond = self._visit_expr(stmt.cond, ctx)
@@ -594,7 +622,7 @@ class _Interpreter(Visitor):
             self._visit_block(stmt.iff, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Context) -> None:
-        names = set(self.env.keys())
+        # names = set(self.env.keys())
 
         # evaluate the condition
         cond = self._visit_expr(stmt.cond, ctx)
@@ -611,12 +639,12 @@ class _Interpreter(Visitor):
 
         # remove any newly introduced variable
         # (they are out of scope)
-        for name in tuple(self.env.keys()):
-            if name not in names:
-                del self.env[name]
+        # for name in tuple(self.env.keys()):
+        #     if name not in names:
+        #         del self.env[name]
 
     def _visit_for(self, stmt: ForStmt, ctx: Context) -> None:
-        names = set(self.env.keys())
+        # names = set(self.env.keys())
 
         # evaluate the iterable data
         iterable = self._visit_expr(stmt.iterable, ctx)
@@ -634,9 +662,9 @@ class _Interpreter(Visitor):
 
         # remove any newly introduced variable
         # (they are out of scope)
-        for name in tuple(self.env.keys()):
-            if name not in names:
-                del self.env[name]
+        # for name in tuple(self.env.keys()):
+        #     if name not in names:
+        #         del self.env[name]
 
     def _visit_foreign_attr(self, e: ForeignAttribute, ctx: Context):
         # lookup the root value (should be captured)

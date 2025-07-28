@@ -163,7 +163,18 @@ class _FormatterInstance(Visitor):
             elts = [self._visit_expr(elt, ctx) for elt in e.args]
             return f'({", ".join(elts)})'
 
-    def _visit_comp_expr(self, e: CompExpr, ctx: _Ctx):
+    def _visit_list_expr(self, e: ListExpr, ctx: _Ctx):
+        num_elts = len(e.args)
+        if num_elts == 0:
+            return '[]'
+        elif num_elts == 1:
+            elt = self._visit_expr(e.args[0], ctx)
+            return f'[{elt}]'
+        else:
+            elts = [self._visit_expr(elt, ctx) for elt in e.args]
+            return f'[{", ".join(elts)}]'
+
+    def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
         targets: list[str] = []
         for target in e.targets:
             match target:
@@ -180,18 +191,18 @@ class _FormatterInstance(Visitor):
         s = ' '.join(f'for {target} in {iterable}' for target, iterable in zip(targets, iterables))
         return f'[{elt} {s}]'
 
-    def _visit_tuple_ref(self, e: TupleRef, ctx: _Ctx):
+    def _visit_list_ref(self, e: ListRef, ctx: _Ctx):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
         return f'{value}[{index}]'
 
-    def _visit_tuple_slice(self, e: TupleSlice, ctx: _Ctx):
+    def _visit_list_slice(self, e: ListSlice, ctx: _Ctx):
         value = self._visit_expr(e.value, ctx)
         start = '' if e.start is None else self._visit_expr(e.start, ctx)
         stop = '' if e.stop is None else self._visit_expr(e.stop, ctx)
         return f'{value}[{start}:{stop}]'
 
-    def _visit_tuple_set(self, e: TupleSet, ctx: _Ctx):
+    def _visit_list_set(self, e: ListSet, ctx: _Ctx):
         array = self._visit_expr(e.array, ctx)
         slices = [self._visit_expr(slice, ctx) for slice in e.slices]
         value = self._visit_expr(e.value, ctx)

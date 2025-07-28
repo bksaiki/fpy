@@ -123,7 +123,7 @@ def _zeros(ns: list[Expr]) -> Expr:
     assert len(ns) >= 1
     v: Expr = Integer(0, None)
     for n in reversed(ns):
-        v = CompExpr([UnderscoreId()], [Range(NamedId('range'), n, None)], v, None)
+        v = ListComp([UnderscoreId()], [Range(NamedId('range'), n, None)], v, None)
     return v
 
 
@@ -295,7 +295,7 @@ class _FPCore2FPy:
 
     def _visit_array(self, e: fpc.Array, ctx: _Ctx) -> Expr:
         exprs = [self._visit(e, ctx) for e in e.children]
-        return TupleExpr(exprs, None)
+        return ListExpr(exprs, None)
 
     def _visit_ref(self, e: fpc.Ref, ctx: _Ctx) -> Expr:
         # (ref <array> <index> ...)
@@ -305,7 +305,7 @@ class _FPCore2FPy:
 
         val: fpc.Expr = arr
         for index in indices:
-            val = TupleRef(val, index, None)
+            val = ListRef(val, index, None)
         return val
 
     def _visit_if(self, e: fpc.If, ctx: _Ctx) -> Expr:

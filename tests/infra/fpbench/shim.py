@@ -43,7 +43,7 @@ def compare(
             if not actual.isnan if expect.isnan else expect != actual:
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
-        case list(), list():
+        case list() | tuple(), list() | tuple():
             if len(expect) != len(actual):
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')

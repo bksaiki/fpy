@@ -18,6 +18,8 @@ from .float_params import (
     FP64_SMASK,
     FP64_EMASK,
     FP64_MMASK,
+    FP64_EONES,
+    FP64_IMPLICIT1
 )
 
 from .fractions import digits_to_fraction, decnum_to_fraction, hexnum_to_fraction, is_dyadic

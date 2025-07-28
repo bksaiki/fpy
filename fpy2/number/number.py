@@ -22,6 +22,8 @@ from ..utils import (
     FP64_SMASK,
     FP64_EMASK,
     FP64_MMASK,
+    FP64_EONES,
+    FP64_IMPLICIT1
 )
 
 from .context import Context
@@ -450,8 +452,6 @@ class RealFloat(numbers.Rational):
         """
         if not isinstance(x, float):
             raise TypeError(f'expected float, got {type(x)}')
-        if math.isnan(x) or math.isinf(x):
-            raise ValueError(f'expected finite float, got x={x}')
 
         # convert to bits
         b = float_to_bits(x)
@@ -466,10 +466,13 @@ class RealFloat(numbers.Rational):
         if ebits == 0:
             # zero / subnormal
             return RealFloat(s=s, exp=FP64_EXPMIN, c=mbits)
+        elif ebits == FP64_EONES:
+            # infinity or NaN
+            raise ValueError(f'expected finite float, got x={x}')
         else:
             # normal
             exp = FP64_EXPMIN + (ebits - 1)
-            c = (1 << FP64_M) | mbits
+            c = FP64_IMPLICIT1 | mbits
             return RealFloat(s=s, exp=exp, c=c)
 
     @staticmethod
@@ -1257,20 +1260,29 @@ class Float(numbers.Rational):
         interval_closed: Optional[bool] = None,
         ctx: Optional[Context] = None
     ):
-        if x is not None and not isinstance(x, RealFloat | Float):
-            raise TypeError(f'expected Float, got {type(x)}')
+        match x:
+            case None:
+                real = None
+            case RealFloat():
+                real = x
+            case Float():
+                real = x._real
+                if isinf is None:
+                    isinf = x._isinf
+                if isnan is None:
+                    isnan = x._isnan
+                if ctx is None:
+                    ctx = x._ctx
+            case _:
+                raise TypeError(f'expected \'RealFloat\' or \'Float\', got {type(x)} for x={x}')
 
         if isinf is not None:
             self._isinf = isinf
-        elif isinstance(x, Float):
-            self._isinf = x._isinf
         else:
             self._isinf = False
 
         if isnan is not None:
             self._isnan = isnan
-        elif isinstance(x, Float):
-            self._isnan = x._isnan
         else:
             self._isnan = False
 
@@ -1279,17 +1291,8 @@ class Float(numbers.Rational):
 
         if ctx is not None:
             self._ctx = ctx
-        elif isinstance(x, Float):
-            self._ctx = x._ctx
         else:
             self._ctx = None
-
-        if isinstance(x, RealFloat):
-            real = x
-        elif isinstance(x, Float):
-            real = x._real
-        else:
-            real = None
 
         # create a new RealFloat instance if any field is overriden
         if (s is None

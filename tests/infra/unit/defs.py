@@ -149,13 +149,6 @@ def test_tuple4():
 def test_list1():
     return [1.0, 2.0, 3.0]
 
-@fpy
-def test_list2():
-    x, y = [1.0, 2.0], [3.0, 4.0]
-    x0, x1 = x
-    y0, y1 = y
-    return x0 * y0 + x1 * y1
-
 @fpy(name='Test length (1/2)')
 def test_list_len1():
     x = [1.0, 2.0, 3.0]
@@ -422,8 +415,8 @@ def test_for3():
 
 @fpy
 def test_for4() -> Real:
-    xs = (1, 2, 3)
-    ys = (3, 5, 7)
+    xs = [1, 2, 3]
+    ys = [3, 5, 7]
     sum = 0.0
     for x, y in zip(xs, ys):
         sum += x * y
@@ -612,7 +605,6 @@ tests = [
     test_tuple3,
     test_tuple4,
     test_list1,
-    test_list2,
     test_list_len1,
     test_list_len2,
     test_list_dim1,
