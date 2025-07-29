@@ -103,8 +103,6 @@ def _get_binary_table() -> dict[type[BinaryOp], type[fpc.Expr]]:
             Div: fpc.Div,
             Copysign: fpc.Copysign,
             Fdim: fpc.Fdim,
-            Fmax: fpc.Fmax,
-            Fmin: fpc.Fmin,
             Fmod: fpc.Fmod,
             Remainder: fpc.Remainder,
             Hypot: fpc.Hypot,
@@ -301,20 +299,52 @@ class FPCoreCompileInstance(Visitor):
                 )
             )
 
-    def _visit_sum(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
-        # expand sum expression with left-associative addition
-        if len(args) == 0:
-            # no children => empty sum
-            return fpc.Integer(0)
-        elif len(args) == 1:
-            # single child => just compile it
-            return self._visit_expr(args[0], ctx)
-        else:
-            # multiple children => reduce with addition
-            accum = self._visit_expr(args[0], ctx)
-            for arg in args[1:]:
-                accum = fpc.Add(accum, self._visit_expr(arg, ctx))
-            return accum
+    def _visit_min(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
+        # expand min expression by left associativity
+        # at least two arguments
+        # (fmin (fmin (fmin t1 t2) t3) ... tn)
+        vals = [self._visit_expr(arg, ctx) for arg in args]
+        min_expr = vals[0]
+        for val in vals[1:]:
+            min_expr = fpc.Fmin(min_expr, val)
+        return min_expr
+
+    def _visit_max(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
+        # expand max expression by left associativity
+        # at least two arguments
+        # (fmax (fmax (fmax t1 t2) t3) ... tn)
+        vals = [self._visit_expr(arg, ctx) for arg in args]
+        min_expr = vals[0]
+        for val in vals[1:]:
+            min_expr = fpc.Fmax(min_expr, val)
+        return min_expr
+
+    def _visit_sum(self, arg: Expr, ctx: None) -> fpc.Expr:
+        # expand sum expression by left associativity
+        # the sum expression has at most one argument
+        # (let ([t <tuple>])
+        #   (for ([i (! :precision integer (- (size t 0) 1))]
+        #         [accum (ref t i) (+ accum (ref t (! :precision integer (+ i 1))))])
+        #     accum))
+        tuple_id = str(self.gensym.fresh('t'))
+        iter_id = str(self.gensym.fresh('i'))
+        accum_id = str(self.gensym.fresh('accum'))
+        idx_ctx = { 'precision': 'integer' }
+
+        tup = self._visit_expr(arg, ctx)
+        return fpc.Let(
+            [(tuple_id, tup)],
+            fpc.For(
+                [(iter_id, fpc.Ctx(idx_ctx, fpc.Sub(fpc.Size(fpc.Var(tuple_id), fpc.Integer(0)), fpc.Integer(1))))],
+                [(
+                    accum_id,
+                    fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)),
+                    fpc.Ctx(idx_ctx, fpc.Add(accum_id, fpc.Ref(fpc.Var(tuple_id), fpc.Add(fpc.Var(iter_id), fpc.Integer(1)))))
+                )],
+                fpc.Var(accum_id)
+            )
+        )
+
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
         nullary_table = _get_nullary_table()
@@ -341,6 +371,9 @@ class FPCoreCompileInstance(Visitor):
                 case Enumerate():
                     # enumerate expression
                     return self._visit_enumerate(e.arg, ctx)
+                case Sum():
+                    # sum expression
+                    return self._visit_sum(e.arg, ctx)
                 case _:
                     raise NotImplementedError('no FPCore operator for', e)
 
@@ -385,12 +418,16 @@ class FPCoreCompileInstance(Visitor):
                 case Zip():
                     # zip expression
                     return self._visit_zip(e.args, ctx)
-                case Sum():
-                    # sum expression
-                    return self._visit_sum(e.args, ctx)
+                case Min():
+                    # min expression
+                    return self._visit_min(e.args, ctx)
+                case Max():
+                    # max expression
+                    return self._visit_max(e.args, ctx)
                 case _:
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
+
     def _visit_compare(self, e: Compare, ctx: None) -> fpc.Expr:
         assert e.ops != [], 'should not be empty'
         match e.ops:

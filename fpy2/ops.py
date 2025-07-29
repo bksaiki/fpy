@@ -98,7 +98,6 @@ __all__ = [
     'const_sqrt1_2',
 ]
 
-
 _real_ops: dict[Any, Callable[..., Float]] = {
     mpfr_fabs: real_abs,
     mpfr_neg: real_neg,

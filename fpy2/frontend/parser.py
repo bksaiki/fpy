@@ -71,7 +71,8 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     round_exact: RoundExact,
     range: Range,
     dim: Dim,
-    enumerate: Enumerate
+    enumerate: Enumerate,
+    sum: Sum
 }
 
 _binary_table: dict[Callable, type[BinaryOp] | type[NamedBinaryOp]] = {
@@ -81,10 +82,6 @@ _binary_table: dict[Callable, type[BinaryOp] | type[NamedBinaryOp]] = {
     div: Div,
     copysign: Copysign,
     fdim: Fdim,
-    fmax: Fmax,
-    min: Fmin,
-    max: Fmax,
-    fmin: Fmin,
     fmod: Fmod,
     remainder: Remainder,
     hypot: Hypot,
@@ -99,7 +96,10 @@ _ternary_table: dict[Callable, type[TernaryOp] | type[NamedTernaryOp]] = {
 
 _nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
     zip: Zip,
-    sum: Sum
+    max: Max,
+    min: Min,
+    fmin: Min,
+    fmax: Max,
 }
 
 
@@ -446,6 +446,8 @@ class Parser:
                 return cls3(first, second, third, loc)
         elif fn in _nary_table:
             cls = _nary_table[fn]
+            if (cls is Min or cls is Max) and len(e.args) < 2:
+                raise FPyParserError(loc, f'FPy expects at least 2 arguments for `{fn}`', e)
             args = [self._parse_expr(arg) for arg in e.args]
             if issubclass(cls, NamedNaryOp):
                 return cls(func, args, loc)
