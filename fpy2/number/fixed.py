@@ -161,18 +161,21 @@ class FixedContext(MPBFixedContext, EncodableContext):
             raise ValueError(f'Expected representable value, got x={x} for self={self}')
 
         # normalize the scale value within the representation
-        offset = x.exp - self.scale
-        if offset >= 0:
-            # padding the value with zeroes
-            c = x.c << offset
+        if x.c == 0:
+            c = 0
         else:
-            # dropping lower bits
-            # should be safe since the value is representable
-            c = x.c >> -offset
+            offset = x.exp - self.scale
+            if offset >= 0:
+                # padding the value with zeroes
+                c = x.c << offset
+            else:
+                # dropping lower bits
+                # should be safe since the value is representable
+                c = x.c >> -offset
 
-        if self.signed and x.s:
-            # apply 2's complement
-            c = (1 << (self.nbits - 1)) - c
+            if self.signed and x.s:
+                # apply 2's complement
+                c = (1 << (self.nbits - 1)) - c
 
         # ensure the value fits in the bitmask
         if c > bitmask(self.nbits):

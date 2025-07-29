@@ -111,11 +111,31 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
             raise TypeError(f'Expected \'Float\', got x={x}')
         if not self.representable_under(x):
             raise ValueError(f'Expected representable value, got x={x} for self={self}')
-        raise NotImplementedError
+
+        # sign bit
+        sbit = 1 if x.s else 0
+
+        # magnitude
+        if x.c == 0:
+            c = 0
+        else:
+            offset = x.exp - self.scale
+            if offset >= 0:
+                # padding the value with zeroes
+                c = x.c << offset
+            else:
+                # dropping lower bits
+                # should be safe since the value is representable
+                c = x.c >> -offset
+
+        return (sbit << (self.nbits - 1)) | c
 
     def decode(self, x: int) -> Float:
         if not isinstance(x, int):
             raise TypeError(f'Expected \'int\', got x={x}')
         if x < 0 or x >= (1 << self.nbits):
             raise ValueError(f'Expected value in range [0, {1 << self.nbits}), got x={x}')
-        raise NotImplementedError
+
+        s = bool((x >> (self.nbits - 1)) & 1)
+        c = x & bitmask(self.nbits - 1)
+        return Float(s, self.scale, c, ctx=self)
