@@ -1,5 +1,5 @@
 """
-This module defines the usual fixed-width fixed-point numbers.
+This module defines the usual fixed-width, two's complement, fixed-point numbers.
 """
 
 from typing import Optional
@@ -14,7 +14,7 @@ from .round import RoundingMode, OverflowMode
 @default_repr
 class FixedContext(MPBFixedContext, EncodableContext):
     """
-    Rounding context for fixed-width fixed-point numbers.
+    Rounding context for two's fixed-width, two's complement, fixed-point numbers.
 
     This context is parameterized by whether it is signed, `signed`,
     the scale factor `scale`, the total number of bits `nbits`,
@@ -182,6 +182,8 @@ class FixedContext(MPBFixedContext, EncodableContext):
     def decode(self, x: int) -> Float:
         if not isinstance(x, int):
             raise TypeError(f'Expected \'int\', got x={x}')
+        if x < 0 or x >= (1 << self.nbits):
+            raise ValueError(f'Expected value in range [0, {1 << self.nbits}), got x={x}')
 
         if self.signed and x >= (1 << (self.nbits - 1)):
             # negative value encoded in 2's complement

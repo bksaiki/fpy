@@ -14,6 +14,7 @@ from .mpb_fixed import MPBFixedContext
 from .mpb_float import MPBFloatContext
 from .mps_float import MPSFloatContext
 from .real import RealContext
+from .sm_fixed import SMFixedContext
 
 # Rounding
 from .round import RoundingMode, RoundingDirection, OverflowMode
