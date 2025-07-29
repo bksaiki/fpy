@@ -349,7 +349,7 @@ class _Interpreter(Visitor):
         for val in vals:
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number argument, got {val}')
-        return min(*vals)
+        return max(*vals)
 
     def _apply_sum(self, arg: Expr, ctx: Context):
         """Apply the `sum` method to the given n-ary expression."""
