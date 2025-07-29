@@ -79,6 +79,10 @@ Fixed-Point Contexts
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.SMFixedContext
+   :members:
+   :show-inheritance:
+
 Real Context
 ^^^^^^^^^^^^^^^^^^^^^^^^
 

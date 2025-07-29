@@ -1,5 +1,5 @@
 """
-This module defines the usual fixed-width fixed-point numbers.
+This module defines the usual fixed-width, two's complement, fixed-point numbers.
 """
 
 from typing import Optional
@@ -14,7 +14,7 @@ from .round import RoundingMode, OverflowMode
 @default_repr
 class FixedContext(MPBFixedContext, EncodableContext):
     """
-    Rounding context for fixed-width fixed-point numbers.
+    Rounding context for two's fixed-width, two's complement, fixed-point numbers.
 
     This context is parameterized by whether it is signed, `signed`,
     the scale factor `scale`, the total number of bits `nbits`,
@@ -161,18 +161,21 @@ class FixedContext(MPBFixedContext, EncodableContext):
             raise ValueError(f'Expected representable value, got x={x} for self={self}')
 
         # normalize the scale value within the representation
-        offset = x.exp - self.scale
-        if offset >= 0:
-            # padding the value with zeroes
-            c = x.c << offset
+        if x.c == 0:
+            c = 0
         else:
-            # dropping lower bits
-            # should be safe since the value is representable
-            c = x.c >> -offset
+            offset = x.exp - self.scale
+            if offset >= 0:
+                # padding the value with zeroes
+                c = x.c << offset
+            else:
+                # dropping lower bits
+                # should be safe since the value is representable
+                c = x.c >> -offset
 
-        if self.signed and x.s:
-            # apply 2's complement
-            c = (1 << (self.nbits - 1)) - c
+            if self.signed and x.s:
+                # apply 2's complement
+                c = (1 << (self.nbits - 1)) - c
 
         # ensure the value fits in the bitmask
         if c > bitmask(self.nbits):
@@ -182,6 +185,8 @@ class FixedContext(MPBFixedContext, EncodableContext):
     def decode(self, x: int) -> Float:
         if not isinstance(x, int):
             raise TypeError(f'Expected \'int\', got x={x}')
+        if x < 0 or x >= (1 << self.nbits):
+            raise ValueError(f'Expected value in range [0, {1 << self.nbits}), got x={x}')
 
         if self.signed and x >= (1 << (self.nbits - 1)):
             # negative value encoded in 2's complement
