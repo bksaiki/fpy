@@ -1,5 +1,19 @@
 # Version History
 
+## [0.0.8] - 2025-07-29
+### Features:
+ - Numbers library
+   - added `SMFixedContext` for signed-magnitude fixed-point numbers.
+ - Language
+   - native support for Python's `sum`, `max`, and `min` functions.
+
+### Changes:
+- Runtime:
+  - adds `pathos` for multiprocessing support
+ - Language
+   - separate `tuple` and `list` types
+
+
 ## [0.0.7] - 2025-07-21
 ### Features:
  - Numbers library
