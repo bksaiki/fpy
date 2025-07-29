@@ -37,8 +37,13 @@ from .backend import (
     FPCoreCompiler
 )
 
+# utilities
+from . import utils
+
+
 ###########################################################
 # typing hints
+# TODO: remove these hints
 
 import typing
 
