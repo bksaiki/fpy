@@ -335,21 +335,40 @@ class _Interpreter(Visitor):
 
     def _apply_min(self, args: Sequence[Expr], ctx: Context):
         """Apply the `min` method to the given n-ary expression."""
-        # evaluate all children
-        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
-        for val in vals:
+        vals: list[Float] = []
+        for arg in args:
+            val = self._visit_expr(arg, ctx)
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number argument, got {val}')
-        return min(*vals)
+            if not val.isnan:
+                vals.append(val)
+
+        len_vals = len(vals)
+        if len_vals == 0:
+            return Float(isnan=True, ctx=ctx)
+        elif len_vals == 1:
+            return vals[0]
+        else:
+            return min(*vals)
 
     def _apply_max(self, args: Sequence[Expr], ctx: Context):
         """Apply the `max` method to the given n-ary expression."""
         # evaluate all children
-        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
-        for val in vals:
+        vals: list[Float] = []
+        for arg in args:
+            val = self._visit_expr(arg, ctx)
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number argument, got {val}')
-        return max(*vals)
+            if not val.isnan:
+                vals.append(val)
+
+        len_vals = len(vals)
+        if len_vals == 0:
+            return Float(isnan=True, ctx=ctx)
+        elif len_vals == 1:
+            return vals[0]
+        else:
+            return max(*vals)
 
     def _apply_sum(self, arg: Expr, ctx: Context):
         """Apply the `sum` method to the given n-ary expression."""
