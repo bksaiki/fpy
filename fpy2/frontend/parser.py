@@ -31,6 +31,7 @@ _nullary_table: dict[Callable, type[NullaryOp]] = {
 }
 
 _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
+    abs: Fabs,
     fabs: Fabs,
     sqrt: Sqrt,
     cbrt: Cbrt,
