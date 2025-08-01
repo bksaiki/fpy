@@ -115,6 +115,7 @@ def _get_binary_table() -> dict[type[BinaryOp], Callable[[Float, Float, Context]
             Hypot: ops.hypot,
             Atan2: ops.atan2,
             Pow: ops.pow,
+            RoundAt: ops.round_at
         }
     return _binary_table
 

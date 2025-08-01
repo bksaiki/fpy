@@ -161,6 +161,7 @@ __all__ = [
     # Rounding operator
     'Round',
     'RoundExact',
+    'RoundAt',
 
     # Tensor operators
     'Range',
@@ -1014,6 +1015,10 @@ class Round(NamedUnaryOp):
 
 class RoundExact(NamedUnaryOp):
     """FPy node: inter-format rounding"""
+    __slots__ = ()
+
+class RoundAt(NamedBinaryOp):
+    """FPy node: inter-format rounding with absolute position"""
     __slots__ = ()
 
 # Tensor operators

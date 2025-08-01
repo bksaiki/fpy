@@ -88,7 +88,8 @@ _binary_table: dict[Callable, type[BinaryOp] | type[NamedBinaryOp]] = {
     hypot: Hypot,
     atan2: Atan2,
     pow: Pow,
-    size: Size
+    size: Size,
+    round_at: RoundAt,
 }
 
 _ternary_table: dict[Callable, type[TernaryOp] | type[NamedTernaryOp]] = {
