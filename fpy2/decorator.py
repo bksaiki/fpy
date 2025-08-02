@@ -193,4 +193,6 @@ def _apply_fpy_prim_decorator(
     """
     Applies the `@fpy_prim` decorator to a function.
     """
-    return Primitive(func, kwargs)
+    prim = Primitive(func, kwargs)
+    prim.__call__.__doc__ = func.__doc__
+    return prim
