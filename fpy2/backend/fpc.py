@@ -89,6 +89,7 @@ def _get_unary_table() -> dict[type[UnaryOp], type[fpc.Expr]]:
             # rounding
             Round: fpc.Cast,
             RoundExact: fpc.Cast # TODO: does this have an FPCore translation?
+            # RoundAt: # TODO: cannot translate this to FPCore
         }
     return _unary_table_cache
 

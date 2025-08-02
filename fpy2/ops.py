@@ -63,6 +63,7 @@ __all__ = [
     # Rounding operations
     'round',
     'round_exact',
+    'round_at',
     # Round-to-integer operations
     'ceil',
     'floor',
@@ -545,6 +546,22 @@ def round_exact(x: Real, ctx: Optional[Context] = None) -> Float:
         case _:
             return ctx.round(x, exact=True)
 
+def round_at(x: Real, n: Real, ctx: Optional[Context] = None) -> Float:
+    """
+    Rounds `x` with least absolute digit `n`, the most significant digit
+    that must definitely be rounded off. If `ctx` has bounded precision,
+    the actual `n` use may be larger than the one specified.
+    """
+    x = _real_to_float(x)
+    n = _real_to_float(n)
+    if not n.is_integer():
+        raise ValueError(f'n={n} must be an integer')
+    match ctx:
+        case None | RealContext():
+            raise ValueError(f'round_at() not supported for ctx={ctx}')
+        case _:
+            return ctx.round_at(x, int(n))
+
 #############################################################################
 # Round-to-integer operations
 
@@ -687,14 +704,22 @@ def size(x: list | tuple, dim: Real, ctx: Optional[Context] = None):
     Assumes that `x` is not a ragged tensor.
     """
     dim = _real_to_float(dim)
-    for _ in range(int(dim)):
-        x = x[0]
-        if not isinstance(x, (list, tuple)):
-            raise ValueError(f'dimension `{dim}` is out of bounds for the tensor `{x}`')
-    if ctx is None:
-        return Float.from_int(len(x))
+    if dim.is_zero():
+        # size(x, 0) = len(x)
+        if ctx is None:
+            return Float.from_int(len(x))
+        else:
+            return ctx.round(len(x))
     else:
-        return ctx.round(len(x))
+        # size(x, n) = size(x[0], n - 1)
+        for _ in range(int(dim)):
+            x = x[0]
+            if not isinstance(x, (list, tuple)):
+                raise ValueError(f'dimension `{dim}` is out of bounds for the tensor `{x}`')
+        if ctx is None:
+            return Float.from_int(len(x))
+        else:
+            return ctx.round(len(x))
 
 #############################################################################
 # Constants

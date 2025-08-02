@@ -161,6 +161,7 @@ __all__ = [
     # Rounding operator
     'Round',
     'RoundExact',
+    'RoundAt',
 
     # Tensor operators
     'Range',
@@ -549,8 +550,11 @@ class NaryExpr(Expr):
 
 class NullaryOp(NaryExpr):
     """FPy AST: (named) nullary operation"""
+
     __slots__ = ('func',)
+
     func: NamedId | ForeignAttribute
+    args: tuple[Expr, ...] = ()
 
     def __init__(self, func: NamedId | ForeignAttribute, loc: Optional[Location]):
         super().__init__(loc)
@@ -561,8 +565,10 @@ class NullaryOp(NaryExpr):
 
 class UnaryOp(NaryExpr):
     """FPy AST: unary operation"""
-    __slots__ = ('arg',)
-    arg: Expr
+
+    __slots__ = ('args',)
+
+    args: tuple[Expr]
 
     def __init__(
         self,
@@ -570,7 +576,11 @@ class UnaryOp(NaryExpr):
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.arg = arg
+        self.args = (arg,)
+
+    @property
+    def arg(self):
+        return self.args[0]
 
     def is_equiv(self, other) -> bool:
         return (
@@ -581,7 +591,9 @@ class UnaryOp(NaryExpr):
 
 class NamedUnaryOp(UnaryOp):
     """FPy AST: unary operation with a named function"""
+
     __slots__ = ('func',)
+
     func: NamedId | ForeignAttribute
 
     def __init__(
@@ -595,9 +607,10 @@ class NamedUnaryOp(UnaryOp):
 
 class BinaryOp(NaryExpr):
     """FPy AST: binary operation"""
-    __slots__ = ('first', 'second')
-    first: Expr
-    second: Expr
+
+    __slots__ = ('args')
+
+    args: tuple[Expr, Expr]
 
     def __init__(
         self,
@@ -606,8 +619,15 @@ class BinaryOp(NaryExpr):
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.first = first
-        self.second = second
+        self.args = (first, second)
+
+    @property
+    def first(self):
+        return self.args[0]
+
+    @property
+    def second(self):
+        return self.args[1]
 
     def is_equiv(self, other) -> bool:
         return (
@@ -619,7 +639,9 @@ class BinaryOp(NaryExpr):
 
 class NamedBinaryOp(BinaryOp):
     """FPy AST: binary operation with a named function"""
+
     __slots__ = ('func',)
+
     func: NamedId | ForeignAttribute
 
     def __init__(
@@ -634,10 +656,10 @@ class NamedBinaryOp(BinaryOp):
 
 class TernaryOp(NaryExpr):
     """FPy AST: ternary operation"""
-    __slots__ = ('first', 'second', 'third')
-    first: Expr
-    second: Expr
-    third: Expr
+
+    __slots__ = ('args',)
+
+    args: tuple[Expr, Expr, Expr]
 
     def __init__(
         self,
@@ -647,9 +669,19 @@ class TernaryOp(NaryExpr):
         loc: Optional[Location]
     ):
         super().__init__(loc)
-        self.first = first
-        self.second = second
-        self.third = third
+        self.args = (first, second, third)
+
+    @property
+    def first(self):
+        return self.args[0]
+
+    @property
+    def second(self):
+        return self.args[1]
+
+    @property
+    def third(self):
+        return self.args[2]
 
     def is_equiv(self, other) -> bool:
         return (
@@ -678,7 +710,9 @@ class NamedTernaryOp(TernaryOp):
 
 class NaryOp(NaryExpr):
     """FPy AST: n-ary operation"""
+
     __slots__ = ('args',)
+
     args: tuple[Expr, ...]
 
     def __init__(self, args: Sequence[Expr], loc: Optional[Location]):
@@ -1014,6 +1048,10 @@ class Round(NamedUnaryOp):
 
 class RoundExact(NamedUnaryOp):
     """FPy node: inter-format rounding"""
+    __slots__ = ()
+
+class RoundAt(NamedBinaryOp):
+    """FPy node: inter-format rounding with absolute position"""
     __slots__ = ()
 
 # Tensor operators

@@ -28,117 +28,93 @@ ScalarArg: TypeAlias = ScalarVal | str | int | float
 TensorArg: TypeAlias = tuple | list
 """Type of list arguments in FPy programs; includes native Python types"""
 
-_nullary_table: Optional[dict[type[NullaryOp], Callable[[Context], Any]]] = None
-_unary_table: Optional[dict[type[UnaryOp], Callable[[Float, Context], Any]]] = None
-_binary_table: Optional[dict[type[BinaryOp], Callable[[Float, Float, Context], Any]]] = None
-_ternary_table: Optional[dict[type[TernaryOp], Callable[[Float, Float, Float, Context], Any]]] = None
-
-def _get_nullary_table() -> dict[type[NullaryOp], Callable[[Context], Any]]:
-    global _nullary_table
-    if _nullary_table is None:
-        _nullary_table = {
-            ConstNan: ops.nan,
-            ConstInf: ops.inf,
-            ConstPi: ops.const_pi,
-            ConstE: ops.const_e,
-            ConstLog2E: ops.const_log2e,
-            ConstLog10E: ops.const_log10e,
-            ConstLn2: ops.const_ln2,
-            ConstPi_2: ops.const_pi_2,
-            ConstPi_4: ops.const_pi_4,
-            Const1_Pi: ops.const_1_pi,
-            Const2_Pi: ops.const_2_pi,
-            Const2_SqrtPi: ops.const_2_sqrt_pi,
-            ConstSqrt2: ops.const_sqrt2,
-            ConstSqrt1_2: ops.const_sqrt1_2,
-        }
-    return _nullary_table
-
-def _get_unary_table() -> dict[type[UnaryOp], Callable[[Float, Context], Any]]:
-    global _unary_table
-    if _unary_table is None:
-        _unary_table = {
-            Fabs: ops.fabs,
-            Sqrt: ops.sqrt,
-            Neg: ops.neg,
-            Cbrt: ops.cbrt,
-            Ceil: ops.ceil,
-            Floor: ops.floor,
-            NearbyInt: ops.nearbyint,
-            RoundInt: ops.roundint,
-            Trunc: ops.trunc,
-            Acos: ops.acos,
-            Asin: ops.asin,
-            Atan: ops.atan,
-            Cos: ops.cos,
-            Sin: ops.sin,
-            Tan: ops.tan,
-            Acosh: ops.acosh,
-            Asinh: ops.asinh,
-            Atanh: ops.atanh,
-            Cosh: ops.cosh,
-            Sinh: ops.sinh,
-            Tanh: ops.tanh,
-            Exp: ops.exp,
-            Exp2: ops.exp2,
-            Expm1: ops.expm1,
-            Log: ops.log,
-            Log10: ops.log10,
-            Log1p: ops.log1p,
-            Log2: ops.log2,
-            Erf: ops.erf,
-            Erfc: ops.erfc,
-            Lgamma: ops.lgamma,
-            Tgamma: ops.tgamma,
-            IsFinite: ops.isfinite,
-            IsInf: ops.isinf,
-            IsNan: ops.isnan,
-            IsNormal: ops.isnormal,
-            Signbit: ops.signbit,
-            Round: ops.round,
-            RoundExact: ops.round_exact
-        }
-    return _unary_table
-
-def _get_binary_table() -> dict[type[BinaryOp], Callable[[Float, Float, Context], Any]]:
-    global _binary_table
-    if _binary_table is None:
-        _binary_table = {
-            Add: ops.add,
-            Sub: ops.sub,
-            Mul: ops.mul,
-            Div: ops.div,
-            Copysign: ops.copysign,
-            Fdim: ops.fdim,
-            Fmod: ops.fmod,
-            Remainder: ops.remainder,
-            Hypot: ops.hypot,
-            Atan2: ops.atan2,
-            Pow: ops.pow,
-        }
-    return _binary_table
-
-def _get_ternary_table() -> dict[type[TernaryOp], Callable[[Float, Float, Float, Context], Any]]:
-    global _ternary_table
-    if _ternary_table is None:
-        _ternary_table = {
-            Fma: ops.fma,
-        }
-    return _ternary_table
-
 _Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
 """Type of the environment used by the interpreter."""
 
+# Pre-built lookup tables for better performance
+_NULLARY_TABLE: dict[type[NullaryOp], Callable[..., Any]] = {
+    ConstNan: ops.nan,
+    ConstInf: ops.inf,
+    ConstPi: ops.const_pi,
+    ConstE: ops.const_e,
+    ConstLog2E: ops.const_log2e,
+    ConstLog10E: ops.const_log10e,
+    ConstLn2: ops.const_ln2,
+    ConstPi_2: ops.const_pi_2,
+    ConstPi_4: ops.const_pi_4,
+    Const1_Pi: ops.const_1_pi,
+    Const2_Pi: ops.const_2_pi,
+    Const2_SqrtPi: ops.const_2_sqrt_pi,
+    ConstSqrt2: ops.const_sqrt2,
+    ConstSqrt1_2: ops.const_sqrt1_2,
+}
 
-class _NoValue():
-    """Marker class for no value."""
-    __slots__ = ()
+_UNARY_TABLE: dict[type[UnaryOp], Callable[..., Any]] = {
+    Fabs: ops.fabs,
+    Sqrt: ops.sqrt,
+    Neg: ops.neg,
+    Cbrt: ops.cbrt,
+    Ceil: ops.ceil,
+    Floor: ops.floor,
+    NearbyInt: ops.nearbyint,
+    RoundInt: ops.roundint,
+    Trunc: ops.trunc,
+    Acos: ops.acos,
+    Asin: ops.asin,
+    Atan: ops.atan,
+    Cos: ops.cos,
+    Sin: ops.sin,
+    Tan: ops.tan,
+    Acosh: ops.acosh,
+    Asinh: ops.asinh,
+    Atanh: ops.atanh,
+    Cosh: ops.cosh,
+    Sinh: ops.sinh,
+    Tanh: ops.tanh,
+    Exp: ops.exp,
+    Exp2: ops.exp2,
+    Expm1: ops.expm1,
+    Log: ops.log,
+    Log10: ops.log10,
+    Log1p: ops.log1p,
+    Log2: ops.log2,
+    Erf: ops.erf,
+    Erfc: ops.erfc,
+    Lgamma: ops.lgamma,
+    Tgamma: ops.tgamma,
+    IsFinite: ops.isfinite,
+    IsInf: ops.isinf,
+    IsNan: ops.isnan,
+    IsNormal: ops.isnormal,
+    Signbit: ops.signbit,
+    Round: ops.round,
+    RoundExact: ops.round_exact
+}
 
-_NO_VALUE = _NoValue()
+_BINARY_TABLE: dict[type[BinaryOp], Callable[..., Any]] = {
+    Add: ops.add,
+    Sub: ops.sub,
+    Mul: ops.mul,
+    Div: ops.div,
+    Copysign: ops.copysign,
+    Fdim: ops.fdim,
+    Fmod: ops.fmod,
+    Remainder: ops.remainder,
+    Hypot: ops.hypot,
+    Atan2: ops.atan2,
+    Pow: ops.pow,
+    RoundAt: ops.round_at
+}
+
+_TERNARY_TABLE: dict[type[TernaryOp], Callable[..., Any]] = {
+    Fma: ops.fma,
+}
 
 
 class _Interpreter(Visitor):
     """Single-use interpreter for a function"""
+
+    __slots__ = ('env', 'foreign', 'override_ctx')
 
     env: _Env
     """mapping from variable names to values"""
@@ -190,7 +166,6 @@ class _Interpreter(Visitor):
 
         # possibly override the context
         eval_ctx = self._eval_ctx(ctx)
-        assert isinstance(ctx, Context)
 
         # process arguments and add to environment
         for val, arg in zip(args, func.args):
@@ -227,14 +202,14 @@ class _Interpreter(Visitor):
         except FunctionReturnException as e:
             return e.value
 
-    def _lookup(self, name: NamedId, ctx: Context):
-        val = self.env.get(name, _NO_VALUE)
-        if val is _NO_VALUE:
-            raise RuntimeError(f'unbound variable {name}')
-        return val
+    def _lookup(self, name: NamedId):
+        try:
+            return self.env[name]
+        except KeyError as exc:
+            raise RuntimeError(f'unbound variable {name}') from exc
 
     def _visit_var(self, e: Var, ctx: Context):
-        return self._lookup(e.name, ctx)
+        return self._lookup(e.name)
 
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return e.val
@@ -273,18 +248,22 @@ class _Interpreter(Visitor):
         return not arg
 
     def _apply_and(self, args: Sequence[Expr], ctx: Context):
-        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
-        for val in vals:
+        for arg in args:
+            val = self._visit_expr(arg, ctx)
             if not isinstance(val, bool):
                 raise TypeError(f'expected a boolean argument, got {val}')
-        return all(vals)
+            if not val:  # Short-circuit evaluation
+                return False
+        return True
 
     def _apply_or(self, args: Sequence[Expr], ctx: Context):
-        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
-        for val in vals:
+        for arg in args:
+            val = self._visit_expr(arg, ctx)
             if not isinstance(val, bool):
                 raise TypeError(f'expected a boolean argument, got {val}')
-        return any(vals)
+            if val:  # Short-circuit evaluation
+                return True
+        return False
 
     def _apply_range(self, arg: Expr, ctx: Context):
         stop = self._visit_expr(arg, ctx)
@@ -378,27 +357,29 @@ class _Interpreter(Visitor):
         if not len(val) > 0:
             raise ValueError('cannot sum an empty list')
 
-        if not isinstance(val[0], Float):
-            raise TypeError(f'expected a real number argument, got {val[0]}')
-        accum = val[0]
-
-        for x in val[1:]:
+        for x in val:
             if not isinstance(x, Float):
                 raise TypeError(f'expected a real number argument, got {x}')
+
+        accum = val[0]
+        for x in val[1:]:
             accum = ops.add(accum, x, ctx=ctx)
         return accum
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
-        fn = _get_nullary_table().get(type(e))
+        fn = _NULLARY_TABLE.get(type(e))
         if fn is not None:
-            return self._apply_method(fn, (), ctx)
+            return fn(ctx=ctx)
         else:
             raise RuntimeError('unknown operator', e)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Context):
-        fn = _get_unary_table().get(type(e))
+        fn = _UNARY_TABLE.get(type(e))
         if fn is not None:
-            return self._apply_method(fn, (e.arg,), ctx)
+            arg = self._visit_expr(e.arg, ctx)
+            if not isinstance(arg, Float):
+                raise TypeError(f'expected a real number argument, got {arg}')
+            return fn(arg, ctx=ctx)
         else:
             match e:
                 case Not():
@@ -415,9 +396,15 @@ class _Interpreter(Visitor):
                     raise RuntimeError('unknown operator', e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context):
-        fn = _get_binary_table().get(type(e))
+        fn = _BINARY_TABLE.get(type(e))
         if fn is not None:
-            return self._apply_method(fn, (e.first, e.second), ctx)
+            first = self._visit_expr(e.first, ctx)
+            second = self._visit_expr(e.second, ctx)
+            if not isinstance(first, Float):
+                raise TypeError(f'expected a real number argument, got {first}')
+            if not isinstance(second, Float):
+                raise TypeError(f'expected a real number argument, got {second}')
+            return fn(first, second, ctx=ctx)
         else:
             match e:
                 case Size():
@@ -426,9 +413,18 @@ class _Interpreter(Visitor):
                     raise RuntimeError('unknown operator', e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
-        fn = _get_ternary_table().get(type(e))
+        fn = _TERNARY_TABLE.get(type(e))
         if fn is not None:
-            return self._apply_method(fn, (e.first, e.second, e.third), ctx)
+            first = self._visit_expr(e.first, ctx)
+            second = self._visit_expr(e.second, ctx)
+            third = self._visit_expr(e.third, ctx)
+            if not isinstance(first, Float):
+                raise TypeError(f'expected a real number argument, got {first}')
+            if not isinstance(second, Float):
+                raise TypeError(f'expected a real number argument, got {second}')
+            if not isinstance(third, Float):
+                raise TypeError(f'expected a real number argument, got {third}')
+            return fn(first, second, third, ctx=ctx)
         else:
             raise RuntimeError('unknown operator', e)
 
@@ -631,7 +627,7 @@ class _Interpreter(Visitor):
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context) -> None:
         # lookup the array
-        array = self._lookup(stmt.var, ctx)
+        array = self._lookup(stmt.var)
 
         # evaluate indices
         slices: list[int] = []
@@ -652,8 +648,6 @@ class _Interpreter(Visitor):
         array[slices[-1]] = val
 
     def _visit_if1(self, stmt: If1Stmt, ctx: Context):
-        # names = set(self.env.keys())
-
         # evaluate the condition
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
@@ -661,11 +655,6 @@ class _Interpreter(Visitor):
         elif cond:
             # evaluate the if-true branch
             self._visit_block(stmt.body, ctx)
-            # remove any newly introduced variable
-            # (they are out of scope)
-            # for name in tuple(self.env.keys()):
-            #     if name not in names:
-            #         del self.env[name]
 
     def _visit_if(self, stmt: IfStmt, ctx: Context) -> None:
         cond = self._visit_expr(stmt.cond, ctx)
@@ -680,8 +669,6 @@ class _Interpreter(Visitor):
             self._visit_block(stmt.iff, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Context) -> None:
-        # names = set(self.env.keys())
-
         # evaluate the condition
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
@@ -695,15 +682,7 @@ class _Interpreter(Visitor):
             if not isinstance(cond, bool):
                 raise TypeError(f'expected a boolean, got {cond}')
 
-        # remove any newly introduced variable
-        # (they are out of scope)
-        # for name in tuple(self.env.keys()):
-        #     if name not in names:
-        #         del self.env[name]
-
     def _visit_for(self, stmt: ForStmt, ctx: Context) -> None:
-        # names = set(self.env.keys())
-
         # evaluate the iterable data
         iterable = self._visit_expr(stmt.iterable, ctx)
         if not isinstance(iterable, list):
@@ -718,15 +697,9 @@ class _Interpreter(Visitor):
             # evaluate the body of the loop
             self._visit_block(stmt.body, ctx)
 
-        # remove any newly introduced variable
-        # (they are out of scope)
-        # for name in tuple(self.env.keys()):
-        #     if name not in names:
-        #         del self.env[name]
-
     def _visit_foreign_attr(self, e: ForeignAttribute, ctx: Context):
         # lookup the root value (should be captured)
-        val = self._lookup(e.name, ctx)
+        val = self._lookup(e.name)
         # walk the attribute chain
         for attr_id in e.attrs:
             # need to manually lookup the attribute
@@ -794,13 +767,11 @@ class _Interpreter(Visitor):
         self._visit_expr(stmt.expr, ctx)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: Context):
-        return self._visit_expr(stmt.expr, ctx)
+        x = self._visit_expr(stmt.expr, ctx)
+        raise FunctionReturnException(x)
 
     def _visit_block(self, block: StmtBlock, ctx: Context):
         for stmt in block.stmts:
-            if isinstance(stmt, ReturnStmt):
-                x = self._visit_return(stmt, ctx)
-                raise FunctionReturnException(x)
             self._visit_statement(stmt, ctx)
 
     def _visit_function(self, func: FuncDef, ctx: Context):
