@@ -202,14 +202,14 @@ class _Interpreter(Visitor):
         except FunctionReturnException as e:
             return e.value
 
-    def _lookup(self, name: NamedId, ctx: Context):
+    def _lookup(self, name: NamedId):
         try:
             return self.env[name]
-        except KeyError:
-            raise RuntimeError(f'unbound variable {name}')
+        except KeyError as exc:
+            raise RuntimeError(f'unbound variable {name}') from exc
 
     def _visit_var(self, e: Var, ctx: Context):
-        return self._lookup(e.name, ctx)
+        return self._lookup(e.name)
 
     def _visit_bool(self, e: BoolVal, ctx: Any):
         return e.val
@@ -357,13 +357,12 @@ class _Interpreter(Visitor):
         if not len(val) > 0:
             raise ValueError('cannot sum an empty list')
 
-        if not isinstance(val[0], Float):
-            raise TypeError(f'expected a real number argument, got {val[0]}')
-        accum = val[0]
-
-        for x in val[1:]:
+        for x in val:
             if not isinstance(x, Float):
                 raise TypeError(f'expected a real number argument, got {x}')
+
+        accum = val[0]
+        for x in val[1:]:
             accum = ops.add(accum, x, ctx=ctx)
         return accum
 
@@ -628,7 +627,7 @@ class _Interpreter(Visitor):
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context) -> None:
         # lookup the array
-        array = self._lookup(stmt.var, ctx)
+        array = self._lookup(stmt.var)
 
         # evaluate indices
         slices: list[int] = []
@@ -700,7 +699,7 @@ class _Interpreter(Visitor):
 
     def _visit_foreign_attr(self, e: ForeignAttribute, ctx: Context):
         # lookup the root value (should be captured)
-        val = self._lookup(e.name, ctx)
+        val = self._lookup(e.name)
         # walk the attribute chain
         for attr_id in e.attrs:
             # need to manually lookup the attribute
