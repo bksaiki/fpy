@@ -99,6 +99,15 @@ def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
         e = fp.Float.from_int(x.e, ctx=x.ctx)
         return (mant, e)
 
+############################################################
+# Predicates
+
+@fp.fpy
+def isinteger(x: fp.Real) -> bool:
+    """Checks if `x` is an integer."""
+    _, fpart = modf(x)
+    return fp.isfinite(fpart) and fpart == 0
+
 ###########################################################
 # Exponent extraction and scaling
 
@@ -200,15 +209,6 @@ def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:
                 any_non_zero = True
 
     return (largest_e, any_non_zero)
-
-############################################################
-# Predicates
-
-@fp.fpy
-def isinteger(x: fp.Real) -> bool:
-    """Checks if `x` is an integer."""
-    _, fpart = modf(x)
-    return fp.isfinite(fpart) and fpart == 0
 
 ############################################################
 # Context operations
