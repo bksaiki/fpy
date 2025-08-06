@@ -531,7 +531,7 @@ class Parser:
                 match e.value:
                     case ast.Attribute():
                         val = self._parse_foreign_attribute(e.value)
-                        val.attrs.append(NamedId(e.attr))
+                        val.attrs = tuple(list(val.attrs) + [NamedId(e.attr)])
                         return val
                     case ast.Name():
                         name = self._parse_id(e.value)

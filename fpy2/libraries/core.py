@@ -26,12 +26,12 @@ def split(x: fp.Float, n: fp.Float):
         raise ValueError("n must be an integer")
 
     if x.isnan:
-        return [fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx)]
+        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
     elif x.isinf:
-        return [fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx)]
+        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx))
     else:
         hi, lo = x.as_real().split(int(n))
-        return [fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx)]
+        return (fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx))
 
 @fp.fpy
 def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
@@ -214,7 +214,7 @@ def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:
 # Context operations
 
 @fp.fpy_primitive
-def max_p(ctx: fp.Context) -> int:
+def max_p(ctx: fp.Context):
     """
     Returns the maximum precision of the context.
     This is a no-op for the `RealContext`.
@@ -222,10 +222,10 @@ def max_p(ctx: fp.Context) -> int:
     p, _ = ctx.round_params()
     if p is None:
         raise ValueError(f"ctx={ctx} does not have a maximum precision")
-    return p
+    return ctx.round(p)
 
 @fp.fpy_primitive
-def min_n(ctx: fp.Context) -> int:
+def min_n(ctx: fp.Context):
     """
     Returns the least absolute digit of the context.
     This is the position of the most significant digit that
@@ -234,4 +234,4 @@ def min_n(ctx: fp.Context) -> int:
     _, n = ctx.round_params()
     if n is None:
         raise ValueError(f"ctx={ctx} does not have a least absolute digit")
-    return n
+    return ctx.round(n)
