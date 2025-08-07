@@ -32,7 +32,7 @@ def default_str_convert(x: RealFloat | Float) -> str:
 
     if x.is_zero():
         s = '-' if x.s else '+'
-        return f'{Float.__name__}(\'0.0\')'
+        return f'{Float.__name__}(\'{s}0.0\')'
     else:
         return f'{Float.__name__}(\'{str(float_to_mpfr(x))}\')'
 

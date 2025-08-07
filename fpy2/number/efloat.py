@@ -61,6 +61,20 @@ class EFloatContext(EncodableContext):
     num_randbits: Optional[int]
     """number of random bits for stochastic rounding, if applicable"""
 
+    nan_value: Optional[Float]
+    """
+    if NaN is not representable, what value should NaN round to?
+    if not set, then `round()` will produce to Inf or MAX_VAL whichever
+    is representable.
+    """
+
+    inf_value: Optional[Float]
+    """
+    if Inf is not representable, what value should Inf round to?
+    if not set, then `round()` will produce NAN or MAX_VAL whichever
+    is representable.
+    """
+
     _mpb_ctx: MPBFloatContext
     """this context as an `MPBFloatContext`"""
 
@@ -74,6 +88,9 @@ class EFloatContext(EncodableContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
         num_randbits: Optional[int] = 0,
+        *,
+        nan_value: Optional[Float] = None,
+        inf_value: Optional[Float] = None
     ):
         if not isinstance(es, int):
             raise TypeError(f'Expected \'int\', got \'{type(es)}\' for es={es}')
@@ -101,6 +118,27 @@ class EFloatContext(EncodableContext):
 
         if overflow == OverflowMode.WRAP:
             raise ValueError('OverflowMode.WRAP is not supported for ExtFloatContext')
+        mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
+
+        if nan_value is not None:
+            if not isinstance(nan_value, Float):
+                raise TypeError(f'Expected \'Float\' for nan_value={nan_value}, got {type(nan_value)}')
+            if nan_kind == EFloatNanKind.NONE:
+                # this field matters
+                if nan_value.isinf and not enable_inf:
+                    raise ValueError(f'Cannot set NaN value to infinity when infinities are disabled: {nan_value}')
+                elif not mpb_ctx.representable_under(nan_value):
+                    raise ValueError(f'Cannot set NaN value to {nan_value} when it is not representable in this context')
+
+        if inf_value is not None:
+            if not isinstance(inf_value, Float):
+                raise TypeError(f'Expected \'Float\' for inf_value={inf_value}, got {type(inf_value)}')
+            if not enable_inf:
+                # this field matters
+                if nan_kind == EFloatNanKind.NONE:
+                    raise ValueError(f'Cannot set Inf value to NaN when NaNs are disabled: {inf_value}')
+                elif not mpb_ctx.representable_under(inf_value):
+                    raise ValueError(f'Cannot set Inf value to {inf_value} when it is not representable in this context')
 
         self.es = es
         self.nbits = nbits
@@ -110,7 +148,9 @@ class EFloatContext(EncodableContext):
         self.rm = rm
         self.overflow = overflow
         self.num_randbits = num_randbits
-        self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
+        self.nan_value = nan_value
+        self.inf_value = inf_value
+        self._mpb_ctx = mpb_ctx
 
     def __eq__(self, other):
         return (
@@ -123,6 +163,8 @@ class EFloatContext(EncodableContext):
             and self.rm == other.rm
             and self.overflow == other.overflow
             and self.num_randbits == other.num_randbits
+            and self.nan_value == other.nan_value
+            and self.inf_value == other.inf_value
         )
 
     def __hash__(self):
@@ -134,7 +176,9 @@ class EFloatContext(EncodableContext):
             self.eoffset,
             self.rm,
             self.overflow,
-            self.num_randbits
+            self.num_randbits,
+            self.nan_value,
+            self.inf_value
         ))
 
     @property
@@ -189,6 +233,8 @@ class EFloatContext(EncodableContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         num_randbits: DefaultOr[Optional[int]] = DEFAULT,
+        nan_value: DefaultOr[Float | None] = DEFAULT,
+        inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
     ) -> 'EFloatContext':
         if es is DEFAULT:
@@ -207,9 +253,24 @@ class EFloatContext(EncodableContext):
             overflow = self.overflow
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if nan_value is DEFAULT:
+            nan_value = self.nan_value
+        if inf_value is DEFAULT:
+            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')
-        return EFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
+        return EFloatContext(
+            es,
+            nbits,
+            enable_inf,
+            nan_kind,
+            eoffset,
+            rm,
+            overflow,
+            num_randbits,
+            nan_value=nan_value,
+            inf_value=inf_value
+        )
 
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
@@ -232,10 +293,10 @@ class EFloatContext(EncodableContext):
                 if x.ctx is not None and self.is_equiv(x.ctx):
                     # same context, so representable
                     return True
-                if x.isinf and not self.enable_inf:
+                elif x.isinf and not self.enable_inf:
                     # Inf is not representable in this context
                     return False
-                if x.isnan and self.nan_kind == EFloatNanKind.NONE:
+                elif x.isnan and self.nan_kind == EFloatNanKind.NONE:
                     # NaN is not representable in this context
                     return False
             case RealFloat():
@@ -245,7 +306,7 @@ class EFloatContext(EncodableContext):
 
         if not self._mpb_ctx.representable_under(x):
             return False
-        elif self.nan_kind == EFloatNanKind.NEG_ZERO and x.s and x.is_zero():
+        elif x.is_zero() and x.s and self.nan_kind == EFloatNanKind.NEG_ZERO:
             # -0 is not representable in this context
             return False
         else:
@@ -273,23 +334,54 @@ class EFloatContext(EncodableContext):
     def round_params(self):
         return self._mpb_ctx.round_params()
 
+    def _fixup(self, x: Float):
+        if x.isnan and self.nan_kind == EFloatNanKind.NONE:
+            # NaN is not representable in this context
+            if self.nan_value is None:
+                # resolve by default rules
+                if self.enable_inf:
+                    # NaN rounds to Inf
+                    return Float.inf(s=x.s, ctx=self)
+                else:
+                    # NaN rounds to MAX_VAL
+                    return self.maxval(s=x.s)
+            return Float(s=x.s, x=self.nan_value, ctx=self)
+        elif x.isinf and not self.enable_inf:
+            # Inf is not representable in this context
+            if self.inf_value is None:
+                # resolve by default rules
+                if self.nan_kind != EFloatNanKind.NONE:
+                    # Inf rounds to NaN
+                    return Float.nan(s=x.s, ctx=self)
+                else:
+                    # Inf rounds to MAX_VAL
+                    return self.maxval(s=x.s)
+            return Float(s=x.s, x=self.inf_value, ctx=self)
+        elif x.is_zero() and x.s and self.nan_kind == EFloatNanKind.NEG_ZERO:
+            # -0 is not representable in this context
+            return Float(x=x, s=False, ctx=self)
+        else:
+            return x
+
     def round(self, x, *, exact: bool = False) -> Float:
         x = self._mpb_ctx.round(x, exact=exact)
         x._ctx = self
-        return x
+        return self._fixup(x)
 
     def round_at(self, x, n, *, exact: bool = False) -> Float:
         x = self._mpb_ctx.round_at(x, n, exact=exact)
         x._ctx = self
-        return x
+        return self._fixup(x)
 
-    def to_ordinal(self, x: Float, infval = False) -> int:
+    def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_ctx.to_ordinal(x, infval=infval)
 
-    def from_ordinal(self, x: int, infval = False) -> Float:
-        return Float(x=self._mpb_ctx.from_ordinal(x, infval=infval), ctx=self)
+    def from_ordinal(self, x: int, infval: bool = False) -> Float:
+        y = self._mpb_ctx.from_ordinal(x, infval=infval)
+        y._ctx = self
+        return y
 
     def zero(self, s: bool = False):
         """
@@ -317,7 +409,7 @@ class EFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def min_subnormal(self, s = False) -> Float:
+    def min_subnormal(self, s: bool = False) -> Float:
         """
         Returns the smallest subnormal value with sign `s` under this context.
 
@@ -330,7 +422,7 @@ class EFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def max_subnormal(self, s = False) -> Float:
+    def max_subnormal(self, s: bool = False) -> Float:
         """
         Returns the largest subnormal value with sign `s` under this context.
 
@@ -343,7 +435,7 @@ class EFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def min_normal(self, s = False) -> Float:
+    def min_normal(self, s: bool = False) -> Float:
         """
         Returns the smallest normal value with sign `s` under this context.
 
@@ -356,7 +448,7 @@ class EFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def max_normal(self, s = False) -> Float:
+    def max_normal(self, s: bool = False) -> Float:
         """
         Returns the largest normal value with sign `s` under this context.
 
@@ -369,7 +461,7 @@ class EFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def maxval(self, s = False) -> Float:
+    def maxval(self, s: bool = False) -> Float:
         """
         Returns the largest value with sign `s` under this context.
 
