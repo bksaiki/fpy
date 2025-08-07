@@ -4,15 +4,8 @@ Core numerical functions.
 
 from . import base as fp
 
-__all__ = [
-    "split",
-    "modf",
-    "isinteger",
-    "logb",
-    "ldexp",
-    "frexp",
-    "max_e",
-]
+###########################################################
+# Splitting functions
 
 @fp.fpy_primitive
 def split(x: fp.Float, n: fp.Float):
@@ -33,12 +26,12 @@ def split(x: fp.Float, n: fp.Float):
         raise ValueError("n must be an integer")
 
     if x.isnan:
-        return [fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx)]
+        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
     elif x.isinf:
-        return [fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx)]
+        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx))
     else:
         hi, lo = x.as_real().split(int(n))
-        return [fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx)]
+        return (fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx))
 
 @fp.fpy
 def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
@@ -83,11 +76,40 @@ def modf(x: fp.Float) -> tuple[fp.Float, fp.Float]:
         hi, lo = x.as_real().split(-1)
         return (fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx))
 
+@fp.fpy_primitive
+def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
+    """
+    Decomposes `x` into its mantissa and exponent.
+    The computation is performed exactly.
+
+    Mirroring the behavior of C/C++ `frexp`:
+    - if `x` is NaN, the result is `(NaN, NaN)`.
+    - if `x` is infinity, the result is `(x, NaN)`.
+    - if `x` is zero, the result is `(x, 0)`.
+    """
+    if x.isnan:
+        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
+    elif x.isinf:
+        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
+    elif x.is_zero():
+        return (fp.Float(x=x, ctx=x.ctx), fp.Float(ctx=x.ctx))
+    else:
+        x = x.normalize()
+        mant = fp.Float(s=x.s, e=0, c=x.c, ctx=x.ctx)
+        e = fp.Float.from_int(x.e, ctx=x.ctx)
+        return (mant, e)
+
+############################################################
+# Predicates
+
 @fp.fpy
 def isinteger(x: fp.Real) -> bool:
     """Checks if `x` is an integer."""
     _, fpart = modf(x)
     return fp.isfinite(fpart) and fpart == 0
+
+###########################################################
+# Exponent extraction and scaling
 
 @fp.fpy
 def _logb_spec(x: fp.Real):
@@ -166,29 +188,6 @@ def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
         scale = fp.RealFloat.power_of_2(int(n))
         return ctx.round(xr * scale)
 
-@fp.fpy_primitive
-def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
-    """
-    Decomposes `x` into its mantissa and exponent.
-    The computation is performed exactly.
-
-    Mirroring the behavior of C/C++ `frexp`:
-    - if `x` is NaN, the result is `(NaN, NaN)`.
-    - if `x` is infinity, the result is `(x, NaN)`.
-    - if `x` is zero, the result is `(x, 0)`.
-    """
-    if x.isnan:
-        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
-    elif x.isinf:
-        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
-    elif x.is_zero():
-        return (fp.Float(x=x, ctx=x.ctx), fp.Float(ctx=x.ctx))
-    else:
-        x = x.normalize()
-        mant = fp.Float(s=x.s, e=0, c=x.c, ctx=x.ctx)
-        e = fp.Float.from_int(x.e, ctx=x.ctx)
-        return (mant, e)
-
 @fp.fpy(ctx=fp.INTEGER)
 def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:
     """
@@ -211,3 +210,28 @@ def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:
 
     return (largest_e, any_non_zero)
 
+############################################################
+# Context operations
+
+@fp.fpy_primitive
+def max_p(ctx: fp.Context):
+    """
+    Returns the maximum precision of the context.
+    This is a no-op for the `RealContext`.
+    """
+    p, _ = ctx.round_params()
+    if p is None:
+        raise ValueError(f"ctx={ctx} does not have a maximum precision")
+    return ctx.round(p)
+
+@fp.fpy_primitive
+def min_n(ctx: fp.Context):
+    """
+    Returns the least absolute digit of the context.
+    This is the position of the most significant digit that
+    can never be represented.
+    """
+    _, n = ctx.round_params()
+    if n is None:
+        raise ValueError(f"ctx={ctx} does not have a least absolute digit")
+    return ctx.round(n)
