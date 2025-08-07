@@ -2,6 +2,10 @@ import unittest
 import random
 
 from fpy2 import Float, IEEEContext, RM, FP64
+from hypothesis import given, strategies as st
+
+from ...generators import floats
+
 
 class DecodeTestCase(unittest.TestCase):
     """Testing `IEEEContext.decode()`"""
@@ -46,7 +50,7 @@ class EncodeTestCase(unittest.TestCase):
             self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
             self.assertLess(i, 1 << FP64.nbits, f'x={x}, i={i}')
 
-    def test_small(self, es_max: int = 6, nbits_max: int = 8):
+    def test_small_exhaustive(self, es_max: int = 6, nbits_max: int = 8):
         # iterate over possible contexts
         for es in range(2, es_max+1):
             for nbits in range(es + 2, nbits_max+1):
@@ -62,6 +66,15 @@ class EncodeTestCase(unittest.TestCase):
                             self.assertIsInstance(i, int, f'x={x}, i={i}')
                             self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
                             self.assertLess(i, 1 << ctx.nbits, f'x={x}, i={i}')
+
+    @given(floats(prec=3, exp_min=-10, exp_max=10, ctx=IEEEContext(2, 5)))
+    def test_ieee2_5(self, x: Float):
+        """Test encoding for IEEEContext(2, 5)"""
+        ctx = IEEEContext(2, 5)
+        i = ctx.encode(x)
+        self.assertIsInstance(i, int, f'x={x}, i={i}')
+        self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
+        self.assertLess(i, 1 << ctx.nbits, f'x={x}, i={i}')
 
 
 class EncodeRoundTripTestCase(unittest.TestCase):

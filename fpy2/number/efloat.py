@@ -442,12 +442,35 @@ class EFloatContext(EncodableContext):
             ebits = 0
             mbits = 0
         elif x.e <= self.emin:
-            # subnormal
+            # subnormal: sgn(x) * [ 0 | m ]
+            # need to ensure that exp=self.expmin
+            offset = x.exp - self.expmin
+            if offset > 0:
+                # need to increase precision of `c`
+                c = x.c << offset
+            elif offset < 0:
+                # need to decrease precision of `c`
+                c = x.c >> -offset
+            else:
+                # no change
+                c = x.c
+
             ebits = 0
-            mbits = x.c << (x.exp - self.expmin)  # normalize so that exp=self.expmin
+            mbits = c
         else:
-            # normal
-            c = x.c << (self.pmax - x.p) # normalize so that p=self.pmax
+            # normal: sgn(x) * [ eord | m ]
+            # normalize so that p=self.pmax
+            offset = x.p - self.pmax
+            if offset > 0:
+                # too much precision
+                c = x.c >> offset
+            elif offset < 0:
+                # too little precision
+                c = x.c << -offset
+            else:
+                # no change
+                c = x.c
+
             ebits = x.e - self.emin + 1
             mbits = c & bitmask(self.pmax - 1)
 
