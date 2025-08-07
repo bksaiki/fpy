@@ -6,10 +6,10 @@ by the IEEE 754 standard.
 from typing import Optional
 
 from ..utils import DEFAULT, DefaultOr
-from .ext_float import ExtFloatContext, ExtFloatNanKind
+from .efloat import EFloatContext, EFloatNanKind
 from .round import RoundingMode, OverflowMode
 
-class IEEEContext(ExtFloatContext):
+class IEEEContext(EFloatContext):
     """
     Rounding context for IEEE 754 floating-point values.
 
@@ -30,7 +30,7 @@ class IEEEContext(ExtFloatContext):
         overflow: OverflowMode = OverflowMode.OVERFLOW,
         num_randbits: Optional[int] = 0
     ):
-        super().__init__(es, nbits, True, ExtFloatNanKind.IEEE_754, 0, rm, overflow, num_randbits)
+        super().__init__(es, nbits, True, EFloatNanKind.IEEE_754, 0, rm, overflow, num_randbits)
 
     def __repr__(self):
         return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r}, overflow={self.overflow!r}, num_randbits={self.num_randbits!r})'
