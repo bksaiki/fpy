@@ -232,6 +232,12 @@ class EFloatContext(EncodableContext):
                 if x.ctx is not None and self.is_equiv(x.ctx):
                     # same context, so representable
                     return True
+                if x.isinf and not self.enable_inf:
+                    # Inf is not representable in this context
+                    return False
+                if x.isnan and self.nan_kind == EFloatNanKind.NONE:
+                    # NaN is not representable in this context
+                    return False
             case RealFloat():
                 pass
             case _:
@@ -268,10 +274,14 @@ class EFloatContext(EncodableContext):
         return self._mpb_ctx.round_params()
 
     def round(self, x, *, exact: bool = False) -> Float:
-        return Float(x=self._mpb_ctx.round(x, exact=exact), ctx=self)
+        x = self._mpb_ctx.round(x, exact=exact)
+        x._ctx = self
+        return x
 
     def round_at(self, x, n, *, exact: bool = False) -> Float:
-        return Float(x=self._mpb_ctx.round_at(x, n, exact=exact), ctx=self)
+        x = self._mpb_ctx.round_at(x, n, exact=exact)
+        x._ctx = self
+        return x
 
     def to_ordinal(self, x: Float, infval = False) -> int:
         if not isinstance(x, Float) or not self.representable_under(x):
