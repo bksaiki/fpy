@@ -227,6 +227,16 @@ Floating-Point Contexts
    with `encode(x) == 0xFF` representing NaN and `encode(x) == 0x00` representing
    the exponent one below the minimum normal exponent value.
 
+.. py:data:: fpy2.MX_INT8
+   :value: FixedContext(True, -6, 8, RM.RNE)
+
+   Alias for the MX 8-bit integer format in the Open Compute Project (OCP)
+   Microscaling Formats (MX) specification with round nearest, ties-to-even
+   rounding mode.
+
+   This implementation uses the standard asymmetric encoding inherited
+   from fixed-point formats, with `+MAX_VAL = +1 63/64` and `-MAX_VAL = -2`.
+
 .. py:data:: fpy2.FP8P1
    :value: EFloatContext(7, 8, True, ExtNanKind.NEG_ZERO, 0, RM.RNE)
 
