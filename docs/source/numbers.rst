@@ -216,6 +216,17 @@ Floating-Point Contexts
    `OCP MX specification <https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf>`_
    for more information.
 
+.. py:data:: fpy2.MX_E8M0
+   :value: ExpContext(8, 0)
+
+   Alias for the MX scaling format in the Open Compute Project (OCP)
+   Microscaling Formats (MX) specification with round nearest, ties-to-even
+   rounding mode.
+
+   This is just the exponent field of a single-precision floating-point value (`FP32`)
+   with `encode(x) == 0xFF` representing NaN and `encode(x) == 0x00` representing
+   the exponent one below the minimum normal exponent value.
+
 .. py:data:: fpy2.FP8P1
    :value: EFloatContext(7, 8, True, ExtNanKind.NEG_ZERO, 0, RM.RNE)
 
