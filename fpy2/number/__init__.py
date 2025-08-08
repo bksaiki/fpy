@@ -5,6 +5,7 @@ from .number import RealFloat, Float, Real
 
 # Contexts
 from .context import Context, OrdinalContext, SizedContext, EncodableContext
+from .exponential import ExpContext
 from .efloat import EFloatContext, EFloatNanKind
 from .fixed import FixedContext
 from .ieee754 import IEEEContext
@@ -148,6 +149,17 @@ with round nearest, ties-to-even rounding mode.
 
 See the OCP MX specification for more information:
 https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+"""
+
+MX_E8M0 = ExpContext(8, 0)
+"""
+Alias for the MX scaling format in the Open Compute Project (OCP)
+Microscaling Formats (MX) specification with round nearest, ties-to-even
+rounding mode.
+
+This is just the exponent field of a single-precision floating-point value (`FP32`)
+with `encode(x) == 0xFF` representing NaN and `encode(x) == 0x00` representing
+the exponent one below the minimum normal exponent value.
 """
 
 # TODO: MX_INT8

@@ -21,6 +21,7 @@ from ..number import (
     EncodableContext,
     # concrete context types
     EFloatContext,
+    ExpContext,
     FixedContext,
     MPFixedContext,
     MPFloatContext,

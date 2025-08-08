@@ -64,6 +64,10 @@ Floating-Point Contexts
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.ExpContext
+   :members:
+   :show-inheritance:
+
 Fixed-Point Contexts
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
