@@ -20,7 +20,7 @@ from ..number import (
     SizedContext,
     EncodableContext,
     # concrete context types
-    ExtFloatContext,
+    EFloatContext,
     FixedContext,
     MPFixedContext,
     MPFloatContext,
@@ -34,7 +34,7 @@ from ..number import (
     RoundingMode,
     RoundingDirection, RM,
     # encoding utilities
-    ExtFloatNanKind,
+    EFloatNanKind,
     OverflowMode, OV,
     # type aliases
     REAL,

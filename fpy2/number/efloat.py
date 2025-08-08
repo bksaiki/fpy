@@ -9,7 +9,7 @@ from .mpb_float import MPBFloatContext
 from .round import RoundingMode, OverflowMode
 
 @enum_repr
-class ExtFloatNanKind(IntEnum):
+class EFloatNanKind(IntEnum):
     """
     Describes how NaN values are encoded for `ExtFloatContext` rounding contexts.
     """
@@ -24,7 +24,7 @@ class ExtFloatNanKind(IntEnum):
 
 
 @default_repr
-class ExtFloatContext(EncodableContext):
+class EFloatContext(EncodableContext):
     """
     Rounding context for the "extended" floating-point format
     as described in Brett Saiki's blog post. These formats extend
@@ -46,7 +46,7 @@ class ExtFloatContext(EncodableContext):
     enable_inf: bool
     """whether to enable infinities"""
 
-    nan_kind: ExtFloatNanKind
+    nan_kind: EFloatNanKind
     """how NaNs are encoded"""
 
     eoffset: int
@@ -61,6 +61,20 @@ class ExtFloatContext(EncodableContext):
     num_randbits: Optional[int]
     """number of random bits for stochastic rounding, if applicable"""
 
+    nan_value: Optional[Float]
+    """
+    if NaN is not representable, what value should NaN round to?
+    if not set, then `round()` will produce to Inf or MAX_VAL whichever
+    is representable.
+    """
+
+    inf_value: Optional[Float]
+    """
+    if Inf is not representable, what value should Inf round to?
+    if not set, then `round()` will produce NAN or MAX_VAL whichever
+    is representable.
+    """
+
     _mpb_ctx: MPBFloatContext
     """this context as an `MPBFloatContext`"""
 
@@ -69,11 +83,14 @@ class ExtFloatContext(EncodableContext):
         es: int,
         nbits: int,
         enable_inf: bool,
-        nan_kind: ExtFloatNanKind,
+        nan_kind: EFloatNanKind,
         eoffset: int,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
         num_randbits: Optional[int] = 0,
+        *,
+        nan_value: Optional[Float] = None,
+        inf_value: Optional[Float] = None
     ):
         if not isinstance(es, int):
             raise TypeError(f'Expected \'int\', got \'{type(es)}\' for es={es}')
@@ -85,7 +102,7 @@ class ExtFloatContext(EncodableContext):
             raise TypeError(f'Expected \'OverflowMode\', got \'{type(overflow)}\' for overflow={overflow}')
         if not isinstance(enable_inf, bool):
             raise TypeError(f'Expected \'bool\', got \'{type(enable_inf)}\' for enable_inf={enable_inf}')
-        if not isinstance(nan_kind, ExtFloatNanKind):
+        if not isinstance(nan_kind, EFloatNanKind):
             raise TypeError(f'Expected \'NanEncoding\', got \'{type(nan_kind)}\' for nan_encoding={nan_kind}')
         if not isinstance(eoffset, int):
             raise TypeError(f'Expected \'int\', got \'{type(eoffset)}\' for eoffset={eoffset}')
@@ -101,6 +118,27 @@ class ExtFloatContext(EncodableContext):
 
         if overflow == OverflowMode.WRAP:
             raise ValueError('OverflowMode.WRAP is not supported for ExtFloatContext')
+        mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
+
+        if nan_value is not None:
+            if not isinstance(nan_value, Float):
+                raise TypeError(f'Expected \'Float\' for nan_value={nan_value}, got {type(nan_value)}')
+            if nan_kind == EFloatNanKind.NONE:
+                # this field matters
+                if nan_value.isinf and not enable_inf:
+                    raise ValueError(f'Cannot set NaN value to infinity when infinities are disabled: {nan_value}')
+                elif not mpb_ctx.representable_under(nan_value):
+                    raise ValueError(f'Cannot set NaN value to {nan_value} when it is not representable in this context')
+
+        if inf_value is not None:
+            if not isinstance(inf_value, Float):
+                raise TypeError(f'Expected \'Float\' for inf_value={inf_value}, got {type(inf_value)}')
+            if not enable_inf:
+                # this field matters
+                if nan_kind == EFloatNanKind.NONE:
+                    raise ValueError(f'Cannot set Inf value to NaN when NaNs are disabled: {inf_value}')
+                elif not mpb_ctx.representable_under(inf_value):
+                    raise ValueError(f'Cannot set Inf value to {inf_value} when it is not representable in this context')
 
         self.es = es
         self.nbits = nbits
@@ -110,11 +148,13 @@ class ExtFloatContext(EncodableContext):
         self.rm = rm
         self.overflow = overflow
         self.num_randbits = num_randbits
-        self._mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
+        self.nan_value = nan_value
+        self.inf_value = inf_value
+        self._mpb_ctx = mpb_ctx
 
     def __eq__(self, other):
         return (
-            isinstance(other, ExtFloatContext)
+            isinstance(other, EFloatContext)
             and self.es == other.es
             and self.nbits == other.nbits
             and self.enable_inf == other.enable_inf
@@ -123,6 +163,8 @@ class ExtFloatContext(EncodableContext):
             and self.rm == other.rm
             and self.overflow == other.overflow
             and self.num_randbits == other.num_randbits
+            and self.nan_value == other.nan_value
+            and self.inf_value == other.inf_value
         )
 
     def __hash__(self):
@@ -134,7 +176,9 @@ class ExtFloatContext(EncodableContext):
             self.eoffset,
             self.rm,
             self.overflow,
-            self.num_randbits
+            self.num_randbits,
+            self.nan_value,
+            self.inf_value
         ))
 
     @property
@@ -184,13 +228,15 @@ class ExtFloatContext(EncodableContext):
         es: DefaultOr[int] = DEFAULT,
         nbits: DefaultOr[int] = DEFAULT,
         enable_inf: DefaultOr[bool] = DEFAULT,
-        nan_kind: DefaultOr[ExtFloatNanKind] = DEFAULT,
+        nan_kind: DefaultOr[EFloatNanKind] = DEFAULT,
         eoffset: DefaultOr[int] = DEFAULT,
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         num_randbits: DefaultOr[Optional[int]] = DEFAULT,
+        nan_value: DefaultOr[Float | None] = DEFAULT,
+        inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
-    ) -> 'ExtFloatContext':
+    ) -> 'EFloatContext':
         if es is DEFAULT:
             es = self.es
         if nbits is DEFAULT:
@@ -207,9 +253,24 @@ class ExtFloatContext(EncodableContext):
             overflow = self.overflow
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if nan_value is DEFAULT:
+            nan_value = self.nan_value
+        if inf_value is DEFAULT:
+            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExtFloatContext')
-        return ExtFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
+        return EFloatContext(
+            es,
+            nbits,
+            enable_inf,
+            nan_kind,
+            eoffset,
+            rm,
+            overflow,
+            num_randbits,
+            nan_value=nan_value,
+            inf_value=inf_value
+        )
 
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
@@ -218,7 +279,7 @@ class ExtFloatContext(EncodableContext):
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
         return (
-            isinstance(other, ExtFloatContext)
+            isinstance(other, EFloatContext)
             and self.es == other.es
             and self.nbits == other.nbits
             and self.enable_inf == other.enable_inf
@@ -232,6 +293,12 @@ class ExtFloatContext(EncodableContext):
                 if x.ctx is not None and self.is_equiv(x.ctx):
                     # same context, so representable
                     return True
+                elif x.isinf and not self.enable_inf:
+                    # Inf is not representable in this context
+                    return False
+                elif x.isnan and self.nan_kind == EFloatNanKind.NONE:
+                    # NaN is not representable in this context
+                    return False
             case RealFloat():
                 pass
             case _:
@@ -239,7 +306,7 @@ class ExtFloatContext(EncodableContext):
 
         if not self._mpb_ctx.representable_under(x):
             return False
-        elif self.nan_kind == ExtFloatNanKind.NEG_ZERO and x.s and x.is_zero():
+        elif x.is_zero() and x.s and self.nan_kind == EFloatNanKind.NEG_ZERO:
             # -0 is not representable in this context
             return False
         else:
@@ -267,19 +334,54 @@ class ExtFloatContext(EncodableContext):
     def round_params(self):
         return self._mpb_ctx.round_params()
 
+    def _fixup(self, x: Float):
+        if x.isnan and self.nan_kind == EFloatNanKind.NONE:
+            # NaN is not representable in this context
+            if self.nan_value is None:
+                # resolve by default rules
+                if self.enable_inf:
+                    # NaN rounds to Inf
+                    return Float.inf(s=x.s, ctx=self)
+                else:
+                    # NaN rounds to MAX_VAL
+                    return self.maxval(s=x.s)
+            return Float(s=x.s, x=self.nan_value, ctx=self)
+        elif x.isinf and not self.enable_inf:
+            # Inf is not representable in this context
+            if self.inf_value is None:
+                # resolve by default rules
+                if self.nan_kind != EFloatNanKind.NONE:
+                    # Inf rounds to NaN
+                    return Float.nan(s=x.s, ctx=self)
+                else:
+                    # Inf rounds to MAX_VAL
+                    return self.maxval(s=x.s)
+            return Float(s=x.s, x=self.inf_value, ctx=self)
+        elif x.is_zero() and x.s and self.nan_kind == EFloatNanKind.NEG_ZERO:
+            # -0 is not representable in this context
+            return Float(x=x, s=False, ctx=self)
+        else:
+            return x
+
     def round(self, x, *, exact: bool = False) -> Float:
-        return Float(x=self._mpb_ctx.round(x, exact=exact), ctx=self)
+        x = self._mpb_ctx.round(x, exact=exact)
+        x._ctx = self
+        return self._fixup(x)
 
     def round_at(self, x, n, *, exact: bool = False) -> Float:
-        return Float(x=self._mpb_ctx.round_at(x, n, exact=exact), ctx=self)
+        x = self._mpb_ctx.round_at(x, n, exact=exact)
+        x._ctx = self
+        return self._fixup(x)
 
-    def to_ordinal(self, x: Float, infval = False) -> int:
+    def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float) or not self.representable_under(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_ctx.to_ordinal(x, infval=infval)
 
-    def from_ordinal(self, x: int, infval = False) -> Float:
-        return Float(x=self._mpb_ctx.from_ordinal(x, infval=infval), ctx=self)
+    def from_ordinal(self, x: int, infval: bool = False) -> Float:
+        y = self._mpb_ctx.from_ordinal(x, infval=infval)
+        y._ctx = self
+        return y
 
     def zero(self, s: bool = False):
         """
@@ -307,7 +409,7 @@ class ExtFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def min_subnormal(self, s = False) -> Float:
+    def min_subnormal(self, s: bool = False) -> Float:
         """
         Returns the smallest subnormal value with sign `s` under this context.
 
@@ -320,7 +422,7 @@ class ExtFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def max_subnormal(self, s = False) -> Float:
+    def max_subnormal(self, s: bool = False) -> Float:
         """
         Returns the largest subnormal value with sign `s` under this context.
 
@@ -333,7 +435,7 @@ class ExtFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def min_normal(self, s = False) -> Float:
+    def min_normal(self, s: bool = False) -> Float:
         """
         Returns the smallest normal value with sign `s` under this context.
 
@@ -346,7 +448,7 @@ class ExtFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def max_normal(self, s = False) -> Float:
+    def max_normal(self, s: bool = False) -> Float:
         """
         Returns the largest normal value with sign `s` under this context.
 
@@ -359,7 +461,7 @@ class ExtFloatContext(EncodableContext):
             raise ValueError(f'not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
-    def maxval(self, s = False) -> Float:
+    def maxval(self, s: bool = False) -> Float:
         """
         Returns the largest value with sign `s` under this context.
 
@@ -394,7 +496,7 @@ class ExtFloatContext(EncodableContext):
         if x.isnan:
             # NaN: placement of NaN depends on NaN / Inf encoding
             match self.nan_kind:
-                case ExtFloatNanKind.IEEE_754:
+                case EFloatNanKind.IEEE_754:
                     if self.enable_inf:
                         # usual IEEE 754 encoding: NaN => +qNaN(0)
                         ebits = bitmask(self.es)
@@ -403,11 +505,11 @@ class ExtFloatContext(EncodableContext):
                         # no infinity, NaN => +NaN(0)
                         ebits = bitmask(self.es)
                         mbits = 0
-                case ExtFloatNanKind.MAX_VAL:
+                case EFloatNanKind.MAX_VAL:
                     # NaN is the maximum encoding
                     ebits = bitmask(self.es)
                     mbits = bitmask(self.m)
-                case ExtFloatNanKind.NEG_ZERO:
+                case EFloatNanKind.NEG_ZERO:
                     # NaN replaces -0
                     ebits = 0
                     mbits = 0
@@ -417,11 +519,11 @@ class ExtFloatContext(EncodableContext):
         elif x.isinf:
             # Inf: placement of Inf depends on NaN encoding
             match self.nan_kind:
-                case ExtFloatNanKind.IEEE_754:
+                case EFloatNanKind.IEEE_754:
                     # usual IEEE 754 encoding
                     ebits = bitmask(self.es)
                     mbits = 0
-                case ExtFloatNanKind.MAX_VAL:
+                case EFloatNanKind.MAX_VAL:
                     # Inf one before the maximum encoding
                     if self.pmax == 1:
                         # Inf is in the previous binade
@@ -431,7 +533,7 @@ class ExtFloatContext(EncodableContext):
                         # Inf is in the last binade
                         ebits = bitmask(self.es)
                         mbits = bitmask(self.m) - 1
-                case ExtFloatNanKind.NEG_ZERO | ExtFloatNanKind.NONE:
+                case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
                     # Inf is the maximum encoding
                     ebits = bitmask(self.es)
                     mbits = bitmask(self.m)
@@ -442,12 +544,35 @@ class ExtFloatContext(EncodableContext):
             ebits = 0
             mbits = 0
         elif x.e <= self.emin:
-            # subnormal
+            # subnormal: sgn(x) * [ 0 | m ]
+            # need to ensure that exp=self.expmin
+            offset = x.exp - self.expmin
+            if offset > 0:
+                # need to increase precision of `c`
+                c = x.c << offset
+            elif offset < 0:
+                # need to decrease precision of `c`
+                c = x.c >> -offset
+            else:
+                # no change
+                c = x.c
+
             ebits = 0
-            mbits = x.c << (x.exp - self.expmin)  # normalize so that exp=self.expmin
+            mbits = c
         else:
-            # normal
-            c = x.c << (self.pmax - x.p) # normalize so that p=self.pmax
+            # normal: sgn(x) * [ eord | m ]
+            # normalize so that p=self.pmax
+            offset = x.p - self.pmax
+            if offset > 0:
+                # too much precision
+                c = x.c >> offset
+            elif offset < 0:
+                # too little precision
+                c = x.c << -offset
+            else:
+                # no change
+                c = x.c
+
             ebits = x.e - self.emin + 1
             mbits = c & bitmask(self.pmax - 1)
 
@@ -473,7 +598,7 @@ class ExtFloatContext(EncodableContext):
 
         # case split on NaN encoding
         match self.nan_kind:
-            case ExtFloatNanKind.IEEE_754:
+            case EFloatNanKind.IEEE_754:
                 # IEEE 754 style decoding
                 if ebits == 0: # all zeros
                     # subnormal / zero
@@ -493,7 +618,7 @@ class ExtFloatContext(EncodableContext):
                     exp = self.expmin + (ebits - 1)
                     return Float(s=s, c=c, exp=exp, ctx=self)
 
-            case ExtFloatNanKind.MAX_VAL:
+            case EFloatNanKind.MAX_VAL:
                 # NaN is the maximum encoding
                 # if it exists, then Inf is in the previous encoding
 
@@ -523,7 +648,7 @@ class ExtFloatContext(EncodableContext):
                         exp = self.expmin + (ebits - 1)
                         return Float(s=s, c=c, exp=exp, ctx=self)
 
-            case ExtFloatNanKind.NEG_ZERO | ExtFloatNanKind.NONE:
+            case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
                 # NaN replaces -0 (or no NaN)
                 # if it exists, then Inf is the maximum encoding
 
@@ -543,7 +668,7 @@ class ExtFloatContext(EncodableContext):
                         # subnormal / zero (or NaN)
                         if mbits == 0:
                             # zero (or NaN)
-                            if s and self.nan_kind == ExtFloatNanKind.NEG_ZERO:
+                            if s and self.nan_kind == EFloatNanKind.NEG_ZERO:
                                 # NaN
                                 return Float(s=s, isnan=True, ctx=self)
                             else:
@@ -568,7 +693,7 @@ def _format_is_valid(
     es: int,
     nbits: int,
     enable_inf: bool,
-    nan_kind: ExtFloatNanKind,
+    nan_kind: EFloatNanKind,
 ):
     """Returns True if the `ExtFloatContext` format is valid."""
     # condition (i): positive bitwidth
@@ -583,7 +708,7 @@ def _format_is_valid(
     #                 are only in the last binade
     p = nbits - es
     match nan_kind:
-        case ExtFloatNanKind.IEEE_754:
+        case EFloatNanKind.IEEE_754:
             if es == 0:
                 # would only encode special values: violates (iii)
                 return False
@@ -591,7 +716,7 @@ def _format_is_valid(
                 # no room for Inf _and_ NaN: violates (iv)
                 return False
 
-        case ExtFloatNanKind.MAX_VAL:
+        case EFloatNanKind.MAX_VAL:
             if es == 0:
                 if p == 1:
                     # only value is NaN: violates (iii)
@@ -605,7 +730,7 @@ def _format_is_valid(
                     # but then only values are Inf and NaN: violates (iii)
                     return False
 
-        case ExtFloatNanKind.NEG_ZERO | ExtFloatNanKind.NONE:
+        case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
             if es == 0 and p == 1 and enable_inf:
                 # no room for Inf and NaN: violates (iii)
                 return False
@@ -620,7 +745,7 @@ def _ext_to_mpb(
     es: int,
     nbits: int,
     enable_inf: bool,
-    nan_kind: ExtFloatNanKind,
+    nan_kind: EFloatNanKind,
     eoffset: int,
     rm: RoundingMode,
     overflow: OverflowMode,
@@ -643,11 +768,11 @@ def _ext_to_mpb(
     # since the number of available numerical values depends
     # on the presence of infinities and the number of NaNs
     match nan_kind:
-        case ExtFloatNanKind.IEEE_754:
+        case EFloatNanKind.IEEE_754:
             # the maximum value is the usual IEEE 754 maximum value
             maxval = RealFloat(c=bitmask(p), exp=expmax)
 
-        case ExtFloatNanKind.MAX_VAL:
+        case EFloatNanKind.MAX_VAL:
             # there is only 1 NaN and a possible infinity
             # the maximum value is just the "previous" encoding
             if p == 1:
@@ -674,7 +799,7 @@ def _ext_to_mpb(
                     c = bitmask(p) - 1
                     maxval = RealFloat(c=c, exp=expmax+1)
 
-        case ExtFloatNanKind.NEG_ZERO | ExtFloatNanKind.NONE:
+        case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
             # NaN replaces -0 (or no NaN), there may be a possible infinity
             # the maximum value is either the maximum encoding or
             # the "previous" encoding before infinity

@@ -5,7 +5,7 @@ from .number import RealFloat, Float, Real
 
 # Contexts
 from .context import Context, OrdinalContext, SizedContext, EncodableContext
-from .ext_float import ExtFloatContext, ExtFloatNanKind
+from .efloat import EFloatContext, EFloatNanKind
 from .fixed import FixedContext
 from .ieee754 import IEEEContext
 from .mp_fixed import MPFixedContext
@@ -84,7 +84,7 @@ Alias for Google's Brain Floating Point (BF16) floating point format
 with round nearest, ties-to-even rounding mode.
 """
 
-S1E5M2 = ExtFloatContext(5, 8, False, ExtFloatNanKind.NEG_ZERO, -1, RM.RNE)
+S1E5M2 = EFloatContext(5, 8, False, EFloatNanKind.NEG_ZERO, -1, RM.RNE)
 """
 Alias for Graphcore's FP8 format with 5 bits of exponent
 with round nearest, ties-to-even rounding mode.
@@ -92,7 +92,7 @@ with round nearest, ties-to-even rounding mode.
 See Graphcore's FP8 proposal for more information: https://arxiv.org/pdf/2206.02915.
 """
 
-S1E4M3 = ExtFloatContext(4, 8, False, ExtFloatNanKind.NEG_ZERO, -1, RM.RNE)
+S1E4M3 = EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, -1, RM.RNE)
 """
 Alias for Graphcore's FP8 format with 4 bits of exponent
 with round nearest, ties-to-even rounding mode.
@@ -110,7 +110,7 @@ See the OCP MX specification for more information:
 https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 """
 
-MX_E4M3 = ExtFloatContext(4, 8, False, ExtFloatNanKind.MAX_VAL, 0, RM.RNE)
+MX_E4M3 = EFloatContext(4, 8, False, EFloatNanKind.MAX_VAL, 0, RM.RNE)
 """
 Alias for the FP8 format with 4 bits of exponent in
 the Open Compute Project (OCP) Microscaling Formats (MX) specification
@@ -120,7 +120,7 @@ See the OCP MX specification for more information:
 https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 """
 
-MX_E3M2 = ExtFloatContext(3, 6, False, ExtFloatNanKind.NONE, 0, RM.RNE)
+MX_E3M2 = EFloatContext(3, 6, False, EFloatNanKind.NONE, 0, RM.RNE)
 """
 Alias for the FP6 format with 3 bits of exponent in
 the Open Compute Project (OCP) Microscaling Formats (MX) specification
@@ -130,7 +130,7 @@ See the OCP MX specification for more information:
 https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 """
 
-MX_E2M3 = ExtFloatContext(2, 6, False, ExtFloatNanKind.NONE, 0, RM.RNE)
+MX_E2M3 = EFloatContext(2, 6, False, EFloatNanKind.NONE, 0, RM.RNE)
 """
 Alias for the FP6 format with 2 bits of exponent in
 the Open Compute Project (OCP) Microscaling Formats (MX) specification
@@ -140,7 +140,7 @@ See the OCP MX specification for more information:
 https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 """
 
-MX_E2M1 = ExtFloatContext(2, 4, False, ExtFloatNanKind.NONE, 0, RM.RNE)
+MX_E2M1 = EFloatContext(2, 4, False, EFloatNanKind.NONE, 0, RM.RNE)
 """
 Alias for the FP4 format with 2 bits of exponent in
 the Open Compute Project (OCP) Microscaling Formats (MX) specification
@@ -152,7 +152,7 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 
 # TODO: MX_INT8
 
-FP8P1 = ExtFloatContext(7, 8, True, ExtFloatNanKind.NEG_ZERO, 0, RM.RNE)
+FP8P1 = EFloatContext(7, 8, True, EFloatNanKind.NEG_ZERO, 0, RM.RNE)
 """
 Alias for the FP8 format with 7 bits of exponent found in
 a draft proposal by the IEEE P3109 working group
@@ -163,7 +163,7 @@ See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
 """
 
-FP8P2 = ExtFloatContext(6, 8, True, ExtFloatNanKind.NEG_ZERO, -1, RM.RNE)
+FP8P2 = EFloatContext(6, 8, True, EFloatNanKind.NEG_ZERO, -1, RM.RNE)
 """
 Alias for the FP8 format with 6 bits of exponent found in
 a draft proposal by the IEEE P3109 working group
@@ -174,7 +174,7 @@ See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
 """
 
-FP8P3 = ExtFloatContext(5, 8, True, ExtFloatNanKind.NEG_ZERO, -1, RM.RNE)
+FP8P3 = EFloatContext(5, 8, True, EFloatNanKind.NEG_ZERO, -1, RM.RNE)
 """
 Alias for the FP8 format with 5 bits of exponent found in
 a draft proposal by the IEEE P3109 working group
@@ -185,7 +185,7 @@ See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
 """
 
-FP8P4 = ExtFloatContext(4, 8, True, ExtFloatNanKind.NEG_ZERO, -1, RM.RNE)
+FP8P4 = EFloatContext(4, 8, True, EFloatNanKind.NEG_ZERO, -1, RM.RNE)
 """
 Alias for the FP8 format with 4 bits of exponent found in
 a draft proposal by the IEEE P3109 working group
@@ -196,7 +196,7 @@ See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
 """
 
-FP8P5 = ExtFloatContext(3, 8, True, ExtFloatNanKind.NEG_ZERO, -1, RM.RNE)
+FP8P5 = EFloatContext(3, 8, True, EFloatNanKind.NEG_ZERO, -1, RM.RNE)
 """
 Alias for the FP8 format with 3 bits of exponent found in
 a draft proposal by the IEEE P3109 working group
@@ -207,7 +207,7 @@ See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
 """
 
-FP8P6 = ExtFloatContext(2, 8, True, ExtFloatNanKind.NEG_ZERO, -1, RM.RNE)
+FP8P6 = EFloatContext(2, 8, True, EFloatNanKind.NEG_ZERO, -1, RM.RNE)
 """
 Alias for the FP8 format with 2 bits of exponent found in
 a draft proposal by the IEEE P3109 working group
@@ -218,7 +218,7 @@ See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
 """
 
-FP8P7 = ExtFloatContext(1, 8, True, ExtFloatNanKind.NEG_ZERO, -1, RM.RNE)
+FP8P7 = EFloatContext(1, 8, True, EFloatNanKind.NEG_ZERO, -1, RM.RNE)
 """
 Alias for the FP8 format with 1 bit of exponent found in
 a draft proposal by the IEEE P3109 working group

@@ -23,7 +23,9 @@ from ..utils import (
     FP64_EMASK,
     FP64_MMASK,
     FP64_EONES,
-    FP64_IMPLICIT1
+    FP64_IMPLICIT1,
+    DefaultOr,
+    DEFAULT,
 )
 
 from .context import Context
@@ -1258,7 +1260,7 @@ class Float(numbers.Rational):
         interval_size: Optional[int] = None,
         interval_down: Optional[bool] = None,
         interval_closed: Optional[bool] = None,
-        ctx: Optional[Context] = None
+        ctx: DefaultOr[Context | None] = DEFAULT
     ):
         match x:
             case None:
@@ -1271,7 +1273,7 @@ class Float(numbers.Rational):
                     isinf = x._isinf
                 if isnan is None:
                     isnan = x._isnan
-                if ctx is None:
+                if ctx is DEFAULT:
                     ctx = x._ctx
             case _:
                 raise TypeError(f'expected \'RealFloat\' or \'Float\', got {type(x)} for x={x}')
@@ -1289,10 +1291,10 @@ class Float(numbers.Rational):
         if self._isinf and self._isnan:
             raise ValueError('cannot be both infinite and NaN')
 
-        if ctx is not None:
-            self._ctx = ctx
-        else:
+        if ctx is DEFAULT:
             self._ctx = None
+        else:
+            self._ctx = ctx
 
         # create a new RealFloat instance if any field is overriden
         if (s is None
