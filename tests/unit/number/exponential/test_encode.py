@@ -3,7 +3,6 @@ import unittest
 
 from hypothesis import given, strategies as st
 
-
 class EncodeTestCase(unittest.TestCase):
     """Testing `ExpContext.encode()`"""
 
