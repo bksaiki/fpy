@@ -55,7 +55,7 @@ class RoundTestCase(unittest.TestCase):
             self.assertEqual(x_rounded, expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}')
 
     @given(
-        real_floats(100),
+        real_floats(prec=100),
         st.one_of(st.none(), st.integers(min_value=0)),
         st.one_of(st.none(), st.integers()),
         rounding_modes()
@@ -104,7 +104,7 @@ class RoundStochasticTestCase(unittest.TestCase):
             self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
 
     @given(
-        real_floats(100),
+        real_floats(prec=100),
         st.one_of(st.none(), st.integers(min_value=0)),
         st.one_of(st.none(), st.integers()),
         st.one_of(st.none(), st.integers(min_value=1, max_value=100)),
@@ -165,7 +165,7 @@ class RoundAtTestCase(unittest.TestCase):
             self.assertEqual(x_rounded, expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}')
 
     @given(
-        real_floats(100),
+        real_floats(prec=100),
         st.integers(),
         st.one_of(st.none(), st.integers()),
         rounding_modes()
@@ -215,7 +215,7 @@ class RoundStochasticAtTestCase(unittest.TestCase):
             self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
 
     @given(
-        real_floats(100),
+        real_floats(prec=100),
         st.integers(),
         st.one_of(st.none(), st.integers(min_value=1, max_value=100)),
         rounding_modes()

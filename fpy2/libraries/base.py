@@ -21,6 +21,7 @@ from ..number import (
     EncodableContext,
     # concrete context types
     EFloatContext,
+    ExpContext,
     FixedContext,
     MPFixedContext,
     MPFloatContext,
@@ -42,6 +43,7 @@ from ..number import (
     TF32, BF16,
     S1E5M2, S1E4M3,
     MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
+    MX_E8M0, MX_INT8,
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
     INTEGER,
     SINT8, SINT16, SINT32, SINT64,

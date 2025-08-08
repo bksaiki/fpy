@@ -13,7 +13,13 @@ def rounding_modes(draw):
     return draw(st.sampled_from([fp.RM.RNE, fp.RM.RNA, fp.RM.RTP, fp.RM.RTN, fp.RM.RTZ, fp.RM.RAZ, fp.RM.RTO, fp.RM.RTE]))
 
 @st.composite
-def real_floats(draw, prec: int | None = None, exp_min: int | None = None, exp_max: int | None = None):
+def real_floats(
+    draw,
+    signed: bool = True,
+    prec: int | None = None,
+    exp_min: int | None = None,
+    exp_max: int | None = None
+):
     """
     Returns a strategy for generating a `RealFloat` with a
     maximum precision `prec`, and exponent range between
@@ -24,7 +30,7 @@ def real_floats(draw, prec: int | None = None, exp_min: int | None = None, exp_m
     else:
         max_value = (1 << prec) - 1
 
-    s = draw(st.booleans())
+    s = draw(st.booleans()) if signed else False
     exp = draw(st.integers(min_value=exp_min, max_value=exp_max))
     c = draw(st.integers(min_value=0, max_value=max_value))
     return fp.RealFloat(s, exp, c)
@@ -62,9 +68,9 @@ def floats(
     else:  # finite
         if ctx is not None:
             # Generate representable finite float
-            x = draw(real_floats(prec, exp_min, exp_max).filter(lambda x: ctx.representable_under(x)))
+            x = draw(real_floats(prec=prec, exp_min=exp_min, exp_max=exp_max).filter(lambda x: ctx.representable_under(x)))
             return fp.Float.from_real(x, ctx, checked=False)
         else:
             # Generate arbitrary finite float
-            x = draw(real_floats(prec, exp_min, exp_max))
+            x = draw(real_floats(prec=prec, exp_min=exp_min, exp_max=exp_max))
             return fp.Float.from_real(x)

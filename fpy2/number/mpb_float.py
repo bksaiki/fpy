@@ -253,9 +253,9 @@ class MPBFloatContext(SizedContext):
         else:
             return x > self.pos_maxval
 
-    def _overflow_to_infinity(self, x: RealFloat):
+    def _overflow_to_infinity(self, s: bool):
         """Should overflows round to infinity (rather than MAX_VAL)?"""
-        _, direction = self.rm.to_direction(x.s)
+        _, direction = self.rm.to_direction(s)
         match direction:
             case RoundingDirection.RTZ:
                 # always round towards zero
@@ -311,7 +311,7 @@ class MPBFloatContext(SizedContext):
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     # overflowing => check which way to round
-                    if self._overflow_to_infinity(rounded):
+                    if self._overflow_to_infinity(rounded.s):
                         # overflow to infinity
                         return Float(x=x, isinf=True, ctx=self)
                     else:
