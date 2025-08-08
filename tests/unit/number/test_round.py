@@ -53,7 +53,7 @@ class ContextRoundTestCase(unittest.TestCase):
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
 
-    @given(real_floats(_MAX_PRECISION, -_EXP_LIMIT, _EXP_LIMIT))
+    @given(real_floats(prec=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT))
     def test_round_real_float(self, x: fp.RealFloat):
         for ctx in _all_contexts():
             y = ctx.round(x)
@@ -94,7 +94,7 @@ class ContextRoundAtTestCase(unittest.TestCase):
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
 
-    @given(real_floats(_MAX_PRECISION, -_EXP_LIMIT, _EXP_LIMIT), st.integers())
+    @given(real_floats(prec=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT), st.integers())
     def test_round_real_float(self, x: fp.RealFloat, n: int):
         for ctx in _all_contexts():
             if not isinstance(ctx, fp.RealContext):
