@@ -426,12 +426,12 @@ class ExpContext(EncodableContext):
 
     def minval(self, s: bool = False) -> Float:
         if s:
-            raise ValueError(f'negative values are not representable')
+            raise ValueError('negative values are not representable')
         return Float(c=1, exp=self.emin, ctx=self)
 
     def maxval(self, s: bool = False) -> Float:
         if s:
-            raise ValueError(f'negative values are not representable')
+            raise ValueError('negative values are not representable')
         return Float(c=1, exp=self.emax, ctx=self)
 
     def encode(self, x: Float) -> int:
