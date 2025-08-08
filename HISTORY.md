@@ -1,5 +1,24 @@
 # Version History
 
+## [0.0.9] - 2025-08-08
+### Features:
+ - Numbers library
+  - added `ExpContext` for (bounded) exponential numbers.
+  - added `MX_E8M0` and `MX_INT8` context aliases
+ - Language
+  - add `round_at` builtin
+
+### Changes:
+ - Numbers library
+   - renamed `ExtFloatContext` to `EFloatContext`
+
+### Fixes
+ - Numbers library
+   - fixed `encode()` for `EFloatContext`
+   - fixed `round()` for special values in `EFloatContext`
+ - Language
+   - parse Python `abs` corrrectly
+
 ## [0.0.8] - 2025-07-29
 ### Features:
  - Numbers library
