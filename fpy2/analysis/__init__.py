@@ -3,3 +3,4 @@
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefinitionCtx
 from .live_vars import LiveVars
 from .syntax_check import SyntaxCheck, FPySyntaxError
+from .type_check import TypeCheck
