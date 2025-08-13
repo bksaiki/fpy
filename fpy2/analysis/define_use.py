@@ -7,7 +7,23 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
 
-Definition: TypeAlias = Argument | Stmt | ListComp
+_DefSite: TypeAlias = Argument | Stmt | ListComp
+_UseSite: TypeAlias = Var | IndexedAssign
+
+@dataclass
+class Definition:
+    id: NamedId
+    site: _DefSite
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, Definition)
+            and self.id == other.id
+            and self.site == other.site
+        )
+
+    def __hash__(self):
+        return hash((self.id, self.site))
 
 @default_repr
 class _DefineUnion:
@@ -66,24 +82,40 @@ class DefinitionCtx(dict[NamedId, Definition | _DefineUnion]):
         return set(other.keys() - self.keys())
 
 
-@dataclass
+@default_repr
 class DefineUseAnalysis:
     """Result of definition-use analysis"""
     defs: dict[NamedId, set[Definition]]
-    uses: dict[Definition, set[Var | IndexedAssign]]
+    uses: dict[Definition, set[_UseSite]]
     stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
     blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
 
-    @staticmethod
-    def default():
-        """Default analysis with empty definitions and uses"""
-        return DefineUseAnalysis({}, {}, {}, {})
+    def __init__(self):
+        self.defs = {}
+        self.uses = {}
+        self.stmts = {}
+        self.blocks = {}
 
     @property
     def names(self) -> set[NamedId]:
         """Returns the set of all variable names in the analysis"""
         return set(self.defs.keys())
 
+    def find_def_from_site(self, name: NamedId, site: _DefSite) -> Definition:
+        """Finds the definition of given a (name, site) pair."""
+        defs = self.defs.get(name, set())
+        for def_ in defs:
+            if def_.site == site:
+                return def_
+        raise KeyError(f'no definition found for {name} at {site}')
+
+    def find_def_from_use(self, site: _UseSite):
+        """Finds the definition of a variable."""
+        # TODO: make more efficient: build inverse map?
+        for def_ in self.uses:
+            if site in self.uses[def_]:
+                return def_
+        raise KeyError(f'no definition found for site {site}')
 
 class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""
@@ -92,7 +124,7 @@ class _DefineUseInstance(DefaultVisitor):
 
     def __init__(self, ast: FuncDef | StmtBlock):
         self.ast = ast
-        self.analysis = DefineUseAnalysis.default()
+        self.analysis = DefineUseAnalysis()
 
     def analyze(self):
         match self.ast:
@@ -104,11 +136,13 @@ class _DefineUseInstance(DefaultVisitor):
                 raise RuntimeError(f'unreachable case: {self.ast}')
         return self.analysis
 
-    def _add_def(self, name: NamedId, definition: Definition):
+    def _add_def(self, name: NamedId, site: _DefSite):
         if name not in self.analysis.defs:
             self.analysis.defs[name] = set()
+        definition = Definition(name, site)
         self.analysis.defs[name].add(definition)
         self.analysis.uses[definition] = set()
+        return definition
 
     def _add_use(self, name: NamedId, use: Var | IndexedAssign, ctx: DefinitionCtx):
         def_or_union = ctx[name]
@@ -129,15 +163,13 @@ class _DefineUseInstance(DefaultVisitor):
         ctx = ctx.copy()
         for target in e.targets:
             for name in target.names():
-                self._add_def(name, e)
-                ctx[name] = e
+                ctx[name] = self._add_def(name, e)
         self._visit_expr(e.elt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
-            self._add_def(var, stmt)
-            ctx[var] = stmt
+            ctx[var] = self._add_def(var, stmt)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefinitionCtx):
         self._add_use(stmt.var, stmt, ctx)
@@ -174,12 +206,10 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = ctx.copy()
         match stmt.target:
             case NamedId():
-                self._add_def(stmt.target, stmt)
-                body_ctx[stmt.target] = stmt
+                body_ctx[stmt.target] = self._add_def(stmt.target, stmt)
             case TupleBinding():
                 for var in stmt.target.names():
-                    self._add_def(var, stmt)
-                    body_ctx[var] = stmt
+                    body_ctx[var] = self._add_def(var, stmt)
 
         body_ctx = self._visit_block(stmt.body, body_ctx)
         # merge contexts along both paths
@@ -202,8 +232,7 @@ class _DefineUseInstance(DefaultVisitor):
     def _visit_function(self, func: FuncDef, ctx: DefinitionCtx):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
-                self._add_def(arg.name, arg)
-                ctx[arg.name] = arg
+                ctx[arg.name] = self._add_def(arg.name, arg)
         self._visit_block(func.body, ctx.copy())
 
 

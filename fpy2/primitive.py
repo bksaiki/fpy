@@ -1,13 +1,13 @@
 """FPy primitives are the result of `@fpy_prim` decorators."""
 
-from typing import Any, Callable, Generic, ParamSpec, TypeVar
+from typing import Any, Callable, Generic, ParamSpec, Sequence, TypeVar
 
+from .ast import TypeAnn
 from .utils import has_keyword
 from .number import Context, FP64
 
 P = ParamSpec('P')
 R = TypeVar('R')
-
 
 class Primitive(Generic[P, R]):
     """
@@ -20,10 +20,22 @@ class Primitive(Generic[P, R]):
 
     func: Callable[..., R]
 
+    arg_types: tuple[TypeAnn, ...]
+
+    return_type: TypeAnn
+
     metadata: dict[str, Any]
 
-    def __init__(self, func: Callable[P, R], metadata: dict[str, Any]):
+    def __init__(
+        self,
+        func: Callable[P, R],
+        arg_types: Sequence[TypeAnn],
+        return_type: TypeAnn,
+        metadata: dict[str, Any]
+    ):
         self.func = func
+        self.arg_types = tuple(arg_types)
+        self.return_type = return_type
         self.metadata = metadata
 
     def __repr__(self):
