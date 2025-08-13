@@ -16,8 +16,9 @@ from typing import (
 )
 
 from .analysis import SyntaxCheck, TypeCheck
-from .ast import EffectStmt, NamedId
+from .ast import EffectStmt, NamedId, RealTypeAnn, BoolTypeAnn, AnyTypeAnn
 from .env import ForeignEnv
+from .number import Float
 from .frontend import Parser
 from .function import Function
 from .primitive import Primitive
@@ -188,6 +189,23 @@ def _apply_fpy_decorator(
     # wrap the IR in a Function
     return Function(ast, env, func=func)
 
+_banned_param_kinds = [
+    inspect.Parameter.VAR_KEYWORD,
+    inspect.Parameter.KEYWORD_ONLY,
+    inspect.Parameter.VAR_POSITIONAL
+]
+
+
+def _convert_annotation(ann):
+    if ann is float or ann is int or ann is Float:
+        return RealTypeAnn(None)
+    elif ann is bool:
+        return BoolTypeAnn(None)
+    elif ann is inspect.Parameter.empty:
+        return AnyTypeAnn(None)
+    else:
+        raise NotImplementedError(ann)
+
 def _apply_fpy_prim_decorator(
     func: Callable[P, R],
     kwargs: dict[str, Any]
@@ -195,4 +213,15 @@ def _apply_fpy_prim_decorator(
     """
     Applies the `@fpy_prim` decorator to a function.
     """
-    return Primitive(func, kwargs)
+    sig = inspect.signature(func)
+
+    # TODO: make more robust
+    arg_tys = []
+    for name, kind in sig.parameters.items():
+        if kind in _banned_param_kinds:
+            raise ValueError(f"for primitive {func}: parameter '{name}' of kind {kind} is not allowed")
+        arg_ty = _convert_annotation(kind.annotation)
+        arg_tys.append(arg_ty)
+
+    ret_ty = _convert_annotation(sig.return_annotation)
+    return Primitive(func, arg_tys, ret_ty, kwargs)
