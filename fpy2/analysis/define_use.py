@@ -18,9 +18,7 @@ class _DefineUnion:
         self.defs = set(defs)
 
     def __eq__(self, other):
-        if not isinstance(other, _DefineUnion):
-            return NotImplemented
-        return self.defs == other.defs
+        return isinstance(other, _DefineUnion) and self.defs == other.defs
 
     def __hash__(self):
         return hash(tuple(self.defs))

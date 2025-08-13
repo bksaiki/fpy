@@ -15,7 +15,7 @@ from typing import (
     TypeVar
 )
 
-from .analysis import SyntaxCheck
+from .analysis import SyntaxCheck, TypeCheck
 from .ast import EffectStmt, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
@@ -163,7 +163,6 @@ def _apply_fpy_decorator(
     # strictness
     strict = kwargs.get('strict', True)
 
-
     # function may have a global context
     if 'ctx' in kwargs:
         ast.ctx = kwargs['ctx']
@@ -182,6 +181,9 @@ def _apply_fpy_decorator(
         )
     else:
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
+
+    # type checking
+    TypeCheck.check(ast)
 
     # wrap the IR in a Function
     return Function(ast, env, func=func)
