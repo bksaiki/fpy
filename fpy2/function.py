@@ -7,6 +7,7 @@ from . import ast as fpyast
 from .env import ForeignEnv
 from .frontend import fpcore_to_fpy
 from .number import Context
+from .types import FunctionType
 
 # avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:
@@ -23,7 +24,9 @@ class Function(Generic[P, R]):
     This object is created by the `@fpy` decorator and represents
     a function in the FPy runtime.
     """
+
     ast: fpyast.FuncDef
+    sig: FunctionType | None
     env: ForeignEnv
     runtime: Optional['Interpreter']
 
@@ -33,15 +36,16 @@ class Function(Generic[P, R]):
     def __init__(
         self,
         ast: fpyast.FuncDef,
+        sig: FunctionType | None,
         env: ForeignEnv,
         *,
         runtime: Optional['Interpreter'] = None,
         func: Optional[Callable[P, R]] = None
     ):
         self.ast = ast
+        self.sig = sig
         self.env = env
         self.runtime = runtime
-        self._ir = None
         self._func = func
 
     def __repr__(self):
@@ -82,17 +86,17 @@ class Function(Generic[P, R]):
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
         ir = fpcore_to_fpy(core, default_name=default_name, ignore_unknown=ignore_unknown)
-        return Function(ir, ForeignEnv.empty())
+        return Function(ir, None, ForeignEnv.empty())
 
     def with_rt(self, rt: 'Interpreter'):
         if not isinstance(rt, Interpreter):
             raise TypeError(f'expected \'BaseInterpreter\', got {rt}')
-        return Function(self.ast, self.env, runtime=rt, func=self._func)
+        return Function(self.ast, self.sig, self.env, runtime=rt, func=self._func)
 
     def with_ast(self, ast: fpyast.FuncDef):
         if not isinstance(ast, fpyast.FuncDef):
             raise TypeError(f'expected \'FuncDef\', got {ast}')
-        return Function(ast, self.env, runtime=self.runtime, func=self._func)
+        return Function(ast, self.sig, self.env, runtime=self.runtime, func=self._func)
 
 ###########################################################
 # Default function call

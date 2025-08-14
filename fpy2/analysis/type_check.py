@@ -10,108 +10,14 @@ FPy has a simple type system:
 
 """
 
-from typing import TypeAlias, Sequence
-
 from ..ast import *
 from ..function import Function
 from ..primitive import Primitive
-from ..utils import NamedId, default_repr
-from .define_use import DefineUse, DefineUseAnalysis, Definition
+from ..types import Type, NullType, BoolType, RealType, VarType, FunctionType, TupleType, ListType
+from ..utils import NamedId
+
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 from .live_vars import LiveVars
-
-#####################################################################
-# Abstract type
-
-@default_repr
-class Type:
-    """Base class for all FPy types."""
-    pass
-
-_Type: TypeAlias = Type | NamedId
-"""type: either a type annotation or type variable"""
-
-_TCtx: TypeAlias = dict[NamedId, _Type]
-"""typing context: mapping from variable to type"""
-
-#####################################################################
-# Types
-
-class NullType(Type):
-    """Placeholder for an ill-typed value."""
-
-    def __eq__(self, other):
-        return isinstance(other, NullType)
-
-    def __hash__(self):
-        return hash(type(self))
-
-class BoolType(Type):
-    """Type of boolean values"""
-
-    def __eq__(self, other):
-        return isinstance(other, BoolType)
-
-    def __hash__(self):
-        return hash(type(self))
-
-class RealType(Type):
-    """Real number type."""
-
-    def __eq__(self, other):
-        return isinstance(other, RealType)
-
-    def __hash__(self):
-        return hash(type(self))
-
-class TupleType(Type):
-    """Tuple type."""
-
-    elt_types: tuple[_Type, ...]
-    """type of elements"""
-
-    def __init__(self, *elts: _Type):
-        self.elt_types = elts
-
-    def __eq__(self, other):
-        return isinstance(other, TupleType) and self.elt_types == other.elt_types
-
-    def __hash__(self):
-        return hash(self.elt_types)
-
-class ListType(Type):
-    """List type."""
-
-    elt_type: _Type
-    """element type"""
-
-    def __init__(self, elt: _Type):
-        self.elt_type = elt
-
-    def __eq__(self, other):
-        return isinstance(other, ListType) and self.elt_type == other.elt_type
-
-    def __hash__(self):
-        return hash(self.elt_type)
-
-class FunctionType(Type):
-    """Function type."""
-
-    arg_types: tuple[_Type, ...]
-    """argument types"""
-
-    return_type: _Type
-    """return type"""
-
-    def __init__(self, arg_types: Sequence[_Type], return_type: _Type):
-        self.arg_types = tuple(arg_types)
-        self.return_type = return_type
-
-    def __eq__(self, other):
-        return isinstance(other, FunctionType) and self.arg_types == other.arg_types and self.return_type == other.return_type
-
-    def __hash__(self):
-        return hash((self.arg_types, self.return_type))
-
 
 #####################################################################
 # Type Inference
@@ -208,8 +114,8 @@ class _TypeCheckInstance(Visitor):
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    types: dict[Definition, _Type]
-    ret_type: _Type | None
+    types: dict[Definition, Type]
+    ret_type: Type | None
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
@@ -220,11 +126,11 @@ class _TypeCheckInstance(Visitor):
     def analyze(self) -> FunctionType:
         return self._visit_function(self.func, None)
 
-    def _unify(self, a_ty: _Type, b_ty: _Type):
+    def _unify(self, a_ty: Type, b_ty: Type):
         # TODO: implement
-        pass
+        return a_ty
 
-    def _annotation_to_type(self, ty: TypeAnn | None) -> _Type:
+    def _annotation_to_type(self, ty: TypeAnn | None) -> Type:
         match ty:
             case AnyTypeAnn():
                 # TODO: actually implement this
@@ -234,14 +140,14 @@ class _TypeCheckInstance(Visitor):
             case _:
                 raise NotImplementedError(ty)
 
-    def _visit_var(self, e: Var, ctx: None) -> _Type:
+    def _visit_var(self, e: Var, ctx: None) -> Type:
         d = self.def_use.find_def_from_use(e)
         return self.types[d]
 
     def _visit_bool(self, e: BoolVal, ctx: None) -> BoolType:
         return BoolType()
 
-    def _visit_foreign(self, e: ForeignVal, ctx: None) -> _Type:
+    def _visit_foreign(self, e: ForeignVal, ctx: None) -> Type:
         raise NotImplementedError
 
     def _visit_decnum(self, e: Decnum, ctx: None) -> RealType:
@@ -259,7 +165,7 @@ class _TypeCheckInstance(Visitor):
     def _visit_digits(self, e: Digits, ctx: None) -> RealType:
         return RealType()
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> _Type:
+    def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> Type:
         cls = type(e)
         if cls in _nullary_table:
             fn_ty = _nullary_table[cls]
@@ -267,7 +173,7 @@ class _TypeCheckInstance(Visitor):
         else:
             raise ValueError(f'unknown nullary operator: {cls}')
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> _Type:
+    def _visit_unaryop(self, e: UnaryOp, ctx: None) -> Type:
         cls = type(e)
         arg_ty = self._visit_expr(e.arg, None)
         if cls in _unary_table:
@@ -275,9 +181,30 @@ class _TypeCheckInstance(Visitor):
             self._unify(fn_ty.arg_types[0], arg_ty)
             return fn_ty.return_type
         else:
-            raise ValueError(f'unknown unary operator: {cls}')
+            match e:
+                case Sum():
+                    # sum operator
+                    self._unify(arg_ty, ListType(RealType()))
+                    return RealType()
+                case Range():
+                    # range operator
+                    self._unify(arg_ty, RealType())
+                    return ListType(RealType())
+                case Dim():
+                    # dimension operator
+                    # TODO: unify with list[A]
+                    self._unify(arg_ty, ListType(NullType()))
+                    return RealType()
+                case Enumerate():
+                    # enumerate operator
+                    # TODO: unify with list[A]
+                    self._unify(arg_ty, ListType(NullType()))
+                    # TODO: produce list[tuple[Real, A]]
+                    return ListType(TupleType(RealType(), NullType()))
+                case _:
+                    raise ValueError(f'unknown unary operator: {cls}')
 
-    def _visit_binaryop(self, e: BinaryOp, ctx: None) -> _Type:
+    def _visit_binaryop(self, e: BinaryOp, ctx: None) -> Type:
         cls = type(e)
         lhs_ty = self._visit_expr(e.first, None)
         rhs_ty = self._visit_expr(e.second, None)
@@ -287,9 +214,17 @@ class _TypeCheckInstance(Visitor):
             self._unify(fn_ty.arg_types[1], rhs_ty)
             return fn_ty.return_type
         else:
-            raise ValueError(f'unknown binary operator: {cls}')
+            match e:
+                case Size():
+                    # size operator
+                    # TODO: unify with list[A]
+                    self._unify(lhs_ty, ListType(NullType()))
+                    self._unify(rhs_ty, RealType())
+                    return RealType()
+                case _:
+                    raise ValueError(f'unknown binary operator: {cls}')
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> _Type:
+    def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> Type:
         cls = type(e)
         first = self._visit_expr(e.first, None)
         second = self._visit_expr(e.second, None)
@@ -303,7 +238,7 @@ class _TypeCheckInstance(Visitor):
         else:
             raise ValueError(f'unknown ternary operator: {cls}')
 
-    def _visit_naryop(self, e: NaryOp, ctx: None) -> _Type:
+    def _visit_naryop(self, e: NaryOp, ctx: None) -> Type:
         match e:
             case Min() | Max():
                 for arg in e.args:
@@ -315,6 +250,15 @@ class _TypeCheckInstance(Visitor):
                     ty = self._visit_expr(arg, None)
                     self._unify(ty, BoolType())
                 return BoolType()
+            case Zip():
+                arg_tys: list[Type] = []
+                for arg in e.args:
+                    arg_ty = self._visit_expr(arg, None)
+                    # TODO: unify with list[A]
+                    self._unify(arg_ty, ListType(NullType()))
+                    # TODO: extract A
+                    arg_tys.append(NullType())
+                return ListType(TupleType(*arg_tys))
             case _:
                 raise ValueError(f'unknown n-ary operator: {type(e)}')
 
@@ -324,7 +268,7 @@ class _TypeCheckInstance(Visitor):
             self._unify(ty, BoolType())
         return BoolType()
 
-    def _visit_call(self, e: Call, ctx: None) -> _Type:
+    def _visit_call(self, e: Call, ctx: None) -> Type:
         match e.fn:
             case Primitive():
                 for arg, ann in zip(e.args, e.fn.arg_types):
@@ -332,11 +276,15 @@ class _TypeCheckInstance(Visitor):
                     self._unify(ty, self._annotation_to_type(ann))
                 return self._annotation_to_type(e.fn.return_type)
             case Function():
-                expect_tys = [arg.type for arg in e.fn.args]
-                for arg, ann in zip(e.args, expect_tys):
-                    ty = self._visit_expr(arg, None)
-                    self._unify(ty, self._annotation_to_type(ann))
-                return self._annotation_to_type(e.fn.return_type)
+                if e.fn.sig is None or len(e.fn.sig.arg_types) != len(e.args):
+                    # no function signature / signature mismatch
+                    return NullType()
+                else:
+                    # signature matches
+                    for arg, expect_ty in zip(e.args, e.fn.sig.arg_types):
+                        ty = self._visit_expr(arg, None)
+                        self._unify(ty, expect_ty)
+                    return e.fn.sig.return_type
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn}')
 
@@ -345,30 +293,21 @@ class _TypeCheckInstance(Visitor):
         return TupleType(*elt_tys)
 
     def _visit_list_expr(self, e: ListExpr, ctx: None) -> ListType:
-        raise NotImplementedError
+        arg_tys = [self._visit_expr(arg, None) for arg in e.args]
+        if len(arg_tys) == 0:
+            # empty list
+            # TODO: return list[A]
+            return ListType(NullType())
+        else:
+            ty = arg_tys[0]
+            for arg_ty in arg_tys[1:]:
+                ty = self._unify(ty, arg_ty)
+            return ListType(ty)
 
-    def _visit_list_comp(self, e: ListComp, ctx: None) -> ListType:
-        raise NotImplementedError
-
-    def _visit_list_ref(self, e: ListRef, ctx: None) -> _Type:
-        raise NotImplementedError
-
-    def _visit_list_slice(self, e: ListSlice, ctx: None) -> ListType:
-        raise NotImplementedError
-
-    def _visit_list_set(self, e: ListSet, ctx: None) -> _Type:
-        raise NotImplementedError
-
-    def _visit_if_expr(self, e: IfExpr, ctx: None) -> _Type:
-        raise NotImplementedError
-
-    def _visit_context_expr(self, e: ContextExpr, ctx: None) -> _Type:
-        raise NotImplementedError
-
-    def _visit_binding(self, stmt: Assign, binding: Id | TupleBinding, ty: _Type):
+    def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, ty: Type):
         match binding:
             case NamedId():
-                d = self.def_use.find_def_from_site(binding, stmt)
+                d = self.def_use.find_def_from_site(binding, site)
                 self.types[d] = ty
             case UnderscoreId():
                 pass
@@ -376,13 +315,78 @@ class _TypeCheckInstance(Visitor):
                 if isinstance(ty, TupleType) and len(binding.elts) == len(ty.elt_types):
                     # type has expected shape
                     for elt_ty, elt in zip(ty.elt_types, binding.elts):
-                        self._visit_binding(stmt, elt, elt_ty)
+                        self._visit_binding(site, elt, elt_ty)
                 else:
                     # type does not have expected shape
                     for elt in binding.elts:
-                        self._visit_binding(stmt, elt, NullType())
+                        self._visit_binding(site, elt, NullType())
             case _:
-                raise RuntimeError(f'unreachable: {stmt.binding}')
+                raise RuntimeError(f'unreachable: {binding}')
+
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> ListType:
+        for target, iterable in zip(e.targets, e.iterables):
+            iter_ty = self._visit_expr(iterable, None)
+            match iter_ty:
+                case ListType():
+                    # expected type: list a
+                    self._visit_binding(e, target, iter_ty.elt_type)
+                case _:
+                    # otherwise
+                    self._visit_binding(e, target, NullType())
+
+        elt_ty = self._visit_expr(e.elt, None)
+        return ListType(elt_ty)
+
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> Type:
+        # type check array
+        value_ty = self._visit_expr(e.value, None)
+        # TODO: unify with list[A]
+        self._unify(value_ty, ListType(NullType()))
+        # type check index
+        index_ty = self._visit_expr(e.index, None)
+        self._unify(index_ty, RealType())
+        # TODO: return A
+        return NullType()
+
+    def _visit_list_slice(self, e: ListSlice, ctx: None) -> ListType:
+        # type check array
+        value_ty = self._visit_expr(e.value, None)
+        # TODO: unify with list[A]
+        self._unify(value_ty, ListType(NullType()))
+        # type check endpoints
+        if e.start is not None:
+            start_ty = self._visit_expr(e.start, None)
+            self._unify(start_ty, RealType())
+        if e.stop is not None:
+            stop_ty = self._visit_expr(e.stop, None)
+            self._unify(stop_ty, RealType())
+        # same type as value_ty
+        return value_ty
+
+    def _visit_list_set(self, e: ListSet, ctx: None) -> Type:
+        # type check array
+        value_ty = self._visit_expr(e.value, None)
+        # TODO: unify with list[A]
+        self._unify(value_ty, ListType(NullType()))
+        # type check index
+        index_ty = self._visit_expr(e.index, None)
+        self._unify(index_ty, RealType())
+        # same type as value_ty
+        return value_ty
+
+
+    def _visit_if_expr(self, e: IfExpr, ctx: None) -> Type:
+        # type check condition
+        cond_ty = self._visit_expr(e.cond, None)
+        self._unify(cond_ty, BoolType())
+
+        # type check branches
+        ift_ty = self._visit_expr(e.ift, None)
+        iff_ty = self._visit_expr(e.iff, None)
+        return self._unify(ift_ty, iff_ty)
+
+    def _visit_context_expr(self, e: ContextExpr, ctx: None) -> Type:
+        raise NotImplementedError
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         ty = self._visit_expr(stmt.expr, None)
@@ -392,10 +396,18 @@ class _TypeCheckInstance(Visitor):
         raise NotImplementedError
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
-        raise NotImplementedError
+        # type check condition
+        cond_ty = self._visit_expr(stmt.cond, None)
+        self._unify(cond_ty, BoolType())
+        # type check body
+        self._visit_block(stmt.body, None)
+        # TODO: merge variables
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
-        self._visit_expr(stmt.cond, None)
+        # type check condition
+        cond_ty = self._visit_expr(stmt.cond, None)
+        self._unify(cond_ty, BoolType())
+        # type check branches
         self._visit_block(stmt.ift, None)
         self._visit_block(stmt.iff, None)
         # TODO: merge variables
@@ -404,10 +416,23 @@ class _TypeCheckInstance(Visitor):
         raise NotImplementedError
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        raise NotImplementedError
+        # type check iterable
+        iter_ty = self._visit_expr(stmt.iterable, None)
+        match iter_ty:
+            case ListType():
+                # expected type: list a
+                self._visit_binding(stmt, stmt.target, iter_ty.elt_type)
+            case _:
+                # otherwise
+                self._visit_binding(stmt, stmt.target, NullType())
+
+        # type check body
+        self._visit_block(stmt.body, None)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        raise NotImplementedError
+        # TODO: type check context
+        # type check body
+        self._visit_block(stmt.body, None)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
         self._visit_expr(stmt.test, None)
@@ -424,7 +449,7 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_function(self, func: FuncDef, ctx: None) -> FunctionType:
         # infer types from annotations
-        arg_tys: list[_Type] = []
+        arg_tys: list[Type] = []
         for arg in func.args:
             arg_ty = self._annotation_to_type(arg.type)
             if isinstance(arg.name, NamedId):
