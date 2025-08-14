@@ -187,7 +187,7 @@ def _apply_fpy_decorator(
     ty = TypeCheck.check(ast)
 
     # wrap the IR in a Function
-    return Function(ast, env, func=func)
+    return Function(ast, ty, env, func=func)
 
 def _apply_fpy_prim_decorator(
     func: Callable[P, R],

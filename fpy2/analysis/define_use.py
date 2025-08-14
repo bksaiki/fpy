@@ -7,13 +7,13 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
 
-_DefSite: TypeAlias = Argument | Stmt | ListComp
-_UseSite: TypeAlias = Var | IndexedAssign
+DefSite: TypeAlias = Argument | Stmt | ListComp
+UseSite: TypeAlias = Var | IndexedAssign
 
 @dataclass
 class Definition:
     id: NamedId
-    site: _DefSite
+    site: DefSite
 
     def __eq__(self, other):
         return (
@@ -86,7 +86,7 @@ class DefinitionCtx(dict[NamedId, Definition | _DefineUnion]):
 class DefineUseAnalysis:
     """Result of definition-use analysis"""
     defs: dict[NamedId, set[Definition]]
-    uses: dict[Definition, set[_UseSite]]
+    uses: dict[Definition, set[UseSite]]
     stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
     blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
 
@@ -101,7 +101,7 @@ class DefineUseAnalysis:
         """Returns the set of all variable names in the analysis"""
         return set(self.defs.keys())
 
-    def find_def_from_site(self, name: NamedId, site: _DefSite) -> Definition:
+    def find_def_from_site(self, name: NamedId, site: DefSite) -> Definition:
         """Finds the definition of given a (name, site) pair."""
         defs = self.defs.get(name, set())
         for def_ in defs:
@@ -109,7 +109,7 @@ class DefineUseAnalysis:
                 return def_
         raise KeyError(f'no definition found for {name} at {site}')
 
-    def find_def_from_use(self, site: _UseSite):
+    def find_def_from_use(self, site: UseSite):
         """Finds the definition of a variable."""
         # TODO: make more efficient: build inverse map?
         for def_ in self.uses:
@@ -136,7 +136,7 @@ class _DefineUseInstance(DefaultVisitor):
                 raise RuntimeError(f'unreachable case: {self.ast}')
         return self.analysis
 
-    def _add_def(self, name: NamedId, site: _DefSite):
+    def _add_def(self, name: NamedId, site: DefSite):
         if name not in self.analysis.defs:
             self.analysis.defs[name] = set()
         definition = Definition(name, site)

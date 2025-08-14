@@ -163,7 +163,7 @@ def _ldexp_spec(x: fp.Real, n: fp.Real) -> fp.Real:
     elif fp.isinf(x):
         ret = fp.copysign(fp.inf(), x)
     else:
-        ret = x * pow(2, n)
+        ret = x * fp.pow(2, n)
 
     return ret
 
