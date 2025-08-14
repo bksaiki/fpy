@@ -184,27 +184,10 @@ def _apply_fpy_decorator(
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
 
     # type checking
-    TypeCheck.check(ast)
+    ty = TypeCheck.check(ast)
 
     # wrap the IR in a Function
     return Function(ast, env, func=func)
-
-_banned_param_kinds = [
-    inspect.Parameter.VAR_KEYWORD,
-    inspect.Parameter.KEYWORD_ONLY,
-    inspect.Parameter.VAR_POSITIONAL
-]
-
-
-def _convert_annotation(ann):
-    if ann is float or ann is int or ann is Float:
-        return RealTypeAnn(None)
-    elif ann is bool:
-        return BoolTypeAnn(None)
-    elif ann is inspect.Parameter.empty:
-        return AnyTypeAnn(None)
-    else:
-        raise NotImplementedError(ann)
 
 def _apply_fpy_prim_decorator(
     func: Callable[P, R],
@@ -213,15 +196,14 @@ def _apply_fpy_prim_decorator(
     """
     Applies the `@fpy_prim` decorator to a function.
     """
-    sig = inspect.signature(func)
+    # reparse for the typing annotations
+    src_name = inspect.getabsfile(func)
+    _, start_line = inspect.getsourcelines(func)
+    src = textwrap.dedent(inspect.getsource(func))
 
-    # TODO: make more robust
-    arg_tys = []
-    for name, kind in sig.parameters.items():
-        if kind in _banned_param_kinds:
-            raise ValueError(f"for primitive {func}: parameter '{name}' of kind {kind} is not allowed")
-        arg_ty = _convert_annotation(kind.annotation)
-        arg_tys.append(arg_ty)
+    # parse for the type signature
+    env = _function_env(func)
+    parser = Parser(src_name, src, env, start_line=start_line)
+    arg_types, return_type = parser.parse_signature()
 
-    ret_ty = _convert_annotation(sig.return_annotation)
-    return Primitive(func, arg_tys, ret_ty, kwargs)
+    return Primitive(func, arg_types, return_type, kwargs)

@@ -177,20 +177,6 @@ class Parser:
         self.lines = source.splitlines()
         self.start_line = start_line
 
-    def parse_function(self):
-        """Parses `self.source` as an FPy `FunctionDef`."""
-        start_loc = Location(self.name, self.start_line, 0, self.start_line, 0)
-
-        mod = ast.parse(self.source, self.name)
-        if len(mod.body) > 1:
-            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
-
-        ptree = mod.body[0]
-        if not isinstance(ptree, ast.FunctionDef):
-            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
-
-        return self._parse_function(ptree)
-
     def _parse_location(self, e: ast.expr | ast.stmt | ast.arg) -> Location:
         """Extracts the parse location of a  Python ST node."""
         assert e.end_lineno is not None, "missing end line number"
@@ -202,7 +188,6 @@ class Parser:
             e.end_lineno + self.start_line - 1,
             e.end_col_offset
         )
-
 
     def _parse_type_annotation(self, ann: ast.expr) -> TypeAnn:
         loc = self._parse_location(ann)
@@ -805,6 +790,9 @@ class Parser:
 
         return args
 
+    def _parse_returns(self, e: ast.expr):
+        return self._parse_type_annotation(e)
+
     def _parse_lambda(self, f: ast.Lambda):
         """Parse a Python lambda expression."""
         loc = self._parse_location(f)
@@ -820,7 +808,7 @@ class Parser:
         # check arguments are only positional
         pos_args = f.args.posonlyargs + f.args.args
         if f.args.vararg:
-            raise FPyParserError(loc, 'FPy does not support variary arguments', f, f.args.vararg)
+            raise FPyParserError(loc, 'FPy does not support variadic arguments', f, f.args.vararg)
         if f.args.kwarg:
             raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
 
@@ -847,6 +835,48 @@ class Parser:
     ):
         globals = None if globals is None else dict(globals)
         return eval(ast.unparse(e), globals, locals)
+
+    def _start_parse(self):
+        start_loc = Location(self.name, self.start_line, 0, self.start_line, 0)
+
+        mod = ast.parse(self.source, self.name)
+        if len(mod.body) > 1:
+            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
+
+        ptree = mod.body[0]
+        if not isinstance(ptree, ast.FunctionDef):
+            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
+
+        return ptree
+
+
+    def parse_function(self):
+        """Parses `self.source` as an FPy `FunctionDef`."""
+        ptree = self._start_parse()
+        return self._parse_function(ptree)
+
+    def parse_signature(self):
+        """Parses `self.source` to extract the arguments."""
+        f = self._start_parse()
+        loc = self._parse_location(f)
+
+        # check arguments are only positional
+        pos_args = f.args.posonlyargs + f.args.args
+        if f.args.vararg:
+            raise FPyParserError(loc, 'FPy does not support variadic arguments', f, f.args.vararg)
+        if f.args.kwarg:
+            raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
+
+        # check that there's a return annotation
+        if f.returns is None:
+            raise FPyParserError(loc, 'FPy requires a return annotation', f, f.returns)
+
+        # parse arguments and returns
+        args = self._parse_arguments(pos_args)
+        returns = self._parse_returns(f.returns)
+
+        arg_types = [arg.type for arg in args]
+        return arg_types, returns
 
     def find_decorator(
         self,
