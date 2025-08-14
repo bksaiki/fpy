@@ -7,7 +7,7 @@ from typing import Any, Optional, TypeAlias
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
 from ..ast.fpyast import *
-from ..analysis import SyntaxCheck
+from ..analysis import SyntaxCheck, TypeCheck
 from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..utils import Gensym, pythonize_id
 
@@ -806,4 +806,5 @@ def fpcore_to_fpy(
     # FPy builtins are printed
     ast = _FPCore2FPy(core, default_name).convert()
     SyntaxCheck.check(ast, ignore_unknown=ignore_unknown)
+    TypeCheck.check(ast)
     return ast
