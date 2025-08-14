@@ -1,6 +1,10 @@
 """Program analyses for FPy programs"""
 
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefinitionCtx, DefSite, UseSite
+from .define_use import (
+    DefineUse, DefineUseAnalysis, Definition, DefineUnion, DefinitionCtx,
+    DefSite, UseSite
+)
+
 from .live_vars import LiveVars
 from .syntax_check import SyntaxCheck, FPySyntaxError
 from .type_check import TypeCheck

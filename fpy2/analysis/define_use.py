@@ -26,7 +26,7 @@ class Definition:
         return hash((self.id, self.site))
 
 @default_repr
-class _DefineUnion:
+class DefineUnion:
     """Union of possible definition sites."""
     defs: set[Definition]
 
@@ -34,17 +34,17 @@ class _DefineUnion:
         self.defs = set(defs)
 
     def __eq__(self, other):
-        return isinstance(other, _DefineUnion) and self.defs == other.defs
+        return isinstance(other, DefineUnion) and self.defs == other.defs
 
     def __hash__(self):
         return hash(tuple(self.defs))
 
     @staticmethod
-    def union(*defs_or_unions: Union[Definition, '_DefineUnion']):
+    def union(*defs_or_unions: Union[Definition, 'DefineUnion']):
         """Create a union of definitions from a set of definitions or unions."""
         defs: set[Definition] = set()
         for item in defs_or_unions:
-            if isinstance(item, _DefineUnion):
+            if isinstance(item, DefineUnion):
                 defs.update(item.defs)
             else:
                 defs.add(item)
@@ -54,9 +54,9 @@ class _DefineUnion:
         elif len(defs) == 1:
             return defs.pop()
         else:
-            return _DefineUnion(defs)
+            return DefineUnion(defs)
 
-class DefinitionCtx(dict[NamedId, Definition | _DefineUnion]):
+class DefinitionCtx(dict[NamedId, Definition | DefineUnion]):
     """Mapping from variable to its definition (or possible definitions)."""
 
     def copy(self) -> 'DefinitionCtx':
@@ -146,7 +146,7 @@ class _DefineUseInstance(DefaultVisitor):
 
     def _add_use(self, name: NamedId, use: Var | IndexedAssign, ctx: DefinitionCtx):
         def_or_union = ctx[name]
-        if isinstance(def_or_union, _DefineUnion):
+        if isinstance(def_or_union, DefineUnion):
             for def_ in def_or_union.defs:
                 self.analysis.uses[def_].add(use)
         else:
@@ -183,7 +183,7 @@ class _DefineUseInstance(DefaultVisitor):
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = _DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
 
     def _visit_if(self, stmt: IfStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.cond, ctx)
@@ -191,7 +191,7 @@ class _DefineUseInstance(DefaultVisitor):
         iff_ctx = self._visit_block(stmt.iff, ctx.copy())
         # merge contexts along both paths
         for var in ift_ctx.keys() & iff_ctx.keys():
-            ctx[var] = _DefineUnion.union(ift_ctx[var], iff_ctx[var])
+            ctx[var] = DefineUnion.union(ift_ctx[var], iff_ctx[var])
 
     def _visit_while(self, stmt: WhileStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.cond, ctx)
@@ -199,7 +199,7 @@ class _DefineUseInstance(DefaultVisitor):
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = _DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
 
     def _visit_for(self, stmt: ForStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.iterable, ctx)
@@ -215,7 +215,7 @@ class _DefineUseInstance(DefaultVisitor):
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = _DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
 
     def _visit_statement(self, stmt: Stmt, ctx: DefinitionCtx):
         ctx_in = ctx.copy()
