@@ -205,5 +205,6 @@ def _apply_fpy_prim_decorator(
     env = _function_env(func)
     parser = Parser(src_name, src, env, start_line=start_line)
     arg_types, return_type = parser.parse_signature()
+    print(func, arg_types, return_type)
 
     return Primitive(func, arg_types, return_type, kwargs)

@@ -56,6 +56,9 @@ class VarType(Type):
     name: NamedId
     """identifier"""
 
+    def __init__(self, name: NamedId):
+        self.name = name
+
     def __eq__(self, other):
         return isinstance(other, VarType) and self.name == other.name
 
