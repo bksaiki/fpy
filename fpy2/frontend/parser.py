@@ -189,23 +189,7 @@ class Parser:
             e.end_col_offset
         )
 
-    def _parse_type_annotation(self, ann: ast.expr) -> TypeAnn:
-        loc = self._parse_location(ann)
-        match ann:
-            case ast.Attribute():
-                attrib = self._parse_foreign_attribute(ann)
-                ty = self._eval_foreign_attribute(attrib, ann, loc)
-            case ast.Name():
-                ident = self._parse_id(ann)
-                if isinstance(ident, UnderscoreId):
-                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', ann)
-                if ident.base not in self.env:
-                    raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', ann)
-                ty = self.env[ident.base]
-            case _:
-                # TODO: implement
-                return AnyTypeAnn(loc)
-
+    def _convert_type(self, ty, loc: Location):
         if ty == Real:
             return RealTypeAnn(loc)
         elif isinstance(ty, type):
@@ -219,9 +203,57 @@ class Parser:
             else:
                 # TODO: implement
                 return AnyTypeAnn(loc)
+        elif isinstance(ty, tuple):
+            elts = [self._convert_type(elt, loc) for elt in ty]
+            return TupleTypeAnn(elts, loc)
+        elif isinstance(ty, list):
+            elt = self._convert_type(ty[0], loc)
+            return ListTypeAnn(elt, loc)
         else:
             # TODO: implement
             return AnyTypeAnn(loc)
+
+    def _eval_type_annotation(self, ann: ast.expr):
+        loc = self._parse_location(ann)
+        match ann:
+            case ast.Attribute():
+                attrib = self._parse_foreign_attribute(ann)
+                return self._eval_foreign_attribute(attrib, ann, loc)
+            case ast.Name():
+                ident = self._parse_id(ann)
+                if isinstance(ident, UnderscoreId):
+                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', ann)
+                if ident.base not in self.env:
+                    raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', ann)
+                return self.env[ident.base]
+            case ast.Subscript():
+                ctor = self._eval_type_annotation(ann.value)
+                if ctor is tuple:
+                    # tuple[t1, ...]
+                    arg = self._eval_type_annotation(ann.slice)
+                    match arg:
+                        case tuple():
+                            return arg
+                        case _:
+                            return (arg,)
+                elif ctor is list:
+                    # list[t]
+                    arg = self._eval_type_annotation(ann.slice)
+                    return [arg]
+                else:
+                    return None
+            case ast.Tuple():
+                return tuple(self._eval_type_annotation(elt) for elt in ann.elts)
+            case _:
+                # TODO: implement
+                return None
+
+    def _parse_type_annotation(self, ann: ast.expr) -> TypeAnn:
+        loc = self._parse_location(ann)
+        ty = self._eval_type_annotation(ann)
+        if ty is None:
+            return AnyTypeAnn(loc)
+        return self._convert_type(ty, loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':

@@ -189,7 +189,7 @@ def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
         return ctx.round(xr * scale)
 
 @fp.fpy(ctx=fp.INTEGER)
-def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:
+def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
     """
     Computes the largest (normalized) exponent of the
     subset of finite, non-zero elements of `xs`.
