@@ -2,12 +2,14 @@
 Type checking for FPy programs.
 """
 
+from typing import cast
+
 from ..ast import *
 from ..primitive import Primitive
 from ..types import Type, NullType, BoolType, RealType, VarType, FunctionType, TupleType, ListType
 from ..utils import Gensym, NamedId, Unionfind
 
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefineUnion, DefSite
 from .live_vars import LiveVars
 
 #####################################################################
@@ -100,6 +102,47 @@ _ternary_table: dict[type[TernaryOp], FunctionType] = {
 }
 
 
+def _free_type_vars(ty: Type) -> set[VarType]:
+    match ty:
+        case BoolType() | RealType() | NullType():
+            return set()
+        case VarType():
+            return { ty }
+        case ListType():
+            return _free_type_vars(ty.elt_type)
+        case TupleType():
+            fvs: set[VarType] = set()
+            for elt in ty.elt_types:
+                fvs |= _free_type_vars(elt)
+            return fvs
+        case FunctionType():
+            fvs = set()
+            for arg in ty.arg_types:
+                fvs |= _free_type_vars(arg)
+            fvs |= _free_type_vars(ty.return_type)
+            return fvs
+        case _:
+            raise ValueError(f"unknown type: {ty}")
+
+def _type_subst(ty: Type, subst: dict[VarType, Type]) -> Type:
+    match ty:
+        case BoolType() | RealType() | NullType():
+            return ty
+        case VarType():
+            return subst[ty]
+        case ListType():
+            return ListType(_type_subst(ty.elt_type, subst))
+        case TupleType():
+            return TupleType(*[_type_subst(elt, subst) for elt in ty.elt_types])
+        case FunctionType():
+            return FunctionType(
+                [_type_subst(arg, subst) for arg in ty.arg_types],
+                _type_subst(ty.return_type, subst)
+            )
+        case _:
+            raise ValueError(f"unknown type: {ty}")
+
+
 class _TypeCheckInstance(Visitor):
     """Single-use instance of type checking."""
 
@@ -131,12 +174,10 @@ class _TypeCheckInstance(Visitor):
         match a_ty, b_ty:
             case VarType(), _:
                 b_ty = self.tvars.add(b_ty)
-                self.tvars.union(a_ty, b_ty)
-                return a_ty
+                return self.tvars.union(b_ty, a_ty)
             case _, VarType():
                 a_ty = self.tvars.add(a_ty)
-                self.tvars.union(a_ty, b_ty)
-                return a_ty
+                return self.tvars.union(a_ty, b_ty)
             case RealType(), RealType():
                 return a_ty
             case BoolType(), BoolType():
@@ -144,13 +185,35 @@ class _TypeCheckInstance(Visitor):
             case ListType(), ListType():
                 elt_ty = self._unify(a_ty.elt_type, b_ty.elt_type)
                 ty = self.tvars.add(elt_ty)
-                self.tvars.union(ty, self.tvars.add(a_ty))
-                self.tvars.union(ty, self.tvars.add(b_ty))
-                return ty
+                ty = self.tvars.union(ty, self.tvars.add(a_ty))
+                return self.tvars.union(ty, self.tvars.add(b_ty))
+            case TupleType(), TupleType():
+                # TODO: what if the length doesn't match
+                if len(a_ty.elt_types) != len(b_ty.elt_types):
+                    raise TypeError(f'tuple types do not match: {a_ty} != {b_ty}')
+                elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elt_types, b_ty.elt_types)]
+                return TupleType(*elts)
             case NullType(), NullType():
                 return a_ty
             case _:
                 raise NotImplementedError(a_ty, b_ty)
+
+    def _instantiate(self, ty: Type) -> Type:
+        subst: dict[VarType, Type] = {}
+        for fv in _free_type_vars(ty):
+            subst[fv] = self._fresh_type_var()
+        return _type_subst(ty, subst)
+
+    def _generalize(self, ty: Type) -> Type:
+        subst: dict[VarType, Type] = {}
+        for i, fv in enumerate(_free_type_vars(ty)):
+            t = self.tvars.find(fv)
+            match t: 
+                case VarType():
+                    subst[fv] = VarType(NamedId(f't{i + 1}'))
+                case _:
+                    subst[fv] = t
+        return _type_subst(ty, subst)
 
     def _annotation_to_type(self, ty: TypeAnn | None) -> Type:
         match ty:
@@ -324,10 +387,11 @@ class _TypeCheckInstance(Visitor):
                     return NullType()
                 else:
                     # signature matches
-                    for arg, expect_ty in zip(e.args, e.fn.sig.arg_types):
+                    fn_ty = cast(FunctionType, self._instantiate(e.fn.sig))
+                    for arg, expect_ty in zip(e.args, fn_ty.arg_types):
                         ty = self._visit_expr(arg, None)
                         self._unify(ty, expect_ty)
-                    return e.fn.sig.return_type
+                    return fn_ty.return_type
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
@@ -441,10 +505,13 @@ class _TypeCheckInstance(Visitor):
         arr_ty = self.types[d]
 
         for s in stmt.slices:
-            ty = self._visit_expr(s, None)
+            # arr : list[A]
             elt_ty = self._fresh_type_var()
             self._unify(arr_ty, ListType(elt_ty))
+            # s : real
+            ty = self._visit_expr(s, None)
             self._unify(ty, RealType())
+            # arr [idx] : A
             arr_ty = elt_ty
 
         val_ty = self._visit_expr(stmt.expr, None)
@@ -456,7 +523,15 @@ class _TypeCheckInstance(Visitor):
         self._unify(cond_ty, BoolType())
         # type check body
         self._visit_block(stmt.body, None)
-        # TODO: merge variables
+
+    def _select_def_repr(self, d: Definition | DefineUnion):
+        match d:
+            case Definition():
+                return d
+            case DefineUnion():
+                return next(iter(d.defs))
+            case _:
+                raise RuntimeError(f'unreachable')
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         # type check condition
@@ -465,14 +540,22 @@ class _TypeCheckInstance(Visitor):
         # type check branches
         self._visit_block(stmt.ift, None)
         self._visit_block(stmt.iff, None)
-        # TODO: merge variables
+
+        # need to merge variables introduced on both sides
+        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
+        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
+        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
+        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
+        for intro in intros_ift & intros_iff:
+            ift_def = self._select_def_repr(defs_out_ift[intro])
+            iff_def = self._select_def_repr(defs_out_iff[intro])
+            self._unify(self.types[ift_def], self.types[iff_def])
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
         # type check body
         self._visit_block(stmt.body, None)
-        # TODO: merge variables
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         # type check iterable
@@ -484,7 +567,6 @@ class _TypeCheckInstance(Visitor):
             case _:
                 # otherwise
                 self._visit_binding(stmt, stmt.target, NullType())
-        # TODO: merge variables
 
         # type check body
         self._visit_block(stmt.body, None)
@@ -517,10 +599,15 @@ class _TypeCheckInstance(Visitor):
                 self.types[d] = arg_ty
             arg_tys.append(arg_ty)
 
+        # type check body
         self._visit_block(func.body, None)
         if self.ret_type is None:
             raise TypeError(f'function {func.name} has no return type')
-        return FunctionType(arg_tys, self.ret_type)
+
+        # generalize the function type
+        ty = FunctionType(arg_tys, self.ret_type)
+        print(ty, self.tvars)
+        return cast(FunctionType, self._generalize(ty))
 
 
 class TypeCheck:
