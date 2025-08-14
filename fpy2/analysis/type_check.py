@@ -1,17 +1,8 @@
 """
 Type checking for FPy programs.
-
-FPy has a simple type system:
-
-    t ::= bool
-        | real
-        | t1 x t2
-        | list t
-
 """
 
 from ..ast import *
-from ..function import Function
 from ..primitive import Primitive
 from ..types import Type, NullType, BoolType, RealType, VarType, FunctionType, TupleType, ListType
 from ..utils import NamedId
@@ -132,11 +123,27 @@ class _TypeCheckInstance(Visitor):
 
     def _annotation_to_type(self, ty: TypeAnn | None) -> Type:
         match ty:
-            case AnyTypeAnn():
+            case None | AnyTypeAnn():
                 # TODO: actually implement this
                 return NullType()
+            case BoolTypeAnn():
+                # boolean type
+                return BoolType()
             case RealTypeAnn():
                 return RealType()
+            case TupleTypeAnn():
+                # tuple type
+                elt_tys = [self._annotation_to_type(elt) for elt in ty.elts]
+                return TupleType(*elt_tys)
+            case SizedTensorTypeAnn():
+                if len(ty.dims) == 0:
+                    # TODO: return list[A]
+                    return ListType(NullType())
+                else:
+                    arr_ty = ListType(self._annotation_to_type(ty.elt))
+                    for _ in ty.dims[1:]:
+                        arr_ty = ListType(arr_ty)
+                    return arr_ty
             case _:
                 raise NotImplementedError(ty)
 
@@ -269,13 +276,21 @@ class _TypeCheckInstance(Visitor):
         return BoolType()
 
     def _visit_call(self, e: Call, ctx: None) -> Type:
+        # get around circular imports
+        from ..function import Function
+
         match e.fn:
+            case None:
+                # unbound call
+                return NullType()
             case Primitive():
+                # calling a primitive
                 for arg, ann in zip(e.args, e.fn.arg_types):
                     ty = self._visit_expr(arg, None)
                     self._unify(ty, self._annotation_to_type(ann))
                 return self._annotation_to_type(e.fn.return_type)
             case Function():
+                # calling a function
                 if e.fn.sig is None or len(e.fn.sig.arg_types) != len(e.args):
                     # no function signature / signature mismatch
                     return NullType()
@@ -286,7 +301,7 @@ class _TypeCheckInstance(Visitor):
                         self._unify(ty, expect_ty)
                     return e.fn.sig.return_type
             case _:
-                raise NotImplementedError(f'cannot type check {e.fn}')
+                raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> TupleType:
         elt_tys = [self._visit_expr(arg, None) for arg in e.args]
@@ -364,16 +379,20 @@ class _TypeCheckInstance(Visitor):
         return value_ty
 
     def _visit_list_set(self, e: ListSet, ctx: None) -> Type:
-        # type check array
-        value_ty = self._visit_expr(e.value, None)
-        # TODO: unify with list[A]
-        self._unify(value_ty, ListType(NullType()))
-        # type check index
-        index_ty = self._visit_expr(e.index, None)
-        self._unify(index_ty, RealType())
-        # same type as value_ty
-        return value_ty
+        arr_ty = self._visit_expr(e.array, None)
 
+        iter_ty = arr_ty
+        for s in e.slices:
+            ty = self._visit_expr(s, None)
+            # TODO: unify with list[A]
+            self._unify(ty, ListType(NullType()))
+            self._unify(ty, RealType())
+            # TODO: extract A
+            iter_ty = NullType()
+
+        val_ty = self._visit_expr(e.value, None)
+        self._unify(val_ty, iter_ty)
+        return arr_ty
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> Type:
         # type check condition
@@ -393,7 +412,19 @@ class _TypeCheckInstance(Visitor):
         self._visit_binding(stmt, stmt.binding, ty)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-        raise NotImplementedError
+        d = self.def_use.find_def_from_use(stmt)
+        arr_ty = self.types[d]
+
+        for s in stmt.slices:
+            ty = self._visit_expr(s, None)
+            # TODO: unify with list[A]
+            self._unify(ty, ListType(NullType()))
+            self._unify(ty, RealType())
+            # TODO: extract A
+            arr_ty = NullType()
+
+        val_ty = self._visit_expr(stmt.expr, None)
+        self._unify(val_ty, arr_ty)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         # type check condition
@@ -413,7 +444,10 @@ class _TypeCheckInstance(Visitor):
         # TODO: merge variables
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        raise NotImplementedError
+        cond_ty = self._visit_expr(stmt.cond, None)
+        self._unify(cond_ty, BoolType())
+        # type check body
+        self._visit_block(stmt.body, None)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         # type check iterable
