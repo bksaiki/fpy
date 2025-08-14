@@ -531,7 +531,7 @@ class _TypeCheckInstance(Visitor):
             case DefineUnion():
                 return next(iter(d.defs))
             case _:
-                raise RuntimeError(f'unreachable')
+                raise RuntimeError(f'unreachable {d}')
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         # type check condition
