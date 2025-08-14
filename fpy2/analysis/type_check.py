@@ -209,11 +209,13 @@ class _TypeCheckInstance(Visitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     types: dict[Definition, _Type]
+    ret_type: _Type | None
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
         self.types = {}
+        self.ret_type = None
 
     def analyze(self) -> FunctionType:
         return self._visit_function(self.func, None)
@@ -224,6 +226,9 @@ class _TypeCheckInstance(Visitor):
 
     def _annotation_to_type(self, ty: TypeAnn | None) -> _Type:
         match ty:
+            case AnyTypeAnn():
+                # TODO: actually implement this
+                return NullType()
             case RealTypeAnn():
                 return RealType()
             case _:
@@ -299,7 +304,19 @@ class _TypeCheckInstance(Visitor):
             raise ValueError(f'unknown ternary operator: {cls}')
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> _Type:
-        raise NotImplementedError
+        match e:
+            case Min() | Max():
+                for arg in e.args:
+                    ty = self._visit_expr(arg, None)
+                    self._unify(ty, RealType())
+                return RealType()
+            case And() | Or():
+                for arg in e.args:
+                    ty = self._visit_expr(arg, None)
+                    self._unify(ty, BoolType())
+                return BoolType()
+            case _:
+                raise ValueError(f'unknown n-ary operator: {type(e)}')
 
     def _visit_compare(self, e: Compare, ctx: None) -> BoolType:
         for arg in e.args:
@@ -310,9 +327,15 @@ class _TypeCheckInstance(Visitor):
     def _visit_call(self, e: Call, ctx: None) -> _Type:
         match e.fn:
             case Primitive():
-                for arg, expect_ty in zip(e.args, e.fn.arg_types):
+                for arg, ann in zip(e.args, e.fn.arg_types):
                     ty = self._visit_expr(arg, None)
-                    self._unify(ty, expect_ty)
+                    self._unify(ty, self._annotation_to_type(ann))
+                return self._annotation_to_type(e.fn.return_type)
+            case Function():
+                expect_tys = [arg.type for arg in e.fn.args]
+                for arg, ann in zip(e.args, expect_tys):
+                    ty = self._visit_expr(arg, None)
+                    self._unify(ty, self._annotation_to_type(ann))
                 return self._annotation_to_type(e.fn.return_type)
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn}')
@@ -342,11 +365,28 @@ class _TypeCheckInstance(Visitor):
     def _visit_context_expr(self, e: ContextExpr, ctx: None) -> _Type:
         raise NotImplementedError
 
+    def _visit_binding(self, stmt: Assign, binding: Id | TupleBinding, ty: _Type):
+        match binding:
+            case NamedId():
+                d = self.def_use.find_def_from_site(binding, stmt)
+                self.types[d] = ty
+            case UnderscoreId():
+                pass
+            case TupleBinding():
+                if isinstance(ty, TupleType) and len(binding.elts) == len(ty.elt_types):
+                    # type has expected shape
+                    for elt_ty, elt in zip(ty.elt_types, binding.elts):
+                        self._visit_binding(stmt, elt, elt_ty)
+                else:
+                    # type does not have expected shape
+                    for elt in binding.elts:
+                        self._visit_binding(stmt, elt, NullType())
+            case _:
+                raise RuntimeError(f'unreachable: {stmt.binding}')
+
     def _visit_assign(self, stmt: Assign, ctx: None):
         ty = self._visit_expr(stmt.expr, None)
-        if isinstance(stmt.binding, NamedId):
-            d = self.def_use.find_def_from_site(stmt.binding, stmt)
-            self.types[d] = ty
+        self._visit_binding(stmt, stmt.binding, ty)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         raise NotImplementedError
@@ -370,13 +410,13 @@ class _TypeCheckInstance(Visitor):
         raise NotImplementedError
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
-        raise NotImplementedError
+        self._visit_expr(stmt.test, None)
 
     def _visit_effect(self, stmt: EffectStmt, ctx: None):
-        raise NotImplementedError
+        self._visit_expr(stmt.expr, None)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None):
-        raise NotImplementedError
+        self.ret_type = self._visit_expr(stmt.expr, None)
 
     def _visit_block(self, block: StmtBlock, ctx: None):
         for stmt in block.stmts:
@@ -393,8 +433,9 @@ class _TypeCheckInstance(Visitor):
             arg_tys.append(arg_ty)
 
         self._visit_block(func.body, None)
-        raise NotImplementedError
-
+        if self.ret_type is None:
+            raise TypeError(f'function {func.name} has no return type')
+        return FunctionType(arg_tys, self.ret_type)
 
 
 class TypeCheck:
@@ -421,3 +462,4 @@ class TypeCheck:
         inst = _TypeCheckInstance(func, def_use)
         ty = inst.analyze()
         print(func.name, ty)
+        return ty
