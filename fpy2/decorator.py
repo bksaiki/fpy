@@ -15,8 +15,8 @@ from typing import (
     TypeVar
 )
 
-from .analysis import SyntaxCheck, TypeCheck
-from .ast import EffectStmt, NamedId, RealTypeAnn, BoolTypeAnn, AnyTypeAnn
+from .analysis import SyntaxCheck, ContextInfer
+from .ast import EffectStmt, NamedId
 from .env import ForeignEnv
 from .number import Float
 from .frontend import Parser
@@ -187,6 +187,8 @@ def _apply_fpy_decorator(
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
         # type checking [disabled: fpy is not statically typed]
         # ty = TypeCheck.check(ast)
+
+        ContextInfer.infer(ast)
 
     # wrap the IR in a Function
     return Function(ast, None, env, func=func)
