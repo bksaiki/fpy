@@ -410,7 +410,6 @@ class _TypeCheckInstance(Visitor):
             return ListType(ty)
 
     def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, ty: Type):
-        print(binding, ty)
         match binding:
             case NamedId():
                 d = self.def_use.find_def_from_site(binding, site)
@@ -605,7 +604,6 @@ class _TypeCheckInstance(Visitor):
 
         # generalize the function type
         ty = FunctionType(arg_tys, self.ret_type)
-        print(ty, self.tvars)
         return cast(FunctionType, self._generalize(ty))
 
 
@@ -629,9 +627,7 @@ class TypeCheck:
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
 
-        print(func.format())
         def_use = DefineUse.analyze(func)
         inst = _TypeCheckInstance(func, def_use)
         ty = inst.analyze()
-        print(func.name, ty)
         return ty

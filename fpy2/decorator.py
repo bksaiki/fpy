@@ -171,8 +171,8 @@ def _apply_fpy_decorator(
     # add context information
     ast.metadata = { **kwargs, **props }
 
-    # syntax checkng (and compute relevant free vars)
     if is_pattern:
+        # syntax checking
         ast.free_vars = SyntaxCheck.check(
             ast,
             free_vars=free_vars,
@@ -180,19 +180,19 @@ def _apply_fpy_decorator(
             ignore_noreturn=True,
             allow_wildcard=True
         )
+        # no type checking
+        ty = None
     else:
+        # syntax checking
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
+        # type checking
+        ty = TypeCheck.check(ast)
 
-    # type checking
-    ty = TypeCheck.check(ast)
 
     # wrap the IR in a Function
     return Function(ast, ty, env, func=func)
 
-def _apply_fpy_prim_decorator(
-    func: Callable[P, R],
-    kwargs: dict[str, Any]
-):
+def _apply_fpy_prim_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     """
     Applies the `@fpy_prim` decorator to a function.
     """
@@ -205,6 +205,5 @@ def _apply_fpy_prim_decorator(
     env = _function_env(func)
     parser = Parser(src_name, src, env, start_line=start_line)
     arg_types, return_type = parser.parse_signature()
-    print(func, arg_types, return_type)
 
     return Primitive(func, arg_types, return_type, kwargs)
