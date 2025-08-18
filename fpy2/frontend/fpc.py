@@ -7,7 +7,7 @@ from typing import Any, Optional, TypeAlias
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
 from ..ast.fpyast import *
-from ..analysis import SyntaxCheck
+from ..analysis import SyntaxCheck, TypeCheck
 from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..utils import Gensym, pythonize_id
 
@@ -117,12 +117,14 @@ def _get_ternary_table():
         }
     return _ternary_table_cache
 
-def _zeros(ns: list[Expr]) -> Expr:
-    assert len(ns) >= 1
-    v: Expr = Integer(0, None)
-    for n in reversed(ns):
-        v = ListComp([UnderscoreId()], [Range(NamedId('range'), n, None)], v, None)
-    return v
+def _empty(ns: list[Expr]) -> Expr:
+    if len(ns) == 1:
+        return Empty(NamedId('empty'), ns[0], None)
+    elif len(ns) > 1:
+        elt = _empty(ns[1:])
+        return ListComp([UnderscoreId()], [Range(NamedId('range'), ns[0], None)], elt, None)
+    else:
+        raise ValueError(f'ns={ns} cannot be empty')
 
 
 # TODO: clean this up
@@ -484,7 +486,7 @@ class _FPCore2FPy:
 
         # initialize tensor
         tuple_id = self.gensym.fresh('t')
-        zeroed = _zeros([Var(var, None) for var in bound_vars])
+        zeroed = _empty([Var(var, None) for var in bound_vars])
         stmt = Assign(tuple_id, None, zeroed, None)
         ctx.stmts.append(stmt)
 
@@ -537,7 +539,7 @@ class _FPCore2FPy:
 
         # initialize tensor
         tuple_id = self.gensym.fresh('t')
-        zeroed = _zeros([Var(var, None) for var in bound_vars])
+        zeroed = _empty([Var(var, None) for var in bound_vars])
         stmt = Assign(tuple_id, None, zeroed, None)
         ctx.stmts.append(stmt)
 

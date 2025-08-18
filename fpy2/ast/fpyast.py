@@ -40,6 +40,7 @@ __all__ = [
     'BoolTypeAnn',
     'TensorTypeAnn',
     'TupleTypeAnn',
+    'ListTypeAnn',
     'SizedTensorTypeAnn',
 
     # Value expressions
@@ -165,6 +166,7 @@ __all__ = [
 
     # Tensor operators
     'Range',
+    'Empty',
     'Dim',
     'Size',
     'Zip',
@@ -306,6 +308,23 @@ class TupleTypeAnn(TensorTypeAnn):
 
     def __hash__(self) -> int:
         return hash(self.elts)
+
+class ListTypeAnn(TensorTypeAnn):
+    """FPy AST: native list type annotation"""
+    __slots__ = ('elt',)
+    elt: TypeAnn
+
+    def __init__(self, elt: TypeAnn, loc: Optional[Location]):
+        super().__init__(loc)
+        self.elt = elt
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ListTypeAnn):
+            return False
+        return self.elt == other.elt
+
+    def __hash__(self) -> int:
+        return hash(self.elt)
 
 class SizedTensorTypeAnn(TensorTypeAnn):
     """FPy AST: sized, homogenous tensor type annotation"""
@@ -1058,6 +1077,10 @@ class RoundAt(NamedBinaryOp):
 
 class Range(NamedUnaryOp):
     """FPy node: range constructor"""
+    __slots__ = ()
+
+class Empty(NamedUnaryOp):
+    """FPy node: empty operator"""
     __slots__ = ()
 
 class Dim(NamedUnaryOp):

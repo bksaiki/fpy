@@ -7,10 +7,26 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
 
-Definition: TypeAlias = Argument | Stmt | ListComp
+DefSite: TypeAlias = FuncDef | Argument | Stmt | ListComp
+UseSite: TypeAlias = Var | IndexedAssign
+
+@dataclass
+class Definition:
+    id: NamedId
+    site: DefSite
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, Definition)
+            and self.id == other.id
+            and self.site == other.site
+        )
+
+    def __hash__(self):
+        return hash((self.id, self.site))
 
 @default_repr
-class _DefineUnion:
+class DefineUnion:
     """Union of possible definition sites."""
     defs: set[Definition]
 
@@ -18,19 +34,17 @@ class _DefineUnion:
         self.defs = set(defs)
 
     def __eq__(self, other):
-        if not isinstance(other, _DefineUnion):
-            return NotImplemented
-        return self.defs == other.defs
+        return isinstance(other, DefineUnion) and self.defs == other.defs
 
     def __hash__(self):
         return hash(tuple(self.defs))
 
     @staticmethod
-    def union(*defs_or_unions: Union[Definition, '_DefineUnion']):
+    def union(*defs_or_unions: Union[Definition, 'DefineUnion']):
         """Create a union of definitions from a set of definitions or unions."""
         defs: set[Definition] = set()
         for item in defs_or_unions:
-            if isinstance(item, _DefineUnion):
+            if isinstance(item, DefineUnion):
                 defs.update(item.defs)
             else:
                 defs.add(item)
@@ -40,9 +54,9 @@ class _DefineUnion:
         elif len(defs) == 1:
             return defs.pop()
         else:
-            return _DefineUnion(defs)
+            return DefineUnion(defs)
 
-class DefinitionCtx(dict[NamedId, Definition | _DefineUnion]):
+class DefinitionCtx(dict[NamedId, Definition | DefineUnion]):
     """Mapping from variable to its definition (or possible definitions)."""
 
     def copy(self) -> 'DefinitionCtx':
@@ -68,24 +82,40 @@ class DefinitionCtx(dict[NamedId, Definition | _DefineUnion]):
         return set(other.keys() - self.keys())
 
 
-@dataclass
+@default_repr
 class DefineUseAnalysis:
     """Result of definition-use analysis"""
     defs: dict[NamedId, set[Definition]]
-    uses: dict[Definition, set[Var | IndexedAssign]]
+    uses: dict[Definition, set[UseSite]]
     stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
     blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
 
-    @staticmethod
-    def default():
-        """Default analysis with empty definitions and uses"""
-        return DefineUseAnalysis({}, {}, {}, {})
+    def __init__(self):
+        self.defs = {}
+        self.uses = {}
+        self.stmts = {}
+        self.blocks = {}
 
     @property
     def names(self) -> set[NamedId]:
         """Returns the set of all variable names in the analysis"""
         return set(self.defs.keys())
 
+    def find_def_from_site(self, name: NamedId, site: DefSite) -> Definition:
+        """Finds the definition of given a (name, site) pair."""
+        defs = self.defs.get(name, set())
+        for def_ in defs:
+            if def_.site == site:
+                return def_
+        raise KeyError(f'no definition found for {name} at {site}')
+
+    def find_def_from_use(self, site: UseSite):
+        """Finds the definition of a variable."""
+        # TODO: make more efficient: build inverse map?
+        for def_ in self.uses:
+            if site in self.uses[def_]:
+                return def_
+        raise KeyError(f'no definition found for site {site}')
 
 class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""
@@ -94,7 +124,7 @@ class _DefineUseInstance(DefaultVisitor):
 
     def __init__(self, ast: FuncDef | StmtBlock):
         self.ast = ast
-        self.analysis = DefineUseAnalysis.default()
+        self.analysis = DefineUseAnalysis()
 
     def analyze(self):
         match self.ast:
@@ -106,15 +136,17 @@ class _DefineUseInstance(DefaultVisitor):
                 raise RuntimeError(f'unreachable case: {self.ast}')
         return self.analysis
 
-    def _add_def(self, name: NamedId, definition: Definition):
+    def _add_def(self, name: NamedId, site: DefSite):
         if name not in self.analysis.defs:
             self.analysis.defs[name] = set()
+        definition = Definition(name, site)
         self.analysis.defs[name].add(definition)
         self.analysis.uses[definition] = set()
+        return definition
 
     def _add_use(self, name: NamedId, use: Var | IndexedAssign, ctx: DefinitionCtx):
         def_or_union = ctx[name]
-        if isinstance(def_or_union, _DefineUnion):
+        if isinstance(def_or_union, DefineUnion):
             for def_ in def_or_union.defs:
                 self.analysis.uses[def_].add(use)
         else:
@@ -131,15 +163,13 @@ class _DefineUseInstance(DefaultVisitor):
         ctx = ctx.copy()
         for target in e.targets:
             for name in target.names():
-                self._add_def(name, e)
-                ctx[name] = e
+                ctx[name] = self._add_def(name, e)
         self._visit_expr(e.elt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
-            self._add_def(var, stmt)
-            ctx[var] = stmt
+            ctx[var] = self._add_def(var, stmt)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefinitionCtx):
         self._add_use(stmt.var, stmt, ctx)
@@ -153,7 +183,7 @@ class _DefineUseInstance(DefaultVisitor):
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = _DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
 
     def _visit_if(self, stmt: IfStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.cond, ctx)
@@ -161,7 +191,7 @@ class _DefineUseInstance(DefaultVisitor):
         iff_ctx = self._visit_block(stmt.iff, ctx.copy())
         # merge contexts along both paths
         for var in ift_ctx.keys() & iff_ctx.keys():
-            ctx[var] = _DefineUnion.union(ift_ctx[var], iff_ctx[var])
+            ctx[var] = DefineUnion.union(ift_ctx[var], iff_ctx[var])
 
     def _visit_while(self, stmt: WhileStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.cond, ctx)
@@ -169,25 +199,23 @@ class _DefineUseInstance(DefaultVisitor):
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = _DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
 
     def _visit_for(self, stmt: ForStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.iterable, ctx)
         body_ctx = ctx.copy()
         match stmt.target:
             case NamedId():
-                self._add_def(stmt.target, stmt)
-                body_ctx[stmt.target] = stmt
+                body_ctx[stmt.target] = self._add_def(stmt.target, stmt)
             case TupleBinding():
                 for var in stmt.target.names():
-                    self._add_def(var, stmt)
-                    body_ctx[var] = stmt
+                    body_ctx[var] = self._add_def(var, stmt)
 
         body_ctx = self._visit_block(stmt.body, body_ctx)
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = _DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
 
     def _visit_statement(self, stmt: Stmt, ctx: DefinitionCtx):
         ctx_in = ctx.copy()
@@ -204,8 +232,9 @@ class _DefineUseInstance(DefaultVisitor):
     def _visit_function(self, func: FuncDef, ctx: DefinitionCtx):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
-                self._add_def(arg.name, arg)
-                ctx[arg.name] = arg
+                ctx[arg.name] = self._add_def(arg.name, arg)
+        for v in func.free_vars:
+            ctx[v] = self._add_def(v, func)
         self._visit_block(func.body, ctx.copy())
 
 

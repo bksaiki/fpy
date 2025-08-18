@@ -30,3 +30,5 @@ from .iterator import sliding_window
 from .location import Location
 from .ordering import Ordering
 from .string import pythonize_id
+from .uninit import UNINIT
+from .unionfind import Unionfind

@@ -274,6 +274,14 @@ class _Interpreter(Visitor):
         n = int(stop)
         return [Float.from_int(i, ctx=ctx) for i in range(n)]
 
+    def _apply_empty(self, arg: Expr, ctx: Context):
+        size = self._visit_expr(arg, ctx)
+        if not isinstance(size, Float):
+            raise TypeError(f'expected a real number argument, got {size}')
+        if not size.is_integer() or size.is_negative():
+            raise TypeError(f'expected an integer argument, got {size}')
+        return ops.empty(size)
+
     def _apply_dim(self, arg: Expr, ctx: Context):
         v = self._visit_expr(arg, ctx)
         if not isinstance(v, list):
@@ -386,6 +394,8 @@ class _Interpreter(Visitor):
                     return self._apply_not(e.arg, ctx)
                 case Range():
                     return self._apply_range(e.arg, ctx)
+                case Empty():
+                    return self._apply_empty(e.arg, ctx)
                 case Dim():
                     return self._apply_dim(e.arg, ctx)
                 case Enumerate():

@@ -15,9 +15,10 @@ from typing import (
     TypeVar
 )
 
-from .analysis import SyntaxCheck
-from .ast import EffectStmt, NamedId
+from .analysis import SyntaxCheck, TypeCheck
+from .ast import EffectStmt, NamedId, RealTypeAnn, BoolTypeAnn, AnyTypeAnn
 from .env import ForeignEnv
+from .number import Float
 from .frontend import Parser
 from .function import Function
 from .primitive import Primitive
@@ -163,7 +164,6 @@ def _apply_fpy_decorator(
     # strictness
     strict = kwargs.get('strict', True)
 
-
     # function may have a global context
     if 'ctx' in kwargs:
         ast.ctx = kwargs['ctx']
@@ -171,8 +171,8 @@ def _apply_fpy_decorator(
     # add context information
     ast.metadata = { **kwargs, **props }
 
-    # syntax checkng (and compute relevant free vars)
     if is_pattern:
+        # syntax checking
         ast.free_vars = SyntaxCheck.check(
             ast,
             free_vars=free_vars,
@@ -180,17 +180,29 @@ def _apply_fpy_decorator(
             ignore_noreturn=True,
             allow_wildcard=True
         )
+        # no type checking
+        # ty = None
     else:
+        # syntax checking
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
+        # type checking [disabled: fpy is not statically typed]
+        # ty = TypeCheck.check(ast)
 
     # wrap the IR in a Function
-    return Function(ast, env, func=func)
+    return Function(ast, None, env, func=func)
 
-def _apply_fpy_prim_decorator(
-    func: Callable[P, R],
-    kwargs: dict[str, Any]
-):
+def _apply_fpy_prim_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     """
     Applies the `@fpy_prim` decorator to a function.
     """
-    return Primitive(func, kwargs)
+    # reparse for the typing annotations
+    src_name = inspect.getabsfile(func)
+    _, start_line = inspect.getsourcelines(func)
+    src = textwrap.dedent(inspect.getsource(func))
+
+    # parse for the type signature
+    env = _function_env(func)
+    parser = Parser(src_name, src, env, start_line=start_line)
+    arg_types, return_type = parser.parse_signature()
+
+    return Primitive(func, arg_types, return_type, kwargs)

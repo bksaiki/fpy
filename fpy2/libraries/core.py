@@ -8,7 +8,7 @@ from . import base as fp
 # Splitting functions
 
 @fp.fpy_primitive
-def split(x: fp.Float, n: fp.Float):
+def split(x: fp.Float, n: fp.Float) -> tuple[fp.Float, fp.Float]:
     """
     Splits `x` into two parts:
     - all digits of `x` that are above the `n`th digit
@@ -126,7 +126,7 @@ def _logb_spec(x: fp.Real):
     return fp.floor(fp.log2(abs(x)))
 
 @fp.fpy_primitive(spec=_logb_spec)
-def logb(x: fp.Float, ctx: fp.Context):
+def logb(x: fp.Float, ctx: fp.Context) -> fp.Float:
     """
     Returns the normalized exponent of `x`.
 
@@ -163,7 +163,7 @@ def _ldexp_spec(x: fp.Real, n: fp.Real) -> fp.Real:
     elif fp.isinf(x):
         ret = fp.copysign(fp.inf(), x)
     else:
-        ret = x * pow(2, n)
+        ret = x * fp.pow(2, n)
 
     return ret
 
@@ -189,7 +189,7 @@ def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
         return ctx.round(xr * scale)
 
 @fp.fpy(ctx=fp.INTEGER)
-def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:
+def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
     """
     Computes the largest (normalized) exponent of the
     subset of finite, non-zero elements of `xs`.
@@ -214,7 +214,7 @@ def max_e(xs: tuple[fp.Real, ...]) -> tuple[fp.Real, bool]:
 # Context operations
 
 @fp.fpy_primitive
-def max_p(ctx: fp.Context):
+def max_p(ctx: fp.Context) -> fp.Float:
     """
     Returns the maximum precision of the context.
     This is a no-op for the `RealContext`.
@@ -225,7 +225,7 @@ def max_p(ctx: fp.Context):
     return ctx.round(p)
 
 @fp.fpy_primitive
-def min_n(ctx: fp.Context):
+def min_n(ctx: fp.Context) -> fp.Float:
     """
     Returns the least absolute digit of the context.
     This is the position of the most significant digit that

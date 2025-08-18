@@ -71,6 +71,7 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     round: Round,
     round_exact: RoundExact,
     range: Range,
+    empty: Empty,
     dim: Dim,
     enumerate: Enumerate,
     sum: Sum
@@ -177,20 +178,6 @@ class Parser:
         self.lines = source.splitlines()
         self.start_line = start_line
 
-    def parse_function(self):
-        """Parses `self.source` as an FPy `FunctionDef`."""
-        start_loc = Location(self.name, self.start_line, 0, self.start_line, 0)
-
-        mod = ast.parse(self.source, self.name)
-        if len(mod.body) > 1:
-            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
-
-        ptree = mod.body[0]
-        if not isinstance(ptree, ast.FunctionDef):
-            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
-
-        return self._parse_function(ptree)
-
     def _parse_location(self, e: ast.expr | ast.stmt | ast.arg) -> Location:
         """Extracts the parse location of a  Python ST node."""
         assert e.end_lineno is not None, "missing end line number"
@@ -203,24 +190,7 @@ class Parser:
             e.end_col_offset
         )
 
-
-    def _parse_type_annotation(self, ann: ast.expr) -> TypeAnn:
-        loc = self._parse_location(ann)
-        match ann:
-            case ast.Attribute():
-                attrib = self._parse_foreign_attribute(ann)
-                ty = self._eval_foreign_attribute(attrib, ann, loc)
-            case ast.Name():
-                ident = self._parse_id(ann)
-                if isinstance(ident, UnderscoreId):
-                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', ann)
-                if ident.base not in self.env:
-                    raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', ann)
-                ty = self.env[ident.base]
-            case _:
-                # TODO: implement
-                return AnyTypeAnn(loc)
-
+    def _convert_type(self, ty, loc: Location):
         if ty == Real:
             return RealTypeAnn(loc)
         elif isinstance(ty, type):
@@ -234,9 +204,57 @@ class Parser:
             else:
                 # TODO: implement
                 return AnyTypeAnn(loc)
+        elif isinstance(ty, tuple):
+            elts = [self._convert_type(elt, loc) for elt in ty]
+            return TupleTypeAnn(elts, loc)
+        elif isinstance(ty, list):
+            elt = self._convert_type(ty[0], loc)
+            return ListTypeAnn(elt, loc)
         else:
             # TODO: implement
             return AnyTypeAnn(loc)
+
+    def _eval_type_annotation(self, ann: ast.expr):
+        loc = self._parse_location(ann)
+        match ann:
+            case ast.Attribute():
+                attrib = self._parse_foreign_attribute(ann)
+                return self._eval_foreign_attribute(attrib, ann, loc)
+            case ast.Name():
+                ident = self._parse_id(ann)
+                if isinstance(ident, UnderscoreId):
+                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', ann)
+                if ident.base not in self.env:
+                    raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', ann)
+                return self.env[ident.base]
+            case ast.Subscript():
+                ctor = self._eval_type_annotation(ann.value)
+                if ctor is tuple:
+                    # tuple[t1, ...]
+                    arg = self._eval_type_annotation(ann.slice)
+                    match arg:
+                        case tuple():
+                            return arg
+                        case _:
+                            return (arg,)
+                elif ctor is list:
+                    # list[t]
+                    arg = self._eval_type_annotation(ann.slice)
+                    return [arg]
+                else:
+                    return None
+            case ast.Tuple():
+                return tuple(self._eval_type_annotation(elt) for elt in ann.elts)
+            case _:
+                # TODO: implement
+                return None
+
+    def _parse_type_annotation(self, ann: ast.expr) -> TypeAnn:
+        loc = self._parse_location(ann)
+        ty = self._eval_type_annotation(ann)
+        if ty is None:
+            return AnyTypeAnn(loc)
+        return self._convert_type(ty, loc)
 
     def _parse_id(self, e: ast.Name):
         if e.id == '_':
@@ -805,6 +823,9 @@ class Parser:
 
         return args
 
+    def _parse_returns(self, e: ast.expr):
+        return self._parse_type_annotation(e)
+
     def _parse_lambda(self, f: ast.Lambda):
         """Parse a Python lambda expression."""
         loc = self._parse_location(f)
@@ -820,7 +841,7 @@ class Parser:
         # check arguments are only positional
         pos_args = f.args.posonlyargs + f.args.args
         if f.args.vararg:
-            raise FPyParserError(loc, 'FPy does not support variary arguments', f, f.args.vararg)
+            raise FPyParserError(loc, 'FPy does not support variadic arguments', f, f.args.vararg)
         if f.args.kwarg:
             raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
 
@@ -847,6 +868,48 @@ class Parser:
     ):
         globals = None if globals is None else dict(globals)
         return eval(ast.unparse(e), globals, locals)
+
+    def _start_parse(self):
+        start_loc = Location(self.name, self.start_line, 0, self.start_line, 0)
+
+        mod = ast.parse(self.source, self.name)
+        if len(mod.body) > 1:
+            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
+
+        ptree = mod.body[0]
+        if not isinstance(ptree, ast.FunctionDef):
+            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
+
+        return ptree
+
+
+    def parse_function(self):
+        """Parses `self.source` as an FPy `FunctionDef`."""
+        ptree = self._start_parse()
+        return self._parse_function(ptree)
+
+    def parse_signature(self):
+        """Parses `self.source` to extract the arguments."""
+        f = self._start_parse()
+        loc = self._parse_location(f)
+
+        # check arguments are only positional
+        pos_args = f.args.posonlyargs + f.args.args
+        if f.args.vararg:
+            raise FPyParserError(loc, 'FPy does not support variadic arguments', f, f.args.vararg)
+        if f.args.kwarg:
+            raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
+
+        # check that there's a return annotation
+        if f.returns is None:
+            raise FPyParserError(loc, 'FPy requires a return annotation', f, f.returns)
+
+        # parse arguments and returns
+        args = self._parse_arguments(pos_args)
+        returns = self._parse_returns(f.returns)
+
+        arg_types = [arg.type for arg in args]
+        return arg_types, returns
 
     def find_decorator(
         self,
