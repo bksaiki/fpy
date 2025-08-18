@@ -138,8 +138,9 @@ def _apply_mpfr(fn: Callable[..., Float], *args: Float, ctx: Optional[Context] =
                 r = fn(*args, n=n)
                 return ctx.round(r)  # re-round under desired rounding mode
             case _:
-                # real computation; no rounding
-                return _apply_real(fn, args)
+                # real computation; stochastic rounding may apply
+                x = _apply_real(fn, args)
+                return ctx.round(x)
 
 def _real_constant(name: str, ctx: Optional[Context] = None) -> Float:
     if name == 'NAN':
@@ -168,8 +169,9 @@ def _apply_mpfr_constant(name: str, ctx: Optional[Context] = None) -> Float:
                 r = mpfr_constant(name, n=n)
                 return ctx.round(r)  # re-round under desired rounding mode
             case _:
-                # real computation; no rounding
-                return _real_constant(name)
+                # real computation; stochastic rounding may apply
+                x = _real_constant(name)
+                return ctx.round(x)
 
 ################################################################################
 # Types
