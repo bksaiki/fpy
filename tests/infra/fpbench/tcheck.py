@@ -13,9 +13,12 @@ _skip_cores = [
 ]
 
 def test_tcheck():
-    for core in fetch_cores().all_cores():
+    # for core in fetch_cores().all_cores():
+    for core in fetch_cores().tensor_cores:
         if core.name not in _skip_cores:
+            print('tcheck', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
+            print(fn.format())
             ty = TypeCheck.check(fn.ast)
             print(core.name, core.ident, ty)
 

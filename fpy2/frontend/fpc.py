@@ -806,5 +806,4 @@ def fpcore_to_fpy(
     # FPy builtins are printed
     ast = _FPCore2FPy(core, default_name).convert()
     SyntaxCheck.check(ast, ignore_unknown=ignore_unknown)
-    TypeCheck.check(ast)
     return ast

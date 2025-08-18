@@ -181,16 +181,15 @@ def _apply_fpy_decorator(
             allow_wildcard=True
         )
         # no type checking
-        ty = None
+        # ty = None
     else:
         # syntax checking
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
-        # type checking
-        ty = TypeCheck.check(ast)
-
+        # type checking [disabled: fpy is not statically typed]
+        # ty = TypeCheck.check(ast)
 
     # wrap the IR in a Function
-    return Function(ast, ty, env, func=func)
+    return Function(ast, None, env, func=func)
 
 def _apply_fpy_prim_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     """

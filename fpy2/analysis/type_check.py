@@ -169,7 +169,15 @@ class _TypeCheckInstance(Visitor):
         self.tvars.add(ty)
         return ty
 
+    def _resolve_type(self, ty: Type):
+        if ty in self.tvars:
+            return self.tvars.find(ty)
+        else:
+            return ty
+
     def _unify(self, a_ty: Type, b_ty: Type):
+        a_ty = self._resolve_type(a_ty)
+        b_ty = self._resolve_type(b_ty)
         match a_ty, b_ty:
             case VarType(), _:
                 b_ty = self.tvars.add(b_ty)
@@ -183,9 +191,10 @@ class _TypeCheckInstance(Visitor):
                 return b_ty
             case ListType(), ListType():
                 elt_ty = self._unify(a_ty.elt_type, b_ty.elt_type)
-                ty = self.tvars.add(elt_ty)
-                ty = self.tvars.union(ty, self.tvars.add(a_ty))
-                return self.tvars.union(ty, self.tvars.add(b_ty))
+                elt_ty = self.tvars.add(elt_ty)
+                elt_ty = self.tvars.union(elt_ty, self.tvars.add(a_ty.elt_type))
+                elt_ty = self.tvars.union(elt_ty, self.tvars.add(b_ty.elt_type))
+                return ListType(elt_ty)
             case TupleType(), TupleType():
                 # TODO: what if the length doesn't match
                 if len(a_ty.elt_types) != len(b_ty.elt_types):
@@ -381,12 +390,17 @@ class _TypeCheckInstance(Visitor):
                 return self._annotation_to_type(e.fn.return_type)
             case Function():
                 # calling a function
-                if e.fn.sig is None or len(e.fn.sig.arg_types) != len(e.args):
+                if e.fn.sig is None:
+                    # type checking not run
+                    fn_ty = TypeCheck.check(e.fn.ast)
+                else:
+                    fn_ty = e.fn.sig
+
+                if len(fn_ty.arg_types) != len(e.args):
                     # no function signature / signature mismatch
                     return NullType()
                 else:
                     # signature matches
-                    fn_ty = cast(FunctionType, self._instantiate(e.fn.sig))
                     for arg, expect_ty in zip(e.args, fn_ty.arg_types):
                         ty = self._visit_expr(arg, None)
                         self._unify(ty, expect_ty)
@@ -404,10 +418,11 @@ class _TypeCheckInstance(Visitor):
             # empty list
             return ListType(self._fresh_type_var())
         else:
-            ty = arg_tys[0]
+            elt_ty = arg_tys[0]
             for arg_ty in arg_tys[1:]:
-                ty = self._unify(ty, arg_ty)
-            return ListType(ty)
+                elt_ty = self._unify(elt_ty, arg_ty)
+            ty = ListType(elt_ty)
+            return ty
 
     def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, ty: Type):
         match binding:
@@ -443,13 +458,14 @@ class _TypeCheckInstance(Visitor):
         return ListType(elt_ty)
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> Type:
-        # type check array
+        # val : list[A]
         value_ty = self._visit_expr(e.value, None)
         ty = self._fresh_type_var()
         self._unify(value_ty, ListType(ty))
-        # type check index
+        # index : real
         index_ty = self._visit_expr(e.index, None)
         self._unify(index_ty, RealType())
+        # val[index] : A
         return ty
 
     def _visit_list_slice(self, e: ListSlice, ctx: None) -> ListType:
@@ -512,6 +528,7 @@ class _TypeCheckInstance(Visitor):
             # arr [idx] : A
             arr_ty = elt_ty
 
+        # val : A
         val_ty = self._visit_expr(stmt.expr, None)
         self._unify(val_ty, arr_ty)
 
