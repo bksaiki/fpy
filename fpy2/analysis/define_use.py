@@ -7,7 +7,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
 
-DefSite: TypeAlias = Argument | Stmt | ListComp
+DefSite: TypeAlias = FuncDef | Argument | Stmt | ListComp
 UseSite: TypeAlias = Var | IndexedAssign
 
 @dataclass
@@ -233,6 +233,8 @@ class _DefineUseInstance(DefaultVisitor):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 ctx[arg.name] = self._add_def(arg.name, arg)
+        for v in func.free_vars:
+            ctx[v] = self._add_def(v, func)
         self._visit_block(func.body, ctx.copy())
 
 

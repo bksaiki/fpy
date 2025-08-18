@@ -24,6 +24,11 @@ class Type(ABC):
     """Base class for all FPy types."""
 
     @abstractmethod
+    def format(self) -> str:
+        """Returns this type as a formatted string."""
+        ...
+
+    @abstractmethod
     def free_vars(self) -> set['VarType']:
         """Returns the free type variables in the type."""
         ...
@@ -36,6 +41,9 @@ class Type(ABC):
 
 class NullType(Type):
     """Placeholder for an ill-typed value."""
+
+    def format(self) -> str:
+        return "⊥"
 
     def free_vars(self) -> set['VarType']:
         return set()
@@ -52,6 +60,9 @@ class NullType(Type):
 class BoolType(Type):
     """Type of boolean values"""
 
+    def format(self) -> str:
+        return "bool"
+
     def free_vars(self) -> set['VarType']:
         return set()
 
@@ -66,6 +77,9 @@ class BoolType(Type):
 
 class RealType(Type):
     """Real number type."""
+
+    def format(self) -> str:
+        return "real"
 
     def free_vars(self) -> set['VarType']:
         return set()
@@ -88,6 +102,9 @@ class VarType(Type):
     def __init__(self, name: NamedId):
         self.name = name
 
+    def format(self):
+        return self.name
+
     def free_vars(self) -> set['VarType']:
         return {self}
 
@@ -108,6 +125,9 @@ class TupleType(Type):
 
     def __init__(self, *elts: Type):
         self.elt_types = elts
+
+    def format(self) -> str:
+        return f'tuple[{", ".join(elt.format() for elt in self.elt_types)}]'
 
     def free_vars(self) -> set['VarType']:
         fvs: set[VarType] = set()
@@ -133,6 +153,9 @@ class ListType(Type):
     def __init__(self, elt: Type):
         self.elt_type = elt
 
+    def format(self) -> str:
+        return f'list[{self.elt_type.format()}]'
+
     def free_vars(self) -> set['VarType']:
         return self.elt_type.free_vars()
 
@@ -157,6 +180,9 @@ class FunctionType(Type):
     def __init__(self, arg_types: Sequence[Type], return_type: Type):
         self.arg_types = tuple(arg_types)
         self.return_type = return_type
+
+    def format(self) -> str:
+        return f'function[{", ".join(arg.format() for arg in self.arg_types)}] -> {self.return_type.format()}'
 
     def free_vars(self) -> set['VarType']:
         fvs: set[VarType] = set()

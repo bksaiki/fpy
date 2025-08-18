@@ -100,6 +100,10 @@ _ternary_table: dict[type[TernaryOp], FunctionType] = {
     Fma: _Real3ary,
 }
 
+class FPyTypeError(Exception):
+    """Type error for FPy programs."""
+    pass
+
 class _TypeCheckInstance(Visitor):
     """Single-use instance of type checking."""
 
@@ -159,13 +163,13 @@ class _TypeCheckInstance(Visitor):
             case TupleType(), TupleType():
                 # TODO: what if the length doesn't match
                 if len(a_ty.elt_types) != len(b_ty.elt_types):
-                    raise TypeError(f'tuple types do not match: {a_ty} != {b_ty}')
+                    raise FPyTypeError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
                 elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elt_types, b_ty.elt_types)]
                 return TupleType(*elts)
             case NullType(), NullType():
                 return a_ty
             case _:
-                raise NotImplementedError(a_ty, b_ty)
+                raise FPyTypeError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
 
     def _instantiate(self, ty: Type) -> Type:
         subst: dict[VarType, Type] = {}
@@ -219,7 +223,7 @@ class _TypeCheckInstance(Visitor):
         return BoolType()
 
     def _visit_foreign(self, e: ForeignVal, ctx: None) -> Type:
-        raise NotImplementedError
+        return self._fresh_type_var()
 
     def _visit_decnum(self, e: Decnum, ctx: None) -> RealType:
         return RealType()
@@ -581,10 +585,15 @@ class _TypeCheckInstance(Visitor):
                 self._set_type(d, arg_ty)
             arg_tys.append(arg_ty)
 
+        # generate free variables types
+        for v in func.free_vars:
+            d = self.def_use.find_def_from_site(v, func)
+            self._set_type(d, self._fresh_type_var())
+
         # type check body
         self._visit_block(func.body, None)
         if self.ret_type is None:
-            raise TypeError(f'function {func.name} has no return type')
+            raise FPyTypeError(f'function {func.name} has no return type')
 
         # generalize the function type
         ty = FunctionType(arg_tys, self.ret_type)
