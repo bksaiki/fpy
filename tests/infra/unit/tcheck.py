@@ -22,7 +22,7 @@ def _test_tcheck_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
-                ty = TypeCheck.check(obj.ast)
+                ty, _ = TypeCheck.check(obj.ast)
                 print(obj.name, ty)
 
 def test_tcheck():

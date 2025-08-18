@@ -122,8 +122,13 @@ class _TypeCheckInstance(Visitor):
         self.tvars = Unionfind()
         self.gensym = Gensym()
 
-    def analyze(self) -> FunctionType:
-        return self._visit_function(self.func, None)
+    def analyze(self) -> tuple[FunctionType, dict[Definition, Type]]:
+        ty = self._visit_function(self.func, None)
+        tctx = {
+            name: self._resolve_type(ty)
+            for name, ty in self.types.items()
+        }
+        return ty, tctx
 
     def _set_type(self, site: Definition, ty: Type):
         self.types[site] = ty
@@ -363,7 +368,7 @@ class _TypeCheckInstance(Visitor):
                 # calling a function
                 if e.fn.sig is None:
                     # type checking not run
-                    fn_ty = TypeCheck.check(e.fn.ast)
+                    fn_ty, _ = TypeCheck.check(e.fn.ast)
                 else:
                     fn_ty = e.fn.sig
 
@@ -605,16 +610,17 @@ class TypeCheck:
     """
 
     @staticmethod
-    def check(func: FuncDef):
+    def check(func: FuncDef) -> tuple[FunctionType, dict[Definition, Type]]:
         """
         Analyzes the function for type errors.
 
-        Produces a type signature for the function if it is well-typed.
+        Produces a type signature for the function if it is well-typed
+        and a mapping from definition to type.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
 
         def_use = DefineUse.analyze(func)
         inst = _TypeCheckInstance(func, def_use)
-        ty = inst.analyze()
-        return ty
+        return inst.analyze()
+

@@ -17,7 +17,7 @@ def test_tcheck():
         if core.name not in _skip_cores:
             print('tcheck', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
-            ty = TypeCheck.check(fn.ast)
+            ty, _ = TypeCheck.check(fn.ast)
             print(core.name, core.ident, ty)
 
 if __name__ == '__main__':
