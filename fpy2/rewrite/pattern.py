@@ -80,13 +80,19 @@ class StmtPattern(Pattern):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)}')
 
         # set of targets (LHS of assignments)
-        # TODO: which analysis should be run?
+        targets: set[NamedId] = set()
         def_use = DefineUse.analyze(func)
-        targets = set(def_use.defs.keys())
+        for defs in def_use.defs.values():
+            for d in defs:
+                if not isinstance(d.site, FuncDef):
+                    targets.add(d.id)
+
+        # set of uses
+        live_vars = LiveVars.analyze(func)
 
         self.block = func.body
         self._func = func
-        self._vars = LiveVars.analyze(func) | targets
+        self._vars = targets | live_vars
 
     def vars(self) -> set[NamedId]:
         """Returns the set of pattern variables."""
