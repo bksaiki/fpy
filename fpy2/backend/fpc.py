@@ -257,6 +257,12 @@ class FPCoreCompileInstance(Visitor):
         size = self._visit_expr(arg, ctx)
         return fpc.Tensor([(tuple_id, size)], fpc.Var(tuple_id))
 
+    def _visit_empty(self, arg: Expr, ctx: None) -> fpc.Expr:
+        # tensor with uninitialized values
+        tuple_id = str(self.gensym.fresh('i'))
+        size = self._visit_expr(arg, ctx)
+        return fpc.Tensor([(tuple_id, size)], fpc.Integer(0))
+
     def _visit_size(self, arr: Expr, dim: Expr, ctx) -> fpc.Expr:
         tup = self._visit_expr(arr, ctx)
         idx = self._visit_expr(dim, ctx)
@@ -366,6 +372,9 @@ class FPCoreCompileInstance(Visitor):
                 case Range():
                     # range expression
                     return self._visit_range(e.arg, ctx)
+                case Empty():
+                    # empty expression
+                    return self._visit_empty(e.arg, ctx)
                 case Dim():
                     # dim expression
                     return self._visit_dim(e.arg, ctx)

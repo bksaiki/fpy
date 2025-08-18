@@ -71,6 +71,7 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     round: Round,
     round_exact: RoundExact,
     range: Range,
+    empty: Empty,
     dim: Dim,
     enumerate: Enumerate,
     sum: Sum

@@ -163,6 +163,9 @@ class _TypeCheckInstance(Visitor):
     def analyze(self) -> FunctionType:
         return self._visit_function(self.func, None)
 
+    def _set_type(self, site: Definition, ty: Type):
+        self.types[site] = ty
+
     def _fresh_type_var(self) -> VarType:
         """Generates a fresh type variable."""
         ty = VarType(self.gensym.fresh('t'))
@@ -300,6 +303,12 @@ class _TypeCheckInstance(Visitor):
                     # range operator
                     self._unify(arg_ty, RealType())
                     return ListType(RealType())
+                case Empty():
+                    # arg : real
+                    self._unify(arg_ty, RealType())
+                    # result is list[A]
+                    ty = self._fresh_type_var()
+                    return ListType(ty)
                 case Dim():
                     # dimension operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
@@ -428,7 +437,7 @@ class _TypeCheckInstance(Visitor):
         match binding:
             case NamedId():
                 d = self.def_use.find_def_from_site(binding, site)
-                self.types[d] = ty
+                self._set_type(d, ty)
             case UnderscoreId():
                 pass
             case TupleBinding():
@@ -611,7 +620,7 @@ class _TypeCheckInstance(Visitor):
             arg_ty = self._annotation_to_type(arg.type)
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
-                self.types[d] = arg_ty
+                self._set_type(d, arg_ty)
             arg_tys.append(arg_ty)
 
         # type check body

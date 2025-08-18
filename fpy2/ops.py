@@ -14,7 +14,10 @@ from .number.real import (
     real_fma
 )
 
-from .utils import digits_to_fraction, hexnum_to_fraction, is_dyadic
+from .utils import (
+    UNINIT,
+    digits_to_fraction, hexnum_to_fraction, is_dyadic
+)
 
 __all__ = [
     # General operations
@@ -77,6 +80,7 @@ __all__ = [
     'isnormal',
     'signbit',
     # Tensor
+    'empty',
     'dim',
     'size',
     # Constants
@@ -683,6 +687,15 @@ def signbit(x: Real, ctx: Optional[Context] = None) -> bool:
 
 #############################################################################
 # Tensor
+
+def empty(n: Real, ctx: Optional[Context] = None) -> list:
+    """
+    Initializes an empty list of length `n`.
+    """
+    n = _real_to_float(n)
+    if not n.is_integer() or n.is_negative():
+        raise ValueError(f'Invalid list size: {n}')
+    return [UNINIT for _ in range(int(n))]
 
 def dim(x: list | tuple, ctx: Optional[Context] = None):
     """
