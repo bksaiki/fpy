@@ -14,6 +14,7 @@ There are boolean and real number scalar types, (heterogenous) tuples,
 and (homogenous) lists, function types, and type variables.
 """
 
+from abc import ABC, abstractmethod
 from typing import Sequence
 
 from .utils import NamedId, default_repr

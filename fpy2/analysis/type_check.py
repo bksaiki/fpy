@@ -10,7 +10,6 @@ from ..types import Type, NullType, BoolType, RealType, VarType, FunctionType, T
 from ..utils import Gensym, NamedId, Unionfind
 
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefineUnion, DefSite
-from .live_vars import LiveVars
 
 #####################################################################
 # Type Inference
