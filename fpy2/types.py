@@ -20,12 +20,28 @@ from typing import Sequence
 from .utils import NamedId, default_repr
 
 @default_repr
-class Type:
+class Type(ABC):
     """Base class for all FPy types."""
-    pass
+
+    @abstractmethod
+    def free_vars(self) -> set['VarType']:
+        """Returns the free type variables in the type."""
+        ...
+
+    @abstractmethod
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        """Substitutes type variables in the type."""
+        ...
+
 
 class NullType(Type):
     """Placeholder for an ill-typed value."""
+
+    def free_vars(self) -> set['VarType']:
+        return set()
+
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        return self
 
     def __eq__(self, other):
         return isinstance(other, NullType)
@@ -36,6 +52,12 @@ class NullType(Type):
 class BoolType(Type):
     """Type of boolean values"""
 
+    def free_vars(self) -> set['VarType']:
+        return set()
+
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        return self
+
     def __eq__(self, other):
         return isinstance(other, BoolType)
 
@@ -44,6 +66,12 @@ class BoolType(Type):
 
 class RealType(Type):
     """Real number type."""
+
+    def free_vars(self) -> set['VarType']:
+        return set()
+
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        return self
 
     def __eq__(self, other):
         return isinstance(other, RealType)
@@ -60,6 +88,12 @@ class VarType(Type):
     def __init__(self, name: NamedId):
         self.name = name
 
+    def free_vars(self) -> set['VarType']:
+        return {self}
+
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        return subst.get(self, self)
+
     def __eq__(self, other):
         return isinstance(other, VarType) and self.name == other.name
 
@@ -75,6 +109,15 @@ class TupleType(Type):
     def __init__(self, *elts: Type):
         self.elt_types = elts
 
+    def free_vars(self) -> set['VarType']:
+        fvs: set[VarType] = set()
+        for elt in self.elt_types:
+            fvs |= elt.free_vars()
+        return fvs
+
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        return TupleType(*[elt.subst(subst) for elt in self.elt_types])
+
     def __eq__(self, other):
         return isinstance(other, TupleType) and self.elt_types == other.elt_types
 
@@ -89,6 +132,12 @@ class ListType(Type):
 
     def __init__(self, elt: Type):
         self.elt_type = elt
+
+    def free_vars(self) -> set['VarType']:
+        return self.elt_type.free_vars()
+
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        return ListType(self.elt_type.subst(subst))
 
     def __eq__(self, other):
         return isinstance(other, ListType) and self.elt_type == other.elt_type
@@ -108,6 +157,19 @@ class FunctionType(Type):
     def __init__(self, arg_types: Sequence[Type], return_type: Type):
         self.arg_types = tuple(arg_types)
         self.return_type = return_type
+
+    def free_vars(self) -> set['VarType']:
+        fvs: set[VarType] = set()
+        for arg in self.arg_types:
+            fvs |= arg.free_vars()
+        fvs |= self.return_type.free_vars()
+        return fvs
+
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        return FunctionType(
+            [arg.subst(subst) for arg in self.arg_types],
+            self.return_type.subst(subst)
+        )
 
     def __eq__(self, other):
         return isinstance(other, FunctionType) and self.arg_types == other.arg_types and self.return_type == other.return_type

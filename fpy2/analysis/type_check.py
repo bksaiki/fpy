@@ -100,48 +100,6 @@ _ternary_table: dict[type[TernaryOp], FunctionType] = {
     Fma: _Real3ary,
 }
 
-
-def _free_type_vars(ty: Type) -> set[VarType]:
-    match ty:
-        case BoolType() | RealType() | NullType():
-            return set()
-        case VarType():
-            return { ty }
-        case ListType():
-            return _free_type_vars(ty.elt_type)
-        case TupleType():
-            fvs: set[VarType] = set()
-            for elt in ty.elt_types:
-                fvs |= _free_type_vars(elt)
-            return fvs
-        case FunctionType():
-            fvs = set()
-            for arg in ty.arg_types:
-                fvs |= _free_type_vars(arg)
-            fvs |= _free_type_vars(ty.return_type)
-            return fvs
-        case _:
-            raise ValueError(f"unknown type: {ty}")
-
-def _type_subst(ty: Type, subst: dict[VarType, Type]) -> Type:
-    match ty:
-        case BoolType() | RealType() | NullType():
-            return ty
-        case VarType():
-            return subst[ty]
-        case ListType():
-            return ListType(_type_subst(ty.elt_type, subst))
-        case TupleType():
-            return TupleType(*[_type_subst(elt, subst) for elt in ty.elt_types])
-        case FunctionType():
-            return FunctionType(
-                [_type_subst(arg, subst) for arg in ty.arg_types],
-                _type_subst(ty.return_type, subst)
-            )
-        case _:
-            raise ValueError(f"unknown type: {ty}")
-
-
 class _TypeCheckInstance(Visitor):
     """Single-use instance of type checking."""
 
@@ -211,20 +169,20 @@ class _TypeCheckInstance(Visitor):
 
     def _instantiate(self, ty: Type) -> Type:
         subst: dict[VarType, Type] = {}
-        for fv in _free_type_vars(ty):
+        for fv in ty.free_vars():
             subst[fv] = self._fresh_type_var()
-        return _type_subst(ty, subst)
+        return ty.subst(subst)
 
     def _generalize(self, ty: Type) -> Type:
         subst: dict[VarType, Type] = {}
-        for i, fv in enumerate(_free_type_vars(ty)):
+        for i, fv in enumerate(ty.free_vars()):
             t = self.tvars.find(fv)
             match t: 
                 case VarType():
                     subst[fv] = VarType(NamedId(f't{i + 1}'))
                 case _:
                     subst[fv] = t
-        return _type_subst(ty, subst)
+        return ty.subst(subst)
 
     def _annotation_to_type(self, ty: TypeAnn | None) -> Type:
         match ty:
