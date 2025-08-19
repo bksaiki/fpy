@@ -154,6 +154,7 @@ class _TypeCheckInstance(Visitor):
         return ty
 
     def _resolve_type(self, ty: Type):
+        # fix to be recursive
         if ty in self.tvars:
             return self.tvars.find(ty)
         else:
@@ -184,7 +185,10 @@ class _TypeCheckInstance(Visitor):
                 if len(a_ty.elt_types) != len(b_ty.elt_types):
                     raise FPyTypeError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
                 elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elt_types, b_ty.elt_types)]
-                return TupleType(*elts)
+                ty = self.tvars.add(TupleType(*elts))
+                ty = self.tvars.union(ty, self.tvars.add(a_ty))
+                ty = self.tvars.union(ty, self.tvars.add(b_ty))
+                return ty
             case NullType(), NullType():
                 return a_ty
             case _:

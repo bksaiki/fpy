@@ -103,10 +103,15 @@ class _ContextInferInstance(Visitor):
             case UnderscoreId():
                 pass
             case TupleBinding():
-                if not isinstance(ctx, TupleContext):
-                    raise RuntimeError(f'unexpected context for tuple binding: {ctx}')
-                for elt, elt_ctx in zip(target.elts, ctx.elts):
-                    self._visit_binding(site, elt, elt_ctx)
+                match ctx:
+                    case None:
+                        for elt in target.elts:
+                            self._visit_binding(site, elt, None)
+                    case TupleContext():
+                        for elt, elt_ctx in zip(target.elts, ctx.elts):
+                            self._visit_binding(site, elt, elt_ctx)
+                    case _:
+                        raise RuntimeError(f'unexpected context for binding {ctx}')
             case _:
                 raise RuntimeError(f'unreachable: {target}')
 
@@ -154,9 +159,13 @@ class _ContextInferInstance(Visitor):
         return ctx
 
     def _visit_naryop(self, e: NaryOp, ctx: _Context):
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
-        return ctx
+        match e:
+            case Zip():
+                return TupleContext(self._visit_expr(arg, ctx) for arg in e.args)
+            case _:
+                for arg in e.args:
+                    self._visit_expr(arg, ctx)
+                return ctx
 
     def _visit_compare(self, e: Compare, ctx: _Context):
         for arg in e.args:
