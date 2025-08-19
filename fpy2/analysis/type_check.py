@@ -382,6 +382,7 @@ class _TypeCheckInstance(Visitor):
                 # calling a function
                 if e.fn.sig is None:
                     # type checking not run
+                    # TODO: guard against recursion
                     fn_info = TypeCheck.check(e.fn.ast)
                     fn_ty = fn_info.fn_type
                 else:
@@ -459,7 +460,7 @@ class _TypeCheckInstance(Visitor):
         # val[index] : A
         return ty
 
-    def _visit_list_slice(self, e: ListSlice, ctx: None) -> ListType:
+    def _visit_list_slice(self, e: ListSlice, ctx: None):
         # type check array
         value_ty = self._visit_expr(e.value, None)
         self._unify(value_ty, ListType(self._fresh_type_var()))
