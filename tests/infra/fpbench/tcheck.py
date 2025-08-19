@@ -18,7 +18,7 @@ def test_tcheck():
             print('tcheck', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
             info = TypeCheck.check(fn.ast)
-            print(core.name, core.ident, info.ret_type)
+            print(core.name, core.ident, info.fn_type)
 
 if __name__ == '__main__':
     test_tcheck()

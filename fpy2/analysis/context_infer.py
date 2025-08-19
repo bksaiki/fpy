@@ -3,7 +3,7 @@ Context inference.
 """
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import TypeAlias, Iterable
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
@@ -11,8 +11,24 @@ from ..number import Context
 from ..utils import DEFAULT, DefaultOr
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
-_Context: TypeAlias = DefaultOr[Context | None]
 
+_BaseContext: TypeAlias = DefaultOr[Context | None]
+
+class TupleContext:
+    """Tracks the contexts of tuples"""
+
+    elts: tuple[_BaseContext | 'TupleContext', ...]
+
+    def __init__(self, elts: Iterable[_BaseContext | 'TupleContext']):
+        self.elts = tuple(elts)
+
+    def __eq__(self, other):
+        return isinstance(other, TupleContext) and self.elts == other.elts
+
+    def __hash__(self):
+        return hash(self.elts)
+
+_Context: TypeAlias = DefaultOr[Context | TupleContext | None]
 
 @dataclass(frozen=True)
 class ContextAnalysis:
@@ -21,7 +37,7 @@ class ContextAnalysis:
     by_expr: dict[Expr, _Context]
 
 
-class _ContextInferInstance(DefaultVisitor):
+class _ContextInferInstance(Visitor):
     """
     Context inference instance.
 
@@ -45,6 +61,107 @@ class _ContextInferInstance(DefaultVisitor):
     def infer(self):
         self._visit_function(self.func, None)
         return ContextAnalysis(self.ret_ctx, self.by_def, self.by_expr)
+
+    def _merge(self, a_ctx: _Context, b_ctx: _Context) -> _Context:
+        match a_ctx, b_ctx:
+            case _, _ if a_ctx is DEFAULT and b_ctx is DEFAULT:
+                return DEFAULT
+            case Context(), Context():
+                if a_ctx.is_equiv(b_ctx):
+                    return a_ctx
+                else:
+                    return None
+            case _:
+                return None
+
+    def _visit_var(self, e: Var, ctx: _Context):
+        d = self.def_use.find_def_from_use(e)
+        return self.by_def[d]
+
+    def _visit_bool(self, e: BoolVal, ctx: _Context):
+        return ctx
+
+    def _visit_foreign(self, e: ForeignVal, ctx: _Context):
+        return None
+
+    def _visit_decnum(self, e: Decnum, ctx: _Context):
+        return ctx
+
+    def _visit_hexnum(self, e: Hexnum, ctx: _Context):
+        return ctx
+
+    def _visit_integer(self, e: Integer, ctx: _Context):
+        return ctx
+
+    def _visit_rational(self, e: Rational, ctx: _Context):
+        return ctx
+
+    def _visit_digits(self, e: Digits, ctx: _Context):
+        return ctx
+
+    def _visit_nullaryop(self, e: NullaryOp, ctx: _Context):
+        return ctx
+
+    def _visit_unaryop(self, e: UnaryOp, ctx: _Context):
+        self._visit_expr(e.arg, ctx)
+        return ctx
+
+    def _visit_binaryop(self, e: BinaryOp, ctx: _Context):
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
+        return ctx
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx: _Context):
+        self._visit_expr(e.first, ctx)
+        self._visit_expr(e.second, ctx)
+        self._visit_expr(e.third, ctx)
+        return ctx
+
+    def _visit_naryop(self, e: NaryOp, ctx: _Context):
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        return ctx
+
+    def _visit_compare(self, e: Compare, ctx: _Context):
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        return ctx
+
+    def _visit_call(self, e: Call, ctx: _Context):
+        raise NotImplementedError
+
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: _Context):
+        return TupleContext(self._visit_expr(arg, ctx) for arg in e.args)
+
+    def _visit_list_expr(self, e: ListExpr, ctx: _Context):
+        if len(e.args) == 0:
+            return ctx
+        else:
+            elt_ctx = self._visit_expr(e.args[0], ctx)
+            for arg in e.args[1:]:
+                elt_ctx = self._merge(elt_ctx, self._visit_expr(arg, ctx))
+            return elt_ctx
+
+    def _visit_list_comp(self, e: ListComp, ctx: _Context):
+        raise NotImplementedError
+
+    def _visit_list_ref(self, e: ListRef, ctx: _Context):
+        raise NotImplementedError
+
+    def _visit_list_slice(self, e: ListSlice, ctx: _Context):
+        raise NotImplementedError
+
+    def _visit_list_set(self, e: ListSet, ctx: _Context):
+        raise NotImplementedError
+
+    def _visit_if_expr(self, e: IfExpr, ctx: _Context):
+        self._visit_expr(e.cond, ctx)
+        ift_ctx = self._visit_expr(e.ift, ctx)
+        iff_ctx = self._visit_expr(e.iff, ctx)
+        return self._merge(ift_ctx, iff_ctx)
+
+    def _visit_context_expr(self, e: ContextExpr, ctx: _Context):
+        return None
 
     def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ctx: _Context):
         match target:
@@ -137,9 +254,10 @@ class _ContextInferInstance(DefaultVisitor):
         self._visit_block(func.body, body_ctx)
         return self.ret_ctx
 
-    def _visit_expr(self, expr: Expr, ctx: _Context):
-        self.by_expr[expr] = ctx
-        super()._visit_expr(expr, ctx)
+    def _visit_expr(self, expr: Expr, ctx: _Context) -> _Context:
+        ret_ctx = super()._visit_expr(expr, ctx)
+        self.by_expr[expr] = ret_ctx
+        return ret_ctx
 
 
 class ContextInfer:

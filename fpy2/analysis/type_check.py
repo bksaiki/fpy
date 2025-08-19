@@ -107,7 +107,7 @@ class FPyTypeError(Exception):
 
 @dataclass(frozen=True)
 class TypeAnalysis:
-    ret_type: FunctionType
+    fn_type: FunctionType
     by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
 
@@ -117,7 +117,7 @@ class _TypeCheckInstance(Visitor):
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    by_defs: dict[Definition, Type]
+    by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
     ret_type: Type | None
     tvars: Unionfind[Type]
@@ -126,7 +126,7 @@ class _TypeCheckInstance(Visitor):
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.by_defs = {}
+        self.by_def = {}
         self.by_expr = {}
         self.ret_type = None
         self.tvars = Unionfind()
@@ -136,7 +136,7 @@ class _TypeCheckInstance(Visitor):
         ty = self._visit_function(self.func, None)
         by_defs = {
             name: self._resolve_type(ty)
-            for name, ty in self.by_defs.items()
+            for name, ty in self.by_def.items()
         }
         by_expr = {
             e: self._resolve_type(ty)
@@ -145,7 +145,7 @@ class _TypeCheckInstance(Visitor):
         return TypeAnalysis(ty, by_defs, by_expr)
 
     def _set_type(self, site: Definition, ty: Type):
-        self.by_defs[site] = ty
+        self.by_def[site] = ty
 
     def _fresh_type_var(self) -> VarType:
         """Generates a fresh type variable."""
@@ -236,7 +236,7 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_var(self, e: Var, ctx: None) -> Type:
         d = self.def_use.find_def_from_use(e)
-        return self.by_defs[d]
+        return self.by_def[d]
 
     def _visit_bool(self, e: BoolVal, ctx: None) -> BoolType:
         return BoolType()
@@ -383,7 +383,7 @@ class _TypeCheckInstance(Visitor):
                 if e.fn.sig is None:
                     # type checking not run
                     fn_info = TypeCheck.check(e.fn.ast)
-                    fn_ty = fn_info.ret_type
+                    fn_ty = fn_info.fn_type
                 else:
                     fn_ty = e.fn.sig
 
@@ -507,7 +507,7 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         d = self.def_use.find_def_from_use(stmt)
-        arr_ty = self.by_defs[d]
+        arr_ty = self.by_def[d]
 
         for s in stmt.slices:
             # arr : list[A]
@@ -549,7 +549,7 @@ class _TypeCheckInstance(Visitor):
         for intro in intros_ift & intros_iff:
             ift_def = self._select_def_repr(defs_out_ift[intro])
             iff_def = self._select_def_repr(defs_out_iff[intro])
-            self._unify(self.by_defs[ift_def], self.by_defs[iff_def])
+            self._unify(self.by_def[ift_def], self.by_def[iff_def])
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         cond_ty = self._visit_expr(stmt.cond, None)
@@ -612,6 +612,11 @@ class _TypeCheckInstance(Visitor):
         # generalize the function type
         ty = FunctionType(arg_tys, self.ret_type)
         return cast(FunctionType, self._generalize(ty))
+
+    def _visit_expr(self, expr: Expr, ctx: None) -> Type:
+        ret_ty = super()._visit_expr(expr, ctx)
+        self.by_expr[expr] = ret_ty
+        return ret_ty
 
 
 class TypeCheck:
