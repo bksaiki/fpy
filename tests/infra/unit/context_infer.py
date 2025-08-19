@@ -1,10 +1,11 @@
 """
-Type checking tests
+Context inference tests
 """
 
 import fpy2 as fp
 
-from fpy2.analysis import TypeCheck
+from fpy2.analysis import ContextInfer
+from fpy2.transform import ContextInline
 
 from .defs import tests, examples
 
@@ -15,19 +16,19 @@ _modules = [
 def _test_tcheck_unit():
     for core in tests + examples:
         assert isinstance(core, fp.Function)
-        ty, _ = TypeCheck.check(core.ast)
-        print(core.name, ty)
+        ast = ContextInline.apply(core.ast, core.env)
+        ContextInfer.infer(ast)
 
 def _test_tcheck_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
-                ty, _ = TypeCheck.check(obj.ast)
-                print(obj.name, ty)
+                ast = ContextInline.apply(obj.ast, obj.env)
+                ContextInfer.infer(ast)
 
-def test_tcheck():
+def test_context_infer():
     _test_tcheck_unit()
     _test_tcheck_library()
 
 if __name__ == '__main__':
-    test_tcheck()
+    test_context_infer()

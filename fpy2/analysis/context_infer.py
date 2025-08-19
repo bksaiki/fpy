@@ -8,8 +8,7 @@ from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..utils import DEFAULT, DefaultOr
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefineUnion, DefSite
-
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
 _Context: TypeAlias = DefaultOr[Context | None]
 
@@ -25,15 +24,17 @@ class _ContextInferInstance(Visitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     contexts: dict[Definition, _Context]
+    ret_ctx: _Context | None
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
         self.contexts = {}
+        self.ret_ctx = None
 
     def infer(self):
         self._visit_function(self.func, None)
-        return self.contexts
+        return self.ret_ctx, self.contexts
 
     def _visit_var(self, e: Var, ctx: _Context):
         raise NotImplementedError
@@ -164,6 +165,7 @@ class _ContextInferInstance(Visitor):
         return ctx
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _Context):
+        self.ret_ctx = ctx
         return ctx
 
     def _visit_block(self, block: StmtBlock, ctx: _Context):
@@ -174,11 +176,14 @@ class _ContextInferInstance(Visitor):
         # function can have an overriding context
         match func.ctx:
             case None:
-                self._visit_block(func.body, DEFAULT)
+                body_ctx: _Context = DEFAULT
             case FPCoreContext():
-                self._visit_block(func.body, None)
+                body_ctx = None
             case _:
-                self._visit_block(func.body, func.ctx)
+                body_ctx = func.ctx
+
+        self._visit_block(func.body, body_ctx)
+        return self.ret_ctx
 
 
 class ContextInfer:
@@ -203,5 +208,5 @@ class ContextInfer:
 
         def_use = DefineUse.analyze(func)
         inst = _ContextInferInstance(func, def_use)
-        info = inst.infer()
-        print(func.name, info)
+        ret_ctx, info = inst.infer()
+        print(func.name, ret_ctx)
