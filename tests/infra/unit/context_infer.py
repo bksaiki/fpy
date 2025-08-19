@@ -17,14 +17,16 @@ def _test_tcheck_unit():
     for core in tests + examples:
         assert isinstance(core, fp.Function)
         ast = ContextInline.apply(core.ast, core.env)
-        ContextInfer.infer(ast)
+        info = ContextInfer.infer(ast)
+        print(ast.name, info.ret_ctx)
 
 def _test_tcheck_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
                 ast = ContextInline.apply(obj.ast, obj.env)
-                ContextInfer.infer(ast)
+                info = ContextInfer.infer(ast)
+                print(ast.name, info.ret_ctx)
 
 def test_context_infer():
     _test_tcheck_unit()

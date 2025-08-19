@@ -2,6 +2,7 @@
 Context inference.
 """
 
+from dataclasses import dataclass
 from typing import TypeAlias
 
 from ..ast import *
@@ -13,7 +14,14 @@ from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 _Context: TypeAlias = DefaultOr[Context | None]
 
 
-class _ContextInferInstance(Visitor):
+@dataclass(frozen=True)
+class ContextAnalysis:
+    ret_ctx: _Context
+    by_def: dict[Definition, _Context]
+    by_expr: dict[Expr, _Context]
+
+
+class _ContextInferInstance(DefaultVisitor):
     """
     Context inference instance.
 
@@ -23,93 +31,26 @@ class _ContextInferInstance(Visitor):
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    contexts: dict[Definition, _Context]
-    ret_ctx: _Context | None
+    by_def: dict[Definition, _Context]
+    by_expr: dict[Expr, _Context]
+    ret_ctx: _Context
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.contexts = {}
+        self.by_def = {}
+        self.by_expr = {}
         self.ret_ctx = None
 
     def infer(self):
         self._visit_function(self.func, None)
-        return self.ret_ctx, self.contexts
-
-    def _visit_var(self, e: Var, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_bool(self, e: BoolVal, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_foreign(self, e: ForeignVal, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_decnum(self, e: Decnum, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_hexnum(self, e: Hexnum, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_integer(self, e: Integer, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_rational(self, e: Rational, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_digits(self, e: Digits, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_nullaryop(self, e: NullaryOp, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_unaryop(self, e: UnaryOp, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_binaryop(self, e: BinaryOp, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_ternaryop(self, e: TernaryOp, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_naryop(self, e: NaryOp, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_compare(self, e: Compare, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_call(self, e: Call, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_list_expr(self, e: ListExpr, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_list_comp(self, e: ListComp, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_list_ref(self, e: ListRef, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_list_slice(self, e: ListSlice, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_list_set(self, e: ListSet, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_if_expr(self, e: IfExpr, ctx: _Context):
-        raise NotImplementedError
-
-    def _visit_context_expr(self, e: ContextExpr, ctx: _Context):
-        raise NotImplementedError
+        return ContextAnalysis(self.ret_ctx, self.by_def, self.by_expr)
 
     def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ctx: _Context):
         match target:
             case NamedId():
                 d = self.def_use.find_def_from_site(target, site)
-                self.contexts[d] = ctx
+                self.by_def[d] = ctx
             case UnderscoreId():
                 pass
             case TupleBinding():
@@ -119,26 +60,34 @@ class _ContextInferInstance(Visitor):
                 raise RuntimeError(f'unreachable: {target}')
 
     def _visit_assign(self, stmt: Assign, ctx: _Context):
+        self._visit_expr(stmt.expr, ctx)
         self._visit_binding(stmt, stmt.binding, ctx)
         return ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Context):
+        for s in stmt.slices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(stmt.expr, ctx)
         return ctx
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _Context):
+        self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
         return ctx
 
     def _visit_if(self, stmt: IfStmt, ctx: _Context):
+        self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
         return ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Context):
+        self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
         return ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: _Context):
+        self._visit_expr(stmt.iterable, ctx)
         self._visit_binding(stmt, stmt.target, ctx)
         self._visit_block(stmt.body, ctx)
         return ctx
@@ -159,12 +108,15 @@ class _ContextInferInstance(Visitor):
         return ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Context):
+        self._visit_expr(stmt.test, ctx)
         return ctx
 
     def _visit_effect(self, stmt: EffectStmt, ctx: _Context):
+        self._visit_expr(stmt.expr, ctx)
         return ctx
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _Context):
+        self._visit_expr(stmt.expr, ctx)
         self.ret_ctx = ctx
         return ctx
 
@@ -184,6 +136,10 @@ class _ContextInferInstance(Visitor):
 
         self._visit_block(func.body, body_ctx)
         return self.ret_ctx
+
+    def _visit_expr(self, expr: Expr, ctx: _Context):
+        self.by_expr[expr] = ctx
+        super()._visit_expr(expr, ctx)
 
 
 class ContextInfer:
@@ -208,5 +164,4 @@ class ContextInfer:
 
         def_use = DefineUse.analyze(func)
         inst = _ContextInferInstance(func, def_use)
-        ret_ctx, info = inst.infer()
-        print(func.name, ret_ctx)
+        return inst.infer()

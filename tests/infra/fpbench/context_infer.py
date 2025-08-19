@@ -23,7 +23,8 @@ def test_context_infer():
             print('tcheck', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
             ast = ContextInline.apply(fn.ast, fn.env)
-            ContextInfer.infer(ast)
+            info = ContextInfer.infer(ast)
+            print(ast.name, info.ret_ctx)
 
 if __name__ == '__main__':
     test_context_infer()

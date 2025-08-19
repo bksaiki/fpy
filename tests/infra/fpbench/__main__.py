@@ -6,6 +6,7 @@ FPBench infastructure tests.
 - Checks that FPy and FPCore functions are equivalent.
 """
 
+from .context_infer import test_context_infer
 from .eval import test_eval
 from .parse import test_parse
 from .round_trip import test_round_trip
@@ -15,3 +16,4 @@ test_parse()
 test_eval()
 test_round_trip()
 test_tcheck()
+test_context_infer()
