@@ -154,11 +154,20 @@ class _TypeCheckInstance(Visitor):
         return ty
 
     def _resolve_type(self, ty: Type):
-        # fix to be recursive
         if ty in self.tvars:
             return self.tvars.find(ty)
-        else:
-            return ty
+
+        match ty:
+            case NullType() | BoolType() | RealType() | VarType():
+                return self.tvars.add(ty)
+            case TupleType():
+                elts = [self._resolve_type(elt) for elt in ty.elt_types]
+                return self.tvars.add(TupleType(*elts))
+            case ListType():
+                elt_ty = self._resolve_type(ty.elt_type)
+                return self.tvars.add(ListType(elt_ty))
+            case _:
+                raise NotImplementedError(f'cannot resolve type {ty}')
 
     def _unify(self, a_ty: Type, b_ty: Type):
         a_ty = self._resolve_type(a_ty)
