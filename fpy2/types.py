@@ -102,6 +102,17 @@ class VarType(Type):
     def __init__(self, name: NamedId):
         self.name = name
 
+    def __eq__(self, other):
+        return isinstance(other, VarType) and self.name == other.name
+
+    def __lt__(self, other: 'VarType'):
+        if not isinstance(other, VarType):
+            raise TypeError(f"'<' not supported between instances '{type(self)}' and '{type(other)}'")
+        return self.name < other.name
+
+    def __hash__(self):
+        return hash(self.name)
+
     def format(self):
         return self.name
 
@@ -110,12 +121,6 @@ class VarType(Type):
 
     def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
         return subst.get(self, self)
-
-    def __eq__(self, other):
-        return isinstance(other, VarType) and self.name == other.name
-
-    def __hash__(self):
-        return hash(self.name)
 
 class TupleType(Type):
     """Tuple type."""

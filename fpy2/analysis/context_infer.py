@@ -5,14 +5,14 @@ TODO: unification for context variables
 """
 
 from dataclasses import dataclass
-from typing import Self, TypeAlias, Iterable
+from typing import Iterable, Mapping, Self, TypeAlias, cast
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind, default_repr
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefineUnion, DefSite
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
 
 @default_repr
@@ -32,6 +32,30 @@ class TupleContext:
 
 _Context: TypeAlias = NamedId | Context | TupleContext | None
 
+@default_repr
+class FunctionContext:
+    """Tracks the context of a function"""
+
+    ctx: _Context # global context
+    args: tuple[_Context, ...]
+    ret: _Context
+
+    def __init__(self, ctx: _Context, args: Iterable[_Context], ret: _Context):
+        self.ctx = ctx
+        self.args = tuple(args)
+        self.ret = ret
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, FunctionContext)
+            and self.ctx == other.ctx
+            and self.args == other.args
+            and self.ret == other.ret
+        )
+
+    def __hash__(self):
+        return hash((self.ctx, self.args, self.ret))
+
 
 class ContextInferError(Exception):
     """Context inference error for FPy programs."""
@@ -39,10 +63,21 @@ class ContextInferError(Exception):
 
 @dataclass(frozen=True)
 class ContextAnalysis:
-    arg_ctxs: tuple[_Context, ...]
-    ret_ctx: _Context
+    func_ctx: FunctionContext
     by_def: dict[Definition, _Context]
     by_expr: dict[Expr, _Context]
+
+    @property
+    def body_ctx(self):
+        return self.func_ctx.ctx
+
+    @property
+    def arg_ctxs(self):
+        return self.func_ctx.args
+
+    @property
+    def ret_ctx(self):
+        return self.func_ctx.ret
 
 
 class _ContextInferInstance(Visitor):
@@ -71,9 +106,7 @@ class _ContextInferInstance(Visitor):
         self.gensym = Gensym()
 
     def infer(self):
-        arg_ctxs = self._visit_function(self.func, None)
-        arg_ctxs = tuple(self._resolve_context(ctx) for ctx in arg_ctxs)
-        ret_ctx = self._resolve_context(self.ret_ctx)
+        f_ctx = self._visit_function(self.func, None)
         by_defs = {
             d: self._resolve_context(ctx)
             for d, ctx in self.by_def.items()
@@ -82,7 +115,7 @@ class _ContextInferInstance(Visitor):
             e: self._resolve_context(ctx)
             for e, ctx in self.by_expr.items()
         }
-        return ContextAnalysis(arg_ctxs, ret_ctx, by_defs, by_expr)
+        return ContextAnalysis(f_ctx, by_defs, by_expr)
 
     def _set_context(self, site: Definition, ctx: _Context):
         self.by_def[site] = ctx
@@ -91,6 +124,61 @@ class _ContextInferInstance(Visitor):
         rvar = self.gensym.fresh('r')
         self.rvars.add(rvar)
         return rvar
+
+    def _free_vars(self, ctx: _Context | FunctionContext):
+        match ctx:
+            case None | Context():
+                return set()
+            case NamedId():
+                return { ctx }
+            case TupleContext():
+                fvs: set[NamedId] = set()
+                for elt in ctx.elts:
+                    fvs |= self._free_vars(elt)
+                return fvs
+            case FunctionContext():
+                fvs = self._free_vars(ctx.ctx)
+                for arg in ctx.args:
+                    fvs |= self._free_vars(arg)
+                fvs |= self._free_vars(ctx.ret)
+                return fvs
+            case _:
+                raise RuntimeError(f'unknown context: {ctx}')
+
+    def _subst_vars(self, ctx: _Context | FunctionContext, subst: Mapping[NamedId, _Context]):
+        match ctx:
+            case None | Context():
+                return ctx
+            case NamedId():
+                return subst.get(ctx, ctx)
+            case TupleContext():
+                return TupleContext(self._subst_vars(elt, subst) for elt in ctx.elts)
+            case FunctionContext():
+                return FunctionContext(
+                    self._subst_vars(ctx.ctx, subst),
+                    (self._subst_vars(arg, subst) for arg in ctx.args),
+                    self._subst_vars(ctx.ret, subst)
+                )
+            case _:
+                raise RuntimeError(f'unknown context: {ctx}')
+
+    def _instantiate(self, ctx: FunctionContext):
+        subst: dict[NamedId, NamedId] = {}
+        for fv in sorted(self._free_vars(ctx)):
+            subst[fv] = self._fresh_context_var()
+        return self._subst_vars(ctx, subst)
+
+    def _generalize(self, ctx: FunctionContext):
+        subst: dict[NamedId, _Context] = {}
+        print(sorted(self._free_vars(ctx)))
+        for i, fv in enumerate(sorted(self._free_vars(ctx))):
+            t = self.rvars.find(fv)
+            match t:
+                case NamedId():
+                    subst[fv] = NamedId(f'r{i + 1}')
+                case _:
+                    subst[fv] = t
+        return self._subst_vars(ctx, subst)
 
     def _resolve_context(self, ctx: _Context):
         match ctx:
@@ -104,7 +192,7 @@ class _ContextInferInstance(Visitor):
             case _:
                 raise RuntimeError(f'unknown context: {ctx}')
 
-    def __unify(self, a_ctx: _Context, b_ctx: _Context) -> _Context:
+    def _unify(self, a_ctx: _Context, b_ctx: _Context) -> _Context:
         a_ctx = self.rvars.get(a_ctx, a_ctx)
         b_ctx = self.rvars.get(b_ctx, b_ctx)
         match a_ctx, b_ctx:
@@ -130,11 +218,6 @@ class _ContextInferInstance(Visitor):
                 return ctx
             case _:
                 return None
-
-    def _unify(self, a_ctx, b_ctx):
-        ctx = self.__unify(a_ctx, b_ctx)
-        print(a_ctx, b_ctx, ctx)
-        return ctx
 
     def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ctx: _Context):
         match target:
@@ -229,9 +312,20 @@ class _ContextInferInstance(Visitor):
                 # calling a function
                 # TODO: guard against recursion
                 fn_info = ContextInfer.infer(e.fn.ast)
-                ret_ctx = fn_info.ret_ctx
-                # TODO: something about unification
-                return ret_ctx
+                if len(fn_info.arg_ctxs) != len(e.args):
+                    raise ContextInferError(
+                        f'function {e.fn} expects {len(fn_info.arg_ctxs)} arguments, '
+                        f'got {len(e.args)}'
+                    )
+
+                # instantiate the function context
+                fn_ctx = cast(FunctionContext, self._instantiate(fn_info.func_ctx))
+                # merge arguments
+                for arg, expect_ty in zip(e.args, fn_ctx.args):
+                    ty = self._visit_expr(arg, None)
+                    self._unify(ty, expect_ty)
+
+                return fn_ctx.ret
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
@@ -300,14 +394,8 @@ class _ContextInferInstance(Visitor):
         self._visit_block(stmt.body, ctx)
         return ctx
 
-    def _select_def_repr(self, d: Definition | DefineUnion):
-        match d:
-            case Definition():
-                return d
-            case DefineUnion():
-                return d.defs[0]
-            case _:
-                raise RuntimeError(f'unreachable {d}')
+    def _select_def_repr(self, d: Definition):
+        return d.assigns()[0]
 
     def _visit_if(self, stmt: IfStmt, ctx: _Context):
         self._visit_expr(stmt.cond, ctx)
@@ -322,9 +410,11 @@ class _ContextInferInstance(Visitor):
         for intro in intros_ift & intros_iff:
             ift_def = self._select_def_repr(defs_out_ift[intro])
             iff_def = self._select_def_repr(defs_out_iff[intro])
-            ctx = self._unify(self.by_def[ift_def], self.by_def[iff_def])
-            if ctx is None:
+            phi_ctx = self._unify(self.by_def[ift_def], self.by_def[iff_def])
+            if phi_ctx is None:
                 # if we can't infer a context, clear whatever we inferred in the branches
+                # TODO: technically this is wrong; we know the types in the branches
+                # but the type of the merged variable is unknown
                 self.by_def[ift_def] = None
                 self.by_def[iff_def] = None
 
@@ -400,7 +490,12 @@ class _ContextInferInstance(Visitor):
             self._set_context(d, self._fresh_context_var())
 
         self._visit_block(func.body, body_ctx)
-        return arg_ctxs
+
+        # generalize the function context
+        arg_ctxs = [self._resolve_context(ctx) for ctx in arg_ctxs]
+        ret_ctx = self._resolve_context(self.ret_ctx)
+        ty = FunctionContext(body_ctx, arg_ctxs, ret_ctx)
+        return cast(FunctionContext, self._generalize(ty))
 
     def _visit_expr(self, expr: Expr, ctx: _Context) -> _Context:
         ret_ctx = super()._visit_expr(expr, ctx)

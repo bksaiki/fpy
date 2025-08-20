@@ -202,13 +202,13 @@ class _TypeCheckInstance(Visitor):
 
     def _instantiate(self, ty: Type) -> Type:
         subst: dict[VarType, Type] = {}
-        for fv in ty.free_vars():
+        for fv in sorted(ty.free_vars()):
             subst[fv] = self._fresh_type_var()
         return ty.subst(subst)
 
     def _generalize(self, ty: Type) -> Type:
         subst: dict[VarType, Type] = {}
-        for i, fv in enumerate(ty.free_vars()):
+        for i, fv in enumerate(sorted(ty.free_vars())):
             t = self.tvars.find(fv)
             match t: 
                 case VarType():
@@ -403,6 +403,9 @@ class _TypeCheckInstance(Visitor):
                     return NullType()
                 else:
                     # signature matches
+                    # instantiate the function type
+                    fn_ty = cast(FunctionType, self._instantiate(fn_ty))
+                    # merge arguments
                     for arg, expect_ty in zip(e.args, fn_ty.arg_types):
                         ty = self._visit_expr(arg, None)
                         self._unify(ty, expect_ty)
