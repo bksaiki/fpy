@@ -2,6 +2,7 @@
 Type checking for FPy programs.
 """
 
+from dataclasses import dataclass
 from typing import cast
 
 from ..ast import *
@@ -104,12 +105,20 @@ class FPyTypeError(Exception):
     """Type error for FPy programs."""
     pass
 
+@dataclass(frozen=True)
+class TypeAnalysis:
+    fn_type: FunctionType
+    by_def: dict[Definition, Type]
+    by_expr: dict[Expr, Type]
+
+
 class _TypeCheckInstance(Visitor):
     """Single-use instance of type checking."""
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    types: dict[Definition, Type]
+    by_def: dict[Definition, Type]
+    by_expr: dict[Expr, Type]
     ret_type: Type | None
     tvars: Unionfind[Type]
     gensym: Gensym
@@ -117,16 +126,26 @@ class _TypeCheckInstance(Visitor):
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.types = {}
+        self.by_def = {}
+        self.by_expr = {}
         self.ret_type = None
         self.tvars = Unionfind()
         self.gensym = Gensym()
 
-    def analyze(self) -> FunctionType:
-        return self._visit_function(self.func, None)
+    def analyze(self) -> TypeAnalysis:
+        ty = self._visit_function(self.func, None)
+        by_defs = {
+            name: self._resolve_type(ty)
+            for name, ty in self.by_def.items()
+        }
+        by_expr = {
+            e: self._resolve_type(ty)
+            for e, ty in self.by_expr.items()
+        }
+        return TypeAnalysis(ty, by_defs, by_expr)
 
     def _set_type(self, site: Definition, ty: Type):
-        self.types[site] = ty
+        self.by_def[site] = ty
 
     def _fresh_type_var(self) -> VarType:
         """Generates a fresh type variable."""
@@ -135,14 +154,21 @@ class _TypeCheckInstance(Visitor):
         return ty
 
     def _resolve_type(self, ty: Type):
-        if ty in self.tvars:
-            return self.tvars.find(ty)
-        else:
-            return ty
+        match ty:
+            case NullType() | BoolType() | RealType() | VarType():
+                return self.tvars.get(ty, ty)
+            case TupleType():
+                elts = [self._resolve_type(elt) for elt in ty.elt_types]
+                return self.tvars.add(TupleType(*elts))
+            case ListType():
+                elt_ty = self._resolve_type(ty.elt_type)
+                return self.tvars.add(ListType(elt_ty))
+            case _:
+                raise NotImplementedError(f'cannot resolve type {ty}')
 
     def _unify(self, a_ty: Type, b_ty: Type):
-        a_ty = self._resolve_type(a_ty)
-        b_ty = self._resolve_type(b_ty)
+        a_ty = self.tvars.get(a_ty, a_ty)
+        b_ty = self.tvars.get(b_ty, b_ty)
         match a_ty, b_ty:
             case VarType(), _:
                 b_ty = self.tvars.add(b_ty)
@@ -159,13 +185,16 @@ class _TypeCheckInstance(Visitor):
                 elt_ty = self.tvars.add(elt_ty)
                 elt_ty = self.tvars.union(elt_ty, self.tvars.add(a_ty.elt_type))
                 elt_ty = self.tvars.union(elt_ty, self.tvars.add(b_ty.elt_type))
-                return ListType(elt_ty)
+                return self.tvars.add(ListType(elt_ty))
             case TupleType(), TupleType():
                 # TODO: what if the length doesn't match
                 if len(a_ty.elt_types) != len(b_ty.elt_types):
                     raise FPyTypeError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
                 elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elt_types, b_ty.elt_types)]
-                return TupleType(*elts)
+                ty = self.tvars.add(TupleType(*elts))
+                ty = self.tvars.union(ty, self.tvars.add(a_ty))
+                ty = self.tvars.union(ty, self.tvars.add(b_ty))
+                return ty
             case NullType(), NullType():
                 return a_ty
             case _:
@@ -173,13 +202,13 @@ class _TypeCheckInstance(Visitor):
 
     def _instantiate(self, ty: Type) -> Type:
         subst: dict[VarType, Type] = {}
-        for fv in ty.free_vars():
+        for fv in sorted(ty.free_vars()):
             subst[fv] = self._fresh_type_var()
         return ty.subst(subst)
 
     def _generalize(self, ty: Type) -> Type:
         subst: dict[VarType, Type] = {}
-        for i, fv in enumerate(ty.free_vars()):
+        for i, fv in enumerate(sorted(ty.free_vars())):
             t = self.tvars.find(fv)
             match t: 
                 case VarType():
@@ -217,7 +246,7 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_var(self, e: Var, ctx: None) -> Type:
         d = self.def_use.find_def_from_use(e)
-        return self.types[d]
+        return self.by_def[d]
 
     def _visit_bool(self, e: BoolVal, ctx: None) -> BoolType:
         return BoolType()
@@ -363,7 +392,9 @@ class _TypeCheckInstance(Visitor):
                 # calling a function
                 if e.fn.sig is None:
                     # type checking not run
-                    fn_ty = TypeCheck.check(e.fn.ast)
+                    # TODO: guard against recursion
+                    fn_info = TypeCheck.check(e.fn.ast)
+                    fn_ty = fn_info.fn_type
                 else:
                     fn_ty = e.fn.sig
 
@@ -372,6 +403,9 @@ class _TypeCheckInstance(Visitor):
                     return NullType()
                 else:
                     # signature matches
+                    # instantiate the function type
+                    fn_ty = cast(FunctionType, self._instantiate(fn_ty))
+                    # merge arguments
                     for arg, expect_ty in zip(e.args, fn_ty.arg_types):
                         ty = self._visit_expr(arg, None)
                         self._unify(ty, expect_ty)
@@ -439,7 +473,7 @@ class _TypeCheckInstance(Visitor):
         # val[index] : A
         return ty
 
-    def _visit_list_slice(self, e: ListSlice, ctx: None) -> ListType:
+    def _visit_list_slice(self, e: ListSlice, ctx: None):
         # type check array
         value_ty = self._visit_expr(e.value, None)
         self._unify(value_ty, ListType(self._fresh_type_var()))
@@ -487,7 +521,7 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         d = self.def_use.find_def_from_use(stmt)
-        arr_ty = self.types[d]
+        arr_ty = self.by_def[d]
 
         for s in stmt.slices:
             # arr : list[A]
@@ -529,7 +563,7 @@ class _TypeCheckInstance(Visitor):
         for intro in intros_ift & intros_iff:
             ift_def = self._select_def_repr(defs_out_ift[intro])
             iff_def = self._select_def_repr(defs_out_iff[intro])
-            self._unify(self.types[ift_def], self.types[iff_def])
+            self._unify(self.by_def[ift_def], self.by_def[iff_def])
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         cond_ty = self._visit_expr(stmt.cond, None)
@@ -593,28 +627,42 @@ class _TypeCheckInstance(Visitor):
         ty = FunctionType(arg_tys, self.ret_type)
         return cast(FunctionType, self._generalize(ty))
 
+    def _visit_expr(self, expr: Expr, ctx: None) -> Type:
+        ret_ty = super()._visit_expr(expr, ctx)
+        self.by_expr[expr] = ret_ty
+        return ret_ty
+
 
 class TypeCheck:
     """
-    Type checker for the FPy language.
+    Type inference for the FPy language.
 
-    Unlike Python, FPy is statically typed.
-
-    When the `@fpy` decorator runs, it also type checks the function
-    and raises an error if the function is not well-typed.
+    FPy is not statically typed, but compilation may require statically
+    determining the types throughout the program.
+    The FPy type inference algorithm is a Hindley-Milner based algorithm.
     """
 
+    #
+    # <type> ::= bool
+    #          | real
+    #          | <var>
+    #          | <type> x <type>
+    #          | list <type>
+    #          | <type> -> <type>
+    #
+
     @staticmethod
-    def check(func: FuncDef):
+    def check(func: FuncDef) -> TypeAnalysis:
         """
         Analyzes the function for type errors.
 
-        Produces a type signature for the function if it is well-typed.
+        Produces a type signature for the function if it is well-typed
+        and a mapping from definition to type.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
 
         def_use = DefineUse.analyze(func)
         inst = _TypeCheckInstance(func, def_use)
-        ty = inst.analyze()
-        return ty
+        return inst.analyze()
+

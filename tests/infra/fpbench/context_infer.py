@@ -1,6 +1,11 @@
+"""
+Context inference tests
+"""
+
 import fpy2 as fp
 
-from fpy2.analysis import TypeCheck
+from fpy2.analysis import ContextInfer
+from fpy2.transform import ContextInline
 
 from .fetch import fetch_cores
 
@@ -12,13 +17,14 @@ _skip_cores = [
     'rk4-step-3d'
 ]
 
-def test_tcheck():
+def test_context_infer():
     for core in fetch_cores().all_cores():
         if core.name not in _skip_cores:
             print('tcheck', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
-            info = TypeCheck.check(fn.ast)
-            print(core.name, core.ident, info.fn_type)
+            ast = ContextInline.apply(fn.ast, fn.env)
+            info = ContextInfer.infer(ast)
+            print(ast.name, info.ret_ctx)
 
 if __name__ == '__main__':
-    test_tcheck()
+    test_context_infer()

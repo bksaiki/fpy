@@ -60,6 +60,16 @@ class Unionfind(Generic[T]):
             raise KeyError(x)
         return self._find(x)
 
+    def get(self, x: T, default=None):
+        """
+        Finds the representative of the set containing `x`,
+        or `default` if a representative is not found.
+        """
+        if x in self._parent:
+            return self._find(x)
+        else:
+            return default
+
     def union(self, x: T, y: T) -> T:
         """
         Union the sets containing `x` and `y`.
