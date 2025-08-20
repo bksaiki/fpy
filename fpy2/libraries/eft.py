@@ -20,10 +20,10 @@ def veltkamp_split(x: fp.Real, s: fp.Real):
     C = fp.pow(2, s) + 1
     g = C * x
     e = x - g
-    h = g + e
-    l = x - h
+    s = g + e
+    t = x - s
 
-    return h, l
+    return s, t
 
 
 ###########################################################
