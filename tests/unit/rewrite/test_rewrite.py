@@ -299,7 +299,7 @@ class RewriteTestCase(unittest.TestCase):
         self.assertIsInstance(k_rw, Function)
         self.assertAstEqual(k_rw.ast.body, k2.ast.body)
 
-    def test_unroll_while_example2(self):
+    def test_unroll_while_example3(self):
         assert isinstance(k, Function)
         assert isinstance(k3, Function)
 

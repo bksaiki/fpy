@@ -1,7 +1,7 @@
 """Definition use analysis for FPy ASTs"""
 
-from dataclasses import dataclass
-from typing import TypeAlias, Union
+from abc import ABC, abstractmethod
+from typing import Iterable, TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -10,53 +10,104 @@ from ..utils import default_repr
 DefSite: TypeAlias = FuncDef | Argument | Stmt | ListComp
 UseSite: TypeAlias = Var | IndexedAssign
 
-@dataclass
-class Definition:
-    id: NamedId
+
+@default_repr
+class Definition(ABC):
+    """
+    Definition of a variable:
+    - an assignment
+    - merging definitions from two branches
+    """
+
+    name: NamedId
+
+    def __init__(self, name: NamedId):
+        self.name = name
+
+    @abstractmethod
+    def assigns(self) -> list['AssignDef']:
+        """Returns the set of concrete assignments that for this variable."""
+        ...
+
+
+class AssignDef(Definition):
+    """Concrete definition for an assignment."""
+
     site: DefSite
+    """syntax location of the assignment"""
+
+    def __init__(self, name: NamedId, site: DefSite):
+        super().__init__(name)
+        self.site = site
 
     def __eq__(self, other):
         return (
-            isinstance(other, Definition)
-            and self.id == other.id
+            isinstance(other, AssignDef)
+            and self.name == other.name
             and self.site == other.site
         )
 
+    def __lt__(self, other: 'AssignDef'):
+        if not isinstance(other, AssignDef):
+            raise TypeError(f"'<' not supported between instances '{type(self)}' and '{type(other)}'")
+        return self.name < other.name
+
     def __hash__(self):
-        return hash((self.id, self.site))
+        return hash((self.name, self.site))
 
-@default_repr
-class DefineUnion:
-    """Union of possible definition sites."""
-    defs: set[Definition]
+    def assigns(self) -> list['AssignDef']:
+        return [self]
 
-    def __init__(self, defs: set[Definition]):
-        self.defs = set(defs)
+
+class PhiDef(Definition):
+    """Merged definition from multiple branches (phi node in SSA form)"""
+
+    children: tuple[AssignDef, ...]
+
+    def __init__(self, name: NamedId, defs: Iterable[Definition]):
+        children: list[AssignDef] = []
+        for d in defs:
+            children.extend(d.assigns())
+
+        super().__init__(name)
+        self.children = tuple(children)
 
     def __eq__(self, other):
-        return isinstance(other, DefineUnion) and self.defs == other.defs
+        return (
+            isinstance(other, PhiDef)
+            and self.name == other.name
+            and self.children == other.children
+        )
 
     def __hash__(self):
-        return hash(tuple(self.defs))
+        return hash((self.name, self.children))
+
+    def assigns(self) -> list['AssignDef']:
+        return list(self.children)
 
     @staticmethod
-    def union(*defs_or_unions: Union[Definition, 'DefineUnion']):
-        """Create a union of definitions from a set of definitions or unions."""
-        defs: set[Definition] = set()
-        for item in defs_or_unions:
-            if isinstance(item, DefineUnion):
-                defs.update(item.defs)
-            else:
-                defs.add(item)
+    def union(first: Definition, *others: Definition) -> Definition:
+        """
+        Create a phi definition from a set of definitions.
+        If the first definition is a PhiDef, it is returned as is.
+        """
+        name = first.name
+        uniq_assigns = set(first.assigns())
+        for other in others:
+            if name != other.name:
+                raise ValueError(f'cannot union definitions with different names {other}')
+            uniq_assigns.update(other.assigns())
 
-        if len(defs) == 0:
-            raise ValueError('Cannot create a union of an empty set of definitions')
-        elif len(defs) == 1:
-            return defs.pop()
+        assigns = sorted(uniq_assigns)
+        if len(assigns) == 0:
+            raise ValueError('cannot create a phi definition from an empty set of definitions')
+        elif len(assigns) == 1:
+            return assigns[0]
         else:
-            return DefineUnion(defs)
+            return PhiDef(name, assigns)
 
-class DefinitionCtx(dict[NamedId, Definition | DefineUnion]):
+
+class DefinitionCtx(dict[NamedId, Definition]):
     """Mapping from variable to its definition (or possible definitions)."""
 
     def copy(self) -> 'DefinitionCtx':
@@ -68,11 +119,11 @@ class DefinitionCtx(dict[NamedId, Definition | DefineUnion]):
         Returns the set of variables that are defined in `self`
         and mutated in `other`.
         """
-        names: set[NamedId] = set()
+        names: list[NamedId] = []
         for name in self.keys() & other.keys():
             if self[name] != other[name]:
-                names.add(name)
-        return list(names)
+                names.append(name)
+        return names
 
     def fresh_in(self, other: 'DefinitionCtx') -> set[NamedId]:
         """
@@ -85,8 +136,8 @@ class DefinitionCtx(dict[NamedId, Definition | DefineUnion]):
 @default_repr
 class DefineUseAnalysis:
     """Result of definition-use analysis"""
-    defs: dict[NamedId, set[Definition]]
-    uses: dict[Definition, set[UseSite]]
+    defs: dict[NamedId, set[AssignDef]]
+    uses: dict[AssignDef, set[UseSite]]
     stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
     blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
 
@@ -139,18 +190,14 @@ class _DefineUseInstance(DefaultVisitor):
     def _add_def(self, name: NamedId, site: DefSite):
         if name not in self.analysis.defs:
             self.analysis.defs[name] = set()
-        definition = Definition(name, site)
+        definition = AssignDef(name, site)
         self.analysis.defs[name].add(definition)
         self.analysis.uses[definition] = set()
         return definition
 
     def _add_use(self, name: NamedId, use: Var | IndexedAssign, ctx: DefinitionCtx):
-        def_or_union = ctx[name]
-        if isinstance(def_or_union, DefineUnion):
-            for def_ in def_or_union.defs:
-                self.analysis.uses[def_].add(use)
-        else:
-            self.analysis.uses[def_or_union].add(use)
+        for d in ctx[name].assigns():
+            self.analysis.uses[d].add(use)
 
     def _visit_var(self, e: Var, ctx: DefinitionCtx):
         if e.name not in ctx:
@@ -183,7 +230,7 @@ class _DefineUseInstance(DefaultVisitor):
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = PhiDef.union(ctx[var], body_ctx[var])
 
     def _visit_if(self, stmt: IfStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.cond, ctx)
@@ -191,7 +238,7 @@ class _DefineUseInstance(DefaultVisitor):
         iff_ctx = self._visit_block(stmt.iff, ctx.copy())
         # merge contexts along both paths
         for var in ift_ctx.keys() & iff_ctx.keys():
-            ctx[var] = DefineUnion.union(ift_ctx[var], iff_ctx[var])
+            ctx[var] = PhiDef.union(ift_ctx[var], iff_ctx[var])
 
     def _visit_while(self, stmt: WhileStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.cond, ctx)
@@ -199,7 +246,7 @@ class _DefineUseInstance(DefaultVisitor):
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = PhiDef.union(ctx[var], body_ctx[var])
 
     def _visit_for(self, stmt: ForStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.iterable, ctx)
@@ -215,7 +262,7 @@ class _DefineUseInstance(DefaultVisitor):
         # merge contexts along both paths
         # definitions cannot be introduced in the body
         for var in ctx:
-            ctx[var] = DefineUnion.union(ctx[var], body_ctx[var])
+            ctx[var] = PhiDef.union(ctx[var], body_ctx[var])
 
     def _visit_statement(self, stmt: Stmt, ctx: DefinitionCtx):
         ctx_in = ctx.copy()
