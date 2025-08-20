@@ -9,7 +9,7 @@ from ..primitive import Primitive
 from ..types import Type, NullType, BoolType, RealType, VarType, FunctionType, TupleType, ListType
 from ..utils import Gensym, NamedId, Unionfind
 
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefineUnion, DefSite
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
 #####################################################################
 # Type Inference
@@ -510,14 +510,8 @@ class _TypeCheckInstance(Visitor):
         # type check body
         self._visit_block(stmt.body, None)
 
-    def _select_def_repr(self, d: Definition | DefineUnion):
-        match d:
-            case Definition():
-                return d
-            case DefineUnion():
-                return next(iter(d.defs))
-            case _:
-                raise RuntimeError(f'unreachable {d}')
+    def _select_def_repr(self, d: Definition):
+        return d.assigns()[0]
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         # type check condition

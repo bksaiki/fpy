@@ -1,7 +1,7 @@
 """Program analyses for FPy programs"""
 
 from .define_use import (
-    DefineUse, DefineUseAnalysis, Definition, DefineUnion, DefinitionCtx,
+    DefineUse, DefineUseAnalysis, Definition, DefinitionCtx,
     DefSite, UseSite
 )
 

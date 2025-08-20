@@ -12,6 +12,7 @@ from .location import Location
 
 class Id(ABC):
     """Abstract base class for identifiers."""
+
     __slots__ = ()
 
     @abstractmethod
@@ -22,6 +23,11 @@ class Id(ABC):
         This method is for compability with AST classes.
         """
         ...
+
+    def __lt__(self, other: 'Id'):
+        if not isinstance(other, Id):
+            raise TypeError(f"'<' not supported between instances '{type(self)}' and '{type(other)}'")
+        return str(self) < str(other)
 
     def is_equiv(self, other) -> bool:
         """
