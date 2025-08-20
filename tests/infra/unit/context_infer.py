@@ -10,7 +10,8 @@ from fpy2.transform import ContextInline
 from .defs import tests, examples
 
 _modules = [
-    fp.libraries.core
+    fp.libraries.core,
+    fp.libraries.eft
 ]
 
 def _test_tcheck_unit():
@@ -18,7 +19,7 @@ def _test_tcheck_unit():
         assert isinstance(core, fp.Function)
         ast = ContextInline.apply(core.ast, core.env)
         info = ContextInfer.infer(ast)
-        print(ast.name, info.ret_ctx)
+        print(ast.name, info.func_ctx)
 
 def _test_tcheck_library():
     for mod in _modules:
@@ -26,7 +27,7 @@ def _test_tcheck_library():
             if isinstance(obj, fp.Function):
                 ast = ContextInline.apply(obj.ast, obj.env)
                 info = ContextInfer.infer(ast)
-                print(ast.name, info.ret_ctx)
+                print(ast.name, info.func_ctx)
 
 def test_context_infer():
     _test_tcheck_unit()

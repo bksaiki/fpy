@@ -170,7 +170,6 @@ class _ContextInferInstance(Visitor):
 
     def _generalize(self, ctx: FunctionContext):
         subst: dict[NamedId, _Context] = {}
-        print(sorted(self._free_vars(ctx)))
         for i, fv in enumerate(sorted(self._free_vars(ctx))):
             t = self.rvars.find(fv)
             match t:

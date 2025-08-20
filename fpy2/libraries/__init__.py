@@ -13,3 +13,6 @@ from . import base
 
 # core operations and utilities
 from . import core
+
+# error-free transformations
+from . import eft
