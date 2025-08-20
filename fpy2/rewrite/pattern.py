@@ -85,7 +85,7 @@ class StmtPattern(Pattern):
         for defs in def_use.defs.values():
             for d in defs:
                 if not isinstance(d.site, FuncDef):
-                    targets.add(d.id)
+                    targets.add(d.name)
 
         # set of uses
         live_vars = LiveVars.analyze(func)
