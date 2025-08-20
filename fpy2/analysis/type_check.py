@@ -154,9 +154,6 @@ class _TypeCheckInstance(Visitor):
         return ty
 
     def _resolve_type(self, ty: Type):
-        if ty in self.tvars:
-            return self.tvars.find(ty)
-
         match ty:
             case NullType() | BoolType() | RealType() | VarType():
                 return self.tvars.add(ty)
@@ -170,8 +167,8 @@ class _TypeCheckInstance(Visitor):
                 raise NotImplementedError(f'cannot resolve type {ty}')
 
     def _unify(self, a_ty: Type, b_ty: Type):
-        a_ty = self._resolve_type(a_ty)
-        b_ty = self._resolve_type(b_ty)
+        a_ty = self.tvars.get(a_ty, a_ty)
+        b_ty = self.tvars.get(b_ty, b_ty)
         match a_ty, b_ty:
             case VarType(), _:
                 b_ty = self.tvars.add(b_ty)
@@ -188,7 +185,7 @@ class _TypeCheckInstance(Visitor):
                 elt_ty = self.tvars.add(elt_ty)
                 elt_ty = self.tvars.union(elt_ty, self.tvars.add(a_ty.elt_type))
                 elt_ty = self.tvars.union(elt_ty, self.tvars.add(b_ty.elt_type))
-                return ListType(elt_ty)
+                return self.tvars.add(ListType(elt_ty))
             case TupleType(), TupleType():
                 # TODO: what if the length doesn't match
                 if len(a_ty.elt_types) != len(b_ty.elt_types):
