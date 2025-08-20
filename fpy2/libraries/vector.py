@@ -5,6 +5,62 @@ Operations on vectors.
 from . import base as fp
 
 @fp.fpy
+def add(x: list[fp.Real], y: list[fp.Real]) -> list[fp.Real]:
+    """
+    Element-wise addition of two vectors.
+
+    :param x: First vector.
+    :param y: Second vector.
+    :return: Result vector x + y.
+    """
+    assert len(x) == len(y)
+    return [xi + yi for xi, yi in zip(x, y)]
+
+@fp.fpy
+def sub(x: list[fp.Real], y: list[fp.Real]) -> list[fp.Real]:
+    """
+    Element-wise subtraction of two vectors.
+
+    :param x: First vector.
+    :param y: Second vector.
+    :return: Result vector x - y.
+    """
+    assert len(x) == len(y)
+    return [xi - yi for xi, yi in zip(x, y)]
+
+@fp.fpy
+def hadamard(x: list[fp.Real], y: list[fp.Real]) -> list[fp.Real]:
+    """
+    Element-wise multiplication (Hadamard product) of two vectors.
+
+    :param x: First vector.
+    :param y: Second vector.
+    :return: Result vector x ⊙ y.
+    """
+    assert len(x) == len(y)
+    return [xi * yi for xi, yi in zip(x, y)]
+
+@fp.fpy
+def zeros(n: int) -> list[fp.Real]:
+    """
+    Create a zero vector of length n.
+
+    :param n: Vector length.
+    :return: Zero vector.
+    """
+    return [0.0 for _ in range(n)]
+
+@fp.fpy
+def ones(n: int) -> list[fp.Real]:
+    """
+    Create a vector of ones of length n.
+
+    :param n: Vector length.
+    :return: Vector of ones.
+    """
+    return [1.0 for _ in range(n)]
+
+@fp.fpy
 def dot(x: list[fp.Real], y: list[fp.Real]) -> fp.Real:
     """
     Compute the dot product of two vectors.
@@ -100,3 +156,66 @@ def norm_p(x: list[fp.Real], p: fp.Real) -> fp.Real:
     :return: p-norm of x.
     """
     return fp.pow(sum([fp.pow(abs(xi), p) for xi in x]), 1.0 / p)
+
+@fp.fpy
+def cosine_similarity(x: list[fp.Real], y: list[fp.Real]) -> fp.Real:
+    """
+    Compute cosine similarity between two vectors.
+
+    :param x: First vector.
+    :param y: Second vector.
+    :return: Cosine similarity x·y / (||x|| ||y||).
+    """
+    dot_xy = dot(x, y)
+    norm_x = norm2(x)
+    norm_y = norm2(y)
+    return dot_xy / (norm_x * norm_y)
+
+@fp.fpy
+def normalize(x: list[fp.Real]) -> list[fp.Real]:
+    """
+    Normalize a vector to unit length (L2 norm).
+
+    :param x: Input vector.
+    :return: Unit vector in direction of x.
+    """
+    norm = norm2(x)
+    return [xi / norm for xi in x]
+
+@fp.fpy
+def normalize_p(x: list[fp.Real], p: fp.Real) -> list[fp.Real]:
+    """
+    Normalize a vector using p-norm.
+
+    :param x: Input vector.
+    :param p: Norm parameter.
+    :return: Vector normalized by p-norm.
+    """
+    norm = norm_p(x, p)
+    return [xi / norm for xi in x]
+
+@fp.fpy
+def cross(x: list[fp.Real], y: list[fp.Real]) -> list[fp.Real]:
+    """
+    Compute cross product of two 3D vectors.
+
+    :param x: First 3D vector.
+    :param y: Second 3D vector.
+    :return: Cross product x × y.
+    """
+    assert len(x) == 3 and len(y) == 3
+    return [
+        x[1] * y[2] - x[2] * y[1],
+        x[2] * y[0] - x[0] * y[2],
+        x[0] * y[1] - x[1] * y[0]
+    ]
+
+@fp.fpy
+def mean(x: list[fp.Real]) -> fp.Real:
+    """
+    Compute the mean of vector elements.
+
+    :param x: Input vector.
+    :return: Mean of elements.
+    """
+    return sum(x) / len(x)
