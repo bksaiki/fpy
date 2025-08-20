@@ -10,7 +10,8 @@ from .defs import tests, examples
 
 _modules = [
     fp.libraries.core,
-    fp.libraries.eft
+    fp.libraries.eft,
+    fp.libraries.vector,
 ]
 
 def _test_tcheck_unit():
