@@ -11,8 +11,8 @@ from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..primitive import Primitive
-from ..utils import Gensym, default_repr
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
+from ..utils import Gensym, NamedId, Unionfind, default_repr
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefineUnion, DefSite
 
 
 @default_repr
@@ -31,6 +31,11 @@ class TupleContext:
         return hash(self.elts)
 
 _Context: TypeAlias = NamedId | Context | TupleContext | None
+
+
+class ContextInferError(Exception):
+    """Context inference error for FPy programs."""
+    pass
 
 @dataclass(frozen=True)
 class ContextAnalysis:
@@ -53,6 +58,7 @@ class _ContextInferInstance(Visitor):
     by_def: dict[Definition, _Context]
     by_expr: dict[Expr, _Context]
     ret_ctx: _Context
+    rvars: Unionfind[_Context]
     gensym: Gensym
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
@@ -61,39 +67,74 @@ class _ContextInferInstance(Visitor):
         self.by_def = {}
         self.by_expr = {}
         self.ret_ctx = None
+        self.rvars = Unionfind()
         self.gensym = Gensym()
 
     def infer(self):
         arg_ctxs = self._visit_function(self.func, None)
-        return ContextAnalysis(tuple(arg_ctxs), self.ret_ctx, self.by_def, self.by_expr)
-
-    def _fresh_context_var(self) -> NamedId:
-        return self.gensym.fresh('r')
+        arg_ctxs = tuple(self._resolve_context(ctx) for ctx in arg_ctxs)
+        ret_ctx = self._resolve_context(self.ret_ctx)
+        by_defs = {
+            d: self._resolve_context(ctx)
+            for d, ctx in self.by_def.items()
+        }
+        by_expr = {
+            e: self._resolve_context(ctx)
+            for e, ctx in self.by_expr.items()
+        }
+        return ContextAnalysis(arg_ctxs, ret_ctx, by_defs, by_expr)
 
     def _set_context(self, site: Definition, ctx: _Context):
         self.by_def[site] = ctx
 
-    def _merge(self, a_ctx: _Context, b_ctx: _Context) -> _Context:
+    def _fresh_context_var(self) -> NamedId:
+        rvar = self.gensym.fresh('r')
+        self.rvars.add(rvar)
+        return rvar
+
+    def _resolve_context(self, ctx: _Context):
+        match ctx:
+            case None | Context():
+                return ctx
+            case NamedId():
+                return self.rvars.get(ctx, ctx)
+            case TupleContext():
+                elts = (self._resolve_context(elt) for elt in ctx.elts)
+                return self.rvars.add(TupleContext(elts))
+            case _:
+                raise RuntimeError(f'unknown context: {ctx}')
+
+    def __unify(self, a_ctx: _Context, b_ctx: _Context) -> _Context:
+        a_ctx = self.rvars.get(a_ctx, a_ctx)
+        b_ctx = self.rvars.get(b_ctx, b_ctx)
         match a_ctx, b_ctx:
-            case NamedId(), NamedId():
-                if a_ctx == b_ctx:
-                    return a_ctx
-                else:
-                    return None
+            case (None, _) | (None, _):
+                return None
+            case NamedId(), _:
+                b_ctx = self.rvars.add(b_ctx)
+                return self.rvars.union(b_ctx, a_ctx)
+            case _, NamedId():
+                a_ctx = self.rvars.add(a_ctx)
+                return self.rvars.union(a_ctx, b_ctx)
             case Context(), Context():
-                if a_ctx.is_equiv(b_ctx):
-                    return a_ctx
-                else:
-                    return None
+                if not a_ctx.is_equiv(b_ctx):
+                    raise ContextInferError(f'incompatible context types: {a_ctx} != {b_ctx}')
+                return a_ctx
             case TupleContext(), TupleContext():
                 if len(a_ctx.elts) != len(b_ctx.elts):
-                    raise RuntimeError(f'incompatible tuple contexts: {a_ctx} vs {b_ctx}')
-                return TupleContext(
-                    self._merge(a_elt, b_elt)
-                    for a_elt, b_elt in zip(a_ctx.elts, b_ctx.elts)
-                )
+                    raise ContextInferError(f'incompatible context types: {a_ctx} != {b_ctx}')
+                elts = (self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ctx.elts, b_ctx.elts))
+                ctx = self.rvars.add(TupleContext(elts))
+                ctx = self.rvars.union(ctx, self.rvars.add(a_ctx))
+                ctx = self.rvars.union(ctx, self.rvars.add(b_ctx))
+                return ctx
             case _:
                 return None
+
+    def _unify(self, a_ctx, b_ctx):
+        ctx = self.__unify(a_ctx, b_ctx)
+        print(a_ctx, b_ctx, ctx)
+        return ctx
 
     def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ctx: _Context):
         match target:
@@ -203,7 +244,7 @@ class _ContextInferInstance(Visitor):
         else:
             elt_ctx = self._visit_expr(e.args[0], ctx)
             for arg in e.args[1:]:
-                elt_ctx = self._merge(elt_ctx, self._visit_expr(arg, ctx))
+                elt_ctx = self._unify(elt_ctx, self._visit_expr(arg, ctx))
             return elt_ctx
 
     def _visit_list_comp(self, e: ListComp, ctx: _Context):
@@ -238,7 +279,7 @@ class _ContextInferInstance(Visitor):
         self._visit_expr(e.cond, ctx)
         ift_ctx = self._visit_expr(e.ift, ctx)
         iff_ctx = self._visit_expr(e.iff, ctx)
-        return self._merge(ift_ctx, iff_ctx)
+        return self._unify(ift_ctx, iff_ctx)
 
     def _visit_context_expr(self, e: ContextExpr, ctx: _Context):
         return None
@@ -259,10 +300,34 @@ class _ContextInferInstance(Visitor):
         self._visit_block(stmt.body, ctx)
         return ctx
 
+    def _select_def_repr(self, d: Definition | DefineUnion):
+        match d:
+            case Definition():
+                return d
+            case DefineUnion():
+                return d.defs[0]
+            case _:
+                raise RuntimeError(f'unreachable {d}')
+
     def _visit_if(self, stmt: IfStmt, ctx: _Context):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
+
+        # need to merge variables introduced on both sides
+        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
+        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
+        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
+        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
+        for intro in intros_ift & intros_iff:
+            ift_def = self._select_def_repr(defs_out_ift[intro])
+            iff_def = self._select_def_repr(defs_out_iff[intro])
+            ctx = self._unify(self.by_def[ift_def], self.by_def[iff_def])
+            if ctx is None:
+                # if we can't infer a context, clear whatever we inferred in the branches
+                self.by_def[ift_def] = None
+                self.by_def[iff_def] = None
+
         return ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Context):

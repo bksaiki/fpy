@@ -156,7 +156,7 @@ class _TypeCheckInstance(Visitor):
     def _resolve_type(self, ty: Type):
         match ty:
             case NullType() | BoolType() | RealType() | VarType():
-                return self.tvars.add(ty)
+                return self.tvars.get(ty, ty)
             case TupleType():
                 elts = [self._resolve_type(elt) for elt in ty.elt_types]
                 return self.tvars.add(TupleType(*elts))
