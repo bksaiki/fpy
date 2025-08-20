@@ -9,7 +9,8 @@ from fpy2.analysis import TypeCheck
 from .defs import tests, examples
 
 _modules = [
-    fp.libraries.core
+    fp.libraries.core,
+    fp.libraries.eft
 ]
 
 def _test_tcheck_unit():

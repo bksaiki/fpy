@@ -170,12 +170,12 @@ class _TypeCheckInstance(Visitor):
         a_ty = self.tvars.get(a_ty, a_ty)
         b_ty = self.tvars.get(b_ty, b_ty)
         match a_ty, b_ty:
-            case VarType(), _:
-                b_ty = self.tvars.add(b_ty)
-                return self.tvars.union(b_ty, a_ty)
             case _, VarType():
                 a_ty = self.tvars.add(a_ty)
                 return self.tvars.union(a_ty, b_ty)
+            case VarType(), _:
+                b_ty = self.tvars.add(b_ty)
+                return self.tvars.union(b_ty, a_ty)
             case RealType(), RealType():
                 return a_ty
             case BoolType(), BoolType():

@@ -108,6 +108,11 @@ def isinteger(x: fp.Real) -> bool:
     _, fpart = modf(x)
     return fp.isfinite(fpart) and fpart == 0
 
+@fp.fpy
+def isnar(x: fp.Real) -> bool:
+    """Checks if `x` is either NaN or infinity."""
+    return fp.isnan(x) or fp.isinf(x)
+
 ###########################################################
 # Exponent extraction and scaling
 
