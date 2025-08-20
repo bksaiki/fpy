@@ -635,13 +635,21 @@ class _TypeCheckInstance(Visitor):
 
 class TypeCheck:
     """
-    Type checker for the FPy language.
+    Type inference for the FPy language.
 
-    Unlike Python, FPy is statically typed.
-
-    When the `@fpy` decorator runs, it also type checks the function
-    and raises an error if the function is not well-typed.
+    FPy is not statically typed, but compilation may require statically
+    determining the types throughout the program.
+    The FPy type inference algorithm is a Hindley-Milner based algorithm.
     """
+
+    #
+    # <type> ::= bool
+    #          | real
+    #          | <var>
+    #          | <type> x <type>
+    #          | list <type>
+    #          | <type> -> <type>
+    #
 
     @staticmethod
     def check(func: FuncDef) -> TypeAnalysis:

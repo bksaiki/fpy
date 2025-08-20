@@ -513,6 +513,11 @@ class ContextInfer:
     if it can be determined.
     """
 
+    #
+    # <context> ::= C_i
+    #             | <context> x <context>
+    #             | [<context>] <context> -> <context>
+
     @staticmethod
     def infer(func: FuncDef):
         """
