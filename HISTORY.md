@@ -1,5 +1,17 @@
 # Version History
 
+## [0.0.10] - 2025-08-20
+### Features:
+ - Library
+   - added EFT library (`fpy2.libraries.eft`)
+ - Analyses
+   - added type inference
+   - added rounding context inference
+
+### Fixes:
+ - interpreter was ignoring stochastic rounding
+ - cleanup `DefinitionUseAnalysis`
+
 ## [0.0.9] - 2025-08-08
 ### Features:
  - Numbers library
