@@ -197,12 +197,12 @@ class _ContextInferInstance(Visitor):
         match a_ctx, b_ctx:
             case (None, _) | (None, _):
                 return None
-            case NamedId(), _:
-                b_ctx = self.rvars.add(b_ctx)
-                return self.rvars.union(b_ctx, a_ctx)
             case _, NamedId():
                 a_ctx = self.rvars.add(a_ctx)
                 return self.rvars.union(a_ctx, b_ctx)
+            case NamedId(), _:
+                b_ctx = self.rvars.add(b_ctx)
+                return self.rvars.union(b_ctx, a_ctx)
             case Context(), Context():
                 if not a_ctx.is_equiv(b_ctx):
                     raise ContextInferError(f'incompatible context types: {a_ctx} != {b_ctx}')
@@ -319,6 +319,8 @@ class _ContextInferInstance(Visitor):
 
                 # instantiate the function context
                 fn_ctx = cast(FunctionContext, self._instantiate(fn_info.func_ctx))
+                # merge caller context
+                self._unify(ctx, fn_ctx.ctx)
                 # merge arguments
                 for arg, expect_ty in zip(e.args, fn_ctx.args):
                     ty = self._visit_expr(arg, None)

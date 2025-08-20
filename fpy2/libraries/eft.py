@@ -175,3 +175,66 @@ def classic_2mul(a: fp.Real, b: fp.Real):
     r2 = t3 + al * bl
 
     return r1, r2
+
+
+@fp.fpy
+def fast_2mul(a: fp.Real, b: fp.Real):
+    """
+    Error-free transformation of the product of two floating-point numbers.
+
+    Returns a tuple (s, t) where:
+    - `s` is the floating-point product of `a` and `b`;
+    - `t` is the error term such that `s + t = a * b`.
+
+    Assumes that:
+    - the rounding context is floating point;
+    """
+
+    r1 = a * b
+    r2 = fp.fma(a, b, -r1)
+    return r1, r2
+
+###########################################################
+# FMA
+
+@fp.fpy
+def ideal_fma(a: fp.Real, b: fp.Real, c: fp.Real):
+    """
+    Error-free transformation of the fused multiply-add operation.
+
+    Returns a tuple (r, t) where:
+    - `r` is the floating-point result of `a * b + c`;
+    - `t` is the error term such that `r + t = a * b + c`.
+
+    This implementation is "ideal" since the error term
+    may not be representable in the caller's rounding context.
+    """
+
+    r = fp.fma(a, b, c)
+    with fp.REAL:
+        t = fp.fma(a, b, c) - r
+    return r, t
+
+@fp.fpy
+def classic_2fma(a: fp.Real, b: fp.Real, c: fp.Real):
+    """
+    Computes the fused multiply-add operation with error-free transformation.
+    This algorithm is due to Boldo and Muller.
+
+    Returns a tuple (r, t) where:
+    - `r1` is the floating-point result of `a * b + c`;
+    - `r2` and `r3` are the error terms: `a * b + c = r1 + r2 + r3`.
+
+    Assumes that:
+    - the rounding context is floating point;
+    - the rounding mode is round-nearest.
+    """
+
+    r1 = fp.fma(a, b, c)
+    u1, u2 = fast_2mul(a, b)
+    a1, a2 = classic_2sum(c, u2)
+    b1, b2 = classic_2sum(u1, a1)
+    g = (b1 - r1) + b2
+    r2, r3 = fast_2sum(g, a2)
+
+    return r1, r2, r3
