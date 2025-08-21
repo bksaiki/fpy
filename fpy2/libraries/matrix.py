@@ -269,7 +269,7 @@ def trace(A: list[list[fp.Real]]) -> fp.Real:
     assert is_square(A) # Matrix must be square
     
     result = 0.0
-    for i in range(n):
+    for i in range(len(A)):
         result = result + A[i][i]
     return result
 
