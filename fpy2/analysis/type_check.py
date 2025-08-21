@@ -7,7 +7,7 @@ from typing import cast
 
 from ..ast import *
 from ..primitive import Primitive
-from ..types import Type, NullType, BoolType, RealType, VarType, FunctionType, TupleType, ListType
+from ..types import Type, BoolType, RealType, VarType, FunctionType, TupleType, ListType
 from ..utils import Gensym, NamedId, Unionfind
 
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
@@ -155,7 +155,7 @@ class _TypeCheckInstance(Visitor):
 
     def _resolve_type(self, ty: Type):
         match ty:
-            case NullType() | BoolType() | RealType() | VarType():
+            case BoolType() | RealType() | VarType():
                 return self.tvars.get(ty, ty)
             case TupleType():
                 elts = [self._resolve_type(elt) for elt in ty.elt_types]
@@ -195,8 +195,6 @@ class _TypeCheckInstance(Visitor):
                 ty = self.tvars.union(ty, self.tvars.add(a_ty))
                 ty = self.tvars.union(ty, self.tvars.add(b_ty))
                 return ty
-            case NullType(), NullType():
-                return a_ty
             case _:
                 raise FPyTypeError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
 
@@ -398,18 +396,19 @@ class _TypeCheckInstance(Visitor):
                 else:
                     fn_ty = e.fn.sig
 
+                arg_tys = [self._visit_expr(arg, None) for arg in e.args]
                 if len(fn_ty.arg_types) != len(e.args):
                     # no function signature / signature mismatch
-                    return NullType()
-                else:
-                    # signature matches
-                    # instantiate the function type
-                    fn_ty = cast(FunctionType, self._instantiate(fn_ty))
-                    # merge arguments
-                    for arg, expect_ty in zip(e.args, fn_ty.arg_types):
-                        ty = self._visit_expr(arg, None)
-                        self._unify(ty, expect_ty)
-                    return fn_ty.return_type
+                    actual_sig = f'function[{", ".join(arg.format() for arg in arg_tys)}]'
+                    raise FPyTypeError(f'function {e.fn.name}` has signature`{fn_ty.format()}`, but calling with `{actual_sig}')
+
+                # signature matches
+                # instantiate the function type
+                fn_ty = cast(FunctionType, self._instantiate(fn_ty))
+                # merge arguments
+                for arg_ty, expect_ty in zip(arg_tys, fn_ty.arg_types):
+                    self._unify(arg_ty, expect_ty)
+                return fn_ty.return_type
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
@@ -437,27 +436,21 @@ class _TypeCheckInstance(Visitor):
             case UnderscoreId():
                 pass
             case TupleBinding():
-                if isinstance(ty, TupleType) and len(binding.elts) == len(ty.elt_types):
-                    # type has expected shape
-                    for elt_ty, elt in zip(ty.elt_types, binding.elts):
-                        self._visit_binding(site, elt, elt_ty)
-                else:
-                    # type does not have expected shape
-                    for elt in binding.elts:
-                        self._visit_binding(site, elt, NullType())
+                if not isinstance(ty, TupleType) or len(binding.elts) != len(ty.elt_types):
+                    raise FPyTypeError(f'cannot unpack `{ty.format()}` for `{binding.format()}`')
+                # type has expected shape
+                for elt_ty, elt in zip(ty.elt_types, binding.elts):
+                    self._visit_binding(site, elt, elt_ty)
             case _:
                 raise RuntimeError(f'unreachable: {binding}')
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> ListType:
         for target, iterable in zip(e.targets, e.iterables):
             iter_ty = self._visit_expr(iterable, None)
-            match iter_ty:
-                case ListType():
-                    # expected type: list a
-                    self._visit_binding(e, target, iter_ty.elt_type)
-                case _:
-                    # otherwise
-                    self._visit_binding(e, target, NullType())
+            if not isinstance(iter_ty, ListType):
+                raise FPyTypeError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
+            # expected type: list a
+            self._visit_binding(e, target, iter_ty.elt_type)
 
         elt_ty = self._visit_expr(e.elt, None)
         return ListType(elt_ty)
@@ -574,13 +567,11 @@ class _TypeCheckInstance(Visitor):
     def _visit_for(self, stmt: ForStmt, ctx: None):
         # type check iterable
         iter_ty = self._visit_expr(stmt.iterable, None)
-        match iter_ty:
-            case ListType():
-                # expected type: list a
-                self._visit_binding(stmt, stmt.target, iter_ty.elt_type)
-            case _:
-                # otherwise
-                self._visit_binding(stmt, stmt.target, NullType())
+        if not isinstance(iter_ty, ListType):
+            raise FPyTypeError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
+
+        # expected type: list a
+        self._visit_binding(stmt, stmt.target, iter_ty.elt_type)
 
         # type check body
         self._visit_block(stmt.body, None)

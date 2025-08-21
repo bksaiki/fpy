@@ -39,24 +39,6 @@ class Type(ABC):
         ...
 
 
-class NullType(Type):
-    """Placeholder for an ill-typed value."""
-
-    def format(self) -> str:
-        return "⊥"
-
-    def free_vars(self) -> set['VarType']:
-        return set()
-
-    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
-        return self
-
-    def __eq__(self, other):
-        return isinstance(other, NullType)
-
-    def __hash__(self):
-        return hash(type(self))
-
 class BoolType(Type):
     """Type of boolean values"""
 
