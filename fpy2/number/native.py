@@ -22,19 +22,20 @@ def default_float_convert(x: RealFloat | Float):
     return bits_to_float(_FP64.encode(r))
 
 def default_str_convert(x: RealFloat | Float) -> str:
+    cls_name = x.__class__.__name__
     if isinstance(x, Float):
         if x.isnan:
             s = '-' if x.s else '+'
-            return f'{Float.__name__}(\'{s}nan\')'
+            return f'{cls_name}(\'{s}nan\')'
         elif x.isinf:
             s = '-' if x.s else '+'
-            return f'{Float.__name__}(\'{s}inf\')'
+            return f'{cls_name}(\'{s}inf\')'
 
     if x.is_zero():
         s = '-' if x.s else '+'
-        return f'{Float.__name__}(\'{s}0.0\')'
+        return f'{cls_name}(\'{s}0.0\')'
     else:
-        return f'{Float.__name__}(\'{str(float_to_mpfr(x))}\')'
+        return f'{cls_name}(\'{str(float_to_mpfr(x))}\')'
 
 set_current_float_converter(default_float_convert)
 set_current_str_converter(default_str_convert)

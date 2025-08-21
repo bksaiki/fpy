@@ -13,6 +13,7 @@ _modules = [
     fp.libraries.core,
     fp.libraries.eft,
     fp.libraries.vector,
+    fp.libraries.matrix
 ]
 
 def _test_tcheck_unit():

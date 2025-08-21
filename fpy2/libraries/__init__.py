@@ -1,8 +1,10 @@
 """
 FPy standard library.
 
+- base: FPy builtins 
 - core: core numerical operations and utilities
-
+- eft: error-free transformations
+- vector: vector operation
 """
 
 ###########################################################
@@ -19,3 +21,6 @@ from . import eft
 
 # vectors
 from . import vector
+
+# matrices
+from . import matrix
