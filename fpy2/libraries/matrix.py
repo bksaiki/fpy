@@ -41,6 +41,101 @@ def identity(n: int) -> list[list[fp.Real]]:
     return result
 
 @fp.fpy
+def is_square(A: list[list[fp.Real]]) -> bool:
+    """
+    Check if matrix is square.
+
+    :param A: Input matrix.
+    :return: True if square, False otherwise.
+    """
+    rows = len(A)
+    cols = len(A[0])
+    return rows == cols
+
+@fp.fpy
+def is_symmetric(A: list[list[fp.Real]]) -> bool:
+    """
+    Check if a matrix is symmetric.
+
+    :param A: Input matrix.
+    :return: True if matrix is symmetric, False otherwise.
+    """
+    if is_square(A):
+        n = len(A)
+        result = True
+        for i in range(n):
+            for j in range(n):
+                if A[i][j] != A[j][i]:
+                    result = False
+    else:
+        result = False
+
+    return result
+
+@fp.fpy
+def is_diagonal(A: list[list[fp.Real]]) -> bool:
+    """
+    Check if matrix is diagonal.
+
+    :param A: Input matrix.
+    :return: True if diagonal, False otherwise.
+    """
+    # assert message: "Matrix must be square"
+    if is_square(A):
+        n = len(A)
+        result = True
+        for i in range(n):
+            for j in range(n):
+                if i != j and A[i][j] != 0.0:
+                    result = False
+    else:
+        result = False
+
+    return result
+
+@fp.fpy
+def is_upper_triangular(A: list[list[fp.Real]]) -> bool:
+    """
+    Check if matrix is upper triangular.
+
+    :param A: Input matrix.
+    :return: True if upper triangular, False otherwise.
+    """
+    if is_square(A):
+        n = len(A)
+        result = True
+        for i in range(n):
+            for j in range(i):
+                if A[i][j] != 0.0:
+                    result = False
+    else:
+        result = False
+
+    return result
+
+@fp.fpy
+def is_lower_triangular(A: list[list[fp.Real]]) -> bool:
+    """
+    Check if matrix is lower triangular.
+
+    :param A: Input matrix.
+    :return: True if lower triangular, False otherwise.
+    """
+    if is_square(A):
+        n = len(A)
+        result = True
+        for i in range(n):
+            for j in range(n):
+                # TODO: range does not have a start
+                if j > i:
+                    if A[i][j] != 0.0:
+                        result = False
+    else:
+        result = False
+
+    return result
+
+@fp.fpy
 def diagonal(values: list[fp.Real]) -> list[list[fp.Real]]:
     """
     Create a diagonal matrix from a list of values.
@@ -66,7 +161,7 @@ def add(A: list[list[fp.Real]], B: list[list[fp.Real]]) -> list[list[fp.Real]]:
     rows, cols = len(A), len(A[0])
     # assert message: "Matrix dimensions must match for addition"
     assert len(B) == rows and len(B[0]) == cols
-    
+
     result = zeros(rows, cols)
     for i in range(rows):
         for j in range(cols):
@@ -85,7 +180,7 @@ def sub(A: list[list[fp.Real]], B: list[list[fp.Real]]) -> list[list[fp.Real]]:
     rows, cols = len(A), len(A[0])
     # assert message: "Matrix dimensions must match for subtraction"
     assert len(B) == rows and len(B[0]) == cols
-    
+
     result = zeros(rows, cols)
     for i in range(rows):
         for j in range(cols):
@@ -171,9 +266,7 @@ def trace(A: list[list[fp.Real]]) -> fp.Real:
     :param A: Input square matrix.
     :return: Trace of A.
     """
-    n = len(A)
-    # assert message: "Matrix must be square"
-    assert len(A[0]) == n
+    assert is_square(A) # Matrix must be square
     
     result = 0.0
     for i in range(n):
@@ -315,25 +408,6 @@ def set_column(A: list[list[fp.Real]], j: int, col: list[fp.Real]) -> list[list[
     return result
 
 @fp.fpy
-def is_symmetric(A: list[list[fp.Real]]) -> bool:
-    """
-    Check if a matrix is symmetric.
-
-    :param A: Input matrix.
-    :return: True if matrix is symmetric, False otherwise.
-    """
-    n = len(A)
-    if len(A[0]) != n:
-        result = False
-    else:
-        result = True
-        for i in range(n):
-            for j in range(n):
-                if A[i][j] != A[j][i]:
-                    result = False
-    return result
-
-@fp.fpy
 def max_element(A: list[list[fp.Real]]) -> fp.Real:
     """
     Find the maximum element in a matrix.
@@ -391,68 +465,6 @@ def mean_elements(A: list[list[fp.Real]]) -> fp.Real:
     rows, cols = len(A), len(A[0])
     total = sum_elements(A)
     return total / (rows * cols)
-
-@fp.fpy
-def is_diagonal(A: list[list[fp.Real]]) -> bool:
-    """
-    Check if matrix is diagonal.
-
-    :param A: Input matrix.
-    :return: True if diagonal, False otherwise.
-    """
-    n = len(A)
-    # assert message: "Matrix must be square"
-    assert len(A[0]) == n
-
-    result = True
-    for i in range(n):
-        for j in range(n):
-            if i != j and A[i][j] != 0.0:
-                result = False
-
-    return result
-
-@fp.fpy
-def is_upper_triangular(A: list[list[fp.Real]]) -> bool:
-    """
-    Check if matrix is upper triangular.
-
-    :param A: Input matrix.
-    :return: True if upper triangular, False otherwise.
-    """
-    n = len(A)
-    # assert message: "Matrix must be square"
-    assert len(A[0]) == n
-
-    result = True
-    for i in range(n):
-        for j in range(i):
-            if A[i][j] != 0.0:
-                result = False
-
-    return result
-
-@fp.fpy
-def is_lower_triangular(A: list[list[fp.Real]]) -> bool:
-    """
-    Check if matrix is lower triangular.
-
-    :param A: Input matrix.
-    :return: True if lower triangular, False otherwise.
-    """
-    n = len(A)
-    # assert message: "Matrix must be square"
-    assert len(A[0]) == n
-
-    result = True
-    for i in range(n):
-        for j in range(n):
-            # TODO: range does not have a start
-            if j > i:
-                if A[i][j] != 0.0:
-                    result = False
-
-    return result
 
 @fp.fpy
 def norm_1(A: list[list[fp.Real]]) -> fp.Real:
