@@ -364,3 +364,148 @@ def min_element(A: list[list[fp.Real]]) -> fp.Real:
             if A[i][j] < min_val:
                 min_val = A[i][j]
     return min_val
+
+@fp.fpy
+def sum_elements(A: list[list[fp.Real]]) -> fp.Real:
+    """
+    Sum all elements in a matrix.
+    
+    :param A: Input matrix.
+    :return: Sum of all elements.
+    """
+    rows, cols = len(A), len(A[0])
+    result = 0.0
+    for i in range(rows):
+        for j in range(cols):
+            result = result + A[i][j]
+    return result
+
+@fp.fpy
+def mean_elements(A: list[list[fp.Real]]) -> fp.Real:
+    """
+    Compute mean of all matrix elements.
+    
+    :param A: Input matrix.
+    :return: Mean of all elements.
+    """
+    rows, cols = len(A), len(A[0])
+    total = sum_elements(A)
+    return total / (rows * cols)
+
+@fp.fpy
+def is_diagonal(A: list[list[fp.Real]]) -> bool:
+    """
+    Check if matrix is diagonal.
+
+    :param A: Input matrix.
+    :return: True if diagonal, False otherwise.
+    """
+    n = len(A)
+    # assert message: "Matrix must be square"
+    assert len(A[0]) == n
+
+    result = True
+    for i in range(n):
+        for j in range(n):
+            if i != j and A[i][j] != 0.0:
+                result = False
+
+    return result
+
+@fp.fpy
+def is_upper_triangular(A: list[list[fp.Real]]) -> bool:
+    """
+    Check if matrix is upper triangular.
+
+    :param A: Input matrix.
+    :return: True if upper triangular, False otherwise.
+    """
+    n = len(A)
+    # assert message: "Matrix must be square"
+    assert len(A[0]) == n
+
+    result = True
+    for i in range(n):
+        for j in range(i):
+            if A[i][j] != 0.0:
+                result = False
+
+    return result
+
+@fp.fpy
+def is_lower_triangular(A: list[list[fp.Real]]) -> bool:
+    """
+    Check if matrix is lower triangular.
+
+    :param A: Input matrix.
+    :return: True if lower triangular, False otherwise.
+    """
+    n = len(A)
+    # assert message: "Matrix must be square"
+    assert len(A[0]) == n
+
+    result = True
+    for i in range(n):
+        for j in range(i + 1, n):
+            if A[i][j] != 0.0:
+                result = False
+
+    return result
+
+@fp.fpy
+def norm_1(A: list[list[fp.Real]]) -> fp.Real:
+    """
+    Compute 1-norm (maximum absolute column sum) of matrix.
+
+    :param A: Input matrix.
+    :return: 1-norm of matrix.
+    """
+    rows, cols = len(A), len(A[0])
+    max_col_sum = 0.0
+
+    for j in range(cols):
+        col_sum = 0.0
+        for i in range(rows):
+            col_sum = col_sum + abs(A[i][j])
+        if col_sum > max_col_sum:
+            max_col_sum = col_sum
+
+    return max_col_sum
+
+@fp.fpy
+def norm_inf(A: list[list[fp.Real]]) -> fp.Real:
+    """
+    Compute infinity-norm (maximum absolute row sum) of matrix.
+
+    :param A: Input matrix.
+    :return: Infinity-norm of matrix.
+    """
+    rows, cols = len(A), len(A[0])
+    max_row_sum = 0.0
+
+    for i in range(rows):
+        row_sum = 0.0
+        for j in range(cols):
+            row_sum = row_sum + abs(A[i][j])
+        if row_sum > max_row_sum:
+            max_row_sum = row_sum
+
+    return max_row_sum
+
+@fp.fpy
+def vander(x: list[fp.Real], n: int) -> list[list[fp.Real]]:
+    """
+    Generate Vandermonde matrix.
+
+    :param x: Input vector.
+    :param n: Number of columns.
+    :return: Vandermonde matrix.
+    """
+    m = len(x)
+    result = zeros(m, n)
+
+    for i in range(m):
+        for j in range(n):
+            result[i][j] = fp.pow(x[i], j)
+
+    return result

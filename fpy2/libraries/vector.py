@@ -5,6 +5,26 @@ Operations on vectors.
 from . import base as fp
 
 @fp.fpy
+def zeros(n: int) -> list[fp.Real]:
+    """
+    Create a zero vector of length n.
+
+    :param n: Vector length.
+    :return: Zero vector.
+    """
+    return [0.0 for _ in range(n)]
+
+@fp.fpy
+def ones(n: int) -> list[fp.Real]:
+    """
+    Create a vector of ones of length n.
+
+    :param n: Vector length.
+    :return: Vector of ones.
+    """
+    return [1.0 for _ in range(n)]
+
+@fp.fpy
 def add(x: list[fp.Real], y: list[fp.Real]) -> list[fp.Real]:
     """
     Element-wise addition of two vectors.
@@ -40,25 +60,6 @@ def hadamard(x: list[fp.Real], y: list[fp.Real]) -> list[fp.Real]:
     assert len(x) == len(y)
     return [xi * yi for xi, yi in zip(x, y)]
 
-@fp.fpy
-def zeros(n: int) -> list[fp.Real]:
-    """
-    Create a zero vector of length n.
-
-    :param n: Vector length.
-    :return: Zero vector.
-    """
-    return [0.0 for _ in range(n)]
-
-@fp.fpy
-def ones(n: int) -> list[fp.Real]:
-    """
-    Create a vector of ones of length n.
-
-    :param n: Vector length.
-    :return: Vector of ones.
-    """
-    return [1.0 for _ in range(n)]
 
 @fp.fpy
 def dot(x: list[fp.Real], y: list[fp.Real]) -> fp.Real:
@@ -219,3 +220,35 @@ def mean(x: list[fp.Real]) -> fp.Real:
     :return: Mean of elements.
     """
     return sum(x) / len(x)
+
+@fp.fpy
+def min_element(x: list[fp.Real]) -> fp.Real:
+    """
+    Find minimum element in vector.
+    
+    :param x: Input vector.
+    :return: Minimum element.
+    """
+    # assert message: "Vector must not be empty"
+    assert len(x) > 0
+    result = x[0]
+    for xi in x[1:]:
+        if xi < result:
+            result = xi
+    return result
+
+@fp.fpy
+def max_element(x: list[fp.Real]) -> fp.Real:
+    """
+    Find maximum element in vector.
+    
+    :param x: Input vector.
+    :return: Maximum element.
+    """
+    # assert message: "Vector must not be empty"
+    assert len(x) > 0
+    result = x[0]
+    for xi in x[1:]:
+        if xi > result:
+            result = xi
+    return result
