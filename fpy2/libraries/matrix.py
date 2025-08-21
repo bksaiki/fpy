@@ -446,9 +446,11 @@ def is_lower_triangular(A: list[list[fp.Real]]) -> bool:
 
     result = True
     for i in range(n):
-        for j in range(i + 1, n):
-            if A[i][j] != 0.0:
-                result = False
+        for j in range(n):
+            # TODO: range does not have a start
+            if j > i:
+                if A[i][j] != 0.0:
+                    result = False
 
     return result
 
