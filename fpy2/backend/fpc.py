@@ -1,4 +1,4 @@
-"""Compilation from FPy IR to FPCore"""
+"""Compilation from FPy to FPCore."""
 
 from typing import Optional
 
@@ -149,7 +149,7 @@ def _size0_expr(x: str):
     return fpc.Size(fpc.Var(x), fpc.Integer(0))
 
 
-class FPCoreCompileInstance(Visitor):
+class _FPCoreCompileInstance(Visitor):
     """Compilation instance from FPy to FPCore"""
     func: FuncDef
     def_use: DefineUseAnalysis
@@ -993,9 +993,11 @@ class FPCoreCompileInstance(Visitor):
         return super()._visit_statement(stmt, ctx)
 
 class FPCoreCompiler(Backend):
-    """Compiler from FPy IR to FPCore"""
+    """Compiler from FPy to FPCore"""
 
-    def compile(self, func: Function) -> fpc.FPCore:
+    def compile(self, func: Function, ctx: Context | None = None) -> fpc.FPCore:
+        # TODO: handle ctx
+
         # normalization passes
         ast = ContextInline.apply(func.ast, func.env)
         ast = FuncUpdate.apply(ast)
@@ -1005,4 +1007,4 @@ class FPCoreCompiler(Backend):
         ast = IfBundling.apply(ast)
         # compile
         def_use = DefineUse.analyze(ast)
-        return FPCoreCompileInstance(ast, def_use).compile()
+        return _FPCoreCompileInstance(ast, def_use).compile()

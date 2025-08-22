@@ -586,7 +586,7 @@ def keep_p_1(x: fp.Real):
         return fp.round(x)
 
 
-tests = [
+tests: list[Function] = [
     # Tests
     test_simple1,
     test_simple2,
@@ -664,7 +664,7 @@ tests = [
 ]
 
 # Examples
-examples = [
+examples: list[Function] = [
     fma_ctx,
     # dpN,
     nmse3_1,
