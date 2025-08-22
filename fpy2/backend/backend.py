@@ -5,6 +5,13 @@ FPy backend abstraction.
 from abc import ABC, abstractmethod
 
 from ..function import Function
+from ..number import Context
+
+class CompileError(Exception):
+    """
+    Base class for compilation errors.
+    """
+    pass
 
 class Backend(ABC):
     """
@@ -12,6 +19,6 @@ class Backend(ABC):
     """
 
     @abstractmethod
-    def compile(self, func: Function):
+    def compile(self, func: Function, ctx: Context | None = None):
         """Compiles `func` to the backend's target language."""
         ...

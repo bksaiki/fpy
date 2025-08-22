@@ -30,17 +30,17 @@ class TupleContext:
     def __hash__(self):
         return hash(self.elts)
 
-_Context: TypeAlias = NamedId | Context | TupleContext | None
+ContextType: TypeAlias = NamedId | Context | TupleContext | None
 
 @default_repr
 class FunctionContext:
     """Tracks the context of a function"""
 
-    ctx: _Context # global context
-    args: tuple[_Context, ...]
-    ret: _Context
+    ctx: ContextType # global context
+    args: tuple[ContextType, ...]
+    ret: ContextType
 
-    def __init__(self, ctx: _Context, args: Iterable[_Context], ret: _Context):
+    def __init__(self, ctx: ContextType, args: Iterable[ContextType], ret: ContextType):
         self.ctx = ctx
         self.args = tuple(args)
         self.ret = ret
@@ -64,8 +64,8 @@ class ContextInferError(Exception):
 @dataclass(frozen=True)
 class ContextAnalysis:
     func_ctx: FunctionContext
-    by_def: dict[Definition, _Context]
-    by_expr: dict[Expr, _Context]
+    by_def: dict[Definition, ContextType]
+    by_expr: dict[Expr, ContextType]
 
     @property
     def body_ctx(self):
@@ -76,7 +76,7 @@ class ContextAnalysis:
         return self.func_ctx.args
 
     @property
-    def ret_ctx(self):
+    def return_ctx(self):
         return self.func_ctx.ret
 
 
@@ -90,10 +90,10 @@ class _ContextInferInstance(Visitor):
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    by_def: dict[Definition, _Context]
-    by_expr: dict[Expr, _Context]
-    ret_ctx: _Context
-    rvars: Unionfind[_Context]
+    by_def: dict[Definition, ContextType]
+    by_expr: dict[Expr, ContextType]
+    ret_ctx: ContextType
+    rvars: Unionfind[ContextType]
     gensym: Gensym
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
@@ -117,7 +117,7 @@ class _ContextInferInstance(Visitor):
         }
         return ContextAnalysis(f_ctx, by_defs, by_expr)
 
-    def _set_context(self, site: Definition, ctx: _Context):
+    def _set_context(self, site: Definition, ctx: ContextType):
         self.by_def[site] = ctx
 
     def _fresh_context_var(self) -> NamedId:
@@ -125,7 +125,7 @@ class _ContextInferInstance(Visitor):
         self.rvars.add(rvar)
         return rvar
 
-    def _free_vars(self, ctx: _Context | FunctionContext):
+    def _free_vars(self, ctx: ContextType | FunctionContext):
         match ctx:
             case None | Context():
                 return set()
@@ -145,7 +145,7 @@ class _ContextInferInstance(Visitor):
             case _:
                 raise RuntimeError(f'unknown context: {ctx}')
 
-    def _subst_vars(self, ctx: _Context | FunctionContext, subst: Mapping[NamedId, _Context]):
+    def _subst_vars(self, ctx: ContextType | FunctionContext, subst: Mapping[NamedId, ContextType]):
         match ctx:
             case None | Context():
                 return ctx
@@ -169,7 +169,7 @@ class _ContextInferInstance(Visitor):
         return self._subst_vars(ctx, subst)
 
     def _generalize(self, ctx: FunctionContext):
-        subst: dict[NamedId, _Context] = {}
+        subst: dict[NamedId, ContextType] = {}
         for i, fv in enumerate(sorted(self._free_vars(ctx))):
             t = self.rvars.find(fv)
             match t:
@@ -179,7 +179,7 @@ class _ContextInferInstance(Visitor):
                     subst[fv] = t
         return self._subst_vars(ctx, subst)
 
-    def _resolve_context(self, ctx: _Context):
+    def _resolve_context(self, ctx: ContextType):
         match ctx:
             case None | Context():
                 return ctx
@@ -191,7 +191,7 @@ class _ContextInferInstance(Visitor):
             case _:
                 raise RuntimeError(f'unknown context: {ctx}')
 
-    def _unify(self, a_ctx: _Context, b_ctx: _Context) -> _Context:
+    def _unify(self, a_ctx: ContextType, b_ctx: ContextType) -> ContextType:
         a_ctx = self.rvars.get(a_ctx, a_ctx)
         b_ctx = self.rvars.get(b_ctx, b_ctx)
         match a_ctx, b_ctx:
@@ -218,7 +218,7 @@ class _ContextInferInstance(Visitor):
             case _:
                 return None
 
-    def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ctx: _Context):
+    def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ctx: ContextType):
         match target:
             case NamedId():
                 d = self.def_use.find_def_from_site(target, site)
@@ -238,50 +238,50 @@ class _ContextInferInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable: {target}')
 
-    def _visit_var(self, e: Var, ctx: _Context):
+    def _visit_var(self, e: Var, ctx: ContextType):
         d = self.def_use.find_def_from_use(e)
         return self.by_def[d]
 
-    def _visit_bool(self, e: BoolVal, ctx: _Context):
+    def _visit_bool(self, e: BoolVal, ctx: ContextType):
         return ctx
 
-    def _visit_foreign(self, e: ForeignVal, ctx: _Context):
+    def _visit_foreign(self, e: ForeignVal, ctx: ContextType):
         return None
 
-    def _visit_decnum(self, e: Decnum, ctx: _Context):
+    def _visit_decnum(self, e: Decnum, ctx: ContextType):
         return ctx
 
-    def _visit_hexnum(self, e: Hexnum, ctx: _Context):
+    def _visit_hexnum(self, e: Hexnum, ctx: ContextType):
         return ctx
 
-    def _visit_integer(self, e: Integer, ctx: _Context):
+    def _visit_integer(self, e: Integer, ctx: ContextType):
         return ctx
 
-    def _visit_rational(self, e: Rational, ctx: _Context):
+    def _visit_rational(self, e: Rational, ctx: ContextType):
         return ctx
 
-    def _visit_digits(self, e: Digits, ctx: _Context):
+    def _visit_digits(self, e: Digits, ctx: ContextType):
         return ctx
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx: _Context):
+    def _visit_nullaryop(self, e: NullaryOp, ctx: ContextType):
         return ctx
 
-    def _visit_unaryop(self, e: UnaryOp, ctx: _Context):
+    def _visit_unaryop(self, e: UnaryOp, ctx: ContextType):
         self._visit_expr(e.arg, ctx)
         return ctx
 
-    def _visit_binaryop(self, e: BinaryOp, ctx: _Context):
+    def _visit_binaryop(self, e: BinaryOp, ctx: ContextType):
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         return ctx
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx: _Context):
+    def _visit_ternaryop(self, e: TernaryOp, ctx: ContextType):
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
         return ctx
 
-    def _visit_naryop(self, e: NaryOp, ctx: _Context):
+    def _visit_naryop(self, e: NaryOp, ctx: ContextType):
         match e:
             case Zip():
                 return TupleContext(self._visit_expr(arg, ctx) for arg in e.args)
@@ -290,12 +290,12 @@ class _ContextInferInstance(Visitor):
                     self._visit_expr(arg, ctx)
                 return ctx
 
-    def _visit_compare(self, e: Compare, ctx: _Context):
+    def _visit_compare(self, e: Compare, ctx: ContextType):
         for arg in e.args:
             self._visit_expr(arg, ctx)
         return ctx
 
-    def _visit_call(self, e: Call, ctx: _Context):
+    def _visit_call(self, e: Call, ctx: ContextType):
         # get around circular imports
         from ..function import Function
 
@@ -330,10 +330,10 @@ class _ContextInferInstance(Visitor):
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
-    def _visit_tuple_expr(self, e: TupleExpr, ctx: _Context):
+    def _visit_tuple_expr(self, e: TupleExpr, ctx: ContextType):
         return TupleContext(self._visit_expr(arg, ctx) for arg in e.args)
 
-    def _visit_list_expr(self, e: ListExpr, ctx: _Context):
+    def _visit_list_expr(self, e: ListExpr, ctx: ContextType):
         if len(e.args) == 0:
             return ctx
         else:
@@ -342,7 +342,7 @@ class _ContextInferInstance(Visitor):
                 elt_ctx = self._unify(elt_ctx, self._visit_expr(arg, ctx))
             return elt_ctx
 
-    def _visit_list_comp(self, e: ListComp, ctx: _Context):
+    def _visit_list_comp(self, e: ListComp, ctx: ContextType):
         for target, iterable in zip(e.targets, e.iterables):
             iter_ctx = self._visit_expr(iterable, ctx)
             self._visit_binding(e, target, iter_ctx)
@@ -350,12 +350,12 @@ class _ContextInferInstance(Visitor):
         elt_ctx = self._visit_expr(e.elt, None)
         return elt_ctx
 
-    def _visit_list_ref(self, e: ListRef, ctx: _Context):
+    def _visit_list_ref(self, e: ListRef, ctx: ContextType):
         value_ctx = self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
         return value_ctx
 
-    def _visit_list_slice(self, e: ListSlice, ctx: _Context):
+    def _visit_list_slice(self, e: ListSlice, ctx: ContextType):
         value_ctx = self._visit_expr(e.value, ctx)
         if e.start is not None:
             self._visit_expr(e.start, ctx)
@@ -363,34 +363,34 @@ class _ContextInferInstance(Visitor):
             self._visit_expr(e.stop, ctx)
         return value_ctx
 
-    def _visit_list_set(self, e: ListSet, ctx: _Context):
+    def _visit_list_set(self, e: ListSet, ctx: ContextType):
         arr_ctx = self._visit_expr(e.array, ctx)
         for s in e.slices:
             self._visit_expr(s, ctx)
         self._visit_expr(e.value, ctx)
         return arr_ctx
 
-    def _visit_if_expr(self, e: IfExpr, ctx: _Context):
+    def _visit_if_expr(self, e: IfExpr, ctx: ContextType):
         self._visit_expr(e.cond, ctx)
         ift_ctx = self._visit_expr(e.ift, ctx)
         iff_ctx = self._visit_expr(e.iff, ctx)
         return self._unify(ift_ctx, iff_ctx)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: _Context):
+    def _visit_context_expr(self, e: ContextExpr, ctx: ContextType):
         return None
 
-    def _visit_assign(self, stmt: Assign, ctx: _Context):
+    def _visit_assign(self, stmt: Assign, ctx: ContextType):
         e_ctx = self._visit_expr(stmt.expr, ctx)
         self._visit_binding(stmt, stmt.binding, e_ctx)
         return ctx
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Context):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: ContextType):
         for s in stmt.slices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: _Context):
+    def _visit_if1(self, stmt: If1Stmt, ctx: ContextType):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
         for phi in self.def_use.phis[stmt]:
@@ -399,7 +399,7 @@ class _ContextInferInstance(Visitor):
 
         return ctx
 
-    def _visit_if(self, stmt: IfStmt, ctx: _Context):
+    def _visit_if(self, stmt: IfStmt, ctx: ContextType):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
@@ -411,7 +411,7 @@ class _ContextInferInstance(Visitor):
 
         return ctx
 
-    def _visit_while(self, stmt: WhileStmt, ctx: _Context):
+    def _visit_while(self, stmt: WhileStmt, ctx: ContextType):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
 
@@ -422,7 +422,7 @@ class _ContextInferInstance(Visitor):
 
         return ctx
 
-    def _visit_for(self, stmt: ForStmt, ctx: _Context):
+    def _visit_for(self, stmt: ForStmt, ctx: ContextType):
         iter_ctx = self._visit_expr(stmt.iterable, ctx)
         self._visit_binding(stmt, stmt.target, iter_ctx)
         self._visit_block(stmt.body, ctx)
@@ -434,7 +434,7 @@ class _ContextInferInstance(Visitor):
 
         return ctx
 
-    def _visit_context(self, stmt: ContextStmt, ctx: _Context):
+    def _visit_context(self, stmt: ContextStmt, ctx: ContextType):
         match stmt.ctx:
             case ForeignVal():
                 if isinstance(stmt.ctx.val, Context):
@@ -449,20 +449,20 @@ class _ContextInferInstance(Visitor):
         self._visit_block(stmt.body, body_ctx)
         return ctx
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: _Context):
+    def _visit_assert(self, stmt: AssertStmt, ctx: ContextType):
         self._visit_expr(stmt.test, ctx)
         return ctx
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: _Context):
+    def _visit_effect(self, stmt: EffectStmt, ctx: ContextType):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: _Context):
+    def _visit_return(self, stmt: ReturnStmt, ctx: ContextType):
         ret_ctx = self._visit_expr(stmt.expr, ctx)
         self.ret_ctx = ret_ctx
         return ctx
 
-    def _visit_block(self, block: StmtBlock, ctx: _Context):
+    def _visit_block(self, block: StmtBlock, ctx: ContextType):
         for stmt in block.stmts:
             ctx = self._visit_statement(stmt, ctx)
 
@@ -470,14 +470,14 @@ class _ContextInferInstance(Visitor):
         # function can have an overriding context
         match func.ctx:
             case None:
-                body_ctx: _Context = self._fresh_context_var()
+                body_ctx: ContextType = self._fresh_context_var()
             case FPCoreContext():
                 body_ctx = None
             case _:
                 body_ctx = func.ctx
 
         # generate context variables for each argument
-        arg_ctxs: list[_Context] = []
+        arg_ctxs: list[ContextType] = []
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
@@ -500,7 +500,7 @@ class _ContextInferInstance(Visitor):
         ty = FunctionContext(body_ctx, arg_ctxs, ret_ctx)
         return cast(FunctionContext, self._generalize(ty))
 
-    def _visit_expr(self, expr: Expr, ctx: _Context) -> _Context:
+    def _visit_expr(self, expr: Expr, ctx: ContextType) -> ContextType:
         ret_ctx = super()._visit_expr(expr, ctx)
         self.by_expr[expr] = ret_ctx
         return ret_ctx
@@ -522,7 +522,7 @@ class ContextInfer:
     #             | [<context>] <context> -> <context>
 
     @staticmethod
-    def infer(func: FuncDef):
+    def infer(func: FuncDef, def_use: DefineUseAnalysis | None = None):
         """
         Performs rounding context inference.
 
@@ -531,6 +531,7 @@ class ContextInfer:
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
 
-        def_use = DefineUse.analyze(func)
+        if def_use is None:
+            def_use = DefineUse.analyze(func)
         inst = _ContextInferInstance(func, def_use)
         return inst.infer()

@@ -19,6 +19,16 @@ from typing import Sequence
 
 from .utils import NamedId, default_repr
 
+__all__ = [
+    'Type',
+    'BoolType',
+    'RealType',
+    'VarType',
+    'TupleType',
+    'ListType',
+    'FunctionType'
+]
+
 @default_repr
 class Type(ABC):
     """Base class for all FPy types."""

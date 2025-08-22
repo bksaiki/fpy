@@ -604,7 +604,7 @@ def whetsone1(n: int):
     return x1, x2, x3, x4
 
 
-tests = [
+tests: list[Function] = [
     # Tests
     test_simple1,
     test_simple2,
@@ -680,7 +680,7 @@ tests = [
 ]
 
 # Examples
-examples = [
+examples: list[Function] = [
     fma_ctx,
     # dpN,
     nmse3_1,
