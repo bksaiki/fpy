@@ -28,6 +28,9 @@ class Unionfind(Generic[T]):
     def __contains__(self, x: T) -> bool:
         return x in self._parent
 
+    def __iter__(self):
+        return iter(self._parent)
+
     def add(self, x: T) -> T:
         """
         Add an element `x` to the union-find.
@@ -85,3 +88,9 @@ class Unionfind(Generic[T]):
         root_y = self._find(y)
         self._parent[root_y] = root_x
         return root_x
+
+    def items(self):
+        """
+        Returns an iterator over the items in the union-find.
+        """
+        return iter(self._parent.items())

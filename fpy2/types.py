@@ -129,8 +129,8 @@ class VarType(Type):
     def __hash__(self):
         return hash(self.name)
 
-    def format(self):
-        return self.name
+    def format(self) -> str:
+        return str(self.name)
 
     def free_vars(self) -> set['VarType']:
         return {self}

@@ -105,18 +105,6 @@ class ContextTypeInferInstance(Visitor):
         self.rvars = Unionfind()
         self.gensym = Gensym()
 
-    def infer(self):
-        f_ctx = self._visit_function(self.func, None)
-        by_defs = {
-            d: self._resolve_context(ctx)
-            for d, ctx in self.by_def.items()
-        }
-        by_expr = {
-            e: self._resolve_context(ctx)
-            for e, ctx in self.by_expr.items()
-        }
-        return ContextAnalysis(f_ctx, by_defs, by_expr)
-
     def _set_context(self, site: Definition, ctx: ContextType):
         self.by_def[site] = ctx
 
@@ -168,7 +156,7 @@ class ContextTypeInferInstance(Visitor):
             subst[fv] = self._fresh_context_var()
         return self._subst_vars(ctx, subst)
 
-    def _generalize(self, ctx: FunctionContext):
+    def _generalize(self, ctx: FunctionContext) -> tuple[ContextType | FunctionContext, dict[NamedId, ContextType]]:
         subst: dict[NamedId, ContextType] = {}
         for i, fv in enumerate(sorted(self._free_vars(ctx))):
             t = self.rvars.find(fv)
@@ -177,7 +165,8 @@ class ContextTypeInferInstance(Visitor):
                     subst[fv] = NamedId(f'r{i + 1}')
                 case _:
                     subst[fv] = t
-        return self._subst_vars(ctx, subst)
+        c = self._subst_vars(ctx, subst)
+        return c, subst
 
     def _resolve_context(self, ctx: ContextType):
         match ctx:
@@ -501,13 +490,36 @@ class ContextTypeInferInstance(Visitor):
         # generalize the function context
         arg_ctxs = [self._resolve_context(ctx) for ctx in arg_ctxs]
         ret_ctx = self._resolve_context(self.ret_ctx)
-        ty = FunctionContext(body_ctx, arg_ctxs, ret_ctx)
-        return cast(FunctionContext, self._generalize(ty))
+        return FunctionContext(body_ctx, arg_ctxs, ret_ctx)
 
     def _visit_expr(self, expr: Expr, ctx: ContextType) -> ContextType:
         ret_ctx = super()._visit_expr(expr, ctx)
         self.by_expr[expr] = ret_ctx
         return ret_ctx
+
+    def infer(self):
+        # context inference on body
+        ctx = self._visit_function(self.func, None)
+
+        # generalize the output context
+        fn_ctx, subst = self._generalize(ctx)
+        fn_ctx = cast(FunctionContext, fn_ctx)
+
+        # rename unbound context variables
+        for t in self.rvars:
+            if isinstance(t, NamedId) and t not in subst:
+                subst[t] = NamedId(f'r{len(subst) + 1}')
+
+        # resolve definition/expr contexts
+        by_defs = {
+            d: self._subst_vars(self._resolve_context(ctx), subst)
+            for d, ctx in self.by_def.items()
+        }
+        by_expr = {
+            e: self._subst_vars(self._resolve_context(ctx), subst)
+            for e, ctx in self.by_expr.items()
+        }
+        return ContextAnalysis(fn_ctx, by_defs, by_expr)
 
 
 
