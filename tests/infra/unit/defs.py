@@ -20,8 +20,12 @@ def test_bool2():
     return False
 
 @fpy
-def test_decnum():
+def test_decnum1():
     return 0.0
+
+@fpy
+def test_decnum2():
+    return 1.5
 
 @fpy
 def test_digits1():
@@ -592,7 +596,8 @@ tests: list[Function] = [
     test_simple2,
     test_bool1,
     test_bool2,
-    test_decnum,
+    test_decnum1,
+    test_decnum2,
     test_digits1,
     test_digits2,
     test_digits3,

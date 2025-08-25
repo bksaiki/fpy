@@ -7,13 +7,14 @@ import dataclasses
 from ..ast import *
 from ..analysis import (
     ContextAnalysis, ContextInfer, ContextInferError, ContextType,
-    DefineUse, DefineUseAnalysis,
+    DefineUse, DefineUseAnalysis, DefSite,
     TypeAnalysis, TypeCheck, TypeInferError
 )
 from ..function import Function
 from ..number import FP64, FP32
 from ..transform import ContextInline
 from ..types import *
+from ..utils import Gensym
 
 from .backend import Backend, CompileError
 
@@ -45,6 +46,7 @@ class _CppBackendInstance(Visitor):
     type_info: TypeAnalysis
     ctx_info: ContextAnalysis
     targs: dict[NamedId, NamedId]
+    gensym: Gensym
 
     def __init__(
         self,
@@ -60,6 +62,7 @@ class _CppBackendInstance(Visitor):
         self.type_info = type_info
         self.ctx_info = ctx_info
         self.targs = {}
+        self.gensym = Gensym(self.def_use.names)
 
     def compile(self):
         ctx = _CompileCtx.default()
@@ -97,6 +100,12 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise CompileError(f'unsupported type: `{ty.format()}`')
 
+    def _lookup_type(self, name: NamedId, site: DefSite):
+        d = self.def_use.find_def_from_site(name, site)
+        ty = self.type_info.by_def[d]
+        ctx = self.ctx_info.by_def[d]
+        return ty, ctx
+
     def _visit_var(self, e: Var, ctx: _CompileCtx):
         return str(e.name)
 
@@ -107,10 +116,12 @@ class _CppBackendInstance(Visitor):
         raise NotImplementedError
 
     def _visit_decnum(self, e: Decnum, ctx: _CompileCtx):
-        raise NotImplementedError
+        # TODO: check context
+        return str(e.val)
 
     def _visit_hexnum(self, e: Hexnum, ctx: _CompileCtx):
-        raise NotImplementedError
+        # TODO: check context
+        return str(e.val)
 
     def _visit_integer(self, e: Integer, ctx: _CompileCtx):
         # TODO: check type to pre-round
@@ -130,7 +141,7 @@ class _CppBackendInstance(Visitor):
         raise NotImplementedError
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _CompileCtx):
-        raise NotImplementedError
+        raise NotImplementedError(e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _CompileCtx):
         raise NotImplementedError
@@ -172,11 +183,9 @@ class _CppBackendInstance(Visitor):
         e = self._visit_expr(stmt.expr, ctx)
         match stmt.binding:
             case NamedId():
-                d = self.def_use.find_def_from_site(stmt.binding, stmt)
-                var_ty = self.type_info.by_def[d]
-                var_ctx = self.ctx_info.by_def[d]
-                ty = self._compile_type(var_ty, var_ctx)
-                ctx.add_line(f'{ty} {stmt.binding} = {e};')
+                var_ty, var_ctx = self._lookup_type(stmt.binding, stmt)
+                cpp_ty = self._compile_type(var_ty, var_ctx)
+                ctx.add_line(f'{cpp_ty} {stmt.binding} = {e};')
             case _:
                 raise NotImplementedError(stmt.binding)
 
@@ -184,7 +193,8 @@ class _CppBackendInstance(Visitor):
         raise NotImplementedError
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _CompileCtx):
-        raise NotImplementedError
+        c = self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.body, ctx)
 
     def _visit_if(self, stmt: IfStmt, ctx: _CompileCtx):
         raise NotImplementedError
@@ -231,10 +241,20 @@ class _CppBackendInstance(Visitor):
         ctx.add_line('}')  # close function definition
 
 
+_HEADER = [
+    '#include <vector>',
+]
+
+
 class CppBackend(Backend):
     """
     Compiler from FPy to C++.
     """
+
+    includes: bool
+
+    def __init__(self, includes: bool = True):
+        self.includes = includes
 
     def compile(self, func: Function, ctx: Context | None = None) -> str:
         """
@@ -264,4 +284,8 @@ class CppBackend(Backend):
 
         # compile
         inst = _CppBackendInstance(ast, ctx, def_use, type_info, ctx_info)
-        return inst.compile()
+        body_str =  inst.compile()
+
+        if self.includes:
+            body_str = '\n'.join(_HEADER) + '\n\n' + body_str
+        return body_str
