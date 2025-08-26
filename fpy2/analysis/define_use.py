@@ -1,7 +1,6 @@
 """Definition use analysis for FPy ASTs"""
 
-from abc import ABC, abstractmethod
-from typing import Iterable, TypeAlias
+from typing import TypeAlias, cast
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -12,7 +11,7 @@ UseSite: TypeAlias = Var | IndexedAssign
 
 
 @default_repr
-class Definition(ABC):
+class Definition:
     """
     Definition of a variable:
     - an assignment
@@ -24,11 +23,6 @@ class Definition(ABC):
     def __init__(self, name: NamedId):
         self.name = name
 
-    @abstractmethod
-    def assigns(self) -> list['AssignDef']:
-        """Returns the set of concrete assignments that for this variable."""
-        ...
-
 
 class AssignDef(Definition):
     """Concrete definition for an assignment."""
@@ -36,9 +30,13 @@ class AssignDef(Definition):
     site: DefSite
     """syntax location of the assignment"""
 
-    def __init__(self, name: NamedId, site: DefSite):
+    parent: Definition | None
+    """previous definition (if redefining a variable)"""
+
+    def __init__(self, name: NamedId, site: DefSite, parent: Definition | None = None):
         super().__init__(name)
         self.site = site
+        self.parent = parent
 
     def __eq__(self, other):
         return (
@@ -55,56 +53,42 @@ class AssignDef(Definition):
     def __hash__(self):
         return hash((self.name, self.site))
 
-    def assigns(self) -> list['AssignDef']:
-        return [self]
-
 
 class PhiDef(Definition):
     """Merged definition from multiple branches (phi node in SSA form)"""
 
-    children: tuple[AssignDef, ...]
+    lhs: Definition
+    rhs: Definition
 
-    def __init__(self, name: NamedId, defs: Iterable[Definition]):
-        children: list[AssignDef] = []
-        for d in defs:
-            children.extend(d.assigns())
-
+    def __init__(self, name: NamedId, lhs: Definition, rhs: Definition):
         super().__init__(name)
-        self.children = tuple(children)
+        self.lhs = lhs
+        self.rhs = rhs
 
     def __eq__(self, other):
         return (
             isinstance(other, PhiDef)
             and self.name == other.name
-            and self.children == other.children
+            and self.lhs == other.lhs
+            and self.rhs == other.rhs
         )
 
     def __hash__(self):
-        return hash((self.name, self.children))
-
-    def assigns(self) -> list['AssignDef']:
-        return list(self.children)
+        return hash((self.name, self.lhs, self.rhs))
 
     @staticmethod
-    def union(first: Definition, *others: Definition) -> Definition:
+    def union(lhs: Definition, rhs: Definition) -> Definition:
         """
         Create a phi definition from a set of definitions.
         If the first definition is a PhiDef, it is returned as is.
         """
-        name = first.name
-        uniq_assigns = set(first.assigns())
-        for other in others:
-            if name != other.name:
-                raise ValueError(f'cannot union definitions with different names {other}')
-            uniq_assigns.update(other.assigns())
+        if lhs.name != rhs.name:
+            raise ValueError(f'names must match: {lhs.name} != {rhs.name}')
 
-        assigns = sorted(uniq_assigns)
-        if len(assigns) == 0:
-            raise ValueError('cannot create a phi definition from an empty set of definitions')
-        elif len(assigns) == 1:
-            return assigns[0]
+        if lhs == rhs:
+            return lhs
         else:
-            return PhiDef(name, assigns)
+            return PhiDef(lhs.name, lhs, rhs)
 
 
 class DefinitionCtx(dict[NamedId, Definition]):
@@ -136,36 +120,38 @@ class DefinitionCtx(dict[NamedId, Definition]):
 @default_repr
 class DefineUseAnalysis:
     """Result of definition-use analysis"""
-    defs: dict[NamedId, set[AssignDef]]
-    uses: dict[AssignDef, set[UseSite]]
+    defs: dict[NamedId, set[Definition]]
+    uses: dict[Definition, set[UseSite]]
     stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
     blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
+    phis: dict[Stmt, set[PhiDef]]
 
     def __init__(self):
         self.defs = {}
         self.uses = {}
         self.stmts = {}
         self.blocks = {}
+        self.phis = {}
 
     @property
     def names(self) -> set[NamedId]:
         """Returns the set of all variable names in the analysis"""
         return set(self.defs.keys())
 
-    def find_def_from_site(self, name: NamedId, site: DefSite) -> Definition:
+    def find_def_from_site(self, name: NamedId, site: DefSite) -> AssignDef:
         """Finds the definition of given a (name, site) pair."""
         defs = self.defs.get(name, set())
-        for def_ in defs:
-            if def_.site == site:
-                return def_
+        for d in defs:
+            if isinstance(d, AssignDef) and d.site == site:
+                return d
         raise KeyError(f'no definition found for {name} at {site}')
 
     def find_def_from_use(self, site: UseSite):
         """Finds the definition of a variable."""
         # TODO: make more efficient: build inverse map?
-        for def_ in self.uses:
-            if site in self.uses[def_]:
-                return def_
+        for d in self.uses:
+            if site in self.uses[d]:
+                return d
         raise KeyError(f'no definition found for site {site}')
 
 class _DefineUseInstance(DefaultVisitor):
@@ -187,17 +173,21 @@ class _DefineUseInstance(DefaultVisitor):
                 raise RuntimeError(f'unreachable case: {self.ast}')
         return self.analysis
 
-    def _add_def(self, name: NamedId, site: DefSite):
+    def _add_def(self, name: NamedId, d: Definition) -> Definition:
         if name not in self.analysis.defs:
             self.analysis.defs[name] = set()
-        definition = AssignDef(name, site)
-        self.analysis.defs[name].add(definition)
-        self.analysis.uses[definition] = set()
-        return definition
+        self.analysis.defs[name].add(d)
+        self.analysis.uses[d] = set()
+        return d
+
+    def _add_assign(self, name: NamedId, site: DefSite, ctx: DefinitionCtx) -> AssignDef:
+        pred = ctx.get(name)
+        d = AssignDef(name, site, pred)
+        return cast(AssignDef, self._add_def(name, d))
 
     def _add_use(self, name: NamedId, use: Var | IndexedAssign, ctx: DefinitionCtx):
-        for d in ctx[name].assigns():
-            self.analysis.uses[d].add(use)
+        d = ctx[name]
+        self.analysis.uses[d].add(use)
 
     def _visit_var(self, e: Var, ctx: DefinitionCtx):
         if e.name not in ctx:
@@ -210,13 +200,13 @@ class _DefineUseInstance(DefaultVisitor):
         ctx = ctx.copy()
         for target in e.targets:
             for name in target.names():
-                ctx[name] = self._add_def(name, e)
+                ctx[name] = self._add_assign(name, e, ctx)
         self._visit_expr(e.elt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
         for var in stmt.binding.names():
-            ctx[var] = self._add_def(var, stmt)
+            ctx[var] = self._add_assign(var, stmt, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefinitionCtx):
         self._add_use(stmt.var, stmt, ctx)
@@ -229,40 +219,68 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = self._visit_block(stmt.body, ctx.copy())
         # merge contexts along both paths
         # definitions cannot be introduced in the body
+        self.analysis.phis[stmt] = set()
         for var in ctx:
-            ctx[var] = PhiDef.union(ctx[var], body_ctx[var])
+            d_stmt = ctx[var]
+            d_body = body_ctx[var]
+            d = PhiDef.union(d_stmt, d_body)
+            # update tables if the definition is new
+            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+                self.analysis.phis[stmt].add(d)
+                self._add_def(var, d)
+            ctx[var] = d
 
     def _visit_if(self, stmt: IfStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.cond, ctx)
         ift_ctx = self._visit_block(stmt.ift, ctx.copy())
         iff_ctx = self._visit_block(stmt.iff, ctx.copy())
         # merge contexts along both paths
+        self.analysis.phis[stmt] = set()
         for var in ift_ctx.keys() & iff_ctx.keys():
-            ctx[var] = PhiDef.union(ift_ctx[var], iff_ctx[var])
+            d_ift = ift_ctx[var]
+            d_iff = iff_ctx[var]
+            d = PhiDef.union(d_ift, d_iff)
+            # update tables if the definition is new
+            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+                self.analysis.phis[stmt].add(d)
+                self._add_def(var, d)
+            ctx[var] = d
 
     def _visit_while(self, stmt: WhileStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.cond, ctx)
         body_ctx = self._visit_block(stmt.body, ctx.copy())
         # merge contexts along both paths
         # definitions cannot be introduced in the body
+        self.analysis.phis[stmt] = set()
         for var in ctx:
-            ctx[var] = PhiDef.union(ctx[var], body_ctx[var])
+            d_stmt = ctx[var]
+            d_body = body_ctx[var]
+            d = PhiDef.union(d_stmt, d_body)
+            # update tables if the definition is new
+            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+                self.analysis.phis[stmt].add(d)
+                self._add_def(var, d)
+            ctx[var] = d
 
     def _visit_for(self, stmt: ForStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.iterable, ctx)
         body_ctx = ctx.copy()
-        match stmt.target:
-            case NamedId():
-                body_ctx[stmt.target] = self._add_def(stmt.target, stmt)
-            case TupleBinding():
-                for var in stmt.target.names():
-                    body_ctx[var] = self._add_def(var, stmt)
+        for var in stmt.target.names():
+            body_ctx[var] = self._add_assign(var, stmt, body_ctx)
 
         body_ctx = self._visit_block(stmt.body, body_ctx)
         # merge contexts along both paths
         # definitions cannot be introduced in the body
+        self.analysis.phis[stmt] = set()
         for var in ctx:
-            ctx[var] = PhiDef.union(ctx[var], body_ctx[var])
+            d_stmt = ctx[var]
+            d_body = body_ctx[var]
+            d = PhiDef.union(d_stmt, d_body)
+            # update tables if the definition is new
+            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+                self.analysis.phis[stmt].add(d)
+                self._add_def(var, d)
+            ctx[var] = d
 
     def _visit_statement(self, stmt: Stmt, ctx: DefinitionCtx):
         ctx_in = ctx.copy()
@@ -279,9 +297,9 @@ class _DefineUseInstance(DefaultVisitor):
     def _visit_function(self, func: FuncDef, ctx: DefinitionCtx):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
-                ctx[arg.name] = self._add_def(arg.name, arg)
+                ctx[arg.name] = self._add_assign(arg.name, arg, ctx)
         for v in func.free_vars:
-            ctx[v] = self._add_def(v, func)
+            ctx[v] = self._add_assign(v, func, ctx)
         self._visit_block(func.body, ctx.copy())
 
 

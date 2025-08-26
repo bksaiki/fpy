@@ -393,10 +393,11 @@ class _ContextInferInstance(Visitor):
     def _visit_if1(self, stmt: If1Stmt, ctx: _Context):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
-        return ctx
+        for phi in self.def_use.phis[stmt]:
+            ctx = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_context(phi, ctx)
 
-    def _select_def_repr(self, d: Definition):
-        return d.assigns()[0]
+        return ctx
 
     def _visit_if(self, stmt: IfStmt, ctx: _Context):
         self._visit_expr(stmt.cond, ctx)
@@ -404,32 +405,33 @@ class _ContextInferInstance(Visitor):
         self._visit_block(stmt.iff, ctx)
 
         # need to merge variables introduced on both sides
-        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
-        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
-        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
-        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        for intro in intros_ift & intros_iff:
-            ift_def = self._select_def_repr(defs_out_ift[intro])
-            iff_def = self._select_def_repr(defs_out_iff[intro])
-            phi_ctx = self._unify(self.by_def[ift_def], self.by_def[iff_def])
-            if phi_ctx is None:
-                # if we can't infer a context, clear whatever we inferred in the branches
-                # TODO: technically this is wrong; we know the types in the branches
-                # but the type of the merged variable is unknown
-                self.by_def[ift_def] = None
-                self.by_def[iff_def] = None
+        for phi in self.def_use.phis[stmt]:
+            ctx = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_context(phi, ctx)
 
         return ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Context):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
+
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            ctx = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_context(phi, ctx)
+
         return ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: _Context):
         iter_ctx = self._visit_expr(stmt.iterable, ctx)
         self._visit_binding(stmt, stmt.target, iter_ctx)
         self._visit_block(stmt.body, ctx)
+
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            ctx = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_context(phi, ctx)
+
         return ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Context):

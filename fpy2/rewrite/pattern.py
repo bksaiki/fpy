@@ -4,7 +4,7 @@ This module defines a pattern of the FPy AST.
 
 from abc import ABC, abstractmethod
 
-from ..analysis import DefineUse, LiveVars
+from ..analysis import AssignDef, DefineUse, LiveVars
 from ..ast import Expr, FuncDef, EffectStmt, StmtBlock
 from ..utils import NamedId, default_repr
 
@@ -84,7 +84,7 @@ class StmtPattern(Pattern):
         def_use = DefineUse.analyze(func)
         for defs in def_use.defs.values():
             for d in defs:
-                if not isinstance(d.site, FuncDef):
+                if isinstance(d, AssignDef) and not isinstance(d.site, FuncDef):
                     targets.add(d.name)
 
         # set of uses

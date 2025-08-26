@@ -4,6 +4,7 @@ from .context_infer import ContextInfer, ContextAnalysis
 
 from .define_use import (
     DefineUse, DefineUseAnalysis, Definition, DefinitionCtx,
+    AssignDef, PhiDef,
     DefSite, UseSite
 )
 
