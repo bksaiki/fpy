@@ -124,12 +124,14 @@ class DefineUseAnalysis:
     uses: dict[Definition, set[UseSite]]
     stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
     blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
+    phis: dict[Stmt, set[PhiDef]]
 
     def __init__(self):
         self.defs = {}
         self.uses = {}
         self.stmts = {}
         self.blocks = {}
+        self.phis = {}
 
     @property
     def names(self) -> set[NamedId]:
@@ -217,9 +219,15 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = self._visit_block(stmt.body, ctx.copy())
         # merge contexts along both paths
         # definitions cannot be introduced in the body
+        self.analysis.phis[stmt] = set()
         for var in ctx:
-            d = PhiDef.union(ctx[var], body_ctx[var])
-            self._add_def(var, d)
+            d_stmt = ctx[var]
+            d_body = body_ctx[var]
+            d = PhiDef.union(d_stmt, d_body)
+            # update tables if the definition is new
+            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+                self.analysis.phis[stmt].add(d)
+                self._add_def(var, d)
             ctx[var] = d
 
     def _visit_if(self, stmt: IfStmt, ctx: DefinitionCtx):
@@ -227,9 +235,15 @@ class _DefineUseInstance(DefaultVisitor):
         ift_ctx = self._visit_block(stmt.ift, ctx.copy())
         iff_ctx = self._visit_block(stmt.iff, ctx.copy())
         # merge contexts along both paths
+        self.analysis.phis[stmt] = set()
         for var in ift_ctx.keys() & iff_ctx.keys():
-            d = PhiDef.union(ift_ctx[var], iff_ctx[var])
-            self._add_def(var, d)
+            d_ift = ift_ctx[var]
+            d_iff = iff_ctx[var]
+            d = PhiDef.union(d_ift, d_iff)
+            # update tables if the definition is new
+            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+                self.analysis.phis[stmt].add(d)
+                self._add_def(var, d)
             ctx[var] = d
 
     def _visit_while(self, stmt: WhileStmt, ctx: DefinitionCtx):
@@ -237,9 +251,15 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = self._visit_block(stmt.body, ctx.copy())
         # merge contexts along both paths
         # definitions cannot be introduced in the body
+        self.analysis.phis[stmt] = set()
         for var in ctx:
-            d = PhiDef.union(ctx[var], body_ctx[var])
-            self._add_def(var, d)
+            d_stmt = ctx[var]
+            d_body = body_ctx[var]
+            d = PhiDef.union(d_stmt, d_body)
+            # update tables if the definition is new
+            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+                self.analysis.phis[stmt].add(d)
+                self._add_def(var, d)
             ctx[var] = d
 
     def _visit_for(self, stmt: ForStmt, ctx: DefinitionCtx):
@@ -251,9 +271,15 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = self._visit_block(stmt.body, body_ctx)
         # merge contexts along both paths
         # definitions cannot be introduced in the body
+        self.analysis.phis[stmt] = set()
         for var in ctx:
-            d = PhiDef.union(ctx[var], body_ctx[var])
-            self._add_def(var, d)
+            d_stmt = ctx[var]
+            d_body = body_ctx[var]
+            d = PhiDef.union(d_stmt, d_body)
+            # update tables if the definition is new
+            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+                self.analysis.phis[stmt].add(d)
+                self._add_def(var, d)
             ctx[var] = d
 
     def _visit_statement(self, stmt: Stmt, ctx: DefinitionCtx):

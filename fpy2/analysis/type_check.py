@@ -10,7 +10,7 @@ from ..primitive import Primitive
 from ..types import Type, BoolType, RealType, VarType, FunctionType, TupleType, ListType
 from ..utils import Gensym, NamedId, Unionfind
 
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite, PhiDef
 
 #####################################################################
 # Type Inference
@@ -538,33 +538,36 @@ class _TypeCheckInstance(Visitor):
         # type check body
         self._visit_block(stmt.body, None)
 
-        # type check any merged variables
-
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_type(phi, ty)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         # type check condition
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
+
         # type check branches
         self._visit_block(stmt.ift, None)
         self._visit_block(stmt.iff, None)
 
-        # need to merge variables introduced on both sides
-        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
-        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
-        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
-        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        for intro in intros_ift & intros_iff:
-            ift_def = defs_out_ift[intro]
-            iff_def = defs_out_iff[intro]
-            ty = self._unify(self.by_def[ift_def], self.by_def[iff_def])
-            self._set_type(_, ty)
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_type(phi, ty)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
+
         # type check body
         self._visit_block(stmt.body, None)
+
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_type(phi, ty)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         # type check iterable
@@ -577,6 +580,11 @@ class _TypeCheckInstance(Visitor):
 
         # type check body
         self._visit_block(stmt.body, None)
+
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_type(phi, ty)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # TODO: type check context
