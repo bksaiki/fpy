@@ -207,6 +207,11 @@ def test_list_zip4():
     return zip(xs, ys, zs)
 
 @fpy
+def test_list_enumerate():
+    xs = [1.0, 2.0, 4.0]
+    return enumerate(xs)
+
+@fpy
 def test_list_sum(x: fp.Real, y: fp.Real, z: fp.Real) -> Real:
     t1 = sum([x])
     t2 = sum([x, y])
@@ -636,6 +641,7 @@ tests = [
     test_list_zip2,
     test_list_zip3,
     test_list_zip4,
+    test_list_enumerate,
     test_list_sum,
     test_min,
     test_max,

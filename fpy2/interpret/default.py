@@ -293,7 +293,7 @@ class _Interpreter(Visitor):
         if not isinstance(v, list):
             raise TypeError(f'expected a list, got {v}')
         return [
-            [Float.from_int(i, ctx=ctx), val]
+            (Float.from_int(i, ctx=ctx), val)
             for i, val in enumerate(v)
         ]
 
