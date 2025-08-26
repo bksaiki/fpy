@@ -534,11 +534,12 @@ class _TypeCheckInstance(Visitor):
         # type check condition
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
+
         # type check body
         self._visit_block(stmt.body, None)
 
-    def _select_def_repr(self, d: Definition):
-        return d.assigns()[0]
+        # type check any merged variables
+
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         # type check condition
@@ -554,9 +555,10 @@ class _TypeCheckInstance(Visitor):
         intros_ift = defs_in_ift.fresh_in(defs_out_ift)
         intros_iff = defs_in_iff.fresh_in(defs_out_iff)
         for intro in intros_ift & intros_iff:
-            ift_def = self._select_def_repr(defs_out_ift[intro])
-            iff_def = self._select_def_repr(defs_out_iff[intro])
-            self._unify(self.by_def[ift_def], self.by_def[iff_def])
+            ift_def = defs_out_ift[intro]
+            iff_def = defs_out_iff[intro]
+            ty = self._unify(self.by_def[ift_def], self.by_def[iff_def])
+            self._set_type(_, ty)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         cond_ty = self._visit_expr(stmt.cond, None)
