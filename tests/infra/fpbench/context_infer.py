@@ -10,6 +10,10 @@ from fpy2.transform import ContextInline
 from .fetch import fetch_cores
 
 _skip_cores = [
+    # benchmarks
+    'arclength of a wiggly function', # ill-typed
+    'arclength of a wiggly function (old version)', # ill-typed
+    # tensor tests
     'even-int',
     'forward-euler-3d',
     'midpoint-3d',
