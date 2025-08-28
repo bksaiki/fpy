@@ -2,7 +2,10 @@
 Compilation from FPy to (standard) C++.
 """
 
+import enum
 import dataclasses
+
+from typing import TypeAlias
 
 from ..ast import *
 from ..analysis import (
@@ -14,9 +17,26 @@ from ..function import Function
 from ..number import FP64, FP32
 from ..transform import ContextInline
 from ..types import *
-from ..utils import Gensym
+from ..utils import Gensym, enum_repr
 
 from .backend import Backend, CompileError
+from .cpp_utils import CppType, ScalarOpTable, make_op_table
+
+# TODO: support more C++ standards
+@enum_repr
+class CppStandard(enum.Enum):
+    """C++ standards supported by the C++ backend"""
+    CXX_11 = 0
+
+
+class CppCompileError(CompileError):
+    """Compiler error for C++ backend"""
+
+    def __init__(self, func: FuncDef, msg: str, *args):
+        lines: list[str] = [f'C++ backend: {msg} in function `{func.name}`']
+        lines.extend(str(arg) for arg in args)
+        super().__init__('\n '.join(lines))
+
 
 @dataclasses.dataclass
 class _CompileCtx:
@@ -35,21 +55,15 @@ class _CompileCtx:
         self.lines.append(self.indent_str * self.indent_level + line)
 
 
-class CppCompileError(CompileError):
-    """Compiler error for C++ backend"""
-
-    def __init__(self, func: FuncDef, msg: str, *args):
-        lines: list[str] = [f'C++ backend: {msg} in function `{func.name}`']
-        lines.extend(str(arg) for arg in args)
-        super().__init__('\n '.join(lines))
-
-
 class _CppBackendInstance(Visitor):
     """
     Per-function compilation instance.
     """
 
     func: FuncDef
+    std: CppStandard
+    op_table: ScalarOpTable
+
     caller_ctx: Context | None
     def_use: DefineUseAnalysis
     type_info: TypeAnalysis
@@ -60,12 +74,16 @@ class _CppBackendInstance(Visitor):
     def __init__(
         self,
         func: FuncDef,
+        std: CppStandard,
+        op_table: ScalarOpTable,
         caller_ctx: Context | None,
         def_use: DefineUseAnalysis,
         type_info: TypeAnalysis,
         ctx_info: ContextAnalysis
     ):
         self.func = func
+        self.std = std
+        self.op_table = op_table
         self.caller_ctx = caller_ctx
         self.def_use = def_use
         self.type_info = type_info
@@ -78,26 +96,33 @@ class _CppBackendInstance(Visitor):
         self._visit_function(self.func, ctx)
         return '\n'.join(ctx.lines)
 
-    def _compile_context(self, ctx: ContextType) -> str:
+    def _monomorphize_context(self, ctx: ContextType):
         match ctx:
             case NamedId():
-                if ctx not in self.ctx_args:
-                    raise CppCompileError(self.func, f'contexts must be monomorphic: `{ctx}`')
-                return self._compile_context(self.ctx_args[ctx])
+                return self.ctx_args.get(ctx, ctx)
+            case Context():
+                return ctx
+            case _:
+                raise RuntimeError(f'unreachable: {ctx}')
+
+    def _compile_context(self, ctx: ContextType):
+        match ctx:
+            case NamedId():
+                raise CppCompileError(self.func, f'contexts must be monomorphic: `{ctx}`')
             case Context():
                 if ctx.is_equiv(FP64):
-                    return 'double'
+                    return CppType.DOUBLE
                 elif ctx.is_equiv(FP32):
-                    return 'float'
+                    return CppType.FLOAT
                 else:
                     raise CppCompileError(self.func, f'unsupported context: `{ctx}`')
             case _:
                 raise CppCompileError(self.func, f'unsupported context: `{ctx}`')
 
-    def _compile_type(self, ty: Type, ctx: ContextType) -> str:
+    def _compile_type(self, ty: Type, ctx: ContextType):
         match ty:
             case BoolType():
-                return 'bool'
+                return CppType.BOOL
             case RealType():
                 return self._compile_context(ctx)
             case _:
@@ -113,11 +138,15 @@ class _CppBackendInstance(Visitor):
     def _var_type(self, name: NamedId, site: DefSite):
         d = self.def_use.find_def_from_site(name, site)
         ty = self.type_info.by_def[d]
-        ctx = self.ctx_info.by_def[d]
-        return ty, ctx
+        ctx = self._monomorphize_context(self.ctx_info.by_def[d])
+        cpp_ty = self._compile_type(ty, ctx)
+        return ty, ctx, cpp_ty
 
     def _expr_type(self, e: Expr):
-        return self.type_info.by_expr[e], self.ctx_info.by_expr[e]
+        ty = self.type_info.by_expr[e]
+        ctx = self._monomorphize_context(self.ctx_info.by_expr[e])
+        cpp_ty = self._compile_type(ty, ctx)
+        return ty, ctx, cpp_ty
 
     def _visit_var(self, e: Var, ctx: _CompileCtx):
         return str(e.name)
@@ -128,17 +157,30 @@ class _CppBackendInstance(Visitor):
     def _visit_foreign(self, e: ForeignVal, ctx: _CompileCtx):
         raise NotImplementedError
 
+    def _visit_number(self, e: Expr, s: str):
+        _, _, cpp_ty = self._expr_type(e)
+        # TODO: check context for rounding
+        match cpp_ty:
+            case CppType.DOUBLE:
+                if '.' in s:
+                    return s
+                else:
+                    return f'{s}.0'
+            case CppType.FLOAT:
+                return f'{s}f'
+            case CppType.BOOL:
+                raise RuntimeError(f'should not get {cpp_ty} for {e.format()}')
+            case _:
+                raise RuntimeError(f'unreachable: {cpp_ty}')
+
     def _visit_decnum(self, e: Decnum, ctx: _CompileCtx):
-        # TODO: check context
-        return str(e.val)
+        return self._visit_number(e, str(e.val))
 
     def _visit_hexnum(self, e: Hexnum, ctx: _CompileCtx):
-        # TODO: check context
         return str(e.val)
 
     def _visit_integer(self, e: Integer, ctx: _CompileCtx):
-        # TODO: check type to pre-round
-        return str(e.val)
+        return self._visit_number(e, str(e.val))
 
     def _visit_rational(self, e: Rational, ctx: _CompileCtx):
         raise NotImplementedError
@@ -152,30 +194,98 @@ class _CppBackendInstance(Visitor):
 
     def _visit_range(self, arg: Expr, ctx: _CompileCtx):
         arg_cpp = self._visit_expr(arg, ctx)
-        e_ty, e_ctx = self._expr_type(arg)
-        cpp_ty = self._compile_type(e_ty, e_ctx)
-        t = self._fresh_var()
+        _, _, cpp_ty = self._expr_type(arg)
 
         # TODO: check that `arg` may be safely cast to `size_t`
-        ctx.add_line(f'std::vector<{cpp_ty}> {t}(static_cast<size_t>({arg_cpp}));')
-        ctx.add_line(f'std::iota({t}.begin(), {t}.end(), static_cast<{cpp_ty}>(0));')
+        t = self._fresh_var()
+        ctx.add_line(f'std::vector<{cpp_ty.cpp_name}> {t}(static_cast<size_t>({arg_cpp}));')
+        ctx.add_line(f'std::iota({t}.begin(), {t}.end(), static_cast<{cpp_ty.cpp_name}>(0));')
         return t
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _CompileCtx):
         match e:
             case Range():
                 return self._visit_range(e.arg, ctx)
+            case Neg():
+                # Handle negation with prefix operator
+                arg = self._visit_expr(e.arg, ctx)
+                return f'(-{arg})'
             case _:
-                raise NotImplementedError(e)
+                # Check unary operator table
+                cls = type(e)
+                if cls in self.op_table.unary:
+                    ops = self.op_table.unary[cls]
+                    arg = self._visit_expr(e.arg, ctx)
+                    _, _, arg_ty = self._expr_type(e.arg)
+                    _, _, e_ty = self._expr_type(e)
+                    for op in ops:
+                        if op.matches(arg_ty, e_ty):
+                            return op.format(arg)
+                    
+                    # TODO: list options vs. actual signature
+                    raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+                else:
+                    raise CppCompileError(self.func, f'no matching operator for `{e.format()}`')
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _CompileCtx):
-        raise NotImplementedError(e)
+        # compile children
+        lhs = self._visit_expr(e.first, ctx)
+        rhs = self._visit_expr(e.second, ctx)
+
+        # check operator table
+        cls = type(e)
+        if cls in self.op_table.binary:
+            ops = self.op_table.binary[cls]
+            _, _, lhs_ty = self._expr_type(e.first)
+            _, _, rhs_ty = self._expr_type(e.second)
+            _, _, e_ty = self._expr_type(e)
+            for op in ops:
+                if op.matches(lhs_ty, rhs_ty, e_ty):
+                    return op.format(lhs, rhs)
+
+            # TODO: list options vs. actual signature
+            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+        else:
+            raise CppCompileError(self.func, f'no matching operator for `{e.format()}`')
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _CompileCtx):
-        raise NotImplementedError
+        # check operator table
+        cls = type(e)
+        if cls in self.op_table.ternary:
+            ops = self.op_table.ternary[cls]
+            arg1 = self._visit_expr(e.first, ctx)
+            arg2 = self._visit_expr(e.second, ctx)
+            arg3 = self._visit_expr(e.third, ctx)
+            _, _, arg1_ty = self._expr_type(e.first)
+            _, _, arg2_ty = self._expr_type(e.second)
+            _, _, arg3_ty = self._expr_type(e.third)
+            _, _, e_ty = self._expr_type(e)
+            for op in ops:
+                if op.matches(arg1_ty, arg2_ty, arg3_ty, e_ty):
+                    return op.format(arg1, arg2, arg3)
+            
+            # TODO: list options vs. actual signature
+            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+        else:
+            raise CppCompileError(self.func, f'no matching operator for `{e.format()}`')
 
     def _visit_naryop(self, e: NaryOp, ctx: _CompileCtx):
-        raise NotImplementedError
+        # Handle n-ary operations
+        match e:
+            case And():
+                # Logical AND: compile as (arg1 && arg2 && ...)
+                if not e.args:
+                    return 'true'
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
+                return '(' + ' && '.join(args) + ')'
+            case Or():
+                # Logical OR: compile as (arg1 || arg2 || ...)
+                if not e.args:
+                    return 'false'
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
+                return '(' + ' || '.join(args) + ')'
+            case _:
+                raise CppCompileError(self.func, f'unsupported n-ary operation: `{e.format()}`')
 
     def _visit_compare(self, e: Compare, ctx: _CompileCtx):
         raise NotImplementedError
@@ -209,9 +319,8 @@ class _CppBackendInstance(Visitor):
         match stmt.binding:
             case NamedId():
                 if self._var_is_decl(stmt.binding, stmt):
-                    var_ty, var_ctx = self._var_type(stmt.binding, stmt)
-                    cpp_ty = self._compile_type(var_ty, var_ctx)
-                    ctx.add_line(f'{cpp_ty} {stmt.binding} = {e};')
+                    _, _, cpp_ty = self._var_type(stmt.binding, stmt)
+                    ctx.add_line(f'{cpp_ty.cpp_name} {stmt.binding} = {e};')
                 else:
                     ctx.add_line(f'{stmt.binding} = {e};')
             case _:
@@ -278,10 +387,11 @@ class _CppBackendInstance(Visitor):
         arg_strs: list[str] = []
         for arg, arg_ty, arg_ctx in zip(func.args, self.type_info.arg_types, self.ctx_info.arg_ctxs):
             ty = self._compile_type(arg_ty, arg_ctx)
-            arg_strs.append(f'{ty} {arg.name}')
+            arg_strs.append(f'{ty.cpp_name} {arg.name}')
 
-        ret_ty = self._compile_type(self.type_info.return_type, self.ctx_info.return_ctx)
-        ctx.add_line(f'{ret_ty} {func.name}({", ".join(arg_strs)}) {{')
+        body_ctx = self._monomorphize_context(self.ctx_info.return_ctx)
+        ret_ty = self._compile_type(self.type_info.return_type, body_ctx)
+        ctx.add_line(f'{ret_ty.cpp_name} {func.name}({", ".join(arg_strs)}) {{')
 
         # compile body
         self._visit_block(func.body, ctx)
@@ -289,7 +399,10 @@ class _CppBackendInstance(Visitor):
 
 
 _HEADER = [
+    '#include <cassert>',
+    '#include <cmath>',
     '#include <cstddef>',
+    '#include <cstdint>',
     '#include <numeric>',
     '#include <vector>',
 ]
@@ -300,10 +413,23 @@ class CppBackend(Backend):
     Compiler from FPy to C++.
     """
 
-    includes: bool
+    std: CppStandard
+    op_table: ScalarOpTable
 
-    def __init__(self, includes: bool = True):
-        self.includes = includes
+    def __init__(
+        self,
+        std: CppStandard = CppStandard.CXX_11,
+        op_table: ScalarOpTable | None = None
+    ):
+        if op_table is None:
+            op_table = make_op_table()
+
+        self.std = std
+        self.op_table = op_table
+
+    def headers(self) -> str:
+        headers = _HEADER
+        return '\n'.join(headers)
 
     def compile(self, func: Function, ctx: Context | None = None) -> str:
         """
@@ -332,9 +458,6 @@ class CppBackend(Backend):
             raise ValueError(f'context inference failed') from e
 
         # compile
-        inst = _CppBackendInstance(ast, ctx, def_use, type_info, ctx_info)
+        inst = _CppBackendInstance(ast, self.std, self.op_table, ctx, def_use, type_info, ctx_info)
         body_str =  inst.compile()
-
-        if self.includes:
-            body_str = '\n'.join(_HEADER) + '\n\n' + body_str
         return body_str

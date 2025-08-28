@@ -12,7 +12,7 @@ from ..number import Context
 from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
 from ..utils import Gensym
 
-from .backend import Backend
+from .backend import Backend, CompileError
 
 # Cached table storage
 _nullary_table_cache: Optional[dict[type[NullaryOp], fpc.Expr]] = None
@@ -131,7 +131,7 @@ def _get_nary_table() -> dict[type[NaryOp], type[fpc.Expr]]:
         }
     return _nary_table_cache
 
-class FPCoreCompileError(Exception):
+class FPCoreCompileError(CompileError):
     """Any FPCore compilation error"""
     pass
 
