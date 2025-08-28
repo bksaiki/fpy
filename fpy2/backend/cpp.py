@@ -35,6 +35,15 @@ class _CompileCtx:
         self.lines.append(self.indent_str * self.indent_level + line)
 
 
+class CppCompileError(CompileError):
+    """Compiler error for C++ backend"""
+
+    def __init__(self, func: FuncDef, msg: str, *args):
+        lines: list[str] = [f'C++ backend: {msg} in function `{func.name}`']
+        lines.extend(str(arg) for arg in args)
+        super().__init__('\n '.join(lines))
+
+
 class _CppBackendInstance(Visitor):
     """
     Per-function compilation instance.
@@ -45,7 +54,7 @@ class _CppBackendInstance(Visitor):
     def_use: DefineUseAnalysis
     type_info: TypeAnalysis
     ctx_info: ContextAnalysis
-    targs: dict[NamedId, NamedId]
+    ctx_args: dict[NamedId, Context]
     gensym: Gensym
 
     def __init__(
@@ -61,7 +70,7 @@ class _CppBackendInstance(Visitor):
         self.def_use = def_use
         self.type_info = type_info
         self.ctx_info = ctx_info
-        self.targs = {}
+        self.ctx_args = {}
         self.gensym = Gensym(self.def_use.names)
 
     def compile(self):
@@ -69,27 +78,21 @@ class _CppBackendInstance(Visitor):
         self._visit_function(self.func, ctx)
         return '\n'.join(ctx.lines)
 
-    def _compile_context_var(self, cvar: NamedId) -> str:
-        if cvar not in self.targs:
-            if self.targs:
-                self.targs[cvar] = NamedId('T', len(self.targs))
-            else:
-                self.targs[cvar] = NamedId('T')
-        return str(self.targs[cvar])
-
     def _compile_context(self, ctx: ContextType) -> str:
         match ctx:
             case NamedId():
-                return self._compile_context_var(ctx)
+                if ctx not in self.ctx_args:
+                    raise CppCompileError(self.func, f'contexts must be monomorphic: `{ctx}`')
+                return self._compile_context(self.ctx_args[ctx])
             case Context():
                 if ctx.is_equiv(FP64):
                     return 'double'
                 elif ctx.is_equiv(FP32):
                     return 'float'
                 else:
-                    raise CompileError(f'unsupported context: `{ctx}`')
+                    raise CppCompileError(self.func, f'unsupported context: `{ctx}`')
             case _:
-                raise CompileError(f'unsupported context: `{ctx}`')
+                raise CppCompileError(self.func, f'unsupported context: `{ctx}`')
 
     def _compile_type(self, ty: Type, ctx: ContextType) -> str:
         match ty:
@@ -98,13 +101,23 @@ class _CppBackendInstance(Visitor):
             case RealType():
                 return self._compile_context(ctx)
             case _:
-                raise CompileError(f'unsupported type: `{ty.format()}`')
+                raise CppCompileError(self.func, f'unsupported type: `{ty.format()}`')
 
-    def _lookup_type(self, name: NamedId, site: DefSite):
+    def _fresh_var(self):
+        return self.gensym.fresh('__fpy_tmp')
+
+    def _var_is_decl(self, name: NamedId, site: DefSite):
+        d = self.def_use.find_def_from_site(name, site)
+        return d.parent is None
+
+    def _var_type(self, name: NamedId, site: DefSite):
         d = self.def_use.find_def_from_site(name, site)
         ty = self.type_info.by_def[d]
         ctx = self.ctx_info.by_def[d]
         return ty, ctx
+
+    def _expr_type(self, e: Expr):
+        return self.type_info.by_expr[e], self.ctx_info.by_expr[e]
 
     def _visit_var(self, e: Var, ctx: _CompileCtx):
         return str(e.name)
@@ -137,8 +150,23 @@ class _CppBackendInstance(Visitor):
     def _visit_nullaryop(self, e: NullaryOp, ctx: _CompileCtx):
         raise NotImplementedError
 
+    def _visit_range(self, arg: Expr, ctx: _CompileCtx):
+        arg_cpp = self._visit_expr(arg, ctx)
+        e_ty, e_ctx = self._expr_type(arg)
+        cpp_ty = self._compile_type(e_ty, e_ctx)
+        t = self._fresh_var()
+
+        # TODO: check that `arg` may be safely cast to `size_t`
+        ctx.add_line(f'std::vector<{cpp_ty}> {t}(static_cast<size_t>({arg_cpp}));')
+        ctx.add_line(f'std::iota({t}.begin(), {t}.end(), static_cast<{cpp_ty}>(0));')
+        return t
+
     def _visit_unaryop(self, e: UnaryOp, ctx: _CompileCtx):
-        raise NotImplementedError
+        match e:
+            case Range():
+                return self._visit_range(e.arg, ctx)
+            case _:
+                raise NotImplementedError(e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _CompileCtx):
         raise NotImplementedError(e)
@@ -176,16 +204,16 @@ class _CppBackendInstance(Visitor):
     def _visit_if_expr(self, e: IfExpr, ctx: _CompileCtx):
         raise NotImplementedError
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: _CompileCtx):
-        raise NotImplementedError
-
     def _visit_assign(self, stmt: Assign, ctx: _CompileCtx):
         e = self._visit_expr(stmt.expr, ctx)
         match stmt.binding:
             case NamedId():
-                var_ty, var_ctx = self._lookup_type(stmt.binding, stmt)
-                cpp_ty = self._compile_type(var_ty, var_ctx)
-                ctx.add_line(f'{cpp_ty} {stmt.binding} = {e};')
+                if self._var_is_decl(stmt.binding, stmt):
+                    var_ty, var_ctx = self._var_type(stmt.binding, stmt)
+                    cpp_ty = self._compile_type(var_ty, var_ctx)
+                    ctx.add_line(f'{cpp_ty} {stmt.binding} = {e};')
+                else:
+                    ctx.add_line(f'{stmt.binding} = {e};')
             case _:
                 raise NotImplementedError(stmt.binding)
 
@@ -193,17 +221,31 @@ class _CppBackendInstance(Visitor):
         raise NotImplementedError
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _CompileCtx):
-        c = self._visit_expr(stmt.cond, ctx)
+        cond = self._visit_expr(stmt.cond, ctx)
+        ctx.add_line(f'if ({cond}) {{')
         self._visit_block(stmt.body, ctx)
+        ctx.add_line('}')  # close if
 
     def _visit_if(self, stmt: IfStmt, ctx: _CompileCtx):
-        raise NotImplementedError
+        # TODO: fold if statements
+        cond = self._visit_expr(stmt.cond, ctx)
+        ctx.add_line(f'if ({cond}) {{')
+        self._visit_block(stmt.ift, ctx)
+        ctx.add_line('} else {')
+        self._visit_block(stmt.iff, ctx)
+        ctx.add_line('}')  # close if
 
     def _visit_while(self, stmt: WhileStmt, ctx: _CompileCtx):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, ctx)
+        ctx.add_line(f'while ({cond}) {{')
+        self._visit_block(stmt.body, ctx)
+        ctx.add_line('}')  # close if
 
     def _visit_for(self, stmt: ForStmt, ctx: _CompileCtx):
-        raise NotImplementedError
+        iterable = self._visit_expr(stmt.iterable, ctx)
+        ctx.add_line(f'for (auto {stmt.target} : {iterable}) {{')
+        self._visit_block(stmt.body, ctx)
+        ctx.add_line('}')  # close if
 
     def _visit_context(self, stmt: ContextStmt, ctx: _CompileCtx):
         raise NotImplementedError
@@ -213,7 +255,7 @@ class _CppBackendInstance(Visitor):
         ctx.add_line(f'assert({e});')
 
     def _visit_effect(self, stmt: EffectStmt, ctx: _CompileCtx):
-        raise CompileError('FPy effects are not supported in C++ backend')
+        raise CompileError('C++ backend: FPy effects are not supported')
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _CompileCtx):
         e = self._visit_expr(stmt.expr, ctx)
@@ -226,6 +268,11 @@ class _CppBackendInstance(Visitor):
 
     def _visit_function(self, func: FuncDef, ctx: _CompileCtx):
         # TODO: use caller context
+        if isinstance(self.ctx_info.body_ctx, NamedId):
+            if self.caller_ctx is None:
+                # TODO: what to report to user?
+                raise CppCompileError(self.func, f'contexts must be monomorphic `{self.ctx_info.body_ctx}`')
+            self.ctx_args[self.ctx_info.body_ctx] = self.caller_ctx
 
         # compile arguments
         arg_strs: list[str] = []
@@ -242,6 +289,8 @@ class _CppBackendInstance(Visitor):
 
 
 _HEADER = [
+    '#include <cstddef>',
+    '#include <numeric>',
     '#include <vector>',
 ]
 
