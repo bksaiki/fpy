@@ -256,6 +256,37 @@ class _FPCore2FPy:
         else:
             raise NotImplementedError(f'unsupported ternary operation {e.name}')
 
+    def _visit_size(self, e: fpc.Size, ctx: _Ctx) -> Expr:
+        # compiling `size(x, n)` is awkward
+        # t = x
+        # for i in range(n):
+        #   t = t[0]
+        # <result: len(t)>
+
+        # emit temporary
+        tup_id = self.gensym.fresh('t')
+        idx_id = self.gensym.fresh('i')
+
+        # compile children
+        arg0 = self._visit(e.children[0], ctx)
+        arg1 = self._visit(e.children[1], ctx)
+
+        # assign temporary
+        ctx.stmts.append(Assign(tup_id, None, arg0, None))
+
+        # for loop
+        ctx.stmts.append(ForStmt(
+            idx_id,
+            Range(NamedId("range"), arg1, None),
+            StmtBlock([
+                Assign(tup_id, None, ListRef(Var(NamedId("t"), None), Integer(0, None), None), None)
+            ]),
+            None
+        ))
+
+        # result
+        return Var(tup_id, None)
+
     def _visit_nary(self, e: fpc.NaryExpr, ctx: _Ctx) -> Expr:
         match e:
             case fpc.And():
@@ -299,10 +330,7 @@ class _FPCore2FPy:
                 # BUG: titanfp package says `fpc.Size` is n-ary
                 if len(e.children) != 2:
                     raise ValueError('size operator expects 2 arguments')
-                arg0 = self._visit(e.children[0], ctx)
-                arg1 = self._visit(e.children[1], ctx)
-                # TODO: implement size(x, n)
-                raise NotImplementedError('size', arg0, arg1)
+                return self._visit_size(e, ctx)
             case fpc.UnknownOperator():
                 ident = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
