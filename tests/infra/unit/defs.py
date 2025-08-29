@@ -169,16 +169,6 @@ def test_list_dim2():
     x = [[1.0, 2.0], [3.0, 4.0]]
     return dim(x)
 
-@fpy(name='Test size (1/2)')
-def test_list_size1():
-    x = [1.0, 2.0, 3.0]
-    return size(x, 0)
-
-@fpy(name='Test size (2/2)')
-def test_list_size2():
-    x = [[1.0, 2.0], [3.0, 4.0]]
-    return size(x, 1)
-
 @fpy(name='Test enumerate (1/1)')
 def test_enumerate():
     xs = [1.0, 2.0, 3.0]
@@ -634,8 +624,6 @@ tests = [
     test_list_len2,
     test_list_dim1,
     test_list_dim2,
-    test_list_size1,
-    test_list_size2,
     test_enumerate,
     # test_list_zip1,
     test_list_zip2,

@@ -165,10 +165,10 @@ __all__ = [
     'RoundAt',
 
     # Tensor operators
+    'Len',
     'Range',
     'Empty',
     'Dim',
-    'Size',
     'Zip',
     'Enumerate',
 
@@ -1075,6 +1075,10 @@ class RoundAt(NamedBinaryOp):
 
 # Tensor operators
 
+class Len(NamedUnaryOp):
+    """FPy node: length operator"""
+    __slots__ = ()
+
 class Range(NamedUnaryOp):
     """FPy node: range constructor"""
     __slots__ = ()
@@ -1085,10 +1089,6 @@ class Empty(NamedUnaryOp):
 
 class Dim(NamedUnaryOp):
     """FPy node: dimension operator"""
-    __slots__ = ()
-
-class Size(NamedBinaryOp):
-    """FPy node: size operator"""
     __slots__ = ()
 
 class Zip(NamedNaryOp):

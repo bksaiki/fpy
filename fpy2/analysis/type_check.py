@@ -288,6 +288,10 @@ class _TypeCheckInstance(Visitor):
                     # sum operator
                     self._unify(arg_ty, ListType(RealType()))
                     return RealType()
+                case Len():
+                    # length operator
+                    self._unify(arg_ty, ListType(self._fresh_type_var()))
+                    return RealType()
                 case Range():
                     # range operator
                     self._unify(arg_ty, RealType())
@@ -321,11 +325,6 @@ class _TypeCheckInstance(Visitor):
             return fn_ty.return_type
         else:
             match e:
-                case Size():
-                    # size operator
-                    self._unify(lhs_ty, ListType(self._fresh_type_var()))
-                    self._unify(rhs_ty, RealType())
-                    return RealType()
                 case _:
                     raise ValueError(f'unknown binary operator: {cls}')
 

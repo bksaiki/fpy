@@ -70,6 +70,7 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     signbit: Signbit,
     round: Round,
     round_exact: RoundExact,
+    len: Len,
     range: Range,
     empty: Empty,
     dim: Dim,
@@ -89,7 +90,6 @@ _binary_table: dict[Callable, type[BinaryOp] | type[NamedBinaryOp]] = {
     hypot: Hypot,
     atan2: Atan2,
     pow: Pow,
-    size: Size,
     round_at: RoundAt,
 }
 
@@ -479,11 +479,6 @@ class Parser:
             return self._parse_hexfloat(e, func)
         elif fn == digits:
             return self._parse_digits(e, func)
-        elif fn == len:
-            if len(e.args) != 1:
-                raise FPyParserError(loc, 'FPy expects 1 argument for `len`', e)
-            arg = self._parse_expr(e.args[0])
-            return Size(func, arg, Integer(0, None), loc)
         else:
             args = [self._parse_expr(arg) for arg in e.args]
             return Call(func, fn, args, loc)

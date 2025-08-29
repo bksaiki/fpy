@@ -82,7 +82,6 @@ __all__ = [
     # Tensor
     'empty',
     'dim',
-    'size',
     # Constants
     'digits',
     'hexfloat',
@@ -711,30 +710,6 @@ def dim(x: list | tuple, ctx: Optional[Context] = None):
         return Float.from_int(dim)
     else:
         return ctx.round(dim)
-
-def size(x: list | tuple, dim: Real, ctx: Optional[Context] = None):
-    """
-    Returns the size of the dimension `dim` of the tensor `x`.
-
-    Assumes that `x` is not a ragged tensor.
-    """
-    dim = _real_to_float(dim)
-    if dim.is_zero():
-        # size(x, 0) = len(x)
-        if ctx is None:
-            return Float.from_int(len(x))
-        else:
-            return ctx.round(len(x))
-    else:
-        # size(x, n) = size(x[0], n - 1)
-        for _ in range(int(dim)):
-            x = x[0]
-            if not isinstance(x, (list, tuple)):
-                raise ValueError(f'dimension `{dim}` is out of bounds for the tensor `{x}`')
-        if ctx is None:
-            return Float.from_int(len(x))
-        else:
-            return ctx.round(len(x))
 
 #############################################################################
 # Constants

@@ -126,6 +126,12 @@ def _empty(ns: list[Expr]) -> Expr:
     else:
         raise ValueError(f'ns={ns} cannot be empty')
 
+def _size(x: Expr, n: int) -> Expr:
+    assert n >= 0
+    if n == 0:
+        return Len(NamedId('len'), x, None)
+    else:
+        return _size(ListRef(x, Integer(0, None), None), n - 1)
 
 # TODO: clean this up
 class _Ctx:
@@ -295,7 +301,8 @@ class _FPCore2FPy:
                     raise ValueError('size operator expects 2 arguments')
                 arg0 = self._visit(e.children[0], ctx)
                 arg1 = self._visit(e.children[1], ctx)
-                return Size(NamedId('size'), arg0, arg1, None)
+                # TODO: implement size(x, n)
+                raise NotImplementedError('size', arg0, arg1)
             case fpc.UnknownOperator():
                 ident = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
@@ -752,7 +759,7 @@ class _FPCore2FPy:
                             case str():
                                 # named dimension
                                 dim_id = self.gensym.fresh(dim)
-                                size_e = Size(NamedId('size'), Var(t, None), Integer(i, None), None)
+                                size_e = _size(Var(t, None), i)
                                 stmt = Assign(dim_id, None, size_e, None)
                                 ctx.stmts.append(stmt)
                                 # TODO: duplicate dimension names means a runtime check

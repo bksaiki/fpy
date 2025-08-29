@@ -251,6 +251,11 @@ class FPCoreCompileInstance(Visitor):
         args = [self._visit_expr(c, ctx) for c in e.args]
         return fpc.UnknownOperator(*args, name=name)
 
+    def _visit_len(self, arg: Expr, ctx: None) -> fpc.Expr:
+        # length expression
+        arr = self._visit_expr(arg, ctx)
+        return fpc.Size(arr, fpc.Integer(0))
+
     def _visit_range(self, arg: Expr, ctx: None) -> fpc.Expr:
         # expand range expression
         tuple_id = str(self.gensym.fresh('i'))
@@ -369,6 +374,9 @@ class FPCoreCompileInstance(Visitor):
             return cls(arg)
         else:
             match e:
+                case Len():
+                    # length expression
+                    return self._visit_len(e.arg, ctx)
                 case Range():
                     # range expression
                     return self._visit_range(e.arg, ctx)
@@ -397,9 +405,6 @@ class FPCoreCompileInstance(Visitor):
             return cls(arg0, arg1)
         else:
             match e:
-                case Size():
-                    # size expression
-                    return self._visit_size(e.first, e.second, ctx)
                 case _:
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)

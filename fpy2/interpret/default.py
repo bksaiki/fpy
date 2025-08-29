@@ -265,6 +265,12 @@ class _Interpreter(Visitor):
                 return True
         return False
 
+    def _apply_len(self, arg: Expr, ctx: Context):
+        arr = self._visit_expr(arg, ctx)
+        if not isinstance(arr, list):
+            raise TypeError(f'expected a list, got {arr}')
+        return len(arr)
+
     def _apply_range(self, arg: Expr, ctx: Context):
         stop = self._visit_expr(arg, ctx)
         if not isinstance(stop, Float):
@@ -296,17 +302,6 @@ class _Interpreter(Visitor):
             (Float.from_int(i, ctx=ctx), val)
             for i, val in enumerate(v)
         ]
-
-    def _apply_size(self, arr: Expr, idx: Expr, ctx: Context):
-        v = self._visit_expr(arr, ctx)
-        if not isinstance(v, list):
-            raise TypeError(f'expected a list, got {v}')
-        dim = self._visit_expr(idx, ctx)
-        if not isinstance(dim, Float):
-            raise TypeError(f'expected a real number argument, got {dim}')
-        if not dim.is_integer():
-            raise TypeError(f'expected an integer argument, got {dim}')
-        return ops.size(v, dim, ctx)
 
     def _apply_zip(self, args: Sequence[Expr], ctx: Context):
         """Apply the `zip` method to the given n-ary expression."""
@@ -392,6 +387,8 @@ class _Interpreter(Visitor):
             match e:
                 case Not():
                     return self._apply_not(e.arg, ctx)
+                case Len():
+                    return self._apply_len(e.arg, ctx)
                 case Range():
                     return self._apply_range(e.arg, ctx)
                 case Empty():
@@ -417,8 +414,6 @@ class _Interpreter(Visitor):
             return fn(first, second, ctx=ctx)
         else:
             match e:
-                case Size():
-                    return self._apply_size(e.first, e.second, ctx)
                 case _:
                     raise RuntimeError('unknown operator', e)
 
