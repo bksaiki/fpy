@@ -284,9 +284,9 @@ class _TypeCheckInstance(Visitor):
             return fn_ty.return_type
         else:
             match e:
-                case Sum():
-                    # sum operator
-                    self._unify(arg_ty, ListType(RealType()))
+                case Len():
+                    # length operator
+                    self._unify(arg_ty, ListType(self._fresh_type_var()))
                     return RealType()
                 case Range():
                     # range operator
@@ -307,6 +307,10 @@ class _TypeCheckInstance(Visitor):
                     ty = self._fresh_type_var()
                     self._unify(arg_ty, ListType(ty))
                     return ListType(TupleType(RealType(), ty))
+                case Sum():
+                    # sum operator
+                    self._unify(arg_ty, ListType(RealType()))
+                    return RealType()
                 case _:
                     raise ValueError(f'unknown unary operator: {cls}')
 
