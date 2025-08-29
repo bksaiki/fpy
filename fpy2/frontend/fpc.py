@@ -285,7 +285,7 @@ class _FPCore2FPy:
         ))
 
         # result
-        return Var(tup_id, None)
+        return Len(NamedId("len"), Var(tup_id, None), None)
 
     def _visit_nary(self, e: fpc.NaryExpr, ctx: _Ctx) -> Expr:
         match e:
