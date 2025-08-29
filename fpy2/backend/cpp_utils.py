@@ -2,19 +2,20 @@
 C++ compilation utilities.
 """
 
+import abc
 import enum
 import dataclasses
 
-from typing import TypeAlias
+from typing import Iterable, TypeAlias
 
 from ..ast import *
-from ..utils import enum_repr
+from ..utils import default_repr, enum_repr
 
 ###########################################################
 # C++ (scalar) type
 
 @enum_repr
-class CppType(enum.Enum):
+class CppScalar(enum.Enum):
     """
     C++ types.
 
@@ -26,8 +27,8 @@ class CppType(enum.Enum):
     """
 
     BOOL = 0
-    FLOAT = 1
-    DOUBLE = 2
+    F32 = 1
+    F64 = 2
     U8 = 3
     U16 = 4
     U32 = 5
@@ -37,49 +38,85 @@ class CppType(enum.Enum):
     S32 = 9
     S64 = 10
 
-    @property
+    def is_integer(self) -> bool:
+        return self in _INT_TYPES
+
+    def is_float(self) -> bool:
+        return self in _FLOAT_TYPES
+
     def cpp_name(self):
         match self:
-            case CppType.BOOL:
+            case CppScalar.BOOL:
                 return 'bool'
-            case CppType.FLOAT:
+            case CppScalar.F32:
                 return 'float'
-            case CppType.DOUBLE:
+            case CppScalar.F64:
                 return 'double'
-            case CppType.U8:
+            case CppScalar.U8:
                 return 'uint8_t'
-            case CppType.U16:
+            case CppScalar.U16:
                 return 'uint16_t'
-            case CppType.U32:
+            case CppScalar.U32:
                 return 'uint32_t'
-            case CppType.U64:
+            case CppScalar.U64:
                 return 'uint64_t'
-            case CppType.S8:
+            case CppScalar.S8:
                 return 'int8_t'
-            case CppType.S16:
+            case CppScalar.S16:
                 return 'int16_t'
-            case CppType.S32:
+            case CppScalar.S32:
                 return 'int32_t'
-            case CppType.S64:
+            case CppScalar.S64:
                 return 'int64_t'
 
+@default_repr
+class CppList:
+    elt: 'CppType'
+
+    def __init__(self, elt: 'CppType'):
+        self.elt = elt
+
+    def __eq__(self, other):
+        return isinstance(other, CppList) and self.elt == other.elt
+
+    def cpp_name(self):
+        return f'std::vector<{self.elt.cpp_name()}>'
+
+@default_repr
+class CppTuple:
+    elts: tuple['CppType', ...]
+
+    def __init__(self, elts: Iterable['CppType']):
+        self.elts = tuple(elts)
+
+    def __eq__(self, other):
+        return isinstance(other, CppTuple) and self.elts == other.elts
+
+    def cpp_name(self):
+        elts = ', '.join(elt.cpp_name() for elt in self.elts)
+        return f'std::tuple<{elts}>'
+
+
+CppType: TypeAlias = CppScalar | CppList | CppTuple
+
+
 _FLOAT_TYPES = [
-    CppType.FLOAT,
-    CppType.DOUBLE
+    CppScalar.F32,
+    CppScalar.F64
 ]
 
 _INT_TYPES = [
-    CppType.S8,
-    CppType.S16,
-    CppType.S32,
-    CppType.S64,
-    CppType.U8,
-    CppType.U16,
-    CppType.U32,
-    CppType.U64
+    CppScalar.S8,
+    CppScalar.S16,
+    CppScalar.S32,
+    CppScalar.S64,
+    CppScalar.U8,
+    CppScalar.U16,
+    CppScalar.U32,
+    CppScalar.U64
 ]
 
-_ALL_TYPES = [CppType.BOOL] + _FLOAT_TYPES + _INT_TYPES
+_ALL_SCALARS = [CppScalar.BOOL] + _FLOAT_TYPES + _INT_TYPES
 
 ###########################################################
 # C++ operation table
@@ -87,10 +124,10 @@ _ALL_TYPES = [CppType.BOOL] + _FLOAT_TYPES + _INT_TYPES
 @dataclasses.dataclass
 class UnaryCppOp:
     name: str
-    arg: CppType
-    ret: CppType
+    arg: CppScalar
+    ret: CppScalar
 
-    def matches(self, arg: CppType, ret: CppType) -> bool:
+    def matches(self, arg: CppScalar, ret: CppScalar) -> bool:
         return self.arg == arg and self.ret == ret
 
     def format(self, arg: str) -> str:
@@ -101,11 +138,11 @@ class UnaryCppOp:
 class BinaryCppOp:
     name: str
     is_infix: bool
-    lhs: CppType
-    rhs: CppType
-    ret: CppType
+    lhs: CppScalar
+    rhs: CppScalar
+    ret: CppScalar
 
-    def matches(self, lhs: CppType, rhs: CppType, ret: CppType) -> bool:
+    def matches(self, lhs: CppScalar, rhs: CppScalar, ret: CppScalar) -> bool:
         return self.lhs == lhs and self.rhs == rhs and self.ret == ret
 
     def format(self, lhs: str, rhs: str) -> str:
@@ -118,12 +155,12 @@ class BinaryCppOp:
 @dataclasses.dataclass
 class TernaryCppOp:
     name: str
-    arg1: CppType
-    arg2: CppType
-    arg3: CppType
-    ret: CppType
+    arg1: CppScalar
+    arg2: CppScalar
+    arg3: CppScalar
+    ret: CppScalar
 
-    def matches(self, arg1: CppType, arg2: CppType, arg3: CppType, ret: CppType) -> bool:
+    def matches(self, arg1: CppScalar, arg2: CppScalar, arg3: CppScalar, ret: CppScalar) -> bool:
         return self.arg1 == arg1 and self.arg2 == arg2 and self.arg3 == arg3 and self.ret == ret
 
     def format(self, arg1: str, arg2: str, arg3: str) -> str:
@@ -144,178 +181,178 @@ def _make_unary_table() -> UnaryOpTable:
     return {
         # Sign operations
         Neg: [
-            UnaryCppOp('-', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('-', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('-', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('-', CppScalar.F32, CppScalar.F32),
         ],
         Fabs: [
-            UnaryCppOp('std::abs', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::abs', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::abs', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::abs', CppScalar.F32, CppScalar.F32),
         ],
 
         # Rounding and truncation
         Ceil: [
-            UnaryCppOp('std::ceil', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::ceil', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::ceil', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::ceil', CppScalar.F32, CppScalar.F32),
         ],
         Floor: [
-            UnaryCppOp('std::floor', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::floor', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::floor', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::floor', CppScalar.F32, CppScalar.F32),
         ],
         Trunc: [
-            UnaryCppOp('std::trunc', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::trunc', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::trunc', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::trunc', CppScalar.F32, CppScalar.F32),
         ],
         RoundInt: [
-            UnaryCppOp('std::round', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::round', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::round', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::round', CppScalar.F32, CppScalar.F32),
         ],
         NearbyInt: [
-            UnaryCppOp('std::nearbyint', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::nearbyint', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::nearbyint', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::nearbyint', CppScalar.F32, CppScalar.F32),
         ],
         
         # Square root and cube root
         Sqrt: [
-            UnaryCppOp('std::sqrt', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::sqrt', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::sqrt', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::sqrt', CppScalar.F32, CppScalar.F32),
         ],
         Cbrt: [
-            UnaryCppOp('std::cbrt', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::cbrt', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::cbrt', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::cbrt', CppScalar.F32, CppScalar.F32),
         ],
         
         # Trigonometric functions
         Sin: [
-            UnaryCppOp('std::sin', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::sin', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::sin', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::sin', CppScalar.F32, CppScalar.F32),
         ],
         Cos: [
-            UnaryCppOp('std::cos', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::cos', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::cos', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::cos', CppScalar.F32, CppScalar.F32),
         ],
         Tan: [
-            UnaryCppOp('std::tan', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::tan', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::tan', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::tan', CppScalar.F32, CppScalar.F32),
         ],
         Asin: [
-            UnaryCppOp('std::asin', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::asin', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::asin', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::asin', CppScalar.F32, CppScalar.F32),
         ],
         Acos: [
-            UnaryCppOp('std::acos', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::acos', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::acos', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::acos', CppScalar.F32, CppScalar.F32),
         ],
         Atan: [
-            UnaryCppOp('std::atan', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::atan', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::atan', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::atan', CppScalar.F32, CppScalar.F32),
         ],
         
         # Hyperbolic functions
         Sinh: [
-            UnaryCppOp('std::sinh', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::sinh', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::sinh', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::sinh', CppScalar.F32, CppScalar.F32),
         ],
         Cosh: [
-            UnaryCppOp('std::cosh', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::cosh', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::cosh', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::cosh', CppScalar.F32, CppScalar.F32),
         ],
         Tanh: [
-            UnaryCppOp('std::tanh', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::tanh', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::tanh', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::tanh', CppScalar.F32, CppScalar.F32),
         ],
         Asinh: [
-            UnaryCppOp('std::asinh', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::asinh', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::asinh', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::asinh', CppScalar.F32, CppScalar.F32),
         ],
         Acosh: [
-            UnaryCppOp('std::acosh', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::acosh', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::acosh', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::acosh', CppScalar.F32, CppScalar.F32),
         ],
         Atanh: [
-            UnaryCppOp('std::atanh', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::atanh', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::atanh', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::atanh', CppScalar.F32, CppScalar.F32),
         ],
         
         # Exponential and logarithmic functions
         Exp: [
-            UnaryCppOp('std::exp', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::exp', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::exp', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::exp', CppScalar.F32, CppScalar.F32),
         ],
         Exp2: [
-            UnaryCppOp('std::exp2', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::exp2', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::exp2', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::exp2', CppScalar.F32, CppScalar.F32),
         ],
         Expm1: [
-            UnaryCppOp('std::expm1', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::expm1', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::expm1', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::expm1', CppScalar.F32, CppScalar.F32),
         ],
         Log: [
-            UnaryCppOp('std::log', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::log', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::log', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::log', CppScalar.F32, CppScalar.F32),
         ],
         Log10: [
-            UnaryCppOp('std::log10', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::log10', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::log10', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::log10', CppScalar.F32, CppScalar.F32),
         ],
         Log2: [
-            UnaryCppOp('std::log2', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::log2', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::log2', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::log2', CppScalar.F32, CppScalar.F32),
         ],
         Log1p: [
-            UnaryCppOp('std::log1p', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::log1p', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::log1p', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::log1p', CppScalar.F32, CppScalar.F32),
         ],
         
         # Special functions
         Erf: [
-            UnaryCppOp('std::erf', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::erf', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::erf', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::erf', CppScalar.F32, CppScalar.F32),
         ],
         Erfc: [
-            UnaryCppOp('std::erfc', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::erfc', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::erfc', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::erfc', CppScalar.F32, CppScalar.F32),
         ],
         Lgamma: [
-            UnaryCppOp('std::lgamma', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::lgamma', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::lgamma', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::lgamma', CppScalar.F32, CppScalar.F32),
         ],
         Tgamma: [
-            UnaryCppOp('std::tgamma', CppType.DOUBLE, CppType.DOUBLE),
-            UnaryCppOp('std::tgamma', CppType.FLOAT, CppType.FLOAT),
+            UnaryCppOp('std::tgamma', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::tgamma', CppScalar.F32, CppScalar.F32),
         ],
         
         # Classification functions (return bool)
         IsFinite: [
-            UnaryCppOp('std::isfinite', CppType.DOUBLE, CppType.BOOL),
-            UnaryCppOp('std::isfinite', CppType.FLOAT, CppType.BOOL),
+            UnaryCppOp('std::isfinite', CppScalar.F64, CppScalar.BOOL),
+            UnaryCppOp('std::isfinite', CppScalar.F32, CppScalar.BOOL),
         ],
         IsInf: [
-            UnaryCppOp('std::isinf', CppType.DOUBLE, CppType.BOOL),
-            UnaryCppOp('std::isinf', CppType.FLOAT, CppType.BOOL),
+            UnaryCppOp('std::isinf', CppScalar.F64, CppScalar.BOOL),
+            UnaryCppOp('std::isinf', CppScalar.F32, CppScalar.BOOL),
         ],
         IsNan: [
-            UnaryCppOp('std::isnan', CppType.DOUBLE, CppType.BOOL),
-            UnaryCppOp('std::isnan', CppType.FLOAT, CppType.BOOL),
+            UnaryCppOp('std::isnan', CppScalar.F64, CppScalar.BOOL),
+            UnaryCppOp('std::isnan', CppScalar.F32, CppScalar.BOOL),
         ],
         IsNormal: [
-            UnaryCppOp('std::isnormal', CppType.DOUBLE, CppType.BOOL),
-            UnaryCppOp('std::isnormal', CppType.FLOAT, CppType.BOOL),
+            UnaryCppOp('std::isnormal', CppScalar.F64, CppScalar.BOOL),
+            UnaryCppOp('std::isnormal', CppScalar.F32, CppScalar.BOOL),
         ],
         Signbit: [
-            UnaryCppOp('std::signbit', CppType.DOUBLE, CppType.BOOL),
-            UnaryCppOp('std::signbit', CppType.FLOAT, CppType.BOOL),
+            UnaryCppOp('std::signbit', CppScalar.F64, CppScalar.BOOL),
+            UnaryCppOp('std::signbit', CppScalar.F32, CppScalar.BOOL),
         ],
 
         # Rounding operations
         Round: [
-            UnaryCppOp(f'static_cast<{ret_ty.cpp_name}>', arg_ty, ret_ty)
-            for arg_ty in _ALL_TYPES
-            for ret_ty in _ALL_TYPES
+            UnaryCppOp(f'static_cast<{ret_ty.cpp_name()}>', arg_ty, ret_ty)
+            for arg_ty in _ALL_SCALARS
+            for ret_ty in _ALL_SCALARS
         ],
 
         # Logical operations
         Not: [
-            UnaryCppOp('!', CppType.BOOL, CppType.BOOL),
+            UnaryCppOp('!', CppScalar.BOOL, CppScalar.BOOL),
         ],
     }
 
@@ -359,40 +396,40 @@ def _make_binary_table() -> BinaryOpTable:
 
         # Power operations
         Pow: [
-            BinaryCppOp('std::pow', False, CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE),
-            BinaryCppOp('std::pow', False, CppType.FLOAT, CppType.FLOAT, CppType.FLOAT),
+            BinaryCppOp('std::pow', False, CppScalar.F64, CppScalar.F64, CppScalar.F64),
+            BinaryCppOp('std::pow', False, CppScalar.F32, CppScalar.F32, CppScalar.F32),
         ],
 
         # Modulus operations
         Fmod: [
-            BinaryCppOp('std::fmod', False, CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE),
-            BinaryCppOp('std::fmod', False, CppType.FLOAT, CppType.FLOAT, CppType.FLOAT),
+            BinaryCppOp('std::fmod', False, CppScalar.F64, CppScalar.F64, CppScalar.F64),
+            BinaryCppOp('std::fmod', False, CppScalar.F32, CppScalar.F32, CppScalar.F32),
         ],
         Remainder: [
-            BinaryCppOp('std::remainder', False, CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE),
-            BinaryCppOp('std::remainder', False, CppType.FLOAT, CppType.FLOAT, CppType.FLOAT),
+            BinaryCppOp('std::remainder', False, CppScalar.F64, CppScalar.F64, CppScalar.F64),
+            BinaryCppOp('std::remainder', False, CppScalar.F32, CppScalar.F32, CppScalar.F32),
         ],
 
         # Sign operations
         Copysign: [
-            BinaryCppOp('std::copysign', False, CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE),
-            BinaryCppOp('std::copysign', False, CppType.FLOAT, CppType.FLOAT, CppType.FLOAT),
+            BinaryCppOp('std::copysign', False, CppScalar.F64, CppScalar.F64, CppScalar.F64),
+            BinaryCppOp('std::copysign', False, CppScalar.F32, CppScalar.F32, CppScalar.F32),
         ],
 
         # Composite arithmetic
         Fdim: [
-            BinaryCppOp('std::fdim', False, CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE),
-            BinaryCppOp('std::fdim', False, CppType.FLOAT, CppType.FLOAT, CppType.FLOAT),
+            BinaryCppOp('std::fdim', False, CppScalar.F64, CppScalar.F64, CppScalar.F64),
+            BinaryCppOp('std::fdim', False, CppScalar.F32, CppScalar.F32, CppScalar.F32),
         ],
         Hypot: [
-            BinaryCppOp('std::hypot', False, CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE),
-            BinaryCppOp('std::hypot', False, CppType.FLOAT, CppType.FLOAT, CppType.FLOAT),
+            BinaryCppOp('std::hypot', False, CppScalar.F64, CppScalar.F64, CppScalar.F64),
+            BinaryCppOp('std::hypot', False, CppScalar.F32, CppScalar.F32, CppScalar.F32),
         ],
 
         # Trigonometric functions
         Atan2: [
-            BinaryCppOp('std::atan2', False, CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE),
-            BinaryCppOp('std::atan2', False, CppType.FLOAT, CppType.FLOAT, CppType.FLOAT),
+            BinaryCppOp('std::atan2', False, CppScalar.F64, CppScalar.F64, CppScalar.F64),
+            BinaryCppOp('std::atan2', False, CppScalar.F32, CppScalar.F32, CppScalar.F32),
         ],
     }
 
@@ -400,8 +437,8 @@ def _make_ternary_table() -> TernaryOpTable:
     return {
         # Fused multiply-add
         Fma: [
-            TernaryCppOp('std::fma', CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE, CppType.DOUBLE),
-            TernaryCppOp('std::fma', CppType.FLOAT, CppType.FLOAT, CppType.FLOAT, CppType.FLOAT),
+            TernaryCppOp('std::fma', CppScalar.F64, CppScalar.F64, CppScalar.F64, CppScalar.F64),
+            TernaryCppOp('std::fma', CppScalar.F32, CppScalar.F32, CppScalar.F32, CppScalar.F32),
         ],
     }
 

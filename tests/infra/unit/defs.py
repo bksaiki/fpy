@@ -150,6 +150,11 @@ def test_tuple4():
     return x0 * y0 + x1 * y1
 
 @fpy
+def test_tuple5():
+    (x, y), (z, _) = (1.0, 2.0), (3.0, 4.0)
+    return x + y + z
+
+@fpy
 def test_list1():
     return [1.0, 2.0, 3.0]
 
@@ -645,6 +650,7 @@ tests: list[Function] = [
     test_tuple2,
     test_tuple3,
     test_tuple4,
+    test_tuple5,
     test_list1,
     test_list_len1,
     test_list_len2,
