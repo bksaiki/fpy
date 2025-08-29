@@ -154,10 +154,10 @@ class _TypeCheckInstance(Visitor):
             case BoolType() | RealType() | ContextType() | VarType():
                 return self.tvars.get(ty, ty)
             case TupleType():
-                elts = [self._resolve_type(elt) for elt in ty.elt_types]
+                elts = [self._resolve_type(elt) for elt in ty.elts]
                 return self.tvars.add(TupleType(*elts))
             case ListType():
-                elt_ty = self._resolve_type(ty.elt_type)
+                elt_ty = self._resolve_type(ty.elt)
                 return self.tvars.add(ListType(elt_ty))
             case _:
                 raise NotImplementedError(f'cannot resolve type {ty}')
@@ -175,16 +175,16 @@ class _TypeCheckInstance(Visitor):
             case (RealType(), RealType()) | (BoolType(), BoolType()) | (ContextType(), ContextType()):
                 return a_ty
             case ListType(), ListType():
-                elt_ty = self._unify(a_ty.elt_type, b_ty.elt_type)
+                elt_ty = self._unify(a_ty.elt, b_ty.elt)
                 elt_ty = self.tvars.add(elt_ty)
-                elt_ty = self.tvars.union(elt_ty, self.tvars.add(a_ty.elt_type))
-                elt_ty = self.tvars.union(elt_ty, self.tvars.add(b_ty.elt_type))
+                elt_ty = self.tvars.union(elt_ty, self.tvars.add(a_ty.elt))
+                elt_ty = self.tvars.union(elt_ty, self.tvars.add(b_ty.elt))
                 return self.tvars.add(ListType(elt_ty))
             case TupleType(), TupleType():
                 # TODO: what if the length doesn't match
-                if len(a_ty.elt_types) != len(b_ty.elt_types):
+                if len(a_ty.elts) != len(b_ty.elts):
                     raise TypeInferError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
-                elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elt_types, b_ty.elt_types)]
+                elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elts, b_ty.elts)]
                 ty = self.tvars.add(TupleType(*elts))
                 ty = self.tvars.union(ty, self.tvars.add(a_ty))
                 ty = self.tvars.union(ty, self.tvars.add(b_ty))
@@ -439,10 +439,10 @@ class _TypeCheckInstance(Visitor):
             case UnderscoreId():
                 pass
             case TupleBinding():
-                if not isinstance(ty, TupleType) or len(binding.elts) != len(ty.elt_types):
+                if not isinstance(ty, TupleType) or len(binding.elts) != len(ty.elts):
                     raise TypeInferError(f'cannot unpack `{ty.format()}` for `{binding.format()}`')
                 # type has expected shape
-                for elt_ty, elt in zip(ty.elt_types, binding.elts):
+                for elt_ty, elt in zip(ty.elts, binding.elts):
                     self._visit_binding(site, elt, elt_ty)
             case _:
                 raise RuntimeError(f'unreachable: {binding}')
@@ -453,7 +453,7 @@ class _TypeCheckInstance(Visitor):
             if not isinstance(iter_ty, ListType):
                 raise TypeInferError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
             # expected type: list a
-            self._visit_binding(e, target, iter_ty.elt_type)
+            self._visit_binding(e, target, iter_ty.elt)
 
         elt_ty = self._visit_expr(e.elt, None)
         return ListType(elt_ty)
@@ -582,7 +582,7 @@ class _TypeCheckInstance(Visitor):
             raise TypeInferError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
 
         # expected type: list a
-        self._visit_binding(stmt, stmt.target, iter_ty.elt_type)
+        self._visit_binding(stmt, stmt.target, iter_ty.elt)
 
         # type check body
         self._visit_block(stmt.body, None)

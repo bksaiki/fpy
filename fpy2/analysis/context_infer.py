@@ -249,8 +249,13 @@ class ContextTypeInferInstance(Visitor):
         return ctx
 
     def _visit_unaryop(self, e: UnaryOp, ctx: ContextType):
-        self._visit_expr(e.arg, ctx)
-        return ctx
+        arg_ctx = self._visit_expr(e.arg, ctx)
+        match e:
+            case Enumerate():
+                # a -> tuple[a, ctx]
+                return TupleContext([ctx, arg_ctx])
+            case _:
+                return ctx
 
     def _visit_binaryop(self, e: BinaryOp, ctx: ContextType):
         self._visit_expr(e.first, ctx)
