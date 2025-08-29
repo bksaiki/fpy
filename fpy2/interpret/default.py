@@ -265,6 +265,12 @@ class _Interpreter(Visitor):
                 return True
         return False
 
+    def _apply_len(self, arg: Expr, ctx: Context):
+        arr = self._visit_expr(arg, ctx)
+        if not isinstance(arr, list):
+            raise TypeError(f'expected a list, got {arr}')
+        return Float.from_int(len(arr), ctx=ctx)
+
     def _apply_range(self, arg: Expr, ctx: Context):
         stop = self._visit_expr(arg, ctx)
         if not isinstance(stop, Float):
@@ -392,6 +398,8 @@ class _Interpreter(Visitor):
             match e:
                 case Not():
                     return self._apply_not(e.arg, ctx)
+                case Len():
+                    return self._apply_len(e.arg, ctx)
                 case Range():
                     return self._apply_range(e.arg, ctx)
                 case Empty():
