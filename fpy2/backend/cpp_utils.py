@@ -44,7 +44,7 @@ class CppScalar(enum.Enum):
     def is_float(self) -> bool:
         return self in _FLOAT_TYPES
 
-    def cpp_name(self):
+    def format(self):
         match self:
             case CppScalar.BOOL:
                 return 'bool'
@@ -79,8 +79,8 @@ class CppList:
     def __eq__(self, other):
         return isinstance(other, CppList) and self.elt == other.elt
 
-    def cpp_name(self):
-        return f'std::vector<{self.elt.cpp_name()}>'
+    def format(self):
+        return f'std::vector<{self.elt.format()}>'
 
 @default_repr
 class CppTuple:
@@ -92,8 +92,8 @@ class CppTuple:
     def __eq__(self, other):
         return isinstance(other, CppTuple) and self.elts == other.elts
 
-    def cpp_name(self):
-        elts = ', '.join(elt.cpp_name() for elt in self.elts)
+    def format(self):
+        elts = ', '.join(elt.format() for elt in self.elts)
         return f'std::tuple<{elts}>'
 
 
@@ -165,6 +165,7 @@ class TernaryCppOp:
 
     def format(self, arg1: str, arg2: str, arg3: str) -> str:
         return f'{self.name}({arg1}, {arg2}, {arg3})'
+
 
 UnaryOpTable: TypeAlias = dict[type[Expr], list[UnaryCppOp]]
 BinaryOpTable: TypeAlias = dict[type[Expr], list[BinaryCppOp]]
@@ -345,7 +346,7 @@ def _make_unary_table() -> UnaryOpTable:
 
         # Rounding operations
         Round: [
-            UnaryCppOp(f'static_cast<{ret_ty.cpp_name()}>', arg_ty, ret_ty)
+            UnaryCppOp(f'static_cast<{ret_ty.format()}>', arg_ty, ret_ty)
             for arg_ty in _ALL_SCALARS
             for ret_ty in _ALL_SCALARS
         ],
@@ -377,8 +378,8 @@ def _make_binary_table() -> BinaryOpTable:
         ],
 
         # Min/Max operations
-        # NOTE: std::min and std::max don't handle NaN properly for IEEE 754,
-        # so we use std::fmin and std::fmax
+        # these are technically N-ary operations, but the
+        # C++ backend reduces them down to 2-ary
         Min: [
             BinaryCppOp('std::fmin', False, ty, ty, ty)
             for ty in _FLOAT_TYPES

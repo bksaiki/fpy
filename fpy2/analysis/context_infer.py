@@ -341,7 +341,7 @@ class _ContextInferInstance(Visitor):
             iter_ctx = self._visit_expr(iterable, ctx)
             self._visit_binding(e, target, iter_ctx)
 
-        elt_ctx = self._visit_expr(e.elt, None)
+        elt_ctx = self._visit_expr(e.elt, ctx)
         return elt_ctx
 
     def _visit_list_ref(self, e: ListRef, ctx: ContextType):
