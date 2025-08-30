@@ -5,7 +5,7 @@ Compilation from FPy to (standard) C++.
 import enum
 import dataclasses
 
-from typing import TypeAlias
+from typing import Iterable
 
 from ..ast import *
 from ..analysis import (
@@ -51,6 +51,10 @@ class _CompileCtx:
     def indent(self):
         return _CompileCtx(self.lines, self.indent_str, self.indent_level + 1)
 
+    def dedent(self):
+        assert self.indent_level > 0
+        return _CompileCtx(self.lines, self.indent_str, self.indent_level - 1)
+
     def add_line(self, line: str):
         self.lines.append(self.indent_str * self.indent_level + line)
 
@@ -64,6 +68,7 @@ class _CppBackendInstance(Visitor):
     std: CppStandard
     op_table: ScalarOpTable
 
+    arg_ctxs: tuple[Context | None, ...]
     caller_ctx: Context | None
     def_use: DefineUseAnalysis
     type_info: TypeAnalysis
@@ -76,6 +81,7 @@ class _CppBackendInstance(Visitor):
         func: FuncDef,
         std: CppStandard,
         op_table: ScalarOpTable,
+        arg_ctxs: Iterable[Context | None],
         caller_ctx: Context | None,
         def_use: DefineUseAnalysis,
         type_info: TypeAnalysis,
@@ -84,6 +90,7 @@ class _CppBackendInstance(Visitor):
         self.func = func
         self.std = std
         self.op_table = op_table
+        self.arg_ctxs = tuple(arg_ctxs)
         self.caller_ctx = caller_ctx
         self.def_use = def_use
         self.type_info = type_info
@@ -98,6 +105,8 @@ class _CppBackendInstance(Visitor):
 
     def _monomorphize_context(self, ctx: ContextType):
         match ctx:
+            case None:
+                raise CppCompileError(self.func, 'context inference inconclusive')
             case NamedId():
                 return self.ctx_args.get(ctx, ctx)
             case Context():
@@ -210,7 +219,7 @@ class _CppBackendInstance(Visitor):
         # len(x)
         arg_cpp = self._visit_expr(e.arg, ctx)
         _, _, cpp_ty = self._expr_type(e)
-        return f'static_cast<{cpp_ty.cpp_name()}>({arg_cpp}.size())'
+        return f'static_cast<{cpp_ty.format()}>({arg_cpp}.size())'
 
     def _visit_range(self, e: Range, ctx: _CompileCtx):
         # range(n)
@@ -219,8 +228,8 @@ class _CppBackendInstance(Visitor):
 
         t = self._fresh_var()
         s = self._compile_size(arg_cpp, cpp_ty)
-        ctx.add_line(f'std::vector<{cpp_ty.cpp_name()}> {t}({s}));')
-        ctx.add_line(f'std::iota({t}.begin(), {t}.end(), static_cast<{cpp_ty.cpp_name()}>(0));')
+        ctx.add_line(f'std::vector<{cpp_ty.format()}> {t}({s});')
+        ctx.add_line(f'std::iota({t}.begin(), {t}.end(), static_cast<{cpp_ty.format()}>(0));')
         return t
 
     def _visit_size(self, arr: Expr, dim: Expr, ctx: _CompileCtx):
@@ -256,16 +265,17 @@ class _CppBackendInstance(Visitor):
         idx_ty = enum_ty.elt.elts[0]
 
         ctx.add_line(f'auto {x} = {arr_cpp};')
-        ctx.add_line(f'std::vector<std::tuple<{idx_ty.cpp_name()}, {elt_ty}>> {t}({arr_cpp}.size());')
+        ctx.add_line(f'std::vector<std::tuple<{idx_ty.format()}, {elt_ty}>> {t}({arr_cpp}.size());')
         ctx.add_line(f'for (size_t {i} = 0; {i} < {x}.size(); ++{i}) {{')
-        ctx.add_line(f'    {t}[{i}] = std::make_tuple({i}, {x}[{i}]);')
-        ctx.add_line(f'}}')
+        ctx.indent().add_line(f'{t}[{i}] = std::make_tuple({i}, {x}[{i}]);')
+        ctx.add_line('}')
 
         return t
 
     def _visit_sum(self, e: Sum, ctx: _CompileCtx):
         arg_str = ', '.join(self._visit_expr(arg, ctx) for arg in e.args)
-        return f'std::accumulate({arg_str}.begin(), {arg_str}.end(), 0)'
+        _, _, cpp_ty = self._expr_type(e)
+        return f'std::accumulate({arg_str}.begin(), {arg_str}.end(), static_cast<{cpp_ty.format()}>(0))'
 
     def _visit_zip(self, e: Zip, ctx: _CompileCtx):
         # zip(x1, ..., xn) =>
@@ -290,10 +300,38 @@ class _CppBackendInstance(Visitor):
         tmpl = ', '.join(f'decltype({x})::value_type' for x in xs)
         ctx.add_line(f'std::vector<std::tuple<{tmpl}>> {t}({xs[0]}.size());')
         ctx.add_line(f'for (size_t {i} = 0; {i} < {xs[0]}.size(); ++{i}) {{')
-        ctx.add_line(f'    {t}[{i}] = std::make_tuple({", ".join(f"{x}[{i}]" for x in xs)});')
-        ctx.add_line(f'}}')
+        ctx.indent().add_line(f'{t}[{i}] = std::make_tuple({", ".join(f"{x}[{i}]" for x in xs)});')
+        ctx.add_line('}')
 
         return t
+
+    def _visit_mxn2(self, e: Min | Max, x1: str, x2: str, x1_ty: CppScalar, x2_ty: CppScalar, e_ty: CppScalar):
+        # min(x1, x2) => std::fmin(<x1>, <x2>)
+        for op in self.op_table.binary[type(e)]:
+            if op.matches(x1_ty, x2_ty, e_ty):
+                return op.format(x1, x2)
+        raise CppCompileError(self.func, f'no matching signature for {e.format()}')
+
+    def _visit_mxn(self, e: Min | Max, ctx: _CompileCtx):
+        # min(x1, ..., xn)
+        assert len(e.args) >= 2
+
+        # initial 2 arguments
+        # <result> = std::fmin(<arg0>, <arg1>)
+        x1 = self._visit_expr(e.args[0], ctx)
+        x2 = self._visit_expr(e.args[1], ctx)
+        _, _, x1_ty = self._expr_type(e.args[0])
+        _, _, x2_ty = self._expr_type(e.args[1])
+        _, _, e_ty = self._expr_type(e)
+        s = self._visit_mxn2(e, x1, x2, x1_ty, x2_ty, e_ty)
+
+        # remaining arguments
+        for arg in e.args[2:]:
+            arg_cpp = self._visit_expr(arg, ctx)
+            _, _, arg_ty = self._expr_type(arg)
+            s = self._visit_mxn2(e, s, arg_cpp, e_ty, arg_ty, e_ty)
+
+        return s
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _CompileCtx):
         # Check unary operator table
@@ -377,6 +415,8 @@ class _CppBackendInstance(Visitor):
         match e:
             case Zip():
                 return self._visit_zip(e, ctx)
+            case Min() | Max():
+                return self._visit_mxn(e, ctx)
             case And():
                 # Logical AND: compile as (arg1 && arg2 && ...)
                 assert len(e.args) >= 2
@@ -422,18 +462,103 @@ class _CppBackendInstance(Visitor):
     def _visit_list_expr(self, e: ListExpr, ctx: _CompileCtx):
         _, _, cpp_ty = self._expr_type(e)
         args = ', '.join(self._visit_expr(arg, ctx) for arg in e.args)
-        return f'{cpp_ty.cpp_name()}({{{args}}})'
+        return f'{cpp_ty.format()}({{{args}}})'
 
     def _visit_list_comp(self, e: ListComp, ctx: _CompileCtx):
-        raise NotImplementedError
+        # [<e> for <x1> in <iterable1> ... for <xN> in <iterableN>] =>
+        # auto <t1> = <iterable1>;
+        # ...
+        # auto <tN> = <iterableN>;
+        # std::vector<T> t(t1.size() * ... * t2.size());
+        # size_t i = 0;
+        # for (auto <x1> : <t1>) {
+        #   ...
+        #      for (auto <xN> : <tN>) {
+        #         t[i] = <e>;
+        #         i++;
+        #      }
+        # }
+
+        # emit temporaries for iterables
+        ts = [self._fresh_var() for _ in e.iterables]
+        for t, iterable in zip(ts, e.iterables):
+            ctx.add_line(f'auto {t} = {self._visit_expr(iterable, ctx)};')
+
+        # reserve output vector
+        v = self._fresh_var()
+        _, _, cpp_ty = self._expr_type(e)
+        size = ' * '.join(f'{t}.size()' for t in ts)
+        ctx.add_line(f'{cpp_ty.format()} {v}({size});')
+
+        # initialize the counter
+        i = self._fresh_var()
+        ctx.add_line(f'size_t {i} = 0;')
+
+        # fill the vector
+        body_ctx = ctx
+        for target, t in zip(e.targets, ts):
+            match target:
+                case NamedId():
+                    body_ctx.add_line(f'for (auto {target} : {t}) {{')
+                case TupleBinding():
+                    t2 = self._fresh_var()
+                    body_ctx.add_line(f'for (auto {t2} : {t}) {{')
+                    self._visit_tuple_binding(t2, target, e, body_ctx)
+                case _:
+                    raise RuntimeError(f'unreachable {target}')
+            body_ctx = body_ctx.indent()
+
+        # compute the element
+        elt = self._visit_expr(e.elt, body_ctx)
+        body_ctx.add_line(f'{v}[{i}] = {elt};')
+        body_ctx.add_line(f'{i}++;')
+
+        # closing braces
+        while body_ctx.indent_level > ctx.indent_level:
+            body_ctx = body_ctx.dedent()
+            body_ctx.add_line('}')
+
+        return v
 
     def _visit_list_ref(self, e: ListRef, ctx: _CompileCtx):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
-        return f'{value}[{index}]'
+
+        _, _, index_ty = self._expr_type(e.index)
+        size = self._compile_size(index, index_ty)
+        return f'{value}[{size}]'
 
     def _visit_list_slice(self, e: ListSlice, ctx: _CompileCtx):
-        raise NotImplementedError
+        # x[<start>:<stop>] =>
+        # auto v = <x>
+        # auto start = static_cast<size_t>(<start>) OR 0;
+        # auto stop = static_cast<size_t>(<stop>) OR x.size();
+        # <result> = std::vector<T>(v.begin() + start, v.end() + end);
+
+        # temporarily bind array
+        t = self._fresh_var()
+        arr = self._visit_expr(e.value, ctx)
+        _, _, e_ty = self._expr_type(e)
+        ctx.add_line(f'auto {t} = {arr};')
+
+        # compile start
+        if e.start is None:
+            start = '0'
+        else:
+            start = self._visit_expr(e.start, ctx)
+            _, _ , start_ty = self._expr_type(e.start)
+            start = self._compile_size(start, start_ty)
+
+        # compile stop
+        if e.stop is None:
+            stop = f'{t}.size()'
+        else:
+            stop = self._visit_expr(e.stop, ctx)
+            _, _ , stop_ty = self._expr_type(e.stop)
+            stop = self._compile_size(stop, stop_ty)
+
+        # result
+        return f'{e_ty.format()}({t}.begin() + {start}, {t}.begin() + {stop})'
 
     def _visit_list_set(self, e: ListSet, ctx: _CompileCtx):
         raise CompileError('C++ backend: functional list updates are not supported')
@@ -444,12 +569,12 @@ class _CppBackendInstance(Visitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'({cond} ? {ift} : {iff})'
 
-    def _visit_decl(self, name: Id, e: str, stmt: Stmt, ctx: _CompileCtx):
+    def _visit_decl(self, name: Id, e: str, site: DefSite, ctx: _CompileCtx):
         match name:
             case NamedId():
-                if self._var_is_decl(name, stmt):
-                    _, _, cpp_ty = self._var_type(name, stmt)
-                    ctx.add_line(f'{cpp_ty.cpp_name()} {name} = {e};')
+                if self._var_is_decl(name, site):
+                    _, _, cpp_ty = self._var_type(name, site)
+                    ctx.add_line(f'{cpp_ty.format()} {name} = {e};')
                 else:
                     ctx.add_line(f'{name} = {e};')
             case UnderscoreId():
@@ -457,12 +582,12 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable: {name}')
 
-    def _visit_tuple_binding(self, t_id: str, binding: TupleBinding, stmt: Stmt, ctx: _CompileCtx):
+    def _visit_tuple_binding(self, t_id: str, binding: TupleBinding, site: DefSite, ctx: _CompileCtx):
         for i, elt in enumerate(binding.elts):
             match elt:
                 case NamedId():
                     # bind the ith element to the name
-                    self._visit_decl(elt, f'std::get<{i}>({t_id})', stmt, ctx)
+                    self._visit_decl(elt, f'std::get<{i}>({t_id})', site, ctx)
                 case UnderscoreId():
                     # do nothing
                     pass
@@ -470,7 +595,7 @@ class _CppBackendInstance(Visitor):
                     # emit temporary variable for the tuple
                     t = self._fresh_var()
                     ctx.add_line(f'auto {t} = std::get<{i}>({t_id});')
-                    self._visit_tuple_binding(t, elt, stmt, ctx)
+                    self._visit_tuple_binding(t, elt, site, ctx)
                 case _:
                     raise RuntimeError(f'unreachable: {elt}')
 
@@ -546,22 +671,31 @@ class _CppBackendInstance(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _visit_function(self, func: FuncDef, ctx: _CompileCtx):
-        # TODO: use caller context
+        # apply caller context
         if isinstance(self.ctx_info.body_ctx, NamedId):
             if self.caller_ctx is None:
                 # TODO: what to report to user?
                 raise CppCompileError(self.func, f'contexts must be monomorphic `{self.ctx_info.body_ctx}`')
             self.ctx_args[self.ctx_info.body_ctx] = self.caller_ctx
 
+        # apply argument contexts
+        for caller_arg, arg_ctx in zip(self.arg_ctxs, self.ctx_info.arg_ctxs):
+            if isinstance(arg_ctx, NamedId):
+                if caller_arg is None:
+                    # TODO: what to report to user?
+                    raise CppCompileError(self.func, f'contexts must be monomorphic `{arg_ctx}`')
+                self.ctx_args[arg_ctx] = caller_arg
+
         # compile arguments
         arg_strs: list[str] = []
         for arg, arg_ty, arg_ctx in zip(func.args, self.type_info.arg_types, self.ctx_info.arg_ctxs):
+            arg_ctx = self._monomorphize_context(arg_ctx)
             ty = self._compile_type(arg_ty, arg_ctx)
-            arg_strs.append(f'{ty.cpp_name()} {arg.name}')
+            arg_strs.append(f'{ty.format()} {arg.name}')
 
         body_ctx = self._monomorphize_context(self.ctx_info.return_ctx)
         ret_ty = self._compile_type(self.type_info.return_type, body_ctx)
-        ctx.add_line(f'{ret_ty.cpp_name()} {func.name}({", ".join(arg_strs)}) {{')
+        ctx.add_line(f'{ret_ty.format()} {func.name}({", ".join(arg_strs)}) {{')
 
         # compile body
         self._visit_block(func.body, ctx)
@@ -632,7 +766,12 @@ static size_t dim(const std::vector<T>& vec) {
 }
 """
 
-    def compile(self, func: Function, ctx: Context | None = None) -> str:
+    def compile(
+        self,
+        func: Function,
+        arg_ctxs: None | Iterable[Context | None] = None,
+        ctx: Context | None = None
+    ) -> str:
         """
         Compiles the given FPy function to a C++ program
         represented as a string.
@@ -641,6 +780,8 @@ static size_t dim(const std::vector<T>& vec) {
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
         if ctx is not None and not isinstance(ctx, Context):
             raise TypeError(f'Expected `Context`, got {type(ctx)} for {ctx}')
+        if arg_ctxs is None:
+            arg_ctxs = tuple(None for _ in func.args)
 
         # normalization passes
         ast = ContextInline.apply(func.ast, func.env)
@@ -651,14 +792,14 @@ static size_t dim(const std::vector<T>& vec) {
         try:
             type_info = TypeCheck.check(ast, def_use=def_use)
         except TypeInferError as e:
-            raise ValueError(f'type inference failed') from e
+            raise ValueError(f'{func.name}: type inference failed') from e
 
         try:
             ctx_info = ContextInfer.infer(ast, def_use=def_use)
         except ContextInferError as e:
-            raise ValueError(f'context inference failed') from e
+            raise ValueError(f'{func.name}: context inference failed') from e
 
         # compile
-        inst = _CppBackendInstance(ast, self.std, self.op_table, ctx, def_use, type_info, ctx_info)
+        inst = _CppBackendInstance(ast, self.std, self.op_table, arg_ctxs, ctx, def_use, type_info, ctx_info)
         body_str =  inst.compile()
         return body_str

@@ -38,7 +38,10 @@ from .backend import (
     FPCoreCompiler
 )
 
-# utilities
+# submodules
+from . import analysis
+from . import transform
+from . import types
 from . import utils
 
 
@@ -46,14 +49,14 @@ from . import utils
 # typing hints
 # TODO: remove these hints
 
-import typing
+import typing as _typing
 
 from typing import Literal as Dim
 
-_Dims = typing.TypeVarTuple('_Dims')
-_DType = typing.TypeVar('_DType')
+_Dims = _typing.TypeVarTuple('_Dims')
+_DType = _typing.TypeVar('_DType')
 
-class Tensor(tuple, typing.Generic[*_Dims, _DType]):
+class Tensor(tuple, _typing.Generic[*_Dims, _DType]):
     """
     FPy type hint for a homogenous tensor object::
 
