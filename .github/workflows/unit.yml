@@ -78,11 +78,13 @@ jobs:
         run: source .env/bin/activate
       - name: Install
         run: pip install -e .[dev]
-      - name: Tests (unittest)
+      - name: Unit Tests
         run: python3 -m unittest -v
+      - name: Infrastucture Tests
+        run: python3 -m tests.infra.unit
 
-  infra:
-    name: "Infrastructure Tests"
+  fpcore:
+    name: "FPCore tests"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,7 +103,28 @@ jobs:
         run: source .env/bin/activate
       - name: Install
         run: pip install -e .[dev]
-      - name: Tests (unit)
-        run: python3 -m tests.infra.unit
-      - name: Tests (FPCore)
+      - name: Compilation tests
         run: python3 -m tests.infra.fpbench
+
+  cpp:
+    name: "C++ tests"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: "Checkout fpbench/fpbench"
+        uses: actions/checkout@v4
+        with:
+          repository: fpbench/fpbench
+          path: ~/fpbench
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Create virtual environment
+        run: python3 -m venv .env/
+      - name: Activate virtual environment
+        run: source .env/bin/activate
+      - name: Install
+        run: pip install -e .[dev]
+      - name: Tests (C++)
+        run: python3 -m tests.infra.compile.cpp

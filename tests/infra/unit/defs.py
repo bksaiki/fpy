@@ -513,7 +513,7 @@ def dpN(xs: list[Real], ys: list[Real]) -> Real:
     with RealContext():
         for x, y in zip(xs, ys):
             sum += x * y
-    return roundint(sum)
+    return round(sum)
 
 @fpy(
     name='NMSE example 3.1',
