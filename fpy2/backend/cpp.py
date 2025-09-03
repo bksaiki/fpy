@@ -10,7 +10,7 @@ from typing import Iterable
 from ..ast import *
 from ..analysis import (
     ContextAnalysis, ContextInfer, ContextInferError, ContextType, TupleContext,
-    DefineUse, DefineUseAnalysis, DefSite,
+    DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
     TypeAnalysis, TypeCheck, TypeInferError
 )
 from ..function import Function
@@ -74,6 +74,9 @@ class _CppBackendInstance(Visitor):
     type_info: TypeAnalysis
     ctx_info: ContextAnalysis
     ctx_args: dict[NamedId, Context]
+
+    decl_phis: set[PhiDef]
+    decl_assigns: set[AssignDef]
     gensym: Gensym
 
     def __init__(
@@ -90,12 +93,16 @@ class _CppBackendInstance(Visitor):
         self.func = func
         self.std = std
         self.op_table = op_table
+
         self.arg_ctxs = tuple(arg_ctxs)
         self.caller_ctx = caller_ctx
         self.def_use = def_use
         self.type_info = type_info
         self.ctx_info = ctx_info
         self.ctx_args = {}
+
+        self.decl_phis = set()
+        self.decl_assigns = set()
         self.gensym = Gensym(self.def_use.names)
 
     def compile(self):
@@ -148,14 +155,17 @@ class _CppBackendInstance(Visitor):
 
     def _var_is_decl(self, name: NamedId, site: DefSite):
         d = self.def_use.find_def_from_site(name, site)
-        return d.parent is None
+        return d.parent is None and d not in self.decl_assigns
 
-    def _var_type(self, name: NamedId, site: DefSite):
-        d = self.def_use.find_def_from_site(name, site)
+    def _def_type(self, d: Definition):
         ty = self.type_info.by_def[d]
         ctx = self._monomorphize_context(self.ctx_info.by_def[d])
         cpp_ty = self._compile_type(ty, ctx)
         return ty, ctx, cpp_ty
+
+    def _var_type(self, name: NamedId, site: DefSite):
+        d = self.def_use.find_def_from_site(name, site)
+        return self._def_type(d)
 
     def _expr_type(self, e: Expr):
         ty = self.type_info.by_expr[e]
@@ -498,12 +508,12 @@ class _CppBackendInstance(Visitor):
         body_ctx = ctx
         for target, t in zip(e.targets, ts):
             match target:
-                case NamedId():
+                case Id():
                     body_ctx.add_line(f'for (auto {target} : {t}) {{')
                 case TupleBinding():
                     t2 = self._fresh_var()
                     body_ctx.add_line(f'for (auto {t2} : {t}) {{')
-                    self._visit_tuple_binding(t2, target, e, body_ctx)
+                    self._visit_tuple_binding(t2, target, e, body_ctx.indent())
                 case _:
                     raise RuntimeError(f'unreachable {target}')
             body_ctx = body_ctx.indent()
@@ -613,7 +623,17 @@ class _CppBackendInstance(Visitor):
                 raise NotImplementedError(stmt.binding)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _CompileCtx):
-        raise NotImplementedError
+        # compile indices
+        indices: list[str] = []
+        for index in stmt.slices:
+            i = self._visit_expr(index, ctx)
+            _, _, index_ty = self._expr_type(index)
+            indices.append(self._compile_size(i, index_ty))
+
+        # compile expression
+        e = self._visit_expr(stmt.expr, ctx)
+        index_str = ''.join(f'[{i}]' for i in indices)
+        ctx.add_line(f'{stmt.var}{index_str} = {e};')
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _CompileCtx):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -622,6 +642,17 @@ class _CppBackendInstance(Visitor):
         ctx.add_line('}')  # close if
 
     def _visit_if(self, stmt: IfStmt, ctx: _CompileCtx):
+        # variables need to be declared if they are assigned
+        # within the branches but not before defined in the branches
+        for phi in self.def_use.phis[stmt]:
+            if phi.is_new and phi not in self.decl_phis:
+                # need a declaration for the phi assignment
+                _, _, cpp_ty = self._def_type(phi)
+                ctx.add_line(f'{cpp_ty.format()} {phi.name};')
+                # record this phi so that we don't revisit it
+                self.decl_phis |= phi.phis()
+                self.decl_assigns |= phi.assigns()
+
         # TODO: fold if statements
         cond = self._visit_expr(stmt.cond, ctx)
         ctx.add_line(f'if ({cond}) {{')
@@ -639,12 +670,12 @@ class _CppBackendInstance(Visitor):
     def _visit_for(self, stmt: ForStmt, ctx: _CompileCtx):
         iterable = self._visit_expr(stmt.iterable, ctx)
         match stmt.target:
-            case NamedId():
+            case Id():
                 ctx.add_line(f'for (auto {stmt.target} : {iterable}) {{')
-            case UnderscoreId():
-                ctx.add_line(f'for (auto _ : {iterable}) {{')
             case TupleBinding():
-                raise NotImplementedError(ctx)
+                t = self._fresh_var()
+                ctx.add_line(f'for (auto {t} : {iterable}) {{')
+                self._visit_tuple_binding(t, stmt.target, stmt, ctx.indent())
             case _:
                 raise RuntimeError(f'unreachable {ctx}')
 

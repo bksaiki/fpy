@@ -1,5 +1,6 @@
 """Definition use analysis for FPy ASTs"""
 
+from abc import ABC, abstractmethod
 from typing import TypeAlias, cast
 
 from ..ast.fpyast import *
@@ -11,7 +12,7 @@ UseSite: TypeAlias = Var | IndexedAssign
 
 
 @default_repr
-class Definition:
+class Definition(ABC):
     """
     Definition of a variable:
     - an assignment
@@ -22,6 +23,16 @@ class Definition:
 
     def __init__(self, name: NamedId):
         self.name = name
+
+    @abstractmethod
+    def phis(self) -> set['PhiDef']:
+        """Returns all phi nodes defined or redefined by this definition."""
+        ...
+
+    @abstractmethod
+    def assigns(self) -> set['AssignDef']:
+        """Returns all assignment sites defined or redefined by this definition."""
+        ...
 
 
 class AssignDef(Definition):
@@ -53,17 +64,26 @@ class AssignDef(Definition):
     def __hash__(self):
         return hash((self.name, self.site))
 
+    def phis(self) -> set['PhiDef']:
+        return set()
+
+    def assigns(self) -> set['AssignDef']:
+        return { self }
+
 
 class PhiDef(Definition):
-    """Merged definition from multiple branches (phi node in SSA form)"""
-
+    """
+    Merged definition from multiple branches (phi node in SSA form)
+    """
     lhs: Definition
     rhs: Definition
+    is_new: bool
 
-    def __init__(self, name: NamedId, lhs: Definition, rhs: Definition):
+    def __init__(self, name: NamedId, lhs: Definition, rhs: Definition, is_new: bool = False):
         super().__init__(name)
         self.lhs = lhs
         self.rhs = rhs
+        self.is_new = is_new
 
     def __eq__(self, other):
         return (
@@ -71,10 +91,11 @@ class PhiDef(Definition):
             and self.name == other.name
             and self.lhs == other.lhs
             and self.rhs == other.rhs
+            and self.is_new == other.is_new
         )
 
     def __hash__(self):
-        return hash((self.name, self.lhs, self.rhs))
+        return hash((self.name, self.lhs, self.rhs, self.is_new))
 
     @staticmethod
     def union(lhs: Definition, rhs: Definition) -> Definition:
@@ -89,6 +110,12 @@ class PhiDef(Definition):
             return lhs
         else:
             return PhiDef(lhs.name, lhs, rhs)
+
+    def phis(self) -> set['PhiDef']:
+        return { self } | self.lhs.phis() | self.rhs.phis()
+
+    def assigns(self) -> set['AssignDef']:
+        return self.lhs.assigns() | self.rhs.assigns()
 
 
 class DefinitionCtx(dict[NamedId, Definition]):
@@ -225,7 +252,8 @@ class _DefineUseInstance(DefaultVisitor):
             d_body = body_ctx[var]
             d = PhiDef.union(d_stmt, d_body)
             # update tables if the definition is new
-            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+            if d != d_stmt and d != d_body:
+                assert isinstance(d, PhiDef)
                 self.analysis.phis[stmt].add(d)
                 self._add_def(var, d)
             ctx[var] = d
@@ -241,7 +269,9 @@ class _DefineUseInstance(DefaultVisitor):
             d_iff = iff_ctx[var]
             d = PhiDef.union(d_ift, d_iff)
             # update tables if the definition is new
-            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+            if d != d_ift and d != d_iff:
+                assert isinstance(d, PhiDef)
+                d.is_new = var not in ctx
                 self.analysis.phis[stmt].add(d)
                 self._add_def(var, d)
             ctx[var] = d
@@ -257,7 +287,8 @@ class _DefineUseInstance(DefaultVisitor):
             d_body = body_ctx[var]
             d = PhiDef.union(d_stmt, d_body)
             # update tables if the definition is new
-            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+            if d != d_stmt and d != d_body:
+                assert isinstance(d, PhiDef)
                 self.analysis.phis[stmt].add(d)
                 self._add_def(var, d)
             ctx[var] = d
@@ -277,7 +308,8 @@ class _DefineUseInstance(DefaultVisitor):
             d_body = body_ctx[var]
             d = PhiDef.union(d_stmt, d_body)
             # update tables if the definition is new
-            if isinstance(d, PhiDef) and d not in self.analysis.uses:
+            if d != d_stmt and d != d_body:
+                assert isinstance(d, PhiDef)
                 self.analysis.phis[stmt].add(d)
                 self._add_def(var, d)
             ctx[var] = d
