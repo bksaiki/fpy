@@ -15,6 +15,7 @@ from ..analysis import (
 )
 from ..function import Function
 from ..number import (
+    RM,
     FP64, FP32,
     SINT8, SINT16, SINT32, SINT64,
     UINT8, UINT16, UINT32, UINT64
@@ -172,6 +173,19 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise CppCompileError(self.func, f'unsupported type: `{ty.format()}` with {ctx}')
 
+    def _compile_rm(self, rm: RM):
+        match rm:
+            case RM.RNE:
+                return 'FE_TONEAREST'
+            case RM.RTZ:
+                return 'FE_TOWARDZERO'
+            case RM.RTP:
+                return 'FE_UPWARD'
+            case RM.RTN:
+                return 'FE_DOWNWARD'
+            case _:
+                raise CppCompileError(self.func, f'unsupported rounding mode: `{rm}`')
+
     def _fresh_var(self):
         return str(self.gensym.fresh('__fpy_tmp'))
 
@@ -214,7 +228,10 @@ class _CppBackendInstance(Visitor):
                 else:
                     return f'{s}.0'
             case CppScalar.F32:
-                return f'{s}f'
+                if '.' in s:
+                    return f'{s}f'
+                else:
+                    return f'{s}.0f'
             case CppScalar.U8 | CppScalar.U16 | CppScalar.U32:
                 return f'{s}u'
             case CppScalar.U64:
@@ -673,7 +690,7 @@ class _CppBackendInstance(Visitor):
     def _visit_if1(self, stmt: If1Stmt, ctx: _CompileCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         ctx.add_line(f'if ({cond}) {{')
-        self._visit_block(stmt.body, ctx)
+        self._visit_block(stmt.body, ctx.indent())
         ctx.add_line('}')  # close if
 
     def _visit_if(self, stmt: IfStmt, ctx: _CompileCtx):
@@ -691,15 +708,15 @@ class _CppBackendInstance(Visitor):
         # TODO: fold if statements
         cond = self._visit_expr(stmt.cond, ctx)
         ctx.add_line(f'if ({cond}) {{')
-        self._visit_block(stmt.ift, ctx)
+        self._visit_block(stmt.ift, ctx.indent())
         ctx.add_line('} else {')
-        self._visit_block(stmt.iff, ctx)
+        self._visit_block(stmt.iff, ctx.indent())
         ctx.add_line('}')  # close if
 
     def _visit_while(self, stmt: WhileStmt, ctx: _CompileCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         ctx.add_line(f'while ({cond}) {{')
-        self._visit_block(stmt.body, ctx)
+        self._visit_block(stmt.body, ctx.indent())
         ctx.add_line('}')  # close if
 
     def _visit_for(self, stmt: ForStmt, ctx: _CompileCtx):
@@ -714,15 +731,21 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable {ctx}')
 
-        self._visit_block(stmt.body, ctx)
+        self._visit_block(stmt.body, ctx.indent())
         ctx.add_line('}')  # close if
 
     def _visit_context(self, stmt: ContextStmt, ctx: _CompileCtx):
         if not isinstance(stmt.ctx, ForeignVal):
             raise CppCompileError(self.func, f'Rounding context cannot be compiled `{stmt.ctx}`')
-        cpp_ctx = self._compile_context(stmt.ctx.val)
+        rctx = stmt.ctx.val
+        cpp_ctx = self._compile_context(rctx)
         if cpp_ctx.is_float():
-            raise NotImplementedError('float', stmt.ctx, cpp_ctx)
+            assert isinstance(rctx, type(FP64))
+            fenv = self._fresh_var()
+            ctx.add_line(f'const auto {fenv} = fegetround();')
+            ctx.add_line(f'fesetround({self._compile_rm(rctx.rm)});')
+            self._visit_block(stmt.body, ctx)
+            ctx.add_line(f'fesetround({fenv});')
         elif cpp_ctx.is_integer():
             # do nothing
             self._visit_block(stmt.body, ctx)
@@ -741,7 +764,6 @@ class _CppBackendInstance(Visitor):
         ctx.add_line(f'return {e};')
 
     def _visit_block(self, block: StmtBlock, ctx: _CompileCtx):
-        ctx = ctx.indent()
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
@@ -769,18 +791,19 @@ class _CppBackendInstance(Visitor):
         ctx.add_line(f'{ret_ty.format()} {func.name}({", ".join(arg_strs)}) {{')
 
         # compile body
-        self._visit_block(func.body, ctx)
+        self._visit_block(func.body, ctx.indent())
         ctx.add_line('}')  # close function definition
 
 
-_HEADER = [
+_HEADERS = [
     '#include <cassert>',
+    '#include <cfenv>',
     '#include <cmath>',
     '#include <cstddef>',
     '#include <cstdint>',
     '#include <numeric>',
     '#include <vector>',
-    '#include <tuple>'
+    '#include <tuple>',
 ]
 
 
@@ -807,7 +830,7 @@ class CppBackend(Backend):
         """
         Returns the C++ headers required for compiling an FPy program.
         """
-        return list(_HEADER)
+        return list(_HEADERS)
 
     def helpers(self) -> str:
         """
@@ -815,6 +838,8 @@ class CppBackend(Backend):
         """
 
         return """
+#pragma STDC FENV_ACCESS ON
+
 template <typename T>
 static size_t size(const T&, size_t) {
     assert(false && "cannot compute tensor size of a scalar");
