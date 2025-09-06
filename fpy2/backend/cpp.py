@@ -14,7 +14,11 @@ from ..analysis import (
     TypeAnalysis, TypeCheck, TypeInferError
 )
 from ..function import Function
-from ..number import FP64, FP32
+from ..number import (
+    FP64, FP32,
+    SINT8, SINT16, SINT32, SINT64,
+    UINT8, UINT16, UINT32, UINT64
+)
 from ..transform import ContextInline
 from ..types import *
 from ..utils import Gensym, enum_repr
@@ -115,7 +119,9 @@ class _CppBackendInstance(Visitor):
             case None:
                 raise CppCompileError(self.func, 'context inference inconclusive')
             case NamedId():
-                return self.ctx_args.get(ctx, ctx)
+                if ctx not in self.ctx_args:
+                    raise CppCompileError(self.func, f'contexts must be monomorphic `{ctx}`')
+                return self.ctx_args[ctx]
             case Context():
                 return ctx
             case TupleContext():
@@ -132,6 +138,22 @@ class _CppBackendInstance(Visitor):
                     return CppScalar.F64
                 elif ctx.is_equiv(FP32):
                     return CppScalar.F32
+                elif ctx.is_equiv(SINT8):
+                    return CppScalar.S8
+                elif ctx.is_equiv(SINT16):
+                    return CppScalar.S16
+                elif ctx.is_equiv(SINT32):
+                    return CppScalar.S32
+                elif ctx.is_equiv(SINT64):
+                    return CppScalar.S64
+                elif ctx.is_equiv(UINT8):
+                    return CppScalar.U8
+                elif ctx.is_equiv(UINT16):
+                    return CppScalar.U16
+                elif ctx.is_equiv(UINT32):
+                    return CppScalar.U32
+                elif ctx.is_equiv(UINT64):
+                    return CppScalar.U64
                 else:
                     raise CppCompileError(self.func, f'unsupported context: `{ctx}`')
             case _:
@@ -193,6 +215,14 @@ class _CppBackendInstance(Visitor):
                     return f'{s}.0'
             case CppScalar.F32:
                 return f'{s}f'
+            case CppScalar.U8 | CppScalar.U16 | CppScalar.U32:
+                return f'{s}u'
+            case CppScalar.U64:
+                return f'{s}ull'
+            case CppScalar.S8 | CppScalar.S16 | CppScalar.S32:
+                return f'{s}'
+            case CppScalar.S64:
+                return f'{s}ll'
             case CppScalar.BOOL:
                 raise RuntimeError(f'should not get {cpp_ty} for {e.format()}')
             case _:
@@ -261,23 +291,22 @@ class _CppBackendInstance(Visitor):
         # x = <x>;
         # std::vector<std::tuple<R, T>> t(x.size());
         # for (size_t i = 0; i < x.size(); ++i) {
-        #     t[i] = std::make_tuple(i, x[i]);
+        #     t[i] = std::make_tuple(static_cast<R>(i), x[i]);
         # }
-        arr_cpp = self._visit_expr(e.arg, ctx)
-
         x = self._fresh_var()
         t = self._fresh_var()
         i = self._fresh_var()
-        elt_ty = f'decltype({x})::value_type'
-        _, _, enum_ty = self._expr_type(e)
-        assert isinstance(enum_ty, CppList)
-        assert isinstance(enum_ty.elt, CppTuple)
-        idx_ty = enum_ty.elt.elts[0]
+
+        arr_cpp = self._visit_expr(e.arg, ctx)
+        _, _, e_ty = self._expr_type(e)
+        if not isinstance(e_ty, CppList) or not isinstance(e_ty.elt, CppTuple):
+            raise CppCompileError(self.func, f'expected list or tuple for `{e.format()}`')
+        enum_ty = e_ty.elt.elts[0]
 
         ctx.add_line(f'auto {x} = {arr_cpp};')
-        ctx.add_line(f'std::vector<std::tuple<{idx_ty.format()}, {elt_ty}>> {t}({arr_cpp}.size());')
+        ctx.add_line(f'{e_ty.format()} {t}({arr_cpp}.size());')
         ctx.add_line(f'for (size_t {i} = 0; {i} < {x}.size(); ++{i}) {{')
-        ctx.indent().add_line(f'{t}[{i}] = std::make_tuple({i}, {x}[{i}]);')
+        ctx.indent().add_line(f'{t}[{i}] = std::make_tuple(static_cast<{enum_ty.format()}>({i}), {x}[{i}]);')
         ctx.add_line('}')
 
         return t
@@ -299,15 +328,21 @@ class _CppBackendInstance(Visitor):
         # }
 
         xs: list[str] = []
+        arg_tys: list[CppType] = []
         for arg in e.args:
             x = self._fresh_var()
             arg_cpp = self._visit_expr(arg, ctx)
             ctx.add_line(f'auto {x} = {arg_cpp};')
             xs.append(x)
 
+            _, _, arg_ty = self._expr_type(arg)
+            if not isinstance(arg_ty, CppList):
+                raise CppCompileError(self.func, f'expected list for `{arg.format()}`')
+            arg_tys.append(arg_ty.elt)
+
         t = self._fresh_var()
         i = self._fresh_var()
-        tmpl = ', '.join(f'decltype({x})::value_type' for x in xs)
+        tmpl = ', '.join(ty.format() for ty in arg_tys)
         ctx.add_line(f'std::vector<std::tuple<{tmpl}>> {t}({xs[0]}.size());')
         ctx.add_line(f'for (size_t {i} = 0; {i} < {xs[0]}.size(); ++{i}) {{')
         ctx.indent().add_line(f'{t}[{i}] = std::make_tuple({", ".join(f"{x}[{i}]" for x in xs)});')
@@ -683,14 +718,23 @@ class _CppBackendInstance(Visitor):
         ctx.add_line('}')  # close if
 
     def _visit_context(self, stmt: ContextStmt, ctx: _CompileCtx):
-        raise NotImplementedError
+        if not isinstance(stmt.ctx, ForeignVal):
+            raise CppCompileError(self.func, f'Rounding context cannot be compiled `{stmt.ctx}`')
+        cpp_ctx = self._compile_context(stmt.ctx.val)
+        if cpp_ctx.is_float():
+            raise NotImplementedError('float', stmt.ctx, cpp_ctx)
+        elif cpp_ctx.is_integer():
+            # do nothing
+            self._visit_block(stmt.body, ctx)
+        else:
+            raise RuntimeError(f'unexpected context: `{cpp_ctx}`')
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _CompileCtx):
         e = self._visit_expr(stmt.test, ctx)
         ctx.add_line(f'assert({e});')
 
     def _visit_effect(self, stmt: EffectStmt, ctx: _CompileCtx):
-        raise CompileError('C++ backend: FPy effects are not supported')
+        raise CppCompileError(self.func, 'FPy effects are not supported')
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _CompileCtx):
         e = self._visit_expr(stmt.expr, ctx)
@@ -704,18 +748,14 @@ class _CppBackendInstance(Visitor):
     def _visit_function(self, func: FuncDef, ctx: _CompileCtx):
         # apply caller context
         if isinstance(self.ctx_info.body_ctx, NamedId):
-            if self.caller_ctx is None:
-                # TODO: what to report to user?
-                raise CppCompileError(self.func, f'contexts must be monomorphic `{self.ctx_info.body_ctx}`')
-            self.ctx_args[self.ctx_info.body_ctx] = self.caller_ctx
+            if self.caller_ctx is not None:
+                self.ctx_args[self.ctx_info.body_ctx] = self.caller_ctx
 
         # apply argument contexts
         for caller_arg, arg_ctx in zip(self.arg_ctxs, self.ctx_info.arg_ctxs):
             if isinstance(arg_ctx, NamedId):
-                if caller_arg is None:
-                    # TODO: what to report to user?
-                    raise CppCompileError(self.func, f'contexts must be monomorphic `{arg_ctx}`')
-                self.ctx_args[arg_ctx] = caller_arg
+                if caller_arg is not None:
+                    self.ctx_args[arg_ctx] = caller_arg
 
         # compile arguments
         arg_strs: list[str] = []
