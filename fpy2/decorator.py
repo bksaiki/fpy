@@ -15,7 +15,7 @@ from typing import (
     TypeVar
 )
 
-from .analysis import SyntaxCheck
+from .analysis import Reachability, SyntaxCheck
 from .ast import EffectStmt, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
@@ -184,6 +184,7 @@ def _apply_fpy_decorator(
     else:
         # syntax checking
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
+        Reachability.analyze(ast, check_all_reachable=True, check_no_fallthrough=True)
         # type checking [disabled: fpy is not statically typed]
         # ty = TypeCheck.check(ast)
         # ContextInfer.infer(ast)

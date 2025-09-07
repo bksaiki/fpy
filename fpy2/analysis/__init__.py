@@ -10,6 +10,8 @@ from .define_use import (
 
 from .live_vars import LiveVars
 
+from .reachability import Reachability
+
 from .syntax_check import SyntaxCheck, FPySyntaxError
 
 from .type_check import TypeCheck, TypeAnalysis
