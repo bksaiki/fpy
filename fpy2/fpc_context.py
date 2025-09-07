@@ -134,9 +134,12 @@ class FPCoreContext:
                         return FPCoreContext(precision='binary16', round=rm)
                     case _:
                         return FPCoreContext(precision=['float', ctx.es, ctx.nbits], round=rm)
-            case MPFixedContext() if ctx.nmin == -1:
+            case MPFixedContext():
                 rm = _round_mode_from_fpc(ctx.rm)
-                return FPCoreContext(precision='integer', round=rm)
+                if ctx.nmin == -1:
+                    return FPCoreContext(precision='integer', round=rm)
+                else:
+                    return FPCoreContext(n=ctx.nmin, round=rm)
             case RealContext():
                 return FPCoreContext(precision='real')
             case _:

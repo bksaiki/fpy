@@ -246,15 +246,21 @@ class SyntaxCheckInstance(Visitor):
                 self._visit_var(e.ctor, ctx)
             case _:
                 raise RuntimeError('unreachable', e.ctor)
-        # check that context is not data-dependent
+        # check arguments
         for arg in e.args:
             match arg:
                 case ForeignAttribute():
                     self._visit_foreign_attr(arg, ctx)
                 case _:
-                    for free in LiveVars.analyze(arg):
-                        if free not in self.free_vars:
-                            raise FPySyntaxError('context is data-dependent')
+                    self._visit_expr(arg, ctx)
+        # check keyword arguments
+        for _, arg in e.kwargs:
+            match arg:
+                case ForeignAttribute():
+                    self._visit_foreign_attr(arg, ctx)
+                case _:
+                    self._visit_expr(arg, ctx)
+
 
     def _visit_binding(self, binding: Id | TupleBinding, env: _Env):
         match binding:

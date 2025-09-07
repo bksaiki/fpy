@@ -359,7 +359,7 @@ class _FormatterInstance(Visitor):
         # metadata
         props = func.metadata.copy()
         if func.ctx is not None:
-            props['context'] = func.ctx
+            props['ctx'] = func.ctx
         self._format_decorator(props, arg_str, ctx)
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)
