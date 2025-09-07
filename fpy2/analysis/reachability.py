@@ -14,10 +14,23 @@ class _ReachabilityCtx:
     def default():
         return _ReachabilityCtx(True)
 
+
+class ReachabilityError(Exception):
+    """Assertion error from a `Reachability` analysis."""
+    pass
+
 @dataclasses.dataclass
 class ReachabilityAnalysis:
-    by_stmt: dict[Stmt, bool]
+    """Result type of a `Reachability` analysis."""
+
+    has_entry: dict[Stmt, bool]
+    """is the statement reachable?"""
+    has_exit: dict[Stmt, bool]
+    """is there a reachable path through the statement?"""
+    ret_stmts: set[ReturnStmt]
+    """all return statements in the program"""
     has_fallthrough: bool
+    """is there a path that does not end in a return statement"""
 
 
 class _ReachabilityInstance(DefaultVisitor):
@@ -32,15 +45,19 @@ class _ReachabilityInstance(DefaultVisitor):
     """
 
     func: FuncDef
-    is_reachable: dict[Stmt, bool] = {}
+    has_entry: dict[Stmt, bool]
+    has_exit: dict[Stmt, bool]
+    ret_stmts: set[ReturnStmt]
 
     def __init__(self, func: FuncDef):
         self.func = func
-        self.is_reachable = {}
+        self.has_entry = {}
+        self.has_exit = {}
+        self.ret_stmts = set()
 
     def analyze(self):
         has_fallthrough = self._visit_function(self.func, _ReachabilityCtx.default())
-        return ReachabilityAnalysis(self.is_reachable, has_fallthrough)
+        return ReachabilityAnalysis(self.has_entry, self.has_exit, self.ret_stmts, has_fallthrough)
 
     def _visit_assign(self, stmt: Assign, ctx: _ReachabilityCtx) -> bool:
         # OUT[s] = IN[s]
@@ -61,7 +78,7 @@ class _ReachabilityInstance(DefaultVisitor):
         # IN[iff] = IN[s]
         # OUT[s] = OUT[ift] |_| OUT[iff]
         ift_is_reachable = self._visit_block(stmt.ift, ctx)
-        iff_is_reachable = self._visit_block(stmt.ift, ctx)
+        iff_is_reachable = self._visit_block(stmt.iff, ctx)
         return ift_is_reachable or iff_is_reachable
 
     def _visit_while(self, stmt: WhileStmt, ctx: _ReachabilityCtx) -> bool:
@@ -91,17 +108,24 @@ class _ReachabilityInstance(DefaultVisitor):
         return ctx.is_reachable
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _ReachabilityCtx) -> bool:
+        self.ret_stmts.add(stmt)
         return False
 
     def _visit_statement(self, stmt: Stmt, ctx: _ReachabilityCtx):
-        self.is_reachable[stmt] = ctx.is_reachable
-        return super()._visit_statement(stmt, ctx)
+        self.has_entry[stmt] = ctx.is_reachable
+        is_reachable = super()._visit_statement(stmt, ctx)
+        self.has_exit[stmt] = is_reachable
+        return is_reachable
 
     def _visit_block(self, block: StmtBlock, ctx: _ReachabilityCtx):
         for stmt in block.stmts:
             is_reachable = self._visit_statement(stmt, ctx)
             ctx = _ReachabilityCtx(is_reachable)
         return ctx.is_reachable
+
+    def _visit_function(self, func: FuncDef, ctx: _ReachabilityCtx):
+        # TODO: add a reduce visitor?
+        return self._visit_block(func.body, ctx)
 
 class Reachability:
     """
@@ -115,24 +139,46 @@ class Reachability:
 
     OUT[s] = |_| IN[s]
 
+    The resulting `ReachabilityAnalysis` has four fields:
+    - `has_entry`: is the statement reachable?
+    - `has_exit`: is there a reachable path through the statement?
+    - `ret_stmts: all return statements in the program
+    - `has_fallthrough`: is there a path that does not end in a return statement
+
+    The analysis may optionally assert three properties:
+    - `check_all_reachable`: every statement in the program is reachable
+    - `check_no_fallthrough`: every program path ends at a return statement
+    - `check_single_exit`: the program has only one return statement
     """
 
     @staticmethod
-    def analyze(func: FuncDef, check_all_reachable: bool = False, check_no_fallthrough: bool = False):
+    def analyze(func: FuncDef, check: bool = False):
         # run the analysis
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
         analysis = _ReachabilityInstance(func).analyze()
 
-        # optionally check that all statements are reachable
-        if check_all_reachable:
-            for stmt, is_reachable in analysis.by_stmt.items():
+        if check:
+            # optionally check that all statements are reachable
+            unreachable: list[Stmt] = []
+            for stmt, is_reachable in analysis.has_entry.items():
                 if not is_reachable:
-                    print(f'WARNING: for `{func.name}`, `{stmt.format()}` is not reachable')
+                    unreachable.append(stmt)
 
-        # optionally check that every path through the program ends
-        # at a return statement
-        if check_no_fallthrough and analysis.has_fallthrough:
-            print(f'WARN: for `{func.name}`, not all paths have a return statement')
+            if unreachable:
+                fmt_str = [f'`{func.name}` has unreachable statements']
+                fmt_str.extend(
+                    f'at ???: `{stmt.format()}`' if stmt.loc is None else f'at {stmt.loc.format()}: `{stmt.format()}`'
+                    for stmt in unreachable)
+                raise ReachabilityError('\n  '.join(fmt_str))
+
+            # optionally check that every path through the program ends
+            # at a return statement
+            if analysis.has_fallthrough:
+                raise ReachabilityError(f'in `{func.name}`: not all paths have a return statement')
+
+            # optionally check that there is exactly one return statement
+            if len(analysis.ret_stmts) != 1:
+                raise ReachabilityError(f'`{func.name}` must have a single return statement')
 
         return analysis

@@ -176,7 +176,6 @@ def _apply_fpy_decorator(
             ast,
             free_vars=free_vars,
             ignore_unknown=True,
-            ignore_noreturn=True,
             allow_wildcard=True
         )
         # no type checking
@@ -184,7 +183,7 @@ def _apply_fpy_decorator(
     else:
         # syntax checking
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
-        Reachability.analyze(ast, check_all_reachable=True, check_no_fallthrough=True)
+        Reachability.analyze(ast, check=True)
         # type checking [disabled: fpy is not statically typed]
         # ty = TypeCheck.check(ast)
         # ContextInfer.infer(ast)

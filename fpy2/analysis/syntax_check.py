@@ -49,36 +49,24 @@ class SyntaxCheckInstance(Visitor):
     func: FuncDef
     free_vars: set[NamedId]
     ignore_unknown: bool
-    ignore_noreturn: bool
     allow_wildcard: bool
-
     free_var_args: set[NamedId]
-    rets: set[Stmt]
 
     def __init__(
         self,
         func: FuncDef,
         free_vars: set[NamedId],
         ignore_unknown: bool,
-        ignore_noreturn: bool,
         allow_wildcard: bool
     ):
         self.func = func
         self.free_vars = free_vars
         self.ignore_unknown = ignore_unknown
-        self.ignore_noreturn = ignore_noreturn
         self.allow_wildcard = allow_wildcard
-
         self.free_var_args = set()
-        self.rets = set()
 
     def analyze(self):
         self._visit_function(self.func, (_Env(), False))
-        if not self.ignore_noreturn:
-            if len(self.rets) == 0:
-                raise FPySyntaxError('function has no return statement')
-            elif len(self.rets) > 1:
-                raise FPySyntaxError('function has multiple return statements')
         return self.free_var_args
 
     def _mark_use(
@@ -347,12 +335,7 @@ class SyntaxCheckInstance(Visitor):
         for i, stmt in enumerate(block.stmts):
             match stmt:
                 case ReturnStmt():
-                    if not is_top:
-                        raise FPySyntaxError('return statement must be at the top-level')
-                    if i != len(block.stmts) - 1:
-                        raise FPySyntaxError('return statement must be at the end of the function definition')
                     env = self._visit_statement(stmt, (env, False))
-                    self.rets.add(stmt)
                 case ContextStmt():
                     env = self._visit_statement(stmt, (env, is_top))
                 case _:
@@ -391,11 +374,6 @@ class SyntaxCheck:
 
     - any variables must be defined before it is used;
 
-    Return statements:
-
-    - all functions must have exactly one return statement,
-    - must be at the end of the function definiton;
-
     If statements
 
     - any variable must be defined along both branches when
@@ -408,7 +386,6 @@ class SyntaxCheck:
         *,
         free_vars: Optional[set[NamedId]] = None,
         ignore_unknown: bool = False,
-        ignore_noreturn: bool = False,
         allow_wildcard: bool = False
     ):
         """
@@ -423,5 +400,5 @@ class SyntaxCheck:
         if free_vars is None:
             free_vars = set(func.free_vars)
 
-        inst = SyntaxCheckInstance(func, free_vars, ignore_unknown, ignore_noreturn, allow_wildcard)
+        inst = SyntaxCheckInstance(func, free_vars, ignore_unknown, allow_wildcard)
         return inst.analyze()
