@@ -160,9 +160,6 @@ def _apply_fpy_decorator(
     # parse any relevant properties from the decorator
     props = parser.parse_decorator(dec_ast)
 
-    # strictness
-    strict = kwargs.get('strict', True)
-
     # function may have a global context
     if 'ctx' in kwargs:
         ast.ctx = kwargs['ctx']
@@ -182,11 +179,8 @@ def _apply_fpy_decorator(
         # ty = None
     else:
         # syntax checking
-        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
+        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
         Reachability.analyze(ast, check=True)
-        # type checking [disabled: fpy is not statically typed]
-        # ty = TypeCheck.check(ast)
-        # ContextInfer.infer(ast)
 
     # wrap the IR in a Function
     return Function(ast, None, env, func=func)
