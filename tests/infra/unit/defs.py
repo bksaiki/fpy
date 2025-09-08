@@ -447,21 +447,28 @@ def test_for4() -> Real:
         sum += x * y
     return sum
 
-@fpy(name='Test context statement (1/3)')
-def test_context1():
+
+@fp.fpy
+def test_context1(x: fp.Real):
+    with fp.INTEGER:
+        return x + 1
+
+@fpy
+def test_context2():
     with IEEEContext(8, 32, RM.RNE):
         return 0
 
-@fpy(name='Test context statement (2/3)')
-def test_context2():
+@fpy
+def test_context3():
     x = 1
     with IEEEContext(8, 32, RM.RNE):
         return x + 1
 
 @fp.fpy
-def test_context3(x: fp.Real):
-    with fp.INTEGER:
-        return x + 1
+def test_context4():
+    x = 3.1415
+    with MPFixedContext(-2, rm=fp.RM.RNE):
+        return fp.round(x)
 
 # @fpy(name='Test context statement (3/3)')
 # def test_context3(x: Real, y: Real):
@@ -676,6 +683,7 @@ tests = [
     test_context1,
     test_context2,
     test_context3,
+    test_context4,
     test_assert,
 ]
 

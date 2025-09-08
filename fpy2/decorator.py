@@ -15,7 +15,7 @@ from typing import (
     TypeVar
 )
 
-from .analysis import SyntaxCheck
+from .analysis import Reachability, SyntaxCheck
 from .ast import EffectStmt, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
@@ -160,9 +160,6 @@ def _apply_fpy_decorator(
     # parse any relevant properties from the decorator
     props = parser.parse_decorator(dec_ast)
 
-    # strictness
-    strict = kwargs.get('strict', True)
-
     # function may have a global context
     if 'ctx' in kwargs:
         ast.ctx = kwargs['ctx']
@@ -176,17 +173,14 @@ def _apply_fpy_decorator(
             ast,
             free_vars=free_vars,
             ignore_unknown=True,
-            ignore_noreturn=True,
             allow_wildcard=True
         )
         # no type checking
         # ty = None
     else:
         # syntax checking
-        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars, ignore_unknown=not strict)
-        # type checking [disabled: fpy is not statically typed]
-        # ty = TypeCheck.check(ast)
-        # ContextInfer.infer(ast)
+        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
+        Reachability.analyze(ast, check=True)
 
     # wrap the IR in a Function
     return Function(ast, None, env, func=func)
