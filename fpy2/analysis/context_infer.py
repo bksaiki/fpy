@@ -376,8 +376,8 @@ class _ContextInferInstance(Visitor):
         iff_ctx = self._visit_expr(e.iff, ctx)
         return self._unify(ift_ctx, iff_ctx)
 
-    # def _visit_context_expr(self, e: ContextExpr, ctx: _Context):
-    #     return None
+    def _visit_attribute(self, e: Attribute, ctx: _Context):
+        raise NotImplementedError(e)
 
     def _visit_assign(self, stmt: Assign, ctx: _Context):
         e_ctx = self._visit_expr(stmt.expr, ctx)
@@ -441,10 +441,8 @@ class _ContextInferInstance(Visitor):
                     body_ctx = stmt.ctx.val
                 else:
                     body_ctx = None
-            case Var() | ForeignAttribute() | ContextExpr():
-                body_ctx = None
             case _:
-                raise RuntimeError(f'unreachable: {stmt.ctx}')
+                body_ctx = None
 
         self._visit_block(stmt.body, body_ctx)
         return ctx

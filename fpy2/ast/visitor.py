@@ -349,8 +349,7 @@ class DefaultVisitor(Visitor):
         self._visit_block(stmt.body, ctx)
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
-        if not isinstance(stmt.ctx, ForeignAttribute):
-            self._visit_expr(stmt.ctx, ctx)
+        self._visit_expr(stmt.ctx, ctx)
         self._visit_block(stmt.body, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
@@ -439,7 +438,8 @@ class DefaultTransformVisitor(Visitor):
 
     def _visit_call(self, e: Call, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        return Call(e.func, e.fn, args, e.loc)
+        kwargs = { k: self._visit_expr(v, ctx) for k, v in e.kwargs }
+        return Call(e.func, e.fn, args, kwargs, e.loc)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
@@ -479,35 +479,8 @@ class DefaultTransformVisitor(Visitor):
         return IfExpr(cond, ift, iff, e.loc)
 
     def _visit_attribute(self, e: Attribute, ctx: Any):
-        value = self._visit_expr(e, ctx)
+        value = self._visit_expr(e.value, ctx)
         return Attribute(value, e.attr, ctx)
-
-    # def _visit_context_expr(self, e: ContextExpr, ctx: Any):
-    #     match e.ctor:
-    #         case Var():
-    #             ctor = self._visit_var(e.ctor, ctx)
-    #         case ForeignAttribute():
-    #             ctor = ForeignAttribute(e.ctor.name, e.ctor.attrs, e.loc)
-    #         case _:
-    #             raise RuntimeError('unreachable', e.ctor)
-
-    #     args: list[Expr | ForeignAttribute] = []
-    #     for arg in e.args:
-    #         match arg:
-    #             case ForeignAttribute():
-    #                 args.append(ForeignAttribute(arg.name, arg.attrs, arg.loc))
-    #             case _:
-    #                 args.append(self._visit_expr(arg, ctx))
-
-    #     kwargs: list[tuple[str, Expr | ForeignAttribute]] = []
-    #     for name, arg in e.kwargs:
-    #         match arg:
-    #             case ForeignAttribute():
-    #                 kwargs.append((name, ForeignAttribute(arg.name, arg.attrs, arg.loc)))
-    #             case _:
-    #                 kwargs.append((name, self._visit_expr(arg, ctx)))
-
-    #     return ContextExpr(ctor, args, kwargs, e.loc)
 
     def _visit_binding(self, binding: Id | TupleBinding, ctx: Any):
         match binding:
@@ -561,16 +534,7 @@ class DefaultTransformVisitor(Visitor):
         return s, ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
-        match stmt.ctx:
-            case Var():
-                context = self._visit_var(stmt.ctx, ctx)
-            case ContextExpr():
-                context = self._visit_context_expr(stmt.ctx, ctx)
-            case ForeignVal():
-                context = ForeignVal(stmt.ctx.val, stmt.loc)
-            case _:
-                raise RuntimeError('unreachable', stmt.ctx)
-
+        context = self._visit_expr(stmt.ctx, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
         s = ContextStmt(stmt.name, context, body, stmt.loc)
         return s, ctx

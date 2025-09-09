@@ -2,6 +2,7 @@
 FPy runtime backed by the Titanic library.
 """
 
+import copy
 import inspect
 
 from typing import Any, Callable, Collection, Optional, TypeAlias
@@ -460,11 +461,11 @@ class _Interpreter(Visitor):
             case _:
                 raise RuntimeError('unknown operator', e)
 
-    def _cvt_context_arg(self, name: str, arg: Any, ty: type):
+    def _cvt_context_arg(self, cls: type[Context], name: str, arg: Any, ty: type):
         if ty is int:
             # convert to int
             if not isinstance(arg, Float) or not arg.is_integer():
-                raise TypeError(f'expected an integer argument for `{name}`, got `{arg}`')
+                raise TypeError(f'expected an integer argument for `{name}={arg}`')
             return int(arg)
         elif ty is float:
             # convert to float
@@ -482,7 +483,7 @@ class _Interpreter(Visitor):
         ctor_args = []
         for arg, name in zip(args, list(sig.parameters)[1:]):
             param = sig.parameters[name]
-            ctor_arg = self._cvt_context_arg(name, arg, param.annotation)
+            ctor_arg = self._cvt_context_arg(cls, name, arg, param.annotation)
             ctor_args.append(ctor_arg)
 
         ctor_kwargs = {}
@@ -490,7 +491,7 @@ class _Interpreter(Visitor):
             if name not in sig.parameters:
                 raise TypeError(f'unknown parameter {name} for constructor {cls}')
             param = sig.parameters[name]
-            ctor_kwargs[name] = self._cvt_context_arg(val, param.annotation)
+            ctor_kwargs[name] = self._cvt_context_arg(cls, name, val, param.annotation)
 
         return cls(*ctor_args, **ctor_kwargs)
 
@@ -771,40 +772,6 @@ class _Interpreter(Visitor):
             return getattr(value, e.attr)
         else:
             raise RuntimeError(f'unknown attribute {e.attr} for {value}')
-
-    # def _visit_context_expr(self, e: ContextExpr, ctx: Context):
-    #     match e.ctor:
-    #         case ForeignAttribute():
-    #             ctor = self._visit_foreign_attr(e.ctor, ctx)
-    #         case Var():
-    #             ctor = self._visit_var(e.ctor, ctx)
-
-    #     args: list[Any] = []
-    #     for arg in e.args:
-    #         match arg:
-    #             case ForeignAttribute():
-    #                 args.append(self._visit_foreign_attr(arg, ctx))
-    #             case _:
-    #                 v = self._visit_expr(arg, ctx)
-    #                 if isinstance(v, Float) and v.is_integer():
-    #                     # HACK: keeps things as specific as possible
-    #                     args.append(int(v))
-    #                 else:
-    #                     args.append(v)
-
-    #     kwargs: dict[str, Any] = {}
-    #     for k, v in e.kwargs:
-    #         match v:
-    #             case ForeignAttribute():
-    #                 kwargs[k] = self._visit_foreign_attr(v, ctx)
-    #             case _:
-    #                 v = self._visit_expr(v, ctx)
-    #                 if isinstance(v, Float) and v.is_integer():
-    #                     kwargs[k] = int(v)
-    #                 else:
-    #                     kwargs[k] = v
-
-    #     return ctor(*args, **kwargs)
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
         round_ctx = self._visit_expr(stmt.ctx, ctx)

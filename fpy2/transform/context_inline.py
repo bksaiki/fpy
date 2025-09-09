@@ -79,25 +79,13 @@ class _ContextInlineInstance(DefaultTransformVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         match stmt.ctx:
-            case ContextExpr():
-                v = self._eval_context_expr(stmt.ctx)
-                if not isinstance(v, Context | FPCoreContext):
-                    raise TypeError(f'Expected `Context` or `FPCoreContext`, got {type(v)} for {v}')
-                context = ForeignVal(v, None)
             case Var():
                 v = self._eval_var(stmt.ctx)
                 if not isinstance(v, Context | FPCoreContext):
                     raise TypeError(f'Expected `Context` or `FPCoreContext`, got {type(v)} for {v}')
-                context = ForeignVal(v, None)
-            case ForeignVal():
-                context = stmt.ctx
-            case ForeignAttribute():
-                v = self._eval_foreign_attr(stmt.ctx)
-                if not isinstance(v, Context | FPCoreContext):
-                    raise TypeError(f'Expected `Context` or `FPCoreContext`, got {type(v)} for {v}')
-                context = ForeignVal(v, None)
+                context: Expr = ForeignVal(v, None)
             case _:
-                raise RuntimeError('unreachable', stmt.ctx)
+                context = stmt.ctx
 
         body, _ = self._visit_block(stmt.body, None)
         s = ContextStmt(stmt.name, context, body, stmt.loc)

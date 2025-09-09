@@ -177,8 +177,10 @@ class SyntaxCheckInstance(Visitor):
                 self._visit_attribute(e.func, ctx)
             case _:
                 raise RuntimeError('unreachable', e.func)
-        for c in e.args:
-            self._visit_expr(c, ctx)
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        for _, arg in e.kwargs:
+            self._visit_expr(arg, ctx)
         return env
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
