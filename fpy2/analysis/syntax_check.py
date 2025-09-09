@@ -173,9 +173,8 @@ class SyntaxCheckInstance(Visitor):
         match e.func:
             case NamedId():
                 self._mark_use(e.func, env, ignore_missing=self.ignore_unknown)
-            case ForeignAttribute():
-                # TODO: should `ignore_unknown` be passed here?
-                self._visit_foreign_attr(e.func, ctx)
+            case Attribute():
+                self._visit_attribute(e.func, ctx)
             case _:
                 raise RuntimeError('unreachable', e.func)
         for c in e.args:
@@ -233,33 +232,32 @@ class SyntaxCheckInstance(Visitor):
         self._visit_expr(e.iff, ctx)
         return env
 
-    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: _Ctx):
-        env = ctx.env
-        self._mark_use(e.name, env, ignore_missing=self.ignore_unknown)
+    def _visit_attribute(self, e: Attribute, ctx: _Ctx):
+        self._visit_expr(e.value, ctx)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
-        # check the constructor
-        match e.ctor:
-            case ForeignAttribute():
-                self._visit_foreign_attr(e.ctor, ctx)
-            case Var():
-                self._visit_var(e.ctor, ctx)
-            case _:
-                raise RuntimeError('unreachable', e.ctor)
-        # check arguments
-        for arg in e.args:
-            match arg:
-                case ForeignAttribute():
-                    self._visit_foreign_attr(arg, ctx)
-                case _:
-                    self._visit_expr(arg, ctx)
-        # check keyword arguments
-        for _, arg in e.kwargs:
-            match arg:
-                case ForeignAttribute():
-                    self._visit_foreign_attr(arg, ctx)
-                case _:
-                    self._visit_expr(arg, ctx)
+    # def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
+    #     # check the constructor
+    #     match e.ctor:
+    #         case ForeignAttribute():
+    #             self._visit_foreign_attr(e.ctor, ctx)
+    #         case Var():
+    #             self._visit_var(e.ctor, ctx)
+    #         case _:
+    #             raise RuntimeError('unreachable', e.ctor)
+    #     # check arguments
+    #     for arg in e.args:
+    #         match arg:
+    #             case ForeignAttribute():
+    #                 self._visit_foreign_attr(arg, ctx)
+    #             case _:
+    #                 self._visit_expr(arg, ctx)
+    #     # check keyword arguments
+    #     for _, arg in e.kwargs:
+    #         match arg:
+    #             case ForeignAttribute():
+    #                 self._visit_foreign_attr(arg, ctx)
+    #             case _:
+    #                 self._visit_expr(arg, ctx)
 
 
     def _visit_binding(self, binding: Id | TupleBinding, env: _Env):
@@ -320,11 +318,7 @@ class SyntaxCheckInstance(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env = ctx.env
-        match stmt.ctx:
-            case ForeignAttribute():
-                self._visit_foreign_attr(stmt.ctx, ctx)
-            case _:
-                self._visit_expr(stmt.ctx, ctx)
+        self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.name, NamedId):
             env = env.extend(stmt.name)
         return self._visit_block(stmt.body, _Ctx(env))

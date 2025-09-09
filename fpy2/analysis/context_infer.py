@@ -376,8 +376,8 @@ class _ContextInferInstance(Visitor):
         iff_ctx = self._visit_expr(e.iff, ctx)
         return self._unify(ift_ctx, iff_ctx)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: _Context):
-        return None
+    # def _visit_context_expr(self, e: ContextExpr, ctx: _Context):
+    #     return None
 
     def _visit_assign(self, stmt: Assign, ctx: _Context):
         e_ctx = self._visit_expr(stmt.expr, ctx)

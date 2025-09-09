@@ -877,8 +877,8 @@ class FPCoreCompileInstance(Visitor):
             ))
 
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: None):
-        raise RuntimeError('do not call')
+    # def _visit_context_expr(self, e: ContextExpr, ctx: None):
+    #     raise RuntimeError('do not call')
 
     def _visit_data(self, data):
         match data:

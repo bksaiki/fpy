@@ -509,8 +509,8 @@ class _TypeCheckInstance(Visitor):
         iff_ty = self._visit_expr(e.iff, None)
         return self._unify(ift_ty, iff_ty)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: None) -> Type:
-        raise NotImplementedError
+    # def _visit_context_expr(self, e: ContextExpr, ctx: None) -> Type:
+    #     raise NotImplementedError
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         ty = self._visit_expr(stmt.expr, None)

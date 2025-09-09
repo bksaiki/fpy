@@ -36,12 +36,12 @@ class _FormatterInstance(Visitor):
     def _add_line(self, line: str, indent: int):
         self.fmt += '    ' * indent + line + '\n'
 
-    def _visit_function_name(self, func: NamedId | ForeignAttribute, ctx: _Ctx) -> str:
+    def _visit_function_name(self, func: NamedId | Attribute, ctx: _Ctx) -> str:
         match func:
             case NamedId():
                 return str(func)
-            case ForeignAttribute():
-                return self._visit_foreign_attr(func, ctx)
+            case Attribute():
+                return self._visit_attribute(func, ctx)
             case _:
                 raise RuntimeError('unreachable', func)
 
@@ -214,27 +214,27 @@ class _FormatterInstance(Visitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'({ift} if {cond} else {iff})'
 
-    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: _Ctx):
-        attr_strs = [str(attr) for attr in e.attrs]
-        return f'{e.name}.' + '.'.join(attr_strs)
+    def _visit_attribute(self, e: Attribute, ctx: _Ctx):
+        value = self._visit_expr(e.value, ctx)
+        return f'{value}.{e.attr}'
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
-        match e.ctor:
-            case ForeignAttribute():
-                ctor_str = self._visit_foreign_attr(e.ctor, ctx)
-            case Var():
-                ctor_str = self._visit_var(e.ctor, ctx)
+    # def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
+    #     match e.ctor:
+    #         case ForeignAttribute():
+    #             ctor_str = self._visit_foreign_attr(e.ctor, ctx)
+    #         case Var():
+    #             ctor_str = self._visit_var(e.ctor, ctx)
 
-        arg_strs: list[str] = []
-        for arg in e.args:
-            match arg:
-                case ForeignAttribute():
-                    attr = self._visit_foreign_attr(arg, ctx)
-                    arg_strs.append(attr)
-                case _:
-                    arg_strs.append(self._visit_expr(arg, ctx))
+    #     arg_strs: list[str] = []
+    #     for arg in e.args:
+    #         match arg:
+    #             case ForeignAttribute():
+    #                 attr = self._visit_foreign_attr(arg, ctx)
+    #                 arg_strs.append(attr)
+    #             case _:
+    #                 arg_strs.append(self._visit_expr(arg, ctx))
 
-        return f'{ctor_str}({", ".join(arg_strs)})'
+    #     return f'{ctor_str}({", ".join(arg_strs)})'
 
     def _visit_tuple_binding(self, vars: TupleBinding) -> str:
         elt_strs: list[str] = []
@@ -304,10 +304,7 @@ class _FormatterInstance(Visitor):
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
-        if isinstance(stmt.ctx, ForeignAttribute):
-            context = self._visit_foreign_attr(stmt.ctx, ctx)
-        else:
-            context = self._visit_expr(stmt.ctx, ctx)
+        context = self._visit_expr(stmt.ctx, ctx)
         self._add_line(f'with {context} as {str(stmt.name)}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 

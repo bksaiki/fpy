@@ -31,57 +31,51 @@ class _ContextInlineInstance(DefaultTransformVisitor):
             raise NameError(f'free variable {e.name} not in environment')
         return self.env.get(e.name.base)
 
-    def _eval_foreign_attr(self, e: ForeignAttribute):
-        # lookup the root value (should be captured)
-        val = self._lookup(e.name)
-        # walk the attribute chain
-        for attr_id in e.attrs:
-            # need to manually lookup the attribute
-            attr = str(attr_id)
-            if isinstance(val, dict):
-                if attr not in val:
-                    raise RuntimeError(f'unknown attribute {attr} for {val}')
-                val = val[attr]
-            elif hasattr(val, attr):
-                val = getattr(val, attr)
-            else:
-                raise RuntimeError(f'unknown attribute {attr} for {val}')
-        return val
+    def _eval_attribute(self, e: Attribute, ctx: None):
+        value = self._visit_expr(e.value, ctx)
+        if isinstance(value, dict):
+            if e.attr not in value:
+                raise RuntimeError(f'unknown attribute {e.attr} for {value}')
+            return value[e.attr]
+        elif hasattr(value, e.attr):
+            return getattr(value, e.attr)
+        else:
+            raise RuntimeError(f'unknown attribute {e.attr} for {value}')
 
-    def _eval_context_expr(self, e: ContextExpr):
-        match e.ctor:
-            case ForeignAttribute():
-                ctor = self._eval_foreign_attr(e.ctor)
-            case Var():
-                ctor = self._eval_var(e.ctor)
+    # def _eval_context_expr(self, e: ContextExpr):
+    #     match e.ctor:
+    #         case ForeignAttribute():
+    #             ctor = self._eval_foreign_attr(e.ctor)
+    #         case Var():
+    #             ctor = self._eval_var(e.ctor)
 
-        args: list[Any] = []
-        for arg in e.args:
-            match arg:
-                case ForeignAttribute():
-                    args.append(self._eval_foreign_attr(arg))
-                case Integer():
-                    args.append(arg.val)
-                case Var():
-                    args.append(self._eval_var(arg))
-                case _:
-                    # TODO: how to compute this
-                    raise RuntimeError('cannot compute', arg)
+    #     args: list[Any] = []
+    #     for arg in e.args:
+    #         match arg:
+    #             case ForeignAttribute():
+    #                 args.append(self._eval_foreign_attr(arg))
+    #             case Integer():
+    #                 args.append(arg.val)
+    #             case Var():
+    #                 args.append(self._eval_var(arg))
+    #             case _:
+    #                 # TODO: how to compute this
+    #                 raise RuntimeError('cannot compute', arg)
 
-        kwargs: dict[str, Any] = {}
-        for k, v in e.kwargs:
-            match v:
-                case ForeignAttribute():
-                    kwargs[k] = self._eval_foreign_attr(v)
-                case Integer():
-                    args.append(v.val)
-                case Var():
-                    args.append(self._eval_var(v))
-                case _:
-                    # TODO: how to compute this
-                    raise RuntimeError('cannot compute', arg)
+    #     kwargs: dict[str, Any] = {}
+    #     for k, v in e.kwargs:
+    #         match v:
+    #             case ForeignAttribute():
+    #                 kwargs[k] = self._eval_foreign_attr(v)
+    #             case Integer():
+    #                 args.append(v.val)
+    #             case Var():
+    #                 args.append(self._eval_var(v))
+    #             case _:
+    #                 # TODO: how to compute this
+    #                 raise RuntimeError('cannot compute', arg)
 
-        return ctor(*args, **kwargs)
+    #     return ctor(*args, **kwargs)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         match stmt.ctx:

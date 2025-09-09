@@ -28,7 +28,7 @@ _expr_dispatch: dict[type[Expr], str] = {
     ListSlice: "_visit_list_slice",
     ListSet: "_visit_list_set",
     IfExpr: "_visit_if_expr",
-    ContextExpr: "_visit_context_expr",
+    Attribute: "_visit_attribute",
 }
 
 _stmt_dispatch: dict[type[Stmt], str] = {
@@ -141,7 +141,7 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
-    def _visit_context_expr(self, e: ContextExpr, ctx: Any) -> Any:
+    def _visit_attribute(self, e: Attribute, ctx: Any) -> Any:
         ...
 
     #######################################################
@@ -320,10 +320,8 @@ class DefaultVisitor(Visitor):
         self._visit_expr(e.ift, ctx)
         self._visit_expr(e.iff, ctx)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
-        for arg in e.args:
-            if not isinstance(arg, ForeignAttribute):
-                self._visit_expr(arg, ctx)
+    def _visit_attribute(self, e: Attribute, ctx: Any):
+        self._visit_expr(e.value, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
@@ -480,32 +478,36 @@ class DefaultTransformVisitor(Visitor):
         iff = self._visit_expr(e.iff, ctx)
         return IfExpr(cond, ift, iff, e.loc)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: Any):
-        match e.ctor:
-            case Var():
-                ctor = self._visit_var(e.ctor, ctx)
-            case ForeignAttribute():
-                ctor = ForeignAttribute(e.ctor.name, e.ctor.attrs, e.loc)
-            case _:
-                raise RuntimeError('unreachable', e.ctor)
+    def _visit_attribute(self, e: Attribute, ctx: Any):
+        value = self._visit_expr(e, ctx)
+        return Attribute(value, e.attr, ctx)
 
-        args: list[Expr | ForeignAttribute] = []
-        for arg in e.args:
-            match arg:
-                case ForeignAttribute():
-                    args.append(ForeignAttribute(arg.name, arg.attrs, arg.loc))
-                case _:
-                    args.append(self._visit_expr(arg, ctx))
+    # def _visit_context_expr(self, e: ContextExpr, ctx: Any):
+    #     match e.ctor:
+    #         case Var():
+    #             ctor = self._visit_var(e.ctor, ctx)
+    #         case ForeignAttribute():
+    #             ctor = ForeignAttribute(e.ctor.name, e.ctor.attrs, e.loc)
+    #         case _:
+    #             raise RuntimeError('unreachable', e.ctor)
 
-        kwargs: list[tuple[str, Expr | ForeignAttribute]] = []
-        for name, arg in e.kwargs:
-            match arg:
-                case ForeignAttribute():
-                    kwargs.append((name, ForeignAttribute(arg.name, arg.attrs, arg.loc)))
-                case _:
-                    kwargs.append((name, self._visit_expr(arg, ctx)))
+    #     args: list[Expr | ForeignAttribute] = []
+    #     for arg in e.args:
+    #         match arg:
+    #             case ForeignAttribute():
+    #                 args.append(ForeignAttribute(arg.name, arg.attrs, arg.loc))
+    #             case _:
+    #                 args.append(self._visit_expr(arg, ctx))
 
-        return ContextExpr(ctor, args, kwargs, e.loc)
+    #     kwargs: list[tuple[str, Expr | ForeignAttribute]] = []
+    #     for name, arg in e.kwargs:
+    #         match arg:
+    #             case ForeignAttribute():
+    #                 kwargs.append((name, ForeignAttribute(arg.name, arg.attrs, arg.loc)))
+    #             case _:
+    #                 kwargs.append((name, self._visit_expr(arg, ctx)))
+
+    #     return ContextExpr(ctor, args, kwargs, e.loc)
 
     def _visit_binding(self, binding: Id | TupleBinding, ctx: Any):
         match binding:
