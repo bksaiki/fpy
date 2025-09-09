@@ -11,12 +11,12 @@ from .. import ops
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
-from ..number import Context, Float, RealFloat, FP64, INTEGER
+from ..number import Context, Float, RealFloat, REAL, FP64, INTEGER
 from ..env import ForeignEnv
 from ..function import Function
 from ..primitive import Primitive
 
-from .interpreter import Interpreter, FunctionReturnException
+from .interpreter import Interpreter, FunctionReturnError
 
 ScalarVal: TypeAlias = bool | Float
 """Type of scalar values in FPy programs."""
@@ -199,7 +199,7 @@ class _Interpreter(Visitor):
         try:
             self._visit_block(func.body, eval_ctx)
             raise RuntimeError('no return statement encountered')
-        except FunctionReturnException as e:
+        except FunctionReturnError as e:
             return e.value
 
     def _lookup(self, name: NamedId):
@@ -521,8 +521,9 @@ class _Interpreter(Visitor):
                 return fn(*args, ctx=ctx)
             case type() if issubclass(fn, Context):
                 # calling context constructor
-                args = [self._visit_expr(arg, ctx) for arg in e.args]
-                kwargs = { k: self._visit_expr(v, ctx) for k, v in e.kwargs }
+                # this must be computed under a real context
+                args = [self._visit_expr(arg, REAL) for arg in e.args]
+                kwargs = { k: self._visit_expr(v, REAL) for k, v in e.kwargs }
                 return self._construct_context(fn, args, kwargs)
             case _:
                 # calling foreign function
@@ -789,7 +790,7 @@ class _Interpreter(Visitor):
 
     def _visit_return(self, stmt: ReturnStmt, ctx: Context):
         x = self._visit_expr(stmt.expr, ctx)
-        raise FunctionReturnException(x)
+        raise FunctionReturnError(x)
 
     def _visit_block(self, block: StmtBlock, ctx: Context):
         for stmt in block.stmts:

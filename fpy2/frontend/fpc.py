@@ -299,7 +299,7 @@ class _FPCore2FPy:
             case fpc.UnknownOperator():
                 ident = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
-                return Call(NamedId(ident), None, exprs, None)
+                return Call(NamedId(ident), None, exprs, {}, None)
             case _:
                 raise NotImplementedError('unexpected FPCore expression', e)
 

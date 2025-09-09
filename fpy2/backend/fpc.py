@@ -716,7 +716,7 @@ class FPCoreCompileInstance(Visitor):
         return fpc.If(cond, ift, iff)
 
     def _visit_attribute(self, e: Attribute, ctx: None) -> fpc.Expr:
-        raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
+        raise FPCoreCompileError(f'cannot compile to FPCore: {type(e).__name__}')
 
     def _visit_assign(self, stmt: Assign, ctx: fpc.Expr):
         match stmt.binding:
