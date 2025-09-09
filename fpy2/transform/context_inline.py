@@ -1,4 +1,10 @@
-"""Context inlining for FPy ASTs"""
+"""
+Context inlining for FPy ASTs
+
+TODO: this looks something like partial evaluation
+- can the evaluator be adapted here?
+- is this just part of a larger constant folding pass?
+"""
 
 import inspect
 

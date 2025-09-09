@@ -218,24 +218,6 @@ class _FormatterInstance(Visitor):
         value = self._visit_expr(e.value, ctx)
         return f'{value}.{e.attr}'
 
-    # def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
-    #     match e.ctor:
-    #         case ForeignAttribute():
-    #             ctor_str = self._visit_foreign_attr(e.ctor, ctx)
-    #         case Var():
-    #             ctor_str = self._visit_var(e.ctor, ctx)
-
-    #     arg_strs: list[str] = []
-    #     for arg in e.args:
-    #         match arg:
-    #             case ForeignAttribute():
-    #                 attr = self._visit_foreign_attr(arg, ctx)
-    #                 arg_strs.append(attr)
-    #             case _:
-    #                 arg_strs.append(self._visit_expr(arg, ctx))
-
-    #     return f'{ctor_str}({", ".join(arg_strs)})'
-
     def _visit_tuple_binding(self, vars: TupleBinding) -> str:
         elt_strs: list[str] = []
         for var in vars:

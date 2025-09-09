@@ -237,31 +237,6 @@ class SyntaxCheckInstance(Visitor):
     def _visit_attribute(self, e: Attribute, ctx: _Ctx):
         self._visit_expr(e.value, ctx)
 
-    # def _visit_context_expr(self, e: ContextExpr, ctx: _Ctx):
-    #     # check the constructor
-    #     match e.ctor:
-    #         case ForeignAttribute():
-    #             self._visit_foreign_attr(e.ctor, ctx)
-    #         case Var():
-    #             self._visit_var(e.ctor, ctx)
-    #         case _:
-    #             raise RuntimeError('unreachable', e.ctor)
-    #     # check arguments
-    #     for arg in e.args:
-    #         match arg:
-    #             case ForeignAttribute():
-    #                 self._visit_foreign_attr(arg, ctx)
-    #             case _:
-    #                 self._visit_expr(arg, ctx)
-    #     # check keyword arguments
-    #     for _, arg in e.kwargs:
-    #         match arg:
-    #             case ForeignAttribute():
-    #                 self._visit_foreign_attr(arg, ctx)
-    #             case _:
-    #                 self._visit_expr(arg, ctx)
-
-
     def _visit_binding(self, binding: Id | TupleBinding, env: _Env):
         match binding:
             case NamedId():
