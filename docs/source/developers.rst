@@ -65,3 +65,4 @@ Internal
    :caption: Table of Contents
 
    ast
+   types
