@@ -1,7 +1,8 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-from typing import Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKING
+from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKING
 from titanfp.fpbench.fpcast import FPCore
+
 from . import ast as fpyast
 
 from .env import ForeignEnv
@@ -30,9 +31,6 @@ class Function(Generic[P, R]):
     env: ForeignEnv
     runtime: Optional['Interpreter']
 
-    _func: Optional[Callable[P, R]]
-    """original native function"""
-
     def __init__(
         self,
         ast: fpyast.FuncDef,
@@ -40,13 +38,11 @@ class Function(Generic[P, R]):
         env: ForeignEnv,
         *,
         runtime: Optional['Interpreter'] = None,
-        func: Optional[Callable[P, R]] = None
     ):
         self.ast = ast
         self.sig = sig
         self.env = env
         self.runtime = runtime
-        self._func = func
 
     def __repr__(self):
         return f'{self.__class__.__name__}(ast={self.ast}, ...)'
@@ -91,12 +87,12 @@ class Function(Generic[P, R]):
     def with_rt(self, rt: 'Interpreter'):
         if not isinstance(rt, Interpreter):
             raise TypeError(f'expected \'BaseInterpreter\', got {rt}')
-        return Function(self.ast, self.sig, self.env, runtime=rt, func=self._func)
+        return Function(self.ast, self.sig, self.env, runtime=rt)
 
     def with_ast(self, ast: fpyast.FuncDef):
         if not isinstance(ast, fpyast.FuncDef):
             raise TypeError(f'expected \'FuncDef\', got {ast}')
-        return Function(ast, self.sig, self.env, runtime=self.runtime, func=self._func)
+        return Function(ast, self.sig, self.env, runtime=self.runtime)
 
 ###########################################################
 # Default function call

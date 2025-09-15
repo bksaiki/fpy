@@ -947,7 +947,7 @@ class FPCoreCompileInstance(Visitor):
         body = self._visit_block(func.body, ctx)
 
         # metadata
-        props = func.metadata.copy()
+        props = func.meta.copy()
         if func.ctx is not None:
             match func.ctx:
                 case Context():

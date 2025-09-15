@@ -316,7 +316,7 @@ class _FormatterInstance(Visitor):
         else:
             return pformat(data)
 
-    def _format_decorator(self, props: dict[str, str], arg_str: str, ctx: _Ctx):
+    def _format_decorator(self, props: dict[str, Any], arg_str: str, ctx: _Ctx):
         if len(props) == 0:
             self._add_line('@fpy', ctx)
         elif len(props) == 1:
@@ -336,9 +336,15 @@ class _FormatterInstance(Visitor):
         arg_str = ', '.join(arg_strs)
 
         # metadata
-        props = func.metadata.copy()
+        props: dict[str, Any] = {}
         if func.ctx is not None:
             props['ctx'] = func.ctx
+        if func.spec is not None:
+            props['spec'] = func.spec
+        if func.meta:
+            props['meta'] = func.meta
+
+        # formatting
         self._format_decorator(props, arg_str, ctx)
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)

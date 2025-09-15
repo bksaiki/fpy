@@ -19,11 +19,8 @@ class Primitive(Generic[P, R]):
     """
 
     func: Callable[..., R]
-
     arg_types: tuple[TypeAnn, ...]
-
     return_type: TypeAnn
-
     metadata: dict[str, Any]
 
     def __init__(

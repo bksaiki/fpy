@@ -7,109 +7,82 @@ import fpy2 as fp
 def test_simple1():
     return 0
 
-@fpy(
-    name='Test annotation',
-    spec='0.0'
-)
+@fpy
 def test_simple2():
     return 0
 
-@fpy(name='Test boolean (1/2)')
+@fpy
 def test_bool1():
     return True
 
-@fpy(name='Test boolean (2/2)')
+@fpy
 def test_bool2():
     return False
 
-@fpy(
-    name='Test decnum (1/1)',
-    spec='0.0'
-)
+@fpy
 def test_decnum():
     return 0.0
 
-@fpy(
-    name='Test digits (1/4)',
-    spec='0.0'
-)
+@fpy
 def test_digits1():
     return digits(0, 0, 2)
 
-@fpy(
-    name='Test digits (2/4)',
-    spec='1.0'
-)
+@fpy
 def test_digits2():
     return digits(1, 0, 2)
 
-@fpy(
-    name='Test digits (3/4)',
-    spec='-2.0'
-)
+@fpy
 def test_digits3():
     return digits(-1, 0, 2)
 
-@fpy(
-    name='Test digits (4/4)',
-    spec='1.5'
-)
+@fpy
 def test_digits4():
     return digits(3, -1, 2)
 
-@fpy(
-    name='Test let (1/2)',
-    spec='1.0'
-)
+@fpy
 def test_let1():
     a = 1.0
     return a
 
-@fpy(
-    name='Test let (2/2)',
-    spec='2.0'
-)
+@fpy
 def test_let2():
     a = 1.0
     b = 1.0
     return a + b
 
-@fpy(name='Test augassign (1/4)')
+@fpy
 def test_augassign1():
     x = 1.0
     x += 1.0
     return x
 
-@fpy(name='Test augassign (2/4)')
+@fpy
 def test_augassign2():
     x = 1.0
     x -= 1.0
     return x
 
-@fpy(name='Test augassign (3/4)')
+@fpy
 def test_augassign3():
     x = 1.0
     x *= 2.0
     return x
 
-@fpy(name='Test augassign (4/4)')
+@fpy
 def test_augassign4():
     x = 1.0
     x /= 2.0
     return x
 
-@fpy(
-  name='Test if expression (1/6)',
-  spec='1.0'
-)
+@fpy
 def test_ife1():
   return 1.0 if 1.0 > 0.0 else 0.0
 
-@fpy(name='Test if expression (2/6)')
+@fpy
 def test_ife2():
   return 1.0 if 0.0 < 1.0 < 2.0 else 0.0
 
-@fpy(name='Test if expression (3/6)')
+@fpy
 def test_ife3():
   x = 1.0
   y = 2.0
@@ -117,7 +90,7 @@ def test_ife3():
   t = 4.0
   return 1.0 if (x + 1.0) < (y + 2.0) < (z + 3.0) < (t + 4.0) else 0.0
 
-@fpy(name='Test if expression (4/6)')
+@fpy
 def test_ife4():
   x = 1.0
   y = 2.0
@@ -154,37 +127,37 @@ def test_tuple4():
 def test_list1():
     return [1.0, 2.0, 3.0]
 
-@fpy(name='Test length (1/2)')
+@fpy
 def test_list_len1():
     x = [1.0, 2.0, 3.0]
     return len(x)
 
-@fpy(name='Test length (2/2)')
+@fpy
 def test_list_len2():
     x = [[1.0, 2.0, 3.0]]
     return len(x)
 
-@fpy(name='Test dim (1/2)')
+@fpy
 def test_list_dim1():
     x = [1.0, 2.0, 3.0]
     return dim(x)
 
-@fpy(name='Test dim (2/2)')
+@fpy
 def test_list_dim2():
     x = [[1.0, 2.0], [3.0, 4.0]]
     return dim(x)
 
-@fpy(name='Test size (1/2)')
+@fpy
 def test_list_size1():
     x = [1.0, 2.0, 3.0]
     return size(x, 0)
 
-@fpy(name='Test size (2/2)')
+@fpy
 def test_list_size2():
     x = [[1.0, 2.0], [3.0, 4.0]]
     return size(x, 1)
 
-@fpy(name='Test enumerate (1/1)')
+@fpy
 def test_enumerate():
     xs = [1.0, 2.0, 3.0]
     return enumerate(xs)
@@ -193,18 +166,18 @@ def test_enumerate():
 # def test_list_zip1():
 #     return zip()
 
-@fpy(name='Test zip (2/4)')
+@fpy
 def test_list_zip2():
     xs = [1.0, 2.0, 3.0]
     return zip(xs)
 
-@fpy(name='Test zip (3/4)')
+@fpy
 def test_list_zip3():
     xs = [1.0, 2.0, 3.0]
     ys = [4.0, 5.0, 6.0]
     return zip(xs, ys)
 
-@fpy(name='Test zip (4/4)')
+@fpy
 def test_list_zip4():
     xs = [1.0, 2.0, 3.0]
     ys = [4.0, 5.0, 6.0]
@@ -247,62 +220,62 @@ def test_list_comp2():
 def test_list_comp3():
     return [x + y for x, y in zip([0, 1, 2], [3, 4, 5])]
 
-@fpy(name='Test list ref (1/6)')
+@fpy
 def test_list_ref1():
     x = [1.0, 2.0, 3.0]
     return x[0]
 
-@fpy(name='Test list ref (2/6)')
+@fpy
 def test_list_ref2():
     x = [[1.0, 2.0, 3.0]]
     return x[0][0]
 
-@fpy(name='Test list ref (3/6)')
+@fpy
 def test_list_ref3():
-    x = [1.0, 2.0, 3.0, 4.0, 5.0]
+    x = [1.0, 2.0, 3.0]
     return x[:]
 
-@fpy(name='Test list ref (4/6)')
+@fpy
 def test_list_ref4():
     x = [1.0, 2.0, 3.0, 4.0, 5.0]
     return x[1:]
 
-@fpy(name='Test list ref (5/6)')
+@fpy
 def test_list_ref5():
     x = [1.0, 2.0, 3.0, 4.0, 5.0]
     return x[:3]
 
-@fpy(name='Test list ref (6/6)')
+@fpy
 def test_list_ref6():
     x = [1.0, 2.0, 3.0, 4.0, 5.0]
     return x[1:3]
 
-@fpy(name='Test list set (1/3)')
+@fpy
 def test_list_set1():
     x = [1.0, 2.0, 3.0]
     x[0] = 0.0
     return x
 
-@fpy(name='Test list set (2/3)')
+@fpy
 def test_list_set2():
     x = [[1.0, 2.0, 3.0]]
     x[0][0] = 0.0
     return x
 
-@fpy(name='Test list set (3/3)')
+@fpy
 def test_list_set3():
     x = [[[1.0, 2.0, 3.0]]]
     x[0][0][0] = 0.0
     return x
 
-@fpy(name='Test if statement (1/6)')
+@fpy
 def test_if1():
     t = 0
     if 0 < 1:
         t = 1
     return t
 
-@fpy(name='Test if statement (2/6)')
+@fpy
 def test_if2():
     t = 0
     a = 1
@@ -310,7 +283,7 @@ def test_if2():
         t = 1
     return t + a
 
-@fpy(name='Test if statement (3/6)')
+@fpy
 def test_if3():
     if 0 < 1:
         t = 1
@@ -318,7 +291,7 @@ def test_if3():
         t = 0
     return t
 
-@fpy(name='Test if statement (4/6)')
+@fpy
 def test_if4():
     if 0 < 1:
         if 1 < 2:
@@ -332,7 +305,7 @@ def test_if4():
             t = 3
     return t
 
-@fpy(name='Test if statement (5/6)')
+@fpy
 def test_if5():
     if 0 < 1:
         t = 0
@@ -342,7 +315,7 @@ def test_if5():
         t = 2
     return t
 
-@fpy(name='Test if statement (6/6)')
+@fpy
 def test_if6():
     t = 0
     a = 1
@@ -483,7 +456,7 @@ def test_context4():
 #             t1 = x - y
 #         return t0 - t1
 
-@fpy(name='Test assertion (1/1)')
+@fpy
 def test_assert():
     assert 0 == 0
     return 0
@@ -506,19 +479,15 @@ def dpN(xs: list[Real], ys: list[Real]) -> Real:
             sum += x * y
     return roundint(sum)
 
-@fpy(
-    name='NMSE example 3.1',
-    cite=['hamming-1987', 'herbie-2015'],
-    fpbench_domain='textbook',
-)
+@fpy
 def nmse3_1(x: Real):
     return sqrt(x + 1) - sqrt(x)
 
 # TODO: precondition
-@fpy(
-    name='Daisy example instantaneousCurrent',
-    cite=['daisy-2018']
-)
+@fpy(meta={
+    'name': 'Daisy example instantaneousCurrent',
+    'cite': 'daisy-2018'
+})
 def instCurrent(
     t: Real,
     resistance: Real,
@@ -536,10 +505,10 @@ def instCurrent(
     theta = atan(current_im / current_re)
     return maxCurrent * cos(2 * pi * frequency * t + theta)
 
-@fpy(
-    name='azimuth',
-    cite=['solovyev-2015']
-)
+@fpy(meta={
+    'name': 'azimuth',
+    'cite': ['solovyev-2015']
+})
 def azimuth(lat1: Real, lat2: Real, lon1: Real, lon2: Real):
     dLon = lon2 - lon1
     s_lat1 = sin(lat1)
@@ -551,10 +520,10 @@ def azimuth(lat1: Real, lat2: Real, lon1: Real, lon2: Real):
     return atan((c_lat2 * s_dLon) / ((c_lat1 * s_lat2) - (s_lat1 * c_lat2 * c_dLon)))
 
 # TODO: vectors should be tensors
-@fpy(
-    name='Level-of-detail (LOD) algorithm, anisotropic case',
-    cite=['DirectX 11.3 specification, Microsoft-2015']
-)
+@fpy(meta={
+    'name': 'Level-of-detail (LOD) algorithm, anisotropic case',
+    'cite': ['DirectX 11.3 specification, Microsoft-2015']
+})
 def lod_anisotropic(
     dx_u: Real,
     dx_v: Real,
@@ -588,19 +557,10 @@ def lod_anisotropic(
     lod = log2(minor)
     return lod, aniso_ratio, aniso_dir_u, aniso_dir_v
 
-# @fpcore(name='Ray-sphere intersection')
-# def ray_sphere(
-#     origin: tuple[Real, Real, Real],
-#     direction: tuple[Real, Real, Real],
-#     center: tuple[Real, Real, Real],
-#     radius: Real
-# ):
-#     pass
-
-@fpy(
-    name='Whetstone Loop 1',
-    cite=['Curnow-and-Wichmann-1976'],
-)
+@fpy(meta={
+    'name': 'Whetstone Loop 1',
+    'cite': ['Curnow-and-Wichmann-1976'],
+})
 def whetsone1(n: int):
     t = 0.499975
     x1 = 1.0

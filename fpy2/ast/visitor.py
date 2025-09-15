@@ -569,10 +569,11 @@ class DefaultTransformVisitor(Visitor):
         return FuncDef(
             func.name,
             args,
+            func.free_vars,
+            func.ctx,
             body,
-            metadata=func.metadata,
-            free_vars=func.free_vars,
-            ctx=func.ctx,
+            func.spec,
+            func.meta,
             loc=func.loc
         )
 
