@@ -514,7 +514,7 @@ class _TypeCheckInstance(Visitor):
     def _visit_attribute(self, e: Attribute, ctx: None):
         # TODO: how to type check attributes?
         # we expected the attribute value to be a module, but how do we propogate this information?
-        ty = self._visit_expr(e.value, None)
+        self._visit_expr(e.value, None)
         return self._fresh_type_var()
 
     def _visit_assign(self, stmt: Assign, ctx: None):
