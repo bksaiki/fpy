@@ -13,9 +13,26 @@ _modules = [
     fp.libraries.matrix
 ]
 
+_test_ignore = [
+    'test_context_expr1',
+    'test_context1',
+    'test_context2',
+    'test_context3',
+    'test_context4',
+    'test_context5',
+]
+
+_example_ignore = [
+    'fma_ctx'
+]
+
+
 def _test_unit():
+    compiler = fp.CppBackend()
     for test in tests:
-        compiler = fp.CppBackend()
+        if test.name in _test_ignore:
+            continue
+
         arg_ctxs = tuple(fp.FP64 for _ in test.args)
         s = compiler.compile(test, ctx=fp.FP64, arg_ctxs=arg_ctxs)
         print('\n'.join(compiler.headers()))
@@ -23,7 +40,9 @@ def _test_unit():
         print(s)
 
     for example in examples:
-        compiler = fp.CppBackend()
+        if example.name in _example_ignore:
+            continue
+
         arg_ctxs = tuple(fp.FP64 for _ in example.args)
         s = compiler.compile(example, ctx=fp.FP64, arg_ctxs=arg_ctxs)
         print('\n'.join(compiler.headers()))

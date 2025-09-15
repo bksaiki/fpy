@@ -433,21 +433,20 @@ def test_for4() -> Real:
         sum += x * y
     return sum
 
-
 @fp.fpy
-def test_context1(x: fp.Real):
-    with fp.INTEGER:
-        return x + 1
-
-@fpy
-def test_context2():
+def test_context1():
     with IEEEContext(8, 32, RM.RNE):
         return 0
 
-@fpy
-def test_context3():
+@fp.fpy
+def test_context2():
     x = 1
     with IEEEContext(8, 32, RM.RNE):
+        return x + 1
+
+@fp.fpy
+def test_context3(x: fp.Real):
+    with fp.INTEGER:
         return x + 1
 
 @fp.fpy
@@ -459,7 +458,7 @@ def test_context4():
 @fp.fpy
 def test_context5(s: fp.Real): # s : real @ b
     t: fp.Real = 0 # t : real @ a
-    if s < 0: # bool @ a  |    < : real @ b -> real @ a -> bool @ a
+    if s < 0: # < : real @ b -> real @ a -> bool @ a
         t += 1  # + : real @ a -> real @ a -> real @ a
     else:
         with fp.FP32:
@@ -467,14 +466,14 @@ def test_context5(s: fp.Real): # s : real @ b
         t = fp.round(tmp) # round : real @ FP32 -> real @ a
     return t
 
-# @fpy(name='Test context statement (3/3)')
-# def test_context3(x: Real, y: Real):
-#     with IEEEContext(8, 32, RM.RNE) as ctx:
-#         with ctx.replace(rm=RM.RTP):
-#             t0 = x + y
-#         with ctx.replace(rm=RM.RTN):
-#             t1 = x - y
-#         return t0 - t1
+@fp.fpy
+def test_context6():
+    with fp.UINT64:
+        z = 0
+        for i in range(10):
+            z += i * i
+        return z
+
 
 @fpy
 def test_assert():
@@ -683,6 +682,7 @@ tests: list[Function] = [
     test_context3,
     test_context4,
     test_context5,
+    test_context6,
     test_assert,
 ]
 

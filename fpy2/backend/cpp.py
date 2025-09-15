@@ -631,6 +631,9 @@ class _CppBackendInstance(Visitor):
         iff = self._visit_expr(e.iff, ctx)
         return f'({cond} ? {ift} : {iff})'
 
+    def _visit_attribute(self, e: Attribute, ctx: _CompileCtx):
+        raise CompileError('C++ backend: attributes not supported')
+
     def _visit_decl(self, name: Id, e: str, site: DefSite, ctx: _CompileCtx):
         match name:
             case NamedId():
