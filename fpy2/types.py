@@ -5,13 +5,15 @@ FPy has a simple type system.
 
     t ::= bool
         | real
+        | context
         | t1 x t2
         | list t
         | t1 -> t2
         | a
 
-There are boolean and real number scalar types, (heterogenous) tuples,
-and (homogenous) lists, function types, and type variables.
+There are boolean and real number scalar types,
+rounding contexts, (heterogenous) tuples, (homogenous) lists,
+function types, and type variables.
 """
 
 from abc import ABC, abstractmethod
@@ -57,6 +59,7 @@ class BoolType(Type):
     def __hash__(self):
         return hash(type(self))
 
+
 class RealType(Type):
     """Real number type."""
 
@@ -74,6 +77,26 @@ class RealType(Type):
 
     def __hash__(self):
         return hash(type(self))
+
+
+class ContextType(Type):
+    """Rounding context type."""
+
+    def format(self) -> str:
+        return "context"
+
+    def free_vars(self) -> set['VarType']:
+        return set()
+
+    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+        return self
+
+    def __eq__(self, other):
+        return isinstance(other, ContextType)
+
+    def __hash__(self):
+        return hash(type(self))
+
 
 class VarType(Type):
     """Type variable"""
@@ -104,6 +127,7 @@ class VarType(Type):
     def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
         return subst.get(self, self)
 
+
 class TupleType(Type):
     """Tuple type."""
 
@@ -131,6 +155,7 @@ class TupleType(Type):
     def __hash__(self):
         return hash(self.elt_types)
 
+
 class ListType(Type):
     """List type."""
 
@@ -154,6 +179,7 @@ class ListType(Type):
 
     def __hash__(self):
         return hash(self.elt_type)
+
 
 class FunctionType(Type):
     """Function type."""

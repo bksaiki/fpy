@@ -327,6 +327,10 @@ class _ContextInferInstance(Visitor):
                     self._unify(ty, expect_ty)
 
                 return fn_ctx.ret
+            case type() if issubclass(e.fn, Context):
+                # calling context constructor
+                # TODO: can infer if the arguments are statically known
+                return None
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
