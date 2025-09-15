@@ -241,11 +241,13 @@ class FPCoreCompileInstance(Visitor):
         return fpc.Digits(e.m, e.e, e.b)
 
     def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
+        if e.kwargs:
+            raise FPCoreCompileError('cannot compile keyword arguments to FPCore', e)
         match e.func:
             case NamedId():
                 name = str(e.func)
-            case ForeignAttribute():
-                raise NotImplementedError(e.func)
+            case Attribute():
+                raise FPCoreCompileError('cannot compile method call to FPCore', e.func)
             case _:
                 raise RuntimeError('unreachable', e.func)
         args = [self._visit_expr(c, ctx) for c in e.args]
@@ -715,6 +717,9 @@ class FPCoreCompileInstance(Visitor):
         iff = self._visit_expr(e.iff, ctx)
         return fpc.If(cond, ift, iff)
 
+    def _visit_attribute(self, e: Attribute, ctx: None) -> fpc.Expr:
+        raise FPCoreCompileError(f'cannot compile to FPCore: {type(e).__name__}')
+
     def _visit_assign(self, stmt: Assign, ctx: fpc.Expr):
         match stmt.binding:
             case Id():
@@ -876,10 +881,6 @@ class FPCoreCompileInstance(Visitor):
                     ret
             ))
 
-
-    def _visit_context_expr(self, e: ContextExpr, ctx: None):
-        raise RuntimeError('do not call')
-
     def _visit_data(self, data):
         match data:
             case int():
@@ -897,12 +898,10 @@ class FPCoreCompileInstance(Visitor):
         body = self._visit_block(stmt.body, ctx)
         # extract a context value
         match stmt.ctx:
-            case ContextExpr() | Var():
-                raise FPCoreCompileError('Context expressions must be pre-computed', stmt.ctx)
             case ForeignVal():
                 val = stmt.ctx.val
             case _:
-                raise RuntimeError('unreachable', stmt.ctx)
+                raise FPCoreCompileError('Context expressions must be pre-computed', stmt.ctx)
 
         # convert to properties
         match val:

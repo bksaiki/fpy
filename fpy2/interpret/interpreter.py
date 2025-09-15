@@ -43,7 +43,7 @@ class Interpreter(ABC):
         return ctx
 
 
-class FunctionReturnException(Exception):
+class FunctionReturnError(Exception):
     """Raised when a function returns a value."""
 
     def __init__(self, value):

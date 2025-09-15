@@ -3,7 +3,7 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Self, Sequence
+from typing import Any, Collection, Iterable, Optional, Self, TypeAlias
 from fractions import Fraction
 
 from ..fpc_context import FPCoreContext
@@ -184,10 +184,7 @@ __all__ = [
     'ListRef',
     'ListSlice',
     'IfExpr',
-    'ForeignAttribute',
-    'ContextExpr',
-    'ContextAttribute',
-    'ContextUpdate',
+    'Attribute',
 
     # Statements
     'StmtBlock',
@@ -205,6 +202,9 @@ __all__ = [
     # Function definition
     'Argument',
     'FuncDef',
+
+    # Type aliases
+    'FuncSymbol',
 
     # Formatter
     'BaseFormatter',
@@ -346,34 +346,6 @@ class SizedTensorTypeAnn(TensorTypeAnn):
     def __hash__(self) -> int:
         return hash((self.dims, self.elt))
 
-class ForeignAttribute(Ast):
-    """
-    FPy AST: attribute of a foreign object, e.g., `x.y`
-    Attributes may be nested, e.g., `x.y.z`.
-    """
-    __slots__ = ('name', 'attrs')
-    name: NamedId
-    attrs: tuple[NamedId, ...]
-
-    def __init__(self, name: NamedId, attrs: Sequence[NamedId], loc: Optional[Location]):
-        super().__init__(loc)
-        self.name = name
-        self.attrs = tuple(attrs)
-
-    def __eq__(self, other):
-        return (
-            isinstance(other, ForeignAttribute)
-            and self.name == other.name
-            and len(self.attrs) == len(other.attrs)
-            and all(a == b for a, b in zip(self.attrs, other.attrs))
-        )
-
-    def __hash__(self):
-        return hash((self.name, self.attrs))
-
-    def is_equiv(self, other) -> bool:
-        return self == other
-
 class Expr(Ast):
     """FPy AST: expression"""
     __slots__ = ()
@@ -478,10 +450,10 @@ class Decnum(RationalVal):
 class Hexnum(RationalVal):
     """FPy AST: hexadecimal number"""
     __slots__ = ('func', 'val')
-    func: NamedId | ForeignAttribute
+    func: 'FuncSymbol'
     val: str
 
-    def __init__(self, func: NamedId | ForeignAttribute, val: str, loc: Optional[Location]):
+    def __init__(self, func: 'FuncSymbol', val: str, loc: Optional[Location]):
         super().__init__(loc)
         self.func = func
         self.val = val
@@ -510,11 +482,11 @@ class Integer(RationalVal):
 class Rational(RationalVal):
     """FPy AST: rational number"""
     __slots__ = ('func', 'p', 'q')
-    func: NamedId | ForeignAttribute
+    func: 'FuncSymbol'
     p: int
     q: int
 
-    def __init__(self, func: NamedId | ForeignAttribute, p: int, q: int, loc: Optional[Location]):
+    def __init__(self, func: 'FuncSymbol', p: int, q: int, loc: Optional[Location]):
         super().__init__(loc)
         self.func = func
         self.p = p
@@ -529,12 +501,12 @@ class Rational(RationalVal):
 class Digits(RationalVal):
     """FPy AST: scientific notation"""
     __slots__ = ('func', 'm', 'e', 'b')
-    func: NamedId | ForeignAttribute
+    func: 'FuncSymbol'
     m: int
     e: int
     b: int
 
-    def __init__(self, func: NamedId | ForeignAttribute, m: int, e: int, b: int, loc: Optional[Location]):
+    def __init__(self, func: 'FuncSymbol', m: int, e: int, b: int, loc: Optional[Location]):
         super().__init__(loc)
         self.func = func
         self.m = m
@@ -573,10 +545,10 @@ class NullaryOp(NaryExpr):
 
     __slots__ = ('func',)
 
-    func: NamedId | ForeignAttribute
+    func: 'FuncSymbol'
     args: tuple[Expr, ...] = ()
 
-    def __init__(self, func: NamedId | ForeignAttribute, loc: Optional[Location]):
+    def __init__(self, func: 'FuncSymbol', loc: Optional[Location]):
         super().__init__(loc)
         self.func = func
 
@@ -614,11 +586,11 @@ class NamedUnaryOp(UnaryOp):
 
     __slots__ = ('func',)
 
-    func: NamedId | ForeignAttribute
+    func: 'FuncSymbol'
 
     def __init__(
         self,
-        func: NamedId | ForeignAttribute,
+        func: 'FuncSymbol',
         arg: Expr,
         loc: Optional[Location]
     ):
@@ -662,11 +634,11 @@ class NamedBinaryOp(BinaryOp):
 
     __slots__ = ('func',)
 
-    func: NamedId | ForeignAttribute
+    func: 'FuncSymbol'
 
     def __init__(
         self,
-        func: NamedId | ForeignAttribute,
+        func: 'FuncSymbol',
         first: Expr,
         second: Expr,
         loc: Optional[Location]
@@ -715,11 +687,11 @@ class TernaryOp(NaryExpr):
 class NamedTernaryOp(TernaryOp):
     """FPy AST: ternary operation with a named function"""
     __slots__ = ('func',)
-    func: NamedId | ForeignAttribute
+    func: 'FuncSymbol'
 
     def __init__(
         self,
-        func: NamedId | ForeignAttribute,
+        func: 'FuncSymbol',
         first: Expr,
         second: Expr,
         third: Expr,
@@ -735,7 +707,7 @@ class NaryOp(NaryExpr):
 
     args: tuple[Expr, ...]
 
-    def __init__(self, args: Sequence[Expr], loc: Optional[Location]):
+    def __init__(self, args: Iterable[Expr], loc: Optional[Location]):
         super().__init__(loc)
         self.args = tuple(args)
 
@@ -749,12 +721,12 @@ class NaryOp(NaryExpr):
 class NamedNaryOp(NaryOp):
     """FPy AST: n-ary operation with a named function"""
     __slots__ = ('func',)
-    func: NamedId | ForeignAttribute
+    func: 'FuncSymbol'
 
     def __init__(
         self,
-        func: NamedId | ForeignAttribute,
-        args: Sequence[Expr],
+        func: 'FuncSymbol',
+        args: Iterable[Expr],
         loc: Optional[Location]
     ):
         super().__init__(args, loc)
@@ -1104,24 +1076,28 @@ class Enumerate(NamedUnaryOp):
     """FPy node: enumerate operator"""
     __slots__ = ()
 
+
 class Call(NaryExpr):
     """FPy AST: function call"""
-    __slots__ = ('func', 'fn', 'args')
-    func: NamedId | ForeignAttribute
+    __slots__ = ('func', 'fn', 'args', 'kwargs')
+    func: 'FuncSymbol'
     fn: object
     args: tuple[Expr, ...]
+    kwargs: tuple[tuple[str, Expr], ...]
 
     def __init__(
         self,
-        func: NamedId | ForeignAttribute,
+        func: 'FuncSymbol',
         fn: object,
-        args: Sequence[Expr],
+        args: Iterable[Expr],
+        kwargs: Iterable[tuple[str, Expr]],
         loc: Optional[Location]
     ):
         super().__init__(loc)
         self.func = func
         self.fn = fn
         self.args = tuple(args)
+        self.kwargs = tuple(kwargs)
 
     def is_equiv(self, other):
         if not isinstance(other, Call):
@@ -1138,7 +1114,29 @@ class Call(NaryExpr):
         return (
             len(self.args) == len(other.args)
             and all(a.is_equiv(b) for a, b in zip(self.args, other.args))
+            and len(self.kwargs) == len(other.kwargs)
+            and all(k1 == k2 and v1.is_equiv(v2) for (k1, v1), (k2, v2) in zip(self.kwargs, other.kwargs))
         )
+
+
+class Attribute(Expr):
+    """FPy AST: attribute expression `x.y`"""
+    __slots__ = ('value', 'attr')
+    value: Expr
+    attr: str
+
+    def __init__(self, value: Expr, attr: str, loc: Optional[Location]):
+        super().__init__(loc)
+        self.value = value
+        self.attr = attr
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, Attribute)
+            and self.value.is_equiv(other.value)
+            and self.attr == other.attr
+        )
+
 
 class Compare(Expr):
     """FPy AST: comparison chain"""
@@ -1148,8 +1146,8 @@ class Compare(Expr):
 
     def __init__(
         self,
-        ops: Sequence[CompareOp],
-        args: Sequence[Expr],
+        ops: Iterable[CompareOp],
+        args: Iterable[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -1171,7 +1169,7 @@ class TupleExpr(Expr):
 
     def __init__(
         self,
-        args: Sequence[Expr],
+        args: Iterable[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -1191,7 +1189,7 @@ class TupleBinding(Ast):
 
     def __init__(
         self,
-        elts: Sequence[Id | Self],
+        elts: Iterable[Id | Self],
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -1227,7 +1225,7 @@ class ListExpr(Expr):
 
     def __init__(
         self,
-        args: Sequence[Expr],
+        args: Iterable[Expr],
         loc: Optional[Location]
     ):
         super().__init__(loc)
@@ -1249,8 +1247,8 @@ class ListComp(Expr):
 
     def __init__(
         self,
-        targets: Sequence[Id | TupleBinding],
-        iterables: Sequence[Expr],
+        targets: Collection[Id | TupleBinding],
+        iterables: Collection[Expr],
         elt: Expr,
         loc: Optional[Location]
     ):
@@ -1280,7 +1278,7 @@ class ListSet(Expr):
     slices: tuple[Expr, ...]
     value: Expr
 
-    def __init__(self, array: Expr, slices: Sequence[Expr], value: Expr, loc: Optional[Location]):
+    def __init__(self, array: Expr, slices: Iterable[Expr], value: Expr, loc: Optional[Location]):
         super().__init__(loc)
         self.array = array
         self.slices = tuple(slices)
@@ -1375,57 +1373,6 @@ class IfExpr(Expr):
             and self.iff.is_equiv(other.iff)
         )
 
-class ContextExpr(Expr):
-    """FPy AST: context constructor"""
-    __slots__ = ('ctor', 'args', 'kwargs')
-    ctor: Var | ForeignAttribute
-    args: tuple[Expr | ForeignAttribute, ...]
-    kwargs: tuple[tuple[str, Expr | ForeignAttribute], ...]
-
-    def __init__(
-        self,
-        ctor: Var | ForeignAttribute,
-        args: Sequence[Expr | ForeignAttribute],
-        kwargs: Sequence[tuple[str, Expr | ForeignAttribute]],
-        loc: Optional[Location]
-    ):
-        super().__init__(loc)
-        self.ctor = ctor
-        self.args = tuple(args)
-        self.kwargs = tuple(kwargs)
-
-    def is_equiv(self, other):
-        return (
-            isinstance(other, ContextExpr)
-            and self.ctor.is_equiv(other.ctor)
-            and len(self.args) == len(other.args)
-            and all(a.is_equiv(b) for a, b in zip(self.args, other.args))
-            and len(self.kwargs) == len(other.kwargs)
-            and all(k1 == k2 and v1.is_equiv(v2) for (k1, v1), (k2, v2) in zip(self.kwargs, other.kwargs))
-        )
-
-class ContextAttribute(Ast):
-    """FPy AST: context attribute"""
-    __slots__ = ('expr', 'name')
-    expr: Expr
-    name: str
-
-    def __init__(self, expr: Expr, name: str, loc: Optional[Location]):
-        super().__init__(loc)
-        self.expr = expr
-        self.name = name
-
-class ContextUpdate(Ast):
-    """FPy AST: context update"""
-    __slots__ = ('expr', 'kwargs')
-    expr: Expr
-    kwargs: dict[str, Expr]
-
-    def __init__(self, expr: Expr, kwargs: dict[str, Expr], loc: Optional[Location]):
-        super().__init__(loc)
-        self.expr = expr
-        self.kwargs = kwargs
-
 class StmtBlock(Ast):
     """FPy AST: list of statements"""
     __slots__ = ('stmts',)
@@ -1497,7 +1444,7 @@ class IndexedAssign(Stmt):
     def __init__(
         self,
         var: NamedId,
-        slices: Sequence[Expr],
+        slices: Iterable[Expr],
         expr: Expr,
         loc: Optional[Location]
     ):
@@ -1619,13 +1566,13 @@ class ContextStmt(Stmt):
     """FPy AST: with statement"""
     __slots__ = ('name', 'ctx', 'body')
     name: Id
-    ctx: Var | ForeignVal | ForeignAttribute | ContextExpr
+    ctx: Expr
     body: StmtBlock
 
     def __init__(
         self,
         name: Id,
-        ctx: Var | ForeignVal | ForeignAttribute | ContextExpr,
+        ctx: Expr,
         body: StmtBlock,
         loc: Optional[Location]
     ):
@@ -1735,7 +1682,7 @@ class FuncDef(Ast):
     def __init__(
         self,
         name: str,
-        args: Sequence[Argument],
+        args: Iterable[Argument],
         body: StmtBlock,
         *,
         metadata: Optional[dict[str, Any]] = None,
@@ -1770,6 +1717,21 @@ class FuncDef(Ast):
             and self.body.is_equiv(other.body)
         )
 
+###########################################################
+# Type aliases
+
+FuncSymbol: TypeAlias = NamedId | Attribute
+"""
+FPy function symbols have the recursive form
+
+symbol ::= Id
+         | Attribute ( symbol, _ )
+
+This type alias only shallowly checks the type
+"""
+
+###########################################################
+# Formatter base class
 
 class BaseFormatter:
     """Abstract base class for AST formatters."""

@@ -3,20 +3,20 @@ FPy runtime backed by the Titanic library.
 """
 
 import copy
-import functools
+import inspect
 
-from typing import Any, Callable, Optional, Sequence, TypeAlias
+from typing import Any, Callable, Collection, Optional, TypeAlias
 
 from .. import ops
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
-from ..number import Context, Float, FP64, INTEGER
+from ..number import Context, Float, RealFloat, REAL, FP64, INTEGER
 from ..env import ForeignEnv
 from ..function import Function
 from ..primitive import Primitive
 
-from .interpreter import Interpreter, FunctionReturnException
+from .interpreter import Interpreter, FunctionReturnError
 
 ScalarVal: TypeAlias = bool | Float
 """Type of scalar values in FPy programs."""
@@ -159,7 +159,7 @@ class _Interpreter(Visitor):
             case _:
                 return arg
 
-    def eval(self, func: FuncDef, args: Sequence[Any], ctx: Context):
+    def eval(self, func: FuncDef, args: Collection[Any], ctx: Context):
         # check arity
         if len(args) != len(func.args):
             raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
@@ -199,7 +199,7 @@ class _Interpreter(Visitor):
         try:
             self._visit_block(func.body, eval_ctx)
             raise RuntimeError('no return statement encountered')
-        except FunctionReturnException as e:
+        except FunctionReturnError as e:
             return e.value
 
     def _lookup(self, name: NamedId):
@@ -232,7 +232,7 @@ class _Interpreter(Visitor):
     def _visit_digits(self, e: Digits, ctx: Context):
         return ctx.round(e.as_rational())
 
-    def _apply_method(self, fn: Callable[..., Any], args: Sequence[Expr], ctx: Context):
+    def _apply_method(self, fn: Callable[..., Any], args: Collection[Expr], ctx: Context):
         # fn: Callable[[Float, ..., Context], Float]
         vals = tuple(self._visit_expr(arg, ctx) for arg in args)
         for val in vals:
@@ -247,7 +247,7 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a boolean argument, got {arg}')
         return not arg
 
-    def _apply_and(self, args: Sequence[Expr], ctx: Context):
+    def _apply_and(self, args: Collection[Expr], ctx: Context):
         for arg in args:
             val = self._visit_expr(arg, ctx)
             if not isinstance(val, bool):
@@ -256,7 +256,7 @@ class _Interpreter(Visitor):
                 return False
         return True
 
-    def _apply_or(self, args: Sequence[Expr], ctx: Context):
+    def _apply_or(self, args: Collection[Expr], ctx: Context):
         for arg in args:
             val = self._visit_expr(arg, ctx)
             if not isinstance(val, bool):
@@ -314,7 +314,7 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected an integer argument, got {dim}')
         return ops.size(v, dim, ctx)
 
-    def _apply_zip(self, args: Sequence[Expr], ctx: Context):
+    def _apply_zip(self, args: Collection[Expr], ctx: Context):
         """Apply the `zip` method to the given n-ary expression."""
         if len(args) == 0:
             return []
@@ -326,7 +326,7 @@ class _Interpreter(Visitor):
                 raise TypeError(f'expected a list argument, got {val}')
         return list(zip(*arrays))
 
-    def _apply_min(self, args: Sequence[Expr], ctx: Context):
+    def _apply_min(self, args: Collection[Expr], ctx: Context):
         """Apply the `min` method to the given n-ary expression."""
         vals: list[Float] = []
         for arg in args:
@@ -344,7 +344,7 @@ class _Interpreter(Visitor):
         else:
             return min(*vals)
 
-    def _apply_max(self, args: Sequence[Expr], ctx: Context):
+    def _apply_max(self, args: Collection[Expr], ctx: Context):
         """Apply the `max` method to the given n-ary expression."""
         # evaluate all children
         vals: list[Float] = []
@@ -461,29 +461,77 @@ class _Interpreter(Visitor):
             case _:
                 raise RuntimeError('unknown operator', e)
 
+    def _cvt_context_arg(self, cls: type[Context], name: str, arg: Any, ty: type):
+        if ty is int:
+            # convert to int
+            if not isinstance(arg, Float) or not arg.is_integer():
+                raise TypeError(f'expected an integer argument for `{name}={arg}`')
+            return int(arg)
+        elif ty is float:
+            # convert to float
+            raise NotImplementedError(arg, ty)
+        elif ty is RealFloat:
+            # convert to RealFloat
+            raise NotImplementedError(arg, ty)
+        else:
+            # don't apply a conversion
+            return arg
+
+    def _construct_context(self, cls: type[Context], args: list[Any], kwargs: dict[str, Any]):
+        sig = inspect.signature(cls.__init__)
+
+        ctor_args = []
+        for arg, name in zip(args, list(sig.parameters)[1:]):
+            param = sig.parameters[name]
+            ctor_arg = self._cvt_context_arg(cls, name, arg, param.annotation)
+            ctor_args.append(ctor_arg)
+
+        ctor_kwargs = {}
+        for name, val in kwargs.items():
+            if name not in sig.parameters:
+                raise TypeError(f'unknown parameter {name} for constructor {cls}')
+            param = sig.parameters[name]
+            ctor_kwargs[name] = self._cvt_context_arg(cls, name, val, param.annotation)
+
+        return cls(*ctor_args, **ctor_kwargs)
+
+
     def _visit_call(self, e: Call, ctx: Context):
         match e.func:
             case NamedId():
                 fn = self.foreign[e.func.base]
-            case ForeignAttribute():
-                fn = self._visit_foreign_attr(e.func, ctx)
+            case Attribute():
+                fn = self._visit_attribute(e.func, ctx)
             case _:
                 raise RuntimeError('unreachable', e.func)
 
-        args = [self._visit_expr(arg, ctx) for arg in e.args]
         match fn:
             case Function():
                 # calling FPy function
+                if e.kwargs:
+                    raise RuntimeError('FPy functions do not support keyword arguments', e)
                 rt = _Interpreter(fn.env, override_ctx=self.override_ctx)
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
                 return rt.eval(fn.ast, args, ctx)
             case Primitive():
                 # calling FPy primitive
+                if e.kwargs:
+                    raise RuntimeError('FPy functions do not support keyword arguments', e)
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
                 return fn(*args, ctx=ctx)
+            case type() if issubclass(fn, Context):
+                # calling context constructor
+                # this must be computed under a real context
+                args = [self._visit_expr(arg, REAL) for arg in e.args]
+                kwargs = { k: self._visit_expr(v, REAL) for k, v in e.kwargs }
+                return self._construct_context(fn, args, kwargs)
             case _:
                 # calling foreign function
                 # only `print` is allowed
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
+                kwargs = { k: self._visit_expr(v, ctx) for k, v in e.kwargs }
                 if fn == print:
-                    print(*args)
+                    print(*args, **kwargs)
                     # TODO: should we allow `None` to return
                     return None
                 else:
@@ -715,63 +763,19 @@ class _Interpreter(Visitor):
             # evaluate the body of the loop
             self._visit_block(stmt.body, ctx)
 
-    def _visit_foreign_attr(self, e: ForeignAttribute, ctx: Context):
-        # lookup the root value (should be captured)
-        val = self._lookup(e.name)
-        # walk the attribute chain
-        for attr_id in e.attrs:
-            # need to manually lookup the attribute
-            attr = str(attr_id)
-            if isinstance(val, dict):
-                if attr not in val:
-                    raise RuntimeError(f'unknown attribute {attr} for {val}')
-                val = val[attr]
-            elif hasattr(val, attr):
-                val = getattr(val, attr)
-            else:
-                raise RuntimeError(f'unknown attribute {attr} for {val}')
-        return val
-
-    def _visit_context_expr(self, e: ContextExpr, ctx: Context):
-        match e.ctor:
-            case ForeignAttribute():
-                ctor = self._visit_foreign_attr(e.ctor, ctx)
-            case Var():
-                ctor = self._visit_var(e.ctor, ctx)
-
-        args: list[Any] = []
-        for arg in e.args:
-            match arg:
-                case ForeignAttribute():
-                    args.append(self._visit_foreign_attr(arg, ctx))
-                case _:
-                    v = self._visit_expr(arg, ctx)
-                    if isinstance(v, Float) and v.is_integer():
-                        # HACK: keeps things as specific as possible
-                        args.append(int(v))
-                    else:
-                        args.append(v)
-
-        kwargs: dict[str, Any] = {}
-        for k, v in e.kwargs:
-            match v:
-                case ForeignAttribute():
-                    kwargs[k] = self._visit_foreign_attr(v, ctx)
-                case _:
-                    v = self._visit_expr(v, ctx)
-                    if isinstance(v, Float) and v.is_integer():
-                        kwargs[k] = int(v)
-                    else:
-                        kwargs[k] = v
-
-        return ctor(*args, **kwargs)
+    def _visit_attribute(self, e: Attribute, ctx: Context):
+        value = self._visit_expr(e.value, ctx)
+        if isinstance(value, dict):
+            if e.attr not in value:
+                raise RuntimeError(f'unknown attribute {e.attr} for {value}')
+            return value[e.attr]
+        elif hasattr(value, e.attr):
+            return getattr(value, e.attr)
+        else:
+            raise RuntimeError(f'unknown attribute {e.attr} for {value}')
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
-        match stmt.ctx:
-            case ForeignAttribute():
-                round_ctx = self._visit_foreign_attr(stmt.ctx, ctx)
-            case _:
-                round_ctx = self._visit_expr(stmt.ctx, ctx)
+        round_ctx = self._visit_expr(stmt.ctx, ctx)
         self._visit_block(stmt.body, round_ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Context):
@@ -786,7 +790,7 @@ class _Interpreter(Visitor):
 
     def _visit_return(self, stmt: ReturnStmt, ctx: Context):
         x = self._visit_expr(stmt.expr, ctx)
-        raise FunctionReturnException(x)
+        raise FunctionReturnError(x)
 
     def _visit_block(self, block: StmtBlock, ctx: Context):
         for stmt in block.stmts:
@@ -817,7 +821,7 @@ class DefaultInterpreter(Interpreter):
     def eval(
         self,
         func: Function,
-        args: Sequence[Any],
+        args: Collection[Any],
         ctx: Optional[Context] = None
     ):
         if not isinstance(func, Function):

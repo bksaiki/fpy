@@ -126,6 +126,11 @@ def test_ife4():
   return 1.0 if (x + 1.0) < (y + 2.0) <= (z + 3.0) < (t + 4.0) else 0.0
 
 @fpy
+def test_context_expr1():
+    ctx = IEEEContext(8, 32, RM.RNE)
+    return 1
+
+@fpy
 def test_tuple1():
     return (1.0, 2.0, 3.0)
 
@@ -229,7 +234,6 @@ def test_max(x: fp.Real, y: fp.Real, z: fp.Real) -> Real:
     t2 = max(x, y)
     t3 = max(x, y, z)
     return t2 + t3
-
 
 @fpy
 def test_list_comp1():
@@ -610,6 +614,17 @@ def whetsone1(n: int):
         x4 = (-x1 + x2 + x3 + x4) * t
     return x1, x2, x3, x4
 
+@fp.fpy
+def _select_ctx(x: fp.Real):
+    e = fp.libraries.core.logb(x)
+    n = e - 1
+    return fp.MPFixedContext(n)
+
+@fp.fpy(ctx=fp.REAL)
+def keep_p_1(x: fp.Real):
+    with _select_ctx(x):
+        return fp.round(x)
+
 
 tests = [
     # Tests
@@ -632,6 +647,7 @@ tests = [
     test_ife2,
     test_ife3,
     test_ife4,
+    test_context_expr1,
     test_tuple1,
     test_tuple2,
     test_tuple3,
@@ -695,5 +711,6 @@ examples = [
     instCurrent,
     azimuth,
     lod_anisotropic,
-    whetsone1
+    whetsone1,
+    keep_p_1
 ]

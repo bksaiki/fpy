@@ -327,6 +327,10 @@ class _ContextInferInstance(Visitor):
                     self._unify(ty, expect_ty)
 
                 return fn_ctx.ret
+            case type() if issubclass(e.fn, Context):
+                # calling context constructor
+                # TODO: can infer if the arguments are statically known
+                return None
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
@@ -376,8 +380,8 @@ class _ContextInferInstance(Visitor):
         iff_ctx = self._visit_expr(e.iff, ctx)
         return self._unify(ift_ctx, iff_ctx)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: _Context):
-        return None
+    def _visit_attribute(self, e: Attribute, ctx: _Context):
+        raise NotImplementedError(e)
 
     def _visit_assign(self, stmt: Assign, ctx: _Context):
         e_ctx = self._visit_expr(stmt.expr, ctx)
@@ -441,10 +445,8 @@ class _ContextInferInstance(Visitor):
                     body_ctx = stmt.ctx.val
                 else:
                     body_ctx = None
-            case Var() | ForeignAttribute() | ContextExpr():
-                body_ctx = None
             case _:
-                raise RuntimeError(f'unreachable: {stmt.ctx}')
+                body_ctx = None
 
         self._visit_block(stmt.body, body_ctx)
         return ctx

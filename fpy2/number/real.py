@@ -4,8 +4,7 @@ This module defines the rounding context for real numbers.
 
 from fractions import Fraction
 
-from ..utils import default_repr
-
+from ..utils import default_repr, is_dyadic
 from .context import Context
 from .number import Float, RealFloat
 from .round import RoundingMode
@@ -67,6 +66,16 @@ class RealContext(Context):
                 return Float.from_int(x, ctx=self)
             case float():
                 return Float.from_float(x, ctx=self)
+            case Fraction():
+                # can only convert dyadic rationals
+                if not is_dyadic(x):
+                    raise ValueError(f'cannot represent non-dyadic rational x={x}')
+                # fraction is in reduced form with:
+                # - numerator is an integer
+                # - denominator is a power of two
+                m = x.numerator
+                exp = x.denominator.bit_length() - 1
+                return Float(exp=exp, m=m, ctx=self)
             case str() | Fraction():
                 # TODO: implement
                 raise NotImplementedError

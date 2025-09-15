@@ -7,7 +7,7 @@ from typing import cast
 
 from ..ast import *
 from ..primitive import Primitive
-from ..types import Type, BoolType, RealType, VarType, FunctionType, TupleType, ListType
+from ..types import Type, BoolType, RealType, ContextType, VarType, FunctionType, TupleType, ListType
 from ..utils import Gensym, NamedId, Unionfind
 
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite, PhiDef
@@ -155,7 +155,7 @@ class _TypeCheckInstance(Visitor):
 
     def _resolve_type(self, ty: Type):
         match ty:
-            case BoolType() | RealType() | VarType():
+            case BoolType() | RealType() | ContextType() | VarType():
                 return self.tvars.get(ty, ty)
             case TupleType():
                 elts = [self._resolve_type(elt) for elt in ty.elt_types]
@@ -176,10 +176,8 @@ class _TypeCheckInstance(Visitor):
             case VarType(), _:
                 b_ty = self.tvars.add(b_ty)
                 return self.tvars.union(b_ty, a_ty)
-            case RealType(), RealType():
+            case (RealType(), RealType()) | (BoolType(), BoolType()) | (ContextType(), ContextType()):
                 return a_ty
-            case BoolType(), BoolType():
-                return b_ty
             case ListType(), ListType():
                 elt_ty = self._unify(a_ty.elt_type, b_ty.elt_type)
                 elt_ty = self.tvars.add(elt_ty)
@@ -413,6 +411,10 @@ class _TypeCheckInstance(Visitor):
                 for arg_ty, expect_ty in zip(arg_tys, fn_ty.arg_types):
                     self._unify(arg_ty, expect_ty)
                 return fn_ty.return_type
+            case type() if issubclass(e.fn, Context):
+                # calling context constructor
+                # TODO: type check constructor arguments based on Python typing hints
+                return ContextType()
             case _:
                 raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
@@ -509,8 +511,11 @@ class _TypeCheckInstance(Visitor):
         iff_ty = self._visit_expr(e.iff, None)
         return self._unify(ift_ty, iff_ty)
 
-    def _visit_context_expr(self, e: ContextExpr, ctx: None) -> Type:
-        raise NotImplementedError
+    def _visit_attribute(self, e: Attribute, ctx: None):
+        # TODO: how to type check attributes?
+        # we expected the attribute value to be a module, but how do we propogate this information?
+        self._visit_expr(e.value, None)
+        return self._fresh_type_var()
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         ty = self._visit_expr(stmt.expr, None)
@@ -591,8 +596,7 @@ class _TypeCheckInstance(Visitor):
             self._set_type(phi, ty)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        # TODO: type check context
-        # type check body
+        self._visit_expr(stmt.ctx, None)
         self._visit_block(stmt.body, None)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):

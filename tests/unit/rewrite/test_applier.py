@@ -107,7 +107,7 @@ class ApplierStmtTestCase(_ApplierTestCase):
                 Assign(
                     NamedId('sum'),
                     None,
-                    Call(NamedId('accum'), accum, [Var(NamedId('lst'), None)], None),
+                    Call(NamedId('accum'), accum, [Var(NamedId('lst'), None)], {}, None),
                     None),
             ])
         )
