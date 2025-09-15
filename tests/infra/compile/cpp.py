@@ -23,7 +23,14 @@ _test_ignore = [
 ]
 
 _example_ignore = [
-    'fma_ctx'
+    'fma_ctx',
+    'keep_p_1'
+]
+
+_library_ignore = [
+    '_modf_spec',
+    'isinteger',
+    '_ldexp_spec'
 ]
 
 
@@ -50,17 +57,20 @@ def _test_unit():
         print(s)
 
 def _test_library():
+    compiler = fp.CppBackend()
     for mod in _modules:
         for obj in mod.__dict__.values():
-            if isinstance(obj, fp.Function):
-                compiler = fp.CppBackend()
+            if isinstance(obj, fp.Function) and obj.name not in _library_ignore:
                 arg_ctxs = tuple(fp.FP64 for _ in obj.args)
                 s = compiler.compile(obj, ctx=fp.FP64, arg_ctxs=arg_ctxs)
                 print('\n'.join(compiler.headers()))
                 print(compiler.helpers())
                 print(s)
 
-
-if __name__ == '__main__':
+def test_cpp():
     _test_unit()
     _test_library()
+
+
+if __name__ == '__main__':
+    test_cpp()

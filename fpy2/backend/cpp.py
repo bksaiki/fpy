@@ -20,6 +20,7 @@ from ..number import (
     SINT8, SINT16, SINT32, SINT64,
     UINT8, UINT16, UINT32, UINT64
 )
+from ..primitive import Primitive
 from ..transform import ContextInline
 from ..types import *
 from ..utils import Gensym, enum_repr
@@ -515,7 +516,13 @@ class _CppBackendInstance(Visitor):
             return ' && '.join(self._visit_compare2(e.ops[i], args[i], args[i + 1]) for i in range(len(args) - 1))
 
     def _visit_call(self, e: Call, ctx: _CompileCtx):
-        raise NotImplementedError
+        match e.fn:
+            case Primitive():
+                # primitive call (cannot compile)
+                raise CppCompileError(self.func, f'cannot compile primitive call `{e.format()}`')
+            case _:
+                # unknown call
+                raise CppCompileError(self.func, f'cannot compile unsupported call to `{e.format()}`')
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _CompileCtx):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
