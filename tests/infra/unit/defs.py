@@ -614,6 +614,17 @@ def whetsone1(n: int):
         x4 = (-x1 + x2 + x3 + x4) * t
     return x1, x2, x3, x4
 
+@fp.fpy
+def _select_ctx(x: fp.Real):
+    e = fp.libraries.core.logb(x)
+    n = e - 1
+    return fp.MPFixedContext(n)
+
+@fp.fpy(ctx=fp.REAL)
+def keep_p_1(x: fp.Real):
+    with _select_ctx(x):
+        return fp.round(x)
+
 
 tests = [
     # Tests
@@ -700,5 +711,6 @@ examples = [
     instCurrent,
     azimuth,
     lod_anisotropic,
-    whetsone1
+    whetsone1,
+    keep_p_1
 ]

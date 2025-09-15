@@ -2,7 +2,8 @@ from fpy2 import Function, FPCoreCompiler
 from .defs import tests, examples
 
 _ignore = [
-    'test_context_expr1'
+    'test_context_expr1',
+    'keep_p_1',
 ]
 
 def test_compile_fpc():
