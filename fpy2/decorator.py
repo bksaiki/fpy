@@ -101,16 +101,22 @@ def fpy_primitive(func: Callable[P, R]) -> Primitive[P, R]:
 @overload
 def fpy_primitive(
     *,
+    ctx: Context | str | None = None,
+    arg_ctxs: list | None = None,
+    ret_ctx: Context | str | tuple | None = None,
     spec: Any = None,
-    meta: Optional[dict[str, Any]] = None,
+    meta: dict[str, Any] | None = None,
 ) -> Callable[[Callable[P, R]], Primitive[P, R]]:
     ...
 
 def fpy_primitive(
     func: Optional[Callable[P, R]] = None,
     *,
+    ctx: Context | str | None = None,
+    arg_ctxs: list | None = None,
+    ret_ctx: Context | str | tuple | None = None,
     spec: Any = None,
-    meta: Optional[dict[str, Any]] = None,
+    meta: dict[str, Any] | None = None,
 ):
     """
     Decorator to parse a Python function into an FPy primitive.
@@ -123,19 +129,26 @@ def fpy_primitive(
         spec: Optional specification for the primitive
         meta: Optional metadata dictionary for the primitive
     """
-    # Combine spec and meta into kwargs
-    kwargs = {}
-    if spec is not None:
-        kwargs['spec'] = spec
-    if meta is not None:
-        kwargs['meta'] = meta
-
     if func is None:
         # create a new decorator to be applied directly
-        return lambda func: _apply_fpy_prim_decorator(func, kwargs)
+        return lambda func: _apply_fpy_prim_decorator(
+            func, 
+            ctx=ctx,
+            arg_ctxs=arg_ctxs,
+            ret_ctx=ret_ctx,
+            spec=spec,
+            meta=meta
+        )
     else:
         # parse the function as an FPy primitive
-        return _apply_fpy_prim_decorator(func, kwargs)
+        return _apply_fpy_prim_decorator(
+            func, 
+            ctx=ctx,
+            arg_ctxs=arg_ctxs,
+            ret_ctx=ret_ctx,
+            spec=spec,
+            meta=meta
+        )
 
 ###########################################################
 # Utilities
@@ -207,10 +220,19 @@ def _apply_fpy_decorator(
     # wrap the IR in a Function
     return Function(ast, None, env)
 
-def _apply_fpy_prim_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
+def _apply_fpy_prim_decorator(
+    func: Callable[P, R],
+    *,
+    ctx: Context | str | None = None,
+    arg_ctxs: list | None = None,
+    ret_ctx: Context | str | tuple | None = None,
+    spec: Any = None,
+    meta: dict[str, Any] | None = None,
+):
     """
     Applies the `@fpy_prim` decorator to a function.
     """
+
     # reparse for the typing annotations
     src_name = inspect.getabsfile(func)
     _, start_line = inspect.getsourcelines(func)
@@ -221,4 +243,13 @@ def _apply_fpy_prim_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     parser = Parser(src_name, src, env, start_line=start_line)
     arg_types, return_type = parser.parse_signature()
 
-    return Primitive(func, arg_types, return_type, kwargs)
+    return Primitive(
+        func,
+        arg_types,
+        return_type,
+        ctx=ctx,
+        arg_ctxs=arg_ctxs,
+        ret_ctx=ret_ctx,
+        spec=spec,
+        meta=meta
+    )

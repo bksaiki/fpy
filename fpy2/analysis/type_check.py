@@ -387,7 +387,7 @@ class _TypeCheckInstance(Visitor):
                 for arg, ann in zip(e.args, e.fn.arg_types):
                     ty = self._visit_expr(arg, None)
                     self._unify(ty, self._annotation_to_type(ann))
-                return self._annotation_to_type(e.fn.return_type)
+                return self._annotation_to_type(e.fn.ret_type)
             case Function():
                 # calling a function
                 if e.fn.sig is None:

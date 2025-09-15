@@ -7,8 +7,8 @@ from . import base as fp
 ###########################################################
 # Splitting functions
 
-@fp.fpy_primitive
-def split(x: fp.Float, n: fp.Float) -> tuple[fp.Float, fp.Float]:
+@fp.fpy_primitive(ctx='R', ret_ctx=('R', 'R'))
+def split(x: fp.Float, n: fp.Float, ctx: fp.Context) -> tuple[fp.Float, fp.Float]:
     """
     Splits `x` into two parts:
     - all digits of `x` that are above the `n`th digit
@@ -21,17 +21,22 @@ def split(x: fp.Float, n: fp.Float) -> tuple[fp.Float, fp.Float]:
     - if `x` is infinite, the result is `(x, x)`
     - if `n` is not an integer, a `ValueError` is raised.
     """
-
     if not n.is_integer():
         raise ValueError("n must be an integer")
 
     if x.isnan:
-        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
+        hi = ctx.round(fp.Float.nan(), exact=True)
+        lo = ctx.round(fp.Float.nan(), exact=True)
+        return (hi, lo)
     elif x.isinf:
-        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx))
+        hi = ctx.round(fp.Float(s=x.s, isinf=True), exact=True)
+        lo = ctx.round(fp.Float(s=x.s, isinf=True), exact=True)
+        return (hi, lo)
     else:
-        hi, lo = x.as_real().split(int(n))
-        return (fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx))
+        above, below = x.as_real().split(int(n))
+        hi = ctx.round(above, exact=True)
+        lo = ctx.round(below, exact=True)
+        return (hi, lo)
 
 @fp.fpy
 def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
