@@ -181,6 +181,11 @@ class _MatcherInst(Visitor):
             self._visit_expr(c1, c2)
 
     def _visit_call(self, e: Call, pat: Call):
+        # check shape of call
+        if len(e.args) != len(pat.args) or len(e.kwargs) != len(pat.kwargs):
+            raise _MatchFailure(f'matching {pat} against {e}')
+
+        # check function symbol
         match e.fn, pat.fn:
             case None, None:
                 if e.func != pat.func:
@@ -188,10 +193,16 @@ class _MatcherInst(Visitor):
             case _, _:
                 if e.fn != pat.fn:
                     raise _MatchFailure(f'matching {pat} against {e}')
-        if len(e.args) != len(pat.args):
-            raise _MatchFailure(f'matching {pat} against {e}')
+
+        # check arguments
         for c1, c2 in zip(e.args, pat.args):
             self._visit_expr(c1, c2)
+
+        # check keyword arguments
+        for (k1, v1), (k2, v2) in zip(e.kwargs, pat.kwargs):
+            if k1 != k2:
+                raise _MatchFailure(f'matching {pat} against {e}')
+            self._visit_expr(v1, v2)
 
     def _visit_compare(self, e: Compare, pat: Compare):
         # TODO: is matching on a subset of operations valid?
@@ -266,6 +277,11 @@ class _MatcherInst(Visitor):
         self._visit_expr(e.cond, pat.cond)
         self._visit_expr(e.ift, pat.ift)
         self._visit_expr(e.iff, pat.iff)
+
+    def _visit_attribute(self, e: Attribute, pat: Attribute):
+        if e.attr != pat.attr:
+            raise _MatchFailure(f'matching {pat} against {e}')
+        self._visit_expr(e.value, pat.value)
 
     def _visit_binding(self, binding: Id | TupleBinding, pat: Id | TupleBinding):
         match binding, pat:

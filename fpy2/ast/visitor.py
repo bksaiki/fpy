@@ -438,7 +438,7 @@ class DefaultTransformVisitor(Visitor):
 
     def _visit_call(self, e: Call, ctx: None):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        kwargs = { k: self._visit_expr(v, ctx) for k, v in e.kwargs }
+        kwargs = [ (k, self._visit_expr(v, ctx)) for k, v in e.kwargs ]
         return Call(e.func, e.fn, args, kwargs, e.loc)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):

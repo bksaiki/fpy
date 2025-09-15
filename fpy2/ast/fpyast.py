@@ -3,7 +3,7 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Iterable, Self, TypeAlias
+from typing import Any, Collection, Iterable, Optional, Self, TypeAlias
 from fractions import Fraction
 
 from ..fpc_context import FPCoreContext
@@ -1247,8 +1247,8 @@ class ListComp(Expr):
 
     def __init__(
         self,
-        targets: Iterable[Id | TupleBinding],
-        iterables: Iterable[Expr],
+        targets: Collection[Id | TupleBinding],
+        iterables: Collection[Expr],
         elt: Expr,
         loc: Optional[Location]
     ):

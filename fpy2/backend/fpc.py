@@ -241,6 +241,8 @@ class FPCoreCompileInstance(Visitor):
         return fpc.Digits(e.m, e.e, e.b)
 
     def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
+        if e.kwargs:
+            raise FPCoreCompileError('cannot compile keyword arguments to FPCore', e)
         match e.func:
             case NamedId():
                 name = str(e.func)
