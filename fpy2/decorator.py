@@ -35,12 +35,18 @@ def fpy(func: Callable[P, R]) -> Function[P, R]:
     ...
 
 @overload
-def fpy(**kwargs) -> Callable[[Callable[P, R]], Function[P, R]]:
+def fpy(
+    *,
+    spec: Optional[Any] = None,
+    meta: Optional[dict[str, Any]] = None,
+) -> Callable[[Callable[P, R]], Function[P, R]]:
     ...
 
 def fpy(
     func: Optional[Callable[P, R]] = None,
-    **kwargs
+    *,
+    spec: Optional[Any] = None,
+    meta: Optional[dict[str, Any]] = None,
 ):
     """
     Decorator to parse a Python function into FPy.
@@ -48,7 +54,19 @@ def fpy(
     Constructs an FPy `Function` from a Python function.
     FPy is a stricter subset of Python, so this decorator will reject
     any function that is not valid in FPy.
+    
+    Args:
+        func: The function to decorate (when used without parentheses)
+        spec: Optional specification for the function
+        meta: Optional metadata dictionary for the function
     """
+    # Combine spec and meta into kwargs
+    kwargs = {}
+    if spec is not None:
+        kwargs['spec'] = spec
+    if meta is not None:
+        kwargs['meta'] = meta
+
     if func is None:
         # create a new decorator to be applied directly
         return lambda func: _apply_fpy_decorator(func, kwargs)
@@ -84,19 +102,37 @@ def fpy_primitive(func: Callable[P, R]) -> Primitive[P, R]:
     ...
 
 @overload
-def fpy_primitive(**kwargs) -> Callable[[Callable[P, R]], Primitive[P, R]]:
+def fpy_primitive(
+    *,
+    spec: Optional[Any] = None,
+    meta: Optional[dict[str, Any]] = None,
+) -> Callable[[Callable[P, R]], Primitive[P, R]]:
     ...
 
 def fpy_primitive(
     func: Optional[Callable[P, R]] = None,
-    **kwargs
+    *,
+    spec: Optional[Any] = None,
+    meta: Optional[dict[str, Any]] = None,
 ):
     """
     Decorator to parse a Python function into an FPy primitive.
     Constructs an FPy `Primitive` from a Python function.
 
     Primitives are Python functions that can be called from the FPy runtime.
+
+    Args:
+        func: The function to decorate (when used without parentheses)
+        spec: Optional specification for the primitive
+        meta: Optional metadata dictionary for the primitive
     """
+    # Combine spec and meta into kwargs
+    kwargs = {}
+    if spec is not None:
+        kwargs['spec'] = spec
+    if meta is not None:
+        kwargs['meta'] = meta
+
     if func is None:
         # create a new decorator to be applied directly
         return lambda func: _apply_fpy_prim_decorator(func, kwargs)
