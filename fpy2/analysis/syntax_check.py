@@ -42,12 +42,17 @@ class _Env:
 
 @dataclass
 class _Ctx:
+    """Visitor context while syntax checking"""
+
     env: _Env
     """mapping from variable to whether the variable is bound on all paths"""
 
+    within_call: bool
+    """are we checking the function part of a call?"""
+
     @staticmethod
     def default():
-        return _Ctx(_Env())
+        return _Ctx(_Env(), False)
 
 
 class SyntaxCheckInstance(Visitor):
@@ -174,7 +179,7 @@ class SyntaxCheckInstance(Visitor):
             case NamedId():
                 self._mark_use(e.func, env, ignore_missing=self.ignore_unknown)
             case Attribute():
-                self._visit_attribute(e.func, ctx)
+                self._visit_attribute(e.func, _Ctx(env, True))
             case _:
                 raise RuntimeError('unreachable', e.func)
         for arg in e.args:
@@ -201,7 +206,7 @@ class SyntaxCheckInstance(Visitor):
             self._visit_expr(iterable, ctx)
         for target in e.targets:
             env = self._visit_binding(target, env)
-        self._visit_expr(e.elt, _Ctx(env))
+        self._visit_expr(e.elt, _Ctx(env, False))
         return env
 
     def _visit_list_ref(self, e: ListRef, ctx: _Ctx):
@@ -235,6 +240,8 @@ class SyntaxCheckInstance(Visitor):
         return env
 
     def _visit_attribute(self, e: Attribute, ctx: _Ctx):
+        if ctx.within_call and not isinstance(e.value, Var | Attribute):
+            raise FPySyntaxError('attribute base in function position must be either a variable or another attribute')
         self._visit_expr(e.value, ctx)
 
     def _visit_binding(self, binding: Id | TupleBinding, env: _Env):
@@ -283,14 +290,14 @@ class SyntaxCheckInstance(Visitor):
         env = ctx.env
         body_env = self._visit_block(stmt.body, ctx)
         env = env.merge(body_env)
-        self._visit_expr(stmt.cond, _Ctx(env))
+        self._visit_expr(stmt.cond, _Ctx(env, False))
         return env
 
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         env = ctx.env
         self._visit_expr(stmt.iterable, ctx)
         env = self._visit_binding(stmt.target, env)
-        body_env = self._visit_block(stmt.body, _Ctx(env))
+        body_env = self._visit_block(stmt.body, _Ctx(env, False))
         return env.merge(body_env)
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
@@ -298,7 +305,7 @@ class SyntaxCheckInstance(Visitor):
         self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.name, NamedId):
             env = env.extend(stmt.name)
-        return self._visit_block(stmt.body, _Ctx(env))
+        return self._visit_block(stmt.body, _Ctx(env, False))
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
         env = ctx.env
@@ -316,7 +323,7 @@ class SyntaxCheckInstance(Visitor):
     def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         env = ctx.env
         for stmt in block.stmts:
-            env = self._visit_statement(stmt, _Ctx(env))
+            env = self._visit_statement(stmt, _Ctx(env, False))
         return env
 
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
@@ -326,7 +333,7 @@ class SyntaxCheckInstance(Visitor):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 env = env.extend(arg.name)
-        return self._visit_block(func.body, _Ctx(env))
+        return self._visit_block(func.body, _Ctx(env, False))
 
     # override to get typing hint
     def _visit_statement(self, stmt: Stmt, ctx: _Ctx) -> _Env:
@@ -350,10 +357,15 @@ class SyntaxCheck:
 
     - any variables must be defined before it is used;
 
-    If statements
+    If statements:
 
     - any variable must be defined along both branches when
       used after the `if` statement
+
+    Function calls:
+
+    - the function part of a call must be either a variable
+      or an attribute access (e.g., `obj.method`)
     """
 
     @staticmethod
