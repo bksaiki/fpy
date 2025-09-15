@@ -26,10 +26,14 @@ def _test_tcheck_unit():
 def _test_tcheck_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
-            if isinstance(obj, fp.Function):
-                ast = ContextInline.apply(obj.ast, obj.env)
-                info = ContextInfer.infer(ast)
-                print(ast.name, info.func_ctx)
+            match obj:
+                case fp.Function():
+                    ast = ContextInline.apply(obj.ast, obj.env)
+                    info = ContextInfer.infer(ast)
+                    print(ast.name, info.func_ctx)
+                case fp.Primitive():
+                    ctx = ContextInfer.primitive(obj)
+                    print(obj.name, ctx)
 
 def test_context_infer():
     _test_tcheck_unit()

@@ -23,8 +23,8 @@ class Primitive(Generic[P, R]):
     arg_types: tuple[TypeAnn, ...]
     ret_type: TypeAnn
     # context info
-    ctx: Context | str | None
-    arg_ctxs: list | None
+    ctx: str | None
+    arg_ctxs: list[str | tuple] | None
     ret_ctx: Context | str | tuple | None
     # metadata
     spec: Any | None
@@ -35,8 +35,8 @@ class Primitive(Generic[P, R]):
         func: Callable[P, R],
         arg_types: Sequence[TypeAnn],
         return_type: TypeAnn,
-        ctx: Context | str | None = None,
-        arg_ctxs: list | None = None,
+        ctx: str | None = None,
+        arg_ctxs: list[str | tuple] | None = None,
         ret_ctx: Context | str | tuple | None = None,
         spec: Any | None = None,
         meta: dict[str, Any] | None = None
@@ -61,3 +61,8 @@ class Primitive(Generic[P, R]):
             return self.func(*args, ctx=ctx)
         else:
             return self.func(*args)
+
+    @property
+    def name(self) -> str:
+        """The name of the primitive function."""
+        return self.func.__name__

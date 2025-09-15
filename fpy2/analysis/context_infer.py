@@ -508,6 +508,98 @@ class _ContextInferInstance(Visitor):
         return ret_ctx
 
 
+
+class _ContextInferPrimitive:
+    """
+    Context inference for primitives.
+
+    This is a simpler version of context inference that only
+    interprets the context annotations on primitives.
+    """
+    
+    prim: Primitive
+    gensym: Gensym
+    subst: dict[str, NamedId]
+
+    def __init__(self, prim: Primitive):
+        self.prim = prim
+        self.gensym = Gensym()
+        self.subst = {}
+
+    def _arg_ctx(self, ty: TypeAnn, ctx: str | tuple) -> _Context:
+        match ty:
+            case None | RealTypeAnn() | BoolTypeAnn() | AnyTypeAnn():
+                if not isinstance(ctx, str):
+                    raise ValueError(f"expected context variable for argument of type {ty}, got {ctx}")
+                if ctx not in self.subst:
+                    self.subst[ctx] = self.gensym.fresh('r')
+                return self.subst[ctx]
+            case TupleTypeAnn():
+                if not isinstance(ctx, tuple):
+                    raise ValueError(f"expected tuple context for argument of type {ty}, got {ctx}")
+                if len(ty.elts) != len(ctx):
+                    raise ValueError(f"tuple context length mismatch: expected {len(ty.elts)}, got {len(ctx)}")
+                elts = [self._arg_ctx(t, c) for t, c in zip(ty.elts, ctx)]
+                return TupleContext(elts)
+            case ListTypeAnn():
+                return self._arg_ctx(ty.elt, ctx)
+            case _:
+                raise RuntimeError(f'unknown type: {ty}')
+
+    def _cvt_return_ctx(self, ctx: Context | str | tuple) -> _Context:
+        match ctx:
+            case str():
+                if ctx not in self.subst:
+                    raise ContextInferError(f'unbound context variable in ret_ctx: {ctx}')
+                return self.subst[ctx]
+            case Context():
+                return ctx
+            case tuple():
+                elts = [self._cvt_return_ctx(c) for c in ctx]
+                return TupleContext(elts)
+            case _:
+                raise ValueError(f"invalid context in ret_ctx: {ctx}")
+
+    def _default_return_ctx(self, ty: TypeAnn) -> _Context:
+        match ty:
+            case None | RealTypeAnn() | BoolTypeAnn() | AnyTypeAnn():
+                return self.gensym.fresh('r')
+            case TupleTypeAnn():
+                elts = [self._default_return_ctx(t) for t in ty.elts]
+                return TupleContext(elts)
+            case ListTypeAnn():
+                return self._default_return_ctx(ty.elt)
+            case _:
+                raise RuntimeError(f'unknown type: {ty}')
+
+    def infer(self) -> FunctionContext:
+        # interpret primitive context
+        ctx = self.gensym.fresh('r')
+        if self.prim.ctx is not None:
+            self.subst[self.prim.ctx] = ctx
+
+        # interpret argument contexts
+        arg_ctxs: list[_Context] = []
+        if self.prim.arg_ctxs is None:
+            for _ in self.prim.arg_types:
+                arg_ctxs.append(self.gensym.fresh('r'))
+        else:
+            # none specified
+            assert len(self.prim.arg_ctxs) == len(self.prim.arg_types)
+            for ty, arg_ctx in zip(self.prim.arg_types, self.prim.arg_ctxs):
+                arg_ctxs.append(self._arg_ctx(ty, arg_ctx))
+
+        # interpret return context
+        if self.prim.ret_ctx is None:
+            ret_ctx = self.gensym.fresh('r')
+        else:
+            ret_ctx = self._cvt_return_ctx(self.prim.ret_ctx)
+
+        return FunctionContext(ctx, arg_ctxs, ret_ctx)
+
+###########################################################
+# Context inference
+
 class ContextInfer:
     """
     Context inference.
@@ -524,7 +616,7 @@ class ContextInfer:
     #             | [<context>] <context> -> <context>
 
     @staticmethod
-    def infer(func: FuncDef):
+    def infer(func: FuncDef) -> ContextAnalysis:
         """
         Performs rounding context inference.
 
@@ -536,3 +628,12 @@ class ContextInfer:
         def_use = DefineUse.analyze(func)
         inst = _ContextInferInstance(func, def_use)
         return inst.infer()
+
+    @staticmethod
+    def primitive(prim: Primitive) -> FunctionContext:
+        """
+        Infers the context of a primitive.
+        """
+        if not isinstance(prim, Primitive):
+            raise TypeError(f'expected a \'Primitive\', got {prim}')
+        return _ContextInferPrimitive(prim).infer()

@@ -101,8 +101,8 @@ def fpy_primitive(func: Callable[P, R]) -> Primitive[P, R]:
 @overload
 def fpy_primitive(
     *,
-    ctx: Context | str | None = None,
-    arg_ctxs: list | None = None,
+    ctx: str | None = None,
+    arg_ctxs: list[str | tuple] | None = None,
     ret_ctx: Context | str | tuple | None = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
@@ -112,8 +112,8 @@ def fpy_primitive(
 def fpy_primitive(
     func: Optional[Callable[P, R]] = None,
     *,
-    ctx: Context | str | None = None,
-    arg_ctxs: list | None = None,
+    ctx: str | None = None,
+    arg_ctxs: list[str | tuple] | None = None,
     ret_ctx: Context | str | tuple | None = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
@@ -220,11 +220,63 @@ def _apply_fpy_decorator(
     # wrap the IR in a Function
     return Function(ast, None, env)
 
+def _is_valid_context(ctx: Context | str | tuple):
+    match ctx:
+        case tuple():
+            return all(_is_valid_context(c) for c in ctx)
+        case _:
+            return isinstance(ctx, (Context, str))
+
+def _free_context_vars(ctx: Context | str | tuple) -> set[str]:
+    match ctx:
+        case str():
+            return {ctx}
+        case Context():
+            return set()
+        case tuple():
+            vars = set()
+            for c in ctx:
+                vars.update(_free_context_vars(c))
+            return vars
+        case _:
+            raise ValueError(f"invalid context: {ctx}")
+
+def _check_prim_contexts(
+    num_args: int,
+    ctx: str | None,
+    arg_ctxs: list[str | tuple] | None,
+    ret_ctx: Context | str | tuple | None,
+):
+    input_vars: set[str] = set()
+
+    # check contexts are well-formed and that ret_ctx has
+    # no free context variables
+    if ctx is not None:
+        if not _is_valid_context(ctx):
+            raise ValueError(f"invalid context: {ctx}")
+        input_vars.update(_free_context_vars(ctx))
+    if arg_ctxs is not None:
+        if not isinstance(arg_ctxs, list):
+            raise TypeError(f"Expected \'list\': arg_ctxs={arg_ctxs}")
+        if len(arg_ctxs) != num_args:
+            raise ValueError(f"arg_ctxs length mismatch: expected {num_args}, got {len(arg_ctxs)}")
+        for c in arg_ctxs:
+            if not _is_valid_context(c):
+                raise ValueError(f"invalid context in arg_ctxs: {c}")
+            input_vars.update(_free_context_vars(c))
+    if ret_ctx is not None:
+        if not _is_valid_context(ret_ctx):
+            raise ValueError(f"invalid context in ret_ctx: {ret_ctx}")
+        for v in _free_context_vars(ret_ctx):
+            if v not in input_vars:
+                raise ValueError(f"unbound context variable in ret_ctx: {v}")
+
+
 def _apply_fpy_prim_decorator(
     func: Callable[P, R],
     *,
-    ctx: Context | str | None = None,
-    arg_ctxs: list | None = None,
+    ctx: str | None = None,
+    arg_ctxs: list[str | tuple] | None = None,
     ret_ctx: Context | str | tuple | None = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
@@ -241,8 +293,12 @@ def _apply_fpy_prim_decorator(
     # parse for the type signature
     env = _function_env(func)
     parser = Parser(src_name, src, env, start_line=start_line)
-    arg_types, return_type = parser.parse_signature()
+    arg_types, return_type = parser.parse_signature(ignore_ctx=True)
 
+    # check primitive context signature
+    _check_prim_contexts(len(arg_types), ctx, arg_ctxs, ret_ctx)
+
+    # create primitive
     return Primitive(
         func,
         arg_types,
