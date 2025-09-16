@@ -1,5 +1,5 @@
 """
-Compilation from FPy to (standard) C++.
+C++ backend: compiler to C++
 """
 
 import enum
@@ -7,32 +7,31 @@ import dataclasses
 
 from typing import Iterable
 
-from ..ast import *
-from ..analysis import (
+from ...ast import *
+from ...analysis import (
     ContextAnalysis, ContextInfer, ContextInferError, TypeContext, TupleContext,
     DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
     TypeAnalysis, TypeCheck, TypeInferError
 )
-from ..function import Function
-from ..number import (
+from ...function import Function
+from ...number import (
     RM,
     FP64, FP32,
     SINT8, SINT16, SINT32, SINT64,
     UINT8, UINT16, UINT32, UINT64,
     INTEGER
 )
-from ..primitive import Primitive
-from ..transform import ContextInline
-from ..types import *
-from ..utils import Gensym, enum_repr
+from ...primitive import Primitive
+from ...transform import ContextInline
+from ...types import *
+from ...utils import Gensym, enum_repr
 
-from .backend import Backend, CompileError
-from .cpp_utils import (
-    CPP_HEADERS, CPP_HELPERS,
-    CppType, CppScalar, CppList, CppTuple,
-    UnaryCppOp, BinaryCppOp, TernaryCppOp,
-    ScalarOpTable, make_op_table
-)
+from ..backend import Backend, CompileError
+
+from .ops import UnaryCppOp, BinaryCppOp, TernaryCppOp, ScalarOpTable, make_op_table
+from .types import CppType, CppScalar, CppList, CppTuple
+from .utils import CPP_HEADERS, CPP_HELPERS
+
 
 # TODO: support more C++ standards
 @enum_repr

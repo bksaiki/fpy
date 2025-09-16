@@ -1,160 +1,16 @@
 """
-C++ compilation utilities.
+C++ backend: target description
 """
 
-import enum
 import dataclasses
 
-from typing import Iterable, TypeAlias
+from typing import TypeAlias
 
-from ..ast import *
-from ..libraries.core import logb
-from ..primitive import Primitive
-from ..utils import default_repr, enum_repr
+from ...ast import *
+from ...libraries.core import logb
+from ...primitive import Primitive
 
-###########################################################
-# C++ templates
-
-CPP_HEADERS = [
-    '#include <cassert>',
-    '#include <cfenv>',
-    '#include <cmath>',
-    '#include <cstddef>',
-    '#include <cstdint>',
-    '#include <numeric>',
-    '#include <vector>',
-    '#include <tuple>',
-]
-
-CPP_HELPERS = """
-template <typename T>
-static size_t size(const T&, size_t) {
-    assert(false && "cannot compute tensor size of a scalar");
-    return 0;
-}
-
-template <typename T>
-static size_t size(const std::vector<T>& vec, size_t n) {
-    return (n == 0) ? vec.size() : size(vec[0], n);
-}
-"""
-
-###########################################################
-# C++ (scalar) type
-
-@enum_repr
-class CppScalar(enum.Enum):
-    """
-    C++ types.
-
-    Each type represents either
-
-    t ::= bool | real R
-
-    where R is a concrete rounding context.
-    """
-
-    BOOL = 0
-    F32 = 1
-    F64 = 2
-    U8 = 3
-    U16 = 4
-    U32 = 5
-    U64 = 6
-    S8 = 7
-    S16 = 8
-    S32 = 9
-    S64 = 10
-
-    def is_integer(self) -> bool:
-        return self in _INT_TYPES
-
-    def is_float(self) -> bool:
-        return self in _FLOAT_TYPES
-
-    def format(self):
-        match self:
-            case CppScalar.BOOL:
-                return 'bool'
-            case CppScalar.F32:
-                return 'float'
-            case CppScalar.F64:
-                return 'double'
-            case CppScalar.U8:
-                return 'uint8_t'
-            case CppScalar.U16:
-                return 'uint16_t'
-            case CppScalar.U32:
-                return 'uint32_t'
-            case CppScalar.U64:
-                return 'uint64_t'
-            case CppScalar.S8:
-                return 'int8_t'
-            case CppScalar.S16:
-                return 'int16_t'
-            case CppScalar.S32:
-                return 'int32_t'
-            case CppScalar.S64:
-                return 'int64_t'
-
-@default_repr
-class CppList:
-    elt: 'CppType'
-
-    def __init__(self, elt: 'CppType'):
-        self.elt = elt
-
-    def __eq__(self, other):
-        return isinstance(other, CppList) and self.elt == other.elt
-
-    def format(self):
-        return f'std::vector<{self.elt.format()}>'
-
-    def dim(self) -> int:
-        match self.elt:
-            case CppList():
-                return self.elt.dim() + 1
-            case _:
-                return 1
-
-@default_repr
-class CppTuple:
-    elts: tuple['CppType', ...]
-
-    def __init__(self, elts: Iterable['CppType']):
-        self.elts = tuple(elts)
-
-    def __eq__(self, other):
-        return isinstance(other, CppTuple) and self.elts == other.elts
-
-    def format(self):
-        elts = ', '.join(elt.format() for elt in self.elts)
-        return f'std::tuple<{elts}>'
-
-
-CppType: TypeAlias = CppScalar | CppList | CppTuple
-
-
-_FLOAT_TYPES = [
-    CppScalar.F32,
-    CppScalar.F64
-]
-
-_INT_TYPES = [
-    CppScalar.S8,
-    CppScalar.S16,
-    CppScalar.S32,
-    CppScalar.S64,
-    CppScalar.U8,
-    CppScalar.U16,
-    CppScalar.U32,
-    CppScalar.U64
-]
-
-_ALL_SCALARS = [CppScalar.BOOL] + _FLOAT_TYPES + _INT_TYPES
-
-###########################################################
-# C++ operation table
+from .types import CppType, CppScalar, ALL_SCALARS, FLOAT_TYPES, INT_TYPES
 
 @dataclasses.dataclass
 class UnaryCppOp:
@@ -384,8 +240,8 @@ def _make_unary_table() -> UnaryOpTable:
         # Rounding operations
         Round: [
             UnaryCppOp(f'static_cast<{ret_ty.format()}>', arg_ty, ret_ty)
-            for arg_ty in _ALL_SCALARS
-            for ret_ty in _ALL_SCALARS
+            for arg_ty in ALL_SCALARS
+            for ret_ty in ALL_SCALARS
         ],
 
         # Logical operations
@@ -399,19 +255,19 @@ def _make_binary_table() -> BinaryOpTable:
         # Basic arithmetic
         Add: [
             BinaryCppOp('+', True, ty, ty, ty)
-            for ty in _FLOAT_TYPES + _INT_TYPES
+            for ty in FLOAT_TYPES + INT_TYPES
         ],
         Sub: [
             BinaryCppOp('-', True, ty, ty, ty)
-            for ty in _FLOAT_TYPES + _INT_TYPES
+            for ty in FLOAT_TYPES + INT_TYPES
         ],
         Mul: [
             BinaryCppOp('*', True, ty, ty, ty)
-            for ty in _FLOAT_TYPES + _INT_TYPES
+            for ty in FLOAT_TYPES + INT_TYPES
         ],
         Div: [
             BinaryCppOp('/', True, ty, ty, ty)
-            for ty in _FLOAT_TYPES + _INT_TYPES
+            for ty in FLOAT_TYPES + INT_TYPES
         ],
 
         # Min/Max operations
@@ -419,17 +275,17 @@ def _make_binary_table() -> BinaryOpTable:
         # C++ backend reduces them down to 2-ary
         Min: [
             BinaryCppOp('std::fmin', False, ty, ty, ty)
-            for ty in _FLOAT_TYPES
+            for ty in FLOAT_TYPES
         ] + [
             BinaryCppOp('std::min', False, ty, ty, ty)
-            for ty in _INT_TYPES
+            for ty in INT_TYPES
         ],
         Max: [
             BinaryCppOp('std::fmax', False, ty, ty, ty)
-            for ty in _FLOAT_TYPES
+            for ty in FLOAT_TYPES
         ] + [
             BinaryCppOp('std::max', False, ty, ty, ty)
-            for ty in _INT_TYPES
+            for ty in INT_TYPES
         ],
 
         # Power operations
