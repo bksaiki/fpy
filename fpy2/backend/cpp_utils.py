@@ -2,14 +2,44 @@
 C++ compilation utilities.
 """
 
-import abc
 import enum
 import dataclasses
 
 from typing import Iterable, TypeAlias
 
 from ..ast import *
+from ..libraries.core import logb
+from ..primitive import Primitive
 from ..utils import default_repr, enum_repr
+
+###########################################################
+# C++ templates
+
+CPP_HEADERS = [
+    '#include <cassert>',
+    '#include <cfenv>',
+    '#include <cmath>',
+    '#include <cstddef>',
+    '#include <cstdint>',
+    '#include <numeric>',
+    '#include <vector>',
+    '#include <tuple>',
+]
+
+CPP_HELPERS = """"
+#pragma STDC FENV_ACCESS ON
+
+template <typename T>
+static size_t size(const T&, size_t) {
+    assert(false && "cannot compute tensor size of a scalar");
+    return 0;
+}
+
+template <typename T>
+static size_t size(const std::vector<T>& vec, size_t n) {
+    return (n == 0) ? vec.size() : size(vec[0], n);
+}
+"""
 
 ###########################################################
 # C++ (scalar) type
@@ -82,6 +112,13 @@ class CppList:
     def format(self):
         return f'std::vector<{self.elt.format()}>'
 
+    def dim(self) -> int:
+        match self.elt:
+            case CppList():
+                return self.elt.dim() + 1
+            case _:
+                return 1
+
 @default_repr
 class CppTuple:
     elts: tuple['CppType', ...]
@@ -124,10 +161,10 @@ _ALL_SCALARS = [CppScalar.BOOL] + _FLOAT_TYPES + _INT_TYPES
 @dataclasses.dataclass
 class UnaryCppOp:
     name: str
-    arg: CppScalar
-    ret: CppScalar
+    arg: CppType
+    ret: CppType
 
-    def matches(self, arg: CppScalar, ret: CppScalar) -> bool:
+    def matches(self, arg: CppType, ret: CppType) -> bool:
         return self.arg == arg and self.ret == ret
 
     def format(self, arg: str) -> str:
@@ -138,11 +175,11 @@ class UnaryCppOp:
 class BinaryCppOp:
     name: str
     is_infix: bool
-    lhs: CppScalar
-    rhs: CppScalar
-    ret: CppScalar
+    lhs: CppType
+    rhs: CppType
+    ret: CppType
 
-    def matches(self, lhs: CppScalar, rhs: CppScalar, ret: CppScalar) -> bool:
+    def matches(self, lhs: CppType, rhs: CppType, ret: CppType) -> bool:
         return self.lhs == lhs and self.rhs == rhs and self.ret == ret
 
     def format(self, lhs: str, rhs: str) -> str:
@@ -155,12 +192,12 @@ class BinaryCppOp:
 @dataclasses.dataclass
 class TernaryCppOp:
     name: str
-    arg1: CppScalar
-    arg2: CppScalar
-    arg3: CppScalar
-    ret: CppScalar
+    arg1: CppType
+    arg2: CppType
+    arg3: CppType
+    ret: CppType
 
-    def matches(self, arg1: CppScalar, arg2: CppScalar, arg3: CppScalar, ret: CppScalar) -> bool:
+    def matches(self, arg1: CppType, arg2: CppType, arg3: CppType, ret: CppType) -> bool:
         return self.arg1 == arg1 and self.arg2 == arg2 and self.arg3 == arg3 and self.ret == ret
 
     def format(self, arg1: str, arg2: str, arg3: str) -> str:
@@ -170,12 +207,14 @@ class TernaryCppOp:
 UnaryOpTable: TypeAlias = dict[type[Expr], list[UnaryCppOp]]
 BinaryOpTable: TypeAlias = dict[type[Expr], list[BinaryCppOp]]
 TernaryOpTable: TypeAlias = dict[type[Expr], list[TernaryCppOp]]
+PrimitiveTable: TypeAlias = dict[Primitive, list[UnaryCppOp | BinaryCppOp | TernaryCppOp]]
 
 @dataclasses.dataclass
 class ScalarOpTable:
     unary: UnaryOpTable
     binary: BinaryOpTable
     ternary: TernaryOpTable
+    prims: PrimitiveTable
 
 
 def _make_unary_table() -> UnaryOpTable:
@@ -443,9 +482,20 @@ def _make_ternary_table() -> TernaryOpTable:
         ],
     }
 
+def _make_primitive_table() -> PrimitiveTable:
+    return {
+        logb: [
+            UnaryCppOp('std::logb', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::logb', CppScalar.F32, CppScalar.F32),
+            UnaryCppOp('std::ilogb', CppScalar.F64, CppScalar.S64), # technically S32 (auto-promotion?)
+            UnaryCppOp('std::ilogb', CppScalar.F32, CppScalar.S64),
+        ]
+    }
+
 def make_op_table() -> ScalarOpTable:
     return ScalarOpTable(
         unary=_make_unary_table(),
         binary=_make_binary_table(),
         ternary=_make_ternary_table(),
+        prims=_make_primitive_table()
     )

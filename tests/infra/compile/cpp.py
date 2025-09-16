@@ -28,9 +28,16 @@ _example_ignore = [
 ]
 
 _library_ignore = [
+    # core
     '_modf_spec',
     'isinteger',
-    '_ldexp_spec'
+    '_ldexp_spec',
+    # eft
+    'ideal_2sum',
+    'ideal_2mul',
+    'fast_2sum', # isnar
+    'classic_2mul', # max_p
+    'ideal_fma',
 ]
 
 

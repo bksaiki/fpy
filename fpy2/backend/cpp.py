@@ -27,7 +27,12 @@ from ..types import *
 from ..utils import Gensym, enum_repr
 
 from .backend import Backend, CompileError
-from .cpp_utils import CppType, CppScalar, CppList, CppTuple, ScalarOpTable, make_op_table
+from .cpp_utils import (
+    CPP_HEADERS, CPP_HELPERS,
+    CppType, CppScalar, CppList, CppTuple,
+    UnaryCppOp, BinaryCppOp, TernaryCppOp,
+    ScalarOpTable, make_op_table
+)
 
 # TODO: support more C++ standards
 @enum_repr
@@ -309,9 +314,16 @@ class _CppBackendInstance(Visitor):
         return f'size({arr_cpp}, {n})'
 
     def _visit_dim(self, e: Dim, ctx: _CompileCtx):
-        # dim(x)
-        arr_cpp = self._visit_expr(e.arg, ctx)
-        return f'dim({arr_cpp})'
+        # dim(x) => statically determined from type information
+        t = self._fresh_var()
+        e_str = self._visit_expr(e.arg, ctx)
+        _, _ , arg_ty = self._expr_type(e.arg)
+        ctx.add_line(f'auto {t} = {e_str};') # bind it temporarily (unused)
+        assert isinstance(arg_ty, CppList)
+        # compute the size and cast to the expected type
+        dim = arg_ty.dim()
+        _, _, e_ty = self._expr_type(e)
+        return f'static_cast<{e_ty.format()}>({dim})'
 
     def _visit_enumerate(self, e: Enumerate, ctx: _CompileCtx):
         # enumerate(x: T) =>
@@ -526,9 +538,34 @@ class _CppBackendInstance(Visitor):
 
     def _visit_call(self, e: Call, ctx: _CompileCtx):
         match e.fn:
+            case Function():
+                # function call
+                # TODO: monomorphization
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
+                return f'{e.fn.name}({", ".join(args)})'
             case Primitive():
-                # primitive call (cannot compile)
-                raise CppCompileError(self.func, f'cannot compile primitive call `{e.format()}`')
+                # primitive call
+                if e.fn in self.options.op_table.prims:
+                    args = [self._visit_expr(arg, ctx) for arg in e.args]
+                    arg_tys: list[CppScalar] = []
+                    for arg in e.args:
+                        _, _, arg_ty = self._expr_type(arg)
+                        arg_tys.append(arg_ty)
+                    _, _, e_ty = self._expr_type(e)
+
+                    print(arg_tys, e_ty)
+
+                    ops = self.options.op_table.prims[e.fn]
+                    for op in ops:
+                        if isinstance(op, UnaryCppOp) and len(args) == 1 and op.matches(arg_tys[0], e_ty):
+                            return op.format(args[0])
+                        elif isinstance(op, BinaryCppOp) and len(args) == 2 and op.matches(arg_tys[0], arg_tys[1], e_ty):
+                            return op.format(args[0], args[1])
+                        elif isinstance(op, TernaryCppOp) and len(args) == 3 and op.matches(arg_tys[0], arg_tys[1], arg_tys[2], e_ty):
+                            return op.format(args[0], args[1], args[2])
+                    raise CppCompileError(self.func, f'no matching signature for primitive call `{e.format()}`')
+                else:
+                    raise CppCompileError(self.func, f'cannot compile unsupported primitive `{e.format()}`')
             case _:
                 # unknown call
                 raise CppCompileError(self.func, f'cannot compile unsupported call to `{e.format()}`')
@@ -814,43 +851,6 @@ class _CppBackendInstance(Visitor):
         ctx.add_line('}')  # close function definition
 
 
-_HEADERS = [
-    '#include <cassert>',
-    '#include <cfenv>',
-    '#include <cmath>',
-    '#include <cstddef>',
-    '#include <cstdint>',
-    '#include <numeric>',
-    '#include <vector>',
-    '#include <tuple>',
-]
-
-HELPERS = """"
-#pragma STDC FENV_ACCESS ON
-
-template <typename T>
-static size_t size(const T&, size_t) {
-    assert(false && "cannot compute tensor size of a scalar");
-    return 0;
-}
-
-template <typename T>
-static size_t size(const std::vector<T>& vec, size_t n) {
-    return (n == 0) ? vec.size() : size(vec[0], n);
-}
-
-template <typename T>
-static size_t dim(const T&) {
-    return 0;
-}
-
-template <typename T>
-static size_t dim(const std::vector<T>& vec) {
-    return 1 + dim(vec[0]);
-}
-"""
-
-
 class CppBackend(Backend):
     """
     Compiler from FPy to C++.
@@ -858,8 +858,9 @@ class CppBackend(Backend):
 
     std: CppStandard
     op_table: ScalarOpTable
-
     unsafe_allow_int: bool
+
+    compiled: dict[str, Function]
 
     def __init__(
         self,
@@ -874,24 +875,24 @@ class CppBackend(Backend):
         self.std = std
         self.op_table = op_table
         self.unsafe_allow_int = unsafe_allow_int
-
+        self.compiled = {}
 
     def headers(self) -> list[str]:
         """
         Returns the C++ headers required for compiling an FPy program.
         """
-        return list(_HEADERS)
+        return list(CPP_HEADERS)
 
     def helpers(self) -> str:
         """
         Returns C++ helper functions for compiled FPy programs.
         """
-
-        return str(HELPERS)
+        return str(CPP_HELPERS)
 
     def compile(
         self,
         func: Function,
+        *,
         arg_ctxs: None | Iterable[Context | None] = None,
         ctx: Context | None = None
     ) -> str:
@@ -905,6 +906,10 @@ class CppBackend(Backend):
             raise TypeError(f'Expected `Context`, got {type(ctx)} for {ctx}')
         if arg_ctxs is None:
             arg_ctxs = tuple(None for _ in func.args)
+
+        if func.name in self.compiled:
+            raise ValueError(f'Function `{func.name}` has already been compiled')
+        self.compiled[func.name] = func
 
         # normalization passes
         ast = ContextInline.apply(func.ast, func.env)
