@@ -1,7 +1,7 @@
 """Syntax checking for the FPy AST."""
 
 from dataclasses import dataclass
-from typing import Optional, Self
+from typing import Self
 
 from ..ast.fpyast import *
 from ..ast.visitor import Visitor
@@ -16,7 +16,7 @@ class _Env:
     """Bound variables in the current scope."""
     env: dict[NamedId, bool]
 
-    def __init__(self, env: Optional[dict[NamedId, bool]] = None):
+    def __init__(self, env: dict[NamedId, bool] | None = None):
         if env is None:
             self.env = {}
         else:
@@ -374,7 +374,7 @@ class SyntaxCheck:
     def check(
         func: FuncDef,
         *,
-        free_vars: Optional[set[NamedId]] = None,
+        free_vars: set[NamedId] | None = None,
         ignore_unknown: bool = True,
         allow_wildcard: bool = False
     ):

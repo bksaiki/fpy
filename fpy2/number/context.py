@@ -3,9 +3,7 @@ This module defines the rounding context type.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, TypeAlias, Self, Union
-
-from .round import RoundingMode
+from typing import TypeAlias, Self, Union
 
 from . import number
 
@@ -99,7 +97,7 @@ class Context(ABC):
         ...
 
     @abstractmethod
-    def round_params(self) -> tuple[Optional[int], Optional[int]]:
+    def round_params(self) -> tuple[int | None, int | None]:
         """
         Returns the rounding parameters `(max_p, min_n)` used for rounding
         under this context.

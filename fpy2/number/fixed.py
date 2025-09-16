@@ -2,8 +2,6 @@
 This module defines the usual fixed-width, two's complement, fixed-point numbers.
 """
 
-from typing import Optional
-
 from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import EncodableContext
@@ -47,10 +45,10 @@ class FixedContext(MPBFixedContext, EncodableContext):
         nbits: int,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.WRAP,
-        num_randbits: Optional[int] = 0,
+        num_randbits: int | None = 0,
         *,
-        nan_value: Optional[Float] = None,
-        inf_value: Optional[Float] = None
+        nan_value: Float | None = None,
+        inf_value: Float | None = None
     ):
         if not isinstance(signed, bool):
             raise TypeError(f'Expected \'bool\' for signed={signed}, got {type(signed)}')
@@ -92,9 +90,9 @@ class FixedContext(MPBFixedContext, EncodableContext):
         nbits: DefaultOr[int] = DEFAULT,
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
-        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
-        nan_value: DefaultOr[Optional[Float]] = DEFAULT,
-        inf_value: DefaultOr[Optional[Float]] = DEFAULT,
+        num_randbits: DefaultOr[int | None] = DEFAULT,
+        nan_value: DefaultOr[Float | None] = DEFAULT,
+        inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
     ) -> 'FixedContext':
         if signed is DEFAULT:

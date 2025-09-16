@@ -4,12 +4,12 @@ This module contains the parser for the FPy language.
 
 import ast
 
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping
 from types import FunctionType
 
 from ..ast.fpyast import *
 from ..env import ForeignEnv
-from ..number import Context, Float, Real
+from ..number import Float, Real
 from ..utils import NamedId, UnderscoreId, SourceId
 from ..ops import *
 
@@ -112,14 +112,14 @@ class FPyParserError(Exception):
     loc: Location
     why: str
     where: ast.AST
-    ctx: Optional[ast.AST]
+    ctx: ast.AST | None
 
     def __init__(
         self,
         loc: Location,
         why: str,
         where: ast.AST,
-        ctx: Optional[ast.AST] = None
+        ctx: ast.AST | None = None
     ):
         msg_lines = [why]
         match where:
@@ -844,8 +844,8 @@ class Parser:
     def _eval(
         self,
         e: ast.expr,
-        globals: Optional[Mapping[str, Any]] = None,
-        locals: Optional[Mapping[str, object]] = None
+        globals: Mapping[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None
     ):
         globals = None if globals is None else dict(globals)
         return eval(ast.unparse(e), globals, locals)
@@ -901,8 +901,8 @@ class Parser:
         self,
         decorator_list: list[ast.expr],
         decorator: Any,
-        globals: Optional[Mapping[str, Any]] = None,
-        locals: Optional[Mapping[str, object]] = None
+        globals: Mapping[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None
     ):
         """Returns the decorator AST for a particular decorator"""
         for dec in reversed(decorator_list):

@@ -5,7 +5,6 @@ and bounded. Hence, "MP-B."
 """
 
 from fractions import Fraction
-from typing import Optional
 
 from ..utils import default_repr, DefaultOr, DEFAULT
 
@@ -51,7 +50,7 @@ class MPBFloatContext(SizedContext):
     overflow: OverflowMode
     """overflow behavior"""
 
-    num_randbits: Optional[int]
+    num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
     _mps_ctx: MPSFloatContext
@@ -70,9 +69,9 @@ class MPBFloatContext(SizedContext):
         maxval: RealFloat, 
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
-        num_randbits: Optional[int] = 0,
+        num_randbits: int | None = 0,
         *,
-        neg_maxval: Optional[RealFloat] = None
+        neg_maxval: RealFloat | None = None
     ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
@@ -167,7 +166,7 @@ class MPBFloatContext(SizedContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         neg_maxval: DefaultOr[RealFloat] = DEFAULT,
-        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
+        num_randbits: DefaultOr[int | None] = DEFAULT,
         **kwargs
     ) -> 'MPBFloatContext':
         if pmax is DEFAULT:
@@ -272,7 +271,7 @@ class MPBFloatContext(SizedContext):
             case _:
                 raise RuntimeError(f'unrechable {direction}')
 
-    def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
+    def _round_float_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
 
@@ -328,7 +327,7 @@ class MPBFloatContext(SizedContext):
         # step 6. return rounded result
         return Float(x=rounded, ctx=self)
 
-    def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
+    def _round_at(self, x, n: int | None, exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x

@@ -3,7 +3,6 @@ Defines the abstract base class for FPy interpreters.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from ..fpc_context import FPCoreContext
 from ..function import Function, set_default_function_call
@@ -18,10 +17,10 @@ class Interpreter(ABC):
     """Abstract base class for FPy interpreters."""
 
     @abstractmethod
-    def eval(self, func: Function, args, ctx: Optional[Context] = None):
+    def eval(self, func: Function, args, ctx: Context | None = None):
         ...
 
-    def _func_ctx(self, func: Function, ctx: Optional[Context] = None) -> Context:
+    def _func_ctx(self, func: Function, ctx: Context | None = None) -> Context:
         """
         Computes the context to use during evaluation.
 
@@ -52,7 +51,7 @@ class FunctionReturnError(Exception):
 ###########################################################
 # Default interpreter
 
-_default_interpreter: Optional[Interpreter] = None
+_default_interpreter: Interpreter | None = None
 
 def get_default_interpreter() -> Interpreter:
     """Get the default FPy interpreter."""
@@ -71,7 +70,7 @@ def set_default_interpreter(rt: Interpreter):
 ###########################################################
 # Default function call
 
-def _default_function_call(fn: Function, *args, ctx: Optional[Context] = None):
+def _default_function_call(fn: Function, *args, ctx: Context | None = None):
     """Default function call."""
     if fn.runtime is None:
         rt = get_default_interpreter()

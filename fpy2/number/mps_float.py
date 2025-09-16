@@ -5,7 +5,6 @@ numbers with subnormals. Hence, "MP-S."
 """
 
 from fractions import Fraction
-from typing import Optional
 
 from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
@@ -39,7 +38,7 @@ class MPSFloatContext(OrdinalContext):
     rm: RoundingMode
     """rounding mode"""
 
-    num_randbits: Optional[int]
+    num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
     _mp_ctx: MPFloatContext
@@ -56,7 +55,7 @@ class MPSFloatContext(OrdinalContext):
         pmax: int,
         emin: int,
         rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: Optional[int] = 0
+        num_randbits: int | None = 0
     ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
@@ -106,7 +105,7 @@ class MPSFloatContext(OrdinalContext):
         pmax: DefaultOr[int] = DEFAULT,
         emin: DefaultOr[int] = DEFAULT,
         rm: DefaultOr[RoundingMode] = DEFAULT,
-        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
+        num_randbits: DefaultOr[int | None] = DEFAULT,
         **kwargs
     ) -> 'MPSFloatContext':
         if pmax is DEFAULT:
@@ -209,7 +208,7 @@ class MPSFloatContext(OrdinalContext):
             nmin = self.nmin - self.num_randbits
             return pmax, nmin
 
-    def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
+    def _round_float_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
 
@@ -241,7 +240,7 @@ class MPSFloatContext(OrdinalContext):
         # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)
 
-    def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
+    def _round_at(self, x, n: int | None, exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x

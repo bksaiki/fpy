@@ -5,7 +5,7 @@ FPy runtime backed by the Titanic library.
 import copy
 import inspect
 
-from typing import Any, Callable, Collection, Optional, TypeAlias
+from typing import Any, Callable, Collection, TypeAlias
 
 from .. import ops
 
@@ -120,14 +120,14 @@ class _Interpreter(Visitor):
     """mapping from variable names to values"""
     foreign: ForeignEnv
     """foreign environment"""
-    override_ctx: Optional[Context]
+    override_ctx: Context | None
     """optional overriding context"""
 
     def __init__(
         self, 
         foreign: ForeignEnv,
         *,
-        override_ctx: Optional[Context] = None,
+        override_ctx: Context | None = None,
     ):
         self.env = {}
         self.foreign = foreign
@@ -821,17 +821,17 @@ class DefaultInterpreter(Interpreter):
     All operations are correctly-rounded.
     """
 
-    ctx: Optional[Context] = None
+    ctx: Context | None = None
     """optionaly overriding context"""
 
-    def __init__(self, ctx: Optional[Context] = None):
+    def __init__(self, ctx: Context | None = None):
         self.ctx = ctx
 
     def eval(
         self,
         func: Function,
         args: Collection[Any],
-        ctx: Optional[Context] = None
+        ctx: Context | None = None
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')

@@ -2,7 +2,7 @@
 This module defines the `Gensym` object that generates unique identifiers.
 """
 
-from typing import Callable, Optional
+from typing import Callable
 
 from .identifier import *
 
@@ -16,12 +16,12 @@ class Gensym(object):
     _idents: set[NamedId]
     _generated: set[NamedId]
     _counter: int
-    _rename_hook: Optional[Callable[[str], str]]
+    _rename_hook: Callable[[str], str] | None
 
     def __init__(
         self,
-        reserved: Optional[set[NamedId]] = None,
-        rename_hook: Optional[Callable[[str], str]] = None
+        reserved: set[NamedId] | None = None,
+        rename_hook: Callable[[str], str] | None = None
     ):
         if reserved is None:
             self._idents = set()

@@ -1,5 +1,4 @@
 from enum import IntEnum
-from typing import Optional
 
 from ..utils import default_repr, enum_repr, bitmask, DefaultOr, DEFAULT
 
@@ -58,17 +57,17 @@ class EFloatContext(EncodableContext):
     overflow: OverflowMode
     """overflow behavior"""
 
-    num_randbits: Optional[int]
+    num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
-    nan_value: Optional[Float]
+    nan_value: Float | None
     """
     if NaN is not representable, what value should NaN round to?
     if not set, then `round()` will produce to Inf or MAX_VAL whichever
     is representable.
     """
 
-    inf_value: Optional[Float]
+    inf_value: Float | None
     """
     if Inf is not representable, what value should Inf round to?
     if not set, then `round()` will produce NAN or MAX_VAL whichever
@@ -87,10 +86,10 @@ class EFloatContext(EncodableContext):
         eoffset: int,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
-        num_randbits: Optional[int] = 0,
+        num_randbits: int | None = 0,
         *,
-        nan_value: Optional[Float] = None,
-        inf_value: Optional[Float] = None
+        nan_value: Float | None = None,
+        inf_value: Float | None = None
     ):
         if not isinstance(es, int):
             raise TypeError(f'Expected \'int\', got \'{type(es)}\' for es={es}')
@@ -232,7 +231,7 @@ class EFloatContext(EncodableContext):
         eoffset: DefaultOr[int] = DEFAULT,
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
-        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
+        num_randbits: DefaultOr[int | None] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
@@ -749,7 +748,7 @@ def _ext_to_mpb(
     eoffset: int,
     rm: RoundingMode,
     overflow: OverflowMode,
-    num_randbits: Optional[int] = 0,
+    num_randbits: int | None = 0,
 ) -> MPBFloatContext:
     """Converts between `ExtFloatContext` and `MPBFloatContext` parameters."""
     # IEEE 754 derived parameters

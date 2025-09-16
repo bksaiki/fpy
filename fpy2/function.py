@@ -1,6 +1,6 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKING
+from typing import Callable, Generic, ParamSpec, TypeVar, TYPE_CHECKING
 from titanfp.fpbench.fpcast import FPCore
 
 from . import ast as fpyast
@@ -29,7 +29,7 @@ class Function(Generic[P, R]):
     ast: fpyast.FuncDef
     sig: FunctionType | None
     env: ForeignEnv
-    runtime: Optional['Interpreter']
+    runtime: 'Interpreter' | None
 
     def __init__(
         self,
@@ -37,7 +37,7 @@ class Function(Generic[P, R]):
         sig: FunctionType | None,
         env: ForeignEnv,
         *,
-        runtime: Optional['Interpreter'] = None,
+        runtime: 'Interpreter' | None = None,
     ):
         self.ast = ast
         self.sig = sig
@@ -50,7 +50,7 @@ class Function(Generic[P, R]):
     def __str__(self):
         return self.ast.format()
 
-    def __call__(self, *args, ctx: Optional[Context] = None) -> R:
+    def __call__(self, *args, ctx: Context | None = None) -> R:
         fn = get_default_function_call()
         return fn(self, *args, ctx=ctx)
 
@@ -97,7 +97,7 @@ class Function(Generic[P, R]):
 ###########################################################
 # Default function call
 
-_default_function_call: Optional[Callable] = None
+_default_function_call: Callable | None = None
 
 def get_default_function_call() -> Callable:
     """Get the default function call."""

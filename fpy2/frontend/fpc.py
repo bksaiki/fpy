@@ -2,12 +2,12 @@
 FPy parsing from FPCore.
 """
 
-from typing import Any, Optional, TypeAlias
+from typing import Any, TypeAlias
 
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
 from ..ast.fpyast import *
-from ..analysis import SyntaxCheck, TypeCheck
+from ..analysis import SyntaxCheck
 from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..utils import Gensym, pythonize_id
 
@@ -134,9 +134,9 @@ class _Ctx:
 
     def __init__(
         self,
-        env: Optional[dict[str, NamedId]] = None,
-        props: Optional[dict[str, Any]] = None,
-        stmts: Optional[list[Stmt]] = None
+        env: dict[str, NamedId] | None = None,
+        props: dict[str, Any] | None = None,
+        stmts: list[Stmt] | None = None
     ):
         if env is None:
             self.env = {}

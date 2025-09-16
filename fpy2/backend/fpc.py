@@ -1,7 +1,5 @@
 """Compilation from FPy to FPCore."""
 
-from typing import Optional
-
 import titanfp.fpbench.fpcast as fpc
 
 from ..analysis import DefineUse, DefineUseAnalysis
@@ -15,11 +13,11 @@ from ..utils import Gensym
 from .backend import Backend, CompileError
 
 # Cached table storage
-_nullary_table_cache: Optional[dict[type[NullaryOp], fpc.Expr]] = None
-_unary_table_cache: Optional[dict[type[UnaryOp], type[fpc.Expr]]] = None
-_binary_table_cache: Optional[dict[type[BinaryOp], type[fpc.Expr]]] = None
-_ternary_table_cache: Optional[dict[type[TernaryOp], type[fpc.Expr]]] = None
-_nary_table_cache: Optional[dict[type[NaryOp], type[fpc.Expr]]] = None
+_nullary_table_cache: dict[type[NullaryOp], fpc.Expr] | None = None
+_unary_table_cache: dict[type[UnaryOp], type[fpc.Expr]] | None = None
+_binary_table_cache: dict[type[BinaryOp], type[fpc.Expr]] | None = None
+_ternary_table_cache: dict[type[TernaryOp], type[fpc.Expr]] | None = None
+_nary_table_cache: dict[type[NaryOp], type[fpc.Expr]] | None = None
 
 def _get_nullary_table() -> dict[type[NullaryOp], fpc.Expr]:
     """Get the cached nullary operations table."""
@@ -927,7 +925,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_return(self, stmt: ReturnStmt, ctx: None) -> fpc.Expr:
         return self._visit_expr(stmt.expr, ctx)
 
-    def _visit_block(self, block: StmtBlock, ctx: Optional[fpc.Expr]):
+    def _visit_block(self, block: StmtBlock, ctx: fpc.Expr | None):
         if ctx is None:
             e = self._visit_statement(block.stmts[-1], None)
             stmts = block.stmts[:-1]
@@ -942,7 +940,7 @@ class _FPCoreCompileInstance(Visitor):
 
         return e
 
-    def _visit_function(self, func: FuncDef, ctx: Optional[fpc.Expr]):
+    def _visit_function(self, func: FuncDef, ctx: fpc.Expr | None):
         args = [self._compile_arg(arg) for arg in func.args]
         body = self._visit_block(func.body, ctx)
 

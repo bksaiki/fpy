@@ -2,8 +2,6 @@
 Transformation pass to rewrite in-place tuple mutation as functional updates.
 """
 
-from typing import Optional
-
 from ..analysis import DefineUse, SyntaxCheck
 from ..ast import *
 
@@ -34,7 +32,7 @@ class FuncUpdate:
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: Optional[set[str]] = None) -> FuncDef:
+    def apply(func: FuncDef, names: set[str] | None = None) -> FuncDef:
         if names is None:
             def_use = DefineUse.analyze(func)
             names = set(def_use.defs.keys())

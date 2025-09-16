@@ -3,8 +3,6 @@ Transformation pass to bundle updated variables in for loops
 into a single variable.
 """
 
-from typing import Optional
-
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
@@ -25,7 +23,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _visit_tuple_binding(self, binding: TupleBinding, rename: Optional[dict[NamedId, NamedId]] = None):
+    def _visit_tuple_binding(self, binding: TupleBinding, rename: dict[NamedId, NamedId] | None = None):
         new_vars: list[Id | TupleBinding] = []
         for var in binding:
             match var:
