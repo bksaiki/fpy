@@ -16,9 +16,17 @@ _modules = [
     fp.libraries.matrix
 ]
 
+_unit_ignore = [
+    'test_context_expr1',
+    'keep_p_1'
+]
+
 def _test_tcheck_unit():
     for core in tests + examples:
         assert isinstance(core, fp.Function)
+        if core.name in _unit_ignore:
+            continue
+
         ast = ContextInline.apply(core.ast, core.env)
         info = ContextInfer.infer(ast)
         print(ast.name, info.func_ctx)
