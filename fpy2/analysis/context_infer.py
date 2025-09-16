@@ -293,6 +293,9 @@ class _ContextInferInstance(Visitor):
         from ..function import Function
 
         match e.fn:
+            case None:
+                # calling None => can't conclude anything
+                return self._fresh_context_var()
             case Primitive():
                 # calling a primitive => can't conclude anything
                 # TODO: annotations to attach context info to primitives
