@@ -1,61 +1,62 @@
-from fpy2 import *
+import fpy2 as fp
+
 #
 # Utilities
 #
 
-@fpy(name='clamp')
-def clamp(x: Real, a: Real, b: Real):
+@fp.fpy(meta={'name': 'clamp'})
+def clamp(x: fp.Real, a: fp.Real, b: fp.Real):
     """
     Clamps a value `x` to the range [a, b].
     """
     return min(max(x, a), b)
 
-@fpy(name='vector addition')
-def vector_add(x: tuple[Real, ...], y: tuple[Real, ...]):
+@fp.fpy(meta={'name': 'vector addition'})
+def vector_add(x: list[fp.Real], y: list[fp.Real]):
     assert len(x) == len(y)
     return [x + y for x, y in zip(x, y)]
 
-@fpy(name='vector subtraction')
-def vector_sub(x: tuple[Real, ...], y: tuple[Real, ...]):
+@fp.fpy(meta={'name': 'vector subtraction'})
+def vector_sub(x: list[fp.Real], y: list[fp.Real]):
     assert len(x) == len(y)
     return [x - y for x, y in zip(x, y)]
 
-@fpy(name='scalar-vector multiplication')
-def vector_mul(s: Real, x: tuple[Real, ...]):
+@fp.fpy(meta={'name': 'scalar-vector multiplication'})
+def vector_mul(s: fp.Real, x: list[fp.Real]):
     return [s * xi for xi in x]
 
-@fpy(name='transforms spherical coordinates')
-def spherical_direction(sin_theta: Real, cos_theta: Real, phi: Real):
+@fp.fpy(meta={'name': 'transforms spherical coordinates'})
+def spherical_direction(sin_theta: fp.Real, cos_theta: fp.Real, phi: fp.Real):
     sin_theta = clamp(sin_theta, -1, 1)
     cos_theta = clamp(cos_theta, -1, 1)
-    return sin_theta * cos(phi), sin_theta * sin(phi), cos_theta
+    return sin_theta * fp.cos(phi), sin_theta * fp.sin(phi), cos_theta
 
-@fpy(name='phi coordinate in spherical coordinates')
-def spherical_phi(v: tuple[Real, Real, Real]):
-    p = atan2(v[1], v[0])
-    return p + 2 * PI if p < 0 else p
+@fp.fpy(meta={'name': 'phi coordinate in spherical coordinates'})
+def spherical_phi(v: tuple[fp.Real, fp.Real, fp.Real]):
+    p = fp.atan2(v[1], v[0])
+    return p + 2 * fp.const_pi() if p < 0 else p
 
 #
 # Sampling a linear function
 #
 
-@fpy(
-    name='linear interpolation',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda t, a, b: 0 <= t <= 1
-)
-def lerp(t: Real, a: Real, b: Real):
+@fp.fpy(meta={
+    'name': 'linear interpolation',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda t, a, b: 0 <= t <= 1
+})
+def lerp(t: fp.Real, a: fp.Real, b: fp.Real):
     """Linear interpolation between two points `a` and `b`."""
     return (1 - t) * a + t * b
 
-@fpy(
-    name='PDF of linear sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda t, a, b: 0 <= t <= 1
-)
-def linear_pdf(t: Real, a: Real, b: Real):
+@fp.fpy(meta={
+    'name': 'PDF of linear sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda t, a, b: 0 <= t <= 1
+})
+def linear_pdf(t: fp.Real, a: fp.Real, b: fp.Real):
     """PDF of sampling linearly between two points `a` and `b`."""
     if t < 0 or t > 1:
         pdf = 0
@@ -63,30 +64,30 @@ def linear_pdf(t: Real, a: Real, b: Real):
         pdf = 2 * lerp(t, a, b) / (a + b)
     return pdf
 
-@fpy(
-    name='linear sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u, a, b: 0 <= u <= 1
-)
-def sample_linear(u: Real, a: Real, b: Real):
+@fp.fpy(meta={
+    'name': 'linear sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u, a, b: 0 <= u <= 1
+})
+def sample_linear(u: fp.Real, a: fp.Real, b: fp.Real):
     """
     Generates a linear sample on `[a, b]` from a uniform sample `u`.
     """
     if u == 0 and a == 0:
         # TODO: why is this here?
-        x: Real = 0
+        x: fp.Real = 0
     else:
-        x = u * (a + b) / (a + sqrt(lerp(u, a * a, b * b)))
-        x = min(x, hexfloat('0x1.fffffep-1'))
+        x = u * (a + b) / (a + fp.sqrt(lerp(u, a * a, b * b)))
+        x = min(x, fp.hexfloat('0x1.fffffep-1'))
     return x
 
-@fpy(
-    name='inversion of linear sampling',
-    precision='binary32',
-    pre=lambda x, a, b: a <= x <= b
-)
-def invert_linear_sample(x: Real, a: Real, b: Real):
+@fp.fpy(meta={
+    'name': 'inversion of linear sampling',
+    'precision': 'binary32',
+    'pre': lambda x, a, b: a <= x <= b
+})
+def invert_linear_sample(x: fp.Real, a: fp.Real, b: fp.Real):
     """
     Transforms a linear sample on [a, b] to a uniform sample.
     """
@@ -96,13 +97,13 @@ def invert_linear_sample(x: Real, a: Real, b: Real):
 # Uniform sampling of a triangle
 #
 
-@fpy(
-    name='uniform sampling of a triangle',
-    precision='binary32',
-    cite='pbrt-v4',
-    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
-)
-def sample_uniform_triangle(u: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'uniform sampling of a triangle',
+    'precision': 'binary32',
+    'cite': 'pbrt-v4',
+    'pre': lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+})
+def sample_uniform_triangle(u: tuple[fp.Real, fp.Real]):
     """
     Given a uniform sample on the unit square, generates
     a uniform sample on a triangle in barycentric coordinates.
@@ -115,13 +116,13 @@ def sample_uniform_triangle(u: tuple[Real, Real]):
         b0 = u[0] - b1
     return b0, b1, 1 - b0 - b1
 
-@fpy(
-    name='inversion of uniform sampling of a triangle',
-    precision='binary32',
-    cite='pbrt-v4',
-    pre=lambda b: 0 <= b[0] <= 1 and 0 <= b[1] <= 1 and 0 <= b[2] <= 1
-)
-def invert_uniform_triangle_sample(b: tuple[Real, Real, Real]):
+@fp.fpy(meta={
+    'name': 'inversion of uniform sampling of a triangle',
+    'precision': 'binary32',
+    'cite': 'pbrt-v4',
+    'pre': lambda b: 0 <= b[0] <= 1 and 0 <= b[1] <= 1 and 0 <= b[2] <= 1
+})
+def invert_uniform_triangle_sample(b: tuple[fp.Real, fp.Real, fp.Real]):
     """
     Transforms a uniform sample on a triangle in barycentric coordinates
     to a uniform sample on the unit square.
@@ -140,13 +141,13 @@ def invert_uniform_triangle_sample(b: tuple[Real, Real, Real]):
 # Sampling the "tent" function of radius r
 #
 
-@fpy(
-    name='sample discrete',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u: 0 <= u <= 1
-)
-def sample_discrete(u: Real):
+@fp.fpy(meta={
+    'name': 'sample discrete',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u <= 1
+})
+def sample_discrete(u: fp.Real):
     """
     Splits a uniform sample into [0, 0.5) and [0.5, 1).
 
@@ -160,13 +161,13 @@ def sample_discrete(u: Real):
         remapped = 2 * u - 1  # maps [0.5, 1) to [0, 1)
     return lower, remapped
 
-@fpy(
-    name='tent sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u, r: 0 <= u <= 1 and r > 0
-)
-def sample_tent(u: Real, r: Real):
+@fp.fpy(meta={
+    'name': 'tent sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u, r: 0 <= u <= 1 and r > 0
+})
+def sample_tent(u: fp.Real, r: fp.Real):
     """
     Generates a sample from the "tent" function of radius `r`.
 
@@ -180,29 +181,29 @@ def sample_tent(u: Real, r: Real):
         x = r * sample_linear(u2, 1, 0)
     return x
 
-@fpy(
-    name='PDF of tent function',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, r: r > 0
-)
-def tent_pdf(x : Real, r: Real):
+@fp.fpy(meta={
+    'name': 'PDF of tent function',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, r: r > 0
+})
+def tent_pdf(x : fp.Real, r: fp.Real):
     """
     PDF of sampling the "tent" function of radius `r`.
     """
     if abs(x) >= r:
-        pdf: Real = 0
+        pdf: fp.Real = 0
     else:
         pdf = 1 / r - abs(x) / (r * r)
     return pdf
 
-@fpy(
-    name='inversion of tent sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, r: -r <= x <= r and r > 0
-)
-def invert_tent_sample(x: Real, r: Real):
+@fp.fpy(meta={
+    'name': 'inversion of tent sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, r: -r <= x <= r and r > 0
+})
+def invert_tent_sample(x: fp.Real, r: fp.Real):
     """
     Transforms a sample from the "tent" function of radius `r`
     to a uniform sample.
@@ -217,179 +218,179 @@ def invert_tent_sample(x: Real, r: Real):
 # Sampling the exponential function
 #
 
-@fpy(
-    name='PDF of the exponential function',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a: a > 0
-)
-def exponential_pdf(x: Real, a: Real):
+@fp.fpy(meta={
+    'name': 'PDF of the exponential function',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a: a > 0
+})
+def exponential_pdf(x: fp.Real, a: fp.Real):
     """
     PDF of the exponential function.
     """
-    return a * exp(-a * x)
+    return a * fp.exp(-a * x)
 
-@fpy(
-    name='Sample the exponential function',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u, a: a > 0
-)
-def sample_exponential(u: Real, a: Real):
+@fp.fpy(meta={
+    'name': 'Sample the exponential function',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u, a: a > 0
+})
+def sample_exponential(u: fp.Real, a: fp.Real):
     """
     Generates a sample from the exponential function.
     """
-    return -log(1 - u) / a
+    return -fp.log(1 - u) / a
 
-@fpy(
-    name='inversion of exponential sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a: a > 0
-)
-def invert_exponential_sample(x: Real, a: Real):
+@fp.fpy(meta={
+    'name': 'inversion of exponential sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a: a > 0
+})
+def invert_exponential_sample(x: fp.Real, a: fp.Real):
     """
     Transforms a sample from the exponential function to a uniform sample.
     """
-    return 1 - exp(-a * x)
+    return 1 - fp.exp(-a * x)
 
 #
 #   Sampling the trimmed exponential function
 #
 
-@fpy(
-    name='sample the (trimmed) exponential function',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u, a, x_max: a > 0 and x_max > 0
-)
-def sample_trimmed_exponential(u: Real, a: Real, x_max: Real):
+@fp.fpy(meta={
+    'name': 'sample the (trimmed) exponential function',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u, a, x_max: a > 0 and x_max > 0
+})
+def sample_trimmed_exponential(u: fp.Real, a: fp.Real, x_max: fp.Real):
     """
     Generates a sample from the (trimmed) exponential function.
     """
-    return log(1 - u * (1 - exp(-a * x_max))) / -a
-@fpy(
-    name='PDF of the exponential function',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a, x_max: a > 0 and x_max > 0
-)
-def trimmed_exponential_pdf(x: Real, a: Real, x_max: Real):
+    return fp.log(1 - u * (1 - fp.exp(-a * x_max))) / -a
+@fp.fpy(meta={
+    'name': 'PDF of the exponential function',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a, x_max: a > 0 and x_max > 0
+})
+def trimmed_exponential_pdf(x: fp.Real, a: fp.Real, x_max: fp.Real):
     """
     PDF of the (trimmed) exponential function.
     """
     if x < 0 or x > x_max:
-        pdf: Real = 0
+        pdf: fp.Real = 0
     else:
-        pdf = a / (1 - exp(-a * x_max)) * exp(-a * x)
+        pdf = a / (1 - fp.exp(-a * x_max)) * fp.exp(-a * x)
     return pdf
 
-@fpy(
-    name='inversion of (trimmed) exponential sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a, x_max: a > 0 and x_max > 0
-)
-def invert_trimmed_exponential_sample(x: Real, a: Real, x_max: Real):
+@fp.fpy(meta={
+    'name': 'inversion of (trimmed) exponential sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a, x_max: a > 0 and x_max > 0
+})
+def invert_trimmed_exponential_sample(x: fp.Real, a: fp.Real, x_max: fp.Real):
     """
     Transforms a sample from the exponential function to a uniform sample.
     """
-    return (1 - exp(-a * x)) / (1 - exp(-a * x_max))
+    return (1 - fp.exp(-a * x)) / (1 - fp.exp(-a * x_max))
 
 #
 # Sampling the Gaussian distribution
 #
 
-@fpy(
-    name='PDF of Gaussian sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a: a > 0
-)
-def normal_pdf(x: Real, mu: Real, sigma: Real):
+@fp.fpy(meta={
+    'name': 'PDF of Gaussian sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a: a > 0
+})
+def normal_pdf(x: fp.Real, mu: fp.Real, sigma: fp.Real):
     """
     PDF of sampling from a Gaussian distribution.
     """
     mu = x - mu
-    scale = 1 / (abs(sigma) * sqrt(2 * PI))
-    unscaled = exp(-(mu * mu) / (2 * sigma * sigma))
+    scale = 1 / (abs(sigma) * fp.sqrt(2 * fp.const_pi()))
+    unscaled = fp.exp(-(mu * mu) / (2 * sigma * sigma))
     return scale * unscaled
 
-@fpy(
-    name='Sample Gaussian distribution',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u: 0 <= u <= 1
-)
-def sample_normal(u: Real, mu: Real, sigma: Real):
+@fp.fpy(meta={
+    'name': 'Sample Gaussian distribution',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u <= 1
+})
+def sample_normal(u: fp.Real, mu: fp.Real, sigma: fp.Real):
     """
     Generates a sample from a Gaussian distribution.
     """
-    return mu + SQRT2 * sigma * erfc(2 * u - 1)
+    return mu + fp.const_sqrt2() * sigma * fp.erfc(2 * u - 1)
 
-@fpy(
-    name='inversion of Gaussian sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-)
-def invert_normal_sample(x: Real, mu: Real, sigma: Real):
+@fp.fpy(meta={
+    'name': 'inversion of Gaussian sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32'
+})
+def invert_normal_sample(x: fp.Real, mu: fp.Real, sigma: fp.Real):
     """
     Transforms a sample from a Gaussian distribution to a uniform sample.
     """
-    return 0.5 * (1 + erf((x - mu) / (sigma * SQRT2)))
+    return 0.5 * (1 + fp.erf((x - mu) / (sigma * fp.const_sqrt2())))
 
 #
 # Sampling the logistic function
 #
 
-@fpy(
-    name='PDF of logistic sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, s: s > 0
-)
-def logistic_pdf(x: Real, s: Real):
+@fp.fpy(meta={
+    'name': 'PDF of logistic sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, s: s > 0
+})
+def logistic_pdf(x: fp.Real, s: fp.Real):
     """
     PDF of sampling from a logistic distribution.
     """
     x = abs(x)
-    t = 1 + exp(-x / s)
-    return exp(-x / s) / (s * t * t)
+    t = 1 + fp.exp(-x / s)
+    return fp.exp(-x / s) / (s * t * t)
 
-@fpy(
-    name='Sample logistic distribution',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u: 0 <= u <= 1
-)
-def sample_logistic(u: Real, s: Real):
+@fp.fpy(meta={
+    'name': 'Sample logistic distribution',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u <= 1
+})
+def sample_logistic(u: fp.Real, s: fp.Real):
     """
     Generates a sample from a logistic distribution.
     """
-    return -s * log(1 / u - 1)
+    return -s * fp.log(1 / u - 1)
 
-@fpy(
-    name='inversion of logistic sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-)
-def invert_logistic_sample(x: Real, s: Real):
+@fp.fpy(meta={
+    'name': 'inversion of logistic sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32'
+})
+def invert_logistic_sample(x: fp.Real, s: fp.Real):
     """
     Transforms a sample from a logistic distribution to a uniform sample.
     """
-    return 1 / (1 + exp(-x / s))
+    return 1 / (1 + fp.exp(-x / s))
 
 #
 # Sampling the "trimmed" logistic function
 #
 
-@fpy(
-    name='PDF of trimmed logistic sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a, b, s: s > 0 and a <= b
-)
-def trimmed_logistic_pdf(x: Real, a: Real, b: Real, s: Real):
+@fp.fpy(meta={
+    'name': 'PDF of trimmed logistic sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a, b, s: s > 0 and a <= b
+})
+def trimmed_logistic_pdf(x: fp.Real, a: fp.Real, b: fp.Real, s: fp.Real):
     """
     PDF of sampling from a "trimmed" logistic distribution.
     """
@@ -404,13 +405,13 @@ def trimmed_logistic_pdf(x: Real, a: Real, b: Real, s: Real):
 
     return pdf
 
-@fpy(
-    name='Sample trimmed logistic distribution',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u, a, b, s: a <= b and s > 0
-)
-def sample_trimmed_logistic(u: Real, a: Real, b: Real, s: Real):
+@fp.fpy(meta={
+    'name': 'Sample trimmed logistic distribution',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u, a, b, s: a <= b and s > 0
+})
+def sample_trimmed_logistic(u: fp.Real, a: fp.Real, b: fp.Real, s: fp.Real):
     """
     Generates a sample from a "trimmed" logistic distribution.
     """
@@ -421,13 +422,13 @@ def sample_trimmed_logistic(u: Real, a: Real, b: Real, s: Real):
     x = sample_logistic(u, s)
     return clamp(x, a, b)
 
-@fpy(
-    name='inversion of trimmed logistic sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a, b, s: a < b and s > 0
-)
-def invert_trimmed_logistic_sample(x: Real, a: Real, b: Real, s: Real):
+@fp.fpy(meta={
+    'name': 'inversion of trimmed logistic sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a, b, s: a < b and s > 0
+})
+def invert_trimmed_logistic_sample(x: fp.Real, a: fp.Real, b: fp.Real, s: fp.Real):
     """
     Transforms a sample from a "trimmed" logistic distribution to a uniform sample.
     """
@@ -440,13 +441,13 @@ def invert_trimmed_logistic_sample(x: Real, a: Real, b: Real, s: Real):
 # Sampling a cubic interpolant
 #
 
-@fpy(
-    name='cubic interpolation',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a, b: a <= b
-)
-def smooth_step(x: Real, a: Real, b: Real):
+@fp.fpy(meta={
+    'name': 'cubic interpolation',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a, b: a <= b
+})
+def smooth_step(x: fp.Real, a: fp.Real, b: fp.Real):
     """
     Cubic interpolation between two value `a` and `b`.
 
@@ -467,13 +468,13 @@ def smooth_step(x: Real, a: Real, b: Real):
     return y
 
 
-@fpy(
-    name='PDF of cubic interpolation',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a, b: a <= b
-)
-def smooth_step_pdf(x: Real, a: Real, b: Real):
+@fp.fpy(meta={
+    'name': 'PDF of cubic interpolation',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a, b: a <= b
+})
+def smooth_step_pdf(x: fp.Real, a: fp.Real, b: fp.Real):
     """
     PDF of sampling a cubic interpolant between two values.
     """
@@ -484,8 +485,8 @@ def smooth_step_pdf(x: Real, a: Real, b: Real):
     return pdf
 
 
-@fpy(name='single step of Newton iteration')
-def _sample_smooth_step_newton_once(x: Real, u: Real, a: Real, b: Real):
+@fp.fpy(meta={'name': 'single step of Newton iteration'})
+def _sample_smooth_step_newton_once(x: fp.Real, u: fp.Real, a: fp.Real, b: fp.Real):
     """
     Single step of Newton iteration for the cubic interpolant.
     """
@@ -495,13 +496,13 @@ def _sample_smooth_step_newton_once(x: Real, u: Real, a: Real, b: Real):
     return p - u, pderiv
 
 
-@fpy(
-    name='Sample cubic interpolation',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u, a, b: a <= b
-)
-def sample_smooth_step(u: Real, a: Real, b: Real):
+@fp.fpy(meta={
+    'name': 'Sample cubic interpolation',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u, a, b: a <= b
+})
+def sample_smooth_step(u: fp.Real, a: fp.Real, b: fp.Real):
     """
     Generates a sample from a cubic interpolant between two values.
     """
@@ -557,13 +558,13 @@ def sample_smooth_step(u: Real, a: Real, b: Real):
     return x
 
 
-@fpy(
-    name='inversion of cubic interpolation',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda x, a, b: a <= x <= b
-)
-def invert_smooth_step_sample(x: Real, a: Real, b: Real):
+@fp.fpy(meta={
+    'name': 'inversion of cubic interpolation',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda x, a, b: a <= x <= b
+})
+def invert_smooth_step_sample(x: fp.Real, a: fp.Real, b: fp.Real):
     """
     Transforms a sample from a cubic interpolant between two values to a uniform sample.
     """
@@ -577,46 +578,46 @@ def invert_smooth_step_sample(x: Real, a: Real, b: Real):
 #   Sample uniform disk
 #
 
-@fpy(
-    name='sample uniform disk (polar)',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
-)
-def sample_uniform_disk_polar(u: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'sample uniform disk (polar)',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+})
+def sample_uniform_disk_polar(u: tuple[fp.Real, fp.Real]):
     """
     Given a uniform sample from the unit square, produces a 
     uniform sample on the unit disk in Cartesian coordinates.
 
     This mapping interprets the unit square as (scaled) polar coordinates.
     """
-    r = sqrt(u[0])
-    theta = 2 * PI * u[1]
-    return r * cos(theta), r * sin(theta)
+    r = fp.sqrt(u[0])
+    theta = 2 * fp.const_pi() * u[1]
+    return r * fp.cos(theta), r * fp.sin(theta)
 
-@fpy(
-    name='inversion of uniform disk sampling',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda p: 0 <= p[0] * p[0] * p[1] * p[1] <= 1
-)
-def invert_uniform_disk_polar_sample(p: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'inversion of uniform disk sampling',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda p: 0 <= p[0] * p[0] * p[1] * p[1] <= 1
+})
+def invert_uniform_disk_polar_sample(p: tuple[fp.Real, fp.Real]):
     """
     Transforms a sample on the unit disk to one on the unit square.
     """
-    phi = atan2(p[1], p[0])
+    phi = fp.atan2(p[1], p[0])
     if phi < 0:
-        phi += 2 * PI
+        phi += 2 * fp.const_pi()
     r = p[0] * p[0] * p[1] * p[1]
-    return r, phi / (2 * PI)
+    return r, phi / (2 * fp.const_pi())
 
-@fpy(
-    name='sample unit disk (concentric)',
-    cite='pbrt-v4',
-    precision='binary32',
-    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
-)
-def sample_uniform_disk_concentric(u: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'sample unit disk (concentric)',
+    'cite': 'pbrt-v4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+})
+def sample_uniform_disk_concentric(u: tuple[fp.Real, fp.Real]):
     """
     Given a uniform sample from the unit square, produces a 
     uniform sample on the unit disk in Cartesian coordinates.
@@ -631,44 +632,44 @@ def sample_uniform_disk_concentric(u: tuple[Real, Real]):
         # apply concentric mapping to point
         if abs(u[0]) > abs(u[1]):
             r = u[0]
-            theta = PI_4 * (u[1] / u[0])
+            theta = fp.const_pi_4() * (u[1] / u[0])
         else:
             r = u[1]
-            theta = PI_2 - PI_4 * (u[0] / u[1])
-        p = vector_mul(r, (cos(theta), sin(theta)))
+            theta = fp.const_pi_2() - fp.const_pi_4() * (u[0] / u[1])
+        p = vector_mul(r, (fp.cos(theta), fp.sin(theta)))
 
     return p
 
-@fpy(
-    name='inversion of sample unit disk (concentric)',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda p: 0 <= p[0] * p[0] * p[1] * p[1] <= 1,
-)
-def invert_uniform_disk_concentric_sample(p: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'inversion of sample unit disk (concentric)',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda p: 0 <= p[0] * p[0] * p[1] * p[1] <= 1
+})
+def invert_uniform_disk_concentric_sample(p: tuple[fp.Real, fp.Real]):
     """
     Transforms a sample on the unit disk to one on the unit square.
     """
-    theta = atan2(p[1], p[0])
-    r = sqrt(p[0] * p[0] + p[1] * p[1])
+    theta = fp.atan2(p[1], p[0])
+    r = fp.sqrt(p[0] * p[0] + p[1] * p[1])
 
-    if abs(theta) < PI_4 or abs(theta) > 3 * PI_4:
-        r = copysign(r, p[0])
+    if abs(theta) < fp.const_pi_4() or abs(theta) > 3 * fp.const_pi_4():
+        r = fp.copysign(r, p[0])
         u_0 = r
         if p[0] < 0:
             if p[1] < 0:
-                u_1 = (PI + theta) * r / PI_4
+                u_1 = (fp.const_pi() + theta) * r / fp.const_pi_4()
             else:
-                u_1 = (theta - PI) * r / PI_4
+                u_1 = (theta - fp.const_pi()) * r / fp.const_pi_4()
         else:
-            u_1 = (theta * r) / PI_4
+            u_1 = (theta * r) / fp.const_pi_4()
     else:
-        r = copysign(r, p[1])
+        r = fp.copysign(r, p[1])
         u_1 = r
         if p[1] < 0:
-            u_0 = -(PI_2 + theta) * r / PI_4
+            u_0 = -(fp.const_pi_2() + theta) * r / fp.const_pi_4()
         else:
-            u_0 = (PI_2 - theta) * r / PI_4
+            u_0 = (fp.const_pi_2() - theta) * r / fp.const_pi_4()
 
     return (u_0 + 1) / 2, (u_1 + 1) / 2
 
@@ -676,45 +677,45 @@ def invert_uniform_disk_concentric_sample(p: tuple[Real, Real]):
 # Sample hemisphere
 #
 
-@fpy(
-    name='sample a hemisphere uniformly',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
-)
-def sample_uniform_hemisphere(u: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'sample a hemisphere uniformly',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+})
+def sample_uniform_hemisphere(u: tuple[fp.Real, fp.Real]):
     """
     Given a uniform sample from the unit square, produces a
     sample on the hemisphere in spherical coordinates.
     """
     z = u[0]
-    r = sqrt(1 - z * z)
-    phi = 2 * PI * u[1]
-    return r * cos(phi), r * sin(phi), z
+    r = fp.sqrt(1 - z * z)
+    phi = 2 * fp.const_pi() * u[1]
+    return r * fp.cos(phi), r * fp.sin(phi), z
 
 
-@fpy(
-    name='invert uniform hemisphere sample',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and 0 <= w[2] <= 1
-)
-def invert_uniform_hemisphere_sample(w : tuple[Real, Real, Real]):
+@fp.fpy(meta={
+    'name': 'invert uniform hemisphere sample',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and 0 <= w[2] <= 1
+})
+def invert_uniform_hemisphere_sample(w : tuple[fp.Real, fp.Real, fp.Real]):
     """
     Transforms a sample on the hemisphere to one on the unit square.
     """
-    phi = atan2(w[1], w[0])
+    phi = fp.atan2(w[1], w[0])
     if phi < 0:
-        phi += 2 * PI
-    return w[2], phi / (2 * PI)
+        phi += 2 * fp.const_pi()
+    return w[2], phi / (2 * fp.const_pi())
 
-@fpy(
-    name='sample a hemisphere uniformly (cosine)',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
-)
-def sample_cosine_hemisphere(u: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'sample a hemisphere uniformly (cosine)',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+})
+def sample_cosine_hemisphere(u: tuple[fp.Real, fp.Real]):
     """
     Given a uniform sample from the unit square, produces a
     sample on the hemisphere in spherical coordinates.
@@ -723,55 +724,55 @@ def sample_cosine_hemisphere(u: tuple[Real, Real]):
     and then sets the z coordinate accordingly.
     """
     d = sample_uniform_disk_concentric(u)
-    z = sqrt(1 - d[0] * d[0] - d[1] * d[1])
+    z = fp.sqrt(1 - d[0] * d[0] - d[1] * d[1])
     return (d[0], d[1], z)
 
-@fpy(
-    name='PDF of a (cosine) hemisphere sampler',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda cos_theta: -1 <= cos_theta <= 1
-)
-def cosine_hemisphere_pdf(cos_theta: Real):
+@fp.fpy(meta={
+    'name': 'PDF of a (cosine) hemisphere sampler',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda cos_theta: -1 <= cos_theta <= 1
+})
+def cosine_hemisphere_pdf(cos_theta: fp.Real):
     """
     Returns the PDF of the (cosine) hemisphere sampler
     based on the cosine along the z-axis.
     """
-    return cos_theta * M_1_PI
+    return cos_theta * fp.const_1_pi()
 
-@fpy(
-    name='invert uniform hemisphere sample',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and 0 <= w[2] <= 1
-)
-def invert_cosine_hemisphere_sample(w: tuple[Real, Real, Real]):
+@fp.fpy(meta={
+    'name': 'invert uniform hemisphere sample',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and 0 <= w[2] <= 1
+})
+def invert_cosine_hemisphere_sample(w: tuple[fp.Real, fp.Real, fp.Real]):
     return invert_uniform_disk_concentric_sample((w[0], w[1]))
 
-@fpy(
-    name='sample uniform hemisphere (concentric)',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
-)
-def sample_uniform_hemisphere_concentric(u: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'sample uniform hemisphere (concentric)',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+})
+def sample_uniform_hemisphere_concentric(u: tuple[fp.Real, fp.Real]):
     # map uniform random numbers to $[-1,1]^2$
     u = vector_add(vector_mul(2, u), (1, 1))
 
     # handle degeneracy at origin
     if u[0] == 0 and u[1] == 0:
-        p: tuple[Real, Real, Real] = (0, 0, 1)
+        p: tuple[fp.Real, fp.Real, fp.Real] = (0, 0, 1)
     else:
         # apply concentric mapping
         if abs(u[0]) > abs(u[1]):
             r = u[0]
-            theta = PI_4 * (u[1] / u[0])
+            theta = fp.const_pi_4() * (u[1] / u[0])
         else:
             r = u[1]
-            theta = PI_2 - PI_4 * (u[0] / u[1])
-    
-        t = sqrt(2 - r * r)
-        p = (cos(theta) * r * t, sin(theta) * r * t, 1 - r * r)
+            theta = fp.const_pi_2() - fp.const_pi_4() * (u[0] / u[1])
+
+        t = fp.sqrt(2 - r * r)
+        p = (fp.cos(theta) * r * t, fp.sin(theta) * r * t, 1 - r * r)
 
     return p
 
@@ -779,67 +780,67 @@ def sample_uniform_hemisphere_concentric(u: tuple[Real, Real]):
 # Sample sphere
 #
 
-@fpy(
-    name='sample a sphere uniformly',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
-)
-def sample_uniform_sphere(u: tuple[Real, Real]):
+@fp.fpy(meta={
+    'name': 'sample a sphere uniformly',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+})
+def sample_uniform_sphere(u: tuple[fp.Real, fp.Real]):
     """
     Given a uniform sample from the unit square, produces a
     sample on the sphere in spherical coordinates.
     """
     z = 1 - 2 * u[0]
-    r = sqrt(1 - z * z)
-    phi = 2 * PI * u[1]
-    return r * cos(phi), r * sin(phi), z
+    r = fp.sqrt(1 - z * z)
+    phi = 2 * fp.const_pi() * u[1]
+    return r * fp.cos(phi), r * fp.sin(phi), z
 
-@fpy(
-    name='invert uniform sphere sample',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and -1 <= w[2] <= 1
-)
-def invert_uniform_sphere_sample(w: tuple[Real, Real, Real]):
+@fp.fpy(meta={
+    'name': 'invert uniform sphere sample',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and -1 <= w[2] <= 1
+})
+def invert_uniform_sphere_sample(w: tuple[fp.Real, fp.Real, fp.Real]):
     """
     Transforms a sample on the sphere to one on the unit square.
     """
-    phi = atan2(w[1], w[0])
+    phi = fp.atan2(w[1], w[0])
     if phi < 0:
-        phi += 2 * PI
-    return (1 - w[2]) / 1, phi / (2 * PI)
+        phi += 2 * fp.const_pi()
+    return (1 - w[2]) / 1, phi / (2 * fp.const_pi())
 
 #
 # sample uniform cone
 #
 
-@fpy(
-    name='uniform cone sampler',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
-)
-def sample_uniform_cone(u: tuple[Real, Real], cos_theta_max: Real):
+@fp.fpy(meta={
+    'name': 'uniform cone sampler',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda u: 0 <= u[0] <= 1 and 0 <= u[1] <= 1
+})
+def sample_uniform_cone(u: tuple[fp.Real, fp.Real], cos_theta_max: fp.Real):
     """
     Given a uniform sample from the unit square, produces a
     sample on the cone in spherical coordinates.
     """
     cos_theta = lerp(u[0], 1, cos_theta_max)
-    sin_theta = sqrt(1 - cos_theta * cos_theta)
-    phi = u[1] * 2 * PI
+    sin_theta = fp.sqrt(1 - cos_theta * cos_theta)
+    phi = u[1] * 2 * fp.const_pi()
     return spherical_direction(sin_theta, cos_theta, phi)
 
-@fpy(
-    name='invert uniform cone sample',
-    cite='pbrt-4',
-    precision='binary32',
-    pre=lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and -1 <= w[2] <= 1
-)
-def invert_uniform_cone_sample(w: tuple[Real, Real, Real], cos_theta_max: Real):
+@fp.fpy(meta={
+    'name': 'invert uniform cone sample',
+    'cite': 'pbrt-4',
+    'precision': 'binary32',
+    'pre': lambda w: -1 <= w[0] <= 1 and -1 <= w[1] <= 1 and -1 <= w[2] <= 1
+})
+def invert_uniform_cone_sample(w: tuple[fp.Real, fp.Real, fp.Real], cos_theta_max: fp.Real):
     """
     Transforms a sample on the cone to one on the unit square.
     """
     cos_theta = w[2]
     phi = spherical_phi(w)
-    return (cos_theta - 1) / (cos_theta_max - 1), phi / (2 * PI)
+    return (cos_theta - 1) / (cos_theta_max - 1), phi / (2 * fp.const_pi())
