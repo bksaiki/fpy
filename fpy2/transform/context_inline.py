@@ -125,6 +125,8 @@ class _ContextInlineInstance(DefaultTransformVisitor):
             return None
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
+        # context expressions are implicitly evaluated under
+        # a real context so we don't need to round
         match stmt.ctx:
             case Var():
                 # if variables can be resolved to be a context,
