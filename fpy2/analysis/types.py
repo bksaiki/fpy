@@ -19,7 +19,7 @@ function types, and type variables.
 from abc import ABC, abstractmethod
 from typing import Iterable
 
-from .utils import NamedId, default_repr
+from ..utils import NamedId, default_repr
 
 __all__ = [
     'Type',

@@ -23,7 +23,7 @@ from ...number import (
 )
 from ...primitive import Primitive
 from ...transform import ContextInline
-from ...types import *
+from ...analysis.types import *
 from ...utils import Gensym, enum_repr
 
 from ..backend import Backend, CompileError

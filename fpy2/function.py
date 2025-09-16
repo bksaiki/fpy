@@ -1,6 +1,6 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-from typing import Callable, Generic, ParamSpec, TypeVar, TYPE_CHECKING
+from typing import Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKING
 from titanfp.fpbench.fpcast import FPCore
 
 from . import ast as fpyast
@@ -8,10 +8,10 @@ from . import ast as fpyast
 from .env import ForeignEnv
 from .frontend import fpcore_to_fpy
 from .number import Context
-from .types import FunctionType
 
 # avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:
+    from .analysis.types import FunctionType
     from .interpret import Interpreter
 
 P = ParamSpec('P')
@@ -27,17 +27,17 @@ class Function(Generic[P, R]):
     """
 
     ast: fpyast.FuncDef
-    sig: FunctionType | None
+    sig: Optional['FunctionType']
     env: ForeignEnv
-    runtime: 'Interpreter' | None
+    runtime: Optional['Interpreter']
 
     def __init__(
         self,
         ast: fpyast.FuncDef,
-        sig: FunctionType | None,
+        sig: Optional['FunctionType'],
         env: ForeignEnv,
         *,
-        runtime: 'Interpreter' | None = None,
+        runtime: Optional['Interpreter'] = None,
     ):
         self.ast = ast
         self.sig = sig

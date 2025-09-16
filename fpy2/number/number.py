@@ -10,7 +10,7 @@ import numbers
 import random
 
 from fractions import Fraction
-from typing import Self, TypeAlias, TYPE_CHECKING
+from typing import Optional, Self, TypeAlias, TYPE_CHECKING
 
 from ..utils import (
     bitmask,
@@ -82,7 +82,7 @@ class RealFloat(numbers.Rational):
         exp: int | None = None,
         c: int | None = None,
         *,
-        x: 'RealFloat' | None = None,
+        x: Optional['RealFloat'] = None,
         e: int | None = None,
         m: int | None = None,
         interval_size: int | None = None,

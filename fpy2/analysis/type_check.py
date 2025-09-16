@@ -7,10 +7,10 @@ from typing import cast
 
 from ..ast import *
 from ..primitive import Primitive
-from ..types import Type, BoolType, RealType, ContextType, VarType, FunctionType, TupleType, ListType
 from ..utils import Gensym, NamedId, Unionfind
 
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite, PhiDef
+from .types import *
+from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
 #####################################################################
 # Type Inference
