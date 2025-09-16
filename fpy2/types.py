@@ -17,7 +17,7 @@ function types, and type variables.
 """
 
 from abc import ABC, abstractmethod
-from typing import Sequence
+from typing import Iterable
 
 from .utils import NamedId, default_repr
 
@@ -201,7 +201,7 @@ class FunctionType(Type):
     return_type: Type
     """return type"""
 
-    def __init__(self, arg_types: Sequence[Type], return_type: Type):
+    def __init__(self, arg_types: Iterable[Type], return_type: Type):
         self.arg_types = tuple(arg_types)
         self.return_type = return_type
 

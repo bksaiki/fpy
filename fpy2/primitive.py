@@ -1,6 +1,6 @@
 """FPy primitives are the result of `@fpy_prim` decorators."""
 
-from typing import Any, Callable, Generic, ParamSpec, Sequence, TypeVar
+from typing import Any, Callable, Generic, Iterable, ParamSpec, TypeVar
 
 from .ast import TypeAnn
 from .utils import has_keyword
@@ -33,7 +33,7 @@ class Primitive(Generic[P, R]):
     def __init__(
         self,
         func: Callable[P, R],
-        arg_types: Sequence[TypeAnn],
+        arg_types: Iterable[TypeAnn],
         return_type: TypeAnn,
         ctx: str | None = None,
         arg_ctxs: list[str | tuple] | None = None,
