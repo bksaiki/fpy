@@ -5,6 +5,7 @@ Compilation tests for C++
 import argparse
 import fpy2 as fp
 import hashlib
+import shutil
 import subprocess
 import tempfile
 
@@ -109,9 +110,10 @@ _library_ignore = [
     'classic_2fma', # relies on `fast_2sum`
 ]
 
-def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str]):
+def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
     compiler = fp.CppBackend(unsafe_allow_int=True)
-    with open(output_dir / f'library_{prefix}.cpp', 'w') as f:
+    cpp_path = output_dir / f'library_{prefix}.cpp'
+    with open(cpp_path, 'w') as f:
         print('\n'.join(compiler.headers()), file=f)
         print(compiler.helpers(), file=f)
         for func in mod.__dict__.values():
@@ -121,20 +123,29 @@ def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[s
                 print(s, file=f)
                 print(file=f)
 
-def _test_libraries(output_dir: Path):
+    if not no_cc:
+        _compile_obj(cpp_path)
+
+
+def _test_libraries(output_dir: Path, no_cc: bool = False):
     for mod in _modules:
         name = mod.__name__.split('.')[-1]
-        _test_library(output_dir, name, mod, _library_ignore)
+        _test_library(output_dir, name, mod, _library_ignore, no_cc=no_cc)
 
 ###########################################################
 # Main tester
 
 def test_cpp(delete: bool = True, no_cc: bool = False):
-    with tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp', delete=delete) as dir_str:
-        output_dir = Path(dir_str)
-        print(f"Running C++ tests with output under `{output_dir}`")
-        _test_unit(output_dir, no_cc=no_cc)
-        _test_libraries(output_dir)
+    dir_str = tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp', delete=delete)
+    output_dir = Path(dir_str.name)
+    # with tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp', delete=delete) as dir_str:
+
+    print(f"Running C++ tests with output under `{output_dir}`")
+    _test_unit(output_dir, no_cc=no_cc)
+    _test_libraries(output_dir, no_cc=no_cc)
+    if delete:
+        shutil.rmtree(output_dir)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run C++ compilation tests for fpy2")
