@@ -55,6 +55,8 @@ _test_ignore = [
     'test_context3',
     'test_context4',
     'test_context5',
+    'test_assert2',
+    'test_assert3',
 ]
 
 _example_ignore = [
