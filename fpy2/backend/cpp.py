@@ -553,8 +553,6 @@ class _CppBackendInstance(Visitor):
                         arg_tys.append(arg_ty)
                     _, _, e_ty = self._expr_type(e)
 
-                    print(arg_tys, e_ty)
-
                     ops = self.options.op_table.prims[e.fn]
                     for op in ops:
                         if isinstance(op, UnaryCppOp) and len(args) == 1 and op.matches(arg_tys[0], e_ty):

@@ -26,7 +26,7 @@ CPP_HEADERS = [
     '#include <tuple>',
 ]
 
-CPP_HELPERS = """"
+CPP_HELPERS = """
 #pragma STDC FENV_ACCESS ON
 
 template <typename T>
