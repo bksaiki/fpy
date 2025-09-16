@@ -563,10 +563,10 @@ class _Interpreter(Visitor):
         return True
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
-        return tuple(self._visit_expr(x, ctx) for x in e.args)
+        return tuple(self._visit_expr(x, ctx) for x in e.elts)
 
     def _visit_list_expr(self, e: ListExpr, ctx: Context):
-        return [self._visit_expr(x, ctx) for x in e.args]
+        return [self._visit_expr(x, ctx) for x in e.elts]
 
     def _visit_list_ref(self, e: ListRef, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
@@ -611,13 +611,13 @@ class _Interpreter(Visitor):
             return [arr[i] for i in range(start, stop)]
 
     def _visit_list_set(self, e: ListSet, ctx: Context):
-        value = self._visit_expr(e.array, ctx)
+        value = self._visit_expr(e.value, ctx)
         if not isinstance(value, list):
             raise TypeError(f'expected a list, got {value}')
         array = copy.deepcopy(value) # make a copy
 
         slices = []
-        for s in e.slices:
+        for s in e.indices:
             val = self._visit_expr(s, ctx)
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
@@ -625,7 +625,7 @@ class _Interpreter(Visitor):
                 raise TypeError(f'expected an integer slice, got {val}')
             slices.append(int(val))
 
-        val = self._visit_expr(e.value, ctx)
+        val = self._visit_expr(e.expr, ctx)
         for idx in slices[:-1]:
             if not isinstance(array, list):
                 raise TypeError(f'index {idx} is out of bounds for `{array}`')
@@ -684,11 +684,11 @@ class _Interpreter(Visitor):
 
     def _visit_assign(self, stmt: Assign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)
-        match stmt.binding:
+        match stmt.target:
             case NamedId():
-                self.env[stmt.binding] = val
+                self.env[stmt.target] = val
             case TupleBinding():
-                self._unpack_tuple(stmt.binding, val, ctx)
+                self._unpack_tuple(stmt.target, val, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context) -> None:
         # lookup the array
@@ -696,7 +696,7 @@ class _Interpreter(Visitor):
 
         # evaluate indices
         slices: list[int] = []
-        for slice in stmt.slices:
+        for slice in stmt.indices:
             val = self._visit_expr(slice, ctx)
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')

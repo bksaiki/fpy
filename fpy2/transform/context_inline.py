@@ -147,12 +147,12 @@ class _ContextInlineInstance(DefaultTransformVisitor):
 
         body, _ = self._visit_block(stmt.body, None)
         if v is None:
-            s = ContextStmt(stmt.name, stmt.ctx, body, stmt.loc)
+            s = ContextStmt(stmt.target, stmt.ctx, body, stmt.loc)
         else:
             if not isinstance(v, Context | FPCoreContext):
                 raise RuntimeError(f'expected a Context | FPCoreContext, got `{v}` for `{stmt.ctx.format()}`')
             ctx_val = ForeignVal(v, stmt.ctx.loc)
-            s = ContextStmt(stmt.name, ctx_val, body, stmt.loc)
+            s = ContextStmt(stmt.target, ctx_val, body, stmt.loc)
 
         return s, None
 

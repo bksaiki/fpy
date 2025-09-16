@@ -487,10 +487,10 @@ class _FPCoreCompileInstance(Visitor):
                 raise NotImplementedError('unreachable', e.ops)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> fpc.Expr:
-        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.args])
+        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.elts])
 
     def _visit_list_expr(self, e: ListExpr, ctx: None) -> fpc.Expr:
-        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.args])
+        return fpc.Array(*[self._visit_expr(c, ctx) for c in e.elts])
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> fpc.Expr:
         t: Expr = e
@@ -609,14 +609,14 @@ class _FPCoreCompileInstance(Visitor):
 
         # generate temporary variables
         tuple_id = str(self.gensym.fresh('t'))
-        idx_ids = [str(self.gensym.fresh('i')) for _ in e.slices]
+        idx_ids = [str(self.gensym.fresh('i')) for _ in e.indices]
         iter_id = str(self.gensym.fresh('k'))
         val_id = str(self.gensym.fresh('v'))
 
         # compile each component
-        tuple_expr = self._visit_expr(e.array, ctx)
-        idx_exprs = [self._visit_expr(idx, ctx) for idx in e.slices]
-        val_expr = self._visit_expr(e.value, ctx)
+        tuple_expr = self._visit_expr(e.value, ctx)
+        idx_exprs = [self._visit_expr(idx, ctx) for idx in e.indices]
+        val_expr = self._visit_expr(e.expr, ctx)
 
         # create initial let binding
         let_bindings = [(tuple_id, tuple_expr)]
@@ -721,14 +721,14 @@ class _FPCoreCompileInstance(Visitor):
         raise FPCoreCompileError(f'cannot compile to FPCore: {type(e).__name__}')
 
     def _visit_assign(self, stmt: Assign, ctx: fpc.Expr):
-        match stmt.binding:
+        match stmt.target:
             case Id():
-                bindings = [(str(stmt.binding), self._visit_expr(stmt.expr, None))]
+                bindings = [(str(stmt.target), self._visit_expr(stmt.expr, None))]
                 return fpc.Let(bindings, ctx)
             case TupleBinding():
                 tuple_id = str(self.gensym.fresh('t'))
                 tuple_bind = (tuple_id, self._visit_expr(stmt.expr, None))
-                destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.binding, [])
+                destruct_bindings = self._compile_tuple_binding(tuple_id, stmt.target, [])
                 return fpc.LetStar([tuple_bind] + destruct_bindings, ctx)
             case _:
                 raise RuntimeError('unreachable', stmt.binding)

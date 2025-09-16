@@ -81,13 +81,13 @@ class LiveVarsInstance(Visitor):
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> _LiveSet:
         live: set[NamedId] = set()
-        for arg in e.args:
+        for arg in e.elts:
             live |= self._visit_expr(arg, ctx)
         return live
 
     def _visit_list_expr(self, e: ListExpr, ctx: None) -> _LiveSet:
         live: set[NamedId] = set()
-        for arg in e.args:
+        for arg in e.elts:
             live |= self._visit_expr(arg, ctx)
         return live
 
@@ -113,10 +113,10 @@ class LiveVarsInstance(Visitor):
         return live
 
     def _visit_list_set(self, e: ListSet, ctx: None) -> _LiveSet:
-        live = self._visit_expr(e.array, ctx)
-        for s in e.slices:
+        live = self._visit_expr(e.value, ctx)
+        for s in e.indices:
             live |= self._visit_expr(s, ctx)
-        live |= self._visit_expr(e.value, ctx)
+        live |= self._visit_expr(e.expr, ctx)
         return live
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> _LiveSet:
@@ -130,14 +130,14 @@ class LiveVarsInstance(Visitor):
 
     def _visit_assign(self, stmt: Assign, live: _LiveSet) -> _LiveSet:
         live = set(live)
-        live -= stmt.binding.names()
+        live -= stmt.target.names()
         live |= self._visit_expr(stmt.expr, None)
         return live
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live |= self._visit_expr(stmt.expr, None)
-        for s in stmt.slices:
+        for s in stmt.indices:
             live |= self._visit_expr(s, None)
         live.add(stmt.var)
         return live

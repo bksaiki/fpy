@@ -286,11 +286,11 @@ class DefaultVisitor(Visitor):
             self._visit_expr(arg, ctx)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
-        for c in e.args:
+        for c in e.elts:
             self._visit_expr(c, ctx)
 
     def _visit_list_expr(self, e: ListExpr, ctx: Any):
-        for c in e.args:
+        for c in e.elts:
             self._visit_expr(c, ctx)
 
     def _visit_list_ref(self, e: ListRef, ctx: Any):
@@ -305,10 +305,10 @@ class DefaultVisitor(Visitor):
             self._visit_expr(e.stop, ctx)
 
     def _visit_list_set(self, e: ListSet, ctx: Any):
-        self._visit_expr(e.array, ctx)
-        for s in e.slices:
-            self._visit_expr(s, ctx)
         self._visit_expr(e.value, ctx)
+        for s in e.indices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(e.expr, ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx: Any):
         for iterable in e.iterables:
@@ -327,7 +327,7 @@ class DefaultVisitor(Visitor):
         self._visit_expr(stmt.expr, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
-        for s in stmt.slices:
+        for s in stmt.indices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
 
@@ -442,11 +442,11 @@ class DefaultTransformVisitor(Visitor):
         return Call(e.func, e.fn, args, kwargs, e.loc)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
-        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        args = [self._visit_expr(arg, ctx) for arg in e.elts]
         return TupleExpr(args, e.loc)
 
     def _visit_list_expr(self, e: ListExpr, ctx: Any):
-        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        args = [self._visit_expr(arg, ctx) for arg in e.elts]
         return ListExpr(args, e.loc)
 
     def _visit_list_ref(self, e: ListRef, ctx: Any):
@@ -461,9 +461,9 @@ class DefaultTransformVisitor(Visitor):
         return ListSlice(value, start, stop, e.loc)
 
     def _visit_list_set(self, e: ListSet, ctx: Any):
-        array = self._visit_expr(e.array, ctx)
-        slices = [self._visit_expr(s, ctx) for s in e.slices]
-        value = self._visit_expr(e.value, ctx)
+        array = self._visit_expr(e.value, ctx)
+        slices = [self._visit_expr(s, ctx) for s in e.indices]
+        value = self._visit_expr(e.expr, ctx)
         return ListSet(array, slices, value, e.loc)
 
     def _visit_list_comp(self, e: ListComp, ctx: Any):
@@ -496,13 +496,13 @@ class DefaultTransformVisitor(Visitor):
         return TupleBinding(elts, binding.loc)
 
     def _visit_assign(self, stmt: Assign, ctx: Any):
-        binding = self._visit_binding(stmt.binding, ctx)
+        binding = self._visit_binding(stmt.target, ctx)
         expr = self._visit_expr(stmt.expr, ctx)
         s = Assign(binding, stmt.type, expr, stmt.loc)
         return s, ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
-        slices = [self._visit_expr(s, ctx) for s in stmt.slices]
+        slices = [self._visit_expr(s, ctx) for s in stmt.indices]
         expr = self._visit_expr(stmt.expr, ctx)
         s = IndexedAssign(stmt.var, slices, expr, stmt.loc)
         return s, ctx
@@ -536,7 +536,7 @@ class DefaultTransformVisitor(Visitor):
     def _visit_context(self, stmt: ContextStmt, ctx: Any):
         context = self._visit_expr(stmt.ctx, ctx)
         body, _ = self._visit_block(stmt.body, ctx)
-        s = ContextStmt(stmt.name, context, body, stmt.loc)
+        s = ContextStmt(stmt.target, context, body, stmt.loc)
         return s, ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):

@@ -190,13 +190,13 @@ class SyntaxCheckInstance(Visitor):
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
         env = ctx.env
-        for c in e.args:
+        for c in e.elts:
             self._visit_expr(c, ctx)
         return env
 
     def _visit_list_expr(self, e: ListExpr, ctx: _Ctx):
         env = ctx.env
-        for c in e.args:
+        for c in e.elts:
             self._visit_expr(c, ctx)
         return env
 
@@ -226,10 +226,10 @@ class SyntaxCheckInstance(Visitor):
 
     def _visit_list_set(self, e: ListSet, ctx: _Ctx):
         env = ctx.env
-        self._visit_expr(e.array, ctx)
-        for s in e.slices:
-            self._visit_expr(s, ctx)
         self._visit_expr(e.value, ctx)
+        for s in e.indices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(e.expr, ctx)
         return env
 
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
@@ -264,12 +264,12 @@ class SyntaxCheckInstance(Visitor):
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         env = ctx.env
         self._visit_expr(stmt.expr, ctx)
-        return self._visit_binding(stmt.binding, env)
+        return self._visit_binding(stmt.target, env)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
         env = ctx.env
         self._mark_use(stmt.var, env)
-        for s in stmt.slices:
+        for s in stmt.indices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
         return env
@@ -303,8 +303,8 @@ class SyntaxCheckInstance(Visitor):
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env = ctx.env
         self._visit_expr(stmt.ctx, ctx)
-        if isinstance(stmt.name, NamedId):
-            env = env.extend(stmt.name)
+        if isinstance(stmt.target, NamedId):
+            env = env.extend(stmt.target)
         return self._visit_block(stmt.body, _Ctx(env, False))
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):

@@ -337,14 +337,14 @@ class ContextTypeInferInstance(Visitor):
                 raise ContextInferError(f'cannot infer context for call with `{e.fn}`')
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: TypeContext):
-        return TupleContext(self._visit_expr(arg, ctx) for arg in e.args)
+        return TupleContext(self._visit_expr(arg, ctx) for arg in e.elts)
 
     def _visit_list_expr(self, e: ListExpr, ctx: TypeContext):
-        if len(e.args) == 0:
+        if len(e.elts) == 0:
             return ctx
         else:
-            elt_ctx = self._visit_expr(e.args[0], ctx)
-            for arg in e.args[1:]:
+            elt_ctx = self._visit_expr(e.elts[0], ctx)
+            for arg in e.elts[1:]:
                 elt_ctx = self._unify(elt_ctx, self._visit_expr(arg, ctx))
             return elt_ctx
 
@@ -370,10 +370,10 @@ class ContextTypeInferInstance(Visitor):
         return value_ctx
 
     def _visit_list_set(self, e: ListSet, ctx: TypeContext):
-        arr_ctx = self._visit_expr(e.array, ctx)
-        for s in e.slices:
+        arr_ctx = self._visit_expr(e.value, ctx)
+        for s in e.indices:
             self._visit_expr(s, ctx)
-        self._visit_expr(e.value, ctx)
+        self._visit_expr(e.expr, ctx)
         return arr_ctx
 
     def _visit_if_expr(self, e: IfExpr, ctx: TypeContext):
@@ -387,11 +387,11 @@ class ContextTypeInferInstance(Visitor):
 
     def _visit_assign(self, stmt: Assign, ctx: TypeContext):
         e_ctx = self._visit_expr(stmt.expr, ctx)
-        self._visit_binding(stmt, stmt.binding, e_ctx)
+        self._visit_binding(stmt, stmt.target, e_ctx)
         return ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: TypeContext):
-        for s in stmt.slices:
+        for s in stmt.indices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
         return ctx

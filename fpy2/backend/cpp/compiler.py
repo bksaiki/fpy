@@ -568,12 +568,12 @@ class _CppBackendInstance(Visitor):
                 raise CppCompileError(self.func, f'cannot compile unsupported call to `{e.format()}`')
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _CompileCtx):
-        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        args = [self._visit_expr(arg, ctx) for arg in e.elts]
         return f'std::make_tuple({", ".join(args)})'
 
     def _visit_list_expr(self, e: ListExpr, ctx: _CompileCtx):
         _, _, cpp_ty = self._expr_type(e)
-        args = ', '.join(self._visit_expr(arg, ctx) for arg in e.args)
+        args = ', '.join(self._visit_expr(arg, ctx) for arg in e.elts)
         return f'{cpp_ty.format()}({{{args}}})'
 
     def _visit_list_comp(self, e: ListComp, ctx: _CompileCtx):
@@ -716,21 +716,21 @@ class _CppBackendInstance(Visitor):
 
     def _visit_assign(self, stmt: Assign, ctx: _CompileCtx):
         e = self._visit_expr(stmt.expr, ctx)
-        match stmt.binding:
+        match stmt.target:
             case Id():
-                self._visit_decl(stmt.binding, e, stmt, ctx)
+                self._visit_decl(stmt.target, e, stmt, ctx)
             case TupleBinding():
                 # emit temporary variable for the tuple
                 t = self._fresh_var()
                 ctx.add_line(f'auto {t} = {e};')
-                self._visit_tuple_binding(t, stmt.binding, stmt, ctx)
+                self._visit_tuple_binding(t, stmt.target, stmt, ctx)
             case _:
                 raise NotImplementedError(stmt.binding)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _CompileCtx):
         # compile indices
         indices: list[str] = []
-        for index in stmt.slices:
+        for index in stmt.indices:
             i = self._visit_expr(index, ctx)
             _, _, index_ty = self._expr_type(index)
             indices.append(self._compile_size(i, index_ty))

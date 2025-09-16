@@ -153,25 +153,25 @@ class _FormatterInstance(Visitor):
         return f'{name}({arg_str})'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
-        num_elts = len(e.args)
+        num_elts = len(e.elts)
         if num_elts == 0:
             return '()'
         elif num_elts == 1:
-            elt = self._visit_expr(e.args[0], ctx)
+            elt = self._visit_expr(e.elts[0], ctx)
             return f'({elt},)'
         else:
-            elts = [self._visit_expr(elt, ctx) for elt in e.args]
+            elts = [self._visit_expr(elt, ctx) for elt in e.elts]
             return f'({", ".join(elts)})'
 
     def _visit_list_expr(self, e: ListExpr, ctx: _Ctx):
-        num_elts = len(e.args)
+        num_elts = len(e.elts)
         if num_elts == 0:
             return '[]'
         elif num_elts == 1:
-            elt = self._visit_expr(e.args[0], ctx)
+            elt = self._visit_expr(e.elts[0], ctx)
             return f'[{elt}]'
         else:
-            elts = [self._visit_expr(elt, ctx) for elt in e.args]
+            elts = [self._visit_expr(elt, ctx) for elt in e.elts]
             return f'[{", ".join(elts)}]'
 
     def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
@@ -203,9 +203,9 @@ class _FormatterInstance(Visitor):
         return f'{value}[{start}:{stop}]'
 
     def _visit_list_set(self, e: ListSet, ctx: _Ctx):
-        array = self._visit_expr(e.array, ctx)
-        slices = [self._visit_expr(slice, ctx) for slice in e.slices]
-        value = self._visit_expr(e.value, ctx)
+        array = self._visit_expr(e.value, ctx)
+        slices = [self._visit_expr(slice, ctx) for slice in e.indices]
+        value = self._visit_expr(e.expr, ctx)
         return f'tuple_set({array}, [{", ".join(slices)}], {value})'
 
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
@@ -240,17 +240,17 @@ class _FormatterInstance(Visitor):
 
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         val = self._visit_expr(stmt.expr, ctx)
-        match stmt.binding:
+        match stmt.target:
             case Id():
-                self._add_line(f'{str(stmt.binding)} = {val}', ctx)
+                self._add_line(f'{str(stmt.target)} = {val}', ctx)
             case TupleBinding():
-                vars_str = self._visit_tuple_binding(stmt.binding)
+                vars_str = self._visit_tuple_binding(stmt.target)
                 self._add_line(f'{vars_str} = {val}', ctx)
             case _:
                 raise NotImplementedError('unreachable', stmt.var)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _Ctx):
-        slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
+        slices = [self._visit_expr(slice, ctx) for slice in stmt.indices]
         val = self._visit_expr(stmt.expr, ctx)
         ref_str = ''.join(f'[{slice}]' for slice in slices)
         self._add_line(f'{str(stmt.var)}{ref_str} = {val}', ctx)
@@ -287,7 +287,7 @@ class _FormatterInstance(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         context = self._visit_expr(stmt.ctx, ctx)
-        self._add_line(f'with {context} as {str(stmt.name)}:', ctx)
+        self._add_line(f'with {context} as {str(stmt.target)}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):

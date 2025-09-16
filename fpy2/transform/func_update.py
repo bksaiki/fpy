@@ -18,7 +18,7 @@ class _FuncUpdateInstance(DefaultTransformVisitor):
         return self._visit_function(self.func, None)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-        slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
+        slices = [self._visit_expr(slice, ctx) for slice in stmt.indices]
         expr = self._visit_expr(stmt.expr, ctx)
         e = ListSet(Var(stmt.var, None), slices, expr, stmt.loc)
         s = Assign(stmt.var, None, e, stmt.loc)

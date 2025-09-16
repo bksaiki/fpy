@@ -416,11 +416,11 @@ class _TypeCheckInstance(Visitor):
                 raise NotImplementedError(f'cannot type check {e.fn} {e.func}')
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None) -> TupleType:
-        elt_tys = [self._visit_expr(arg, None) for arg in e.args]
+        elt_tys = [self._visit_expr(arg, None) for arg in e.elts]
         return TupleType(*elt_tys)
 
     def _visit_list_expr(self, e: ListExpr, ctx: None) -> ListType:
-        arg_tys = [self._visit_expr(arg, None) for arg in e.args]
+        arg_tys = [self._visit_expr(arg, None) for arg in e.elts]
         if len(arg_tys) == 0:
             # empty list
             return ListType(self._fresh_type_var())
@@ -484,17 +484,17 @@ class _TypeCheckInstance(Visitor):
         return value_ty
 
     def _visit_list_set(self, e: ListSet, ctx: None) -> Type:
-        arr_ty = self._visit_expr(e.array, None)
+        arr_ty = self._visit_expr(e.value, None)
 
         iter_ty = arr_ty
-        for s in e.slices:
+        for s in e.indices:
             ty = self._visit_expr(s, None)
             elt_ty = self._fresh_type_var()
             self._unify(arr_ty, ListType(elt_ty))
             self._unify(ty, RealType())
             iter_ty = elt_ty
 
-        val_ty = self._visit_expr(e.value, None)
+        val_ty = self._visit_expr(e.expr, None)
         self._unify(val_ty, iter_ty)
         return arr_ty
 
@@ -516,13 +516,13 @@ class _TypeCheckInstance(Visitor):
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         ty = self._visit_expr(stmt.expr, None)
-        self._visit_binding(stmt, stmt.binding, ty)
+        self._visit_binding(stmt, stmt.target, ty)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         d = self.def_use.find_def_from_use(stmt)
         arr_ty = self.by_def[d]
 
-        for s in stmt.slices:
+        for s in stmt.indices:
             # arr : list[A]
             elt_ty = self._fresh_type_var()
             self._unify(arr_ty, ListType(elt_ty))
