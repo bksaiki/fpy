@@ -279,6 +279,8 @@ class Parser:
                     return Decnum(str(e.value), loc)
             case str():
                 return ForeignVal(e.value, loc)
+            case None:
+                return ForeignVal(e.value, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
 
