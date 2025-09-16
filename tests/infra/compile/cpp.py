@@ -136,7 +136,7 @@ def _test_libraries(output_dir: Path, no_cc: bool = False):
 # Main tester
 
 def test_cpp(delete: bool = True, no_cc: bool = False):
-    dir_str = tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp', delete=delete)
+    dir_str = tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp')
     output_dir = Path(dir_str.name)
     # with tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp', delete=delete) as dir_str:
 
