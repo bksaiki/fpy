@@ -316,36 +316,53 @@ class _FormatterInstance(Visitor):
         else:
             return pformat(data)
 
-    def _format_decorator(self, props: dict[str, Any], arg_str: str, ctx: _Ctx):
-        if len(props) == 0:
+    def _format_decorator(
+        self,
+        arg_str: str,
+        rctx: Context | FPCoreContext | None,
+        spec: Any | None,
+        meta: dict[str, Any] | None,
+        ctx: _Ctx
+    ):
+        num_fields = sum(x is not None for x in (rctx, spec, meta))
+        if num_fields == 0:
             self._add_line('@fpy', ctx)
-        elif len(props) == 1:
-            k, *_ = tuple(props.keys())
-            v = self._format_data(props[k], arg_str)
-            self._add_line(f'@fpy({k}={v})', ctx)
         else:
             self._add_line('@fpy(', ctx)
-            for k, data in props.items():
-                v = self._format_data(data, arg_str)
-                self._add_line(f'{k}={v},', ctx + 1)
+            if rctx is not None:
+                v = self._format_data(rctx, arg_str)
+                self._add_line(f'ctx={v},', ctx + 1)
+            if spec is not None:
+                v = self._format_data(spec, arg_str)
+                self._add_line(f'spec={v},', ctx + 1)
+            if meta is not None:
+                self._add_line('meta={', ctx + 1)
+                for k, v in meta.items():
+                    v = self._format_data(v, arg_str)
+                    self._add_line(f'\'{k}\': {v},', ctx + 2)
+                self._add_line('}', ctx + 1)
             self._add_line(')', ctx)
+
+    # def _format_decorator(self, props: dict[str, Any], arg_str: str, ctx: _Ctx):
+    #     if len(props) == 0:
+    #         self._add_line('@fpy', ctx)
+    #     elif len(props) == 1:
+    #         k = list(props.keys())[0]
+    #         v = self._format_data(props[k], arg_str)
+    #         self._add_line(f'@fpy({k}={v})', ctx)
+    #     else:
+    #         self._add_line('@fpy(', ctx)
+    #         for k, data in props.items():
+    #             v = self._format_data(data, arg_str)
+    #             self._add_line(f'{k}={v},', ctx + 1)
+    #         self._add_line(')', ctx)
 
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)
 
-        # metadata
-        props: dict[str, Any] = {}
-        if func.ctx is not None:
-            props['ctx'] = func.ctx
-        if func.spec is not None:
-            props['spec'] = func.spec
-        if func.meta:
-            props['meta'] = func.meta
-
-        # formatting
-        self._format_decorator(props, arg_str, ctx)
+        self._format_decorator(arg_str, func.ctx, func.spec, func.meta, ctx)
         self._add_line(f'def {func.name}({arg_str}):', ctx)
         self._visit_block(func.body, ctx + 1)
 

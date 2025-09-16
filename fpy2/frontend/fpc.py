@@ -85,7 +85,6 @@ def _get_unary_table():
             'isnan': IsNan,
             'isnormal': IsNormal,
             'signbit': Signbit,
-            'cast': Round,
             'range': Range,
             'dim': Dim,
         }
@@ -203,6 +202,9 @@ class _FPCore2FPy:
         if e.name == '-':
             arg = self._visit(e.children[0], ctx)
             return Neg(arg, None)
+        elif e.name == 'cast':
+            arg = self._visit(e.children[0], ctx)
+            return Round(NamedId('round'), arg, None)
         elif e.name in unary_table:
             cls = unary_table[e.name]
             arg = self._visit(e.children[0], ctx)

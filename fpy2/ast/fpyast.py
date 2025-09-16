@@ -1676,9 +1676,9 @@ class FuncDef(Ast):
     args: tuple[Argument, ...]
     body: StmtBlock
     free_vars: set[NamedId]
-    ctx: Optional[Context | FPCoreContext]
+    ctx: Context | FPCoreContext | None
     spec: Any
-    meta: dict[str, Any]
+    meta: dict[str, Any] | None
 
     def __init__(
         self,
@@ -1688,7 +1688,7 @@ class FuncDef(Ast):
         ctx: Context | FPCoreContext | None,
         body: StmtBlock,
         spec: Any,
-        meta: dict[str, Any],
+        meta: dict[str, Any] | None,
         *,
         loc: Optional[Location] = None
     ):

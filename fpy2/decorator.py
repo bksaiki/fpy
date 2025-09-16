@@ -201,8 +201,7 @@ def _apply_fpy_decorator(
 
     # spec and metadata
     ast.spec = spec
-    if meta:
-        ast.meta.update(meta)
+    ast.meta = meta
 
     if decorator == pattern:
         # syntax checking

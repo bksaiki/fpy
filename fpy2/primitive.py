@@ -28,7 +28,7 @@ class Primitive(Generic[P, R]):
     ret_ctx: Context | str | tuple | None
     # metadata
     spec: Any | None
-    meta: dict[str, Any]
+    meta: dict[str, Any] | None
 
     def __init__(
         self,
@@ -41,9 +41,6 @@ class Primitive(Generic[P, R]):
         spec: Any | None = None,
         meta: dict[str, Any] | None = None
     ):
-        if meta is None:
-            meta = {}
-
         self.func = func
         self.arg_types = tuple(arg_types)
         self.ret_type = return_type
