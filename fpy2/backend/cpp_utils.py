@@ -27,8 +27,6 @@ CPP_HEADERS = [
 ]
 
 CPP_HELPERS = """
-#pragma STDC FENV_ACCESS ON
-
 template <typename T>
 static size_t size(const T&, size_t) {
     assert(false && "cannot compute tensor size of a scalar");
