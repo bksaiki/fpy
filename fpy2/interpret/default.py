@@ -521,9 +521,8 @@ class _Interpreter(Visitor):
                 return fn(*args, ctx=ctx)
             case type() if issubclass(fn, Context):
                 # calling context constructor
-                # this must be computed under a real context
-                args = [self._visit_expr(arg, REAL) for arg in e.args]
-                kwargs = { k: self._visit_expr(v, REAL) for k, v in e.kwargs }
+                args = [self._visit_expr(arg, ctx) for arg in e.args]
+                kwargs = { k: self._visit_expr(v, ctx) for k, v in e.kwargs }
                 return self._construct_context(fn, args, kwargs)
             case _:
                 # calling foreign function
@@ -775,7 +774,11 @@ class _Interpreter(Visitor):
             raise RuntimeError(f'unknown attribute {e.attr} for {value}')
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
-        round_ctx = self._visit_expr(stmt.ctx, ctx)
+        # evaluate the context under a real context
+        round_ctx = self._visit_expr(stmt.ctx, REAL)
+        if not isinstance(round_ctx, Context):
+            raise TypeError(f'expected a context, got `{round_ctx}`')
+        # evaluate the body under the new context
         self._visit_block(stmt.body, round_ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Context):
