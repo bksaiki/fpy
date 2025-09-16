@@ -211,7 +211,7 @@ def _make_unary_table() -> UnaryOpTable:
             UnaryCppOp('std::nearbyint', CppScalar.F64, CppScalar.F64),
             UnaryCppOp('std::nearbyint', CppScalar.F32, CppScalar.F32),
         ],
-        
+
         # Square root and cube root
         Sqrt: [
             UnaryCppOp('std::sqrt', CppScalar.F64, CppScalar.F64),
@@ -221,7 +221,7 @@ def _make_unary_table() -> UnaryOpTable:
             UnaryCppOp('std::cbrt', CppScalar.F64, CppScalar.F64),
             UnaryCppOp('std::cbrt', CppScalar.F32, CppScalar.F32),
         ],
-        
+
         # Trigonometric functions
         Sin: [
             UnaryCppOp('std::sin', CppScalar.F64, CppScalar.F64),

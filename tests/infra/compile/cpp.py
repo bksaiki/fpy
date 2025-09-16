@@ -35,7 +35,7 @@ _library_ignore = [
 
 
 def _test_unit():
-    compiler = fp.CppBackend()
+    compiler = fp.CppBackend(unsafe_allow_int=True)
     for test in tests:
         if test.name in _test_ignore:
             continue
@@ -57,7 +57,7 @@ def _test_unit():
         print(s)
 
 def _test_library():
-    compiler = fp.CppBackend()
+    compiler = fp.CppBackend(unsafe_allow_int=True)
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function) and obj.name not in _library_ignore:

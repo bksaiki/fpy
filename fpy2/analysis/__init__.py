@@ -1,6 +1,6 @@
 """Program analyses for FPy programs"""
 
-from .context_infer import ContextInfer, ContextAnalysis, ContextInferError, ContextType, TupleContext
+from .context_infer import ContextInfer, ContextAnalysis, ContextInferError, TypeContext, TupleContext
 
 from .define_use import (
     DefineUse, DefineUseAnalysis, Definition, DefinitionCtx,

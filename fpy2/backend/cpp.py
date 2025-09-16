@@ -9,7 +9,7 @@ from typing import Iterable
 
 from ..ast import *
 from ..analysis import (
-    ContextAnalysis, ContextInfer, ContextInferError, ContextType, TupleContext,
+    ContextAnalysis, ContextInfer, ContextInferError, TypeContext, TupleContext,
     DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
     TypeAnalysis, TypeCheck, TypeInferError
 )
@@ -18,7 +18,8 @@ from ..number import (
     RM,
     FP64, FP32,
     SINT8, SINT16, SINT32, SINT64,
-    UINT8, UINT16, UINT32, UINT64
+    UINT8, UINT16, UINT32, UINT64,
+    INTEGER
 )
 from ..primitive import Primitive
 from ..transform import ContextInline
@@ -42,6 +43,13 @@ class CppCompileError(CompileError):
         lines: list[str] = [f'C++ backend: {msg} in function `{func.name}`']
         lines.extend(str(arg) for arg in args)
         super().__init__('\n '.join(lines))
+
+
+@dataclasses.dataclass
+class _CppOptions:
+    std: CppStandard
+    op_table: ScalarOpTable
+    unsafe_allow_int: bool
 
 
 @dataclasses.dataclass
@@ -70,9 +78,8 @@ class _CppBackendInstance(Visitor):
     Per-function compilation instance.
     """
 
+    options: _CppOptions
     func: FuncDef
-    std: CppStandard
-    op_table: ScalarOpTable
 
     arg_ctxs: tuple[Context | None, ...]
     caller_ctx: Context | None
@@ -87,18 +94,16 @@ class _CppBackendInstance(Visitor):
 
     def __init__(
         self,
+        options: _CppOptions,
         func: FuncDef,
-        std: CppStandard,
-        op_table: ScalarOpTable,
         arg_ctxs: Iterable[Context | None],
         caller_ctx: Context | None,
         def_use: DefineUseAnalysis,
         type_info: TypeAnalysis,
         ctx_info: ContextAnalysis
     ):
+        self.options = options
         self.func = func
-        self.std = std
-        self.op_table = op_table
 
         self.arg_ctxs = tuple(arg_ctxs)
         self.caller_ctx = caller_ctx
@@ -116,7 +121,7 @@ class _CppBackendInstance(Visitor):
         self._visit_function(self.func, ctx)
         return '\n'.join(ctx.lines)
 
-    def _monomorphize_context(self, ctx: ContextType):
+    def _monomorphize_context(self, ctx: TypeContext):
         match ctx:
             case None:
                 raise CppCompileError(self.func, 'context inference inconclusive')
@@ -131,7 +136,7 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable: {ctx}')
 
-    def _compile_context(self, ctx: ContextType):
+    def _compile_context(self, ctx: TypeContext):
         match ctx:
             case NamedId():
                 raise CppCompileError(self.func, f'contexts must be monomorphic: `{ctx}`')
@@ -156,12 +161,16 @@ class _CppBackendInstance(Visitor):
                     return CppScalar.U32
                 elif ctx.is_equiv(UINT64):
                     return CppScalar.U64
+                elif ctx.is_equiv(INTEGER):
+                    if not self.options.unsafe_allow_int:
+                        raise CppCompileError(self.func, 'integer type not allowed (set `unsafe_allow_int=True` to override)')
+                    return CppScalar.S64
                 else:
                     raise CppCompileError(self.func, f'unsupported context: `{ctx}`')
             case _:
                 raise CppCompileError(self.func, f'unsupported context: `{ctx}`')
 
-    def _compile_type(self, ty: Type, ctx: ContextType):
+    def _compile_type(self, ty: Type, ctx: TypeContext):
         match ty, ctx:
             case BoolType(), _:
                 return CppScalar.BOOL
@@ -370,7 +379,7 @@ class _CppBackendInstance(Visitor):
 
     def _visit_mxn2(self, e: Min | Max, x1: str, x2: str, x1_ty: CppScalar, x2_ty: CppScalar, e_ty: CppScalar):
         # min(x1, x2) => std::fmin(<x1>, <x2>)
-        for op in self.op_table.binary[type(e)]:
+        for op in self.options.op_table.binary[type(e)]:
             if op.matches(x1_ty, x2_ty, e_ty):
                 return op.format(x1, x2)
         raise CppCompileError(self.func, f'no matching signature for {e.format()}')
@@ -399,8 +408,8 @@ class _CppBackendInstance(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: _CompileCtx):
         # Check unary operator table
         cls = type(e)
-        if cls in self.op_table.unary:
-            ops = self.op_table.unary[cls]
+        if cls in self.options.op_table.unary:
+            ops = self.options.op_table.unary[cls]
             arg = self._visit_expr(e.arg, ctx)
             _, _, arg_ty = self._expr_type(e.arg)
             _, _, e_ty = self._expr_type(e)
@@ -433,8 +442,8 @@ class _CppBackendInstance(Visitor):
 
         # check operator table
         cls = type(e)
-        if cls in self.op_table.binary:
-            ops = self.op_table.binary[cls]
+        if cls in self.options.op_table.binary:
+            ops = self.options.op_table.binary[cls]
             _, _, lhs_ty = self._expr_type(e.first)
             _, _, rhs_ty = self._expr_type(e.second)
             _, _, e_ty = self._expr_type(e)
@@ -455,8 +464,8 @@ class _CppBackendInstance(Visitor):
     def _visit_ternaryop(self, e: TernaryOp, ctx: _CompileCtx):
         # check operator table
         cls = type(e)
-        if cls in self.op_table.ternary:
-            ops = self.op_table.ternary[cls]
+        if cls in self.options.op_table.ternary:
+            ops = self.options.op_table.ternary[cls]
             arg1 = self._visit_expr(e.first, ctx)
             arg2 = self._visit_expr(e.second, ctx)
             arg3 = self._visit_expr(e.third, ctx)
@@ -816,38 +825,7 @@ _HEADERS = [
     '#include <tuple>',
 ]
 
-
-class CppBackend(Backend):
-    """
-    Compiler from FPy to C++.
-    """
-
-    std: CppStandard
-    op_table: ScalarOpTable
-
-    def __init__(
-        self,
-        std: CppStandard = CppStandard.CXX_11,
-        op_table: ScalarOpTable | None = None
-    ):
-        if op_table is None:
-            op_table = make_op_table()
-
-        self.std = std
-        self.op_table = op_table
-
-    def headers(self) -> list[str]:
-        """
-        Returns the C++ headers required for compiling an FPy program.
-        """
-        return list(_HEADERS)
-
-    def helpers(self) -> str:
-        """
-        Returns C++ helper functions for compiled FPy programs.
-        """
-
-        return """
+HELPERS = """"
 #pragma STDC FENV_ACCESS ON
 
 template <typename T>
@@ -871,6 +849,45 @@ static size_t dim(const std::vector<T>& vec) {
     return 1 + dim(vec[0]);
 }
 """
+
+
+class CppBackend(Backend):
+    """
+    Compiler from FPy to C++.
+    """
+
+    std: CppStandard
+    op_table: ScalarOpTable
+
+    unsafe_allow_int: bool
+
+    def __init__(
+        self,
+        std: CppStandard = CppStandard.CXX_11,
+        op_table: ScalarOpTable | None = None,
+        *,
+        unsafe_allow_int: bool = False
+    ):
+        if op_table is None:
+            op_table = make_op_table()
+
+        self.std = std
+        self.op_table = op_table
+        self.unsafe_allow_int = unsafe_allow_int
+
+
+    def headers(self) -> list[str]:
+        """
+        Returns the C++ headers required for compiling an FPy program.
+        """
+        return list(_HEADERS)
+
+    def helpers(self) -> str:
+        """
+        Returns C++ helper functions for compiled FPy programs.
+        """
+
+        return str(HELPERS)
 
     def compile(
         self,
@@ -906,6 +923,7 @@ static size_t dim(const std::vector<T>& vec) {
             raise ValueError(f'{func.name}: context inference failed') from e
 
         # compile
-        inst = _CppBackendInstance(ast, self.std, self.op_table, arg_ctxs, ctx, def_use, type_info, ctx_info)
+        options = _CppOptions(self.std, self.op_table, self.unsafe_allow_int)
+        inst = _CppBackendInstance(options, ast, arg_ctxs, ctx, def_use, type_info, ctx_info)
         body_str =  inst.compile()
         return body_str
