@@ -129,8 +129,8 @@ class VarType(Type):
     def __hash__(self):
         return hash(self.name)
 
-    def format(self):
-        return self.name
+    def format(self) -> str:
+        return str(self.name)
 
     def free_vars(self) -> set['VarType']:
         return {self}
@@ -142,54 +142,54 @@ class VarType(Type):
 class TupleType(Type):
     """Tuple type."""
 
-    elt_types: tuple[Type, ...]
+    elts: tuple[Type, ...]
     """type of elements"""
 
     def __init__(self, *elts: Type):
-        self.elt_types = elts
+        self.elts = elts
 
     def format(self) -> str:
-        return f'tuple[{", ".join(elt.format() for elt in self.elt_types)}]'
+        return f'tuple[{", ".join(elt.format() for elt in self.elts)}]'
 
     def free_vars(self) -> set['VarType']:
         fvs: set[VarType] = set()
-        for elt in self.elt_types:
+        for elt in self.elts:
             fvs |= elt.free_vars()
         return fvs
 
     def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
-        return TupleType(*[elt.subst(subst) for elt in self.elt_types])
+        return TupleType(*[elt.subst(subst) for elt in self.elts])
 
     def __eq__(self, other):
-        return isinstance(other, TupleType) and self.elt_types == other.elt_types
+        return isinstance(other, TupleType) and self.elts == other.elts
 
     def __hash__(self):
-        return hash(self.elt_types)
+        return hash(self.elts)
 
 
 class ListType(Type):
     """List type."""
 
-    elt_type: Type
+    elt: Type
     """element type"""
 
     def __init__(self, elt: Type):
-        self.elt_type = elt
+        self.elt = elt
 
     def format(self) -> str:
-        return f'list[{self.elt_type.format()}]'
+        return f'list[{self.elt.format()}]'
 
     def free_vars(self) -> set['VarType']:
-        return self.elt_type.free_vars()
+        return self.elt.free_vars()
 
     def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
-        return ListType(self.elt_type.subst(subst))
+        return ListType(self.elt.subst(subst))
 
     def __eq__(self, other):
-        return isinstance(other, ListType) and self.elt_type == other.elt_type
+        return isinstance(other, ListType) and self.elt == other.elt
 
     def __hash__(self):
-        return hash(self.elt_type)
+        return hash(self.elt)
 
 
 class FunctionType(Type):

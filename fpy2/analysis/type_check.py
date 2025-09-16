@@ -101,7 +101,7 @@ _ternary_table: dict[type[TernaryOp], FunctionType] = {
     Fma: _Real3ary,
 }
 
-class FPyTypeError(Exception):
+class TypeInferError(Exception):
     """Type error for FPy programs."""
     pass
 
@@ -110,6 +110,14 @@ class TypeAnalysis:
     fn_type: FunctionType
     by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
+
+    @property
+    def arg_types(self):
+        return self.fn_type.arg_types
+
+    @property
+    def return_type(self):
+        return self.fn_type.return_type
 
 
 class _TypeCheckInstance(Visitor):
@@ -132,18 +140,6 @@ class _TypeCheckInstance(Visitor):
         self.tvars = Unionfind()
         self.gensym = Gensym()
 
-    def analyze(self) -> TypeAnalysis:
-        ty = self._visit_function(self.func, None)
-        by_defs = {
-            name: self._resolve_type(ty)
-            for name, ty in self.by_def.items()
-        }
-        by_expr = {
-            e: self._resolve_type(ty)
-            for e, ty in self.by_expr.items()
-        }
-        return TypeAnalysis(ty, by_defs, by_expr)
-
     def _set_type(self, site: Definition, ty: Type):
         self.by_def[site] = ty
 
@@ -158,10 +154,10 @@ class _TypeCheckInstance(Visitor):
             case BoolType() | RealType() | ContextType() | VarType():
                 return self.tvars.get(ty, ty)
             case TupleType():
-                elts = [self._resolve_type(elt) for elt in ty.elt_types]
+                elts = [self._resolve_type(elt) for elt in ty.elts]
                 return self.tvars.add(TupleType(*elts))
             case ListType():
-                elt_ty = self._resolve_type(ty.elt_type)
+                elt_ty = self._resolve_type(ty.elt)
                 return self.tvars.add(ListType(elt_ty))
             case _:
                 raise NotImplementedError(f'cannot resolve type {ty}')
@@ -179,22 +175,22 @@ class _TypeCheckInstance(Visitor):
             case (RealType(), RealType()) | (BoolType(), BoolType()) | (ContextType(), ContextType()):
                 return a_ty
             case ListType(), ListType():
-                elt_ty = self._unify(a_ty.elt_type, b_ty.elt_type)
+                elt_ty = self._unify(a_ty.elt, b_ty.elt)
                 elt_ty = self.tvars.add(elt_ty)
-                elt_ty = self.tvars.union(elt_ty, self.tvars.add(a_ty.elt_type))
-                elt_ty = self.tvars.union(elt_ty, self.tvars.add(b_ty.elt_type))
+                elt_ty = self.tvars.union(elt_ty, self.tvars.add(a_ty.elt))
+                elt_ty = self.tvars.union(elt_ty, self.tvars.add(b_ty.elt))
                 return self.tvars.add(ListType(elt_ty))
             case TupleType(), TupleType():
                 # TODO: what if the length doesn't match
-                if len(a_ty.elt_types) != len(b_ty.elt_types):
-                    raise FPyTypeError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
-                elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elt_types, b_ty.elt_types)]
+                if len(a_ty.elts) != len(b_ty.elts):
+                    raise TypeInferError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
+                elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elts, b_ty.elts)]
                 ty = self.tvars.add(TupleType(*elts))
                 ty = self.tvars.union(ty, self.tvars.add(a_ty))
                 ty = self.tvars.union(ty, self.tvars.add(b_ty))
                 return ty
             case _:
-                raise FPyTypeError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
+                raise TypeInferError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
 
     def _instantiate(self, ty: Type) -> Type:
         subst: dict[VarType, Type] = {}
@@ -202,7 +198,7 @@ class _TypeCheckInstance(Visitor):
             subst[fv] = self._fresh_type_var()
         return ty.subst(subst)
 
-    def _generalize(self, ty: Type) -> Type:
+    def _generalize(self, ty: Type) -> tuple[Type, dict[VarType, Type]]:
         subst: dict[VarType, Type] = {}
         for i, fv in enumerate(sorted(ty.free_vars())):
             t = self.tvars.find(fv)
@@ -211,7 +207,8 @@ class _TypeCheckInstance(Visitor):
                     subst[fv] = VarType(NamedId(f't{i + 1}'))
                 case _:
                     subst[fv] = t
-        return ty.subst(subst)
+        ty = ty.subst(subst)
+        return ty, subst
 
     def _annotation_to_type(self, ty: TypeAnn | None) -> Type:
         match ty:
@@ -402,7 +399,7 @@ class _TypeCheckInstance(Visitor):
                 if len(fn_ty.arg_types) != len(e.args):
                     # no function signature / signature mismatch
                     actual_sig = f'function[{", ".join(arg.format() for arg in arg_tys)}]'
-                    raise FPyTypeError(f'function {e.fn.name}` has signature`{fn_ty.format()}`, but calling with `{actual_sig}')
+                    raise TypeInferError(f'function {e.fn.name}` has signature`{fn_ty.format()}`, but calling with `{actual_sig}')
 
                 # signature matches
                 # instantiate the function type
@@ -442,10 +439,10 @@ class _TypeCheckInstance(Visitor):
             case UnderscoreId():
                 pass
             case TupleBinding():
-                if not isinstance(ty, TupleType) or len(binding.elts) != len(ty.elt_types):
-                    raise FPyTypeError(f'cannot unpack `{ty.format()}` for `{binding.format()}`')
+                if not isinstance(ty, TupleType) or len(binding.elts) != len(ty.elts):
+                    raise TypeInferError(f'cannot unpack `{ty.format()}` for `{binding.format()}`')
                 # type has expected shape
-                for elt_ty, elt in zip(ty.elt_types, binding.elts):
+                for elt_ty, elt in zip(ty.elts, binding.elts):
                     self._visit_binding(site, elt, elt_ty)
             case _:
                 raise RuntimeError(f'unreachable: {binding}')
@@ -454,9 +451,9 @@ class _TypeCheckInstance(Visitor):
         for target, iterable in zip(e.targets, e.iterables):
             iter_ty = self._visit_expr(iterable, None)
             if not isinstance(iter_ty, ListType):
-                raise FPyTypeError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
+                raise TypeInferError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
             # expected type: list a
-            self._visit_binding(e, target, iter_ty.elt_type)
+            self._visit_binding(e, target, iter_ty.elt)
 
         elt_ty = self._visit_expr(e.elt, None)
         return ListType(elt_ty)
@@ -582,10 +579,10 @@ class _TypeCheckInstance(Visitor):
         # type check iterable
         iter_ty = self._visit_expr(stmt.iterable, None)
         if not isinstance(iter_ty, ListType):
-            raise FPyTypeError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
+            raise TypeInferError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
 
         # expected type: list a
-        self._visit_binding(stmt, stmt.target, iter_ty.elt_type)
+        self._visit_binding(stmt, stmt.target, iter_ty.elt)
 
         # type check body
         self._visit_block(stmt.body, None)
@@ -630,16 +627,41 @@ class _TypeCheckInstance(Visitor):
         # type check body
         self._visit_block(func.body, None)
         if self.ret_type is None:
-            raise FPyTypeError(f'function {func.name} has no return type')
+            raise TypeInferError(f'function {func.name} has no return type')
 
         # generalize the function type
-        ty = FunctionType(arg_tys, self.ret_type)
-        return cast(FunctionType, self._generalize(ty))
+        arg_tys = [self._resolve_type(ty) for ty in arg_tys]
+        ret_ty = self._resolve_type(self.ret_type)
+        return FunctionType(arg_tys, ret_ty)
 
     def _visit_expr(self, expr: Expr, ctx: None) -> Type:
         ret_ty = super()._visit_expr(expr, ctx)
         self.by_expr[expr] = ret_ty
         return ret_ty
+
+    def analyze(self) -> TypeAnalysis:
+        # type check the body
+        ty = self._visit_function(self.func, None)
+
+        # generalize the output type
+        fn_ty, subst = self._generalize(ty)
+        fn_ty = cast(FunctionType, fn_ty)
+
+        # rename unbound type variables
+        for t in self.tvars:
+            if isinstance(t, VarType) and t not in subst:
+                subst[t] = VarType(NamedId(f't{len(subst) + 1}'))
+
+        # resolve definition/expr types
+        by_defs = {
+            name: self._resolve_type(ty).subst(subst)
+            for name, ty in self.by_def.items()
+        }
+        by_expr = {
+            e: self._resolve_type(ty).subst(subst)
+            for e, ty in self.by_expr.items()
+        }
+        return TypeAnalysis(fn_ty, by_defs, by_expr)
 
 
 class TypeCheck:
@@ -661,7 +683,7 @@ class TypeCheck:
     #
 
     @staticmethod
-    def check(func: FuncDef) -> TypeAnalysis:
+    def check(func: FuncDef, def_use: DefineUseAnalysis | None = None) -> TypeAnalysis:
         """
         Analyzes the function for type errors.
 
@@ -671,7 +693,8 @@ class TypeCheck:
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
 
-        def_use = DefineUse.analyze(func)
+        if def_use is None:
+            def_use = DefineUse.analyze(func)
         inst = _TypeCheckInstance(func, def_use)
         return inst.analyze()
 

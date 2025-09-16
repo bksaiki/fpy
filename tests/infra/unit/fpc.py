@@ -3,6 +3,7 @@ from .defs import tests, examples
 
 _ignore = [
     'test_context_expr1',
+    'test_context6',
     'keep_p_1',
 ]
 
@@ -14,3 +15,6 @@ def test_compile_fpc():
             print(f'Compiling {core.name}')
             fpc = comp.compile(core)
             print(fpc)
+
+if __name__ == '__main__':
+    test_compile_fpc()

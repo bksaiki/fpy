@@ -6,13 +6,17 @@ from typing import Any
 
 from .number import (
     Context,
+    FixedContext,
     IEEEContext,
     MPFixedContext,
     RealContext,
-    RM,
+    RM, OV,
     FP128, FP64, FP32, FP16,
     INTEGER
 )
+
+###########################################################
+# Rounding modes
 
 _round_mode = {
     'nearestEven': RM.RNE,
@@ -23,25 +27,39 @@ _round_mode = {
     'awayZero': RM.RAZ,
 }
 
-_invert_round_mode = {
-    RM.RNE: 'nearestEven',
-    RM.RNA: 'nearestAway',
-    RM.RTP: 'toPositive',
-    RM.RTN: 'toNegative',
-    RM.RTZ: 'toZero',
-    RM.RAZ: 'awayZero',
-}
-
 def _round_mode_to_fpy(mode: str):
     if mode not in _round_mode:
         raise ValueError(f'Unknown rounding mode: {mode}')
     return _round_mode[mode]
 
 def _round_mode_from_fpc(mode: RM):
+    _invert_round_mode = { v: k for k, v in _round_mode.items() }
     if mode not in _invert_round_mode:
         raise ValueError(f'Unknown rounding mode: {mode}')
     return _invert_round_mode[mode]
 
+###########################################################
+# Overflow mode
+
+_overflow_mode = {
+    'wrap': OV.WRAP,
+    'clamp': OV.SATURATE,
+    'infinity': OV.OVERFLOW,
+}
+
+def _overflow_mode_to_fpc(mode: str):
+    if mode not in _overflow_mode:
+        raise ValueError(f'Unknown overflow mode: {mode}')
+    return _overflow_mode[mode]
+
+def _overflow_mode_from_fpc(mode: OV):
+    _invert_overflow_mode = { v: k for k, v in _overflow_mode.items() }
+    if mode not in _invert_overflow_mode:
+        raise ValueError(f'Unknown overflow mode: {mode}')
+    return _invert_overflow_mode[mode]
+
+###########################################################
+# FPCore (legacy) context
 
 class NoSuchContextError(Exception):
     """
@@ -140,6 +158,12 @@ class FPCoreContext:
                     return FPCoreContext(precision='integer', round=rm)
                 else:
                     return FPCoreContext(n=ctx.nmin, round=rm)
+            case FixedContext():
+                if not ctx.signed:
+                    raise RuntimeError('Cannot convert unsigned FixedContext to an FPCore context')
+                rm = _round_mode_from_fpc(ctx.rm)
+                of = _overflow_mode_from_fpc(ctx.overflow)
+                return FPCoreContext(precision=['fixed', ctx.nbits, ctx.scale], round=rm, overflow=of)
             case RealContext():
                 return FPCoreContext(precision='real')
             case _:
@@ -152,6 +176,7 @@ class FPCoreContext:
         """
         prec = self.props.get('precision', 'binary64')
         rnd = self.props.get('round', 'nearestEven')
+        ov = self.props.get('overflow', 'infinity')
         try:
             match prec:
                 # IEEE 754 long form
@@ -168,6 +193,9 @@ class FPCoreContext:
                     return FP32.with_params(rm=_round_mode_to_fpy(rnd))
                 case 'binary16':
                     return FP16.with_params(rm=_round_mode_to_fpy(rnd))
+                # fixed-point context
+                case ['fixed', nbits, scale]:
+                    return FixedContext(True, int(nbits), int(scale), _round_mode_to_fpy(rnd), _overflow_mode_to_fpc(ov))
                 # integer context
                 case 'integer':
                     return INTEGER.with_params(rm=_round_mode_to_fpy(rnd))

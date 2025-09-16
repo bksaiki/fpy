@@ -20,8 +20,12 @@ def test_bool2():
     return False
 
 @fpy
-def test_decnum():
+def test_decnum1():
     return 0.0
+
+@fpy
+def test_decnum2():
+    return 1.5
 
 @fpy
 def test_digits1():
@@ -122,6 +126,11 @@ def test_tuple4():
     x0, x1 = x
     y0, y1 = y
     return x0 * y0 + x1 * y1
+
+@fpy
+def test_tuple5():
+    (x, y), (z, _) = (1.0, 2.0), (3.0, 4.0)
+    return x + y + z
 
 @fpy
 def test_list1():
@@ -424,21 +433,20 @@ def test_for4() -> Real:
         sum += x * y
     return sum
 
-
 @fp.fpy
-def test_context1(x: fp.Real):
-    with fp.INTEGER:
-        return x + 1
-
-@fpy
-def test_context2():
+def test_context1():
     with IEEEContext(8, 32, RM.RNE):
         return 0
 
-@fpy
-def test_context3():
+@fp.fpy
+def test_context2():
     x = 1
     with IEEEContext(8, 32, RM.RNE):
+        return x + 1
+
+@fp.fpy
+def test_context3(x: fp.Real):
+    with fp.INTEGER:
         return x + 1
 
 @fp.fpy
@@ -447,14 +455,25 @@ def test_context4():
     with MPFixedContext(-2, rm=fp.RM.RNE):
         return fp.round(x)
 
-# @fpy(name='Test context statement (3/3)')
-# def test_context3(x: Real, y: Real):
-#     with IEEEContext(8, 32, RM.RNE) as ctx:
-#         with ctx.replace(rm=RM.RTP):
-#             t0 = x + y
-#         with ctx.replace(rm=RM.RTN):
-#             t1 = x - y
-#         return t0 - t1
+@fp.fpy
+def test_context5(s: fp.Real): # s : real @ b
+    t: fp.Real = 0 # t : real @ a
+    if s < 0: # < : real @ b -> real @ a -> bool @ a
+        t += 1  # + : real @ a -> real @ a -> real @ a
+    else:
+        with fp.FP32:
+            tmp = t + s # + : real @ a -> real @ b -> real @ FP32
+        t = fp.round(tmp) # round : real @ FP32 -> real @ a
+    return t
+
+@fp.fpy
+def test_context6():
+    with fp.UINT64:
+        z = 0
+        for i in range(10):
+            z += i * i
+        return z
+
 
 @fpy
 def test_assert():
@@ -477,7 +496,7 @@ def dpN(xs: list[Real], ys: list[Real]) -> Real:
     with RealContext():
         for x, y in zip(xs, ys):
             sum += x * y
-    return roundint(sum)
+    return round(sum)
 
 @fpy
 def nmse3_1(x: Real):
@@ -586,13 +605,14 @@ def keep_p_1(x: fp.Real):
         return fp.round(x)
 
 
-tests = [
+tests: list[Function] = [
     # Tests
     test_simple1,
     test_simple2,
     test_bool1,
     test_bool2,
-    test_decnum,
+    test_decnum1,
+    test_decnum2,
     test_digits1,
     test_digits2,
     test_digits3,
@@ -612,6 +632,7 @@ tests = [
     test_tuple2,
     test_tuple3,
     test_tuple4,
+    test_tuple5,
     test_list1,
     test_list_len1,
     test_list_len2,
@@ -660,11 +681,13 @@ tests = [
     test_context2,
     test_context3,
     test_context4,
+    test_context5,
+    test_context6,
     test_assert,
 ]
 
 # Examples
-examples = [
+examples: list[Function] = [
     fma_ctx,
     # dpN,
     nmse3_1,
