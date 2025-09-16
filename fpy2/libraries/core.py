@@ -7,8 +7,8 @@ from . import base as fp
 ###########################################################
 # Splitting functions
 
-@fp.fpy_primitive
-def split(x: fp.Float, n: fp.Float) -> tuple[fp.Float, fp.Float]:
+@fp.fpy_primitive(ctx='R', ret_ctx=('R', 'R'))
+def split(x: fp.Float, n: fp.Float, ctx: fp.Context) -> tuple[fp.Float, fp.Float]:
     """
     Splits `x` into two parts:
     - all digits of `x` that are above the `n`th digit
@@ -21,17 +21,22 @@ def split(x: fp.Float, n: fp.Float) -> tuple[fp.Float, fp.Float]:
     - if `x` is infinite, the result is `(x, x)`
     - if `n` is not an integer, a `ValueError` is raised.
     """
-
     if not n.is_integer():
         raise ValueError("n must be an integer")
 
     if x.isnan:
-        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
+        hi = ctx.round(fp.Float.nan(), exact=True)
+        lo = ctx.round(fp.Float.nan(), exact=True)
+        return hi, lo
     elif x.isinf:
-        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx))
+        hi = ctx.round(fp.Float(s=x.s, isinf=True), exact=True)
+        lo = ctx.round(fp.Float(s=x.s, isinf=True), exact=True)
+        return hi, lo
     else:
-        hi, lo = x.as_real().split(int(n))
-        return (fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx))
+        above, below = x.as_real().split(int(n))
+        hi = ctx.round(above, exact=True)
+        lo = ctx.round(below, exact=True)
+        return hi, lo
 
 @fp.fpy
 def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
@@ -55,8 +60,8 @@ def _modf_spec(x: fp.Real) -> tuple[fp.Real, fp.Real]:
 
     return ret
 
-@fp.fpy_primitive(spec=_modf_spec)
-def modf(x: fp.Float) -> tuple[fp.Float, fp.Float]:
+@fp.fpy_primitive(ctx='R', ret_ctx=('R', 'R'), spec=_modf_spec)
+def modf(x: fp.Float, ctx: fp.Context) -> tuple[fp.Float, fp.Float]:
     """
     Decomposes `x` into its integral and fractional parts.
     The operation is performed exactly.
@@ -67,17 +72,25 @@ def modf(x: fp.Float) -> tuple[fp.Float, fp.Float]:
     - if `x` is NaN, the result is `(NaN, NaN)`
     """
     if x.isnan:
-        return (fp.Float(x=x, ctx=x.ctx), fp.Float(x=x, ctx=x.ctx))
+        i = ctx.round(x, exact=True)
+        f = ctx.round(x, exact=True)
+        return i, f
     elif x.isinf:
-        return (fp.Float(s=x.s, ctx=x.ctx), fp.Float(s=x.s, isinf=True, ctx=x.ctx))
+        i = ctx.round(fp.Float(s=x.s), exact=True)
+        f = ctx.round(fp.Float(s=x.s, isinf=True), exact=True)
+        return i, f
     elif x.is_zero():
-        return (fp.Float(s=x.s, ctx=x.ctx), fp.Float(s=x.s, ctx=x.ctx))
+        i = ctx.round(fp.Float(s=x.s), exact=True)
+        f = ctx.round(fp.Float(s=x.s), exact=True)
+        return i, f
     else:
         hi, lo = x.as_real().split(-1)
-        return (fp.Float.from_real(hi, ctx=x.ctx), fp.Float.from_real(lo, ctx=x.ctx))
+        i = ctx.round(hi, exact=True)
+        f = ctx.round(lo, exact=True)
+        return i, f
 
-@fp.fpy_primitive
-def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
+@fp.fpy_primitive(ctx='R', ret_ctx=('R', 'R'))
+def frexp(x: fp.Float, ctx: fp.Context) -> tuple[fp.Float, fp.Float]:
     """
     Decomposes `x` into its mantissa and exponent.
     The computation is performed exactly.
@@ -88,16 +101,22 @@ def frexp(x: fp.Float) -> tuple[fp.Float, fp.Float]:
     - if `x` is zero, the result is `(x, 0)`.
     """
     if x.isnan:
-        return (fp.Float(isnan=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
+        m = ctx.round(fp.Float.nan(), exact=True)
+        e = ctx.round(fp.Float.nan(), exact=True)
+        return m, e
     elif x.isinf:
-        return (fp.Float(s=x.s, isinf=True, ctx=x.ctx), fp.Float(isnan=True, ctx=x.ctx))
+        m = ctx.round(fp.Float(s=x.s, isinf=True), exact=True)
+        e = ctx.round(fp.Float.nan(), exact=True)
+        return m, e
     elif x.is_zero():
-        return (fp.Float(x=x, ctx=x.ctx), fp.Float(ctx=x.ctx))
+        m = ctx.round(fp.Float(s=x.s), exact=True)
+        e = ctx.round(fp.Float.zero(), exact=True)
+        return m, e
     else:
         x = x.normalize()
-        mant = fp.Float(s=x.s, e=0, c=x.c, ctx=x.ctx)
-        e = fp.Float.from_int(x.e, ctx=x.ctx)
-        return (mant, e)
+        m = ctx.round(fp.RealFloat(s=x.s, e=0, c=x.c), exact=True)
+        e = ctx.round(x.e)
+        return m, e
 
 ############################################################
 # Predicates
@@ -130,7 +149,7 @@ def _logb_spec(x: fp.Real):
     """
     return fp.floor(fp.log2(abs(x)))
 
-@fp.fpy_primitive(spec=_logb_spec)
+@fp.fpy_primitive(ctx='R', ret_ctx='R', spec=_logb_spec)
 def logb(x: fp.Float, ctx: fp.Context) -> fp.Float:
     """
     Returns the normalized exponent of `x`.
@@ -172,7 +191,7 @@ def _ldexp_spec(x: fp.Real, n: fp.Real) -> fp.Real:
 
     return ret
 
-@fp.fpy_primitive(spec=_ldexp_spec)
+@fp.fpy_primitive(ctx='R', ret_ctx='R', spec=_ldexp_spec)
 def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
     """
     Computes `x * 2**n` with correct rounding.
@@ -218,7 +237,7 @@ def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
 ############################################################
 # Context operations
 
-@fp.fpy_primitive
+@fp.fpy_primitive(ctx='R', ret_ctx='R')
 def max_p(ctx: fp.Context) -> fp.Float:
     """
     Returns the maximum precision of the context.
@@ -229,7 +248,7 @@ def max_p(ctx: fp.Context) -> fp.Float:
         raise ValueError(f"ctx={ctx} does not have a maximum precision")
     return ctx.round(p)
 
-@fp.fpy_primitive
+@fp.fpy_primitive(ctx='R', ret_ctx='R')
 def min_n(ctx: fp.Context) -> fp.Float:
     """
     Returns the least absolute digit of the context.

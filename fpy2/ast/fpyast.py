@@ -1671,42 +1671,35 @@ class Argument(Ast):
 
 class FuncDef(Ast):
     """FPy AST: function definition"""
-    __slots__ = ('name', 'args', 'body', 'metadata', 'free_vars', 'ctx')
+    __slots__ = ('name', 'args', 'body', 'free_vars', 'ctx', 'spec', 'meta')
     name: str
     args: tuple[Argument, ...]
     body: StmtBlock
-    metadata: dict[str, Any]
     free_vars: set[NamedId]
-    ctx: Optional[Context | FPCoreContext]
+    ctx: Context | FPCoreContext | None
+    spec: Any
+    meta: dict[str, Any] | None
 
     def __init__(
         self,
         name: str,
         args: Iterable[Argument],
+        free_vars: set[NamedId],
+        ctx: Context | FPCoreContext | None,
         body: StmtBlock,
+        spec: Any,
+        meta: dict[str, Any] | None,
         *,
-        metadata: Optional[dict[str, Any]] = None,
-        free_vars: Optional[set[NamedId]] = None,
-        ctx: Optional[Context | FPCoreContext] = None,
         loc: Optional[Location] = None
     ):
-        if metadata is None:
-            metadata = {}
-        else:
-            metadata = dict(metadata)
-
-        if free_vars is None:
-            free_vars = set()
-        else:
-            free_vars = set(free_vars)
-
         super().__init__(loc)
         self.name = name
         self.args = tuple(args)
-        self.body = body
-        self.metadata = metadata
         self.free_vars = free_vars
         self.ctx = ctx
+        self.body = body
+        self.spec = spec
+        self.meta = meta
 
     def is_equiv(self, other) -> bool:
         return (

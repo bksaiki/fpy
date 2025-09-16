@@ -85,7 +85,6 @@ def _get_unary_table():
             'isnan': IsNan,
             'isnormal': IsNormal,
             'signbit': Signbit,
-            'cast': Round,
             'range': Range,
             'dim': Dim,
         }
@@ -203,6 +202,9 @@ class _FPCore2FPy:
         if e.name == '-':
             arg = self._visit(e.children[0], ctx)
             return Neg(arg, None)
+        elif e.name == 'cast':
+            arg = self._visit(e.children[0], ctx)
+            return Round(NamedId('round'), arg, None)
         elif e.name in unary_table:
             cls = unary_table[e.name]
             arg = self._visit(e.children[0], ctx)
@@ -792,7 +794,7 @@ class _FPCore2FPy:
         block = StmtBlock(ctx.stmts + [ReturnStmt(e, None)])
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
-        return FuncDef(name, args, block, metadata=props, ctx=ctx_val)
+        return FuncDef(name, args, set(), ctx_val, block, None, props)
 
     def convert(self) -> FuncDef:
         return self._visit_function(self.core)

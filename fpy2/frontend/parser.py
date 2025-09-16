@@ -9,7 +9,7 @@ from types import FunctionType
 
 from ..ast.fpyast import *
 from ..env import ForeignEnv
-from ..number import Float, Real
+from ..number import Context, Float, Real
 from ..utils import NamedId, UnderscoreId, SourceId
 from ..ops import *
 
@@ -278,6 +278,8 @@ class Parser:
                 else:
                     return Decnum(str(e.value), loc)
             case str():
+                return ForeignVal(e.value, loc)
+            case None:
                 return ForeignVal(e.value, loc)
             case _:
                 raise FPyParserError(loc, 'Unsupported constant', e)
@@ -809,7 +811,7 @@ class Parser:
         args = self._parse_arguments(f.args.args)
         expr = self._parse_expr(f.body)
         block = StmtBlock([ReturnStmt(expr, expr.loc)])
-        return FuncDef('pre', args, block, loc=loc)
+        return FuncDef('pre', args, set(), None, block, None, {}, loc=loc)
 
     def _parse_function(self, f: ast.FunctionDef):
         """Parse a Python function definition."""
@@ -834,7 +836,7 @@ class Parser:
         block = self._parse_statements(body)
 
         # return AST and decorator list
-        func = FuncDef(f.name, args, block, loc=loc)
+        func = FuncDef(f.name, args, set(), None, block, None, {}, loc=loc)
         return func, f.decorator_list
 
     def _eval(
@@ -865,7 +867,7 @@ class Parser:
         ptree = self._start_parse()
         return self._parse_function(ptree)
 
-    def parse_signature(self):
+    def parse_signature(self, ignore_ctx: bool = False):
         """Parses `self.source` to extract the arguments."""
         f = self._start_parse()
         loc = self._parse_location(f)
@@ -880,6 +882,11 @@ class Parser:
         # check that there's a return annotation
         if f.returns is None:
             raise FPyParserError(loc, 'FPy requires a return annotation', f, f.returns)
+
+        # prune context argument
+        if ignore_ctx and len(pos_args) >= 1:
+            if pos_args[-1].arg == 'ctx':
+                pos_args = pos_args[:-1]
 
         # parse arguments and returns
         args = self._parse_arguments(pos_args)

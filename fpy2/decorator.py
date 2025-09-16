@@ -20,6 +20,7 @@ from .ast import EffectStmt, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function
+from .number import Context
 from .primitive import Primitive
 from .rewrite import ExprPattern, StmtPattern
 
@@ -35,12 +36,20 @@ def fpy(func: Callable[P, R]) -> Function[P, R]:
     ...
 
 @overload
-def fpy(**kwargs) -> Callable[[Callable[P, R]], Function[P, R]]:
+def fpy(
+    *,
+    ctx: Context | None = None,
+    spec: Any = None,
+    meta: dict[str, Any] | None = None,
+) -> Callable[[Callable[P, R]], Function[P, R]]:
     ...
 
 def fpy(
     func: Optional[Callable[P, R]] = None,
-    **kwargs
+    *,
+    ctx: Context | None = None,
+    spec: Any = None,
+    meta: dict[str, Any] | None = None,
 ):
     """
     Decorator to parse a Python function into FPy.
@@ -48,12 +57,18 @@ def fpy(
     Constructs an FPy `Function` from a Python function.
     FPy is a stricter subset of Python, so this decorator will reject
     any function that is not valid in FPy.
+    
+    Args:
+        func: The function to decorate (when used without parentheses)
+        spec: Optional specification for the function
+        meta: Optional metadata dictionary for the function
     """
+
     if func is None:
         # create a new decorator to be applied directly
-        return lambda func: _apply_fpy_decorator(func, kwargs)
+        return lambda func: _apply_fpy_decorator(func, ctx=ctx, spec=spec, meta=meta)
     else:
-        return _apply_fpy_decorator(func, kwargs)
+        return _apply_fpy_decorator(func, ctx=ctx, spec=spec, meta=meta)
 
 
 ###########################################################
@@ -66,7 +81,7 @@ def pattern(func: Callable[P, R]):
     FPy is a stricter subset of Python, so this decorator will reject
     any function that is not valid in FPy.
     """
-    fn = _apply_fpy_decorator(func, {}, decorator=pattern, is_pattern=True)
+    fn = _apply_fpy_decorator(func, decorator=pattern)
 
     # check which pattern it is
     # TODO: should there be separate decorators?
@@ -84,25 +99,56 @@ def fpy_primitive(func: Callable[P, R]) -> Primitive[P, R]:
     ...
 
 @overload
-def fpy_primitive(**kwargs) -> Callable[[Callable[P, R]], Primitive[P, R]]:
+def fpy_primitive(
+    *,
+    ctx: str | None = None,
+    arg_ctxs: list[str | tuple] | None = None,
+    ret_ctx: Context | str | tuple | None = None,
+    spec: Any = None,
+    meta: dict[str, Any] | None = None,
+) -> Callable[[Callable[P, R]], Primitive[P, R]]:
     ...
 
 def fpy_primitive(
     func: Optional[Callable[P, R]] = None,
-    **kwargs
+    *,
+    ctx: str | None = None,
+    arg_ctxs: list[str | tuple] | None = None,
+    ret_ctx: Context | str | tuple | None = None,
+    spec: Any = None,
+    meta: dict[str, Any] | None = None,
 ):
     """
     Decorator to parse a Python function into an FPy primitive.
     Constructs an FPy `Primitive` from a Python function.
 
     Primitives are Python functions that can be called from the FPy runtime.
+
+    Args:
+        func: The function to decorate (when used without parentheses)
+        spec: Optional specification for the primitive
+        meta: Optional metadata dictionary for the primitive
     """
     if func is None:
         # create a new decorator to be applied directly
-        return lambda func: _apply_fpy_prim_decorator(func, kwargs)
+        return lambda func: _apply_fpy_prim_decorator(
+            func, 
+            ctx=ctx,
+            arg_ctxs=arg_ctxs,
+            ret_ctx=ret_ctx,
+            spec=spec,
+            meta=meta
+        )
     else:
         # parse the function as an FPy primitive
-        return _apply_fpy_prim_decorator(func, kwargs)
+        return _apply_fpy_prim_decorator(
+            func, 
+            ctx=ctx,
+            arg_ctxs=arg_ctxs,
+            ret_ctx=ret_ctx,
+            spec=spec,
+            meta=meta
+        )
 
 ###########################################################
 # Utilities
@@ -127,10 +173,11 @@ def _function_env(func: Callable) -> ForeignEnv:
 
 def _apply_fpy_decorator(
     func: Callable[P, R],
-    kwargs: dict[str, Any],
     *,
+    ctx: Context | None = None,
+    spec: Any = None,
+    meta: dict[str, Any] | None = None,
     decorator: Callable = fpy,
-    is_pattern: bool = False
 ):
     # read the original source the function
     src_name = inspect.getabsfile(func)
@@ -147,27 +194,16 @@ def _apply_fpy_decorator(
 
     # parse the source as an FPy function
     parser = Parser(src_name, src, env, start_line=start_line)
-    ast, decorator_list = parser.parse_function()
-
-    # try to reparse the @fpy decorator
-    dec_ast = parser.find_decorator(
-        decorator_list,
-        decorator,
-        globals=func.__globals__,
-        locals=cvars.nonlocals
-    )
-
-    # parse any relevant properties from the decorator
-    props = parser.parse_decorator(dec_ast)
+    ast, _ = parser.parse_function()
 
     # function may have a global context
-    if 'ctx' in kwargs:
-        ast.ctx = kwargs['ctx']
+    ast.ctx = ctx
 
-    # add context information
-    ast.metadata = { **kwargs, **props }
+    # spec and metadata
+    ast.spec = spec
+    ast.meta = meta
 
-    if is_pattern:
+    if decorator == pattern:
         # syntax checking
         ast.free_vars = SyntaxCheck.check(
             ast,
@@ -175,20 +211,79 @@ def _apply_fpy_decorator(
             ignore_unknown=True,
             allow_wildcard=True
         )
-        # no type checking
-        # ty = None
     else:
         # syntax checking
         ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
         Reachability.analyze(ast, check=True)
 
     # wrap the IR in a Function
-    return Function(ast, None, env, func=func)
+    return Function(ast, None, env)
 
-def _apply_fpy_prim_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
+def _is_valid_context(ctx: Context | str | tuple):
+    match ctx:
+        case tuple():
+            return all(_is_valid_context(c) for c in ctx)
+        case _:
+            return isinstance(ctx, (Context, str))
+
+def _free_context_vars(ctx: Context | str | tuple) -> set[str]:
+    match ctx:
+        case str():
+            return {ctx}
+        case Context():
+            return set()
+        case tuple():
+            vars = set()
+            for c in ctx:
+                vars.update(_free_context_vars(c))
+            return vars
+        case _:
+            raise ValueError(f"invalid context: {ctx}")
+
+def _check_prim_contexts(
+    num_args: int,
+    ctx: str | None,
+    arg_ctxs: list[str | tuple] | None,
+    ret_ctx: Context | str | tuple | None,
+):
+    input_vars: set[str] = set()
+
+    # check contexts are well-formed and that ret_ctx has
+    # no free context variables
+    if ctx is not None:
+        if not _is_valid_context(ctx):
+            raise ValueError(f"invalid context: {ctx}")
+        input_vars.update(_free_context_vars(ctx))
+    if arg_ctxs is not None:
+        if not isinstance(arg_ctxs, list):
+            raise TypeError(f"Expected \'list\': arg_ctxs={arg_ctxs}")
+        if len(arg_ctxs) != num_args:
+            raise ValueError(f"arg_ctxs length mismatch: expected {num_args}, got {len(arg_ctxs)}")
+        for c in arg_ctxs:
+            if not _is_valid_context(c):
+                raise ValueError(f"invalid context in arg_ctxs: {c}")
+            input_vars.update(_free_context_vars(c))
+    if ret_ctx is not None:
+        if not _is_valid_context(ret_ctx):
+            raise ValueError(f"invalid context in ret_ctx: {ret_ctx}")
+        for v in _free_context_vars(ret_ctx):
+            if v not in input_vars:
+                raise ValueError(f"unbound context variable in ret_ctx: {v}")
+
+
+def _apply_fpy_prim_decorator(
+    func: Callable[P, R],
+    *,
+    ctx: str | None = None,
+    arg_ctxs: list[str | tuple] | None = None,
+    ret_ctx: Context | str | tuple | None = None,
+    spec: Any = None,
+    meta: dict[str, Any] | None = None,
+):
     """
     Applies the `@fpy_prim` decorator to a function.
     """
+
     # reparse for the typing annotations
     src_name = inspect.getabsfile(func)
     _, start_line = inspect.getsourcelines(func)
@@ -197,6 +292,19 @@ def _apply_fpy_prim_decorator(func: Callable[P, R], kwargs: dict[str, Any]):
     # parse for the type signature
     env = _function_env(func)
     parser = Parser(src_name, src, env, start_line=start_line)
-    arg_types, return_type = parser.parse_signature()
+    arg_types, return_type = parser.parse_signature(ignore_ctx=True)
 
-    return Primitive(func, arg_types, return_type, kwargs)
+    # check primitive context signature
+    _check_prim_contexts(len(arg_types), ctx, arg_ctxs, ret_ctx)
+
+    # create primitive
+    return Primitive(
+        func,
+        arg_types,
+        return_type,
+        ctx=ctx,
+        arg_ctxs=arg_ctxs,
+        ret_ctx=ret_ctx,
+        spec=spec,
+        meta=meta
+    )

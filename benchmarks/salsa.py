@@ -4,10 +4,10 @@ Benchmarks from Salsa.
 - "Intra-procedural Optimization of the Numerical Accuracy of Programs" (FMICS '15)
 """
 
-from fpy2 import *
+import fpy2 as fp
 
-@fpy(cite=['salsa-fmics15'])
-def odometry(sl: Real, sr: Real):
+@fp.fpy(meta={'cite': ['salsa-fmics15']})
+def odometry(sl: fp.Real, sr: fp.Real):
     """
     Compute the position of a robot from the speed of the wheels.
     Inputs: Speed `sl`, `sr` of the left and right wheel, in rad/s
@@ -32,8 +32,8 @@ def odometry(sl: Real, sr: Real):
         t += 0.1
     return (x, y)
 
-@fpy(cite=['salsa-fmics15'])
-def pid(m: Real, kp: Real, ki: Real, kd: Real, c: Real):
+@fp.fpy(meta={'cite': ['salsa-fmics15']})
+def pid(m: fp.Real, kp: fp.Real, ki: fp.Real, kd: fp.Real, c: fp.Real):
     """
     Keep a measure at its setpoint using a PID controller.
     Inputs: Measure `m`; gains `kp`, `ki`, `kd`; setpoint `c`
@@ -54,8 +54,8 @@ def pid(m: Real, kp: Real, ki: Real, kd: Real, c: Real):
         t += dt
     return m
 
-@fpy(cite=['salsa-fmics15'])
-def lead_lag(y: Real, yd: Real):
+@fp.fpy(meta={'cite': ['salsa-fmics15']})
+def lead_lag(y: fp.Real, yd: fp.Real):
     """
     Compute the output of a lead-lag filter.
     Inputs: Input `y`, desired output `yd`
@@ -92,7 +92,7 @@ def lead_lag(y: Real, yd: Real):
     return (xc0, xc1), yc, u
 
 
-@fpy(cite=['salsa-fmics15'])
+@fp.fpy(meta={'cite': ['salsa-fmics15']})
 def runge_kutta_4(h, yn, c):
     """
     Solve the differential equation `y' = (c - y)^2
@@ -111,7 +111,7 @@ def runge_kutta_4(h, yn, c):
 
     return yn
 
-@fpy(cite=['salsa-fmics15'])
+@fp.fpy(meta={'cite': ['salsa-fmics15']})
 def trapeze(u):
     """
     Trapezoidal rule for numerical integration.
@@ -142,8 +142,8 @@ def trapeze(u):
 
     return r
 
-@fpy(cite=['salsa-fmics15'])
-def rocket_trajectory(N: int, dt: Real):
+@fp.fpy(meta={'cite': ['salsa-fmics15']})
+def rocket_trajectory(N: int, dt: fp.Real):
     """
     Compute the trajectory of a rocket around the earth.
 
@@ -157,7 +157,7 @@ def rocket_trajectory(N: int, dt: Real):
 
     r = 0.0
     D = R + 4.0*10e5 # distance between rocket and the center of the earth
-    v_l=0.7*sqrt(G*Mt * D) # release rate of the rocket
+    v_l= 0.7 * fp.sqrt(G*Mt * D) # release rate of the rocket
 
     # position of the satellite
     u1 = 0.0
