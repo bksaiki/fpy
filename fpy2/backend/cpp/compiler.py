@@ -807,7 +807,11 @@ class _CppBackendInstance(Visitor):
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _CompileCtx):
         e = self._visit_expr(stmt.test, ctx)
-        ctx.add_line(f'assert({e});')
+        if stmt.msg is None:
+            ctx.add_line(f'assert({e});')
+        else:
+            msg = self._visit_expr(stmt.msg, ctx)
+            ctx.add_line(f'assert(({e}) && ({msg}));')
 
     def _visit_effect(self, stmt: EffectStmt, ctx: _CompileCtx):
         raise CppCompileError(self.func, 'FPy effects are not supported')

@@ -174,6 +174,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
             return s, None
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
+        # TODO: message?
         test = self._visit_expr(stmt.test, None)
         s = AssertStmt(test, stmt.msg, None)
         return s, None

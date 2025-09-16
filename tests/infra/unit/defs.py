@@ -476,10 +476,19 @@ def test_context6():
 
 
 @fpy
-def test_assert():
+def test_assert1():
     assert 0 == 0
     return 0
 
+@fpy
+def test_assert2():
+    assert 0 == 0, "assert message"
+    return 0
+
+@fpy
+def test_assert3():
+    assert 0 == 0, 1 + 1
+    return 0
 
 ### Examples
 
@@ -683,7 +692,9 @@ tests: list[Function] = [
     test_context4,
     test_context5,
     test_context6,
-    test_assert,
+    test_assert1,
+    test_assert2,
+    test_assert3
 ]
 
 # Examples

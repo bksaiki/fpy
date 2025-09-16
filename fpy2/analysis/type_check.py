@@ -597,7 +597,10 @@ class _TypeCheckInstance(Visitor):
         self._visit_block(stmt.body, None)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
-        self._visit_expr(stmt.test, None)
+        ty = self._visit_expr(stmt.test, None)
+        self._unify(ty, BoolType())
+        if stmt.msg is not None:
+            self._visit_expr(stmt.msg, None)
 
     def _visit_effect(self, stmt: EffectStmt, ctx: None):
         self._visit_expr(stmt.expr, None)

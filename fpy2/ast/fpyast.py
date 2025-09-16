@@ -1603,13 +1603,13 @@ class AssertStmt(Stmt):
     __slots__ = ('test', 'msg')
 
     test: Expr
-    msg: Optional[str]
+    msg: Expr | None
 
     def __init__(
         self,
         test: Expr,
-        msg: Optional[str],
-        loc: Optional[Location]
+        msg: Expr | None,
+        loc: Location | None
     ):
         super().__init__(loc)
         self.test = test

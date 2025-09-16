@@ -295,7 +295,8 @@ class _FormatterInstance(Visitor):
         if stmt.msg is None:
             self._add_line(f'assert {test}', ctx)
         else:
-            self._add_line(f'assert {test}, {stmt.msg}', ctx)
+            msg = self._visit_expr(stmt.msg, ctx)
+            self._add_line(f'assert {test}, {msg}', ctx)
 
     def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
         expr = self._visit_expr(stmt.expr, ctx)

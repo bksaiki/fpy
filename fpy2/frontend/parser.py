@@ -772,9 +772,11 @@ class Parser:
                 return ContextStmt(name, ctx, block, loc)
             case ast.Assert():
                 test = self._parse_expr(stmt.test)
-                if stmt.msg is not None:
-                    raise FPyParserError(loc, 'FPy does not support assert messages', stmt)
-                return AssertStmt(test, None, loc)
+                if stmt.msg is None:
+                    return AssertStmt(test, None, loc)
+                else:
+                    msg = self._parse_expr(stmt.msg)
+                    return AssertStmt(test, msg, loc)
             case ast.Expr():
                 e = self._parse_expr(stmt.value)
                 return EffectStmt(e, loc)

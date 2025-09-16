@@ -785,8 +785,14 @@ class _Interpreter(Visitor):
         test = self._visit_expr(stmt.test, ctx)
         if not isinstance(test, bool):
             raise TypeError(f'expected a boolean, got {test}')
-        if not test:
-            raise AssertionError(stmt.msg)
+
+        if stmt.msg is None:
+            if not test:
+                raise AssertionError(stmt.loc.format(), 'assertion failed')
+        else:
+            msg = self._visit_expr(stmt.msg, ctx)
+            if not test:
+                raise AssertionError(stmt.loc.format(), msg)
 
     def _visit_effect(self, stmt: EffectStmt, ctx: Context):
         self._visit_expr(stmt.expr, ctx)

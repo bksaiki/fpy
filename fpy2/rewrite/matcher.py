@@ -342,6 +342,7 @@ class _MatcherInst(Visitor):
         self._visit_block(stmt.body, pat.body)
 
     def _visit_assert(self, stmt: AssertStmt, pat: AssertStmt):
+        # TODO: message?
         self._visit_expr(stmt.test, pat.test)
 
     def _visit_effect(self, stmt: EffectStmt, pat: EffectStmt):

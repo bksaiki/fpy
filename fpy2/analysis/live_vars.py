@@ -179,7 +179,11 @@ class LiveVarsInstance(Visitor):
         return live
 
     def _visit_assert(self, stmt: AssertStmt, live: _LiveSet) -> _LiveSet:
-        return live | self._visit_expr(stmt.test, None)
+        live = set(live)
+        live |= self._visit_expr(stmt.test, None)
+        if stmt.msg is not None:
+            live |= self._visit_expr(stmt.msg, None)
+        return live
 
     def _visit_effect(self, stmt: EffectStmt, live: _LiveSet) -> _LiveSet:
         return live | self._visit_expr(stmt.expr, None)

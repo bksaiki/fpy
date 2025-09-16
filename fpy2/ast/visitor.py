@@ -354,6 +354,8 @@ class DefaultVisitor(Visitor):
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
         self._visit_expr(stmt.test, ctx)
+        if stmt.msg is not None:
+            self._visit_expr(stmt.msg, ctx)
 
     def _visit_effect(self, stmt: EffectStmt, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
@@ -541,8 +543,13 @@ class DefaultTransformVisitor(Visitor):
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Any):
         test = self._visit_expr(stmt.test, ctx)
-        s = AssertStmt(test, stmt.msg, stmt.loc)
-        return s, ctx
+        if stmt.msg is None:
+            s = AssertStmt(test, None, stmt.loc)
+            return s, ctx
+        else:
+            msg = self._visit_expr(stmt.msg, ctx)
+            s = AssertStmt(test, msg, stmt.loc)
+            return s, ctx
 
     def _visit_effect(self, stmt: EffectStmt, ctx: Any):
         expr = self._visit_expr(stmt.expr, ctx)
