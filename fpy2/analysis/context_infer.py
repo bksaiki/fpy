@@ -5,13 +5,13 @@ TODO: unification for context variables
 """
 
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Self, TypeAlias, cast
+from typing import cast
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..primitive import Primitive
-from ..utils import Gensym, NamedId, Unionfind, default_repr
+from ..utils import Gensym, NamedId, Unionfind
 
 from .context_types import *
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
@@ -24,21 +24,22 @@ class ContextInferError(Exception):
 
 @dataclass(frozen=True)
 class ContextAnalysis:
-    func_ctx: FunctionTypeContext
+    func_ty: FunctionTypeContext
     by_def: dict[Definition, TypeContext]
     by_expr: dict[Expr, TypeContext]
 
     @property
     def body_ctx(self):
-        return self.func_ctx.ctx
+        return self.func_ty.ctx
 
     @property
-    def arg_ctxs(self):
-        return self.func_ctx.args
+    def arg_types(self):
+        return self.func_ty.args
 
     @property
-    def return_ctx(self):
-        return self.func_ctx.ret
+    def return_types(self):
+        return self.func_ty.ret
+
 
 class ContextTypeInferInstance(Visitor):
     """
@@ -163,6 +164,25 @@ class ContextTypeInferInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable: {a_ty}, {b_ty}')
 
+    def _cvt_arg_type(self, ty: Type):
+        match ty:
+            case VarType():
+                return VarTypeContext(ty.name)
+            case BoolType():
+                return BoolTypeContext()
+            case RealType():
+                return RealTypeContext(self._fresh_context_var())
+            case ContextType():
+                return ContextTypeContext()
+            case TupleType():
+                elts = [self._cvt_arg_type(elt) for elt in ty.elts]
+                return TupleTypeContext(*elts)
+            case ListType():
+                elt = self._cvt_arg_type(ty.elt)
+                return ListTypeContext(elt)
+            case _:
+                raise RuntimeError(f'unreachable: {ty}')
+
     def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ty: TypeContext):
         match target:
             case NamedId():
@@ -191,7 +211,7 @@ class ContextTypeInferInstance(Visitor):
         return ty
 
     def _visit_foreign(self, e: ForeignVal, ctx: ContextParam):
-        raise NotImplementedError
+        return self._cvt_arg_type(self._lookup_ty(e))
 
     def _visit_decnum(self, e: Decnum, ctx: ContextParam):
         # C, Γ |- e : real C
@@ -285,7 +305,13 @@ class ContextTypeInferInstance(Visitor):
         match e:
             case Min() | Max():
                 # min / max operator
-                raise NotImplementedError(e)
+                #  C, Γ |- e_1 : real C ... C, Γ |- e_n : real C
+                # -----------------------------------------------
+                #               C, Γ |- e : real C
+                ty = arg_tys[0]
+                for e_ty in arg_tys[1:]:
+                    ty = self._unify(ty, e_ty)
+                return ty
             case And() | Or():
                 # and / or operator
                 # C, Γ |- e : bool
@@ -310,7 +336,58 @@ class ContextTypeInferInstance(Visitor):
         return BoolTypeContext()
 
     def _visit_call(self, e: Call, ctx: ContextParam):
-        raise NotImplementedError
+        # get around circular imports
+        from ..function import Function
+
+        match e.fn:
+            case None:
+                # calling None => can't conclude anything
+                return self._fresh_context_var()
+            case Primitive():
+                # calling a primitive => can't conclude anything
+                # TODO: annotations to attach context info to primitives
+                fn_ty = ContextInfer.primitive(e.fn)
+                # instantiate the function context
+                fn_ty = cast(FunctionTypeContext, self._instantiate(fn_ty))
+                # merge caller context
+                self._unify_contexts(ctx, fn_ty.ctx)
+                # merge arguments
+                if len(fn_ty.args) != len(e.args):
+                    raise ContextInferError(
+                        f'primitive {e.fn} expects {len(fn_ty.args)} arguments, '
+                        f'got {len(e.args)}'
+                    )
+                for arg, expect_ty in zip(e.args, fn_ty.args):
+                    ty = self._visit_expr(arg, ctx)
+                    self._unify(ty, expect_ty)
+
+                return fn_ty.ret
+            case Function():
+                # calling a function
+                # TODO: guard against recursion
+                fn_info = ContextInfer.infer(e.fn.ast)
+                if len(fn_info.arg_types) != len(e.args):
+                    raise ContextInferError(
+                        f'function {e.fn} expects {len(fn_info.arg_types)} arguments, '
+                        f'got {len(e.args)}'
+                    )
+
+                # instantiate the function context
+                fn_ctx = cast(FunctionTypeContext, self._instantiate(fn_info.func_ty))
+                # merge caller context
+                self._unify_contexts(ctx, fn_ctx.ctx)
+                # merge arguments
+                for arg, expect_ty in zip(e.args, fn_ctx.args):
+                    ty = self._visit_expr(arg, ctx)
+                    self._unify(ty, expect_ty)
+
+                return fn_ctx.ret
+            case type() if issubclass(e.fn, Context):
+                # calling context constructor
+                # TODO: can infer if the arguments are statically known
+                raise ContextInferError(f'cannot infer context `{e.fn}`')
+            case _:
+                raise ContextInferError(f'cannot infer context for call with `{e.fn}`')
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: ContextParam):
         #  C, Γ |- e_1 : T_1 ... C, Γ |- e_n : T_n
@@ -331,18 +408,50 @@ class ContextTypeInferInstance(Visitor):
             return ListTypeContext(elts[0])
 
     def _visit_list_comp(self, e: ListComp, ctx: ContextParam):
-        raise NotImplementedError
+        #       C, Γ |- elt: T
+        # --------------------------
+        #  C, Γ |- for ... : list T
+        for target, iterable in zip(e.targets, e.iterables):
+            iterable_ty = self._visit_expr(iterable, ctx)
+            assert isinstance(iterable_ty, ListTypeContext)
+            self._visit_binding(e, target, iterable_ty.elt)
+        ty = self._visit_expr(e.elt, ctx)
+        return ListTypeContext(ty)
 
     def _visit_list_ref(self, e: ListRef, ctx: ContextParam):
-        raise NotImplementedError
+        #      C, Γ |- e: list T       C, Γ |- i : real C
+        # -----------------------------------------------
+        #            C, Γ |- e[i] : T
+        ty = self._visit_expr(e.value, ctx)
+        self._visit_expr(e.index, ctx)
+        assert isinstance(ty, ListTypeContext)
+        return ty.elt
 
     def _visit_list_slice(self, e: ListSlice, ctx: ContextParam):
-        raise NotImplementedError
+        #      C, Γ |- e: list T       C, Γ |- i,j : real C
+        # -----------------------------------------------
+        #           C, Γ |- e[i:j] : list T
+        ty = self._visit_expr(e.value, ctx)
+        if e.start is not None:
+            self._visit_expr(e.start, ctx)
+        if e.stop is not None:
+            self._visit_expr(e.stop, ctx)
+        return ty
 
     def _visit_list_set(self, e: ListSet, ctx: ContextParam):
-        raise NotImplementedError
+        #      C, Γ |- e: list T       C, Γ |- i_1,...,i_n : real C
+        # -----------------------------------------------
+        #        C, Γ |- set(e, (i_1,...,i_n), v) : list T
+        ty = self._visit_expr(e.value, ctx)
+        for s in e.indices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(e.expr, ctx)
+        return ty
 
     def _visit_if_expr(self, e: IfExpr, ctx: ContextParam):
+        #     C, Γ |- cond: bool       C, Γ |- ift: T       C, Γ |- iff: T
+        # -------------------------------------------------------
+        #                 C, Γ |- e : T
         self._visit_expr(e.cond, ctx)
         ift_ty = self._visit_expr(e.ift, ctx)
         iff_ty = self._visit_expr(e.iff, ctx)
@@ -357,7 +466,10 @@ class ContextTypeInferInstance(Visitor):
         return ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: ContextParam):
-        raise NotImplementedError
+        for s in stmt.indices:
+            self._visit_expr(s, ctx)
+        self._visit_expr(stmt.expr, ctx)
+        return ctx
 
     def _visit_if1(self, stmt: If1Stmt, ctx: ContextParam):
         self._visit_expr(stmt.cond, ctx)
@@ -368,7 +480,16 @@ class ContextTypeInferInstance(Visitor):
         return ctx
 
     def _visit_if(self, stmt: IfStmt, ctx: ContextParam):
-        raise NotImplementedError
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.ift, ctx)
+        self._visit_block(stmt.iff, ctx)
+
+        # need to merge variables introduced on both sides
+        for phi in self.def_use.phis[stmt]:
+            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_context(phi, ty)
+
+        return ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: ContextParam):
         self._visit_expr(stmt.cond, ctx)
@@ -379,10 +500,25 @@ class ContextTypeInferInstance(Visitor):
         return ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: ContextParam):
-        raise NotImplementedError
+        iter_ty = self._visit_expr(stmt.iterable, ctx)
+        assert isinstance(iter_ty, ListTypeContext)
+        self._visit_binding(stmt, stmt.target, iter_ty.elt)
+        self._visit_block(stmt.body, ctx)
+
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            self._set_context(phi, ty)
+
+        return ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: ContextParam):
-        raise NotImplementedError
+        if not isinstance(stmt.ctx, ForeignVal) or not isinstance(stmt.ctx.val, Context):
+            raise ContextInferError(f'cannot infer context for `{stmt.ctx}`')
+
+        body_ctx = stmt.ctx.val
+        self._visit_block(stmt.body, body_ctx)
+        return ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: ContextParam):
         self._visit_expr(stmt.test, ctx)
@@ -415,12 +551,17 @@ class ContextTypeInferInstance(Visitor):
         # generate context variables for each argument
         arg_types: list[TypeContext] = []
         for arg, ty in zip(func.args, self.type_info.arg_types):
-            raise NotImplementedError(arg, ty)
+            arg_ty = self._cvt_arg_type(ty)
+            arg_types.append(arg_ty)
+            if isinstance(arg.name, NamedId):
+                d = self.def_use.find_def_from_site(arg.name, arg)
+                self._set_context(d, arg_ty)
 
         # generate context variables for each free variables
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            raise NotImplementedError(arg, ty)
+            ty = self._cvt_arg_type(self.type_info.by_def[d])
+            self._set_context(d, ty)
 
         # visit body
         self._visit_block(func.body, body_ctx)
@@ -433,7 +574,6 @@ class ContextTypeInferInstance(Visitor):
 
     def _visit_expr(self, expr: Expr, ctx: ContextParam) -> TypeContext:
         ty = super()._visit_expr(expr, ctx)
-        print(expr.format(), ' : ', ty, ' : ', ctx)
         self.by_expr[expr] = ty
         return ty
 
@@ -462,341 +602,112 @@ class ContextTypeInferInstance(Visitor):
         return ContextAnalysis(fn_ctx, by_defs, by_expr)
 
 
+class ContextTypeInferPrimitive:
+    """
+    Context inference for primitives.
 
-#     def _unify(self, a_ctx: TypeContext, b_ctx: TypeContext) -> TypeContext:
-#         a_ctx = self.rvars.get(a_ctx, a_ctx)
-#         b_ctx = self.rvars.get(b_ctx, b_ctx)
-#         match a_ctx, b_ctx:
-#             case _, NamedId():
-#                 a_ctx = self.rvars.add(a_ctx)
-#                 return self.rvars.union(a_ctx, b_ctx)
-#             case NamedId(), _:
-#                 b_ctx = self.rvars.add(b_ctx)
-#                 return self.rvars.union(b_ctx, a_ctx)
-#             case Context(), Context():
-#                 if not a_ctx.is_equiv(b_ctx: ContextParam):
-#                     raise ContextInferError(f'incompatible context types: {a_ctx} != {b_ctx}')
-#                 return a_ctx
-#             case TupleContext(), TupleContext():
-#                 if len(a_ctx.elts) != len(b_ctx.elts):
-#                     raise ContextInferError(f'incompatible context types: {a_ctx} != {b_ctx}')
-#                 elts = (self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ctx.elts, b_ctx.elts))
-#                 ctx = self.rvars.add(TupleContext(elts))
-#                 ctx = self.rvars.union(ctx, self.rvars.add(a_ctx))
-#                 ctx = self.rvars.union(ctx, self.rvars.add(b_ctx))
-#                 return ctx
-#             case _:
-#                 raise ContextInferError(f'incompatible context types: {a_ctx} != {b_ctx}')
+    This is a simpler version of context inference that only
+    interprets the context annotations on primitives.
+    """
 
+    prim: Primitive
+    gensym: Gensym
+    subst: dict[str, NamedId]
 
-#     def _visit_unaryop(self, e: UnaryOp, ctx: TypeContext):
-#         arg_ctx = self._visit_expr(e.arg, ctx)
-#         match e:
-#             case Enumerate():
-#                 # a -> tuple[a, ctx]
-#                 return TupleContext([ctx, arg_ctx])
-#             case _:
-#                 return ctx
+    def __init__(self, prim: Primitive):
+        self.prim = prim
+        self.gensym = Gensym()
+        self.subst = {}
 
-#     def _visit_binaryop(self, e: BinaryOp, ctx: TypeContext):
-#         self._visit_expr(e.first, ctx)
-#         self._visit_expr(e.second, ctx)
-#         return ctx
+    def _default_type(self, ty: TypeAnn) -> TypeContext:
+        match ty:
+            case None | AnyTypeAnn():
+                return VarTypeContext(self.gensym.fresh('t'))
+            case BoolTypeAnn():
+                return BoolTypeContext()
+            case RealTypeAnn():
+                return RealTypeContext(self.gensym.fresh('r'))
+            case TupleTypeAnn():
+                elts = [self._default_type(t) for t in ty.elts]
+                return TupleTypeContext(*elts)
+            case ListTypeAnn():
+                elt = self._default_type(ty.elt)
+                return ListTypeContext(elt)
+            case _:
+                raise RuntimeError(f'unknown type: {ty}')
 
-#     def _visit_ternaryop(self, e: TernaryOp, ctx: TypeContext):
-#         self._visit_expr(e.first, ctx)
-#         self._visit_expr(e.second, ctx)
-#         self._visit_expr(e.third, ctx)
-#         return ctx
+    # def _arg_ctx(self, ty: TypeAnn, ctx: str | tuple) -> TypeContext:
+    #     match ty:
+    #         case None | RealTypeAnn() | BoolTypeAnn() | AnyTypeAnn():
+    #             if not isinstance(ctx, str):
+    #                 raise ValueError(f"expected context variable for argument of type {ty}, got {ctx}")
+    #             if ctx not in self.subst:
+    #                 self.subst[ctx] = self.gensym.fresh('r')
+    #             return self.subst[ctx]
+    #         case TupleTypeAnn():
+    #             if not isinstance(ctx, tuple):
+    #                 raise ValueError(f"expected tuple context for argument of type {ty}, got {ctx}")
+    #             if len(ty.elts) != len(ctx):
+    #                 raise ValueError(f"tuple context length mismatch: expected {len(ty.elts)}, got {len(ctx)}")
+    #             elts = [self._arg_ctx(t, c) for t, c in zip(ty.elts, ctx)]
+    #             return TupleTypeContext(elts)
+    #         case ListTypeAnn():
+    #             elt = self._arg_ctx(ty.elt, ctx)
+    #             return ListTypeContext(elt)
+    #         case _:
+    #             raise RuntimeError(f'unknown type: {ty}')
 
-#     def _visit_naryop(self, e: NaryOp, ctx: TypeContext):
-#         match e:
-#             case Zip():
-#                 return TupleContext(self._visit_expr(arg, ctx) for arg in e.args)
-#             case _:
-#                 for arg in e.args:
-#                     self._visit_expr(arg, ctx)
-#                 return ctx
+    # def _cvt_return_ctx(self, ctx: Context | str | tuple) -> TypeContext:
+    #     match ctx:
+    #         case str():
+    #             if ctx not in self.subst:
+    #                 raise ContextInferError(f'unbound context variable in ret_ctx: {ctx}')
+    #             return self.subst[ctx]
+    #         case Context():
+    #             return ctx
+    #         case tuple():
+    #             elts = [self._cvt_return_ctx(c) for c in ctx]
+    #             return TupleTypeContext(elts)
+    #         case _:
+    #             raise ValueError(f"invalid context in ret_ctx: {ctx}")
 
-#     def _visit_compare(self, e: Compare, ctx: TypeContext):
-#         for arg in e.args:
-#             self._visit_expr(arg, ctx)
-#         return ctx
+    # def _default_return_ctx(self, ty: TypeAnn) -> TypeContext:
+    #     match ty:
+    #         case None | RealTypeAnn() | BoolTypeAnn() | AnyTypeAnn():
+    #             return self.gensym.fresh('r')
+    #         case TupleTypeAnn():
+    #             elts = [self._default_return_ctx(t) for t in ty.elts]
+    #             return TupleContext(elts)
+    #         case ListTypeAnn():
+    #             return self._default_return_ctx(ty.elt)
+    #         case _:
+    #             raise RuntimeError(f'unknown type: {ty}')
 
-#     def _visit_call(self, e: Call, ctx: TypeContext):
-#         # get around circular imports
-#         from ..function import Function
+    def infer(self) -> FunctionTypeContext:
+        # interpret primitive context
+        ctx = self.gensym.fresh('r')
+        if self.prim.ctx is not None:
+            self.subst[self.prim.ctx] = ctx
+        raise NotImplementedError(self.prim)
 
-#         match e.fn:
-#             case None:
-#                 # calling None => can't conclude anything
-#                 return self._fresh_context_var()
-#             case Primitive():
-#                 # calling a primitive => can't conclude anything
-#                 # TODO: annotations to attach context info to primitives
-#                 fn_ctx = ContextInfer.primitive(e.fn)
-#                 # instantiate the function context
-#                 fn_ctx = cast(FunctionContext, self._instantiate(fn_ctx))
-#                 # merge caller context
-#                 self._unify(ctx, fn_ctx.ctx)
-#                 # merge arguments
-#                 if len(fn_ctx.args) != len(e.args):
-#                     raise ContextInferError(
-#                         f'primitive {e.fn} expects {len(fn_ctx.args)} arguments, '
-#                         f'got {len(e.args)}'
-#                     )
-#                 for arg, expect_ty in zip(e.args, fn_ctx.args):
-#                     ty = self._visit_expr(arg, ctx)
-#                     self._unify(ty, expect_ty)
+        # interpret argument contexts
+        # arg_types: list[TypeContext] = []
+        # if self.prim.arg_ctxs is None:
+        #     for _ in self.prim.arg_types:
+        #         arg_types.append(self.gensym.fresh('r'))
+        # else:
+        #     # none specified
+        #     assert len(self.prim.arg_ctxs) == len(self.prim.arg_types)
+        #     for ty, arg_ctx in zip(self.prim.arg_types, self.prim.arg_ctxs):
+        #         arg_types.append(self._arg_ctx(ty, arg_ctx))
 
-#                 return fn_ctx.ret
-#             case Function():
-#                 # calling a function
-#                 # TODO: guard against recursion
-#                 fn_info = ContextInfer.infer(e.fn.ast)
-#                 if len(fn_info.arg_ctxs) != len(e.args):
-#                     raise ContextInferError(
-#                         f'function {e.fn} expects {len(fn_info.arg_ctxs)} arguments, '
-#                         f'got {len(e.args)}'
-#                     )
+        # # interpret return context
+        # if self.prim.ret_ctx is None:
+        #     ret_ctx = self.gensym.fresh('r')
+        # else:
+        #     ret_ctx = self._cvt_return_ctx(self.prim.ret_ctx)
 
-#                 # instantiate the function context
-#                 fn_ctx = cast(FunctionContext, self._instantiate(fn_info.func_ctx))
-#                 # merge caller context
-#                 self._unify(ctx, fn_ctx.ctx)
-#                 # merge arguments
-#                 for arg, expect_ty in zip(e.args, fn_ctx.args):
-#                     ty = self._visit_expr(arg, ctx)
-#                     self._unify(ty, expect_ty)
-
-#                 return fn_ctx.ret
-#             case type() if issubclass(e.fn, Context):
-#                 # calling context constructor
-#                 # TODO: can infer if the arguments are statically known
-#                 raise ContextInferError(f'cannot infer context `{e.fn}`')
-#             case _:
-#                 raise ContextInferError(f'cannot infer context for call with `{e.fn}`')
-
-#     def _visit_tuple_expr(self, e: TupleExpr, ctx: TypeContext):
-#         return TupleContext(self._visit_expr(arg, ctx) for arg in e.elts)
-
-#     def _visit_list_expr(self, e: ListExpr, ctx: TypeContext):
-#         if len(e.elts) == 0:
-#             return ctx
-#         else:
-#             elt_ctx = self._visit_expr(e.elts[0], ctx)
-#             for arg in e.elts[1:]:
-#                 elt_ctx = self._unify(elt_ctx, self._visit_expr(arg, ctx))
-#             return elt_ctx
-
-#     def _visit_list_comp(self, e: ListComp, ctx: TypeContext):
-#         for target, iterable in zip(e.targets, e.iterables):
-#             iter_ctx = self._visit_expr(iterable, ctx)
-#             self._visit_binding(e, target, iter_ctx)
-
-#         elt_ctx = self._visit_expr(e.elt, ctx)
-#         return elt_ctx
-
-#     def _visit_list_ref(self, e: ListRef, ctx: TypeContext):
-#         value_ctx = self._visit_expr(e.value, ctx)
-#         self._visit_expr(e.index, ctx)
-#         return value_ctx
-
-#     def _visit_list_slice(self, e: ListSlice, ctx: TypeContext):
-#         value_ctx = self._visit_expr(e.value, ctx)
-#         if e.start is not None:
-#             self._visit_expr(e.start, ctx)
-#         if e.stop is not None:
-#             self._visit_expr(e.stop, ctx)
-#         return value_ctx
-
-#     def _visit_list_set(self, e: ListSet, ctx: TypeContext):
-#         arr_ctx = self._visit_expr(e.value, ctx)
-#         for s in e.indices:
-#             self._visit_expr(s, ctx)
-#         self._visit_expr(e.expr, ctx)
-#         return arr_ctx
-
-#     def _visit_if_expr(self, e: IfExpr, ctx: TypeContext):
-#         self._visit_expr(e.cond, ctx)
-#         ift_ctx = self._visit_expr(e.ift, ctx)
-#         iff_ctx = self._visit_expr(e.iff, ctx)
-#         return self._unify(ift_ctx, iff_ctx)
-
-#     def _visit_attribute(self, e: Attribute, ctx: TypeContext):
-#         raise NotImplementedError(e)
-
-#     def _visit_assign(self, stmt: Assign, ctx: TypeContext):
-#         e_ctx = self._visit_expr(stmt.expr, ctx)
-#         self._visit_binding(stmt, stmt.target, e_ctx)
-#         return ctx
-
-#     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: TypeContext):
-#         for s in stmt.indices:
-#             self._visit_expr(s, ctx)
-#         self._visit_expr(stmt.expr, ctx)
-#         return ctx
-
-#     def _visit_if1(self, stmt: If1Stmt, ctx: TypeContext):
-#         self._visit_expr(stmt.cond, ctx)
-#         self._visit_block(stmt.body, ctx)
-#         for phi in self.def_use.phis[stmt]:
-#             ctx = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
-#             self._set_context(phi, ctx)
-
-#         return ctx
-
-#     def _visit_if(self, stmt: IfStmt, ctx: TypeContext):
-#         self._visit_expr(stmt.cond, ctx)
-#         self._visit_block(stmt.ift, ctx)
-#         self._visit_block(stmt.iff, ctx)
-
-#         # need to merge variables introduced on both sides
-#         for phi in self.def_use.phis[stmt]:
-#             ctx = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
-#             self._set_context(phi, ctx)
-
-#         return ctx
-
-#     def _visit_while(self, stmt: WhileStmt, ctx: TypeContext):
-#         self._visit_expr(stmt.cond, ctx)
-#         self._visit_block(stmt.body, ctx)
-
-#         # unify any merged variable
-#         for phi in self.def_use.phis[stmt]:
-#             ctx = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
-#             self._set_context(phi, ctx)
-
-#         return ctx
-
-#     def _visit_for(self, stmt: ForStmt, ctx: TypeContext):
-#         iter_ctx = self._visit_expr(stmt.iterable, ctx)
-#         self._visit_binding(stmt, stmt.target, iter_ctx)
-#         self._visit_block(stmt.body, ctx)
-
-#         # unify any merged variable
-#         for phi in self.def_use.phis[stmt]:
-#             ctx = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
-#             self._set_context(phi, ctx)
-
-#         return ctx
-
-#     def _visit_context(self, stmt: ContextStmt, ctx: TypeContext):
-#         if not isinstance(stmt.ctx, ForeignVal) or not isinstance(stmt.ctx.val, Context):
-#             raise ContextInferError(f'cannot infer context for `{stmt.ctx}`')
-
-#         body_ctx = stmt.ctx.val
-#         self._visit_block(stmt.body, body_ctx)
-#         return ctx
-
-#     def _visit_assert(self, stmt: AssertStmt, ctx: TypeContext):
-#         self._visit_expr(stmt.test, ctx)
-#         if stmt.msg is not None:
-#             self._visit_expr(stmt.msg, ctx)
-#         return ctx
-
-#     def _visit_effect(self, stmt: EffectStmt, ctx: TypeContext):
-#         self._visit_expr(stmt.expr, ctx)
-#         return ctx
-
-#     def _visit_return(self, stmt: ReturnStmt, ctx: TypeContext):
-#         ret_ctx = self._visit_expr(stmt.expr, ctx)
-#         self.ret_ctx = ret_ctx
-#         return ctx
-
-#     def _visit_block(self, block: StmtBlock, ctx: TypeContext):
-#         for stmt in block.stmts:
-#             ctx = self._visit_statement(stmt, ctx)
-
-
-
-# class ContextTypeInferPrimitive:
-#     """
-#     Context inference for primitives.
-
-#     This is a simpler version of context inference that only
-#     interprets the context annotations on primitives.
-#     """
-    
-#     prim: Primitive
-#     gensym: Gensym
-#     subst: dict[str, NamedId]
-
-#     def __init__(self, prim: Primitive):
-#         self.prim = prim
-#         self.gensym = Gensym()
-#         self.subst = {}
-
-#     def _arg_ctx(self, ty: TypeAnn, ctx: str | tuple) -> TypeContext:
-#         match ty:
-#             case None | RealTypeAnn() | BoolTypeAnn() | AnyTypeAnn():
-#                 if not isinstance(ctx, str):
-#                     raise ValueError(f"expected context variable for argument of type {ty}, got {ctx}")
-#                 if ctx not in self.subst:
-#                     self.subst[ctx] = self.gensym.fresh('r')
-#                 return self.subst[ctx]
-#             case TupleTypeAnn():
-#                 if not isinstance(ctx, tuple):
-#                     raise ValueError(f"expected tuple context for argument of type {ty}, got {ctx}")
-#                 if len(ty.elts) != len(ctx: ContextParam):
-#                     raise ValueError(f"tuple context length mismatch: expected {len(ty.elts)}, got {len(ctx)}")
-#                 elts = [self._arg_ctx(t, c) for t, c in zip(ty.elts, ctx)]
-#                 return TupleContext(elts)
-#             case ListTypeAnn():
-#                 return self._arg_ctx(ty.elt, ctx)
-#             case _:
-#                 raise RuntimeError(f'unknown type: {ty}')
-
-#     def _cvt_return_ctx(self, ctx: Context | str | tuple) -> TypeContext:
-#         match ctx:
-#             case str():
-#                 if ctx not in self.subst:
-#                     raise ContextInferError(f'unbound context variable in ret_ctx: {ctx}')
-#                 return self.subst[ctx]
-#             case Context():
-#                 return ctx
-#             case tuple():
-#                 elts = [self._cvt_return_ctx(c) for c in ctx]
-#                 return TupleContext(elts)
-#             case _:
-#                 raise ValueError(f"invalid context in ret_ctx: {ctx}")
-
-#     def _default_return_ctx(self, ty: TypeAnn) -> TypeContext:
-#         match ty:
-#             case None | RealTypeAnn() | BoolTypeAnn() | AnyTypeAnn():
-#                 return self.gensym.fresh('r')
-#             case TupleTypeAnn():
-#                 elts = [self._default_return_ctx(t) for t in ty.elts]
-#                 return TupleContext(elts)
-#             case ListTypeAnn():
-#                 return self._default_return_ctx(ty.elt)
-#             case _:
-#                 raise RuntimeError(f'unknown type: {ty}')
-
-#     def infer(self) -> FunctionContext:
-#         # interpret primitive context
-#         ctx = self.gensym.fresh('r')
-#         if self.prim.ctx is not None:
-#             self.subst[self.prim.ctx] = ctx
-
-#         # interpret argument contexts
-#         arg_ctxs: list[TypeContext] = []
-#         if self.prim.arg_ctxs is None:
-#             for _ in self.prim.arg_types:
-#                 arg_ctxs.append(self.gensym.fresh('r'))
-#         else:
-#             # none specified
-#             assert len(self.prim.arg_ctxs) == len(self.prim.arg_types)
-#             for ty, arg_ctx in zip(self.prim.arg_types, self.prim.arg_ctxs):
-#                 arg_ctxs.append(self._arg_ctx(ty, arg_ctx))
-
-#         # interpret return context
-#         if self.prim.ret_ctx is None:
-#             ret_ctx = self.gensym.fresh('r')
-#         else:
-#             ret_ctx = self._cvt_return_ctx(self.prim.ret_ctx)
-
-#         return FunctionContext(ctx, arg_ctxs, ret_ctx)
+        # return FunctionTypeContext(ctx, arg_types, ret_ctx)
 
 ###########################################################
 # Context inference
@@ -828,11 +739,11 @@ class ContextInfer:
         inst = ContextTypeInferInstance(func, def_use, type_info)
         return inst.infer()
 
-    # @staticmethod
-    # def primitive(prim: Primitive) -> FunctionTypeContext:
-    #     """
-    #     Infers the context of a primitive.
-    #     """
-    #     if not isinstance(prim, Primitive):
-    #         raise TypeError(f'expected a \'Primitive\', got {prim}')
-    #     return ContextTypeInferPrimitive(prim).infer()
+    @staticmethod
+    def primitive(prim: Primitive) -> FunctionTypeContext:
+        """
+        Infers the context of a primitive.
+        """
+        if not isinstance(prim, Primitive):
+            raise TypeError(f'expected a \'Primitive\', got {prim}')
+        return ContextTypeInferPrimitive(prim).infer()

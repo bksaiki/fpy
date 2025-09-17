@@ -27,6 +27,9 @@ def _test_tcheck_library():
             if isinstance(obj, fp.Function):
                 info = TypeCheck.check(obj.ast)
                 print(obj.name, info.fn_type)
+            elif isinstance(obj, fp.Primitive):
+                fn_ty = TypeCheck.infer_primitive(obj)
+                print(obj.name, fn_ty)
 
 def test_tcheck():
     _test_tcheck_unit()

@@ -28,7 +28,7 @@ def test_context_infer():
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
             ast = ContextInline.apply(fn.ast, fn.env)
             info = ContextInfer.infer(ast)
-            print(ast.name, info.return_ctx)
+            print(ast.name, info.return_types)
 
 if __name__ == '__main__':
     test_context_infer()

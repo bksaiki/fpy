@@ -832,19 +832,19 @@ class _CppBackendInstance(Visitor):
                 self.ctx_args[self.ctx_info.body_ctx] = self.caller_ctx
 
         # apply argument contexts
-        for caller_arg, arg_ctx in zip(self.arg_ctxs, self.ctx_info.arg_ctxs):
+        for caller_arg, arg_ctx in zip(self.arg_ctxs, self.ctx_info.arg_types):
             if isinstance(arg_ctx, NamedId):
                 if caller_arg is not None:
                     self.ctx_args[arg_ctx] = caller_arg
 
         # compile arguments
         arg_strs: list[str] = []
-        for arg, arg_ty, arg_ctx in zip(func.args, self.type_info.arg_types, self.ctx_info.arg_ctxs):
+        for arg, arg_ty, arg_ctx in zip(func.args, self.type_info.arg_types, self.ctx_info.arg_types):
             arg_ctx = self._monomorphize_context(arg_ctx)
             ty = self._compile_type(arg_ty, arg_ctx)
             arg_strs.append(f'{ty.format()} {arg.name}')
 
-        body_ctx = self._monomorphize_context(self.ctx_info.return_ctx)
+        body_ctx = self._monomorphize_context(self.ctx_info.return_types)
         ret_ty = self._compile_type(self.type_info.return_type, body_ctx)
         ctx.add_line(f'{ret_ty.format()} {func.name}({", ".join(arg_strs)}) {{')
 

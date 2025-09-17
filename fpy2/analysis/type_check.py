@@ -3,7 +3,7 @@ Type checking for FPy programs.
 """
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Callable, cast
 
 from ..ast import *
 from ..primitive import Primitive
@@ -100,6 +100,36 @@ _binary_table: dict[type[BinaryOp], FunctionType] = {
 _ternary_table: dict[type[TernaryOp], FunctionType] = {
     Fma: _Real3ary,
 }
+
+
+def _ann_to_type(ty: TypeAnn | None, fresh_var: Callable[[], VarType]) -> Type:
+    match ty:
+        case None | AnyTypeAnn():
+            return fresh_var()
+        case BoolTypeAnn():
+            # boolean type
+            return BoolType()
+        case RealTypeAnn():
+            return RealType()
+        case TupleTypeAnn():
+            # tuple type
+            elt_tys = [_ann_to_type(elt, fresh_var) for elt in ty.elts]
+            return TupleType(*elt_tys)
+        case ListTypeAnn():
+            # list type
+            return ListType(_ann_to_type(ty.elt, fresh_var))
+        case SizedTensorTypeAnn():
+            if len(ty.dims) == 0:
+                return ListType(fresh_var())
+            else:
+                arr_ty = ListType(_ann_to_type(ty.elt, fresh_var))
+                for _ in ty.dims[1:]:
+                    arr_ty = ListType(arr_ty)
+                return arr_ty
+        case _:
+            raise RuntimeError(f'unreachable: {ty}')
+
+
 
 class TypeInferError(Exception):
     """Type error for FPy programs."""
@@ -210,32 +240,8 @@ class _TypeCheckInstance(Visitor):
         ty = ty.subst(subst)
         return ty, subst
 
-    def _annotation_to_type(self, ty: TypeAnn | None) -> Type:
-        match ty:
-            case None | AnyTypeAnn():
-                return self._fresh_type_var()
-            case BoolTypeAnn():
-                # boolean type
-                return BoolType()
-            case RealTypeAnn():
-                return RealType()
-            case TupleTypeAnn():
-                # tuple type
-                elt_tys = [self._annotation_to_type(elt) for elt in ty.elts]
-                return TupleType(*elt_tys)
-            case ListTypeAnn():
-                # list type
-                return ListType(self._annotation_to_type(ty.elt))
-            case SizedTensorTypeAnn():
-                if len(ty.dims) == 0:
-                    return ListType(self._fresh_type_var())
-                else:
-                    arr_ty = ListType(self._annotation_to_type(ty.elt))
-                    for _ in ty.dims[1:]:
-                        arr_ty = ListType(arr_ty)
-                    return arr_ty
-            case _:
-                raise NotImplementedError(ty)
+    def _ann_to_type(self, ty: TypeAnn | None) -> Type:
+        return _ann_to_type(ty, self._fresh_type_var)
 
     def _visit_var(self, e: Var, ctx: None) -> Type:
         d = self.def_use.find_def_from_use(e)
@@ -375,18 +381,32 @@ class _TypeCheckInstance(Visitor):
         # get around circular imports
         from ..function import Function
 
+        arg_tys = [self._visit_expr(arg, None) for arg in e.args]
+
         match e.fn:
             case None:
                 # unbound call
                 return self._fresh_type_var()
             case Primitive():
                 # calling a primitive
-                for arg, ann in zip(e.args, e.fn.arg_types):
-                    ty = self._visit_expr(arg, None)
-                    self._unify(ty, self._annotation_to_type(ann))
-                return self._annotation_to_type(e.fn.ret_type)
+
+                # type check the primitive and instantiate
+                fn_ty = TypeCheck.infer_primitive(e.fn)
+                fn_ty = cast(FunctionType, self._instantiate(fn_ty))
+
+                # check arity
+                if len(fn_ty.arg_types) != len(e.args):
+                    actual_sig = f'function[{", ".join(arg.format() for arg in arg_tys)}]'
+                    raise TypeInferError(f'primitive {e.fn.name}` has signature`{fn_ty.format()}`, but calling with `{actual_sig}``')
+                # merge arguments
+                for arg_ty, expect_ty in zip(arg_tys, fn_ty.arg_types):
+                    self._unify(arg_ty, expect_ty)
+
+                return fn_ty.return_type
             case Function():
                 # calling a function
+
+                # type check the function and instantiate
                 if e.fn.sig is None:
                     # type checking not run
                     # TODO: guard against recursion
@@ -394,19 +414,17 @@ class _TypeCheckInstance(Visitor):
                     fn_ty = fn_info.fn_type
                 else:
                     fn_ty = e.fn.sig
+                fn_ty = cast(FunctionType, self._instantiate(fn_ty))
 
-                arg_tys = [self._visit_expr(arg, None) for arg in e.args]
+                # check arity
                 if len(fn_ty.arg_types) != len(e.args):
                     # no function signature / signature mismatch
                     actual_sig = f'function[{", ".join(arg.format() for arg in arg_tys)}]'
-                    raise TypeInferError(f'function {e.fn.name}` has signature`{fn_ty.format()}`, but calling with `{actual_sig}')
-
-                # signature matches
-                # instantiate the function type
-                fn_ty = cast(FunctionType, self._instantiate(fn_ty))
+                    raise TypeInferError(f'function {e.fn.name}` has signature`{fn_ty.format()}`, but calling with `{actual_sig}`')
                 # merge arguments
                 for arg_ty, expect_ty in zip(arg_tys, fn_ty.arg_types):
                     self._unify(arg_ty, expect_ty)
+
                 return fn_ty.return_type
             case type() if issubclass(e.fn, Context):
                 # calling context constructor
@@ -616,7 +634,7 @@ class _TypeCheckInstance(Visitor):
         # infer types from annotations
         arg_tys: list[Type] = []
         for arg in func.args:
-            arg_ty = self._annotation_to_type(arg.type)
+            arg_ty = self._ann_to_type(arg.type)
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
                 self._set_type(d, arg_ty)
@@ -666,6 +684,38 @@ class _TypeCheckInstance(Visitor):
         }
         return TypeAnalysis(fn_ty, by_defs, by_expr)
 
+###########################################################
+# Primitives
+
+class _TypeInferPrimitive:
+    """
+    Type inference for primitives.
+
+    Converts typing annotations to types.
+    """
+
+    prim: Primitive
+    gensym: Gensym
+
+    def __init__(self, prim: Primitive):
+        self.prim = prim
+        self.gensym = Gensym()
+
+    def _fresh_type_var(self) -> VarType:
+        """Generates a fresh type variable."""
+        return VarType(self.gensym.fresh('t'))
+
+    def _ann_to_type(self, ty: TypeAnn | None) -> Type:
+        return _ann_to_type(ty, self._fresh_type_var)
+
+    def infer(self) -> FunctionType:
+        arg_tys = [self._ann_to_type(ty) for ty in self.prim.arg_types]
+        ret_ty = self._ann_to_type(self.prim.ret_type)
+        return FunctionType(arg_tys, ret_ty)
+
+
+###########################################################
+# Type checker
 
 class TypeCheck:
     """
@@ -701,3 +751,13 @@ class TypeCheck:
         inst = _TypeCheckInstance(func, def_use)
         return inst.analyze()
 
+    @staticmethod
+    def infer_primitive(prim: Primitive) -> FunctionType:
+        """
+        Returns the type signature of a primitive.
+        """
+        if not isinstance(prim, Primitive):
+            raise TypeError(f'expected a \'Primitive\', got `{prim}`')
+
+        inst = _TypeInferPrimitive(prim)
+        return inst.infer()
