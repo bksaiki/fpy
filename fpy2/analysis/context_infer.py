@@ -113,7 +113,7 @@ class ContextTypeInferInstance(Visitor):
     def _instantiate(self, ty: TypeContext) -> TypeContext:
         subst: dict[NamedId, ContextParam] = {}
         for fv in sorted(ty.free_vars()):
-            subst[fv] = self.gensym.fresh()
+            subst[fv] = self._fresh_context_var()
         return ty.subst(subst)
 
     def _generalize(self, ty: TypeContext) -> tuple[TypeContext, dict[NamedId, ContextParam]]:
@@ -122,7 +122,7 @@ class ContextTypeInferInstance(Visitor):
             t = self.rvars.find(fv)
             match t: 
                 case NamedId():
-                    subst[fv] = NamedId(f't{i + 1}')
+                    subst[fv] = NamedId(f'r{i + 1}')
                 case _:
                     subst[fv] = t
         ty = ty.subst(subst)
@@ -345,8 +345,7 @@ class ContextTypeInferInstance(Visitor):
                 return self._fresh_context_var()
             case Primitive():
                 # calling a primitive => can't conclude anything
-                # TODO: annotations to attach context info to primitives
-                fn_ty = ContextInfer.primitive(e.fn)
+                fn_ty = ContextInfer.infer_primitive(e.fn)
                 # instantiate the function context
                 fn_ty = cast(FunctionTypeContext, self._instantiate(fn_ty))
                 # merge caller context
@@ -602,7 +601,7 @@ class ContextTypeInferInstance(Visitor):
         return ContextAnalysis(fn_ctx, by_defs, by_expr)
 
 
-class ContextTypeInferPrimitive:
+class _ContextInferPrimitive:
     """
     Context inference for primitives.
 
@@ -619,95 +618,107 @@ class ContextTypeInferPrimitive:
         self.gensym = Gensym()
         self.subst = {}
 
-    def _default_type(self, ty: TypeAnn) -> TypeContext:
+    def _fresh_context_var(self) -> NamedId:
+        return self.gensym.fresh('r')
+
+    def _cvt_arg_type(self, ty: Type, ctx: str | tuple | None) -> TypeContext:
         match ty:
-            case None | AnyTypeAnn():
-                return VarTypeContext(self.gensym.fresh('t'))
-            case BoolTypeAnn():
+            case VarType():
+                return VarTypeContext(ty.name)
+            case BoolType():
                 return BoolTypeContext()
-            case RealTypeAnn():
-                return RealTypeContext(self.gensym.fresh('r'))
-            case TupleTypeAnn():
-                elts = [self._default_type(t) for t in ty.elts]
-                return TupleTypeContext(*elts)
-            case ListTypeAnn():
-                elt = self._default_type(ty.elt)
-                return ListTypeContext(elt)
+            case RealType():
+                if ctx is None:
+                    return RealTypeContext(self._fresh_context_var())
+                else:
+                    if not isinstance(ctx, str):
+                        raise ValueError(f"expected context variable for argument of type {ty}, got {ctx}")
+                    if ctx not in self.subst:
+                        self.subst[ctx] = self._fresh_context_var()
+                    return RealTypeContext(self.subst[ctx])
+            case ContextType():
+                return ContextTypeContext()
+            case TupleType():
+                if ctx is None:
+                    elts = [self._cvt_arg_type(t, None) for t in ty.elts]
+                    return TupleTypeContext(*elts)
+                else:
+                    if not isinstance(ctx, tuple):
+                        raise ValueError(f"expected tuple context for argument of type {ty}, got {ctx}")
+                    if len(ty.elts) != len(ctx):
+                        raise ValueError(f"tuple context length mismatch: expected {len(ty.elts)}, got {len(ctx)}")
+                    elts = [self._cvt_arg_type(t, c) for t, c in zip(ty.elts, ctx)]
+                    return TupleTypeContext(*elts)
+            case ListType():
+                if ctx is None:
+                    elt = self._cvt_arg_type(ty.elt, None)
+                    return ListTypeContext(elt)
+                else:
+                    return ListTypeContext(self._cvt_arg_type(ty.elt, ctx))
             case _:
                 raise RuntimeError(f'unknown type: {ty}')
 
-    # def _arg_ctx(self, ty: TypeAnn, ctx: str | tuple) -> TypeContext:
-    #     match ty:
-    #         case None | RealTypeAnn() | BoolTypeAnn() | AnyTypeAnn():
-    #             if not isinstance(ctx, str):
-    #                 raise ValueError(f"expected context variable for argument of type {ty}, got {ctx}")
-    #             if ctx not in self.subst:
-    #                 self.subst[ctx] = self.gensym.fresh('r')
-    #             return self.subst[ctx]
-    #         case TupleTypeAnn():
-    #             if not isinstance(ctx, tuple):
-    #                 raise ValueError(f"expected tuple context for argument of type {ty}, got {ctx}")
-    #             if len(ty.elts) != len(ctx):
-    #                 raise ValueError(f"tuple context length mismatch: expected {len(ty.elts)}, got {len(ctx)}")
-    #             elts = [self._arg_ctx(t, c) for t, c in zip(ty.elts, ctx)]
-    #             return TupleTypeContext(elts)
-    #         case ListTypeAnn():
-    #             elt = self._arg_ctx(ty.elt, ctx)
-    #             return ListTypeContext(elt)
-    #         case _:
-    #             raise RuntimeError(f'unknown type: {ty}')
-
-    # def _cvt_return_ctx(self, ctx: Context | str | tuple) -> TypeContext:
-    #     match ctx:
-    #         case str():
-    #             if ctx not in self.subst:
-    #                 raise ContextInferError(f'unbound context variable in ret_ctx: {ctx}')
-    #             return self.subst[ctx]
-    #         case Context():
-    #             return ctx
-    #         case tuple():
-    #             elts = [self._cvt_return_ctx(c) for c in ctx]
-    #             return TupleTypeContext(elts)
-    #         case _:
-    #             raise ValueError(f"invalid context in ret_ctx: {ctx}")
-
-    # def _default_return_ctx(self, ty: TypeAnn) -> TypeContext:
-    #     match ty:
-    #         case None | RealTypeAnn() | BoolTypeAnn() | AnyTypeAnn():
-    #             return self.gensym.fresh('r')
-    #         case TupleTypeAnn():
-    #             elts = [self._default_return_ctx(t) for t in ty.elts]
-    #             return TupleContext(elts)
-    #         case ListTypeAnn():
-    #             return self._default_return_ctx(ty.elt)
-    #         case _:
-    #             raise RuntimeError(f'unknown type: {ty}')
+    def _cvt_ret_type(self, ty: Type, ctx: Context | str | tuple | None) -> TypeContext:
+        match ty:
+            case VarType():
+                return VarTypeContext(ty.name)
+            case BoolType():
+                return BoolTypeContext()
+            case RealType():
+                if ctx is None:
+                    return RealTypeContext(self._fresh_context_var())
+                elif isinstance(ctx, Context):
+                    return RealTypeContext(ctx)
+                else:
+                    if not isinstance(ctx, str):
+                        raise ValueError(f"expected context variable for return of type {ty}, got {ctx}")
+                    if ctx not in self.subst:
+                        raise ValueError(f"unbound context variable '{ctx}' in return type")
+                    return RealTypeContext(self.subst[ctx])
+            case ContextType():
+                return ContextTypeContext()
+            case TupleType():
+                if ctx is None:
+                    elts = [self._cvt_ret_type(t, None) for t in ty.elts]
+                    return TupleTypeContext(*elts)
+                else:
+                    if not isinstance(ctx, tuple):
+                        raise ValueError(f"expected tuple context for return of type {ty}, got {ctx}")
+                    if len(ty.elts) != len(ctx):
+                        raise ValueError(f"tuple context length mismatch: expected {len(ty.elts)}, got {len(ctx)}")
+                    elts = [self._cvt_ret_type(t, c) for t, c in zip(ty.elts, ctx)]
+                    return TupleTypeContext(*elts)
+            case ListType():
+                if ctx is None:
+                    elt = self._cvt_ret_type(ty.elt, None)
+                    return ListTypeContext(elt)
+                else:
+                    return ListTypeContext(self._cvt_ret_type(ty.elt, ctx)) 
+            case _:
+                raise RuntimeError(f'unknown type: {ty}')
 
     def infer(self) -> FunctionTypeContext:
+        # perform standard type inference
+        fn_ty = TypeCheck.infer_primitive(self.prim)
+
         # interpret primitive context
-        ctx = self.gensym.fresh('r')
+        ctx = self._fresh_context_var()
         if self.prim.ctx is not None:
+            # map specified name to generated name
             self.subst[self.prim.ctx] = ctx
-        raise NotImplementedError(self.prim)
 
         # interpret argument contexts
-        # arg_types: list[TypeContext] = []
-        # if self.prim.arg_ctxs is None:
-        #     for _ in self.prim.arg_types:
-        #         arg_types.append(self.gensym.fresh('r'))
-        # else:
-        #     # none specified
-        #     assert len(self.prim.arg_ctxs) == len(self.prim.arg_types)
-        #     for ty, arg_ctx in zip(self.prim.arg_types, self.prim.arg_ctxs):
-        #         arg_types.append(self._arg_ctx(ty, arg_ctx))
+        if self.prim.arg_ctxs is None:
+            arg_types = [self._cvt_arg_type(ty, None) for ty in fn_ty.arg_types]
+        else:
+            assert len(self.prim.arg_ctxs) == len(fn_ty.arg_types)
+            arg_types = [self._cvt_arg_type(ty, ctx) for ty, ctx in zip(fn_ty.arg_types, self.prim.arg_ctxs)]
 
-        # # interpret return context
-        # if self.prim.ret_ctx is None:
-        #     ret_ctx = self.gensym.fresh('r')
-        # else:
-        #     ret_ctx = self._cvt_return_ctx(self.prim.ret_ctx)
+        # interpret return context
+        ret_type = self._cvt_ret_type(fn_ty.return_type, self.prim.ret_ctx)
 
-        # return FunctionTypeContext(ctx, arg_types, ret_ctx)
+        return FunctionTypeContext(ctx, arg_types, ret_type)
+
 
 ###########################################################
 # Context inference
@@ -716,10 +727,12 @@ class ContextInfer:
     """
     Context inference.
 
-    Like type checking but for rounding contexts.
-    Most rounding contexts are statically known, so we
-    can assign every statement (or expression) a rounding context
-    if it can be determined.
+    This is just type checking extended with a static analysis
+    to infer rounding contexts for every real-valued expression.
+    The analysis assigns every statement, definition, and expression
+    a rounding context if it can be determined.
+
+    Raises `ContextInferError` if the context cannot be inferred.
     """
 
     @staticmethod
@@ -740,10 +753,10 @@ class ContextInfer:
         return inst.infer()
 
     @staticmethod
-    def primitive(prim: Primitive) -> FunctionTypeContext:
+    def infer_primitive(prim: Primitive) -> FunctionTypeContext:
         """
         Infers the context of a primitive.
         """
         if not isinstance(prim, Primitive):
             raise TypeError(f'expected a \'Primitive\', got {prim}')
-        return ContextTypeInferPrimitive(prim).infer()
+        return _ContextInferPrimitive(prim).infer()

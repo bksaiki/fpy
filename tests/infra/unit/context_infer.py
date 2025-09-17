@@ -40,7 +40,7 @@ def _test_tcheck_library():
                     info = ContextInfer.infer(ast)
                     print(ast.name, info.func_ty)
                 case fp.Primitive():
-                    ctx = ContextInfer.primitive(obj)
+                    ctx = ContextInfer.infer_primitive(obj)
                     print(obj.name, ctx)
 
 def test_context_infer():
