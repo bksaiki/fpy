@@ -2,8 +2,6 @@
 Copy propagation.
 """
 
-from typing import Optional
-
 from ..analysis import DefineUse, SyntaxCheck
 from ..ast import *
 
@@ -11,10 +9,10 @@ from ..ast import *
 class _CopyPropagateInstance(DefaultVisitor):
     """Single-use instance of copy propagation."""
     func: FuncDef
-    names: Optional[set[NamedId]]
+    names: set[NamedId] | None
     xform: DefaultTransformVisitor
 
-    def __init__(self, func: FuncDef, names: Optional[set[NamedId]]):
+    def __init__(self, func: FuncDef, names: set[NamedId] | None):
         self.func = func
         self.names = names
         self.xform = DefaultTransformVisitor()
@@ -67,7 +65,7 @@ class CopyPropagate:
     """
 
     @staticmethod
-    def apply(func: FuncDef, *, names: Optional[set[NamedId]] = None) -> FuncDef:
+    def apply(func: FuncDef, *, names: set[NamedId] | None = None) -> FuncDef:
         """Applies copy propagation to the given AST."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\' for {func}, got {type(func)}')

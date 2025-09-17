@@ -6,7 +6,6 @@ unique identifiers.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from .location import Location
 
@@ -71,9 +70,9 @@ class NamedId(Id):
     __slots__ = ('base', 'count')
 
     base: str
-    count: Optional[int]
+    count: int | None
 
-    def __init__(self, base: str, count: Optional[int] = None):
+    def __init__(self, base: str, count: int | None = None):
         if not isinstance(base, str):
             raise TypeError(f'expected a str, for {base}')
         self.base = base
@@ -113,7 +112,7 @@ class SourceId(NamedId):
     loc: Location
     """source location"""
 
-    def __init__(self, base: str, loc: Location, count: Optional[int] = None):
+    def __init__(self, base: str, loc: Location, count: int | None = None):
         super().__init__(base, count)
         self.loc = loc
 

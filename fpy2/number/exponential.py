@@ -6,7 +6,6 @@ TODO: stochastic rounding
 """
 
 from fractions import Fraction
-from typing import Optional
 
 from ..utils import DEFAULT, DefaultOr, bitmask, default_repr
 from .context import EncodableContext, Context
@@ -97,7 +96,7 @@ class ExpContext(EncodableContext):
     overflow: OverflowMode
     """overflow mode"""
 
-    inf_value: Optional[Float]
+    inf_value: Float | None
     """
     if Inf is not representable, what value should Inf round to?
     if not set, then `round()` will produce NaN.
@@ -255,7 +254,7 @@ class ExpContext(EncodableContext):
             raise ValueError(f'not representable under this context: x={x}, ctx={self}')
         return self._mp_ctx.normalize(x)
 
-    def round_params(self) -> tuple[Optional[int], Optional[int]]:
+    def round_params(self) -> tuple[int | None, int | None]:
         return 1, None
 
     # TODO: copied from mpb_float.py, should be refactored
@@ -305,7 +304,7 @@ class ExpContext(EncodableContext):
                 # zero is considered even for rounding
                 return False
 
-    def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
+    def _round_float_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
 
@@ -379,7 +378,7 @@ class ExpContext(EncodableContext):
         # step 4. return rounded result
         return Float(x=rounded, ctx=self)
 
-    def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
+    def _round_at(self, x, n: int | None, exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x

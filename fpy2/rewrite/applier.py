@@ -128,14 +128,14 @@ class _StmtApplierInst(DefaultTransformVisitor):
         return TupleBinding([binding for binding in binding.elts], None)
 
     def _visit_assign(self, stmt: Assign, ctx: None):
-        binding = self._visit_binding(stmt.binding, None)
+        binding = self._visit_binding(stmt.target, None)
         expr = self._visit_expr(stmt.expr, None)
         s =  Assign(binding, stmt.type, expr, None)
         return s, None
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         var = self._visit_id(stmt.var)
-        slices = [self._visit_expr(s, None) for s in stmt.slices]
+        slices = [self._visit_expr(s, None) for s in stmt.indices]
         expr = self._visit_expr(stmt.expr, None)
         s = IndexedAssign(var, slices, expr, None)
         return s, None
@@ -166,14 +166,15 @@ class _StmtApplierInst(DefaultTransformVisitor):
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         context = self._visit_expr(stmt.ctx, None)
         body, _ = self._visit_block(stmt.body, None)
-        if stmt.name is None:
+        if stmt.target is None:
             s = ContextStmt(None, context, body, None)
         else:
-            name = self._visit_id(stmt.name)
+            name = self._visit_id(stmt.target)
             s = ContextStmt(name, context, body, None)
             return s, None
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
+        # TODO: message?
         test = self._visit_expr(stmt.test, None)
         s = AssertStmt(test, stmt.msg, None)
         return s, None

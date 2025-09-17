@@ -29,7 +29,7 @@ def _test_tcheck_unit():
 
         ast = ContextInline.apply(core.ast, core.env)
         info = ContextInfer.infer(ast)
-        print(ast.name, info.func_ctx)
+        print(ast.name, info.func_ty)
 
 def _test_tcheck_library():
     for mod in _modules:
@@ -38,9 +38,9 @@ def _test_tcheck_library():
                 case fp.Function():
                     ast = ContextInline.apply(obj.ast, obj.env)
                     info = ContextInfer.infer(ast)
-                    print(ast.name, info.func_ctx)
+                    print(ast.name, info.func_ty)
                 case fp.Primitive():
-                    ctx = ContextInfer.primitive(obj)
+                    ctx = ContextInfer.infer_primitive(obj)
                     print(obj.name, ctx)
 
 def test_context_infer():

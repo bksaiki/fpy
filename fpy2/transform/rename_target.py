@@ -49,14 +49,14 @@ class _RenameTargetInstance(DefaultTransformVisitor):
         return TupleBinding([self._visit_binding(elt, ctx) for elt in binding.elts], None)
 
     def _visit_assign(self, stmt: Assign, ctx: None):
-        binding = self._visit_binding(stmt.binding, ctx)
+        binding = self._visit_binding(stmt.target, ctx)
         expr = self._visit_expr(stmt.expr, ctx)
         s = Assign(binding, stmt.type, expr, stmt.loc)
         return s, None
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         var = self.rename.get(stmt.var, stmt.var)
-        slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
+        slices = [self._visit_expr(slice, ctx) for slice in stmt.indices]
         expr = self._visit_expr(stmt.expr, ctx)
         s = IndexedAssign(var, slices, expr, stmt.loc)
         return s, None

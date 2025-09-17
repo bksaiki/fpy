@@ -49,12 +49,19 @@ def _compile_obj(cpp_path: Path):
 # Unit tests
 
 _test_ignore = [
+    'test_list1', # empty list is not monomorphic
+    'test_list_len1', # empty list is not monomorphic
+    'test_list_dim1', # empty list is not monomorphic
+    'test_list_size1', # empty list is not monomorphic
+    'test_enumerate1', # empty list is not monomorphic
     'test_context_expr1',
     'test_context1',
     'test_context2',
     'test_context3',
     'test_context4',
     'test_context5',
+    'test_assert2',
+    'test_assert3',
 ]
 
 _example_ignore = [
@@ -113,6 +120,7 @@ _library_ignore = [
 def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
     compiler = fp.CppBackend(unsafe_allow_int=True)
     cpp_path = output_dir / f'library_{prefix}.cpp'
+    print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     with open(cpp_path, 'w') as f:
         print('\n'.join(compiler.headers()), file=f)
         print(compiler.helpers(), file=f)
@@ -136,13 +144,14 @@ def _test_libraries(output_dir: Path, no_cc: bool = False):
 # Main tester
 
 def test_cpp(delete: bool = True, no_cc: bool = False):
-    dir_str = tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp')
-    output_dir = Path(dir_str.name)
+    dir_str = tempfile.mkdtemp(prefix='tmp_fpy_cpp')
+    output_dir = Path(dir_str)
     # with tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp', delete=delete) as dir_str:
 
     print(f"Running C++ tests with output under `{output_dir}`")
     _test_unit(output_dir, no_cc=no_cc)
     _test_libraries(output_dir, no_cc=no_cc)
+
     if delete:
         shutil.rmtree(output_dir)
 

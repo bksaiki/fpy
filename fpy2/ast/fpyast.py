@@ -3,7 +3,7 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Collection, Iterable, Optional, Self, TypeAlias
+from typing import Any, Collection, Iterable, Self, TypeAlias
 from fractions import Fraction
 
 from ..fpc_context import FPCoreContext
@@ -217,9 +217,9 @@ __all__ = [
 class Ast(ABC):
     """FPy AST: abstract base class for all AST nodes."""
     __slots__ = ('_loc',)
-    _loc: Optional[Location]
+    _loc: Location | None
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         self._loc = loc
 
     @property
@@ -237,14 +237,14 @@ class TypeAnn(Ast):
     """FPy AST: typing annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
 class AnyTypeAnn(TypeAnn):
     """FPy AST: any type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
     def __eq__(self, other: object) -> bool:
@@ -257,14 +257,14 @@ class ScalarTypeAnn(TypeAnn):
     """FPy AST: scalar type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
 class RealTypeAnn(TypeAnn):
     """FPy AST: real type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
     def __eq__(self, other: object) -> bool:
@@ -277,7 +277,7 @@ class BoolTypeAnn(TypeAnn):
     """FPy AST: boolean type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
     def __eq__(self, other: object) -> bool:
@@ -290,7 +290,7 @@ class TensorTypeAnn(TypeAnn):
     """FPy AST: tensor type annotation"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
 class TupleTypeAnn(TensorTypeAnn):
@@ -298,7 +298,7 @@ class TupleTypeAnn(TensorTypeAnn):
     __slots__ = ('elts',)
     elts: tuple[TypeAnn, ...]
 
-    def __init__(self, elts: list[TypeAnn], loc: Optional[Location]):
+    def __init__(self, elts: list[TypeAnn], loc: Location | None):
         super().__init__(loc)
         self.elts = tuple(elts)
 
@@ -315,7 +315,7 @@ class ListTypeAnn(TensorTypeAnn):
     __slots__ = ('elt',)
     elt: TypeAnn
 
-    def __init__(self, elt: TypeAnn, loc: Optional[Location]):
+    def __init__(self, elt: TypeAnn, loc: Location | None):
         super().__init__(loc)
         self.elt = elt
 
@@ -333,7 +333,7 @@ class SizedTensorTypeAnn(TensorTypeAnn):
     dims: tuple[int | NamedId, ...]
     elt: TypeAnn
 
-    def __init__(self, dims: list[int | NamedId], elt: TypeAnn, loc: Optional[Location]):
+    def __init__(self, dims: list[int | NamedId], elt: TypeAnn, loc: Location | None):
         super().__init__(loc)
         self.dims = tuple(dims)
         self.elt = elt
@@ -350,7 +350,7 @@ class Expr(Ast):
     """FPy AST: expression"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
     @abstractmethod
@@ -368,7 +368,7 @@ class Stmt(Ast):
     """FPy AST: statement"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
     @abstractmethod
@@ -386,7 +386,7 @@ class ValueExpr(Expr):
     """FPy Ast: terminal expression"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
 class Var(ValueExpr):
@@ -394,7 +394,7 @@ class Var(ValueExpr):
     __slots__ = ('name',)
     name: NamedId
 
-    def __init__(self, name: NamedId, loc: Optional[Location]):
+    def __init__(self, name: NamedId, loc: Location | None):
         super().__init__(loc)
         self.name = name
 
@@ -406,7 +406,7 @@ class BoolVal(ValueExpr):
     __slots__ = ('val',)
     val: bool
 
-    def __init__(self, val: bool, loc: Optional[Location]):
+    def __init__(self, val: bool, loc: Location | None):
         super().__init__(loc)
         self.val = val
 
@@ -417,14 +417,14 @@ class RealVal(ValueExpr):
     """FPy AST: real value"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
 class RationalVal(RealVal):
     """FPy AST: abstract rational value"""
     __slots__ = ()
 
-    def __init__(self, loc: Optional[Location]):
+    def __init__(self, loc: Location | None):
         super().__init__(loc)
 
     @abstractmethod
@@ -437,7 +437,7 @@ class Decnum(RationalVal):
     __slots__ = ('val',)
     val: str
 
-    def __init__(self, val: str, loc: Optional[Location]):
+    def __init__(self, val: str, loc: Location | None):
         super().__init__(loc)
         self.val = val
 
@@ -453,7 +453,7 @@ class Hexnum(RationalVal):
     func: 'FuncSymbol'
     val: str
 
-    def __init__(self, func: 'FuncSymbol', val: str, loc: Optional[Location]):
+    def __init__(self, func: 'FuncSymbol', val: str, loc: Location | None):
         super().__init__(loc)
         self.func = func
         self.val = val
@@ -469,7 +469,7 @@ class Integer(RationalVal):
     __slots__ = ('val',)
     val: int
 
-    def __init__(self, val: int, loc: Optional[Location]):
+    def __init__(self, val: int, loc: Location | None):
         super().__init__(loc)
         self.val = val
 
@@ -486,7 +486,7 @@ class Rational(RationalVal):
     p: int
     q: int
 
-    def __init__(self, func: 'FuncSymbol', p: int, q: int, loc: Optional[Location]):
+    def __init__(self, func: 'FuncSymbol', p: int, q: int, loc: Location | None):
         super().__init__(loc)
         self.func = func
         self.p = p
@@ -506,7 +506,7 @@ class Digits(RationalVal):
     e: int
     b: int
 
-    def __init__(self, func: 'FuncSymbol', m: int, e: int, b: int, loc: Optional[Location]):
+    def __init__(self, func: 'FuncSymbol', m: int, e: int, b: int, loc: Location | None):
         super().__init__(loc)
         self.func = func
         self.m = m
@@ -529,7 +529,7 @@ class ForeignVal(ValueExpr):
     __slots__ = ('val',)
     val: Any
 
-    def __init__(self, val: Any, loc: Optional[Location]):
+    def __init__(self, val: Any, loc: Location | None):
         super().__init__(loc)
         self.val = val
 
@@ -548,7 +548,7 @@ class NullaryOp(NaryExpr):
     func: 'FuncSymbol'
     args: tuple[Expr, ...] = ()
 
-    def __init__(self, func: 'FuncSymbol', loc: Optional[Location]):
+    def __init__(self, func: 'FuncSymbol', loc: Location | None):
         super().__init__(loc)
         self.func = func
 
@@ -565,7 +565,7 @@ class UnaryOp(NaryExpr):
     def __init__(
         self,
         arg: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.args = (arg,)
@@ -592,7 +592,7 @@ class NamedUnaryOp(UnaryOp):
         self,
         func: 'FuncSymbol',
         arg: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(arg, loc)
         self.func = func
@@ -608,7 +608,7 @@ class BinaryOp(NaryExpr):
         self,
         first: Expr,
         second: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.args = (first, second)
@@ -641,7 +641,7 @@ class NamedBinaryOp(BinaryOp):
         func: 'FuncSymbol',
         first: Expr,
         second: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(first, second, loc)
         self.func = func
@@ -658,7 +658,7 @@ class TernaryOp(NaryExpr):
         first: Expr,
         second: Expr,
         third: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.args = (first, second, third)
@@ -695,7 +695,7 @@ class NamedTernaryOp(TernaryOp):
         first: Expr,
         second: Expr,
         third: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(first, second, third, loc)
         self.func = func
@@ -707,7 +707,7 @@ class NaryOp(NaryExpr):
 
     args: tuple[Expr, ...]
 
-    def __init__(self, args: Iterable[Expr], loc: Optional[Location]):
+    def __init__(self, args: Iterable[Expr], loc: Location | None):
         super().__init__(loc)
         self.args = tuple(args)
 
@@ -727,7 +727,7 @@ class NamedNaryOp(NaryOp):
         self,
         func: 'FuncSymbol',
         args: Iterable[Expr],
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(args, loc)
         self.func = func
@@ -1091,7 +1091,7 @@ class Call(NaryExpr):
         fn: object,
         args: Iterable[Expr],
         kwargs: Iterable[tuple[str, Expr]],
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.func = func
@@ -1122,10 +1122,11 @@ class Call(NaryExpr):
 class Attribute(Expr):
     """FPy AST: attribute expression `x.y`"""
     __slots__ = ('value', 'attr')
+
     value: Expr
     attr: str
 
-    def __init__(self, value: Expr, attr: str, loc: Optional[Location]):
+    def __init__(self, value: Expr, attr: str, loc: Location | None):
         super().__init__(loc)
         self.value = value
         self.attr = attr
@@ -1148,7 +1149,7 @@ class Compare(Expr):
         self,
         ops: Iterable[CompareOp],
         args: Iterable[Expr],
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.ops = tuple(ops)
@@ -1164,22 +1165,23 @@ class Compare(Expr):
 
 class TupleExpr(Expr):
     """FPy AST: tuple expression"""
-    __slots__ = ('args',)
-    args: tuple[Expr, ...]
+    __slots__ = ('elts',)
+
+    elts: tuple[Expr, ...]
 
     def __init__(
         self,
-        args: Iterable[Expr],
-        loc: Optional[Location]
+        elts: Iterable[Expr],
+        loc: Location | None
     ):
         super().__init__(loc)
-        self.args = tuple(args)
+        self.elts = tuple(elts)
 
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, TupleExpr)
-            and len(self.args) == len(other.args)
-            and all(arg.is_equiv(other_arg) for arg, other_arg in zip(self.args, other.args))
+            and len(self.elts) == len(other.elts)
+            and all(arg.is_equiv(other_arg) for arg, other_arg in zip(self.elts, other.elts))
         )
 
 class TupleBinding(Ast):
@@ -1190,7 +1192,7 @@ class TupleBinding(Ast):
     def __init__(
         self,
         elts: Iterable[Id | Self],
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.elts = tuple(elts)
@@ -1220,27 +1222,29 @@ class TupleBinding(Ast):
 
 class ListExpr(Expr):
     """FPy AST: list expression"""
-    __slots__ = ('args',)
-    args: tuple[Expr, ...]
+    __slots__ = ('elts',)
+
+    elts: tuple[Expr, ...]
 
     def __init__(
         self,
-        args: Iterable[Expr],
-        loc: Optional[Location]
+        elts: Iterable[Expr],
+        loc: Location | None
     ):
         super().__init__(loc)
-        self.args = tuple(args)
+        self.elts = tuple(elts)
 
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, TupleExpr)
-            and len(self.args) == len(other.args)
-            and all(arg.is_equiv(other_arg) for arg, other_arg in zip(self.args, other.args))
+            and len(self.elts) == len(other.elts)
+            and all(arg.is_equiv(other_arg) for arg, other_arg in zip(self.elts, other.elts))
         )
 
 class ListComp(Expr):
     """FPy AST: list comprehension expression"""
     __slots__ = ('targets', 'iterables', 'elt')
+
     targets: tuple[Id | TupleBinding, ...]
     iterables: tuple[Expr, ...]
     elt: Expr
@@ -1250,7 +1254,7 @@ class ListComp(Expr):
         targets: Collection[Id | TupleBinding],
         iterables: Collection[Expr],
         elt: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         assert len(targets) == len(iterables)
         super().__init__(loc)
@@ -1273,24 +1277,25 @@ class ListSet(Expr):
 
     Generated by the `FuncUpdate` transform.
     """
-    __slots__ = ('array', 'slices', 'value')
-    array: Expr
-    slices: tuple[Expr, ...]
-    value: Expr
+    __slots__ = ('value', 'indices', 'expr')
 
-    def __init__(self, array: Expr, slices: Iterable[Expr], value: Expr, loc: Optional[Location]):
+    value: Expr
+    indices: tuple[Expr, ...]
+    expr: Expr
+
+    def __init__(self, value: Expr, indices: Iterable[Expr], expr: Expr, loc: Location | None):
         super().__init__(loc)
-        self.array = array
-        self.slices = tuple(slices)
         self.value = value
+        self.indices = tuple(indices)
+        self.expr = expr
 
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, ListSet)
-            and self.array.is_equiv(other.array)
-            and len(self.slices) == len(other.slices)
-            and all(slice.is_equiv(other_slice) for slice, other_slice in zip(self.slices, other.slices))
             and self.value.is_equiv(other.value)
+            and len(self.indices) == len(other.indices)
+            and all(slice.is_equiv(other_slice) for slice, other_slice in zip(self.indices, other.indices))
+            and self.expr.is_equiv(other.expr)
         )
 
 class ListRef(Expr):
@@ -1299,7 +1304,7 @@ class ListRef(Expr):
     value: Expr
     index: Expr
 
-    def __init__(self, value: Expr, index: Expr, loc: Optional[Location]):
+    def __init__(self, value: Expr, index: Expr, loc: Location | None):
         super().__init__(loc)
         self.value = value
         self.index = index
@@ -1321,9 +1326,9 @@ class ListSlice(Expr):
     def __init__(
         self,
         value: Expr,
-        start: Optional[Expr],
-        stop: Optional[Expr],
-        loc: Optional[Location]
+        start: Expr | None,
+        stop: Expr | None,
+        loc: Location | None
     ):
         super().__init__(loc)
         self.value = value
@@ -1358,7 +1363,7 @@ class IfExpr(Expr):
         cond: Expr,
         ift: Expr,
         iff: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.cond = cond
@@ -1410,55 +1415,57 @@ class StmtBlock(Ast):
 
 class Assign(Stmt):
     """FPy AST: variable assignment"""
-    __slots__ = ('binding', 'type', 'expr')
-    binding: Id | TupleBinding
-    type: Optional[TypeAnn]
+    __slots__ = ('target', 'type', 'expr')
+
+    target: Id | TupleBinding
+    type: TypeAnn | None
     expr: Expr
 
     def __init__(
         self,
-        binding: Id | TupleBinding,
-        type: Optional[TypeAnn],
+        target: Id | TupleBinding,
+        type: TypeAnn | None,
         expr: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
-        self.binding = binding
+        self.target = target
         self.type = type
         self.expr = expr
 
     def is_equiv(self, other):
         return (
             isinstance(other, Assign)
-            and self.binding.is_equiv(other.binding)
+            and self.target.is_equiv(other.target)
             and self.expr.is_equiv(other.expr)
         )
 
 class IndexedAssign(Stmt):
     """FPy AST: assignment to tuple indexing"""
-    __slots__ = ('var', 'slices', 'expr')
+    __slots__ = ('var', 'indices', 'expr')
+
     var: NamedId
-    slices: tuple[Expr, ...]
+    indices: tuple[Expr, ...]
     expr: Expr
 
     def __init__(
         self,
         var: NamedId,
-        slices: Iterable[Expr],
+        indices: Iterable[Expr],
         expr: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.var = var
-        self.slices = tuple(slices)
+        self.indices = tuple(indices)
         self.expr = expr
 
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, IndexedAssign)
             and self.var == other.var
-            and len(self.slices) == len(other.slices)
-            and all(s1.is_equiv(s2) for s1, s2 in zip(self.slices, other.slices))
+            and len(self.indices) == len(other.indices)
+            and all(s1.is_equiv(s2) for s1, s2 in zip(self.indices, other.indices))
             and self.expr.is_equiv(other.expr)
         )
 
@@ -1472,7 +1479,7 @@ class If1Stmt(Stmt):
         self,
         cond: Expr,
         body: StmtBlock,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.cond = cond
@@ -1497,7 +1504,7 @@ class IfStmt(Stmt):
         cond: Expr,
         ift: StmtBlock,
         iff: StmtBlock,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.cond = cond
@@ -1522,7 +1529,7 @@ class WhileStmt(Stmt):
         self,
         cond: Expr,
         body: StmtBlock,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.cond = cond
@@ -1538,6 +1545,7 @@ class WhileStmt(Stmt):
 class ForStmt(Stmt):
     """FPy AST: for statement"""
     __slots__ = ('target', 'iterable', 'body')
+
     target: Id | TupleBinding
     iterable: Expr
     body: StmtBlock
@@ -1547,7 +1555,7 @@ class ForStmt(Stmt):
         target: Id | TupleBinding,
         iterable: Expr,
         body: StmtBlock,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.target = target
@@ -1564,27 +1572,28 @@ class ForStmt(Stmt):
 
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
-    __slots__ = ('name', 'ctx', 'body')
-    name: Id
+    __slots__ = ('target', 'ctx', 'body')
+
+    target: Id
     ctx: Expr
     body: StmtBlock
 
     def __init__(
         self,
-        name: Id,
+        target: Id,
         ctx: Expr,
         body: StmtBlock,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.ctx = ctx
-        self.name = name
+        self.target = target
         self.body = body
 
     def is_equiv(self, other) -> bool:
         return (
             isinstance(other, ContextStmt)
-            and self.name == other.name
+            and self.target == other.target
             and self.ctx.is_equiv(other.ctx)
             and self.body.is_equiv(other.body)
         )
@@ -1592,14 +1601,15 @@ class ContextStmt(Stmt):
 class AssertStmt(Stmt):
     """FPy AST: assert statement"""
     __slots__ = ('test', 'msg')
+
     test: Expr
-    msg: Optional[str]
+    msg: Expr | None
 
     def __init__(
         self,
         test: Expr,
-        msg: Optional[str],
-        loc: Optional[Location]
+        msg: Expr | None,
+        loc: Location | None
     ):
         super().__init__(loc)
         self.test = test
@@ -1620,7 +1630,7 @@ class EffectStmt(Stmt):
     def __init__(
         self,
         expr: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.expr = expr
@@ -1639,7 +1649,7 @@ class ReturnStmt(Stmt):
     def __init__(
         self,
         expr: Expr,
-        loc: Optional[Location]
+        loc: Location | None
     ):
         super().__init__(loc)
         self.expr = expr
@@ -1654,13 +1664,13 @@ class Argument(Ast):
     """FPy AST: function argument"""
     __slots__ = ('name', 'type')
     name: Id
-    type: Optional[TypeAnn]
+    type: TypeAnn | None
 
     def __init__(
         self,
         name: Id,
-        type: Optional[TypeAnn],
-        loc: Optional[Location]
+        type: TypeAnn | None,
+        loc: Location | None
     ):
         super().__init__(loc)
         self.name = name
@@ -1690,7 +1700,7 @@ class FuncDef(Ast):
         spec: Any,
         meta: dict[str, Any] | None,
         *,
-        loc: Optional[Location] = None
+        loc: Location | None = None
     ):
         super().__init__(loc)
         self.name = name
@@ -1733,7 +1743,7 @@ class BaseFormatter:
     def format(self, ast: Ast) -> str:
         ...
 
-_default_formatter: Optional[BaseFormatter] = None
+_default_formatter: BaseFormatter | None = None
 
 def get_default_formatter() -> BaseFormatter:
     """Get the default formatter for FPy AST."""

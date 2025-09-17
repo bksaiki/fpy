@@ -8,7 +8,7 @@ at less precision is safe.
 
 import gmpy2 as gmp
 
-from typing import Callable, Optional
+from typing import Callable
 
 from .number import RealFloat, Float
 
@@ -110,7 +110,7 @@ def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp
     ):
         return fn(*args)
 
-def _mpfr_call(fn: Callable[..., gmp.mpfr], *args: gmp.mpfr, prec: Optional[int] = None, n: Optional[int] = None):
+def _mpfr_call(fn: Callable[..., gmp.mpfr], *args: gmp.mpfr, prec: int | None = None, n: int | None = None):
     """
     Evalutes `fn(args)` such that the result may be safely re-rounded.
     Either specify:
@@ -150,7 +150,7 @@ def _mpfr_call(fn: Callable[..., gmp.mpfr], *args: gmp.mpfr, prec: Optional[int]
         result = _mpfr_call_with_prec(prec + 2, fn, args)
         return _round_odd(result, result.rc != 0)
 
-def mpfr_value(x, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_value(x, *, prec: int | None = None, n: int | None = None):
     """
     Converts `x` into an MPFR type such that it may be safely re-rounded
     accurately to `prec` digits of precision.
@@ -178,7 +178,7 @@ _constant_exprs = {
     'NAN': gmp.nan,
 }
 
-def mpfr_constant(x: str, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_constant(x: str, *, prec: int | None = None, n: int | None = None):
     """
     Converts `x` into an MPFR type such that it may be safely re-rounded
     accurately to `prec` digits of precision.
@@ -192,7 +192,7 @@ def mpfr_constant(x: str, *, prec: Optional[int] = None, n: Optional[int] = None
     except KeyError as e:
         raise ValueError(f'unknown constant {e.args[0]!r}') from None
 
-def _mpfr_eval(gmp_fn: Callable[..., gmp.mpfr], *args: Float, prec: Optional[int] = None, n: Optional[int] = None):
+def _mpfr_eval(gmp_fn: Callable[..., gmp.mpfr], *args: Float, prec: int | None = None, n: int | None = None):
     """
     Evaluates `gmp_fn(*args)` such that the result may be safely re-rounded.
     Either specify:
@@ -207,140 +207,140 @@ def _mpfr_eval(gmp_fn: Callable[..., gmp.mpfr], *args: Float, prec: Optional[int
 #####################################################################
 # General operations
 
-def mpfr_acos(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_acos(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `acos(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.acos, x, prec=prec, n=n)
 
-def mpfr_acosh(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_acosh(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `acosh(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.acosh, x, prec=prec, n=n)
 
-def mpfr_add(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_add(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `x + y` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.add, x, y, prec=prec, n=n)
 
-def mpfr_asin(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_asin(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `asin(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.asin, x, prec=prec, n=n)
 
-def mpfr_asinh(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_asinh(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `asinh(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.asinh, x, prec=prec, n=n)
 
-def mpfr_atan(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_atan(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `atan(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.atan, x, prec=prec, n=n)
 
-def mpfr_atan2(y: Float, x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_atan2(y: Float, x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `atan2(y, x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.atan2, y, x, prec=prec, n=n)
 
-def mpfr_atanh(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_atanh(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `atanh(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.atanh, x, prec=prec, n=n)
 
-def mpfr_cbrt(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_cbrt(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `cbrt(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.cbrt, x, prec=prec, n=n)
 
-def mpfr_copysign(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_copysign(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Returns `x` with the sign of `y` using MPFR such that it may be
     safely re-rounded accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.copy_sign, x, y, prec=prec, n=n)
 
-def mpfr_cos(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_cos(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `cos(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.cos, x, prec=prec, n=n)
 
-def mpfr_cosh(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_cosh(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `cosh(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.cosh, x, prec=prec, n=n)
 
-def mpfr_div(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_div(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `x / y` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.div, x, y, prec=prec, n=n)
 
-def mpfr_erf(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_erf(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `erf(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.erf, x, prec=prec, n=n)
 
-def mpfr_erfc(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_erfc(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `erfc(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.erfc, x, prec=prec, n=n)
 
-def mpfr_exp(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_exp(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `exp(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.exp, x, prec=prec, n=n)
 
-def mpfr_exp2(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_exp2(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `2**x` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.exp2, x, prec=prec, n=n)
 
-def mpfr_exp10(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_exp10(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `10**x` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.exp10, x, prec=prec, n=n)
 
-def mpfr_expm1(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_expm1(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `exp(x) - 1` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.expm1, x, prec=prec, n=n)
 
-def mpfr_fabs(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_fabs(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `abs(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
@@ -350,7 +350,7 @@ def mpfr_fabs(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
     """
     return _mpfr_eval(_gmp_abs, x, prec=prec, n=n)
 
-def mpfr_fdim(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_fdim(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `max(x - y, 0)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
@@ -365,14 +365,14 @@ def mpfr_fdim(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int
         # otherwise, returns +0
         return Float()
 
-def mpfr_fma(x: Float, y: Float, z: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_fma(x: Float, y: Float, z: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `x * y + z` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.fma, x, y, z, prec=prec, n=n)
 
-def mpfr_fmod(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_fmod(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes the remainder of `x / y`, where the remainder has
     the same sign as `x`, using MPFR such that it may be safely re-rounded
@@ -383,7 +383,7 @@ def mpfr_fmod(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int
     """
     return _mpfr_eval(gmp.fmod, x, y, prec=prec, n=n)
 
-def mpfr_fmax(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_fmax(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `max(x, y)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
@@ -393,7 +393,7 @@ def mpfr_fmax(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int
     """
     return _mpfr_eval(gmp.maxnum, x, y, prec=prec, n=n)
 
-def mpfr_fmin(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_fmin(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `min(x, y)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
@@ -403,70 +403,70 @@ def mpfr_fmin(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int
     """
     return _mpfr_eval(gmp.minnum, x, y, prec=prec, n=n)
 
-def mpfr_hypot(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_hypot(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `sqrt(x * x + y * y)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.hypot, x, y, prec=prec, n=n)
 
-def mpfr_lgamma(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_lgamma(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `lgamma(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(_gmp_lgamma, x, prec=prec, n=n)
 
-def mpfr_log(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_log(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `ln(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.log, x, prec=prec, n=n)
 
-def mpfr_log10(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_log10(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `log10(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.log10, x, prec=prec, n=n)
 
-def mpfr_log1p(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_log1p(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `log(1 + x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.log1p, x, prec=prec, n=n)
 
-def mpfr_log2(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_log2(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `log2(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.log2, x, prec=prec, n=n)
 
-def mpfr_mul(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_mul(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `x * y` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.mul, x, y, prec=prec, n=n)
 
-def mpfr_neg(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_neg(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `-x` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(_gmp_neg, x, prec=prec, n=n)
 
-def mpfr_pow(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_pow(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `x ** y` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(_gmp_pow, x, y, prec=prec, n=n)
 
-def mpfr_remainder(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_remainder(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes the remainder of `x / y` using MPFR such that it may be
     safely re-rounded accurately to `prec` digits of precision.
@@ -476,49 +476,49 @@ def mpfr_remainder(x: Float, y: Float, *, prec: Optional[int] = None, n: Optiona
     """
     return _mpfr_eval(gmp.remainder, x, y, prec=prec, n=n)
 
-def mpfr_sin(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_sin(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `sin(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.sin, x, prec=prec, n=n)
 
-def mpfr_sinh(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_sinh(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `sinh(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.sinh, x, prec=prec, n=n)
 
-def mpfr_sqrt(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_sqrt(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `sqrt(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.sqrt, x, prec=prec, n=n)
 
-def mpfr_sub(x: Float, y: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_sub(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `x - y` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.sub, x, y, prec=prec, n=n)
 
-def mpfr_tan(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_tan(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `tan(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.tan, x, prec=prec, n=n)
 
-def mpfr_tanh(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_tanh(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `tanh(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.tanh, x, prec=prec, n=n)
 
-def mpfr_tgamma(x: Float, *, prec: Optional[int] = None, n: Optional[int] = None):
+def mpfr_tgamma(x: Float, *, prec: int | None = None, n: int | None = None):
     """
     Computes `tgamma(x)` using MPFR such that it may be safely re-rounded
     accurately to `prec` digits of precision.

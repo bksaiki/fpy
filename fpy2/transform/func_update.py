@@ -2,8 +2,6 @@
 Transformation pass to rewrite in-place tuple mutation as functional updates.
 """
 
-from typing import Optional
-
 from ..analysis import DefineUse, SyntaxCheck
 from ..ast import *
 
@@ -18,7 +16,7 @@ class _FuncUpdateInstance(DefaultTransformVisitor):
         return self._visit_function(self.func, None)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-        slices = [self._visit_expr(slice, ctx) for slice in stmt.slices]
+        slices = [self._visit_expr(slice, ctx) for slice in stmt.indices]
         expr = self._visit_expr(stmt.expr, ctx)
         e = ListSet(Var(stmt.var, None), slices, expr, stmt.loc)
         s = Assign(stmt.var, None, e, stmt.loc)
@@ -34,7 +32,7 @@ class FuncUpdate:
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: Optional[set[str]] = None) -> FuncDef:
+    def apply(func: FuncDef, names: set[str] | None = None) -> FuncDef:
         if names is None:
             def_use = DefineUse.analyze(func)
             names = set(def_use.defs.keys())

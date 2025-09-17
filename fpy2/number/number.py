@@ -69,7 +69,7 @@ class RealFloat(numbers.Rational):
     _c: int
     """integer significand"""
 
-    _interval_size: Optional[int]
+    _interval_size: int | None
     """rounding envelope: size relative to `2**exp`"""
     _interval_down: bool
     """rounding envelope: does the interval extend towards zero?"""
@@ -78,16 +78,16 @@ class RealFloat(numbers.Rational):
 
     def __init__(
         self,
-        s: Optional[bool] = None,
-        exp: Optional[int] = None,
-        c: Optional[int] = None,
+        s: bool | None = None,
+        exp: int | None = None,
+        c: int | None = None,
         *,
         x: Optional['RealFloat'] = None,
-        e: Optional[int] = None,
-        m: Optional[int] = None,
-        interval_size: Optional[int] = None,
-        interval_down: Optional[bool] = None,
-        interval_closed: Optional[bool] = None,
+        e: int | None = None,
+        m: int | None = None,
+        interval_size: int | None = None,
+        interval_down: bool | None = None,
+        interval_closed: bool | None = None,
     ):
         """
         Creates a new `RealFloat` value.
@@ -411,7 +411,7 @@ class RealFloat(numbers.Rational):
         return self._c
 
     @property
-    def interval_size(self) -> Optional[int]:
+    def interval_size(self) -> int | None:
         """property: rounding envelope size relative to `2**exp`"""
         return self._interval_size
 
@@ -658,7 +658,7 @@ class RealFloat(numbers.Rational):
         bit = self._c & (1 << idx)
         return bit != 0
 
-    def normalize(self, p: int, n: Optional[int] = None):
+    def normalize(self, p: int, n: int | None = None):
         """
         Returns a copy of `self` that has exactly `p` bits of precision.
         Optionally, specify `n` to ensure that if `y = x.normalize(p, n)`,
@@ -856,7 +856,7 @@ class RealFloat(numbers.Rational):
             return self.next_towards()
 
 
-    def _round_params(self, max_p: Optional[int] = None, min_n: Optional[int] = None):
+    def _round_params(self, max_p: int | None = None, min_n: int | None = None):
         """
         Computes rounding parameters `p` and `n`.
 
@@ -897,7 +897,7 @@ class RealFloat(numbers.Rational):
         nearest, direction = rm.to_direction(kept._s)
 
         # rounding envelope
-        interval_size: Optional[int] = None
+        interval_size: int | None = None
         interval_closed: bool = False
         increment: bool = False
 
@@ -964,7 +964,7 @@ class RealFloat(numbers.Rational):
         kept: Self,
         half_bit: bool,
         lower_bits: bool,
-        p: Optional[int],
+        p: int | None,
         rm: RoundingMode
     ):
         """
@@ -1000,7 +1000,7 @@ class RealFloat(numbers.Rational):
 
     def _round_at(
         self,
-        p: Optional[int],
+        p: int | None,
         n: int,
         rm: RoundingMode,
         exact: bool
@@ -1036,11 +1036,11 @@ class RealFloat(numbers.Rational):
 
     def _round_at_stochastic(
         self,
-        p: Optional[int],
+        p: int | None,
         n: int,
         rm: RoundingMode,
-        num_randbits: Optional[int],
-        randbits: Optional[int],
+        num_randbits: int | None,
+        randbits: int | None,
         exact: bool
     ):
         """
@@ -1094,11 +1094,11 @@ class RealFloat(numbers.Rational):
     def round_at(
         self,
         n: int,
-        p: Optional[int] = None,
+        p: int | None = None,
         rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: Optional[int] = 0,
+        num_randbits: int | None = 0,
         *,
-        randbits: Optional[int] = None,
+        randbits: int | None = None,
         exact: bool = False):
         """
         Creates a copy of `self` rounded at absolute digit position `n`
@@ -1129,12 +1129,12 @@ class RealFloat(numbers.Rational):
             return self._round_at_stochastic(p, n, rm, num_randbits, randbits, exact)
 
     def round(self,
-        max_p: Optional[int] = None,
-        min_n: Optional[int] = None,
+        max_p: int | None = None,
+        min_n: int | None = None,
         rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: Optional[int] = 0,
+        num_randbits: int | None = 0,
         *,
-        randbits: Optional[int] = None,
+        randbits: int | None = None,
         exact: bool = False,
     ):
         """
@@ -1240,7 +1240,7 @@ class Float(numbers.Rational):
     _isnan: bool
     """is this number is NaN?"""
 
-    _ctx: Optional[Context]
+    _ctx: Context | None
     """rounding context during construction"""
 
     _real: RealFloat
@@ -1248,18 +1248,18 @@ class Float(numbers.Rational):
 
     def __init__(
         self,
-        s: Optional[bool] = None,
-        exp: Optional[int] = None,
-        c: Optional[int] = None,
+        s: bool | None = None,
+        exp: int | None = None,
+        c: int | None = None,
         *,
-        x: Optional[RealFloat | Self] = None,
-        e: Optional[int] = None,
-        m: Optional[int] = None,
-        isinf: Optional[bool] = None,
-        isnan: Optional[bool] = None,
-        interval_size: Optional[int] = None,
-        interval_down: Optional[bool] = None,
-        interval_closed: Optional[bool] = None,
+        x: RealFloat | Self | None = None,
+        e: int | None = None,
+        m: int | None = None,
+        isinf: bool | None = None,
+        isnan: bool | None = None,
+        interval_size: int | None = None,
+        interval_down: bool | None = None,
+        interval_closed: bool | None = None,
         ctx: DefaultOr[Context | None] = DEFAULT
     ):
         match x:
@@ -1397,7 +1397,7 @@ class Float(numbers.Rational):
         return self._isnan
     
     @property
-    def ctx(self) -> Optional[Context]:
+    def ctx(self) -> Context | None:
         """
         Rounding context under which this number was constructed.
 
@@ -1565,7 +1565,7 @@ class Float(numbers.Rational):
         return self._real.as_rational()
 
     @staticmethod
-    def nan(s: bool = False, ctx: Optional[Context] = None) -> 'Float':
+    def nan(s: bool = False, ctx: Context | None = None) -> 'Float':
         """
         Returns a `Float` representation of NaN.
 
@@ -1576,7 +1576,7 @@ class Float(numbers.Rational):
         return Float(isnan=True, s=s, ctx=ctx)
 
     @staticmethod
-    def inf(s: bool = False, ctx: Optional[Context] = None) -> 'Float':
+    def inf(s: bool = False, ctx: Context | None = None) -> 'Float':
         """
         Returns a `Float` representation of infinity.
 
@@ -1587,7 +1587,7 @@ class Float(numbers.Rational):
         return Float(isinf=True, s=s, ctx=ctx)
 
     @staticmethod
-    def zero(s: bool = False, ctx: Optional[Context] = None) -> 'Float':
+    def zero(s: bool = False, ctx: Context | None = None) -> 'Float':
         """
         Returns a `Float` representation of zero.
 
@@ -1598,7 +1598,7 @@ class Float(numbers.Rational):
         return Float.from_real(RealFloat.zero(s), ctx)
 
     @staticmethod
-    def from_real(x: RealFloat, ctx: Optional[Context] = None, checked: bool = True) -> 'Float':
+    def from_real(x: RealFloat, ctx: Context | None = None, checked: bool = True) -> 'Float':
         """
         Converts a `RealFloat` number to a `Float` number.
 
@@ -1619,7 +1619,7 @@ class Float(numbers.Rational):
             return Float(x=x, ctx=ctx)
 
     @staticmethod
-    def from_int(x: int, ctx: Optional[Context] = None, checked: bool = True) -> 'Float':
+    def from_int(x: int, ctx: Context | None = None, checked: bool = True) -> 'Float':
         """
         Converts an integer to a `Float` number.
 
@@ -1634,7 +1634,7 @@ class Float(numbers.Rational):
         return Float.from_real(xr, ctx, checked)
 
     @staticmethod
-    def from_float(x: float, ctx: Optional[Context] = None, checked: bool = True) -> 'Float':
+    def from_float(x: float, ctx: Context | None = None, checked: bool = True) -> 'Float':
         """
         Converts a native Python float to a `Float` number.
 
@@ -1701,7 +1701,7 @@ class Float(numbers.Rational):
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round_integer(self)
 
-    def compare(self, other: Self | RealFloat) -> Optional[Ordering]:
+    def compare(self, other: Self | RealFloat) -> Ordering | None:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
         """

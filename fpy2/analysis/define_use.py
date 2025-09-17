@@ -232,12 +232,12 @@ class _DefineUseInstance(DefaultVisitor):
 
     def _visit_assign(self, stmt: Assign, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
-        for var in stmt.binding.names():
+        for var in stmt.target.names():
             ctx[var] = self._add_assign(var, stmt, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefinitionCtx):
         self._add_use(stmt.var, stmt, ctx)
-        for slice in stmt.slices:
+        for slice in stmt.indices:
             self._visit_expr(slice, ctx)
         self._visit_expr(stmt.expr, ctx)
 

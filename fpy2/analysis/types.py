@@ -17,9 +17,9 @@ function types, and type variables.
 """
 
 from abc import ABC, abstractmethod
-from typing import Sequence
+from typing import Iterable
 
-from .utils import NamedId, default_repr
+from ..utils import NamedId, default_repr
 
 __all__ = [
     'Type',
@@ -52,63 +52,6 @@ class Type(ABC):
         ...
 
 
-class BoolType(Type):
-    """Type of boolean values"""
-
-    def format(self) -> str:
-        return "bool"
-
-    def free_vars(self) -> set['VarType']:
-        return set()
-
-    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
-        return self
-
-    def __eq__(self, other):
-        return isinstance(other, BoolType)
-
-    def __hash__(self):
-        return hash(type(self))
-
-
-class RealType(Type):
-    """Real number type."""
-
-    def format(self) -> str:
-        return "real"
-
-    def free_vars(self) -> set['VarType']:
-        return set()
-
-    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
-        return self
-
-    def __eq__(self, other):
-        return isinstance(other, RealType)
-
-    def __hash__(self):
-        return hash(type(self))
-
-
-class ContextType(Type):
-    """Rounding context type."""
-
-    def format(self) -> str:
-        return "context"
-
-    def free_vars(self) -> set['VarType']:
-        return set()
-
-    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
-        return self
-
-    def __eq__(self, other):
-        return isinstance(other, ContextType)
-
-    def __hash__(self):
-        return hash(type(self))
-
-
 class VarType(Type):
     """Type variable"""
 
@@ -135,8 +78,64 @@ class VarType(Type):
     def free_vars(self) -> set['VarType']:
         return {self}
 
-    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+    def subst(self, subst: dict['VarType', Type]) -> Type:
         return subst.get(self, self)
+
+class BoolType(Type):
+    """Type of boolean values"""
+
+    def format(self) -> str:
+        return "bool"
+
+    def free_vars(self) -> set['VarType']:
+        return set()
+
+    def subst(self, subst: dict[VarType, Type]) -> Type:
+        return self
+
+    def __eq__(self, other):
+        return isinstance(other, BoolType)
+
+    def __hash__(self):
+        return hash(type(self))
+
+
+class RealType(Type):
+    """Real number type."""
+
+    def format(self) -> str:
+        return "real"
+
+    def free_vars(self) -> set[VarType]:
+        return set()
+
+    def subst(self, subst: dict[VarType, Type]) -> Type:
+        return self
+
+    def __eq__(self, other):
+        return isinstance(other, RealType)
+
+    def __hash__(self):
+        return hash(type(self))
+
+
+class ContextType(Type):
+    """Rounding context type."""
+
+    def format(self) -> str:
+        return "context"
+
+    def free_vars(self) -> set[VarType]:
+        return set()
+
+    def subst(self, subst: dict[VarType, Type]) -> Type:
+        return self
+
+    def __eq__(self, other):
+        return isinstance(other, ContextType)
+
+    def __hash__(self):
+        return hash(type(self))
 
 
 class TupleType(Type):
@@ -151,13 +150,13 @@ class TupleType(Type):
     def format(self) -> str:
         return f'tuple[{", ".join(elt.format() for elt in self.elts)}]'
 
-    def free_vars(self) -> set['VarType']:
+    def free_vars(self) -> set[VarType]:
         fvs: set[VarType] = set()
         for elt in self.elts:
             fvs |= elt.free_vars()
         return fvs
 
-    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+    def subst(self, subst: dict[VarType, Type]) -> Type:
         return TupleType(*[elt.subst(subst) for elt in self.elts])
 
     def __eq__(self, other):
@@ -179,10 +178,10 @@ class ListType(Type):
     def format(self) -> str:
         return f'list[{self.elt.format()}]'
 
-    def free_vars(self) -> set['VarType']:
+    def free_vars(self) -> set[VarType]:
         return self.elt.free_vars()
 
-    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+    def subst(self, subst: dict[VarType, Type]) -> Type:
         return ListType(self.elt.subst(subst))
 
     def __eq__(self, other):
@@ -201,21 +200,21 @@ class FunctionType(Type):
     return_type: Type
     """return type"""
 
-    def __init__(self, arg_types: Sequence[Type], return_type: Type):
+    def __init__(self, arg_types: Iterable[Type], return_type: Type):
         self.arg_types = tuple(arg_types)
         self.return_type = return_type
 
     def format(self) -> str:
         return f'function[{", ".join(arg.format() for arg in self.arg_types)}] -> {self.return_type.format()}'
 
-    def free_vars(self) -> set['VarType']:
+    def free_vars(self) -> set[VarType]:
         fvs: set[VarType] = set()
         for arg in self.arg_types:
             fvs |= arg.free_vars()
         fvs |= self.return_type.free_vars()
         return fvs
 
-    def subst(self, subst: dict['VarType', 'Type']) -> 'Type':
+    def subst(self, subst: dict[VarType, Type]) -> Type:
         return FunctionType(
             [arg.subst(subst) for arg in self.arg_types],
             self.return_type.subst(subst)

@@ -5,7 +5,6 @@ Hence, "MP-F".
 """
 
 from fractions import Fraction
-from typing import Optional
 
 from ..utils import default_repr, DEFAULT, DefaultOr
 
@@ -43,7 +42,7 @@ class MPFixedContext(OrdinalContext):
     rm: RoundingMode
     """rounding mode"""
 
-    num_randbits: Optional[int]
+    num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
     enable_nan: bool
@@ -52,13 +51,13 @@ class MPFixedContext(OrdinalContext):
     enable_inf: bool
     """is infinity representable?"""
 
-    nan_value: Optional[Float]
+    nan_value: Float | None
     """
     if NaN is not enabled, what value should NaN round to?
     if not set, then `round()` will raise a `ValueError`.
     """
 
-    inf_value: Optional[Float]
+    inf_value: Float | None
     """
     if Inf is not enabled, what value should Inf round to?
     if not set, then `round()` will raise a `ValueError`.
@@ -68,12 +67,12 @@ class MPFixedContext(OrdinalContext):
         self,
         nmin: int,
         rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: Optional[int] = 0,
+        num_randbits: int | None = 0,
         *,
         enable_nan: bool = False,
         enable_inf: bool = False,
-        nan_value: Optional[Float] = None,
-        inf_value: Optional[Float] = None
+        nan_value: Float | None = None,
+        inf_value: Float | None = None
     ):
         if not isinstance(nmin, int):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
@@ -156,9 +155,9 @@ class MPFixedContext(OrdinalContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         enable_nan: DefaultOr[bool] = DEFAULT,
         enable_inf: DefaultOr[bool] = DEFAULT,
-        nan_value: DefaultOr[Optional[Float]] = DEFAULT,
-        inf_value: DefaultOr[Optional[Float]] = DEFAULT,
-        num_randbits: DefaultOr[Optional[int]] = DEFAULT,
+        nan_value: DefaultOr[Float | None] = DEFAULT,
+        inf_value: DefaultOr[Float | None] = DEFAULT,
+        num_randbits: DefaultOr[int | None] = DEFAULT,
         **kwargs
     ) -> 'MPFixedContext':
         if nmin is DEFAULT:
@@ -262,7 +261,7 @@ class MPFixedContext(OrdinalContext):
             nmin = self.nmin - self.num_randbits
             return None, nmin
 
-    def _round_float_at(self, x: RealFloat | Float, n: Optional[int], exact: bool) -> Float:
+    def _round_float_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round_at()` but only for `RealFloat` or `Float` instances.
 
@@ -309,7 +308,7 @@ class MPFixedContext(OrdinalContext):
         # step 4. wrap the value in a Float
         return Float(x=xr, ctx=self)
 
-    def _round_at(self, x, n: Optional[int], exact: bool) -> Float:
+    def _round_at(self, x, n: int | None, exact: bool) -> Float:
         match x:
             case Float() | RealFloat():
                 xr = x

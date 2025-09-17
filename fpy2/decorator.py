@@ -6,14 +6,7 @@ import builtins
 import inspect
 import textwrap
 
-from typing import (
-    Any,
-    Callable,
-    Optional,
-    overload,
-    ParamSpec,
-    TypeVar
-)
+from typing import Any, Callable, ParamSpec, TypeVar, overload
 
 from .analysis import Reachability, SyntaxCheck
 from .ast import EffectStmt, NamedId
@@ -45,7 +38,7 @@ def fpy(
     ...
 
 def fpy(
-    func: Optional[Callable[P, R]] = None,
+    func: Callable[P, R] | None = None,
     *,
     ctx: Context | None = None,
     spec: Any = None,
@@ -110,7 +103,7 @@ def fpy_primitive(
     ...
 
 def fpy_primitive(
-    func: Optional[Callable[P, R]] = None,
+    func: Callable[P, R] | None = None,
     *,
     ctx: str | None = None,
     arg_ctxs: list[str | tuple] | None = None,

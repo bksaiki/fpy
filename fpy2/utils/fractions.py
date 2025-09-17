@@ -5,7 +5,6 @@ Helper methods for fractions.
 import re
 
 from fractions import Fraction
-from typing import Optional
 
 from .bits import is_power_of_two
 
@@ -23,10 +22,10 @@ def digits_to_fraction(m: int, e: int, b: int):
     return Fraction(m) * Fraction(b) ** e
 
 def _sci_to_fraction(
-    s: Optional[str],
+    s: str | None,
     i: str,
-    f: Optional[str],
-    e: Optional[str],
+    f: str | None,
+    e: str | None,
     base: int,
     b: int,
 ) -> Fraction:

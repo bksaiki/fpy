@@ -5,7 +5,7 @@ FPy runtime backed by the Titanic library.
 import copy
 import inspect
 
-from typing import Any, Callable, Collection, Optional, TypeAlias
+from typing import Any, Callable, Collection, TypeAlias
 
 from .. import ops
 
@@ -120,14 +120,14 @@ class _Interpreter(Visitor):
     """mapping from variable names to values"""
     foreign: ForeignEnv
     """foreign environment"""
-    override_ctx: Optional[Context]
+    override_ctx: Context | None
     """optional overriding context"""
 
     def __init__(
         self, 
         foreign: ForeignEnv,
         *,
-        override_ctx: Optional[Context] = None,
+        override_ctx: Context | None = None,
     ):
         self.env = {}
         self.foreign = foreign
@@ -146,12 +146,12 @@ class _Interpreter(Visitor):
 
     def _arg_to_value(self, arg: Any):
         match arg:
+            case Float():
+                return arg
             case int():
                 return Float.from_int(arg, ctx=INTEGER, checked=False)
             case float():
                 return Float.from_float(arg, ctx=FP64, checked=False)
-            case Float():
-                return arg
             case tuple():
                 return tuple(self._arg_to_value(x) for x in arg)
             case list():
@@ -563,10 +563,10 @@ class _Interpreter(Visitor):
         return True
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
-        return tuple(self._visit_expr(x, ctx) for x in e.args)
+        return tuple(self._visit_expr(x, ctx) for x in e.elts)
 
     def _visit_list_expr(self, e: ListExpr, ctx: Context):
-        return [self._visit_expr(x, ctx) for x in e.args]
+        return [self._visit_expr(x, ctx) for x in e.elts]
 
     def _visit_list_ref(self, e: ListRef, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
@@ -611,13 +611,13 @@ class _Interpreter(Visitor):
             return [arr[i] for i in range(start, stop)]
 
     def _visit_list_set(self, e: ListSet, ctx: Context):
-        value = self._visit_expr(e.array, ctx)
+        value = self._visit_expr(e.value, ctx)
         if not isinstance(value, list):
             raise TypeError(f'expected a list, got {value}')
         array = copy.deepcopy(value) # make a copy
 
         slices = []
-        for s in e.slices:
+        for s in e.indices:
             val = self._visit_expr(s, ctx)
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
@@ -625,7 +625,7 @@ class _Interpreter(Visitor):
                 raise TypeError(f'expected an integer slice, got {val}')
             slices.append(int(val))
 
-        val = self._visit_expr(e.value, ctx)
+        val = self._visit_expr(e.expr, ctx)
         for idx in slices[:-1]:
             if not isinstance(array, list):
                 raise TypeError(f'index {idx} is out of bounds for `{array}`')
@@ -684,11 +684,11 @@ class _Interpreter(Visitor):
 
     def _visit_assign(self, stmt: Assign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)
-        match stmt.binding:
+        match stmt.target:
             case NamedId():
-                self.env[stmt.binding] = val
+                self.env[stmt.target] = val
             case TupleBinding():
-                self._unpack_tuple(stmt.binding, val, ctx)
+                self._unpack_tuple(stmt.target, val, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context) -> None:
         # lookup the array
@@ -696,7 +696,7 @@ class _Interpreter(Visitor):
 
         # evaluate indices
         slices: list[int] = []
-        for slice in stmt.slices:
+        for slice in stmt.indices:
             val = self._visit_expr(slice, ctx)
             if not isinstance(val, Float):
                 raise TypeError(f'expected a real number slice, got {val}')
@@ -785,8 +785,14 @@ class _Interpreter(Visitor):
         test = self._visit_expr(stmt.test, ctx)
         if not isinstance(test, bool):
             raise TypeError(f'expected a boolean, got {test}')
-        if not test:
-            raise AssertionError(stmt.msg)
+
+        if stmt.msg is None:
+            if not test:
+                raise AssertionError(stmt.loc.format(), 'assertion failed')
+        else:
+            msg = self._visit_expr(stmt.msg, ctx)
+            if not test:
+                raise AssertionError(stmt.loc.format(), msg)
 
     def _visit_effect(self, stmt: EffectStmt, ctx: Context):
         self._visit_expr(stmt.expr, ctx)
@@ -815,17 +821,17 @@ class DefaultInterpreter(Interpreter):
     All operations are correctly-rounded.
     """
 
-    ctx: Optional[Context] = None
+    ctx: Context | None = None
     """optionaly overriding context"""
 
-    def __init__(self, ctx: Optional[Context] = None):
+    def __init__(self, ctx: Context | None = None):
         self.ctx = ctx
 
     def eval(
         self,
         func: Function,
         args: Collection[Any],
-        ctx: Optional[Context] = None
+        ctx: Context | None = None
     ):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got {func}')

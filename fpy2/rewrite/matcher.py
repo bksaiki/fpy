@@ -215,18 +215,18 @@ class _MatcherInst(Visitor):
 
     def _visit_tuple_expr(self, e: TupleExpr, pat: TupleExpr):
         # check if #elements are the same
-        if len(e.args) != len(pat.args):
+        if len(e.elts) != len(pat.elts):
             raise _MatchFailure(f'matching {pat} against {e}')
         # check if elements are the same
-        for c1, c2 in zip(e.args, pat.args):
+        for c1, c2 in zip(e.elts, pat.elts):
             self._visit_expr(c1, c2)
 
     def _visit_list_expr(self, e: ListExpr, pat: ListExpr):
         # check if #elements are the same
-        if len(e.args) != len(pat.args):
+        if len(e.elts) != len(pat.elts):
             raise _MatchFailure(f'matching {pat} against {e}')
         # check if elements are the same
-        for c1, c2 in zip(e.args, pat.args):
+        for c1, c2 in zip(e.elts, pat.elts):
             self._visit_expr(c1, c2)
 
     def _visit_list_ref(self, e: ListRef, pat: ListRef):
@@ -251,12 +251,12 @@ class _MatcherInst(Visitor):
                 raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_list_set(self, e: ListSet, pat: ListSet):
-        if len(e.slices) != len(pat.slices):
+        if len(e.indices) != len(pat.indices):
             raise _MatchFailure(f'matching {pat} against {e}')
-        self._visit_expr(e.array, pat.array)
-        for s1, s2 in zip(e.slices, pat.slices):
-            self._visit_expr(s1, s2)
         self._visit_expr(e.value, pat.value)
+        for s1, s2 in zip(e.indices, pat.indices):
+            self._visit_expr(s1, s2)
+        self._visit_expr(e.expr, pat.expr)
 
     def _visit_list_comp(self, e: ListComp, pat: ListComp):
         if len(e.iterables) != len(pat.iterables):
@@ -293,7 +293,7 @@ class _MatcherInst(Visitor):
                 raise _MatchFailure(f'matching {pat} against {binding}')
 
     def _visit_assign(self, stmt: Assign, pat: Assign):
-        self._visit_binding(stmt.binding, pat.binding)
+        self._visit_binding(stmt.target, pat.target)
         self._visit_expr(stmt.expr, pat.expr)
 
     def _visit_tuple_binding(self, binding: TupleBinding, pat: TupleBinding):
@@ -315,7 +315,7 @@ class _MatcherInst(Visitor):
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, pat: IndexedAssign):
         self._visit_target(stmt.var, pat.var)
-        for e, p in zip(stmt.slices, pat.slices):
+        for e, p in zip(stmt.indices, pat.indices):
             self._visit_expr(e, p)
         self._visit_expr(stmt.expr, pat.expr)
 
@@ -342,6 +342,7 @@ class _MatcherInst(Visitor):
         self._visit_block(stmt.body, pat.body)
 
     def _visit_assert(self, stmt: AssertStmt, pat: AssertStmt):
+        # TODO: message?
         self._visit_expr(stmt.test, pat.test)
 
     def _visit_effect(self, stmt: EffectStmt, pat: EffectStmt):

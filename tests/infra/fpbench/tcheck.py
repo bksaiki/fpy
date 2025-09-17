@@ -1,6 +1,6 @@
 import fpy2 as fp
 
-from fpy2.analysis import TypeCheck
+from fpy2.analysis import TypeInfer
 
 from .fetch import fetch_cores
 
@@ -17,7 +17,7 @@ def test_tcheck():
         if core.name not in _skip_cores:
             print('tcheck', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
-            info = TypeCheck.check(fn.ast)
+            info = TypeInfer.check(fn.ast)
             print(core.name, core.ident, info.fn_type)
 
 if __name__ == '__main__':

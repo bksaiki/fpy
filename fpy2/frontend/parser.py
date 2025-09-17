@@ -4,12 +4,12 @@ This module contains the parser for the FPy language.
 
 import ast
 
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping
 from types import FunctionType
 
 from ..ast.fpyast import *
 from ..env import ForeignEnv
-from ..number import Context, Float, Real
+from ..number import Float, Real
 from ..utils import NamedId, UnderscoreId, SourceId
 from ..ops import *
 
@@ -112,14 +112,14 @@ class FPyParserError(Exception):
     loc: Location
     why: str
     where: ast.AST
-    ctx: Optional[ast.AST]
+    ctx: ast.AST | None
 
     def __init__(
         self,
         loc: Location,
         why: str,
         where: ast.AST,
-        ctx: Optional[ast.AST] = None
+        ctx: ast.AST | None = None
     ):
         msg_lines = [why]
         match where:
@@ -772,9 +772,11 @@ class Parser:
                 return ContextStmt(name, ctx, block, loc)
             case ast.Assert():
                 test = self._parse_expr(stmt.test)
-                if stmt.msg is not None:
-                    raise FPyParserError(loc, 'FPy does not support assert messages', stmt)
-                return AssertStmt(test, None, loc)
+                if stmt.msg is None:
+                    return AssertStmt(test, None, loc)
+                else:
+                    msg = self._parse_expr(stmt.msg)
+                    return AssertStmt(test, msg, loc)
             case ast.Expr():
                 e = self._parse_expr(stmt.value)
                 return EffectStmt(e, loc)
@@ -842,8 +844,8 @@ class Parser:
     def _eval(
         self,
         e: ast.expr,
-        globals: Optional[Mapping[str, Any]] = None,
-        locals: Optional[Mapping[str, object]] = None
+        globals: Mapping[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None
     ):
         globals = None if globals is None else dict(globals)
         return eval(ast.unparse(e), globals, locals)
@@ -899,8 +901,8 @@ class Parser:
         self,
         decorator_list: list[ast.expr],
         decorator: Any,
-        globals: Optional[Mapping[str, Any]] = None,
-        locals: Optional[Mapping[str, object]] = None
+        globals: Mapping[str, Any] | None = None,
+        locals: Mapping[str, object] | None = None
     ):
         """Returns the decorator AST for a particular decorator"""
         for dec in reversed(decorator_list):

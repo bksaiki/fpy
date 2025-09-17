@@ -134,40 +134,69 @@ def test_tuple5():
 
 @fpy
 def test_list1():
+    return []
+
+@fpy
+def test_list2():
+    return [1]
+
+@fpy
+def test_list3():
     return [1.0, 2.0, 3.0]
 
 @fpy
 def test_list_len1():
+    x = []
+    return len(x)
+
+
+@fpy
+def test_list_len2():
     x = [1.0, 2.0, 3.0]
     return len(x)
 
 @fpy
-def test_list_len2():
+def test_list_len3():
     x = [[1.0, 2.0, 3.0]]
     return len(x)
 
 @fpy
 def test_list_dim1():
-    x = [1.0, 2.0, 3.0]
+    x = []
     return dim(x)
 
 @fpy
 def test_list_dim2():
+    x = [1.0, 2.0, 3.0]
+    return dim(x)
+
+@fpy
+def test_list_dim3():
     x = [[1.0, 2.0], [3.0, 4.0]]
     return dim(x)
 
 @fpy
 def test_list_size1():
-    x = [1.0, 2.0, 3.0]
+    x = []
     return size(x, 0)
 
 @fpy
 def test_list_size2():
+    x = [1.0, 2.0, 3.0]
+    return size(x, 0)
+
+@fpy
+def test_list_size3():
     x = [[1.0, 2.0], [3.0, 4.0]]
     return size(x, 1)
 
 @fpy
-def test_enumerate():
+def test_enumerate1():
+    xs = []
+    return enumerate(xs)
+
+@fpy
+def test_enumerate2():
     xs = [1.0, 2.0, 3.0]
     return enumerate(xs)
 
@@ -476,10 +505,19 @@ def test_context6():
 
 
 @fpy
-def test_assert():
+def test_assert1():
     assert 0 == 0
     return 0
 
+@fpy
+def test_assert2():
+    assert 0 == 0, "assert message"
+    return 0
+
+@fpy
+def test_assert3():
+    assert 0 == 0, 1 + 1
+    return 0
 
 ### Examples
 
@@ -634,13 +672,19 @@ tests: list[Function] = [
     test_tuple4,
     test_tuple5,
     test_list1,
+    test_list2,
+    test_list3,
     test_list_len1,
     test_list_len2,
+    test_list_len3,
     test_list_dim1,
     test_list_dim2,
+    test_list_dim3,
     test_list_size1,
     test_list_size2,
-    test_enumerate,
+    test_list_size3,
+    test_enumerate1,
+    test_enumerate2,
     # test_list_zip1,
     test_list_zip2,
     test_list_zip3,
@@ -683,7 +727,9 @@ tests: list[Function] = [
     test_context4,
     test_context5,
     test_context6,
-    test_assert,
+    test_assert1,
+    test_assert2,
+    test_assert3
 ]
 
 # Examples
