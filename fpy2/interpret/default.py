@@ -146,12 +146,12 @@ class _Interpreter(Visitor):
 
     def _arg_to_value(self, arg: Any):
         match arg:
+            case Float():
+                return arg
             case int():
                 return Float.from_int(arg, ctx=INTEGER, checked=False)
             case float():
                 return Float.from_float(arg, ctx=FP64, checked=False)
-            case Float():
-                return arg
             case tuple():
                 return tuple(self._arg_to_value(x) for x in arg)
             case list():
