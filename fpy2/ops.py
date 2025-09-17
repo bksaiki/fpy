@@ -709,6 +709,7 @@ def dim(x: list, ctx: Context | None = None):
             dim += 1
             if x == []:
                 break
+            x = x[0]
         else:
             break
 
