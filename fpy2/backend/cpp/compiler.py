@@ -142,6 +142,8 @@ class _CppBackendInstance(Visitor):
 
     def _monomorphize_type(self, ty: TypeContext):
         match ty:
+            case VarTypeContext():
+                raise CppCompileError(self.func, f'types must be monomorphic `{ty}`')
             case BoolTypeContext():
                 return ty
             case RealTypeContext():

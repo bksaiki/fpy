@@ -672,6 +672,8 @@ tests: list[Function] = [
     test_tuple4,
     test_tuple5,
     test_list1,
+    test_list2,
+    test_list3,
     test_list_len1,
     test_list_len2,
     test_list_len3,

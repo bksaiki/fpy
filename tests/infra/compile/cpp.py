@@ -49,6 +49,11 @@ def _compile_obj(cpp_path: Path):
 # Unit tests
 
 _test_ignore = [
+    'test_list1', # empty list is not monomorphic
+    'test_list_len1', # empty list is not monomorphic
+    'test_list_dim1', # empty list is not monomorphic
+    'test_list_size1', # empty list is not monomorphic
+    'test_enumerate1', # empty list is not monomorphic
     'test_context_expr1',
     'test_context1',
     'test_context2',
