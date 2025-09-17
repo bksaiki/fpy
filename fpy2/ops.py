@@ -704,9 +704,14 @@ def dim(x: list, ctx: Context | None = None):
     Assumes that `x` is not a ragged tensor.
     """
     dim = 0
-    while isinstance(x, list) and len(x) > 0:
-        dim += 1
-        x = x[0]
+    while True:
+        if isinstance(x, list):
+            dim += 1
+            if x == []:
+                break
+        else:
+            break
+
     if ctx is None:
         return Float.from_int(dim)
     else:
