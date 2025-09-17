@@ -4,7 +4,7 @@ Type checking tests
 
 import fpy2 as fp
 
-from fpy2.analysis import TypeCheck
+from fpy2.analysis import TypeInfer
 
 from .defs import tests, examples
 
@@ -18,17 +18,17 @@ _modules = [
 def _test_tcheck_unit():
     for core in tests + examples:
         assert isinstance(core, fp.Function)
-        info = TypeCheck.check(core.ast)
+        info = TypeInfer.check(core.ast)
         print(core.name, info.fn_type)
 
 def _test_tcheck_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
-                info = TypeCheck.check(obj.ast)
+                info = TypeInfer.check(obj.ast)
                 print(obj.name, info.fn_type)
             elif isinstance(obj, fp.Primitive):
-                fn_ty = TypeCheck.infer_primitive(obj)
+                fn_ty = TypeInfer.infer_primitive(obj)
                 print(obj.name, fn_ty)
 
 def test_tcheck():

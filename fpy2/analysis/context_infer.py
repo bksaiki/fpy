@@ -15,7 +15,7 @@ from ..utils import Gensym, NamedId, Unionfind
 
 from .context_types import *
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
-from .type_check import TypeCheck, TypeAnalysis
+from .type_infer import TypeInfer, TypeAnalysis
 from .types import *
 
 class ContextInferError(Exception):
@@ -699,7 +699,7 @@ class _ContextInferPrimitive:
 
     def infer(self) -> FunctionTypeContext:
         # perform standard type inference
-        fn_ty = TypeCheck.infer_primitive(self.prim)
+        fn_ty = TypeInfer.infer_primitive(self.prim)
 
         # interpret primitive context
         ctx = self._fresh_context_var()
@@ -748,7 +748,7 @@ class ContextInfer:
         if def_use is None:
             def_use = DefineUse.analyze(func)
 
-        type_info = TypeCheck.check(func, def_use)
+        type_info = TypeInfer.check(func, def_use)
         inst = ContextTypeInferInstance(func, def_use, type_info)
         return inst.infer()
 

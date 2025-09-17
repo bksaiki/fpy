@@ -14,4 +14,4 @@ from .reachability import Reachability
 
 from .syntax_check import SyntaxCheck, FPySyntaxError
 
-from .type_check import TypeCheck, TypeAnalysis, TypeInferError
+from .type_infer import TypeInfer, TypeAnalysis, TypeInferError

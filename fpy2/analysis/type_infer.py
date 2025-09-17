@@ -150,7 +150,7 @@ class TypeAnalysis:
         return self.fn_type.return_type
 
 
-class _TypeCheckInstance(Visitor):
+class _TypeInferInstance(Visitor):
     """Single-use instance of type checking."""
 
     func: FuncDef
@@ -391,7 +391,7 @@ class _TypeCheckInstance(Visitor):
                 # calling a primitive
 
                 # type check the primitive and instantiate
-                fn_ty = TypeCheck.infer_primitive(e.fn)
+                fn_ty = TypeInfer.infer_primitive(e.fn)
                 fn_ty = cast(FunctionType, self._instantiate(fn_ty))
 
                 # check arity
@@ -410,7 +410,7 @@ class _TypeCheckInstance(Visitor):
                 if e.fn.sig is None:
                     # type checking not run
                     # TODO: guard against recursion
-                    fn_info = TypeCheck.check(e.fn.ast)
+                    fn_info = TypeInfer.check(e.fn.ast)
                     fn_ty = fn_info.fn_type
                 else:
                     fn_ty = e.fn.sig
@@ -717,7 +717,7 @@ class _TypeInferPrimitive:
 ###########################################################
 # Type checker
 
-class TypeCheck:
+class TypeInfer:
     """
     Type inference for the FPy language.
 
@@ -748,7 +748,7 @@ class TypeCheck:
 
         if def_use is None:
             def_use = DefineUse.analyze(func)
-        inst = _TypeCheckInstance(func, def_use)
+        inst = _TypeInferInstance(func, def_use)
         return inst.analyze()
 
     @staticmethod
