@@ -9,10 +9,12 @@ from typing import Iterable
 
 from ...ast import *
 from ...analysis import (
-    ContextAnalysis, ContextInfer, ContextInferError, TypeContext, TupleContext,
+    ContextAnalysis, ContextInfer, ContextInferError,
     DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
     TypeAnalysis, TypeCheck, TypeInferError
 )
+from ...analysis.types import *
+from ...analysis.context_types import *
 from ...function import Function
 from ...number import (
     RM,
@@ -23,7 +25,6 @@ from ...number import (
 )
 from ...primitive import Primitive
 from ...transform import ContextInline
-from ...analysis.types import *
 from ...utils import Gensym, enum_repr
 
 from ..backend import Backend, CompileError
@@ -135,8 +136,8 @@ class _CppBackendInstance(Visitor):
                 return self.ctx_args[ctx]
             case Context():
                 return ctx
-            case TupleContext():
-                return TupleContext(self._monomorphize_context(c) for c in ctx.elts)
+            case TupleTypeContext():
+                return TupleTypeContext(self._monomorphize_context(c) for c in ctx.elts)
             case _:
                 raise RuntimeError(f'unreachable: {ctx}')
 
@@ -180,7 +181,7 @@ class _CppBackendInstance(Visitor):
                 return CppScalar.BOOL
             case RealType(), _:
                 return self._compile_context(ctx)
-            case TupleType(), TupleContext():
+            case TupleType(), TupleTypeContext():
                 return CppTuple(self._compile_type(t, ctx) for t, ctx in zip(ty.elts, ctx.elts))
             case ListType(), _:
                 return CppList(self._compile_type(ty.elt, ctx))

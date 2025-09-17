@@ -21,21 +21,30 @@ the context in which the function is called (this is usually a variable).
 """
 
 from abc import ABC, abstractmethod
-from typing import Iterable
+from typing import Iterable, TypeAlias
 
 from ..number import Context
 from ..utils import NamedId, default_repr
 from .types import *
 
+__all__ = [
+    'TypeContext',
+    'VarTypeContext',
+    'BoolTypeContext',
+    'RealTypeContext',
+    'ContextTypeContext',
+    'TupleTypeContext',
+    'ListTypeContext',
+    'FunctionTypeContext',
+    'ContextParam'
+]
+
+
+ContextParam: TypeAlias = NamedId | Context
+
 @default_repr
 class TypeContext(ABC):
     """Base class for all FPy context types."""
-
-    @abstractmethod
-    @classmethod
-    def from_type(self, ty: Type, ctx: Context | NamedId | None):
-        """Constructs a context type from a standard FPy type and a context."""
-        ...
 
     @abstractmethod
     def as_type(self) -> Type:
@@ -53,11 +62,11 @@ class TypeContext(ABC):
         ...
 
     @abstractmethod
-    def subst(self, subst: dict[NamedId, Context | NamedId]) -> 'TypeContext':
+    def subst(self, subst: dict[NamedId, ContextParam]) -> 'TypeContext':
         """Substitutes context variables in the type."""
         ...
 
-    def _subst(self, ctx: Context | NamedId, subst: dict[NamedId, Context | NamedId]) -> Context | NamedId:
+    def _subst(self, ctx: ContextParam, subst: dict[NamedId, ContextParam]) -> ContextParam:
         if isinstance(ctx, NamedId) and ctx in subst:
             return subst[ctx]
         else:
@@ -84,14 +93,6 @@ class VarTypeContext(TypeContext):
     def __hash__(self):
         return hash(self.name)
 
-    @classmethod
-    def from_type(self, ty: Type, ctx: Context | NamedId | None):
-        if not isinstance(ty, VarType):
-            raise TypeError(f'expected a \'VarType\', got {ty}')
-        if ctx is not None:
-            raise ValueError(f'cannot attach context to type variable {ty}')
-        return VarTypeContext(ty.name)
-
     def as_type(self):
         return VarType(self.name)
 
@@ -101,20 +102,12 @@ class VarTypeContext(TypeContext):
     def free_vars(self) -> set[NamedId]:
         return set()
 
-    def subst(self, subst: dict[NamedId, Context | NamedId]) -> TypeContext:
+    def subst(self, subst: dict[NamedId, ContextParam]) -> TypeContext:
         return self
 
 
 class BoolTypeContext(TypeContext):
     """Type of boolean values"""
-
-    @classmethod
-    def from_type(self, ty: Type, ctx: Context | NamedId | None):
-        if not isinstance(ty, BoolType):
-            raise TypeError(f'expected a \'BoolType\', got {ty}')
-        if ctx is not None:
-            raise ValueError(f'cannot attach context to boolean type {ty}')
-        return BoolTypeContext()
 
     def as_type(self):
         return BoolType()
@@ -125,26 +118,18 @@ class BoolTypeContext(TypeContext):
     def free_vars(self) -> set[NamedId]:
         return set()
 
-    def subst(self, subst: dict[NamedId, Context | NamedId]) -> TypeContext:
+    def subst(self, subst: dict[NamedId, ContextParam]) -> TypeContext:
         return self
 
 
 class RealTypeContext(TypeContext):
     """Type of real numbers with an associated context."""
 
-    ctx: Context | NamedId
+    ctx: ContextParam
     """Rounding context"""
 
-    def __init__(self, ctx: Context | NamedId):
+    def __init__(self, ctx: ContextParam):
         self.ctx = ctx
-
-    @classmethod
-    def from_type(self, ty: Type, ctx: Context | NamedId | None):
-        if not isinstance(ty, RealType):
-            raise TypeError(f'expected a \'RealType\', got {ty}')
-        if ctx is None:
-            raise ValueError(f'missing context for real type {ty}')
-        return RealTypeContext(ctx)
 
     def as_type(self):
         return RealType()
@@ -158,20 +143,12 @@ class RealTypeContext(TypeContext):
         else:
             return set()
 
-    def subst(self, subst: dict[NamedId, Context | NamedId]) -> TypeContext:
+    def subst(self, subst: dict[NamedId, ContextParam]) -> TypeContext:
         return RealTypeContext(self._subst(self.ctx, subst))
 
 
 class ContextTypeContext(TypeContext):
     """Type of rounding contexts."""
-
-    @classmethod
-    def from_type(self, ty: Type, ctx: Context | NamedId | None):
-        if not isinstance(ty, ContextType):
-            raise TypeError(f'expected a \'ContextType\', got {ty}')
-        if ctx is not None:
-            raise ValueError(f'cannot attach context to context type {ty}')
-        return ContextTypeContext()
 
     def as_type(self):
         return ContextType()
@@ -182,7 +159,7 @@ class ContextTypeContext(TypeContext):
     def free_vars(self) -> set[NamedId]:
         return set()
 
-    def subst(self, subst: dict[NamedId, Context | NamedId]) -> TypeContext:
+    def subst(self, subst: dict[NamedId, ContextParam]) -> TypeContext:
         return self
 
 
@@ -194,14 +171,6 @@ class TupleTypeContext(TypeContext):
 
     def __init__(self, *elts: TypeContext):
         self.elts = elts
-
-    @classmethod
-    def from_type(self, ty: Type, ctx: Context | NamedId | None):
-        if not isinstance(ty, TupleType):
-            raise TypeError(f'expected a \'TupleType\', got {ty}')
-        if ctx is not None:
-            raise ValueError(f'cannot attach context to tuple type {ty}')
-        return TupleTypeContext(*[TypeContext.from_type(elt, None) for elt in ty.elts])
 
     def as_type(self):
         return TupleType(*[elt.as_type() for elt in self.elts])
@@ -215,7 +184,7 @@ class TupleTypeContext(TypeContext):
             fvs |= elt.free_vars()
         return fvs
 
-    def subst(self, subst: dict[NamedId, Context | NamedId]) -> TypeContext:
+    def subst(self, subst: dict[NamedId, ContextParam]) -> TypeContext:
         return TupleTypeContext(*[elt.subst(subst) for elt in self.elts])
 
 
@@ -228,14 +197,6 @@ class ListTypeContext(TypeContext):
     def __init__(self, elt: TypeContext):
         self.elt = elt
 
-    @classmethod
-    def from_type(self, ty: Type, ctx: Context | NamedId | None):
-        if not isinstance(ty, ListType):
-            raise TypeError(f'expected a \'ListType\', got {ty}')
-        if ctx is not None:
-            raise ValueError(f'cannot attach context to list type {ty}')
-        return ListTypeContext(TypeContext.from_type(ty.elt, None))
-
     def as_type(self):
         return ListType(self.elt.as_type())
 
@@ -245,60 +206,48 @@ class ListTypeContext(TypeContext):
     def free_vars(self) -> set[NamedId]:
         return self.elt.free_vars()
 
-    def subst(self, subst: dict[NamedId, Context | NamedId]) -> TypeContext:
+    def subst(self, subst: dict[NamedId, ContextParam]) -> TypeContext:
         return ListTypeContext(self.elt.subst(subst))
 
 
 class FunctionTypeContext(TypeContext):
     """Function type with caller context."""
 
-    ctx: Context | NamedId
+    ctx: ContextParam
     """caller context"""
 
-    arg_types: tuple[TypeContext, ...]
+    args: tuple[TypeContext, ...]
     """argument types"""
 
-    ret_type: TypeContext
+    ret: TypeContext
     """return type"""
 
-    def __init__(self, ctx: Context | NamedId, arg_types: Iterable[TypeContext], ret_type: TypeContext):
+    def __init__(self, ctx: ContextParam, args: Iterable[TypeContext], ret: TypeContext):
         self.ctx = ctx
-        self.arg_types = tuple(arg_types)
-        self.ret_type = ret_type
-
-    @classmethod
-    def from_type(self, ty: Type, ctx: Context | NamedId | None):
-        if not isinstance(ty, FunctionType):
-            raise TypeError(f'expected a \'FunctionType\', got {ty}')
-        if ctx is None:
-            raise ValueError(f'missing caller context for function type {ty}')
-        return FunctionTypeContext(
-            ctx,
-            [TypeContext.from_type(arg_ty, None) for arg_ty in ty.arg_types],
-            TypeContext.from_type(ty.return_type, None)
-        )
+        self.args = tuple(args)
+        self.ret = ret
 
     def as_type(self):
         return FunctionType(
-            [arg_ty.as_type() for arg_ty in self.arg_types],
-            self.ret_type.as_type()
+            [arg_ty.as_type() for arg_ty in self.args],
+            self.ret.as_type()
         )
 
     def format(self) -> str:
-        return f'function[{", ".join(arg.format() for arg in self.arg_types)}] -> {self.ret_type.format()} [{self.ctx}]'
+        return f'function[{", ".join(arg.format() for arg in self.args)}] -> {self.ret.format()} [{self.ctx}]'
 
     def free_vars(self) -> set[NamedId]:
         fvs: set[NamedId] = set()
         if isinstance(self.ctx, NamedId):
             fvs.add(self.ctx)
-        for arg in self.arg_types:
+        for arg in self.args:
             fvs |= arg.free_vars()
-        fvs |= self.ret_type.free_vars()
+        fvs |= self.ret.free_vars()
         return fvs
 
-    def subst(self, subst: dict[NamedId, Context | NamedId]) -> TypeContext:
+    def subst(self, subst: dict[NamedId, ContextParam]) -> TypeContext:
         return FunctionTypeContext(
             self._subst(self.ctx, subst),
-            [arg.subst(subst) for arg in self.arg_types],
-            self.ret_type.subst(subst)
+            [arg.subst(subst) for arg in self.args],
+            self.ret.subst(subst)
         )
