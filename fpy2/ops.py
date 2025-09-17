@@ -697,14 +697,14 @@ def empty(n: Real, ctx: Context | None = None) -> list:
         raise ValueError(f'Invalid list size: {n}')
     return [UNINIT for _ in range(int(n))]
 
-def dim(x: list | tuple, ctx: Context | None = None):
+def dim(x: list, ctx: Context | None = None):
     """
     Returns the number of dimensions of the tensor `x`.
 
     Assumes that `x` is not a ragged tensor.
     """
     dim = 0
-    while isinstance(x, (list, tuple)):
+    while isinstance(x, list) and len(x) > 0:
         dim += 1
         x = x[0]
     if ctx is None:
@@ -712,7 +712,7 @@ def dim(x: list | tuple, ctx: Context | None = None):
     else:
         return ctx.round(dim)
 
-def size(x: list | tuple, dim: Real, ctx: Context | None = None):
+def size(x: list, dim: Real, ctx: Context | None = None):
     """
     Returns the size of the dimension `dim` of the tensor `x`.
 

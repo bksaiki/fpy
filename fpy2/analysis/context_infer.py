@@ -401,7 +401,7 @@ class ContextTypeInferInstance(Visitor):
         # -------------------------------------
         #         C, Γ |- e : list T
         if len(e.elts) == 0:
-            raise NotImplementedError
+            return self._cvt_arg_type(self._lookup_ty(e))
         else:
             # type checking ensures the base type is the same
             elts = [self._visit_expr(arg, ctx) for arg in e.elts]
