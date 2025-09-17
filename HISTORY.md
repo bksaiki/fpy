@@ -1,5 +1,32 @@
 # Version History
 
+## [0.0.11] - 2025-09-17
+### Features:
+ - Backend
+   - compiler to C++ (experimental)
+ - Language
+   - contexts are first-class objects
+   - context constructors are just functions
+   - `fpy` and `fpy_primitive` decorators accept explicit keywords
+      - all metadata goes passed as a dictionary to the `meta` keyword
+   - added native support for `len`
+ - Analyses
+   - added reachability analysis
+   - added `ContextType` to the type system
+   - cleaned up context inference
+ - Libraries
+  - vector library (`fpy2.libraries.vector`)
+  - matrix library (`fpy2.libraries.matrix`)
+
+### Changes:
+- Analyses
+  - rewrote `DefineUse` analysis
+
+### Fixes:
+ - fixed evaluation of `enumerate`
+ - fixed evaluation of `dim` for empty lists
+
+
 ## [0.0.10] - 2025-08-20
 ### Features:
  - Library
