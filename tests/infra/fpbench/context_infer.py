@@ -24,7 +24,7 @@ _skip_cores = [
 def test_context_infer():
     for core in fetch_cores().all_cores():
         if core.name not in _skip_cores:
-            print('tcheck', core.name, core.ident)
+            print('context infer', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
             ast = ContextInline.apply(fn.ast, fn.env)
             info = ContextInfer.infer(ast)

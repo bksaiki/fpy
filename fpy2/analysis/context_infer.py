@@ -263,7 +263,7 @@ class ContextTypeInferInstance(Visitor):
             case Empty():
                 # empty operator
                 # C, Γ |- empty e : list T
-                raise NotImplementedError(e)
+                return self._cvt_arg_type(self._lookup_ty(e))
             case Enumerate():
                 # enumerate operator
                 #          C, Γ |- e : list T
@@ -342,7 +342,8 @@ class ContextTypeInferInstance(Visitor):
         match e.fn:
             case None:
                 # calling None => can't conclude anything
-                return self._fresh_context_var()
+                ty = self._cvt_arg_type(self._lookup_ty(e))
+                return ty
             case Primitive():
                 # calling a primitive => can't conclude anything
                 fn_ty = ContextInfer.infer_primitive(e.fn)
@@ -564,7 +565,7 @@ class ContextTypeInferInstance(Visitor):
 
         # visit body
         self._visit_block(func.body, body_ctx)
-        assert self.ret_ty is not None # function has no return statement
+        assert isinstance(self.ret_ty, TypeContext) # function has no return statement
 
         # generalize the function context
         arg_types = [self._resolve(ty) for ty in arg_types]

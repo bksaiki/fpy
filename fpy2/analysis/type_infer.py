@@ -140,6 +140,7 @@ class TypeAnalysis:
     fn_type: FunctionType
     by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
+    tvars: Unionfind[Type]
 
     @property
     def arg_types(self):
@@ -181,7 +182,13 @@ class _TypeInferInstance(Visitor):
 
     def _resolve_type(self, ty: Type):
         match ty:
-            case BoolType() | RealType() | ContextType() | VarType():
+            case VarType():
+                ty = self.tvars.get(ty, ty)
+                if isinstance(ty, VarType):
+                    return ty
+                else:
+                    return self._resolve_type(ty)
+            case BoolType() | RealType() | ContextType():
                 return self.tvars.get(ty, ty)
             case TupleType():
                 elts = [self._resolve_type(elt) for elt in ty.elts]
@@ -386,7 +393,8 @@ class _TypeInferInstance(Visitor):
         match e.fn:
             case None:
                 # unbound call
-                return self._fresh_type_var()
+                ty = self._fresh_type_var()
+                return ty
             case Primitive():
                 # calling a primitive
 
@@ -682,7 +690,7 @@ class _TypeInferInstance(Visitor):
             e: self._resolve_type(ty).subst(subst)
             for e, ty in self.by_expr.items()
         }
-        return TypeAnalysis(fn_ty, by_defs, by_expr)
+        return TypeAnalysis(fn_ty, by_defs, by_expr, self.tvars)
 
 ###########################################################
 # Primitives
