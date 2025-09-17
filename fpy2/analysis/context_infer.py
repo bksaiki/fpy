@@ -37,7 +37,7 @@ class ContextAnalysis:
         return self.func_ty.args
 
     @property
-    def return_types(self):
+    def return_type(self):
         return self.func_ty.ret
 
 
