@@ -619,7 +619,10 @@ class _TypeInferInstance(Visitor):
             self._set_type(phi, ty)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        self._visit_expr(stmt.ctx, None)
+        ty = self._visit_expr(stmt.ctx, None)
+        if isinstance(stmt.target, NamedId):
+            d = self.def_use.find_def_from_site(stmt.target, stmt)
+            self._set_type(d, ty)
         self._visit_block(stmt.body, None)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):

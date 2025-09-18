@@ -18,7 +18,7 @@ from ..primitive import Primitive
 
 from .interpreter import Interpreter, FunctionReturnError
 
-ScalarVal: TypeAlias = bool | Float
+ScalarVal: TypeAlias = bool | Float | Context
 """Type of scalar values in FPy programs."""
 TensorVal: TypeAlias = list
 """Type of list values in FPy programs."""
@@ -778,6 +778,8 @@ class _Interpreter(Visitor):
         round_ctx = self._visit_expr(stmt.ctx, REAL)
         if not isinstance(round_ctx, Context):
             raise TypeError(f'expected a context, got `{round_ctx}`')
+        if isinstance(stmt.target, NamedId):
+            self.env[stmt.target] = round_ctx
         # evaluate the body under the new context
         self._visit_block(stmt.body, round_ctx)
 

@@ -802,6 +802,8 @@ class _CppBackendInstance(Visitor):
     def _visit_context(self, stmt: ContextStmt, ctx: _CompileCtx):
         if not isinstance(stmt.ctx, ForeignVal):
             raise CppCompileError(self.func, f'Rounding context cannot be compiled `{stmt.ctx}`')
+        if isinstance(stmt.target, NamedId):
+            raise CppCompileError(self.func, f'Cannot bind rounding context in C++: `{stmt.format()}`')
         rctx = stmt.ctx.val
         cpp_ctx = self._compile_type(RealTypeContext(rctx))
         if cpp_ctx.is_float():

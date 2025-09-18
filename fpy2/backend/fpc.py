@@ -893,6 +893,10 @@ class _FPCoreCompileInstance(Visitor):
                 raise NotImplementedError(repr(data))
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
+        # check if the context is bound
+        if isinstance(stmt.target, NamedId):
+            raise FPCoreCompileError('Context statements cannot bind to a variable', stmt.target)
+
         body = self._visit_block(stmt.body, ctx)
         # extract a context value
         match stmt.ctx:

@@ -665,7 +665,7 @@ class Parser:
             case None:
                 return UnderscoreId()
             case ast.Name():
-                return var.id
+                return NamedId(var.id)
             case _:
                 loc = self._parse_location(var)
                 raise FPyParserError(loc, '`Context` can only be optionally bound to an identifier`', var, item)

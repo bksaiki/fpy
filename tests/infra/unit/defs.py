@@ -108,6 +108,12 @@ def test_context_expr1():
     return 1
 
 @fpy
+def test_context_expr2():
+    x = 8
+    ctx = MPFixedContext(x, RM.RTZ)
+    return 1
+
+@fpy
 def test_tuple1():
     return (1.0, 2.0, 3.0)
 
@@ -503,6 +509,20 @@ def test_context6():
             z += i * i
         return z
 
+@fp.fpy
+def test_context7():
+    with fp.MPFixedContext(-4) as ctx:
+        a = const_pi()
+    return a, ctx
+
+@fp.fpy
+def test_context8():
+    with fp.MPFixedContext(-4) as ctx:
+        a = const_pi()
+        with fp.IEEEContext(5, 12):
+            b = const_pi()
+            with ctx:
+                return a / b
 
 @fpy
 def test_assert1():
@@ -666,6 +686,7 @@ tests: list[Function] = [
     test_ife3,
     test_ife4,
     test_context_expr1,
+    test_context_expr2,
     test_tuple1,
     test_tuple2,
     test_tuple3,
@@ -727,6 +748,8 @@ tests: list[Function] = [
     test_context4,
     test_context5,
     test_context6,
+    test_context7,
+    test_context8,
     test_assert1,
     test_assert2,
     test_assert3

@@ -18,6 +18,8 @@ _modules = [
 
 _unit_ignore = [
     'test_context_expr1',
+    'test_context_expr2',
+    'test_context8',
     'keep_p_1'
 ]
 

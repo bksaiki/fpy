@@ -3,7 +3,10 @@ from .defs import tests, examples
 
 _ignore = [
     'test_context_expr1',
+    'test_context_expr2',
     'test_context6',
+    'test_context7',
+    'test_context8',
     'keep_p_1',
 ]
 

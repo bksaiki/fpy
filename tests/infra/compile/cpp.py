@@ -55,11 +55,15 @@ _test_ignore = [
     'test_list_size1', # empty list is not monomorphic
     'test_enumerate1', # empty list is not monomorphic
     'test_context_expr1',
+    'test_context_expr2',
     'test_context1',
     'test_context2',
     'test_context3',
     'test_context4',
     'test_context5',
+    # 'test_context6',
+    'test_context7',
+    'test_context8',
     'test_assert2',
     'test_assert3',
 ]

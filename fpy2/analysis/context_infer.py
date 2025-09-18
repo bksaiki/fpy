@@ -9,7 +9,7 @@ from typing import cast
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
-from ..number import Context
+from ..number import Context, REAL
 from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind
 
@@ -514,9 +514,13 @@ class ContextTypeInferInstance(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: ContextParam):
         if not isinstance(stmt.ctx, ForeignVal) or not isinstance(stmt.ctx.val, Context):
-            raise ContextInferError(f'cannot infer context for `{stmt.ctx}`')
-
+            raise ContextInferError(f'cannot infer context for `{stmt.ctx.format()}` at `{stmt.format()}`')
         body_ctx = stmt.ctx.val
+
+        ctx_ty = self._visit_expr(stmt.ctx, REAL) # execute under a real rounding context
+        if isinstance(stmt.target, NamedId):
+            d = self.def_use.find_def_from_site(stmt.target, stmt)
+            self._set_context(d, ctx_ty)
         self._visit_block(stmt.body, body_ctx)
         return ctx
 

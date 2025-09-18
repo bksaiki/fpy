@@ -287,7 +287,13 @@ class _FormatterInstance(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         context = self._visit_expr(stmt.ctx, ctx)
-        self._add_line(f'with {context} as {str(stmt.target)}:', ctx)
+        match stmt.target:
+            case NamedId():
+                self._add_line(f'with {context} as {str(stmt.target)}:', ctx)
+            case UnderscoreId():
+                self._add_line(f'with {context}:', ctx)
+            case _:
+                raise RuntimeError('unreachable', stmt.target)
         self._visit_block(stmt.body, ctx + 1)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
