@@ -312,6 +312,9 @@ class _FormatterInstance(Visitor):
         s = self._visit_expr(stmt.expr, ctx)
         self._add_line(f'return {s}', ctx)
 
+    def _visit_pass(self, stmt: PassStmt, ctx: _Ctx):
+        self._add_line('pass', ctx)
+
     def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
@@ -349,20 +352,6 @@ class _FormatterInstance(Visitor):
                     self._add_line(f'\'{k}\': {v},', ctx + 2)
                 self._add_line('}', ctx + 1)
             self._add_line(')', ctx)
-
-    # def _format_decorator(self, props: dict[str, Any], arg_str: str, ctx: _Ctx):
-    #     if len(props) == 0:
-    #         self._add_line('@fpy', ctx)
-    #     elif len(props) == 1:
-    #         k = list(props.keys())[0]
-    #         v = self._format_data(props[k], arg_str)
-    #         self._add_line(f'@fpy({k}={v})', ctx)
-    #     else:
-    #         self._add_line('@fpy(', ctx)
-    #         for k, data in props.items():
-    #             v = self._format_data(data, arg_str)
-    #             self._add_line(f'{k}={v},', ctx + 1)
-    #         self._add_line(')', ctx)
 
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
         # TODO: type annotation

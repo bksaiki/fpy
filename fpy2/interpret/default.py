@@ -803,6 +803,9 @@ class _Interpreter(Visitor):
         x = self._visit_expr(stmt.expr, ctx)
         raise FunctionReturnError(x)
 
+    def _visit_pass(self, stmt: PassStmt, ctx: Context):
+        pass
+
     def _visit_block(self, block: StmtBlock, ctx: Context):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)

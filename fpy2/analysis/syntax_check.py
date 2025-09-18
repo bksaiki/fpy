@@ -323,6 +323,9 @@ class SyntaxCheckInstance(Visitor):
     def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx):
         return self._visit_expr(stmt.expr, ctx)
 
+    def _visit_pass(self, stmt: PassStmt, ctx: _Ctx):
+        return ctx.env
+
     def _visit_block(self, block: StmtBlock, ctx: _Ctx):
         env = ctx.env
         for stmt in block.stmts:

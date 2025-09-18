@@ -929,6 +929,9 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_return(self, stmt: ReturnStmt, ctx: None) -> fpc.Expr:
         return self._visit_expr(stmt.expr, ctx)
 
+    def _visit_pass(self, stmt: PassStmt, ctx: None) -> fpc.Expr:
+        return ctx
+
     def _visit_block(self, block: StmtBlock, ctx: fpc.Expr | None):
         if ctx is None:
             e = self._visit_statement(block.stmts[-1], None)

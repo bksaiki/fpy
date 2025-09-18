@@ -198,6 +198,7 @@ __all__ = [
     'AssertStmt',
     'EffectStmt',
     'ReturnStmt',
+    'PassStmt',
 
     # Function definition
     'Argument',
@@ -1659,6 +1660,17 @@ class ReturnStmt(Stmt):
             isinstance(other, ReturnStmt)
             and self.expr.is_equiv(other.expr)
         )
+
+class PassStmt(Stmt):
+    """FPy AST: pass (skip) statement"""
+    __slots__ = ()
+
+    def __init__(self, loc: Location | None):
+        super().__init__(loc)
+
+    def is_equiv(self, other) -> bool:
+        return isinstance(other, PassStmt)
+
 
 class Argument(Ast):
     """FPy AST: function argument"""

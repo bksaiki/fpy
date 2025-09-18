@@ -780,6 +780,8 @@ class Parser:
             case ast.Expr():
                 e = self._parse_expr(stmt.value)
                 return EffectStmt(e, loc)
+            case ast.Pass():
+                return PassStmt(loc)
             case _:
                 raise FPyParserError(loc, 'statement is unsupported in FPy', stmt)
 

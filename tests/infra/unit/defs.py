@@ -539,6 +539,11 @@ def test_assert3():
     assert 0 == 0, 1 + 1
     return 0
 
+@fpy
+def test_pass1():
+    pass
+    return 0
+
 ### Examples
 
 @fpy
@@ -752,7 +757,8 @@ tests: list[Function] = [
     test_context8,
     test_assert1,
     test_assert2,
-    test_assert3
+    test_assert3,
+    test_pass1,
 ]
 
 # Examples
