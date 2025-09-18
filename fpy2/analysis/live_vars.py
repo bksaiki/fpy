@@ -164,17 +164,14 @@ class LiveVarsInstance(Visitor):
     def _visit_for(self, stmt: ForStmt, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live |= self._visit_block(stmt.body, live)
-        match stmt.target:
-            case NamedId():
-                live -= { stmt.target }
-            case TupleBinding():
-                live -= stmt.target.names()
+        live -= stmt.target.names()
         live |= self._visit_expr(stmt.iterable, None)
         return live
 
     def _visit_context(self, stmt: ContextStmt, live: _LiveSet) -> _LiveSet:
         live = set(live)
         live = self._visit_block(stmt.body, live)
+        live -= stmt.target.names()
         live |= self._visit_expr(stmt.ctx, None)
         return live
 

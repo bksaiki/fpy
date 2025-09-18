@@ -314,6 +314,12 @@ class _DefineUseInstance(DefaultVisitor):
                 self._add_def(var, d)
             ctx[var] = d
 
+    def _visit_context(self, stmt: ContextStmt, ctx: DefinitionCtx):
+        self._visit_expr(stmt.ctx, ctx)
+        for var in stmt.target.names():
+            ctx[var] = self._add_assign(var, stmt, ctx)
+        self._visit_block(stmt.body, ctx)
+
     def _visit_statement(self, stmt: Stmt, ctx: DefinitionCtx):
         ctx_in = ctx.copy()
         super()._visit_statement(stmt, ctx)
