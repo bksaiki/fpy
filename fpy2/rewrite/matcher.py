@@ -351,6 +351,9 @@ class _MatcherInst(Visitor):
     def _visit_return(self, stmt: ReturnStmt, pat: ReturnStmt):
         self._visit_expr(stmt.expr, pat.expr)
 
+    def _visit_pass(self, stmt: PassStmt, pat: ReturnStmt):
+        pass
+
     def _visit_block(self, block: StmtBlock, pat: StmtBlock):
         # check length of block
         if len(block.stmts) != len(pat.stmts):

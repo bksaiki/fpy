@@ -42,6 +42,7 @@ _stmt_dispatch: dict[type[Stmt], str] = {
     AssertStmt: "_visit_assert",
     EffectStmt: "_visit_effect",
     ReturnStmt: "_visit_return",
+    PassStmt: "_visit_pass",
 }
 
 class Visitor(ABC):
@@ -187,6 +188,9 @@ class Visitor(ABC):
     def _visit_return(self, stmt: ReturnStmt, ctx: Any) -> Any:
         ...
 
+    @abstractmethod
+    def _visit_pass(self, stmt: PassStmt, ctx: Any) -> Any:
+        ...
 
     #######################################################
     # Block
@@ -362,6 +366,9 @@ class DefaultVisitor(Visitor):
 
     def _visit_return(self, stmt: ReturnStmt, ctx: Any):
         self._visit_expr(stmt.expr, ctx)
+
+    def _visit_pass(self, stmt: PassStmt, ctx: Any):
+        pass
 
     def _visit_block(self, block: StmtBlock, ctx: Any):
         for stmt in block.stmts:
@@ -559,6 +566,10 @@ class DefaultTransformVisitor(Visitor):
     def _visit_return(self, stmt: ReturnStmt, ctx: Any):
         expr = self._visit_expr(stmt.expr, ctx)
         s = ReturnStmt(expr, stmt.loc)
+        return s, ctx
+
+    def _visit_pass(self, stmt: PassStmt, ctx: Any):
+        s = PassStmt(stmt.loc)
         return s, ctx
 
     def _visit_block(self, block: StmtBlock, ctx: Any):

@@ -538,6 +538,9 @@ class ContextTypeInferInstance(Visitor):
         self.ret_ty = self._visit_expr(stmt.expr, ctx)
         return ctx
 
+    def _visit_pass(self, stmt: PassStmt, ctx: ContextParam):
+        return ctx
+
     def _visit_block(self, block: StmtBlock, ctx: ContextParam):
         for stmt in block.stmts:
             ctx = self._visit_statement(stmt, ctx)

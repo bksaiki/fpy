@@ -188,6 +188,9 @@ class LiveVarsInstance(Visitor):
     def _visit_return(self, stmt: ReturnStmt, live: _LiveSet) -> _LiveSet:
         return self._visit_expr(stmt.expr, None)
 
+    def _visit_pass(self, stmt: PassStmt, live: _LiveSet) -> _LiveSet:
+        return live
+
     def _visit_block(self, block: StmtBlock, live: _LiveSet) -> _LiveSet:
         live = set(live)
         for stmt in reversed(block.stmts):

@@ -834,6 +834,9 @@ class _CppBackendInstance(Visitor):
         e = self._visit_expr(stmt.expr, ctx)
         ctx.add_line(f'return {e};')
 
+    def _visit_pass(self, stmt: PassStmt, ctx: _CompileCtx):
+        pass
+
     def _visit_block(self, block: StmtBlock, ctx: _CompileCtx):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)

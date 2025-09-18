@@ -637,6 +637,9 @@ class _TypeInferInstance(Visitor):
     def _visit_return(self, stmt: ReturnStmt, ctx: None):
         self.ret_type = self._visit_expr(stmt.expr, None)
 
+    def _visit_pass(self, stmt: PassStmt, ctx: None):
+        pass
+
     def _visit_block(self, block: StmtBlock, ctx: None):
         for stmt in block.stmts:
             self._visit_statement(stmt, None)

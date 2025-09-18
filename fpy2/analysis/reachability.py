@@ -110,6 +110,10 @@ class _ReachabilityInstance(DefaultVisitor):
     def _visit_return(self, stmt: ReturnStmt, ctx: _ReachabilityCtx) -> bool:
         self.ret_stmts.add(stmt)
         return False
+    
+    def _visit_pass(self, stmt: PassStmt, ctx: _ReachabilityCtx) -> bool:
+        # OUT[s] = IN[s]
+        return ctx.is_reachable
 
     def _visit_statement(self, stmt: Stmt, ctx: _ReachabilityCtx):
         self.has_entry[stmt] = ctx.is_reachable
