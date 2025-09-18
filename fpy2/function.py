@@ -6,7 +6,6 @@ from titanfp.fpbench.fpcast import FPCore
 from . import ast as fpyast
 
 from .env import ForeignEnv
-from .frontend import fpcore_to_fpy
 from .number import Context
 
 # avoids circular dependency issues (useful for type checking)
@@ -79,6 +78,9 @@ class Function(Generic[P, R]):
         If `ignore_unknown` is set to `True`, then the syntax checker will not
         raise an exception when encountering unknown functions.
         """
+        # get around circular dependency
+        from .frontend import fpcore_to_fpy
+
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
         ir = fpcore_to_fpy(core, default_name=default_name, ignore_unknown=ignore_unknown)
