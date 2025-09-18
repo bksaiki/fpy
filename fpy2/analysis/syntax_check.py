@@ -305,7 +305,8 @@ class SyntaxCheckInstance(Visitor):
         self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.target, NamedId):
             env = env.extend(stmt.target)
-        return self._visit_block(stmt.body, _Ctx(env, False))
+        body_env = self._visit_block(stmt.body, _Ctx(env, False))
+        return body_env # no merge
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
         env = ctx.env
