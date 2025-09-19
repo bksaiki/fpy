@@ -172,6 +172,23 @@ class DefineUseAnalysis:
         """Returns the set of all variable names in the analysis"""
         return set(self.defs.keys())
 
+    def format(self):
+        lines: list[str] = []
+        for name, ds in self.defs.items():
+            lines.append(f'{name} ::=')
+            for d in ds:
+                match d:
+                    case AssignDef():
+                        lines.append(f'| assign [{d.site.format()}]')
+                    case PhiDef():
+                        lines.append(f'| phi [{d.lhs} , {d.rhs}]')
+                    case _:
+                        raise RuntimeError(f'unexpected definition: {d}')
+                if d in self.uses:
+                    for u in self.uses[d]:
+                        lines.append(f'   | use: {u.format()}')
+        return '\n'.join(lines)
+
     def find_def_from_site(self, name: NamedId, site: DefSite):
         """Finds the definition of given a (name, site) pair."""
         key = (name, site)
@@ -292,6 +309,8 @@ class _DefineUseInstance(DefaultVisitor):
                 case _:
                     raise RuntimeError(f'unreachable: {e.func}')
         for arg in e.args:
+            self._visit_expr(arg, ctx)
+        for _, arg in e.kwargs:
             self._visit_expr(arg, ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx: DefinitionCtx):

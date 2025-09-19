@@ -5,6 +5,8 @@ from .fpc import test_compile_fpc
 from .tcheck import test_tcheck
 from .purity import test_purity
 from .dead_code import test_dead_code
+from .copy_prop import test_copy_prop
+
 
 def _run_tests():
     # formatting
@@ -17,6 +19,7 @@ def _run_tests():
     test_purity()
     # transformations
     test_dead_code()
+    test_copy_prop()
     # compilation
     test_compile_fpc()
 

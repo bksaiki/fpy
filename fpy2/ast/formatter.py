@@ -23,6 +23,9 @@ class _FormatterInstance(Visitor):
         match self.ast:
             case Expr():
                 self.fmt = self._visit_expr(self.ast, 0)
+            case Argument():
+                # TODO: typing annotations
+                self.fmt = str(self.ast.name)
             case Stmt():
                 self._visit_statement(self.ast, 0)
             case StmtBlock():
