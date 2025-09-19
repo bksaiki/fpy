@@ -155,7 +155,43 @@ class _DeadCodeEliminate:
         self.func = func
         self.def_use = def_use
 
+    def _run_once(self):
+        # run one pass of dead code elimination
+        # first compute
+        # - all definitions that are unused
+        # - all phi variables that are used
+        unused_assign: set[Assign] = set()
+        unused_fv: set[NamedId] = set()
+        used_phis: set[PhiDef] = set()
+        for d, uses in self.def_use.uses.items():
+            if len(uses) == 0:   
+                if isinstance(d, AssignDef):
+                    if isinstance(d.site, FuncDef):
+                        # free variable
+                        unused_fv.add(d.name)
+                    elif isinstance(d.site, Assign) and Purity.analyze_expr(d.site.expr, self.def_use):
+                        # assignment
+                        unused_assign.add(d.site)
+            else:
+                if isinstance(d, PhiDef) and len(uses) == 0:
+                    used_phis.add(d)
+
+        # since 
+
+        raise NotImplementedError
+
     def apply(self):
+        while True:
+            # keep running until no more eliminations
+            self.func, is_changed = self._run_once()
+            if not is_changed:
+                return self.func
+
+            # changed something so try again
+            self.def_use = DefineUse.analyze(self.func)
+
+
+
         while True:
             # phi variables are virtual definitions:
             # if a phi variable is used, so are its children
@@ -195,6 +231,7 @@ class _DeadCodeEliminate:
                 return self.func
 
             # removed something so try again
+            print(self.func.format())
             self.def_use = DefineUse.analyze(self.func)
 
 

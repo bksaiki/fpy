@@ -1,6 +1,7 @@
 """Definition use analysis for FPy ASTs"""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import TypeAlias, cast
 
 from ..ast.fpyast import *
@@ -144,51 +145,98 @@ class DefinitionCtx(dict[NamedId, Definition]):
         return set(other.keys() - self.keys())
 
 
-@default_repr
+@dataclass
 class DefineUseAnalysis:
     """Result of definition-use analysis"""
-    defs: dict[NamedId, set[Definition]]
-    uses: dict[Definition, set[UseSite]]
-    stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
-    blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
-    phis: dict[Stmt, set[PhiDef]]
 
-    def __init__(self):
-        self.defs = {}
-        self.uses = {}
-        self.stmts = {}
-        self.blocks = {}
-        self.phis = {}
+    defs: dict[NamedId, set[Definition]]
+    """mapping from target name to its (re-)definitions"""
+    uses: dict[Definition, set[UseSite]]
+    """mapping from definition to its uses"""
+    stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
+    """mapping from statement to definitions in scope before and after the statement"""
+    blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
+    """mapping from statement block to definitions in scope before and after the block"""
+    phis: dict[Stmt, set[PhiDef]]
+    """mapping from statement to phi definitions introduced by the statement"""
+
+    site_to_def: dict[tuple[NamedId, DefSite], AssignDef]
+    """mapping from (name, site) to definition"""
+    use_to_def: dict[UseSite, Definition]
+    """mapping from use site to definition"""
+    successors: dict[Definition, set[Definition]]
+    """mapping from definition to its successor definitions"""
 
     @property
     def names(self) -> set[NamedId]:
         """Returns the set of all variable names in the analysis"""
         return set(self.defs.keys())
 
-    def find_def_from_site(self, name: NamedId, site: DefSite) -> AssignDef:
+    def find_def_from_site(self, name: NamedId, site: DefSite):
         """Finds the definition of given a (name, site) pair."""
-        defs = self.defs.get(name, set())
-        for d in defs:
-            if isinstance(d, AssignDef) and d.site == site:
-                return d
+        key = (name, site)
+        if key in self.site_to_def:
+            return self.site_to_def[key]
         raise KeyError(f'no definition found for {name} at {site}')
 
     def find_def_from_use(self, site: UseSite):
         """Finds the definition of a variable."""
-        # TODO: make more efficient: build inverse map?
-        for d in self.uses:
-            if site in self.uses[d]:
-                return d
+        if site in self.use_to_def:
+            return self.use_to_def[site]
         raise KeyError(f'no definition found for site {site}')
+
 
 class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""
+
     ast: FuncDef | StmtBlock
-    analysis: DefineUseAnalysis
+
+    defs: dict[NamedId, set[Definition]]
+    uses: dict[Definition, set[UseSite]]
+    stmts: dict[Stmt, tuple[DefinitionCtx, DefinitionCtx]]
+    blocks: dict[StmtBlock, tuple[DefinitionCtx, DefinitionCtx]]
+    phis: dict[Stmt, set[PhiDef]]
 
     def __init__(self, ast: FuncDef | StmtBlock):
         self.ast = ast
-        self.analysis = DefineUseAnalysis()
+        self.defs = {}
+        self.uses = {}
+        self.stmts = {}
+        self.blocks = {}
+        self.phis = {}
+
+    def _compute_site_to_def(self, defs: dict[NamedId, set[Definition]]):
+        """Computes the mapping from (name, site) to definition."""
+        sites: dict[tuple[NamedId, DefSite], AssignDef] = {}
+        for name, ds in defs.items():
+            for d in ds:
+                if isinstance(d, AssignDef):
+                    sites[(name, d.site)] = d
+        return sites
+
+    def _compute_use_to_def(self, uses: dict[Definition, set[UseSite]]):
+        """Computes the mapping from use site to definition."""
+        use_to_def: dict[UseSite, Definition] = {}
+        for d, us in uses.items():
+            for u in us:
+                use_to_def[u] = d
+        return use_to_def
+    
+    def _compute_succ(self, defs: dict[NamedId, set[Definition]]):
+        """Compute the successor definitions for each definition."""
+        succ: dict[Definition, set[Definition]] = { d: set() for ds in defs.values() for d in ds }
+        for ds in defs.values():
+            for d in ds:
+                match d:
+                    case AssignDef():
+                        if d.parent is not None:
+                            succ[d.parent].add(d)
+                    case PhiDef():
+                        succ[d.lhs].add(d)
+                        succ[d.rhs].add(d)
+                    case _:
+                        raise RuntimeError(f'unexpected definition: {d}')
+        return succ
 
     def analyze(self):
         match self.ast:
@@ -198,13 +246,17 @@ class _DefineUseInstance(DefaultVisitor):
                 self._visit_block(self.ast, DefinitionCtx())
             case _:
                 raise RuntimeError(f'unreachable case: {self.ast}')
-        return self.analysis
+
+        site_to_def = self._compute_site_to_def(self.defs)
+        use_to_def = self._compute_use_to_def(self.uses)
+        succ = self._compute_succ(self.defs)
+        return DefineUseAnalysis(self.defs, self.uses, self.stmts, self.blocks, self.phis, site_to_def, use_to_def, succ)
 
     def _add_def(self, name: NamedId, d: Definition) -> Definition:
-        if name not in self.analysis.defs:
-            self.analysis.defs[name] = set()
-        self.analysis.defs[name].add(d)
-        self.analysis.uses[d] = set()
+        if name not in self.defs:
+            self.defs[name] = set()
+        self.defs[name].add(d)
+        self.uses[d] = set()
         return d
 
     def _add_assign(self, name: NamedId, site: DefSite, ctx: DefinitionCtx) -> AssignDef:
@@ -214,7 +266,7 @@ class _DefineUseInstance(DefaultVisitor):
 
     def _add_use(self, name: NamedId, use: UseSite, ctx: DefinitionCtx):
         d = ctx[name]
-        self.analysis.uses[d].add(use)
+        self.uses[d].add(use)
 
     def _visit_var(self, e: Var, ctx: DefinitionCtx):
         if e.name not in ctx:
@@ -258,7 +310,7 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = self._visit_block(stmt.body, ctx.copy())
         # merge contexts along both paths
         # definitions cannot be introduced in the body
-        self.analysis.phis[stmt] = set()
+        self.phis[stmt] = set()
         for var in ctx:
             d_stmt = ctx[var]
             d_body = body_ctx[var]
@@ -266,7 +318,7 @@ class _DefineUseInstance(DefaultVisitor):
             # update tables if the definition is new
             if d != d_stmt and d != d_body:
                 assert isinstance(d, PhiDef)
-                self.analysis.phis[stmt].add(d)
+                self.phis[stmt].add(d)
                 self._add_def(var, d)
             ctx[var] = d
 
@@ -275,7 +327,7 @@ class _DefineUseInstance(DefaultVisitor):
         ift_ctx = self._visit_block(stmt.ift, ctx.copy())
         iff_ctx = self._visit_block(stmt.iff, ctx.copy())
         # merge contexts along both paths
-        self.analysis.phis[stmt] = set()
+        self.phis[stmt] = set()
         for var in ift_ctx.keys() & iff_ctx.keys():
             d_ift = ift_ctx[var]
             d_iff = iff_ctx[var]
@@ -284,7 +336,7 @@ class _DefineUseInstance(DefaultVisitor):
             if d != d_ift and d != d_iff:
                 assert isinstance(d, PhiDef)
                 d.is_new = var not in ctx
-                self.analysis.phis[stmt].add(d)
+                self.phis[stmt].add(d)
                 self._add_def(var, d)
             ctx[var] = d
 
@@ -293,7 +345,7 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = self._visit_block(stmt.body, ctx.copy())
         # merge contexts along both paths
         # definitions cannot be introduced in the body
-        self.analysis.phis[stmt] = set()
+        self.phis[stmt] = set()
         for var in ctx:
             d_stmt = ctx[var]
             d_body = body_ctx[var]
@@ -301,7 +353,7 @@ class _DefineUseInstance(DefaultVisitor):
             # update tables if the definition is new
             if d != d_stmt and d != d_body:
                 assert isinstance(d, PhiDef)
-                self.analysis.phis[stmt].add(d)
+                self.phis[stmt].add(d)
                 self._add_def(var, d)
             ctx[var] = d
 
@@ -314,7 +366,7 @@ class _DefineUseInstance(DefaultVisitor):
         body_ctx = self._visit_block(stmt.body, body_ctx)
         # merge contexts along both paths
         # definitions cannot be introduced in the body
-        self.analysis.phis[stmt] = set()
+        self.phis[stmt] = set()
         for var in ctx:
             d_stmt = ctx[var]
             d_body = body_ctx[var]
@@ -322,7 +374,7 @@ class _DefineUseInstance(DefaultVisitor):
             # update tables if the definition is new
             if d != d_stmt and d != d_body:
                 assert isinstance(d, PhiDef)
-                self.analysis.phis[stmt].add(d)
+                self.phis[stmt].add(d)
                 self._add_def(var, d)
             ctx[var] = d
 
@@ -335,13 +387,13 @@ class _DefineUseInstance(DefaultVisitor):
     def _visit_statement(self, stmt: Stmt, ctx: DefinitionCtx):
         ctx_in = ctx.copy()
         super()._visit_statement(stmt, ctx)
-        self.analysis.stmts[stmt] = (ctx_in, ctx.copy())
+        self.stmts[stmt] = (ctx_in, ctx.copy())
 
     def _visit_block(self, block: StmtBlock, ctx: DefinitionCtx):
         ctx_in = ctx.copy()
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
-        self.analysis.blocks[block] = (ctx_in, ctx.copy())
+        self.blocks[block] = (ctx_in, ctx.copy())
         return ctx
 
     def _visit_function(self, func: FuncDef, ctx: DefinitionCtx):
