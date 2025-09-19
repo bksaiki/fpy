@@ -195,7 +195,6 @@ class _DeadCodeEliminate:
                 return self.func
 
             # removed something so try again
-            print(self.func.format())
             self.def_use = DefineUse.analyze(self.func)
 
 
