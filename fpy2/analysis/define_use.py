@@ -222,13 +222,14 @@ class _DefineUseInstance(DefaultVisitor):
         self._add_use(e.name, e, ctx)
 
     def _visit_call(self, e: Call, ctx: DefinitionCtx):
-        match e.func:
-            case NamedId():
-                self._add_use(e.func, e, ctx)
-            case Attribute():
-                self._visit_expr(e.func, ctx)
-            case _:
-                raise RuntimeError(f'unreachable: {e.func}')
+        if e.fn is not None:
+            match e.func:
+                case NamedId():
+                    self._add_use(e.func, e, ctx)
+                case Attribute():
+                    self._visit_expr(e.func, ctx)
+                case _:
+                    raise RuntimeError(f'unreachable: {e.func}')
         for arg in e.args:
             self._visit_expr(arg, ctx)
 
