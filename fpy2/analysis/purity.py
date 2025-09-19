@@ -21,16 +21,22 @@ class _Purity(DefaultVisitor):
     Purity analysis visitor.
     """
 
-    func: FuncDef
+    ast: FuncDef | Expr
     def_use: DefineUseAnalysis
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
-        self.func = func
+    def __init__(self, ast: FuncDef | Expr, def_use: DefineUseAnalysis):
+        self.ast = ast
         self.def_use = def_use
 
     def apply(self) -> bool:
         try:
-            self._visit_function(self.func, None)
+            match self.ast:
+                case FuncDef():
+                    self._visit_function(self.ast, None)
+                case Expr():
+                    self._visit_expr(self.ast, None)
+                case _:
+                    raise RuntimeError(f'Unexpected AST node `{self.ast}`')
         except _ImpureError:
             return False
         return True
@@ -81,7 +87,15 @@ class Purity:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
-        
         if def_use is None:
             def_use = DefineUse.analyze(func)
         return _Purity(func, def_use).apply()
+
+    @staticmethod
+    def analyze_expr(expr: Expr, def_use: DefineUseAnalysis) -> bool:
+        """
+        Analyze the given expression and return True if it is pure, False otherwise.
+        """
+        if not isinstance(expr, Expr):
+            raise TypeError(f'Expected `Expr`, got {type(expr)} for {expr}')
+        return _Purity(expr, def_use).apply()

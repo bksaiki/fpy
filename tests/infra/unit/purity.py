@@ -1,3 +1,7 @@
+"""
+Tests for function purity analysis.
+"""
+
 import fpy2 as fp
 
 from .defs import tests, examples

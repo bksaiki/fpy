@@ -7,16 +7,16 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
 
-DefSite: TypeAlias = FuncDef | Argument | Stmt | ListComp
-UseSite: TypeAlias = Var | IndexedAssign
+DefSite: TypeAlias = FuncDef | Argument | Assign | ForStmt | ContextStmt | ListComp
+UseSite: TypeAlias = Var | IndexedAssign | Call
 
 
 @default_repr
 class Definition(ABC):
     """
     Definition of a variable:
-    - an assignment
-    - merging definitions from two branches
+    - an assignment (`AssignDef`)
+    - merging definitions from two branches (`PhiDef`)
     """
 
     name: NamedId
@@ -212,7 +212,7 @@ class _DefineUseInstance(DefaultVisitor):
         d = AssignDef(name, site, pred)
         return cast(AssignDef, self._add_def(name, d))
 
-    def _add_use(self, name: NamedId, use: Var | IndexedAssign, ctx: DefinitionCtx):
+    def _add_use(self, name: NamedId, use: UseSite, ctx: DefinitionCtx):
         d = ctx[name]
         self.analysis.uses[d].add(use)
 
@@ -220,6 +220,17 @@ class _DefineUseInstance(DefaultVisitor):
         if e.name not in ctx:
             raise NotImplementedError(f'undefined variable {e.name}')
         self._add_use(e.name, e, ctx)
+
+    def _visit_call(self, e: Call, ctx: DefinitionCtx):
+        match e.func:
+            case NamedId():
+                self._add_use(e.func, e, ctx)
+            case Attribute():
+                self._visit_expr(e.func, ctx)
+            case _:
+                raise RuntimeError(f'unreachable: {e.func}')
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx: DefinitionCtx):
         for iterable in e.iterables:
