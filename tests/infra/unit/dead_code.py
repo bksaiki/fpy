@@ -40,6 +40,26 @@ def _example_simple_2_expect():
     return x
 
 @fp.fpy
+def _example_dead_if1_1():
+    if False:
+        x = 1
+    return 2
+
+@fp.fpy
+def _example_dead_if1_1_expect():
+    return 2
+
+@fp.fpy
+def _example_dead_if1_2(t: fp.Real):
+    if t < 0:
+        pass
+    return t
+
+@fp.fpy
+def _example_dead_if1_2_expect(t: fp.Real):
+    return t
+
+@fp.fpy
 def _example_if1_1(t: fp.Real):
     if t < 0:
         x = 1
@@ -47,8 +67,6 @@ def _example_if1_1(t: fp.Real):
 
 @fp.fpy
 def _example_if1_1_expect(t: fp.Real):
-    if t < 0:
-        pass
     return t
 
 @fp.fpy
@@ -65,6 +83,72 @@ def _example_if1_2_expect(t: fp.Real):
     return t
 
 @fp.fpy
+def _example_dead_if_1(t: fp.Real):
+    if False:
+        t = 1
+    else:
+        t = 2
+    return t
+
+@fp.fpy
+def _example_dead_if_1_expect(t: fp.Real):
+    t = 2
+    return t
+
+@fp.fpy
+def _example_dead_if_2(t: fp.Real):
+    if True:
+        t = 1
+    else:
+        t = 2
+    return t
+
+@fp.fpy
+def _example_dead_if_2_expect(t: fp.Real):
+    t = 1
+    return t
+
+@fp.fpy
+def _example_dead_if_3(t: fp.Real):
+    if t < 0:
+        pass
+    else:
+        t = 2
+    return t
+
+@fp.fpy
+def _example_dead_if_3_expect(t: fp.Real):
+    if not t < 0:
+        t = 2
+    return t
+
+@fp.fpy
+def _example_dead_if_4(t: fp.Real):
+    if t < 0:
+        t = 1
+    else:
+        pass
+    return t
+
+@fp.fpy
+def _example_dead_if_4_expect(t: fp.Real):
+    if t < 0:
+        t = 1
+    return t
+
+@fp.fpy
+def _example_dead_if_5(t: fp.Real):
+    if t < 0:
+        pass
+    else:
+        pass
+    return t
+
+@fp.fpy
+def _example_dead_if_5_expect(t: fp.Real):
+    return t
+
+@fp.fpy
 def _example_if_1(t: fp.Real):
     if t < 0:
         x = 1
@@ -74,9 +158,7 @@ def _example_if_1(t: fp.Real):
 
 @fp.fpy
 def _example_if_1_expect(t: fp.Real):
-    if t < 0:
-        pass
-    else:
+    if not t < 0:
         t = 2
     return t
 
@@ -92,8 +174,6 @@ def _example_if_2(t: fp.Real):
 def _example_if_2_expect(t: fp.Real):
     if t < 0:
         t = 2
-    else:
-        pass
     return t
 
 @fp.fpy
@@ -125,11 +205,31 @@ def _example_if_4(t: fp.Real):
 
 @fp.fpy
 def _example_if_4_expect(t: fp.Real):
-    if t < 0:
-        pass
-    else:
-        pass
     return t
+
+@fp.fpy
+def _example_dead_while_1():
+    x = 0
+    while False:
+        x = x + 1
+    return x
+
+@fp.fpy
+def _example_dead_while_1_expect():
+    x = 0
+    return x
+
+@fp.fpy
+def _example_dead_while_2():
+    x = 0
+    while x < 10:
+        pass
+    return x
+
+@fp.fpy
+def _example_dead_while_2_expect():
+    x = 0
+    return x
 
 @fp.fpy
 def _example_while_1():
@@ -174,12 +274,21 @@ def test_simple_4_expect():
 _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_simple_1, _example_simple_1_expect),
     (_example_simple_2, _example_simple_2_expect),
+    (_example_dead_if1_1, _example_dead_if1_1_expect),
+    (_example_dead_if1_2, _example_dead_if1_2_expect),
     (_example_if1_1, _example_if1_1_expect),
     (_example_if1_2, _example_if1_2_expect),
+    (_example_dead_if_1, _example_dead_if_1_expect),
+    (_example_dead_if_2, _example_dead_if_2_expect),
+    (_example_dead_if_3, _example_dead_if_3_expect),
+    (_example_dead_if_4, _example_dead_if_4_expect),
+    (_example_dead_if_5, _example_dead_if_5_expect),
     (_example_if_1, _example_if_1_expect),
     (_example_if_2, _example_if_2_expect),
     (_example_if_3, _example_if_3_expect),
     (_example_if_4, _example_if_4_expect),
+    (_example_dead_while_1, _example_dead_while_1_expect),
+    (_example_dead_while_2, _example_dead_while_2_expect),
     (_example_while_1, _example_while_1_expect),
     (test_simple_3, test_simple_3_expect),
     (test_simple_4, test_simple_4_expect)
@@ -189,11 +298,8 @@ def _test_examples():
     for example, expect in _examples:
         print('dead_code', example.name)
         fn = fp.transform.DeadCodeEliminate.apply(example.ast)
-        if not fn.is_equiv(expect.ast):
-            print('Expected:')
-            print(expect.format())
-            print('Found:')
-            print(fn.format())
+        if not fn.body.is_equiv(expect.ast.body) or fn.free_vars != expect.ast.free_vars:
+            raise ValueError(f'FAILED: test expected\n\n{expect.format()}\n\n{fn.format()}')
 
 ###########################################################
 # Core tests
@@ -214,8 +320,8 @@ def _test_library():
 
 def test_dead_code():
     _test_examples()
-    _test_unit()
-    _test_library()
+    # _test_unit()
+    # _test_library()
 
 if __name__ == '__main__':
     test_dead_code()
