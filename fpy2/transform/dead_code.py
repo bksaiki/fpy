@@ -157,14 +157,15 @@ class _DeadCodeEliminate:
 
     def _run_once(self):
         # run one pass of dead code elimination
-        # first compute
+        # first, compute
         # - all definitions that are unused
         # - all phi variables that are used
         unused_assign: set[Assign] = set()
         unused_fv: set[NamedId] = set()
         used_phis: set[PhiDef] = set()
         for d, uses in self.def_use.uses.items():
-            if len(uses) == 0:   
+            # a definition is unused if it has no uses and no redefinitions
+            if len(uses) == 0 and len(self.def_use.successors[d]) == 0:
                 if isinstance(d, AssignDef):
                     if isinstance(d.site, FuncDef):
                         # free variable
@@ -176,62 +177,18 @@ class _DeadCodeEliminate:
                 if isinstance(d, PhiDef) and len(uses) == 0:
                     used_phis.add(d)
 
-        # since 
-
-        raise NotImplementedError
+        # apply eliminator
+        self.func, is_changed = _Eliminator(self.func, self.def_use, unused_assign, unused_fv)._apply()
+        return is_changed
 
     def apply(self):
         while True:
             # keep running until no more eliminations
-            self.func, is_changed = self._run_once()
+            is_changed = self._run_once()
             if not is_changed:
                 return self.func
 
             # changed something so try again
-            self.def_use = DefineUse.analyze(self.func)
-
-
-
-        while True:
-            # phi variables are virtual definitions:
-            # if a phi variable is used, so are its children
-            # if a phi variable is not used, its children are also unused
-            used_assigns: set[AssignDef] = set()
-            for phis in self.def_use.phis.values():
-                for phi in phis:
-                    if len(self.def_use.uses[phi]) > 0:
-                        # phi variable is used, so 
-                        if isinstance(phi.lhs, AssignDef):
-                            used_assigns.add(phi.lhs)
-                        if isinstance(phi.rhs, AssignDef):
-                            used_assigns.add(phi.rhs)
-
-            # process def-use analysis for definitions without uses
-            # specifically interested in assignments, phi variables,
-            # and free variables
-            unused_assign: set[Assign] = set()
-            unused_fv: set[NamedId] = set()
-            for d, uses in self.def_use.uses.items():
-                if len(uses) == 0:
-                    if isinstance(d, AssignDef):
-                        if isinstance(d.site, FuncDef):
-                            # free variable
-                            unused_fv.add(d.name)
-                        elif (
-                            isinstance(d.site, Assign)
-                            and d not in used_assigns
-                            and Purity.analyze_expr(d.site.expr, self.def_use)
-                        ):
-                            # assignment
-                            unused_assign.add(d.site)
-
-            # run code eliminator
-            self.func, eliminated = _Eliminator(self.func, self.def_use, unused_assign, unused_fv)._apply()
-            if not eliminated:
-                return self.func
-
-            # removed something so try again
-            print(self.func.format())
             self.def_use = DefineUse.analyze(self.func)
 
 

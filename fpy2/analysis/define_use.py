@@ -224,6 +224,7 @@ class _DefineUseInstance(DefaultVisitor):
     
     def _compute_succ(self, defs: dict[NamedId, set[Definition]]):
         """Compute the successor definitions for each definition."""
+        # use parent information to build the successor map
         succ: dict[Definition, set[Definition]] = { d: set() for ds in defs.values() for d in ds }
         for ds in defs.values():
             for d in ds:
@@ -236,7 +237,15 @@ class _DefineUseInstance(DefaultVisitor):
                         succ[d.rhs].add(d)
                     case _:
                         raise RuntimeError(f'unexpected definition: {d}')
+
+        # any definition missing from the map has no successors
+        for ds in defs.values():
+            for d in ds:
+                if d not in succ:
+                    succ[d] = set()
+
         return succ
+
 
     def analyze(self):
         match self.ast:
