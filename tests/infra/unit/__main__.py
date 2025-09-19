@@ -6,6 +6,7 @@ from .tcheck import test_tcheck
 from .purity import test_purity
 from .dead_code import test_dead_code
 from .copy_prop import test_copy_prop
+from .const_prop import test_const_prop
 
 
 def _run_tests():
@@ -20,6 +21,7 @@ def _run_tests():
     # transformations
     test_dead_code()
     test_copy_prop()
+    test_const_prop()
     # compilation
     test_compile_fpc()
 

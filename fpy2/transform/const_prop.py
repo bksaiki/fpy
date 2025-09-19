@@ -1,5 +1,5 @@
 """
-Copy propagation.
+Constant propagation.
 """
 
 from ..analysis import AssignDef, DefineUse, SyntaxCheck
@@ -8,25 +8,34 @@ from ..ast import *
 from .subst_var import SubstVar
 
 
-class CopyPropagate:
+def _is_value(e: Expr) -> bool:
     """
-    Copy propagation.
+    Is this expression a constant?
 
-    For any occurence of the form `x = y`where `y` is a variable,
-    this transform replaces all uses of `x` with `y`.
+    <cprop> ::= <bool>
+              | <foreign>
+    """
+    return isinstance(e, BoolVal | ForeignVal)
+
+class ConstPropagate:
+    """
+    Constant propagation.
+
+    For any occurence of the form `x = c` where `c` is a constant,
+    this transform replaces all uses of `x` with `c`.
     """
 
     @staticmethod
     def apply(func: FuncDef, *, names: set[NamedId] | None = None) -> FuncDef:
         """
-        Applies copy propagation.
+        Applies constant propagation.
 
         If `names` is provided, only propagate variables in this set.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\' for {func}, got {type(func)}')
 
-        prop: dict[AssignDef, Var] = {}
+        prop: dict[AssignDef, Expr] = {}
         def_use = DefineUse.analyze(func)
         for name, defs in def_use.defs.items():
             # skip any names not matching the filter
@@ -34,13 +43,16 @@ class CopyPropagate:
                 continue
 
             for d in defs:
-                if isinstance(d, AssignDef) and isinstance(d.site, Assign) and isinstance(d.site.expr, Var):
-                    # direct assignment: x = y
-                    # substitute all occurences of this definition of `x` with `y`
-                    prop[d] = d.site.expr
+                if isinstance(d, AssignDef) and isinstance(d.site, Assign) and _is_value(d.site.expr):
+                    # direct assignment: x = c
+                    # substitute all occurences of this definition of `x` with `c`
+                    if len(def_use.uses[d]) > 0:
+                        # at least one use of this definition
+                        prop[d] = d.site.expr
 
         if prop:
             # at least one variable to propagate
+            print('propagate', prop)
             func = SubstVar.apply(func, def_use, prop)
             SyntaxCheck.check(func, ignore_unknown=True)
 

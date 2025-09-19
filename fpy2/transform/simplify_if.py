@@ -4,7 +4,7 @@ from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
 
-from .copy_propagate import CopyPropagate
+from .copy_prop import CopyPropagate
 from .rename_target import RenameTarget
 
 

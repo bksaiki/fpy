@@ -1,7 +1,8 @@
 """
 This module defines compiler transforms over FPy IR.
 """
-from .copy_propagate import CopyPropagate
+from .copy_prop import CopyPropagate
+from .const_prop import ConstPropagate
 from .context_inline import ContextInline
 from .dead_code import DeadCodeEliminate
 from .for_bundling import ForBundling
