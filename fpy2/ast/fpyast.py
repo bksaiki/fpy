@@ -1494,7 +1494,7 @@ class If1Stmt(Stmt):
         )
 
 class IfStmt(Stmt):
-    """FPy AST: if statement (with two branhces)"""
+    """FPy AST: if statement (with two branches)"""
     __slots__ = ('cond', 'ift', 'iff')
     cond: Expr
     ift: StmtBlock
