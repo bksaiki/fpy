@@ -116,7 +116,7 @@ class _CppBackendInstance(Visitor):
 
         self.decl_phis = set()
         self.decl_assigns = set()
-        self.gensym = Gensym(self.def_use.names)
+        self.gensym = Gensym(self.def_use.names())
 
     def compile(self):
         ctx = _CompileCtx.default()

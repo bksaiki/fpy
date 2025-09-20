@@ -23,7 +23,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.gensym = Gensym(reserved=def_use.names)
+        self.gensym = Gensym(reserved=def_use.names())
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})

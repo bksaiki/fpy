@@ -166,7 +166,6 @@ class DefineUseAnalysis:
     sucessors: dict[Definition, set[Definition]]
     """mapping from definition to its successor definitions"""
 
-    @property
     def names(self) -> set[NamedId]:
         """Returns the set of all variable names in the analysis"""
         return set(self.defs.keys())
