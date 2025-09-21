@@ -10,8 +10,11 @@ from ..ast.visitor import DefaultVisitor
 _Defs: TypeAlias = set[NamedId]
 _DefMap: TypeAlias = dict[StmtBlock, _Defs]
 
+__all__ = [
+    'DefAnalysis',
+]
 
-class _DefinitionAnalysis(DefaultVisitor):
+class _DefAnalysis(DefaultVisitor):
     """Visitor for definition analysis."""
 
     ast: FuncDef | StmtBlock
@@ -91,16 +94,16 @@ class _DefinitionAnalysis(DefaultVisitor):
         return self.blocks
 
 
-class DefinitionAnalysis:
+class DefAnalysis:
     """
     Definition analysis.
 
-    This analysis is weaker than a definition-use analysis:
-    it only tracks the definitions introduced within each block.
+    This analysis is weaker than both reaching definitions and define-use analysis.
+    It only tracks the identifiers introduced within each block.
     """
 
     @staticmethod
     def analyze(ast: FuncDef | StmtBlock):
         if not isinstance(ast, FuncDef | StmtBlock):
             raise TypeError(f'Expected \'FuncDef\' or \'StmtBlock\', got {type(ast)} for {ast}')
-        return _DefinitionAnalysis(ast).analyze()
+        return _DefAnalysis(ast).analyze()

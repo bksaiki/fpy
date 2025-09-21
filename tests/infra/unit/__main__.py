@@ -1,10 +1,11 @@
 from .context_infer import test_context_infer
+from .dead_code import test_dead_code
+from .defs import test_defs
 from .eval import test_eval
 from .format import test_format
 from .fpc import test_compile_fpc
-from .tcheck import test_tcheck
 from .purity import test_purity
-from .dead_code import test_dead_code
+from .tcheck import test_tcheck
 
 def _run_tests():
     # formatting
@@ -12,6 +13,7 @@ def _run_tests():
     # evaluation
     test_eval()
     # analyses
+    test_defs()
     test_tcheck()
     test_context_infer()
     test_purity()

@@ -4,7 +4,7 @@ Tests for function purity analysis.
 
 import fpy2 as fp
 
-from .defs import tests, examples
+from .unit_tests import tests, examples
 
 _modules = [
     fp.libraries.core,

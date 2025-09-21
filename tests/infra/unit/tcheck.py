@@ -6,7 +6,7 @@ import fpy2 as fp
 
 from fpy2.analysis import TypeInfer
 
-from .defs import tests, examples
+from .unit_tests import tests, examples
 
 _modules = [
     fp.libraries.core,

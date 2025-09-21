@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from types import ModuleType
 
-from ..unit.defs import tests, examples
+from ..unit.unit_tests import tests, examples
 
 ###########################################################
 # Compilation

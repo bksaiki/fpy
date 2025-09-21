@@ -7,7 +7,7 @@ import fpy2 as fp
 from fpy2.analysis import ContextInfer
 from fpy2.transform import ContextInline
 
-from .defs import tests, examples
+from .unit_tests import tests, examples
 
 _modules = [
     fp.libraries.core,

@@ -1,5 +1,5 @@
 from fpy2 import Function, FPCoreCompiler
-from .defs import tests, examples
+from .unit_tests import tests, examples
 
 _ignore = [
     'test_context_expr1',
