@@ -15,7 +15,7 @@ _modules = [
 
 def _test_unit():
     for test in tests + examples:
-        print('dead_code', test.name)
+        print('reaching_defs', test.name)
         defs = fp.analysis.ReachingDefs.analyze(test.ast)
         print(defs.format())
 
@@ -24,7 +24,7 @@ def _test_library():
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
                 defs = fp.analysis.ReachingDefs.analyze(obj.ast)
-                print('dead_code', obj.name)
+                print('reaching_defs', obj.name)
                 print(defs.format())
 
 def test_reaching_defs():

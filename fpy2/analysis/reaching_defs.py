@@ -3,7 +3,7 @@ Reaching definitions analysis.
 """
 
 from dataclasses import dataclass
-from typing import Optional, TypeAlias, Union
+from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -40,16 +40,17 @@ class AssignDef:
     """the name of the variable being defined"""
     site: DefSite
     """the statement introducing the definition"""
-    prev: Optional['Definition']
+    prev: int | None
 
     def __hash__(self):
-        return hash((self.name, self.site))
+        return hash((self.name, self.site, self.prev))
 
     def __eq__(self, other):
         return (
             isinstance(other, AssignDef)
             and self.name == other.name
             and self.site == other.site
+            and self.prev == other.prev
         )
 
     def __lt__(self, other: 'AssignDef'):
@@ -65,9 +66,9 @@ class PhiDef:
     """the name of the variable being defined"""
     site: PhiSite
     """the statement introducing the phi node"""
-    lhs: 'Definition'
+    lhs: int
     """first argument of the phi node"""
-    rhs: 'Definition'
+    rhs: int
     """second argument of the phi node"""
 
     def __hash__(self):
@@ -85,20 +86,22 @@ class PhiDef:
 Definition: TypeAlias = AssignDef | PhiDef
 """definition: either an assignment or a phi node"""
 
-_DefCtx: TypeAlias = dict[NamedId, Definition]
+_DefCtx: TypeAlias = dict[NamedId, int]
 """visitor context: variable to current definition"""
 
 @dataclass
 class ReachingDefsAnalysis:
     """Result of reaching definitions analysis."""
 
-    defs: dict[NamedId, set[Definition]]
+    defs: list[Definition]
+    """list of all definitions"""
+    name_to_defs: dict[NamedId, set[int]]
     """mapping from variable names to all (re-)definitions"""
     in_defs: dict[StmtBlock, _DefCtx]
     """mapping from block to definitions available at entry"""
     out_defs: dict[StmtBlock, _DefCtx]
     """mapping from block to definitions available at exit"""
-    phis: dict[Stmt, dict[NamedId, PhiDef]]
+    phis: dict[Stmt, dict[NamedId, int]]
     """
     mapping from block to phi nodes at each statement:
     - for `If1` and `If`, the phi nodes are at the end of the block;
@@ -107,29 +110,20 @@ class ReachingDefsAnalysis:
 
     def format(self) -> str:
         lines: list[str] = []
-        # print integer -> definition map
-        indexed: dict[int, Definition] = {}
-        inv_indexed: dict[Definition, int] = {}
-        for name, ds in self.defs.items():
+        for name, indices in self.name_to_defs.items():
             lines.append(f'{name}:')
-            for d in ds:
-                i = len(indexed)
-                indexed[i] = d
-                inv_indexed[d] = i
-                lines.append(f' {i}: {d.name} @ {_format_site(d.site.format())}')
-        # print predecessors
-        lines.append('pred:')
-        for i in range(len(indexed)):
-            d = indexed[i]
-            match d:
-                case AssignDef():
-                    lines.append(f' {i} <- {d.prev and inv_indexed[d.prev]}')
-                case PhiDef():
-                    lhs = inv_indexed[d.lhs]
-                    rhs = inv_indexed[d.rhs]
-                    lines.append(f' {i} <- phi({lhs}, {rhs})')
-                case _:
-                    raise RuntimeError(f'unexpected definition {d}')
+            for idx in indices:
+                d = self.defs[idx]
+                match d:
+                    case AssignDef():
+                        site = _format_site(d.site.format())
+                        prev = 'None' if d.prev is None else str(d.prev)
+                        lines.append(f'  {idx} [{prev}] @ {site}')
+                    case PhiDef():
+                        site = _format_site(d.site.format())
+                        lines.append(f'  {idx} [phi({d.lhs}, {d.rhs})] @ {site}')
+                    case _:
+                        raise RuntimeError(f'unexpected definition {d}')
         return '\n'.join(lines)
 
 class _ReachingDefs(DefaultVisitor):
@@ -138,43 +132,56 @@ class _ReachingDefs(DefaultVisitor):
     ast: FuncDef | StmtBlock
     def_ids: dict[StmtBlock, set[NamedId]]
 
-    defs: Unionfind[Definition]
+    indices: Unionfind[int]
+    idx_to_def: dict[int, Definition]
+    def_to_idx: dict[Definition, int]
     in_defs: dict[StmtBlock, _DefCtx]
     out_defs: dict[StmtBlock, _DefCtx]
-    phis: dict[Stmt, dict[NamedId, PhiDef]]
+    phis: dict[Stmt, dict[NamedId, int]]
 
     def __init__(self, ast: FuncDef | StmtBlock, def_ids: dict[StmtBlock, set[NamedId]]):
         self.ast = ast
         self.def_ids = def_ids
-        self.defs = Unionfind()
+
+        self.indices = Unionfind()
+        self.idx_to_def = {}
+        self.def_to_idx = {}
         self.in_defs = {}
         self.out_defs = {}
         self.phis = {}
 
-    def _add_def(self, d: Definition) -> Definition:
+    def _add_def(self, d: Definition) -> int:
         """Add a definition to the union-find structure."""
-        return self.defs.add(d)
+        assert d not in self.def_to_idx, f'definition {d} already added'
+        i = len(self.idx_to_def)
+        self.idx_to_def[i] = d
+        self.def_to_idx[d] = i
+        self.indices.add(i)
+        return i
 
-    def _add_assign(self, name: NamedId, site: DefSite, ctx: _DefCtx) -> tuple[AssignDef, _DefCtx]:
+    def _add_assign(self, name: NamedId, site: DefSite, ctx: _DefCtx) -> tuple[int, _DefCtx]:
         """Adds a new assignment definition, returning the new context."""
-        d = AssignDef(name, site, ctx.get(name))
+        prev = ctx.get(name)
+        d = AssignDef(name, site, None if prev is None else prev)
+        idx = self._add_def(d)
         new_ctx = ctx.copy()
-        new_ctx[name] = self._add_def(d)
-        return d, new_ctx
+        new_ctx[name] = idx
+        return idx, new_ctx
 
-    def _add_phi(self, name: NamedId, site: PhiSite, lhs: Definition, rhs: Definition, ctx: _DefCtx) -> tuple[PhiDef, _DefCtx]:
+    def _add_phi(self, name: NamedId, site: PhiSite, lhs: int, rhs: int, ctx: _DefCtx) -> tuple[int, _DefCtx]:
         """Adds a new phi node definition, returning the new context."""
         d = PhiDef(name, site, lhs, rhs)
+        idx = self._add_def(d)
         new_ctx = ctx.copy()
-        new_ctx[name] = self._add_def(d)
-        return d, new_ctx
+        new_ctx[name] = idx
+        return idx, new_ctx
 
-    def _unify_def(self, d1: Definition, d2: Definition) -> Definition:
+    def _unify_def(self, i1: int, i2: int):
         """
         Unify two definitions in the union-find structure.
         The representative is the representative of `d1`.
         """
-        return self.defs.union(d1, d2)
+        return self.indices.union(i1, i2)
 
     def _visit_list_comp(self, e: ListComp, ctx: _DefCtx):
         for target, arg in zip(e.targets, e.iterables):
@@ -202,7 +209,7 @@ class _ReachingDefs(DefaultVisitor):
         # visit body
         body_out = self._visit_block(stmt.body, ctx)
         # introduce phi nodes for any definitions that are re-defined in the body
-        phis: dict[NamedId, PhiDef] = {}
+        phis: _DefCtx = {}
         for name, orig in ctx.items():
             if orig != body_out[name]:
                 phi, ctx = self._add_phi(name, stmt, orig, body_out[name], ctx)
@@ -219,7 +226,7 @@ class _ReachingDefs(DefaultVisitor):
         # introduce phi nodes for:
         # (i) redefinitions in the branches
         # (ii) introductions in both branches
-        phis: dict[NamedId, PhiDef] = {}
+        phis: _DefCtx = {}
         for name in ift_out.keys() & iff_out.keys():
             d_ift = ift_out[name]
             d_iff = iff_out[name]
@@ -231,31 +238,50 @@ class _ReachingDefs(DefaultVisitor):
         return ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: _DefCtx):
-        # visit condition
-        self._visit_expr(stmt.cond, ctx)
         # create (temporary) phi nodes for any mutated variable
         body_in = ctx.copy()
         mutated = ctx.keys() & self.def_ids[stmt.body]
         for intro in mutated:
             # create (temporary) phi node `x' = phi(x, x)`
             _, body_in = self._add_phi(intro, stmt, ctx[intro], ctx[intro], body_in)
-        # visit body
+        # visit condition and body
+        self._visit_expr(stmt.cond, body_in)
         body_out = self._visit_block(stmt.body, body_in)
         # update phi nodes for any definitions that are re-defined in the body
-        phis: dict[NamedId, PhiDef] = {}
-        phi_lhs = { name: ctx[name] for name in mutated }
+        phis: _DefCtx = {}
         for name in mutated:
             # create actual phi node `x' = phi(x, x'')` where
             # `x` is on entry and `x''` is after the loop body
-            phi, ctx = self._add_phi(name, stmt, phi_lhs[name], body_out[name], ctx)
-            self._unify_def(phi, body_in[name])
-            phis[name] = phi
+            phi, ctx = self._add_phi(name, stmt, ctx[name], body_out[name], ctx)
+            phis[name] = self._unify_def(phi, body_in[name])
         # record the phi nodes and return the updated context
         self.phis[stmt] = phis
         return ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: _DefCtx):
-        raise NotImplementedError
+        # visit iterable expression
+        self._visit_expr(stmt.iterable, ctx)
+        # create (temporary) phi nodes for any mutated variable
+        body_in = ctx.copy()
+        mutated = ctx.keys() & self.def_ids[stmt.body]
+        for intro in mutated:
+            # create (temporary) phi node `x' = phi(x, x)`
+            _, body_in = self._add_phi(intro, stmt, ctx[intro], ctx[intro], body_in)
+        # introduce new definition for the loop variable
+        for name in stmt.target.names():
+            _, body_in = self._add_assign(name, stmt, body_in)
+        # visit body
+        body_out = self._visit_block(stmt.body, body_in)
+        # update phi nodes for any definitions that are re-defined in the body
+        phis: _DefCtx = {}
+        for name in mutated:
+            # create actual phi node `x' = phi(x, x'')` where
+            # `x` is on entry and `x''` is after the loop body
+            phi, ctx = self._add_phi(name, stmt, ctx[name], body_out[name], ctx)
+            phis[name] = self._unify_def(phi, body_in[name])
+        # record the phi nodes and return the updated context
+        self.phis[stmt] = phis
+        return ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: _DefCtx):
         # visit context expression and possibly introduce a binding
@@ -298,49 +324,56 @@ class _ReachingDefs(DefaultVisitor):
         # visit body
         self._visit_block(func.body, ctx)
 
-    def _normalize_def(self, d: Definition) -> Definition:
-        d = self.defs.find(d)
-        match d:
-            case AssignDef():
-                if d.prev is not None:
-                    d_prev = self._normalize_def(d.prev)
-                    new_d = self._unify_def(d, AssignDef(d.name, d.site, d_prev))
-
-                    if d_prev != d.prev:
-                        d = self._unify_def(d, AssignDef(d.name, d.site, d_prev))
-
-
     def _normalize(self):
-        # definitions may refer to non-representative definitions
-        reprs: dict[Definition, Definition] = {}
-        for d in self.defs:
-            self._normalize_def(d, reprs)
+        # create a map from indices to representative indices
+        #  index -> canonical index -> representative index (0, 1, 2, ..., N-1)
+        repr_count = 0
+        repr_indices: dict[int, int] = {}
+        for idx, c_idx in self.indices.items():
+            if c_idx not in repr_indices:
+                repr_indices[c_idx] = repr_count
+                repr_count += 1
+            repr_indices[idx] = repr_indices[c_idx]
 
-        # the representatives are the values of `reprs`
-        defs: dict[NamedId, set[Definition]] = {}
-        for d in reprs.values():
-            name = d.name
-            if name not in defs:
-                defs[name] = set()
-            defs[name].add(d)
+        # using representative indices, create representative definitions
+        for idx in self.indices.representatives():
+            d = self.idx_to_def[idx]
+            match d:
+                case AssignDef():
+                    prev = None if d.prev is None else repr_indices[d.prev]
+                    d = AssignDef(d.name, d.site, prev)
+                case PhiDef():
+                    lhs = repr_indices[d.lhs]
+                    rhs = repr_indices[d.rhs]
+                    d = PhiDef(d.name, d.site, lhs, rhs)
+                case _:
+                    raise RuntimeError(f'unexpected definition {d}')
 
-        # normalize the IN and OUT sets
+            repr_idx = repr_indices[idx]
+            self.idx_to_def[repr_idx] = d
+            self.def_to_idx[d] = repr_idx
+
+        # build list of all representative definitions
+        defs = [self.idx_to_def[i] for i, _ in enumerate(self.idx_to_def)]
+
+        # rebuild map from variable names to all (re-)definitions
+        name_to_defs: dict[NamedId, set[int]] = {}
+        for d, idx in self.def_to_idx.items():
+            if d.name not in name_to_defs:
+                name_to_defs[d.name] = set()
+            name_to_defs[d.name].add(idx)
+
+        # rebuild map for IN and OUT definitions
         for block, ctx in self.in_defs.items():
-            self.in_defs[block] = {name: reprs[d] for name, d in ctx.items()}
+            self.in_defs[block] = { name: repr_indices[idx] for name, idx in ctx.items() }
         for block, ctx in self.out_defs.items():
-            self.out_defs[block] = {name: reprs[d] for name, d in ctx.items()}
+            self.out_defs[block] = { name: repr_indices[idx] for name, idx in ctx.items() }
 
-        # normalize the phi nodes
-        for stmt, phi_map in self.phis.items():
-            new_phis: dict[NamedId, PhiDef] = {}
-            for name, d in phi_map.items():
-                d = reprs[d]
-                assert isinstance(d, PhiDef), f'expected a phi node {d}'
-                new_phis[name] = d
-            self.phis[stmt] = new_phis
+        # rebuild map for phi nodes
+        for stmt, phis in self.phis.items():
+            self.phis[stmt] = { name: repr_indices[idx] for name, idx in phis.items() }
 
-        return ReachingDefsAnalysis(defs, self.in_defs, self.out_defs, self.phis)
-
+        return ReachingDefsAnalysis(defs, name_to_defs, self.in_defs, self.out_defs, self.phis)
 
     def analyze(self) -> ReachingDefsAnalysis:
         match self.ast:
