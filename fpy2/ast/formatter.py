@@ -27,6 +27,9 @@ class _FormatterInstance(Visitor):
                 self._visit_statement(self.ast, 0)
             case StmtBlock():
                 self._visit_block(self.ast, 0)
+            case Argument():
+                # TODO: type signature
+                return str(self.ast.name)
             case FuncDef():
                 self._visit_function(self.ast, 0)
             case _:

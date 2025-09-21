@@ -4,6 +4,7 @@ from .defs import test_defs
 from .eval import test_eval
 from .format import test_format
 from .fpc import test_compile_fpc
+from .reaching_defs import test_reaching_defs
 from .purity import test_purity
 from .tcheck import test_tcheck
 
@@ -14,6 +15,7 @@ def _run_tests():
     test_eval()
     # analyses
     test_defs()
+    test_reaching_defs()
     test_tcheck()
     test_context_infer()
     test_purity()

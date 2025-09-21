@@ -10,5 +10,6 @@ from .define_use import (
 from .live_vars import LiveVars
 from .purity import Purity
 from .reachability import Reachability
+from .reaching_defs import ReachingDefs
 from .syntax_check import SyntaxCheck, FPySyntaxError
 from .type_infer import TypeInfer, TypeAnalysis, TypeInferError
