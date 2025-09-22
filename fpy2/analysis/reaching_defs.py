@@ -483,7 +483,7 @@ class _ReachingDefs(DefaultVisitor):
 
         # rebuild map from variable names to all (re-)definitions
         name_to_defs: dict[NamedId, set[Definition]] = {}
-        for d, idx in repr_to_idx.items():
+        for d in repr_to_idx:
             if d.name not in name_to_defs:
                 name_to_defs[d.name] = set()
             name_to_defs[d.name].add(d)
