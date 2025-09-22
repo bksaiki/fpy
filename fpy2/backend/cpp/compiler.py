@@ -219,7 +219,7 @@ class _CppBackendInstance(Visitor):
 
     def _var_is_decl(self, name: NamedId, site: DefSite):
         d = self.def_use.find_def_from_site(name, site)
-        return d.parent is None and d not in self.decl_assigns
+        return d.prev is None and d not in self.decl_assigns
 
     def _def_type(self, d: Definition):
         ty = self._monomorphize_type(self.ctx_info.by_def[d])

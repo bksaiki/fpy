@@ -188,25 +188,6 @@ class _DeadCodeEliminate:
                     case _:
                         raise RuntimeError(f'unexpected def: {d}')
 
-                # if len(uses) == 0:
-                #     match d:
-                #         case AssignDef():
-                #             # assignment
-                #             if isinstance(d.site, FuncDef):
-                #                 # free variable
-                #                 unused_fv.add(d.name)
-                #             elif (
-                #                 isinstance(d.site, Assign)
-                #                 and Purity.analyze_expr(d.site.expr, self.def_use)
-                #             ):
-                #                 # assignment
-                #                 unused_assign.add(d.site)
-                #         case PhiDef():
-                #             # phi variable
-                #             pass
-                #         case _:
-                #             raise RuntimeError(f'unexpected def: {d}')
-
             # if a phi variable is unused, then its arguments are also unused
             for phi in unused_phi:
                 lhs = self.def_use.defs[phi.lhs]

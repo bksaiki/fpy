@@ -82,10 +82,9 @@ class StmtPattern(Pattern):
         # set of targets (LHS of assignments)
         targets: set[NamedId] = set()
         def_use = DefineUse.analyze(func)
-        for defs in def_use.defs.values():
-            for d in defs:
-                if isinstance(d, AssignDef) and not isinstance(d.site, FuncDef):
-                    targets.add(d.name)
+        for d in def_use.defs:
+            if isinstance(d, AssignDef) and not isinstance(d.site, FuncDef):
+                targets.add(d.name)
 
         # set of uses
         live_vars = LiveVars.analyze(func)

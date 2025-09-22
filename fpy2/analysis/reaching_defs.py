@@ -67,16 +67,20 @@ class PhiDef:
     """first argument of the phi node"""
     rhs: int
     """second argument of the phi node"""
+    is_intro: bool
+    """relevant for `If`: is this a variable introduced by (both) branches?"""
 
     def __hash__(self):
-        return hash((self.name, self.lhs, self.rhs))
+        return hash((self.name, self.site, self.lhs, self.rhs, self.is_intro))
 
     def __eq__(self, other):
         return (
             isinstance(other, PhiDef)
             and self.name == other.name
+            and self.site == other.site
             and self.lhs == other.lhs
             and self.rhs == other.rhs
+            and self.is_intro == other.is_intro
         )
 
 
@@ -254,7 +258,7 @@ class _ReachingDefs(DefaultVisitor):
 
     def _add_phi(self, name: NamedId, site: PhiSite, lhs: int, rhs: int, ctx: _DefCtx) -> tuple[int, _DefCtx]:
         """Adds a new phi node definition, returning the new context."""
-        d = PhiDef(name, site, lhs, rhs)
+        d = PhiDef(name, site, lhs, rhs, name not in ctx)
         idx = self._add_def(d)
         new_ctx = ctx.copy()
         new_ctx[name] = idx
@@ -422,6 +426,8 @@ class _ReachingDefs(DefaultVisitor):
             repr_indices[idx] = repr_indices[c_idx]
 
         # using representative indices, create representative definitions
+        idx_to_repr: dict[int, Definition] = {}
+        repr_to_idx: dict[Definition, int] = {}
         for idx in self.indices.representatives():
             d = self.idx_to_def[idx]
             match d:
@@ -431,29 +437,29 @@ class _ReachingDefs(DefaultVisitor):
                 case PhiDef():
                     lhs = repr_indices[d.lhs]
                     rhs = repr_indices[d.rhs]
-                    d = PhiDef(d.name, d.site, lhs, rhs)
+                    d = PhiDef(d.name, d.site, lhs, rhs, d.is_intro)
                 case _:
                     raise RuntimeError(f'unexpected definition {d}')
 
             repr_idx = repr_indices[idx]
-            self.idx_to_def[repr_idx] = d
-            self.def_to_idx[d] = repr_idx
+            idx_to_repr[repr_idx] = d
+            repr_to_idx[d] = repr_idx
 
         # build list of all representative definitions
-        defs = [self.idx_to_def[i] for i, _ in enumerate(self.idx_to_def)]
+        defs = [idx_to_repr[i] for i, _ in enumerate(idx_to_repr)]
 
         # rebuild map from variable names to all (re-)definitions
         name_to_defs: dict[NamedId, set[Definition]] = {}
-        for d, idx in self.def_to_idx.items():
+        for d, idx in repr_to_idx.items():
             if d.name not in name_to_defs:
                 name_to_defs[d.name] = set()
-            name_to_defs[d.name].add(self.idx_to_def[repr_indices[idx]])
+            name_to_defs[d.name].add(d)
 
         # rebuild map for IN definitions
         in_defs: dict[StmtBlock, DefCtx] = {}
         for block, ctx in self.in_defs.items():
             in_defs[block] = { 
-                name: self.idx_to_def[repr_indices[idx]]
+                name: idx_to_repr[repr_indices[idx]]
                 for name, idx in ctx.items()
             }
 
@@ -461,7 +467,7 @@ class _ReachingDefs(DefaultVisitor):
         out_defs: dict[StmtBlock, DefCtx] = {}
         for block, ctx in self.out_defs.items():
             out_defs[block] = {
-                name: self.idx_to_def[repr_indices[idx]]
+                name: idx_to_repr[repr_indices[idx]]
                 for name, idx in ctx.items()
             }
 
@@ -469,7 +475,7 @@ class _ReachingDefs(DefaultVisitor):
         reach: dict[Stmt, DefCtx] = {}
         for stmt, ctx in self.reach.items():
             reach[stmt] = { 
-                name: self.idx_to_def[repr_indices[idx]]
+                name: idx_to_repr[repr_indices[idx]]
                 for name, idx in ctx.items()
             }
 
@@ -478,7 +484,7 @@ class _ReachingDefs(DefaultVisitor):
         for stmt, ctx in self.phis.items():
             new_phis: set[PhiDef] = set()
             for _, idx in ctx.items():
-                d = self.idx_to_def[repr_indices[idx]]
+                d = idx_to_repr[repr_indices[idx]]
                 assert isinstance(d, PhiDef), f'expected phi node, got {d}'
                 new_phis.add(d)
             phis[stmt] = new_phis

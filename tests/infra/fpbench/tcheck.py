@@ -17,6 +17,7 @@ def test_tcheck():
         if core.name not in _skip_cores:
             print('tcheck', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
+            print(fn.format())
             info = TypeInfer.check(fn.ast)
             print(core.name, core.ident, info.fn_type)
 
