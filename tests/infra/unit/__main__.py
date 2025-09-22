@@ -1,5 +1,6 @@
 from .context_infer import test_context_infer
 from .dead_code import test_dead_code
+from .define_use import test_define_use
 from .defs import test_defs
 from .eval import test_eval
 from .format import test_format
@@ -16,6 +17,7 @@ def _run_tests():
     # analyses
     test_defs()
     test_reaching_defs()
+    test_define_use()
     test_tcheck()
     test_context_infer()
     test_purity()

@@ -11,25 +11,23 @@ from ..utils import Unionfind
 
 from .defs import DefAnalysis
 
+__all__ = [
+    'ReachingDefs',
+    'ReachingDefsAnalysis',
+    'AssignDef',
+    'PhiDef'
+    'Definition',
+    'DefinitionCtx',
+    'DefSite',
+    'PhiSite',
+    'UseSite',
+]
+
 
 DefSite: TypeAlias = FuncDef | Argument | Assign | ForStmt | ContextStmt | ListComp
 """AST nodes that can define variables"""
 PhiSite: TypeAlias = If1Stmt | IfStmt | WhileStmt | ForStmt
 """AST nodes that can introduce phi nodes"""
-UseSite: TypeAlias = Var | IndexedAssign | Call
-"""AST nodes that can use variables"""
-
-def _format_site(s: str, width: int = 20) -> str:
-    """Helper function to format site strings with 20 character limit and no newlines."""
-    assert width > 3
-    # Remove newlines and replace with spaces
-    lines = s.splitlines()
-    # Limit to 20 characters with ellipses if needed
-    line = lines[0]
-    if len(line) > width:
-        return line[:width - 3] + '...'
-    else:
-        return line
 
 
 @dataclass
@@ -86,10 +84,10 @@ class PhiDef:
 Definition: TypeAlias = AssignDef | PhiDef
 """definition: either an assignment or a phi node"""
 
-_DefCtx: TypeAlias = dict[NamedId, int]
+DefinitionCtx: TypeAlias = dict[NamedId, int]
 """visitor context: variable to current definition"""
 
-@dataclass
+@dataclass(frozen=True)
 class ReachingDefsAnalysis:
     """Result of reaching definitions analysis."""
 
@@ -97,16 +95,30 @@ class ReachingDefsAnalysis:
     """list of all definitions"""
     name_to_defs: dict[NamedId, set[int]]
     """mapping from variable names to all (re-)definitions"""
-    in_defs: dict[StmtBlock, _DefCtx]
+    in_defs: dict[StmtBlock, DefinitionCtx]
     """mapping from block to definitions available at entry"""
-    out_defs: dict[StmtBlock, _DefCtx]
+    out_defs: dict[StmtBlock, DefinitionCtx]
     """mapping from block to definitions available at exit"""
+    reach: dict[Stmt, DefinitionCtx]
+    """mapping from statement to definitions reaching that statement"""
     phis: dict[Stmt, dict[NamedId, int]]
     """
     mapping from block to phi nodes at each statement:
     - for `If1` and `If`, the phi nodes are at the end of the block;
     - for `While` and `For`, the phi nodes are at the beginning of the block;
     """
+
+    def _format_site(self, s: str, width: int = 20) -> str:
+        """Helper function to format site strings with 20 character limit and no newlines."""
+        assert width > 3
+        # Remove newlines and replace with spaces
+        lines = s.splitlines()
+        # Limit to 20 characters with ellipses if needed
+        line = lines[0]
+        if len(line) > width:
+            return line[:width - 3] + '...'
+        else:
+            return line
 
     def format(self) -> str:
         lines: list[str] = []
@@ -116,15 +128,25 @@ class ReachingDefsAnalysis:
                 d = self.defs[idx]
                 match d:
                     case AssignDef():
-                        site = _format_site(d.site.format())
+                        site = self._format_site(d.site.format())
                         prev = 'None' if d.prev is None else str(d.prev)
                         lines.append(f'  {idx} [{prev}] @ {site}')
                     case PhiDef():
-                        site = _format_site(d.site.format())
+                        site = self._format_site(d.site.format())
                         lines.append(f'  {idx} [phi({d.lhs}, {d.rhs})] @ {site}')
                     case _:
                         raise RuntimeError(f'unexpected definition {d}')
         return '\n'.join(lines)
+
+    def find_def_from_site(self, name: NamedId, site: DefSite):
+        """Finds the definition of given a (name, site) pair."""
+        idxs = self.name_to_defs.get(name, set())
+        for i in idxs:
+            d = self.defs[i]
+            if isinstance(d, AssignDef) and d.site == site:
+                return i
+        raise KeyError(f'no definition found for {name} at {site}')
+
 
 class _ReachingDefs(DefaultVisitor):
     """Visitor for reaching definitions analysis."""
@@ -135,8 +157,9 @@ class _ReachingDefs(DefaultVisitor):
     indices: Unionfind[int]
     idx_to_def: dict[int, Definition]
     def_to_idx: dict[Definition, int]
-    in_defs: dict[StmtBlock, _DefCtx]
-    out_defs: dict[StmtBlock, _DefCtx]
+    in_defs: dict[StmtBlock, DefinitionCtx]
+    out_defs: dict[StmtBlock, DefinitionCtx]
+    reach: dict[Stmt, DefinitionCtx]
     phis: dict[Stmt, dict[NamedId, int]]
 
     def __init__(self, ast: FuncDef | StmtBlock, def_ids: dict[StmtBlock, set[NamedId]]):
@@ -148,6 +171,7 @@ class _ReachingDefs(DefaultVisitor):
         self.def_to_idx = {}
         self.in_defs = {}
         self.out_defs = {}
+        self.reach = {}
         self.phis = {}
 
     def _add_def(self, d: Definition) -> int:
@@ -159,7 +183,7 @@ class _ReachingDefs(DefaultVisitor):
         self.indices.add(i)
         return i
 
-    def _add_assign(self, name: NamedId, site: DefSite, ctx: _DefCtx) -> tuple[int, _DefCtx]:
+    def _add_assign(self, name: NamedId, site: DefSite, ctx: DefinitionCtx) -> tuple[int, DefinitionCtx]:
         """Adds a new assignment definition, returning the new context."""
         prev = ctx.get(name)
         d = AssignDef(name, site, None if prev is None else prev)
@@ -168,7 +192,7 @@ class _ReachingDefs(DefaultVisitor):
         new_ctx[name] = idx
         return idx, new_ctx
 
-    def _add_phi(self, name: NamedId, site: PhiSite, lhs: int, rhs: int, ctx: _DefCtx) -> tuple[int, _DefCtx]:
+    def _add_phi(self, name: NamedId, site: PhiSite, lhs: int, rhs: int, ctx: DefinitionCtx) -> tuple[int, DefinitionCtx]:
         """Adds a new phi node definition, returning the new context."""
         d = PhiDef(name, site, lhs, rhs)
         idx = self._add_def(d)
@@ -183,33 +207,34 @@ class _ReachingDefs(DefaultVisitor):
         """
         return self.indices.union(i1, i2)
 
-    def _visit_list_comp(self, e: ListComp, ctx: _DefCtx):
-        for target, arg in zip(e.targets, e.iterables):
-            self._visit_expr(arg, ctx)
+    def _visit_list_comp(self, e: ListComp, ctx: DefinitionCtx):
+        for iterable in e.iterables:
+            self._visit_expr(iterable, ctx)
+        for target in e.targets:
             for name in target.names():
                 _, ctx = self._add_assign(name, e, ctx)
         self._visit_expr(e.elt, ctx)
 
-    def _visit_assign(self, stmt: Assign, ctx: _DefCtx):
+    def _visit_assign(self, stmt: Assign, ctx: DefinitionCtx):
         # visit expression and introduce new definitions
         self._visit_expr(stmt.expr, ctx)
         for name in stmt.target.names():
             _, ctx = self._add_assign(name, stmt, ctx)
         return ctx
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _DefCtx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefinitionCtx):
         for index in stmt.indices:
             self._visit_expr(index, ctx)
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: _DefCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: DefinitionCtx):
         # visit condition
         self._visit_expr(stmt.cond, ctx)
         # visit body
         body_out = self._visit_block(stmt.body, ctx)
         # introduce phi nodes for any definitions that are re-defined in the body
-        phis: _DefCtx = {}
+        phis: DefinitionCtx = {}
         for name, orig in ctx.items():
             if orig != body_out[name]:
                 phi, ctx = self._add_phi(name, stmt, orig, body_out[name], ctx)
@@ -217,7 +242,7 @@ class _ReachingDefs(DefaultVisitor):
         self.phis[stmt] = phis
         return ctx
 
-    def _visit_if(self, stmt: IfStmt, ctx: _DefCtx):
+    def _visit_if(self, stmt: IfStmt, ctx: DefinitionCtx):
         # visit condition
         self._visit_expr(stmt.cond, ctx)
         # visit both true and false branches
@@ -226,7 +251,7 @@ class _ReachingDefs(DefaultVisitor):
         # introduce phi nodes for:
         # (i) redefinitions in the branches
         # (ii) introductions in both branches
-        phis: _DefCtx = {}
+        phis: DefinitionCtx = {}
         for name in ift_out.keys() & iff_out.keys():
             d_ift = ift_out[name]
             d_iff = iff_out[name]
@@ -237,7 +262,7 @@ class _ReachingDefs(DefaultVisitor):
         self.phis[stmt] = phis
         return ctx
 
-    def _visit_while(self, stmt: WhileStmt, ctx: _DefCtx):
+    def _visit_while(self, stmt: WhileStmt, ctx: DefinitionCtx):
         # create (temporary) phi nodes for any mutated variable
         body_in = ctx.copy()
         mutated = ctx.keys() & self.def_ids[stmt.body]
@@ -248,7 +273,7 @@ class _ReachingDefs(DefaultVisitor):
         self._visit_expr(stmt.cond, body_in)
         body_out = self._visit_block(stmt.body, body_in)
         # update phi nodes for any definitions that are re-defined in the body
-        phis: _DefCtx = {}
+        phis: DefinitionCtx = {}
         for name in mutated:
             # create actual phi node `x' = phi(x, x'')` where
             # `x` is on entry and `x''` is after the loop body
@@ -258,7 +283,7 @@ class _ReachingDefs(DefaultVisitor):
         self.phis[stmt] = phis
         return ctx
 
-    def _visit_for(self, stmt: ForStmt, ctx: _DefCtx):
+    def _visit_for(self, stmt: ForStmt, ctx: DefinitionCtx):
         # visit iterable expression
         self._visit_expr(stmt.iterable, ctx)
         # create (temporary) phi nodes for any mutated variable
@@ -273,7 +298,7 @@ class _ReachingDefs(DefaultVisitor):
         # visit body
         body_out = self._visit_block(stmt.body, body_in)
         # update phi nodes for any definitions that are re-defined in the body
-        phis: _DefCtx = {}
+        phis: DefinitionCtx = {}
         for name in mutated:
             # create actual phi node `x' = phi(x, x'')` where
             # `x` is on entry and `x''` is after the loop body
@@ -283,7 +308,7 @@ class _ReachingDefs(DefaultVisitor):
         self.phis[stmt] = phis
         return ctx
 
-    def _visit_context(self, stmt: ContextStmt, ctx: _DefCtx):
+    def _visit_context(self, stmt: ContextStmt, ctx: DefinitionCtx):
         # visit context expression and possibly introduce a binding
         self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.target, NamedId):
@@ -291,29 +316,30 @@ class _ReachingDefs(DefaultVisitor):
         # visit the body and continue with the resulting environment
         return self._visit_block(stmt.body, ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: _DefCtx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.test, ctx)
         return ctx
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: _DefCtx):
+    def _visit_effect(self, stmt: EffectStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: _DefCtx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: DefinitionCtx):
         self._visit_expr(stmt.expr, ctx)
         return ctx
 
-    def _visit_pass(self, stmt: PassStmt, ctx: _DefCtx):
+    def _visit_pass(self, stmt: PassStmt, ctx: DefinitionCtx):
         return ctx
 
-    def _visit_block(self, block: StmtBlock, ctx: _DefCtx) -> _DefCtx:
+    def _visit_block(self, block: StmtBlock, ctx: DefinitionCtx) -> DefinitionCtx:
         self.in_defs[block] = ctx
         for stmt in block.stmts:
+            self.reach[stmt] = ctx
             ctx = self._visit_statement(stmt, ctx)
         self.out_defs[block] = ctx
         return ctx
 
-    def _visit_function(self, func: FuncDef, ctx: _DefCtx):
+    def _visit_function(self, func: FuncDef, ctx: DefinitionCtx):
         # process named arguments
         for arg in func.args:
             if isinstance(arg.name, NamedId):
@@ -369,11 +395,15 @@ class _ReachingDefs(DefaultVisitor):
         for block, ctx in self.out_defs.items():
             self.out_defs[block] = { name: repr_indices[idx] for name, idx in ctx.items() }
 
+        # rebuild map for reaching definitions
+        for stmt, ctx in self.reach.items():
+            self.reach[stmt] = { name: repr_indices[idx] for name, idx in ctx.items() }
+
         # rebuild map for phi nodes
         for stmt, phis in self.phis.items():
             self.phis[stmt] = { name: repr_indices[idx] for name, idx in phis.items() }
 
-        return ReachingDefsAnalysis(defs, name_to_defs, self.in_defs, self.out_defs, self.phis)
+        return ReachingDefsAnalysis(defs, name_to_defs, self.in_defs, self.out_defs, self.reach, self.phis)
 
     def analyze(self) -> ReachingDefsAnalysis:
         match self.ast:
@@ -397,7 +427,7 @@ class ReachingDefs:
     - set of all definitions for each variable;
 
     Each definition has a reference its immediate previous definition(s)
-    which represents a chain of definitions.
+    which represents a (possibly cyclic) graph of definitions.
     """
 
     @staticmethod

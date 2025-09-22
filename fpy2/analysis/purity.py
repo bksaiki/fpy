@@ -7,7 +7,8 @@ from ..function import Function
 from ..number import Context
 from ..primitive import Primitive
 
-from .define_use import DefineUse, DefineUseAnalysis, AssignDef
+from .define_use import DefineUse, DefineUseAnalysis
+from .reaching_defs import Definition, DefSite, PhiSite
 
 class _ImpureError(Exception):
     """
