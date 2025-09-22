@@ -10,7 +10,7 @@ from ..utils import default_repr
 
 from .reaching_defs import (
     ReachingDefs, ReachingDefsAnalysis,
-    AssignDef, PhiDef, Definition, DefinitionCtx,
+    AssignDef, PhiDef, Definition, DefCtx,
     DefSite, PhiSite
 )
 
@@ -48,34 +48,6 @@ class _DefineUseInstance(DefaultVisitor):
         self.reaching_defs = reaching_defs
         self.uses = { d: set() for d, _ in enumerate(reaching_defs.defs) }
 
-    # def _site_to_use(self, defs: dict[NamedId, set[Definition]]):
-    #     site_to_use: dict[tuple[NamedId, DefSite], AssignDef] = {}
-    #     for name, ds in defs.items():
-    #         for d in ds:
-    #             if isinstance(d, AssignDef):
-    #                 site_to_use[(name, d.site)] = d
-    #     return site_to_use
-
-    # def _use_to_def(self, uses: dict[Definition, set[UseSite]]):
-    #     use_to_def: dict[UseSite, Definition] = {}
-    #     for d, us in uses.items():
-    #         for u in us:
-    #             use_to_def[u] = d
-    #     return use_to_def
-
-    # def _successors(self, defs: dict[NamedId, set[Definition]]):
-    #     # map every variable to an empty set
-    #     succ: dict[Definition, set[Definition]] = { d: set() for ds in defs.values() for d in ds }
-    #     # iterate over the definitions and invert the parent-child relationship
-    #     for ds in defs.values():
-    #         for d in ds:
-    #             if isinstance(d, AssignDef) and d.parent is not None:
-    #                 succ[d.parent].add(d)
-    #             elif isinstance(d, PhiDef):
-    #                 succ[d.lhs].add(d)
-    #                 succ[d.rhs].add(d)
-    #     return succ
-
     def analyze(self):
         match self.ast:
             case FuncDef():
@@ -95,14 +67,14 @@ class _DefineUseInstance(DefaultVisitor):
             self.uses
         )
 
-    def _add_use(self, name: NamedId, use: UseSite, ctx: DefinitionCtx):
+    def _add_use(self, name: NamedId, use: UseSite, ctx: DefCtx):
         d = ctx[name]
         self.uses[d].add(use)
 
-    def _visit_var(self, e: Var, ctx: DefinitionCtx):
+    def _visit_var(self, e: Var, ctx: DefCtx):
         self._add_use(e.name, e, ctx)
 
-    def _visit_call(self, e: Call, ctx: DefinitionCtx):
+    def _visit_call(self, e: Call, ctx: DefCtx):
         if e.fn is not None:
             match e.func:
                 case NamedId():
@@ -116,7 +88,7 @@ class _DefineUseInstance(DefaultVisitor):
         for _, kwarg in e.kwargs:
             self._visit_expr(kwarg, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx: DefinitionCtx):
+    def _visit_list_comp(self, e: ListComp, ctx: DefCtx):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
         ctx = ctx.copy()
@@ -125,13 +97,13 @@ class _DefineUseInstance(DefaultVisitor):
                 ctx[name] = self.reaching_defs.find_def_from_site(name, e)
         self._visit_expr(e.elt, ctx)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefinitionCtx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: DefCtx):
         self._add_use(stmt.var, stmt, ctx)
         for slice in stmt.indices:
             self._visit_expr(slice, ctx)
         self._visit_expr(stmt.expr, ctx)
     
-    def _visit_statement(self, stmt, ctx: DefinitionCtx):
+    def _visit_statement(self, stmt, ctx: DefCtx):
         ctx = self.reaching_defs.reach[stmt]
         return super()._visit_statement(stmt, ctx)
 
