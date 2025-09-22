@@ -1,8 +1,6 @@
 """Definition-use analysis for FPy ASTs"""
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import TypeAlias, cast
+from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -17,22 +15,60 @@ from .reaching_defs import (
 UseSite: TypeAlias = Var | IndexedAssign | Call
 """AST nodes that can use variables"""
 
-@dataclass(frozen=True)
+@default_repr
 class DefineUseAnalysis(ReachingDefsAnalysis):
     """Result of definition-use analysis."""
 
-    uses: dict[int, set[UseSite]]
+    uses: dict[Definition, set[UseSite]]
     """mapping from definition id to use sites"""
 
+    use_to_def: dict[UseSite, Definition]
+    """mapping from use site to definition"""
+
+    def __init__(
+        self,
+        defs: list[Definition],
+        name_to_defs: dict[NamedId, set[Definition]],
+        in_defs: dict[StmtBlock, DefCtx],
+        out_defs: dict[StmtBlock, DefCtx],
+        reach: dict[Stmt, DefCtx],
+        phis: dict[Stmt, dict[NamedId, PhiDef]],
+        uses: dict[Definition, set[UseSite]]
+    ):
+        super().__init__(defs, name_to_defs, in_defs, out_defs, reach, phis)
+        self.uses = uses
+        # compute mapping from use to def
+        self.use_to_def = {}
+        for d, us in uses.items():
+            for u in us:
+                self.use_to_def[u] = d
+
     def format(self) -> str:
-        lines = ['defs:'] + super().format().splitlines()
-        lines.append('uses:')
-        for def_id, use_sites in self.uses.items():
-            if len(use_sites) > 0:
-                lines.append(f'  def {def_id}:')
-                for site in use_sites:
-                    lines.append(f'    - {self._format_site(site.format())}')
+        lines: list[str] = []
+        for name, ds in self.name_to_defs.items():
+            lines.append(f'def `{name}`:')
+            for d in ds:
+                match d:
+                    case AssignDef():
+                        site = self._format_site(d.site.format())
+                        prev = 'None' if d.prev is None else str(d.prev)
+                        lines.append(f'  {d.name} [{prev}] @ {site}')
+                    case PhiDef():
+                        site = self._format_site(d.site.format())
+                        lines.append(f'  {d.name} [phi({d.lhs}, {d.rhs})] @ {site}')
+                    case _:
+                        raise RuntimeError(f'unexpected definition {d}')
+            print(f'use `{name}`:')
+            for u in self.uses[d]:
+                site = self._format_site(u.format())
+                lines.append(f'  - {site}')
         return '\n'.join(lines)
+
+    def find_def_from_use(self, site: UseSite):
+        """Finds the definition of a variable."""
+        if site in self.use_to_def:
+            return self.use_to_def[site]
+        raise KeyError(f'no definition found for site {site}')
 
 
 class _DefineUseInstance(DefaultVisitor):
@@ -40,13 +76,13 @@ class _DefineUseInstance(DefaultVisitor):
     ast: FuncDef | StmtBlock
     reaching_defs: ReachingDefsAnalysis
 
-    uses: dict[int, set[UseSite]] = {}
+    uses: dict[Definition, set[UseSite]] = {}
     """mapping from definition id to use sites"""
 
     def __init__(self, ast: FuncDef | StmtBlock, reaching_defs: ReachingDefsAnalysis):
         self.ast = ast
         self.reaching_defs = reaching_defs
-        self.uses = { d: set() for d, _ in enumerate(reaching_defs.defs) }
+        self.uses = { d: set() for d in reaching_defs.defs }
 
     def analyze(self):
         match self.ast:
@@ -102,7 +138,7 @@ class _DefineUseInstance(DefaultVisitor):
         for slice in stmt.indices:
             self._visit_expr(slice, ctx)
         self._visit_expr(stmt.expr, ctx)
-    
+
     def _visit_statement(self, stmt, ctx: DefCtx):
         ctx = self.reaching_defs.reach[stmt]
         return super()._visit_statement(stmt, ctx)

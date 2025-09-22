@@ -131,7 +131,6 @@ class ReachingDefsAnalysis:
         self.out_defs = out_defs
         self.reach = reach
         self.phis = phis
-
         # invert mapping from index to definition
         self.def_to_idx = { d: i for i, d in enumerate(defs) }
         # compute mapping from (name, site) to definition
@@ -184,10 +183,9 @@ class ReachingDefsAnalysis:
 
     def find_def_from_site(self, name: NamedId, site: DefSite) -> AssignDef:
         """Finds the definition of given a (name, site) pair."""
-        ds = self.name_to_defs.get(name, set())
-        for d in ds:
-            if isinstance(d, AssignDef) and d.site == site:
-                return d
+        key = (name, site)
+        if key in self.site_to_def:
+            return self.site_to_def[key]
         raise KeyError(f'no definition found for {name} at {site}')
 
 
