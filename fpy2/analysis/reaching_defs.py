@@ -185,6 +185,39 @@ class ReachingDefsAnalysis:
                         raise RuntimeError(f'unexpected definition {d}')
         return '\n'.join(lines)
 
+    def roots_of(self, d: Definition) -> set[AssignDef]:
+        """
+        Returns the set of root definitions (i.e., assignments with no predecessors)
+        that contribute to this definition.
+        """
+        match d:
+            case AssignDef():
+                if d.prev is None:
+                    return {d}
+                else:
+                    return self.roots_of(self.defs[d.prev])
+            case PhiDef():
+                return self.roots_of(self.defs[d.lhs]) | self.roots_of(self.defs[d.rhs])
+            case _:
+                raise RuntimeError(f'unexpected definition {d}')
+
+    def phi_prevs(self, d: PhiDef) -> set[PhiDef]:
+        """
+        Returns the set of phi nodes that are immediate predecessors
+        of this definition.
+        """
+        lhs = self.defs[d.lhs]
+        rhs = self.defs[d.rhs]
+
+        phis: set[PhiDef] = set()
+        if isinstance(lhs, PhiDef):
+            phis.add(lhs)
+            phis |= self.phi_prevs(lhs)
+        if isinstance(rhs, PhiDef):
+            phis.add(rhs)
+            phis |= self.phi_prevs(rhs)
+        return phis
+
     def find_def_from_site(self, name: NamedId, site: DefSite) -> AssignDef:
         """Finds the definition of given a (name, site) pair."""
         key = (name, site)

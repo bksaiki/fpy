@@ -762,13 +762,13 @@ class _CppBackendInstance(Visitor):
         # variables need to be declared if they are assigned
         # within the branches but not before defined in the branches
         for phi in self.def_use.phis[stmt]:
-            if phi.is_new and phi not in self.decl_phis:
+            if phi.is_intro and phi not in self.decl_phis:
                 # need a declaration for the phi assignment
                 _, cpp_ty = self._def_type(phi)
-                ctx.add_line(f'{cpp_ty.format()} {phi.name};')
+                ctx.add_line(f'{cpp_ty.format()} {phi.name}; // phi')
                 # record this phi so that we don't revisit it
-                self.decl_phis |= phi.phis()
-                self.decl_assigns |= phi.assigns()
+                self.decl_phis |= self.def_use.phi_prevs(phi)
+                self.decl_assigns |= self.def_use.roots_of(phi)
 
         # TODO: fold if statements
         cond = self._visit_expr(stmt.cond, ctx)
