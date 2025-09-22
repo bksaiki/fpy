@@ -168,14 +168,15 @@ class ReachingDefsAnalysis:
         for name, ds in self.name_to_defs.items():
             lines.append(f'{name}:')
             for d in ds:
+                idx = self.def_to_idx[d]
                 match d:
                     case AssignDef():
                         site = self._format_site(d.site.format())
                         prev = 'None' if d.prev is None else str(d.prev)
-                        lines.append(f'  {d.name} [{prev}] @ {site}')
+                        lines.append(f' {idx}: {d.name} [{prev}] @ {site}')
                     case PhiDef():
                         site = self._format_site(d.site.format())
-                        lines.append(f'  {d.name} [phi({d.lhs}, {d.rhs})] @ {site}')
+                        lines.append(f' {idx}: {d.name} [phi({d.lhs}, {d.rhs})] @ {site}')
                     case _:
                         raise RuntimeError(f'unexpected definition {d}')
         return '\n'.join(lines)

@@ -64,20 +64,21 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
         for name, ds in self.name_to_defs.items():
             lines.append(f'def `{name}`:')
             for d in ds:
+                idx = self.def_to_idx[d]
                 match d:
                     case AssignDef():
                         site = self._format_site(d.site.format())
                         prev = 'None' if d.prev is None else str(d.prev)
-                        lines.append(f'  {d.name} [{prev}] @ {site}')
+                        lines.append(f' {idx}: {d.name} [{prev}] @ {site}')
                     case PhiDef():
                         site = self._format_site(d.site.format())
-                        lines.append(f'  {d.name} [phi({d.lhs}, {d.rhs})] @ {site}')
+                        lines.append(f' {idx}: {d.name} [phi({d.lhs}, {d.rhs})] @ {site}')
                     case _:
                         raise RuntimeError(f'unexpected definition {d}')
-            lines.append(f'use `{name}`:')
-            for u in self.uses[d]:
-                site = self._format_site(u.format())
-                lines.append(f'  - {site}')
+                lines.append(f' use `{name}`:')
+                for u in self.uses[d]:
+                    site = self._format_site(u.format())
+                    lines.append(f'  - {site}')
         return '\n'.join(lines)
 
     def find_def_from_use(self, site: UseSite):
@@ -155,7 +156,7 @@ class _DefineUseInstance(DefaultVisitor):
             self._visit_expr(slice, ctx)
         self._visit_expr(stmt.expr, ctx)
 
-    def _visit_statement(self, stmt, ctx: DefCtx):
+    def _visit_statement(self, stmt: Stmt, ctx: DefCtx):
         ctx = self.reaching_defs.reach[stmt]
         return super()._visit_statement(stmt, ctx)
 

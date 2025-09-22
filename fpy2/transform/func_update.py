@@ -32,10 +32,7 @@ class FuncUpdate:
     """
 
     @staticmethod
-    def apply(func: FuncDef, names: set[str] | None = None) -> FuncDef:
-        if names is None:
-            def_use = DefineUse.analyze(func)
-            names = set(def_use.defs.keys())
+    def apply(func: FuncDef) -> FuncDef:
         ast = _FuncUpdateInstance(func).apply()
         SyntaxCheck.check(ast, ignore_unknown=True)
         return ast
