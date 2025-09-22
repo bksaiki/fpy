@@ -15,12 +15,11 @@ __all__ = [
     'ReachingDefs',
     'ReachingDefsAnalysis',
     'AssignDef',
-    'PhiDef'
+    'PhiDef',
     'Definition',
     'DefCtx',
     'DefSite',
     'PhiSite',
-    'UseSite',
 ]
 
 
@@ -102,7 +101,7 @@ class ReachingDefsAnalysis:
     """mapping from block to definitions available at exit"""
     reach: dict[Stmt, DefCtx]
     """mapping from statement to definitions reaching that statement"""
-    phis: dict[Stmt, dict[NamedId, PhiDef]]
+    phis: dict[Stmt, set[PhiDef]]
     """
     mapping from block to phi nodes at each statement:
     - for `If1` and `If`, the phi nodes are at the end of the block;
@@ -123,7 +122,7 @@ class ReachingDefsAnalysis:
         in_defs: dict[StmtBlock, DefCtx],
         out_defs: dict[StmtBlock, DefCtx],
         reach: dict[Stmt, DefCtx],
-        phis: dict[Stmt, dict[NamedId, PhiDef]]
+        phis: dict[Stmt, set[PhiDef]]
     ):
         self.defs = defs
         self.name_to_defs = name_to_defs
@@ -187,6 +186,22 @@ class ReachingDefsAnalysis:
         if key in self.site_to_def:
             return self.site_to_def[key]
         raise KeyError(f'no definition found for {name} at {site}')
+
+    def mutated_in(self, block: StmtBlock) -> set[NamedId]:
+        """Returns the set of variables mutated in the given block."""
+        names: set[NamedId] = set()
+        in_ctx = self.in_defs[block]
+        out_ctx = self.out_defs[block]
+        for name in in_ctx.keys() & out_ctx.keys():
+            if in_ctx[name] != out_ctx[name]:
+                names.add(name)
+        return names
+
+    def introed_in(self, block: StmtBlock) -> set[NamedId]:
+        """Returns the set of variables freshly defined in the given block."""
+        in_ctx = self.in_defs[block]
+        out_ctx = self.out_defs[block]
+        return set(out_ctx.keys() - in_ctx.keys())
 
 
 _DefCtx: TypeAlias = dict[NamedId, int]
@@ -458,14 +473,14 @@ class _ReachingDefs(DefaultVisitor):
             }
 
         # rebuild map for phi nodes
-        phis: dict[Stmt, dict[NamedId, PhiDef]] = {}
+        phis: dict[Stmt, set[PhiDef]] = {}
         for stmt, ctx in self.phis.items():
-            new_ctx: dict[NamedId, PhiDef] = {}
-            for name, idx in ctx.items():
+            new_phis: set[PhiDef] = set()
+            for _, idx in ctx.items():
                 d = self.idx_to_def[repr_indices[idx]]
                 assert isinstance(d, PhiDef), f'expected phi node, got {d}'
-                new_ctx[name] = d
-            phis[stmt] = new_ctx
+                new_phis.add(d)
+            phis[stmt] = new_phis
 
         return ReachingDefsAnalysis(defs, name_to_defs, in_defs, out_defs, reach, phis)
 

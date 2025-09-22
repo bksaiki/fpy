@@ -8,9 +8,21 @@ from ..utils import default_repr
 
 from .reaching_defs import (
     ReachingDefs, ReachingDefsAnalysis,
-    AssignDef, PhiDef, Definition, DefCtx,
-    DefSite, PhiSite
+    AssignDef, PhiDef, Definition, DefCtx, DefSite, PhiSite
 )
+
+__all__ = [
+    'DefineUse',
+    'DefineUseAnalysis',
+    'AssignDef',
+    'PhiDef',
+    'Definition',
+    'UseSite',
+    'DefCtx',
+    'DefSite',
+    'PhiSite',
+    'UseSite',
+]
 
 UseSite: TypeAlias = Var | IndexedAssign | Call
 """AST nodes that can use variables"""
@@ -32,7 +44,7 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
         in_defs: dict[StmtBlock, DefCtx],
         out_defs: dict[StmtBlock, DefCtx],
         reach: dict[Stmt, DefCtx],
-        phis: dict[Stmt, dict[NamedId, PhiDef]],
+        phis: dict[Stmt, set[PhiDef]],
         uses: dict[Definition, set[UseSite]]
     ):
         super().__init__(defs, name_to_defs, in_defs, out_defs, reach, phis)
@@ -42,6 +54,10 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
         for d, us in uses.items():
             for u in us:
                 self.use_to_def[u] = d
+
+    def names(self) -> set[NamedId]:
+        """Returns the set of variable names with definitions."""
+        return set(self.name_to_defs.keys())
 
     def format(self) -> str:
         lines: list[str] = []
@@ -58,7 +74,7 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
                         lines.append(f'  {d.name} [phi({d.lhs}, {d.rhs})] @ {site}')
                     case _:
                         raise RuntimeError(f'unexpected definition {d}')
-            print(f'use `{name}`:')
+            lines.append(f'use `{name}`:')
             for u in self.uses[d]:
                 site = self._format_site(u.format())
                 lines.append(f'  - {site}')

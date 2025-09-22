@@ -572,7 +572,9 @@ class _TypeInferInstance(Visitor):
 
         # unify any merged variable
         for phi in self.def_use.phis[stmt]:
-            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            ty = self._unify(lhs_ty, rhs_ty)
             self._set_type(phi, ty)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
@@ -586,20 +588,28 @@ class _TypeInferInstance(Visitor):
 
         # unify any merged variable
         for phi in self.def_use.phis[stmt]:
-            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            ty = self._unify(lhs_ty, rhs_ty)
             self._set_type(phi, ty)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
+        # add types to phi variables
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            self._set_type(phi, lhs_ty)
+
         cond_ty = self._visit_expr(stmt.cond, None)
         self._unify(cond_ty, BoolType())
 
         # type check body
         self._visit_block(stmt.body, None)
 
-        # unify any merged variable
+        # unify phi variables
         for phi in self.def_use.phis[stmt]:
-            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
-            self._set_type(phi, ty)
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self._unify(lhs_ty, rhs_ty)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         # type check iterable
@@ -610,13 +620,19 @@ class _TypeInferInstance(Visitor):
         # expected type: list a
         self._visit_binding(stmt, stmt.target, iter_ty.elt)
 
+        # add types to phi variables
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            self._set_type(phi, lhs_ty)
+
         # type check body
         self._visit_block(stmt.body, None)
 
-        # unify any merged variable
+        # unify phi variables
         for phi in self.def_use.phis[stmt]:
-            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
-            self._set_type(phi, ty)
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self._unify(lhs_ty, rhs_ty)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         ty = self._visit_expr(stmt.ctx, None)

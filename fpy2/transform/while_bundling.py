@@ -21,7 +21,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
+        self.gensym = Gensym(reserved=def_use.names())
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})
@@ -54,9 +54,7 @@ class _WhileBundlingInstance(DefaultTransformVisitor):
         # subsitutes for `x_0, ..., x_N` in the condition.
 
         # identify variables that were mutated in the body
-        defs_in, defs_out = self.def_use.blocks[stmt.body]
-        mutated = defs_in.mutated_in(defs_out)
-
+        mutated = self.def_use.mutated_in(stmt.body)
         if len(mutated) > 1:
             # need to apply the transformation
             stmts: list[Stmt] = []

@@ -176,18 +176,21 @@ class _DeadCodeEliminate:
             unused_assign: set[Assign] = set()
             unused_fv: set[NamedId] = set()
             for d, uses in self.def_use.uses.items():
-                if len(uses) == 0:
+                if len(uses) == 0 and len(self.def_use.successors[d]) == 0:
+                    # print(d.name, d.site.format())
                     if isinstance(d, AssignDef):
                         if isinstance(d.site, FuncDef):
                             # free variable
                             unused_fv.add(d.name)
                         elif (
                             isinstance(d.site, Assign)
-                            and d not in used_assigns
+                            # and d not in used_assigns
                             and Purity.analyze_expr(d.site.expr, self.def_use)
                         ):
                             # assignment
                             unused_assign.add(d.site)
+
+            # print(unused_assign)
 
             # run code eliminator
             self.func, eliminated = _Eliminator(self.func, self.def_use, unused_assign, unused_fv)._apply()
@@ -195,7 +198,6 @@ class _DeadCodeEliminate:
                 return self.func
 
             # removed something so try again
-            print(self.func.format())
             self.def_use = DefineUse.analyze(self.func)
 
 
