@@ -39,6 +39,7 @@ from .backend import (
 )
 
 # submodules
+from . import ast
 from . import analysis
 from . import transform
 from . import utils
