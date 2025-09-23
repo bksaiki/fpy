@@ -1,4 +1,5 @@
 from .context_infer import test_context_infer
+from .copy_prop import test_copy_prop
 from .dead_code import test_dead_code
 from .define_use import test_define_use
 from .defs import test_defs
@@ -22,6 +23,7 @@ def _run_tests():
     test_context_infer()
     test_purity()
     # transformations
+    test_copy_prop()
     test_dead_code()
     # compilation
     test_compile_fpc()

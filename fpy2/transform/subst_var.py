@@ -2,6 +2,8 @@
 Variable substitution. 
 """
 
+from typing import Mapping
+
 from ..analysis import AssignDef, DefineUseAnalysis
 from ..ast import *
 
@@ -10,9 +12,9 @@ class _SubstVar(DefaultTransformVisitor):
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    subst: dict[AssignDef, Expr]
+    subst: Mapping[AssignDef, Expr]
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, subst: dict[AssignDef, Expr]):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, subst: Mapping[AssignDef, Expr]):
         self.func = func
         self.def_use = def_use
         self.subst = subst
@@ -39,7 +41,7 @@ class SubstVar:
     """
 
     @staticmethod
-    def apply(func: FuncDef, def_use: DefineUseAnalysis, subst: dict[AssignDef, Expr]):
+    def apply(func: FuncDef, def_use: DefineUseAnalysis, subst: Mapping[AssignDef, Expr]):
         """
         Given a substitution from variable definitions to expressions, replaces
         all occurences of the variables with the corresponding expressions.
