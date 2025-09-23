@@ -156,7 +156,7 @@ class _FPCoreCompileInstance(Visitor):
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
+        self.gensym = Gensym(reserved=def_use.names())
 
     def compile(self) -> fpc.FPCore:
         f = self._visit_function(self.func, None)
@@ -737,8 +737,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_if1(self, stmt: If1Stmt, ret: fpc.Expr):
         # check that only one variable is mutated in the loop
         # the `IfBundling` pass is required to ensure this
-        defs_in, defs_out = self.def_use.blocks[stmt.body]
-        mutated = defs_in.mutated_in(defs_out)
+        mutated = self.def_use.mutated_in(stmt.body)
         num_mutated = len(mutated)
 
         if num_mutated == 0:
@@ -766,16 +765,14 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_if(self, stmt: IfStmt, ret: fpc.Expr):
         # check that only one variable is mutated in the loop
         # the `IfBundling` pass is required to ensure this
-        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
-        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
-        mutated_ift = defs_in_ift.mutated_in(defs_out_ift)
-        mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
-        mutated  = list(dict.fromkeys(mutated_ift + mutated_iff)) # union with ordering
+        mutated_ift = self.def_use.mutated_in(stmt.ift)
+        mutated_iff = self.def_use.mutated_in(stmt.iff)
+        mutated = sorted(mutated_ift | mutated_iff)
 
         # identify variables that were introduced in each body
-        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
-        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        intros = list(intros_ift & intros_iff) # intersection of fresh variables
+        intros_ift = self.def_use.introed_in(stmt.ift)
+        intros_iff = self.def_use.introed_in(stmt.iff)
+        intros = sorted(intros_ift & intros_iff) # intersection of fresh variables
 
         # mutated or introduced variables
         changed = mutated + intros
@@ -808,8 +805,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_while(self, stmt: WhileStmt, ret: fpc.Expr):
         # check that only one variable is mutated in the loop
         # the `WhileBundling` pass is required to ensure this
-        defs_in, defs_out = self.def_use.blocks[stmt.body]
-        mutated = defs_in.mutated_in(defs_out)
+        mutated = self.def_use.mutated_in(stmt.body)
         num_mutated = len(mutated)
 
         if num_mutated == 0:
@@ -834,8 +830,7 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_for(self, stmt: ForStmt, ret: fpc.Expr):
         # check that only one variable is mutated in the loop
         # the `ForBundling` pass is required to ensure this
-        defs_in, defs_out = self.def_use.blocks[stmt.body]
-        mutated = defs_in.mutated_in(defs_out)
+        mutated = self.def_use.mutated_in(stmt.body)
         num_mutated = len(mutated)
 
         if not isinstance(stmt.target, Id):

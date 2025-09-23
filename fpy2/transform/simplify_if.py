@@ -17,7 +17,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.gensym = Gensym(reserved=set(def_use.defs.keys()))
+        self.gensym = Gensym(reserved=def_use.names())
 
     def apply(self):
         func = self._visit_function(self.func, None)
@@ -40,8 +40,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         body, _ = self._visit_block(stmt.body, ctx)
 
         # identify variables that were mutated in the body
-        defs_in, defs_out = self.def_use.blocks[stmt.body]
-        mutated = defs_in.mutated_in(defs_out)
+        mutated = self.def_use.mutated_in(stmt.body)
 
         # rename mutated variables in the body
         rename = { var: self.gensym.refresh(var) for var in mutated }
@@ -81,20 +80,18 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         iff, _ = self._visit_block(stmt.iff, ctx)
 
         # identify variables that were mutated in each body
-        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
-        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
-        mutated_ift = defs_in_ift.mutated_in(defs_out_ift)
-        mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
+        mutated_ift = self.def_use.mutated_in(stmt.ift)
+        mutated_iff = self.def_use.mutated_in(stmt.iff)
 
         # identify variables that were introduced in the bodies
         # FPy semantics says they must be introduced in both branches
-        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
-        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        intros = list(intros_ift & intros_iff) # intersection of fresh variables
+        intros_ift = self.def_use.introed_in(stmt.ift)
+        intros_iff = self.def_use.introed_in(stmt.iff)
+        intros = sorted(intros_ift & intros_iff) # intersection of fresh variables
 
         # combine sets
-        mutated_or_new_ift = mutated_ift.copy()
-        mutated_or_new_iff = mutated_iff.copy()
+        mutated_or_new_ift = sorted(mutated_ift)
+        mutated_or_new_iff = sorted(mutated_iff)
         mutated_or_new_ift.extend(intros)
         mutated_or_new_iff.extend(intros)
 

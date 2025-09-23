@@ -10,7 +10,7 @@ from typing import cast
 from ..ast import *
 from ..analysis import (
     DefineUse, DefineUseAnalysis, AssignDef, PhiDef,
-    Purity
+    Purity, SyntaxCheck
 )
 
 class _Eliminator(DefaultTransformVisitor):
@@ -24,7 +24,13 @@ class _Eliminator(DefaultTransformVisitor):
     unused_fv: set[NamedId]
     eliminated: bool
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, unused_assign: set[Assign], unused_fv: set[NamedId]):
+    def __init__(
+        self,
+        func: FuncDef,
+        def_use: DefineUseAnalysis,
+        unused_assign: set[Assign],
+        unused_fv: set[NamedId]
+    ):
         self.func = func
         self.def_use = def_use
         self.unused_assign = unused_assign
@@ -157,37 +163,39 @@ class _DeadCodeEliminate:
 
     def apply(self):
         while True:
-            # phi variables are virtual definitions:
-            # if a phi variable is used, so are its children
-            # if a phi variable is not used, its children are also unused
-            used_assigns: set[AssignDef] = set()
-            for phis in self.def_use.phis.values():
-                for phi in phis:
-                    if len(self.def_use.uses[phi]) > 0:
-                        # phi variable is used, so 
-                        if isinstance(phi.lhs, AssignDef):
-                            used_assigns.add(phi.lhs)
-                        if isinstance(phi.rhs, AssignDef):
-                            used_assigns.add(phi.rhs)
-
             # process def-use analysis for definitions without uses
-            # specifically interested in assignments, phi variables,
-            # and free variables
+            # specifically interested in assignments, phi variables, and free variables
             unused_assign: set[Assign] = set()
             unused_fv: set[NamedId] = set()
+            unused_phi: set[PhiDef] = set()
             for d, uses in self.def_use.uses.items():
-                if len(uses) == 0:
-                    if isinstance(d, AssignDef):
+                if len(uses) > 0 or any(isinstance(s, PhiDef) for s in self.def_use.successors[d]):
+                    continue
+                match d:
+                    case AssignDef():
                         if isinstance(d.site, FuncDef):
                             # free variable
                             unused_fv.add(d.name)
                         elif (
                             isinstance(d.site, Assign)
-                            and d not in used_assigns
                             and Purity.analyze_expr(d.site.expr, self.def_use)
                         ):
                             # assignment
                             unused_assign.add(d.site)
+                    case PhiDef():
+                        # phi variable with no uses
+                        unused_phi.add(d)
+                    case _:
+                        raise RuntimeError(f'unexpected def: {d}')
+
+            # if a phi variable is unused, then its arguments are also unused
+            for phi in unused_phi:
+                lhs = self.def_use.defs[phi.lhs]
+                rhs = self.def_use.defs[phi.rhs]
+                if isinstance(lhs, AssignDef) and isinstance(lhs.site, Assign):
+                    unused_assign.add(lhs.site)
+                if isinstance(rhs, AssignDef) and isinstance(rhs.site, Assign):
+                    unused_assign.add(rhs.site)
 
             # run code eliminator
             self.func, eliminated = _Eliminator(self.func, self.def_use, unused_assign, unused_fv)._apply()
@@ -195,7 +203,6 @@ class _DeadCodeEliminate:
                 return self.func
 
             # removed something so try again
-            print(self.func.format())
             self.def_use = DefineUse.analyze(self.func)
 
 
@@ -209,9 +216,11 @@ class DeadCodeEliminate:
     """
 
     @staticmethod
-    def apply(ast: FuncDef, def_use: DefineUseAnalysis | None = None) -> FuncDef:
-        if not isinstance(ast, FuncDef):
-            raise TypeError(f'Expected `FuncDef`, got {type(ast)} for {ast}')
+    def apply(func: FuncDef, def_use: DefineUseAnalysis | None = None) -> FuncDef:
+        if not isinstance(func, FuncDef):
+            raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
         if def_use is None:
-            def_use = DefineUse.analyze(ast)
-        return _DeadCodeEliminate(ast, def_use).apply()
+            def_use = DefineUse.analyze(func)
+        func = _DeadCodeEliminate(func, def_use).apply()
+        SyntaxCheck.check(func)
+        return func

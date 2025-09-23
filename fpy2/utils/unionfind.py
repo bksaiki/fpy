@@ -94,3 +94,10 @@ class Unionfind(Generic[T]):
         Returns an iterator over the items in the union-find.
         """
         return iter(self._parent.items())
+
+    def representatives(self) -> set[T]:
+        """
+        Returns the set of all representatives (root elements) in the union-find.
+        Each representative corresponds to a distinct disjoint set.
+        """
+        return {self._find(x) for x in self._parent}

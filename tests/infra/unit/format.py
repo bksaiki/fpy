@@ -1,5 +1,5 @@
 from fpy2 import Function
-from .defs import tests, examples
+from .unit_tests import tests, examples
 
 def test_format():
     for core in tests + examples:

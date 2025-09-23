@@ -23,7 +23,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
-        self.gensym = Gensym(reserved=def_use.names)
+        self.gensym = Gensym(reserved=def_use.names())
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, {})
@@ -55,9 +55,7 @@ class _IfBundlingInstance(DefaultTransformVisitor):
         # subsitutes for `x_0, ..., x_N` in the condition.
 
         # identify variables that were mutated in the body
-        defs_in, defs_out = self.def_use.blocks[stmt.body]
-        mutated = defs_in.mutated_in(defs_out)
-
+        mutated = self.def_use.mutated_in(stmt.body)
         if len(mutated) > 1:
             # need to apply the transformation
             stmts: list[Stmt] = []
@@ -135,16 +133,14 @@ class _IfBundlingInstance(DefaultTransformVisitor):
         stmts: list[Stmt] = []
 
         # identify variables that were mutated in each body
-        defs_in_ift, defs_out_ift = self.def_use.blocks[stmt.ift]
-        defs_in_iff, defs_out_iff = self.def_use.blocks[stmt.iff]
-        mutated_ift = defs_in_ift.mutated_in(defs_out_ift)
-        mutated_iff = defs_in_iff.mutated_in(defs_out_iff)
-        mutated  = list(dict.fromkeys(mutated_ift + mutated_iff)) # union with ordering
+        mutated_ift = self.def_use.mutated_in(stmt.ift)
+        mutated_iff = self.def_use.mutated_in(stmt.iff)
+        mutated = sorted(mutated_ift | mutated_iff)
 
         # identify variables that were introduced in each body
-        intros_ift = defs_in_ift.fresh_in(defs_out_ift)
-        intros_iff = defs_in_iff.fresh_in(defs_out_iff)
-        intros = list(intros_ift & intros_iff) # intersection of fresh variables
+        intros_ift = self.def_use.introed_in(stmt.ift)
+        intros_iff = self.def_use.introed_in(stmt.iff)
+        intros = sorted(intros_ift & intros_iff) # intersection of fresh variables
 
         # either mutated or introed
         changed = mutated + intros

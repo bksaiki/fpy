@@ -7,7 +7,7 @@ from ..function import Function
 from ..number import Context
 from ..primitive import Primitive
 
-from .define_use import DefineUse, DefineUseAnalysis, AssignDef
+from .define_use import AssignDef, DefineUse, DefineUseAnalysis
 
 class _ImpureError(Exception):
     """

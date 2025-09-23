@@ -474,9 +474,14 @@ class ContextTypeInferInstance(Visitor):
     def _visit_if1(self, stmt: If1Stmt, ctx: ContextParam):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
+
+        # unify any merged variable
         for phi in self.def_use.phis[stmt]:
-            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            ty = self._unify(lhs_ty, rhs_ty)
             self._set_context(phi, ty)
+
         return ctx
 
     def _visit_if(self, stmt: IfStmt, ctx: ContextParam):
@@ -484,31 +489,50 @@ class ContextTypeInferInstance(Visitor):
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
 
-        # need to merge variables introduced on both sides
+        # unify any merged variable
         for phi in self.def_use.phis[stmt]:
-            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            ty = self._unify(lhs_ty, rhs_ty)
             self._set_context(phi, ty)
 
         return ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: ContextParam):
+        # add types to phi variables
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            self._set_context(phi, lhs_ty)
+
+        # visit condition and body
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
+
+        # unify phi variables
         for phi in self.def_use.phis[stmt]:
-            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
-            self._set_context(phi, ty)
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self._unify(lhs_ty, rhs_ty)
+
         return ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: ContextParam):
         iter_ty = self._visit_expr(stmt.iterable, ctx)
         assert isinstance(iter_ty, ListTypeContext)
         self._visit_binding(stmt, stmt.target, iter_ty.elt)
+
+        # add types to phi variables
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            self._set_context(phi, lhs_ty)
+
         self._visit_block(stmt.body, ctx)
 
-        # unify any merged variable
+        # unify phi variables
         for phi in self.def_use.phis[stmt]:
-            ty = self._unify(self.by_def[phi.lhs], self.by_def[phi.rhs])
-            self._set_context(phi, ty)
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self._unify(lhs_ty, rhs_ty)
 
         return ctx
 
