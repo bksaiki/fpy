@@ -2,6 +2,7 @@
 Definition analysis.
 """
 
+from dataclasses import dataclass
 from typing import TypeAlias
 
 from ..ast.fpyast import *
@@ -25,7 +26,7 @@ class _DefAnalysis(DefaultVisitor):
         self.blocks = {}
 
     def _visit_assign(self, stmt: Assign, ctx: None):
-        # any defined variable is introduced into scope
+        # introduces bindings
         defs: _Defs = set()
         for name in stmt.target.names():
             defs.add(name)
@@ -36,25 +37,26 @@ class _DefAnalysis(DefaultVisitor):
         return set()
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
-        # does not introduce bindings
-        self._visit_block(stmt.body, ctx)
-        return set()
+        # does not introduce bindings but body might
+        return self._visit_block(stmt.body, ctx)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
-        # introduces any bindings that are in _both_ branches
+        # does not introduce bindings but branches might
         ift_defs = self._visit_block(stmt.ift, ctx)
         iff_defs = self._visit_block(stmt.iff, ctx)
-        return ift_defs & iff_defs
+        return ift_defs | iff_defs
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        # does not introduce bindings
-        self._visit_block(stmt.body, ctx)
-        return set()
+        # does not introduce bindings but body might
+        return self._visit_block(stmt.body, ctx)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        # does not introduce bindings
-        self._visit_block(stmt.body, ctx)
-        return set()
+        # introduces binding for loop variable
+        defs: _Defs = set()
+        for name in stmt.target.names():
+            defs.add(name)
+        defs |= self._visit_block(stmt.body, ctx)
+        return defs
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # might introduce a binding
@@ -98,8 +100,7 @@ class DefAnalysis:
     """
     Definition analysis.
 
-    This analysis is weaker than both reaching definitions and define-use analysis.
-    It only tracks the identifiers introduced within each block.
+    Computes the set of targets seen within each statement block.
     """
 
     @staticmethod
