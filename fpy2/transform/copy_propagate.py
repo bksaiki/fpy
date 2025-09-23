@@ -29,11 +29,13 @@ class CopyPropagate:
             if isinstance(d, AssignDef) and isinstance(d.site, Assign) and isinstance(d.site.expr, Var):
                 # direct assignment: x = y
                 # substitute all occurences of this definition of `x` with `y`
-                prop[d] = d.site.expr
+                if len(def_use.uses[d]) > 0:
+                    # optimization: only propagate if there is at least one use
+                    prop[d] = d.site.expr
 
         if prop:
             # at least one variable to propagate
             func = SubstVar.apply(func, def_use, prop)
             SyntaxCheck.check(func, ignore_unknown=True)
-        
+
         return func
