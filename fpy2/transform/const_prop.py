@@ -50,7 +50,6 @@ class ConstPropagate:
 
         if prop:
             # at least one variable to propagate
-            print('propagate', prop)
             func = SubstVar.apply(func, def_use, prop)
             SyntaxCheck.check(func, ignore_unknown=True)
 
