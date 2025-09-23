@@ -2,7 +2,6 @@
 Definition analysis.
 """
 
-from dataclasses import dataclass
 from typing import TypeAlias
 
 from ..ast.fpyast import *

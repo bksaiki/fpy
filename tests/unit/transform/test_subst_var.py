@@ -21,7 +21,7 @@ class TestSubstVar(unittest.TestCase):
 
         subst: dict[fp.analysis.AssignDef, fp.ast.Expr] = {}
         def_use = fp.analysis.DefineUse.analyze(test.ast)
-        for d in def_use.defs[fp.ast.NamedId('x')]:
+        for d in def_use.name_to_defs[fp.ast.NamedId('x')]:
             if isinstance(d, fp.analysis.AssignDef):
                 subst[d] = fp.ast.Integer(2, None)
         assert len(subst) == 1
@@ -52,7 +52,7 @@ class TestSubstVar(unittest.TestCase):
 
         subst: dict[fp.analysis.AssignDef, fp.ast.Expr] = {}
         def_use = fp.analysis.DefineUse.analyze(test.ast)
-        for d in def_use.defs[fp.ast.NamedId('x')]:
+        for d in def_use.name_to_defs[fp.ast.NamedId('x')]:
             if isinstance(d, fp.analysis.AssignDef):
                 subst[d] = fp.ast.Integer(2, None)
         assert len(subst) == 1
@@ -84,8 +84,8 @@ class TestSubstVar(unittest.TestCase):
 
         subst: dict[fp.analysis.AssignDef, fp.ast.Expr] = {}
         def_use = fp.analysis.DefineUse.analyze(test.ast)
-        for d in def_use.defs[fp.ast.NamedId('x')]:
-            if isinstance(d, fp.analysis.AssignDef) and d.parent is None:
+        for d in def_use.name_to_defs[fp.ast.NamedId('x')]:
+            if isinstance(d, fp.analysis.AssignDef) and d.prev is None:
                 subst[d] = fp.ast.Integer(2, None)
         assert len(subst) == 1
 
