@@ -1,5 +1,13 @@
 # Version History
 
+## [next] - ???
+### Features:
+ - Numbers:
+   - implement comparators between `Float`/`RealFloat` and Python numbers
+### Fixes:
+ - `RealFloat`: fix `as_rational()`
+ - `Float`: fix `is_positive()` and `is_negative()`
+
 ## [0.0.11] - 2025-09-17
 ### Features:
  - Backend
