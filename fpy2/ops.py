@@ -519,13 +519,12 @@ def tgamma(x: Real, ctx: Context | None = None):
 #############################################################################
 # Rounding operations
 
-def round(x: Real, ctx: Context | None = None) -> Float:
+def round(x: Real | Fraction, ctx: Context | None = None) -> Float | Fraction:
     """
     Rounds `x` under the given context `ctx`.
 
     If `ctx` is `None`, this operation is the identity operation.
     """
-    x = _real_to_float(x)
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     match ctx:

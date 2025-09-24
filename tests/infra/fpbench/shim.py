@@ -1,10 +1,12 @@
 import types
 
 from fpy2 import Float, IEEEContext, RoundingMode, nearbyint
+from fractions import Fraction
+
 from titanfp.arithmetic.evalctx import EvalCtx, RM
 from titanfp.arithmetic.ieee754 import IEEECtx
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
-from titanfp.fpbench.fpcast import Array, Nearbyint
+from titanfp.fpbench.fpcast import Nearbyint
 from titanfp.titanic import ndarray
 
 def fpy_to_mpmf(x: bool | Float | list):
@@ -39,7 +41,7 @@ def compare(
             if expect != actual:
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')
-        case Float(), Float():
+        case Float() | Fraction(), Float() | Fraction():
             if not actual.isnan if expect.isnan else expect != actual:
                 kwarg_str = '\n'.join(f'{k}={v}' for k, v in kwargs.items())
                 raise ValueError(f'Outputs do not match: {expect} != {actual}\n kwargs={kwarg_str}')

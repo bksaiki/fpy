@@ -2,6 +2,7 @@
 Helper methods for fractions.
 """
 
+import numbers
 import re
 
 from fractions import Fraction
@@ -126,7 +127,7 @@ def hexnum_to_fraction(s: str):
 
     return _sci_to_fraction(sign, i, f, exp, 16, 2)
 
-def is_dyadic(x: Fraction) -> bool:
+def is_dyadic(x: numbers.Rational) -> bool:
     """
     Check if the fraction is dyadic, i.e., can be expressed as a
     fraction with a power of two in the denominator.

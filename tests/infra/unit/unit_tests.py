@@ -577,7 +577,7 @@ def instCurrent(
     inductance: Real,
     maxVoltage: Real
 ):
-    pi = 3.14159265359
+    pi = fp.round(3.14159265359)
     impedance_re = resistance
     impedance_im = 2 * pi * frequency * inductance
     denom = impedance_re ** 2 + impedance_im ** 2
@@ -644,7 +644,7 @@ def lod_anisotropic(
     'cite': ['Curnow-and-Wichmann-1976'],
 })
 def whetsone1(n: int):
-    t = 0.499975
+    t = fp.round(0.499975)
     x1 = 1.0
     x2 = -1.0
     x3 = -1.0
