@@ -110,7 +110,7 @@ def eval(
 def test_round_trip():
     rt = mpmf_interpreter()
     env = ForeignEnv.empty()
-    comp = FPCoreCompiler()
+    comp = FPCoreCompiler(unsafe_int_cast=True)
     fpbench = fetch_cores()
     for core in fpbench.all_cores():
         eval(rt, env, comp, core)

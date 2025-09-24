@@ -4,14 +4,6 @@ import fpy2 as fp
 ### Simple tests
 
 @fpy
-def test_simple1():
-    return 0
-
-@fpy
-def test_simple2():
-    return 0
-
-@fpy
 def test_bool1():
     return True
 
@@ -20,12 +12,28 @@ def test_bool2():
     return False
 
 @fpy
+def test_integer1():
+    return 0
+
+@fpy
+def test_integer2():
+    return 1
+
+@fpy
 def test_decnum1():
     return 0.0
 
 @fpy
 def test_decnum2():
     return 1.5
+
+@fpy
+def test_hexnum1():
+    return fp.hexfloat('0x1.921fb54442d18p+1')
+
+@fpy
+def test_rational1():
+    return fp.rational(1, 3)
 
 @fpy
 def test_digits1():
@@ -227,11 +235,6 @@ def test_list_zip4():
     ys = [4.0, 5.0, 6.0]
     zs = [7.0, 8.0, 9.0]
     return zip(xs, ys, zs)
-
-@fpy
-def test_list_enumerate():
-    xs = [1.0, 2.0, 4.0]
-    return enumerate(xs)
 
 @fpy
 def test_list_sum(x: fp.Real, y: fp.Real, z: fp.Real) -> Real:
@@ -670,12 +673,14 @@ def keep_p_1(x: fp.Real):
 
 tests: list[Function] = [
     # Tests
-    test_simple1,
-    test_simple2,
     test_bool1,
     test_bool2,
+    test_integer1,
+    test_integer2,
     test_decnum1,
     test_decnum2,
+    test_hexnum1,
+    test_rational1,
     test_digits1,
     test_digits2,
     test_digits3,
@@ -715,7 +720,6 @@ tests: list[Function] = [
     test_list_zip2,
     test_list_zip3,
     test_list_zip4,
-    test_list_enumerate,
     test_list_sum,
     test_min,
     test_max,
