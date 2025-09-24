@@ -6,6 +6,7 @@ This module defines two floating-point number types.
 """
 
 import math
+import numbers
 import random
 
 from fractions import Fraction
@@ -34,7 +35,7 @@ from .round import RoundingMode, RoundingDirection
 ###########################################################
 # RealFloat
 
-class RealFloat:
+class RealFloat(numbers.Rational):
     """
     The basic floating-point number.
 
@@ -420,8 +421,7 @@ class RealFloat:
         if self.is_zero():
             return Fraction(0)
         else:
-            x = self._c * (Fraction(2) ** self._exp)
-            return -x if self._s else x
+            return self.m * (Fraction(2) ** self._exp)
 
     @staticmethod
     def from_int(x: int):
@@ -545,38 +545,11 @@ class RealFloat:
 
     @property
     def numerator(self):
-        if self._c == 0:
-            # case: value is zero
-            return 0
-        elif self._exp >= 0:
-            # case: value is definitely an integer
-            return self._c << self._exp
-        else:
-            # case: fractional digits
-
-            # compute gcd
-            numerator = self._c
-            denominator = (1 << -self._exp)
-            gcd = math.gcd(numerator, denominator)
-
-            # divide numerator
-            return numerator // gcd
+        return self.as_rational().numerator
 
     @property
     def denominator(self):
-        if self._c == 0 or self._exp >= 0:
-            # case: value is zero or definitely an integer
-            return 1
-        else:
-            # case: fractional digits
-
-            # compute gcd
-            numerator = self._c
-            denominator = (1 << -self._exp)
-            gcd = math.gcd(numerator, denominator)
-
-            # divide numerator
-            return denominator // gcd
+        return self.as_rational().denominator
 
     def is_zero(self) -> bool:
         """Returns whether this value represents zero."""
