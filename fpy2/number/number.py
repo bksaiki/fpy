@@ -6,7 +6,6 @@ This module defines two floating-point number types.
 """
 
 import math
-import numbers
 import random
 
 from fractions import Fraction
@@ -35,7 +34,7 @@ from .round import RoundingMode, RoundingDirection
 ###########################################################
 # RealFloat
 
-class RealFloat(numbers.Rational):
+class RealFloat:
     """
     The basic floating-point number.
 
@@ -189,34 +188,26 @@ class RealFloat(numbers.Rational):
         return hash((self._s, self._exp, self._c))
 
     def __eq__(self, other):
-        if not isinstance(other, RealFloat):
+        if not isinstance(other, RealFloat | int | float | Fraction):
             return False
         ord = self.compare(other)
-        return ord is not None and ord == Ordering.EQUAL
+        return ord == Ordering.EQUAL
 
     def __lt__(self, other):
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'\'<\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
         ord = self.compare(other)
-        return ord is not None and ord == Ordering.LESS
+        return ord == Ordering.LESS
 
     def __le__(self, other):
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'\'<=\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
         ord = self.compare(other)
-        return ord is not None and ord != Ordering.GREATER
+        return ord != Ordering.GREATER
 
     def __gt__(self, other):
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'\'>\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
         ord = self.compare(other)
-        return ord is not None and ord == Ordering.GREATER
+        return ord == Ordering.GREATER
 
     def __ge__(self, other):
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'\'>=\' not supported between instances of \'{type(self)}\' \'{type(other)}\'')
         ord = self.compare(other)
-        return ord is not None and ord != Ordering.LESS
+        return ord != Ordering.LESS
 
     def __add__(self, other: 'RealFloat'):
         """
@@ -429,7 +420,8 @@ class RealFloat(numbers.Rational):
         if self.is_zero():
             return Fraction(0)
         else:
-            return self._c * (Fraction(2) ** self._exp)
+            x = self._c * (Fraction(2) ** self._exp)
+            return -x if self._s else x
 
     @staticmethod
     def from_int(x: int):
@@ -741,54 +733,75 @@ class RealFloat(numbers.Rational):
             lo = RealFloat(self._s, exp_lo, c_lo)
             return (hi, lo)
 
-    def compare(self, other: 'RealFloat'):
+    def compare(self, other: Self | int | float | Fraction) -> Ordering | None:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
 
         For two `RealFloat` values, the result is never `None`.
         """
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'comparison not supported between \'RealFloat\' and \'{type(other)}\'')
+        match other:
+            case RealFloat():
+                if self._c == 0:
+                    if other._c == 0:
+                        return Ordering.EQUAL
+                    elif other._s:
+                        return Ordering.GREATER
+                    else:
+                        return Ordering.LESS
+                elif other._c == 0:
+                    if self._s:
+                        return Ordering.LESS
+                    else:
+                        return Ordering.GREATER
+                elif self._s != other._s:
+                    # non-zero signs are different
+                    if self._s:
+                        return Ordering.LESS
+                    else:
+                        return Ordering.GREATER
+                else:
+                    # non-zero, signs are same
+                    match Ordering.from_compare(self.e, other.e):
+                        case Ordering.GREATER:
+                            # larger magnitude based on MSB
+                            cmp = Ordering.GREATER
+                        case Ordering.LESS:
+                            # smaller magnitude based on MSB
+                            cmp = Ordering.LESS
+                        case Ordering.EQUAL:
+                            # need to actual compare the significands
+                            exp = min(self._exp, other._exp)
+                            c1 = self._c << (self._exp - exp)
+                            c2 = other._c << (other._exp - exp)
+                            cmp = Ordering.from_compare(c1, c2)
 
-        if self._c == 0:
-            if other._c == 0:
-                return Ordering.EQUAL
-            elif other._s:
-                return Ordering.GREATER
-            else:
-                return Ordering.LESS
-        elif other._c == 0:
-            if self._s:
-                return Ordering.LESS
-            else:
-                return Ordering.GREATER
-        elif self._s != other._s:
-            # non-zero signs are different
-            if self._s:
-                return Ordering.LESS
-            else:
-                return Ordering.GREATER
-        else:
-            # non-zero, signs are same
-            match Ordering.from_compare(self.e, other.e):
-                case Ordering.GREATER:
-                    # larger magnitude based on MSB
-                    cmp = Ordering.GREATER
-                case Ordering.LESS:
-                    # smaller magnitude based on MSB
-                    cmp = Ordering.LESS
-                case Ordering.EQUAL:
-                    # need to actual compare the significands
-                    exp = min(self._exp, other._exp)
-                    c1 = self._c << (self._exp - exp)
-                    c2 = other._c << (other._exp - exp)
-                    cmp = Ordering.from_compare(c1, c2)
-
-            # adjust for the sign
-            if self._s:
-                return cmp.reverse()
-            else:
-                return cmp
+                    # adjust for the sign
+                    if self._s:
+                        return cmp.reverse()
+                    else:
+                        return cmp
+            case int():
+                return self.compare(RealFloat.from_int(other))
+            case float():
+                if math.isnan(other):
+                    return None
+                elif math.isinf(other):
+                    if other > 0:
+                        return Ordering.LESS
+                    else:
+                        return Ordering.GREATER
+                else:
+                    return self.compare(RealFloat.from_float(other))
+            case Fraction():
+                f = self.as_rational()
+                if f < other:
+                    return Ordering.LESS
+                elif f > other:
+                    return Ordering.GREATER
+                else:
+                    return Ordering.EQUAL
+            case _:
+                raise TypeError(f'comparison not supported between \'RealFloat\' and \'{type(other)}\'')
 
     def is_identical_to(self, other: Self) -> bool:
         """Is the value encoded identically to another `RealFloat` value?"""
@@ -1201,7 +1214,7 @@ class RealFloat(numbers.Rational):
 # Float
 
 @rcomparable(RealFloat)
-class Float(numbers.Rational):
+class Float:
     """
     The basic floating-point number extended with infinities and NaN.
 
@@ -1498,11 +1511,21 @@ class Float(numbers.Rational):
 
     def is_positive(self) -> bool:
         """Returns whether this value is positive."""
-        return not self.is_nar() and self._real.is_positive()
+        if self._isnan:
+            return False
+        elif self._isinf:
+            return not self._real._s
+        else:
+            return self._real.is_positive()
 
     def is_negative(self) -> bool:
         """Returns whether this value is negative."""
-        return not self.is_nar() and self._real.is_negative()
+        if self._isnan:
+            return False
+        elif self._isinf:
+            return self._real._s
+        else:
+            return self._real.is_negative()
 
     def is_integer(self) -> bool:
         """Returns whether this value is an integer."""
@@ -1701,40 +1724,53 @@ class Float(numbers.Rational):
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round_integer(self)
 
-    def compare(self, other: Self | RealFloat) -> Ordering | None:
+    def compare(self, other: Self | RealFloat | int | float | Fraction) -> Ordering | None:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
         """
-        match other:
-            case RealFloat():
-                if self._isnan:
-                    return None
-                elif self._isnan:
-                    if self.s:
-                        return Ordering.LESS
+        if self._isnan:
+            return None
+        else:
+            match other:
+                case RealFloat():
+                    if self._isinf:
+                        if self.s:
+                            return Ordering.LESS
+                        else:
+                            return Ordering.GREATER
                     else:
-                        return Ordering.GREATER
-                else:
-                    return self._real.compare(other)
-            case Float():
-                if self._isnan or other._isnan:
-                    return None
-                elif self._isinf:
-                    if other._isinf and self.s == other.s:
-                        return Ordering.EQUAL
-                    elif self.s:
-                        return Ordering.LESS
+                        return self._real.compare(other)
+                case Float():
+                    if other._isnan:
+                        return None
+                    elif self._isinf:
+                        if other._isinf and self.s == other.s:
+                            return Ordering.EQUAL
+                        elif self.s:
+                            return Ordering.LESS
+                        else:
+                            return Ordering.GREATER
+                    elif other._isinf:
+                        if other.s:
+                            return Ordering.GREATER
+                        else:
+                            return Ordering.LESS
                     else:
-                        return Ordering.GREATER
-                elif other._isinf:
-                    if other.s:
-                        return Ordering.GREATER
+                        return self._real.compare(other._real)
+                case int():
+                    return self.compare(RealFloat.from_int(other))
+                case float():
+                    return self.compare(Float.from_float(other))
+                case Fraction():
+                    if self._isinf:
+                        if self.s:
+                            return Ordering.LESS
+                        else:
+                            return Ordering.GREATER
                     else:
-                        return Ordering.LESS
-                else:
-                    return self._real.compare(other._real)
-            case _:
-                return False
+                        return self._real.compare(other)
+                case _:
+                    return False
 
     def __add__(self, other: 'Real'):
         if TYPE_CHECKING:
