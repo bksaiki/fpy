@@ -132,4 +132,4 @@ def is_dyadic(x: numbers.Rational) -> bool:
     Check if the fraction is dyadic, i.e., can be expressed as a
     fraction with a power of two in the denominator.
     """
-    return is_power_of_two(abs(x.denominator))
+    return is_power_of_two(abs(int(x.denominator)))

@@ -214,32 +214,32 @@ class ContextTypeInferInstance(Visitor):
         return self._cvt_arg_type(self._lookup_ty(e))
 
     def _visit_decnum(self, e: Decnum, ctx: ContextParam):
-        # C, Γ |- e : real C
-        ty = self._from_scalar(self._lookup_ty(e), ctx)
+        # C, Γ |- e : real REAL
+        ty = self._from_scalar(self._lookup_ty(e), REAL)
         assert isinstance(ty, RealTypeContext) # type checking should have concluded this
         return ty
 
     def _visit_hexnum(self, e: Hexnum, ctx: ContextParam):
-        # C, Γ |- e : real C
-        ty = self._from_scalar(self._lookup_ty(e), ctx)
+        # C, Γ |- e : real REAL
+        ty = self._from_scalar(self._lookup_ty(e), REAL)
         assert isinstance(ty, RealTypeContext) # type checking should have concluded this
         return ty
 
     def _visit_integer(self, e: Integer, ctx: ContextParam):
-        # C, Γ |- e : real C
-        ty = self._from_scalar(self._lookup_ty(e), ctx)
+        # C, Γ |- e : real REAL
+        ty = self._from_scalar(self._lookup_ty(e), REAL)
         assert isinstance(ty, RealTypeContext) # type checking should have concluded this
         return ty
 
     def _visit_rational(self, e: Rational, ctx: ContextParam):
-        # C, Γ |- e : real C
-        ty = self._from_scalar(self._lookup_ty(e), ctx)
+        # C, Γ |- e : real REAL
+        ty = self._from_scalar(self._lookup_ty(e), REAL)
         assert isinstance(ty, RealTypeContext) # type checking should have concluded this
         return ty
 
     def _visit_digits(self, e: Digits, ctx: ContextParam):
-        # C, Γ |- e : real C
-        ty = self._from_scalar(self._lookup_ty(e), ctx)
+        # C, Γ |- e : real REAL
+        ty = self._from_scalar(self._lookup_ty(e), REAL)
         assert isinstance(ty, RealTypeContext) # type checking should have concluded this
         return ty
 
@@ -541,7 +541,7 @@ class ContextTypeInferInstance(Visitor):
             raise ContextInferError(f'cannot infer context for `{stmt.ctx.format()}` at `{stmt.format()}`')
         body_ctx = stmt.ctx.val
 
-        ctx_ty = self._visit_expr(stmt.ctx, REAL) # execute under a real rounding context
+        ctx_ty = self._visit_expr(stmt.ctx, ctx)
         if isinstance(stmt.target, NamedId):
             d = self.def_use.find_def_from_site(stmt.target, stmt)
             self._set_context(d, ctx_ty)

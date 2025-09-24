@@ -5,7 +5,7 @@ Mathematical functions under rounding contexts.
 from fractions import Fraction
 from typing import Any, Callable
 
-from .number import Context, Float, Real, RoundingMode
+from .number import Context, Float, Real, REAL, RoundingMode
 from .number.gmp import *
 from .number.real import (
     RealContext,
@@ -530,7 +530,10 @@ def round(x: Real | Fraction, ctx: Context | None = None) -> Float | Fraction:
     match ctx:
         case None | RealContext():
             # real computation; no rounding
-            return x
+            if isinstance(x, Fraction):
+                return x  # exact rational number
+            else:
+                return REAL.round(x)
         case _:
             return ctx.round(x)
 

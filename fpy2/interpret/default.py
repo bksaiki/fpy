@@ -257,6 +257,12 @@ class _Interpreter(Visitor):
         # compute the result
         return fn(*vals, ctx=ctx)
 
+    def _apply_round(self, arg: Expr, ctx: Context):
+        val = self._visit_expr(arg, ctx)
+        if not isinstance(val, Float | Fraction):
+            raise TypeError(f'expected a real number argument, got {val}')
+        return ops.round(val, ctx=ctx)
+
     def _apply_not(self, arg: Expr, ctx: Context):
         val = self._visit_expr(arg, ctx)
         if not isinstance(val, bool):
@@ -394,8 +400,7 @@ class _Interpreter(Visitor):
         else:
             match e:
                 case Round():
-                    val = self._visit_expr(e.arg, ctx)
-                    return ops.round(val, ctx=ctx)
+                    return self._apply_round(e.arg, ctx)
                 case Not():
                     return self._apply_not(e.arg, ctx)
                 case Len():
@@ -766,7 +771,7 @@ class _Interpreter(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
         # evaluate the context under a real context
-        round_ctx = self._visit_expr(stmt.ctx, REAL)
+        round_ctx = self._visit_expr(stmt.ctx, ctx)
         if not isinstance(round_ctx, Context):
             raise TypeError(f'expected a context, got `{round_ctx}`')
         if isinstance(stmt.target, NamedId):

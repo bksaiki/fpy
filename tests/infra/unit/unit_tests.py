@@ -507,9 +507,9 @@ def test_context5(s: fp.Real): # s : real @ b
 @fp.fpy
 def test_context6():
     with fp.UINT64:
-        z = 0
-        for i in range(10):
-            z += i * i
+        z = fp.round(0) # z : real U64
+        for i in range(10): # i : real R
+            z += i * i # + : real U64 -> real R -> real U64
         return z
 
 @fp.fpy
