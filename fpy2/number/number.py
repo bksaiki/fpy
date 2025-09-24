@@ -1563,7 +1563,7 @@ class Float:
         return self._real.as_rational()
 
     @staticmethod
-    def nan(s: bool = False, ctx: Context | None = None) -> 'Float':
+    def nan(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of NaN.
 
@@ -1574,7 +1574,7 @@ class Float:
         return Float(isnan=True, s=s, ctx=ctx)
 
     @staticmethod
-    def inf(s: bool = False, ctx: Context | None = None) -> 'Float':
+    def inf(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of infinity.
 
@@ -1585,7 +1585,7 @@ class Float:
         return Float(isinf=True, s=s, ctx=ctx)
 
     @staticmethod
-    def zero(s: bool = False, ctx: Context | None = None) -> 'Float':
+    def zero(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of zero.
 
@@ -1596,7 +1596,7 @@ class Float:
         return Float.from_real(RealFloat.zero(s), ctx)
 
     @staticmethod
-    def from_real(x: RealFloat, ctx: Context | None = None, checked: bool = True) -> 'Float':
+    def from_real(x: RealFloat, ctx: Context | None = None, checked: bool = True):
         """
         Converts a `RealFloat` number to a `Float` number.
 
@@ -1617,7 +1617,7 @@ class Float:
             return Float(x=x, ctx=ctx)
 
     @staticmethod
-    def from_int(x: int, ctx: Context | None = None, checked: bool = True) -> 'Float':
+    def from_int(x: int, ctx: Context | None = None, checked: bool = True):
         """
         Converts an integer to a `Float` number.
 
@@ -1632,7 +1632,7 @@ class Float:
         return Float.from_real(xr, ctx, checked)
 
     @staticmethod
-    def from_float(x: float, ctx: Context | None = None, checked: bool = True) -> 'Float':
+    def from_float(x: float, ctx: Context | None = None, checked: bool = True):
         """
         Converts a native Python float to a `Float` number.
 
@@ -1659,7 +1659,7 @@ class Float:
             raise ValueError('cannot convert infinity or NaN to real')
         return self._real
 
-    def normalize(self) -> 'Float':
+    def normalize(self):
         """
         Returns the canonical reprsentation of this number.
 
@@ -1679,7 +1679,7 @@ class Float:
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round(self)
 
-    def round_at(self, ctx: Context, n: int) -> 'Float':
+    def round_at(self, ctx: Context, n: int):
         """
         Rounds this number at the given position.
 
@@ -1689,7 +1689,7 @@ class Float:
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round_at(self, n)
 
-    def round_integer(self, ctx: Context) -> 'Float':
+    def round_integer(self, ctx: Context):
         """
         Rounds this number to the nearest integer.
 
