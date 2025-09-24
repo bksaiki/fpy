@@ -199,7 +199,7 @@ class RealFloat:
 
     def __le__(self, other):
         ord = self.compare(other)
-        return ord != Ordering.GREATER
+        return ord == Ordering.LESS or ord == Ordering.EQUAL
 
     def __gt__(self, other):
         ord = self.compare(other)
@@ -207,7 +207,7 @@ class RealFloat:
 
     def __ge__(self, other):
         ord = self.compare(other)
-        return ord != Ordering.LESS
+        return ord == Ordering.GREATER or ord == Ordering.EQUAL
 
     def __add__(self, other: 'RealFloat'):
         """
@@ -1361,24 +1361,26 @@ class Float:
         return hash((self._isinf, self._isnan, self._real))
 
     def __eq__(self, other):
+        if not isinstance(other, Float | RealFloat | int | float | Fraction):
+            return False
         ord = self.compare(other)
-        return ord is not None and ord == Ordering.EQUAL
+        return ord == Ordering.EQUAL
 
     def __lt__(self, other):
         ord = self.compare(other)
-        return ord is not None and ord == Ordering.LESS
+        return ord == Ordering.LESS
 
     def __le__(self, other):
         ord = self.compare(other)
-        return ord is not None and ord != Ordering.GREATER
+        return ord == Ordering.LESS or ord == Ordering.EQUAL
 
     def __gt__(self, other):
         ord = self.compare(other)
-        return ord is not None and ord == Ordering.GREATER
+        return ord == Ordering.GREATER
 
     def __ge__(self, other):
         ord = self.compare(other)
-        return ord is not None and ord != Ordering.LESS
+        return ord == Ordering.GREATER or ord == Ordering.EQUAL
 
     def __float__(self):
         """
