@@ -252,10 +252,14 @@ class ContextTypeInferInstance(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: ContextParam):
         arg_ty = self._visit_expr(e.arg, ctx)
         match e:
-            case Len() | Dim() | Sum():
-                # length / dimension / sum
+            case Len() | Dim():
+                # length / dimension
                 # C, Γ |- len e : real INTEGER
                 return RealTypeContext(INTEGER)
+            case Sum():
+                # sum operator
+                # C, Γ |- sum e : real C
+                return RealTypeContext(ctx)
             case Range():
                 # range operator
                 # C, Γ |- range e : list (real INTEGER)
@@ -366,7 +370,10 @@ class ContextTypeInferInstance(Visitor):
             case Function():
                 # calling a function
                 # TODO: guard against recursion
-                fn_info = ContextInfer.infer(e.fn.ast)
+                from ..transform import ContextInline
+
+                ast = ContextInline.apply(e.fn.ast, e.fn.env)
+                fn_info = ContextInfer.infer(ast)
                 if len(fn_info.arg_types) != len(e.args):
                     raise ContextInferError(
                         f'function {e.fn} expects {len(fn_info.arg_types)} arguments, '

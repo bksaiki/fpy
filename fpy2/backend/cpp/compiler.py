@@ -271,20 +271,20 @@ class _CppBackendInstance(Visitor):
                 raise RuntimeError(f'unreachable: {ty}')
 
     def _visit_decnum(self, e: Decnum, ctx: _CompileCtx):
-        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
+        raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_hexnum(self, e: Hexnum, ctx: _CompileCtx):
-        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
+        raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_integer(self, e: Integer, ctx: _CompileCtx):
-        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
+        raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_rational(self, e: Rational, ctx: _CompileCtx):
-        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
+        raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_digits(self, e: Digits, ctx: _CompileCtx):
         # TODO: this is incorrect since it rounds
-        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
+        raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: _CompileCtx):
         raise NotImplementedError
@@ -302,13 +302,13 @@ class _CppBackendInstance(Visitor):
             case Decnum():
                 return self._compile_number(str(e.val), ty)
             case Hexnum():
-                raise CppCompileError(self.func, 'hexadecimal literals are not supported in C++ backend')
+                raise CppCompileError(self.func, 'hexadecimal literals are unsupported')
             case Integer():
                 return self._compile_number(str(e.val), ty)
             case Rational():
-                raise CppCompileError(self.func, 'rational values are not supported in C++ backend')
+                raise CppCompileError(self.func, 'rational values are unsupported')
             case Digits():
-                raise CppCompileError(self.func, '`digits(m, e, b)` is not supported in C++ backend')
+                raise CppCompileError(self.func, '`digits(m, e, b)` is unsupported')
             case _:
                 raise RuntimeError(f'unreachable: {e}')
 
@@ -331,7 +331,7 @@ class _CppBackendInstance(Visitor):
 
 
     def _visit_round_at(self, e: RoundAt, ctx: _CompileCtx):
-        raise CppCompileError(self.func, '`round_at` is not supported in C++ backend')
+        raise CppCompileError(self.func, '`round_at` is unsupported')
 
     def _visit_len(self, e: Len, ctx: _CompileCtx):
         # len(x)
@@ -721,7 +721,7 @@ class _CppBackendInstance(Visitor):
         return f'{e_ty.format()}({t}.begin() + {start}, {t}.begin() + {stop})'
 
     def _visit_list_set(self, e: ListSet, ctx: _CompileCtx):
-        raise CompileError('C++ backend: functional list updates are not supported')
+        raise CompileError('functional list updates is unsupported')
 
     def _visit_if_expr(self, e: IfExpr, ctx: _CompileCtx):
         cond = self._visit_expr(e.cond, ctx)
@@ -730,7 +730,7 @@ class _CppBackendInstance(Visitor):
         return f'({cond} ? {ift} : {iff})'
 
     def _visit_attribute(self, e: Attribute, ctx: _CompileCtx):
-        raise CompileError('C++ backend: attributes not supported')
+        raise CompileError('attributes are unsupported')
 
     def _visit_decl(self, name: Id, e: str, site: DefSite, ctx: _CompileCtx):
         match name:

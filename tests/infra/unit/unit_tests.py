@@ -20,6 +20,10 @@ def test_integer2():
     return 1
 
 @fpy
+def test_integer3():
+    return fp.round(1)
+
+@fpy
 def test_decnum1():
     return 0.0
 
@@ -28,12 +32,24 @@ def test_decnum2():
     return 1.5
 
 @fpy
+def test_decnum3():
+    return fp.round(2)
+
+@fpy
 def test_hexnum1():
     return fp.hexfloat('0x1.921fb54442d18p+1')
 
 @fpy
+def test_hexnum2():
+    return fp.round(fp.hexfloat('0x1.921fb54442d18p+1'))
+
+@fpy
 def test_rational1():
     return fp.rational(1, 3)
+
+@fpy
+def test_rational2():
+    return fp.round(fp.rational(1, 3))
 
 @fpy
 def test_digits1():
@@ -52,12 +68,21 @@ def test_digits4():
     return digits(3, -1, 2)
 
 @fpy
+def test_digits5():
+    return fp.round(digits(3, -1, 2))
+
+@fpy
 def test_let1():
-    a = 1.0
+    a = True
     return a
 
 @fpy
 def test_let2():
+    a = 1.0
+    return a
+
+@fpy
+def test_let3():
     a = 1.0
     b = 1.0
     return a + b
@@ -88,14 +113,18 @@ def test_augassign4():
 
 @fpy
 def test_ife1():
-  return 1.0 if 1.0 > 0.0 else 0.0
+    return False if True else False
 
 @fpy
 def test_ife2():
-  return 1.0 if 0.0 < 1.0 < 2.0 else 0.0
+  return 1.0 if 1.0 > 0.0 else 0.0
 
 @fpy
 def test_ife3():
+  return 1.0 if 0.0 < 1.0 < 2.0 else 0.0
+
+@fpy
+def test_ife4():
   x = 1.0
   y = 2.0
   z = 3.0
@@ -103,7 +132,7 @@ def test_ife3():
   return 1.0 if (x + 1.0) < (y + 2.0) < (z + 3.0) < (t + 4.0) else 0.0
 
 @fpy
-def test_ife4():
+def test_ife5():
   x = 1.0
   y = 2.0
   z = 3.0
@@ -123,7 +152,7 @@ def test_context_expr2():
 
 @fpy
 def test_tuple1():
-    return (1.0, 2.0, 3.0)
+    return False, True
 
 @fpy
 def test_tuple2():
@@ -131,18 +160,22 @@ def test_tuple2():
 
 @fpy
 def test_tuple3():
+    return False, 1.0
+
+@fpy
+def test_tuple4():
     x, y = 1.0, 2.0
     return x + y
 
 @fpy
-def test_tuple4():
+def test_tuple5():
     x, y = (1.0, 2.0), (3.0, 4.0)
     x0, x1 = x
     y0, y1 = y
     return x0 * y0 + x1 * y1
 
 @fpy
-def test_tuple5():
+def test_tuple6():
     (x, y), (z, _) = (1.0, 2.0), (3.0, 4.0)
     return x + y + z
 
@@ -159,10 +192,13 @@ def test_list3():
     return [1.0, 2.0, 3.0]
 
 @fpy
+def test_list4():
+    return [False, True]
+
+@fpy
 def test_list_len1():
     x = []
     return len(x)
-
 
 @fpy
 def test_list_len2():
@@ -172,6 +208,11 @@ def test_list_len2():
 @fpy
 def test_list_len3():
     x = [[1.0, 2.0, 3.0]]
+    return len(x)
+
+@fpy
+def test_list_len4():
+    x = [False, True]
     return len(x)
 
 @fpy
@@ -190,6 +231,11 @@ def test_list_dim3():
     return dim(x)
 
 @fpy
+def test_list_dim4():
+    x = [False, True]
+    return dim(x)
+
+@fpy
 def test_list_size1():
     x = []
     return size(x, 0)
@@ -205,6 +251,11 @@ def test_list_size3():
     return size(x, 1)
 
 @fpy
+def test_list_size4():
+    x = [False, True]
+    return size(x, 0)
+
+@fpy
 def test_enumerate1():
     xs = []
     return enumerate(xs)
@@ -212,6 +263,11 @@ def test_enumerate1():
 @fpy
 def test_enumerate2():
     xs = [1.0, 2.0, 3.0]
+    return enumerate(xs)
+
+@fpy
+def test_enumerate3():
+    xs = [False, True]
     return enumerate(xs)
 
 # @fpy(name='Test zip (1/4)')
@@ -235,6 +291,12 @@ def test_list_zip4():
     ys = [4.0, 5.0, 6.0]
     zs = [7.0, 8.0, 9.0]
     return zip(xs, ys, zs)
+
+@fpy
+def test_list_zip5():
+    xs = [False, True]
+    ys = [True, False]
+    return zip(xs, ys)
 
 @fpy
 def test_list_sum(x: fp.Real, y: fp.Real, z: fp.Real) -> Real:
@@ -266,6 +328,10 @@ def test_list_comp2():
 @fpy
 def test_list_comp3():
     return [x + y for x, y in zip([0, 1, 2], [3, 4, 5])]
+
+@fpy
+def test_list_comp4():
+    return [x and y for x, y in zip([True, False], [False, True])]
 
 @fpy
 def test_list_ref1():
@@ -317,13 +383,20 @@ def test_list_set3():
 
 @fpy
 def test_if1():
+    t = False
+    if True:
+        t = True
+    return t
+
+@fpy
+def test_if2():
     t = 0
     if 0 < 1:
         t = 1
     return t
 
 @fpy
-def test_if2():
+def test_if3():
     t = 0
     a = 1
     if 0 < 1:
@@ -331,7 +404,7 @@ def test_if2():
     return t + a
 
 @fpy
-def test_if3():
+def test_if4():
     if 0 < 1:
         t = 1
     else:
@@ -339,7 +412,7 @@ def test_if3():
     return t
 
 @fpy
-def test_if4():
+def test_if5():
     if 0 < 1:
         if 1 < 2:
             t = 0
@@ -353,7 +426,7 @@ def test_if4():
     return t
 
 @fpy
-def test_if5():
+def test_if6():
     if 0 < 1:
         t = 0
     elif 1 < 2:
@@ -363,7 +436,7 @@ def test_if5():
     return t
 
 @fpy
-def test_if6():
+def test_if7():
     t = 0
     a = 1
     if t < 0:
@@ -374,19 +447,26 @@ def test_if6():
 
 @fpy
 def test_while1():
+    t = False
+    while False:
+        t = True
+    return t
+
+@fpy
+def test_while2():
     while False:
         x = 1
     return 0
 
 @fpy
-def test_while2():
+def test_while3():
     x = 0
     while x < 1:
         x = 1
     return x
 
 @fpy
-def test_while3():
+def test_while4():
     x = 0
     t = 1
     while x < 1:
@@ -394,22 +474,12 @@ def test_while3():
     return x + t
 
 @fpy
-def test_while4():
+def test_while5():
     x = 0
     y = 0
     while x < 5:
         x += 1
         y += x
-    return x, y
-
-@fpy
-def test_while5():
-    x = 0
-    y = 0
-    while x < 5:
-        while y < 25:
-            y += 1
-            x += y
     return x, y
 
 @fpy
@@ -417,8 +487,6 @@ def test_while6():
     x = 0
     y = 0
     while x < 5:
-        x += 1
-        y += x
         while y < 25:
             y += 1
             x += y
@@ -440,13 +508,20 @@ def test_while7():
 
 @fpy
 def test_for1():
+    t = False
+    for s in [False, True]:
+        t = s
+    return t
+
+@fpy
+def test_for2():
     j = 0
     for i in range(5):
         j += i
     return j
 
 @fpy
-def test_for2():
+def test_for3():
     accum = 0
     for i in range(5):
         for j in range(5):
@@ -454,7 +529,7 @@ def test_for2():
     return accum
 
 @fpy
-def test_for3():
+def test_for4():
     x = 0
     y = 0
     for i in range(5):
@@ -463,7 +538,7 @@ def test_for3():
     return x, y
 
 @fpy
-def test_for4() -> Real:
+def test_for5():
     xs = [1, 2, 3]
     ys = [3, 5, 7]
     sum = 0.0
@@ -474,18 +549,18 @@ def test_for4() -> Real:
 @fp.fpy
 def test_context1():
     with IEEEContext(8, 32, RM.RNE):
-        return 0
+        return fp.round(0)
 
 @fp.fpy
 def test_context2():
-    x = 1
+    x = fp.round(1)
     with IEEEContext(8, 32, RM.RNE):
-        return x + 1
+        return x + fp.round(1)
 
 @fp.fpy
 def test_context3(x: fp.Real):
     with fp.INTEGER:
-        return x + 1
+        return x + fp.round(1)
 
 @fp.fpy
 def test_context4():
@@ -495,9 +570,9 @@ def test_context4():
 
 @fp.fpy
 def test_context5(s: fp.Real): # s : real @ b
-    t: fp.Real = 0 # t : real @ a
-    if s < 0: # < : real @ b -> real @ a -> bool @ a
-        t += 1  # + : real @ a -> real @ a -> real @ a
+    t: fp.Real = fp.round(0) # t : real @ a
+    if s < fp.round(0): # < : real @ b -> real @ a -> bool @ a
+        t += fp.round(1)  # + : real @ a -> real @ a -> real @ a
     else:
         with fp.FP32:
             tmp = t + s # + : real @ a -> real @ b -> real @ FP32
@@ -508,8 +583,9 @@ def test_context5(s: fp.Real): # s : real @ b
 def test_context6():
     with fp.UINT64:
         z = fp.round(0) # z : real U64
-        for i in range(10): # i : real R
-            z += i * i # + : real U64 -> real R -> real U64
+        for i in range(fp.round(10)): # i : real R
+            j = fp.round(i)
+            z += j * j # + : real U64 -> real U64 -> real U64
         return z
 
 @fp.fpy
@@ -529,8 +605,8 @@ def test_context8():
 
 @fpy
 def test_assert1():
-    assert 0 == 0
-    return 0
+    assert True
+    return False
 
 @fpy
 def test_assert2():
@@ -545,7 +621,7 @@ def test_assert3():
 @fpy
 def test_pass1():
     pass
-    return 0
+    return True
 
 ### Examples
 
@@ -566,7 +642,7 @@ def dpN(xs: list[Real], ys: list[Real]) -> Real:
 
 @fpy
 def nmse3_1(x: Real):
-    return sqrt(x + 1) - sqrt(x)
+    return sqrt(x + fp.R(1)) - sqrt(x)
 
 # TODO: precondition
 @fpy(meta={
@@ -582,13 +658,13 @@ def instCurrent(
 ):
     pi = fp.round(3.14159265359)
     impedance_re = resistance
-    impedance_im = 2 * pi * frequency * inductance
-    denom = impedance_re ** 2 + impedance_im ** 2
+    impedance_im = fp.R(2) * pi * frequency * inductance
+    denom = impedance_re ** 2+ impedance_im ** 2
     current_re = (maxVoltage - impedance_re) / denom
     current_im = (maxVoltage - impedance_im) / denom
     maxCurrent = sqrt(current_re ** 2 + current_im ** 2)
     theta = atan(current_im / current_re)
-    return maxCurrent * cos(2 * pi * frequency * t + theta)
+    return maxCurrent * cos(fp.R(2) * pi * frequency * t + theta)
 
 @fpy(meta={
     'name': 'azimuth',
@@ -622,7 +698,7 @@ def lod_anisotropic(
     x_major = dx2 > dy2
     major2 = dx2 if x_major else dy2
     major = sqrt(major2)
-    norm_major = 1.0 / major
+    norm_major = fp.R(1.0) / major
 
     aniso_dir_u = (dx_u if x_major else dy_u) * norm_major
     aniso_dir_v = (dx_v if x_major else dy_v) * norm_major
@@ -636,8 +712,8 @@ def lod_anisotropic(
         minor = det / major
 
     # clamp LOD
-    if minor < 1.0:
-        aniso_ratio = fmax(1.0, aniso_ratio * minor)
+    if minor < fp.R(1):
+        aniso_ratio = max(fp.R(1), aniso_ratio * minor)
 
     lod = log2(minor)
     return lod, aniso_ratio, aniso_dir_u, aniso_dir_v
@@ -647,11 +723,11 @@ def lod_anisotropic(
     'cite': ['Curnow-and-Wichmann-1976'],
 })
 def whetsone1(n: int):
-    t = fp.round(0.499975)
-    x1 = 1.0
-    x2 = -1.0
-    x3 = -1.0
-    x4 = -1.0
+    t = fp.R(0.499975)
+    x1 = fp.R(1.0)
+    x2 = fp.R(-1.0)
+    x3 = fp.R(-1.0)
+    x4 = fp.R(-1.0)
     for _ in range(n):
         x1 = (x1 + x2 + x3 - x4) * t
         x2 = (x1 + x2 - x3 - x4) * t
@@ -659,7 +735,7 @@ def whetsone1(n: int):
         x4 = (-x1 + x2 + x3 + x4) * t
     return x1, x2, x3, x4
 
-@fp.fpy
+@fp.fpy(ctx=fp.REAL)
 def _select_ctx(x: fp.Real):
     e = fp.libraries.core.logb(x)
     n = e - 1
@@ -677,14 +753,19 @@ tests: list[Function] = [
     test_bool2,
     test_integer1,
     test_integer2,
+    test_integer3,
     test_decnum1,
     test_decnum2,
+    test_decnum3,
     test_hexnum1,
+    test_hexnum2,
     test_rational1,
+    test_rational2,
     test_digits1,
     test_digits2,
     test_digits3,
     test_digits4,
+    test_digits5,
     test_let1,
     test_let2,
     test_augassign1,
@@ -695,6 +776,7 @@ tests: list[Function] = [
     test_ife2,
     test_ife3,
     test_ife4,
+    test_ife5,
     test_context_expr1,
     test_context_expr2,
     test_tuple1,
@@ -702,30 +784,38 @@ tests: list[Function] = [
     test_tuple3,
     test_tuple4,
     test_tuple5,
+    test_tuple6,
     test_list1,
     test_list2,
     test_list3,
+    test_list4,
     test_list_len1,
     test_list_len2,
     test_list_len3,
+    test_list_len4,
     test_list_dim1,
     test_list_dim2,
     test_list_dim3,
+    test_list_dim4,
     test_list_size1,
     test_list_size2,
     test_list_size3,
+    test_list_size4,
     test_enumerate1,
     test_enumerate2,
+    test_enumerate3,
     # test_list_zip1,
     test_list_zip2,
     test_list_zip3,
     test_list_zip4,
+    test_list_zip5,
     test_list_sum,
     test_min,
     test_max,
     test_list_comp1,
     test_list_comp2,
     test_list_comp3,
+    test_list_comp4,
     test_list_ref1,
     test_list_ref2,
     test_list_ref3,
@@ -741,16 +831,19 @@ tests: list[Function] = [
     test_if4,
     test_if5,
     test_if6,
+    test_if7,
     test_while1,
     test_while2,
     test_while3,
     test_while4,
     test_while5,
     test_while6,
+    test_while7,
     test_for1,
     test_for2,
     test_for3,
     test_for4,
+    test_for5,
     test_context1,
     test_context2,
     test_context3,

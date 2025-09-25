@@ -549,8 +549,6 @@ class Parser:
                 return ListSlice(value, lower, upper, loc)
             case _:
                 slice =  self._parse_expr(e.slice)
-                if not isinstance(slice, ValueExpr):
-                    raise FPyParserError(loc, 'FPy expects a value expression for subscript slice', e)
                 return ListRef(value, slice, loc)
 
     def _parse_subscript_target(self, e: ast.Subscript):
