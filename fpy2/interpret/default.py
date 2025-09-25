@@ -257,12 +257,6 @@ class _Interpreter(Visitor):
         # compute the result
         return fn(*vals, ctx=ctx)
 
-    def _apply_round(self, arg: Expr, ctx: Context):
-        val = self._visit_expr(arg, ctx)
-        if not isinstance(val, Float | Fraction):
-            raise TypeError(f'expected a real number argument, got {val}')
-        return ops.round(val, ctx=ctx)
-
     def _apply_not(self, arg: Expr, ctx: Context):
         val = self._visit_expr(arg, ctx)
         if not isinstance(val, bool):
@@ -291,13 +285,13 @@ class _Interpreter(Visitor):
         arr = self._visit_expr(arg, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a list, got {arr}')
-        return Float.from_int(len(arr), ctx=REAL)
+        return Float.from_int(len(arr), ctx=INTEGER, checked=False)
 
     def _apply_range(self, arg: Expr, ctx: Context):
         stop = self._cvt_float(self._visit_expr(arg, ctx))
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
-        return [Float.from_int(i, ctx=REAL) for i in range(int(stop))]
+        return [Float.from_int(i, ctx=INTEGER, checked=False) for i in range(int(stop))]
 
     def _apply_empty(self, arg: Expr, ctx: Context):
         size = self._cvt_float(self._visit_expr(arg, ctx))
@@ -315,7 +309,7 @@ class _Interpreter(Visitor):
         v = self._visit_expr(arg, ctx)
         if not isinstance(v, list):
             raise TypeError(f'expected a list, got {v}')
-        return [(Float.from_int(i, ctx=REAL), val) for i, val in enumerate(v)]
+        return [(Float.from_int(i, ctx=INTEGER, checked=False), val) for i, val in enumerate(v)]
 
     def _apply_size(self, arr: Expr, idx: Expr, ctx: Context):
         v = self._visit_expr(arr, ctx)
@@ -385,6 +379,22 @@ class _Interpreter(Visitor):
                 accum = ops.add(accum, self._cvt_float(x), ctx=ctx)
             return accum
 
+    def _visit_round(self, e: Round | RoundExact, ctx: Context):
+        val = self._visit_expr(e.arg, ctx)
+        if not isinstance(val, Float | Fraction):
+            raise TypeError(f'expected a real number argument, got {val}')
+        if isinstance(e, Round):
+            return ops.round(val, ctx=ctx)
+        else:
+            return ops.round_exact(val, ctx=ctx)
+
+    def _visit_round_at(self, e: RoundAt, ctx: Context):
+        val = self._cvt_float(self._visit_expr(e.first, ctx))
+        n = self._cvt_float(self._visit_expr(e.second, ctx))
+        if not n.is_integer():
+            raise TypeError(f'expected an integer argument, got {n}')
+        return ops.round_at(val, n, ctx=ctx)
+
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         fn = _NULLARY_TABLE.get(type(e))
         if fn is not None:
@@ -399,8 +409,6 @@ class _Interpreter(Visitor):
             return fn(val, ctx=ctx)
         else:
             match e:
-                case Round():
-                    return self._apply_round(e.arg, ctx)
                 case Not():
                     return self._apply_not(e.arg, ctx)
                 case Len():

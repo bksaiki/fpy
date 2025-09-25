@@ -84,10 +84,6 @@ def _get_unary_table() -> dict[type[UnaryOp], type[fpc.Expr]]:
             IsNormal: fpc.Isnormal,
             Signbit: fpc.Signbit,
             Not: fpc.Not,
-            # rounding
-            # Round: fpc.Cast, # special case
-            RoundExact: fpc.Cast # TODO: does this have an FPCore translation?
-            # RoundAt: # TODO: cannot translate this to FPCore
         }
     return _unary_table_cache
 
@@ -275,28 +271,31 @@ class _FPCoreCompileInstance(Visitor):
         args = [self._visit_expr(c, ctx) for c in e.args]
         return fpc.UnknownOperator(*args, name=name)
 
-    def _visit_round(self, arg: Expr, ctx: None) -> fpc.Expr:
+    def _visit_round(self, e: Round | RoundExact, ctx: None) -> fpc.Expr:
         # round expression
-        match arg:
+        match e.arg:
             case Decnum():
                 # round(n) => n
-                return fpc.Decnum(arg.val)
+                return fpc.Decnum(e.arg.val)
             case Hexnum():
                 # round(n) => n
-                return fpc.Hexnum(arg.val)
+                return fpc.Hexnum(e.arg.val)
             case Integer():
                 # round(n) => n
-                return fpc.Integer(arg.val)
+                return fpc.Integer(e.arg.val)
             case Rational():
                 # round(p/q) => p/q
-                return fpc.Rational(arg.p, arg.q)
+                return fpc.Rational(e.arg.p, e.arg.q)
             case Digits():
                 # round(digits(m, e, b)) => digits(m, e, b)
-                return fpc.Digits(arg.m, arg.e, arg.b)
+                return fpc.Digits(e.arg.m, e.arg.e, e.arg.b)
             case _:
                 # round(e) => cast(e)
-                e = self._visit_expr(arg, ctx)
-                return fpc.Cast(e)
+                arg = self._visit_expr(e.arg, ctx)
+                return fpc.Cast(arg)
+
+    def _visit_round_at(self, e: RoundAt, ctx: None) -> fpc.Expr:
+        raise FPCoreCompileError('cannot compile `round_at` expression to FPCore', e)
 
     def _visit_len(self, arg: Expr, ctx: None) -> fpc.Expr:
         # length expression
@@ -421,9 +420,6 @@ class _FPCoreCompileInstance(Visitor):
             return cls(arg)
         else:
             match e:
-                case Round():
-                    # round expression
-                    return self._visit_round(e.arg, ctx)
                 case Len():
                     # len expression
                     return self._visit_len(e.arg, ctx)

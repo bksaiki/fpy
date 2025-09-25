@@ -519,12 +519,7 @@ def tgamma(x: Real, ctx: Context | None = None):
 #############################################################################
 # Rounding operations
 
-def round(x: Real | Fraction, ctx: Context | None = None) -> Float | Fraction:
-    """
-    Rounds `x` under the given context `ctx`.
-
-    If `ctx` is `None`, this operation is the identity operation.
-    """
+def _round(x: Real, ctx: Context | None, exact: bool):
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     match ctx:
@@ -535,24 +530,24 @@ def round(x: Real | Fraction, ctx: Context | None = None) -> Float | Fraction:
             else:
                 return REAL.round(x)
         case _:
-            return ctx.round(x)
+            return ctx.round(x, exact=exact)
 
-def round_exact(x: Real, ctx: Context | None = None) -> Float:
+def round(x: Real, ctx: Context | None = None):
+    """
+    Rounds `x` under the given context `ctx`.
+
+    If `ctx` is `None`, this operation is the identity operation.
+    """
+    return _round(x, ctx, exact=False)
+
+def round_exact(x: Real, ctx: Context | None = None):
     """
     Rounds `x` under the given context `ctx`.
 
     If `ctx` is `None`, this operation is the identity operation.
     If the operation is not exact, it raises a ValueError.
     """
-    x = _real_to_float(x)
-    if ctx is not None and not isinstance(ctx, Context):
-        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    match ctx:
-        case None | RealContext():
-            # real computation; no rounding
-            return x
-        case _:
-            return ctx.round(x, exact=True)
+    return _round(x, ctx, exact=True)
 
 def round_at(x: Real, n: Real, ctx: Context | None = None) -> Float:
     """

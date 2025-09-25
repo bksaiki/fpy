@@ -244,10 +244,9 @@ class _CppBackendInstance(Visitor):
     def _visit_foreign(self, e: ForeignVal, ctx: _CompileCtx):
         raise NotImplementedError
 
-    def _visit_number(self, e: Expr, s: str):
-        _, cpp_ty = self._expr_type(e)
+    def _compile_number(self, s: str, ty: CppType):
         # TODO: check context for rounding
-        match cpp_ty:
+        match ty:
             case CppScalar.F64:
                 if '.' in s:
                     return s
@@ -267,25 +266,25 @@ class _CppBackendInstance(Visitor):
             case CppScalar.S64:
                 return f'{s}ll'
             case CppScalar.BOOL:
-                raise RuntimeError(f'should not get {cpp_ty} for {e.format()}')
+                raise RuntimeError(f'a number cannot be a boolean: {s}')
             case _:
-                raise RuntimeError(f'unreachable: {cpp_ty}')
+                raise RuntimeError(f'unreachable: {ty}')
 
     def _visit_decnum(self, e: Decnum, ctx: _CompileCtx):
-        return self._visit_number(e, str(e.val))
+        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
 
     def _visit_hexnum(self, e: Hexnum, ctx: _CompileCtx):
-        return str(e.val)
+        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
 
     def _visit_integer(self, e: Integer, ctx: _CompileCtx):
-        return self._visit_number(e, str(e.val))
+        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
 
     def _visit_rational(self, e: Rational, ctx: _CompileCtx):
-        raise NotImplementedError
+        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
 
     def _visit_digits(self, e: Digits, ctx: _CompileCtx):
         # TODO: this is incorrect since it rounds
-        return str(float(e.as_rational()))
+        raise CppCompileError(self.func, 'C++ does not support unrounded literals')
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: _CompileCtx):
         raise NotImplementedError
@@ -298,6 +297,42 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'unexpected size type: {ty}')
 
+    def _visit_real_val(self, e: RealVal, ty: CppType):
+        match e:
+            case Decnum():
+                return self._compile_number(str(e.val), ty)
+            case Hexnum():
+                raise CppCompileError(self.func, 'hexadecimal literals are not supported in C++ backend')
+            case Integer():
+                return self._compile_number(str(e.val), ty)
+            case Rational():
+                raise CppCompileError(self.func, 'rational values are not supported in C++ backend')
+            case Digits():
+                raise CppCompileError(self.func, '`digits(m, e, b)` is not supported in C++ backend')
+            case _:
+                raise RuntimeError(f'unreachable: {e}')
+
+    def _visit_round(self, e: Round | RoundExact, ctx: _CompileCtx):
+        if isinstance(e.arg, RealVal):
+            # special case: rounded literal
+            _, e_ty = self._expr_type(e)
+            return self._visit_real_val(e.arg, e_ty)
+        else:
+            # general case: unary operator
+            arg = self._visit_expr(e.arg, ctx)
+            _, arg_ty = self._expr_type(e.arg)
+            _, e_ty = self._expr_type(e)
+            for op in self.options.op_table.unary[type(e)]:
+                if op.matches(arg_ty, e_ty):
+                    return op.format(arg)
+
+            # TODO: list options vs. actual signature
+            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+
+
+    def _visit_round_at(self, e: RoundAt, ctx: _CompileCtx):
+        raise CppCompileError(self.func, '`round_at` is not supported in C++ backend')
+
     def _visit_len(self, e: Len, ctx: _CompileCtx):
         # len(x)
         arg_cpp = self._visit_expr(e.arg, ctx)
@@ -307,12 +342,13 @@ class _CppBackendInstance(Visitor):
     def _visit_range(self, e: Range, ctx: _CompileCtx):
         # range(n)
         arg_cpp = self._visit_expr(e.arg, ctx)
-        _, cpp_ty = self._expr_type(e.arg)
+        _, e_ty = self._expr_type(e)
+        assert isinstance(e_ty, CppList) and isinstance(e_ty.elt, CppScalar)
 
         t = self._fresh_var()
-        s = self._compile_size(arg_cpp, cpp_ty)
-        ctx.add_line(f'std::vector<{cpp_ty.format()}> {t}({s});')
-        ctx.add_line(f'std::iota({t}.begin(), {t}.end(), static_cast<{cpp_ty.format()}>(0));')
+        s = self._compile_size(arg_cpp, e_ty.elt)
+        ctx.add_line(f'std::vector<{e_ty.elt.format()}> {t}({s});')
+        ctx.add_line(f'std::iota({t}.begin(), {t}.end(), static_cast<{e_ty.elt.format()}>(0));')
         return t
 
     def _visit_size(self, arr: Expr, dim: Expr, ctx: _CompileCtx):
@@ -528,25 +564,6 @@ class _CppBackendInstance(Visitor):
     def _visit_compare2(self, op: CompareOp, lhs: str, rhs: str):
         return f'({lhs} {op.symbol()} {rhs})'
 
-    def _visit_compare(self, e: Compare, ctx: _CompileCtx):
-        if len(e.args) == 2:
-            # easy case: 2-argument comparison
-            lhs = self._visit_expr(e.args[0], ctx)
-            rhs = self._visit_expr(e.args[1], ctx)
-            return self._visit_compare2(e.ops[0], lhs, rhs)
-        else:
-            # harder case:
-            # - emit temporaries to bind expressions
-            # - form (t1 op t2) && (t2 op t3) && ...
-            args: list[str] = []
-            for arg in e.args:
-                t = self._fresh_var()
-                cpp_arg = self._visit_expr(arg, ctx)
-                ctx.add_line(f'auto {t} = {cpp_arg};')
-                args.append(t)
-
-            return ' && '.join(self._visit_compare2(e.ops[i], args[i], args[i + 1]) for i in range(len(args) - 1))
-
     def _visit_call(self, e: Call, ctx: _CompileCtx):
         match e.fn:
             case Function():
@@ -578,6 +595,25 @@ class _CppBackendInstance(Visitor):
             case _:
                 # unknown call
                 raise CppCompileError(self.func, f'cannot compile unsupported call to `{e.format()}`')
+
+    def _visit_compare(self, e: Compare, ctx: _CompileCtx):
+        if len(e.args) == 2:
+            # easy case: 2-argument comparison
+            lhs = self._visit_expr(e.args[0], ctx)
+            rhs = self._visit_expr(e.args[1], ctx)
+            return self._visit_compare2(e.ops[0], lhs, rhs)
+        else:
+            # harder case:
+            # - emit temporaries to bind expressions
+            # - form (t1 op t2) && (t2 op t3) && ...
+            args: list[str] = []
+            for arg in e.args:
+                t = self._fresh_var()
+                cpp_arg = self._visit_expr(arg, ctx)
+                ctx.add_line(f'auto {t} = {cpp_arg};')
+                args.append(t)
+
+            return ' && '.join(self._visit_compare2(e.ops[i], args[i], args[i + 1]) for i in range(len(args) - 1))
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _CompileCtx):
         args = [self._visit_expr(arg, ctx) for arg in e.elts]

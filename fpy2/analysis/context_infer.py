@@ -9,7 +9,7 @@ from typing import cast
 
 from ..ast import *
 from ..fpc_context import FPCoreContext
-from ..number import Context, REAL
+from ..number import Context, INTEGER, REAL
 from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind
 
@@ -254,12 +254,12 @@ class ContextTypeInferInstance(Visitor):
         match e:
             case Len() | Dim() | Sum():
                 # length / dimension / sum
-                # C, Γ |- len e : real C
-                return RealTypeContext(ctx)
+                # C, Γ |- len e : real INTEGER
+                return RealTypeContext(INTEGER)
             case Range():
                 # range operator
-                # C, Γ |- range e : list real C
-                return ListTypeContext(RealTypeContext(ctx))
+                # C, Γ |- range e : list (real INTEGER)
+                return ListTypeContext(RealTypeContext(INTEGER))
             case Empty():
                 # empty operator
                 # C, Γ |- empty e : list T
@@ -268,9 +268,10 @@ class ContextTypeInferInstance(Visitor):
                 # enumerate operator
                 #          C, Γ |- e : list T
                 # -----------------------------------------
-                #  C, Γ |- enumerate e : list [real C] x T
+                #  C, Γ |- enumerate e : list [real INTEGER] x T
                 assert isinstance(arg_ty, ListTypeContext)
-                return ListTypeContext(TupleTypeContext(RealTypeContext(ctx), arg_ty.elt))
+                elt_ty = TupleTypeContext(RealTypeContext(INTEGER), arg_ty.elt)
+                return ListTypeContext(elt_ty)
             case _:
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------
@@ -283,8 +284,8 @@ class ContextTypeInferInstance(Visitor):
         match e:
             case Size():
                 # size operator
-                # C, Γ |- size e : real C
-                return RealTypeContext(ctx)
+                # C, Γ |- size e : real INTEGER
+                return RealTypeContext(INTEGER)
             case _:
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------

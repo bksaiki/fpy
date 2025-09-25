@@ -1922,5 +1922,5 @@ class Float:
 ###########################################################
 # Type Aliases
 
-Real: TypeAlias = int | float | Float
+Real: TypeAlias = int | float | Float | Fraction
 

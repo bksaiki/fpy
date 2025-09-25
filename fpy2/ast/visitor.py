@@ -29,6 +29,10 @@ _expr_dispatch: dict[type[Expr], str] = {
     ListSet: "_visit_list_set",
     IfExpr: "_visit_if_expr",
     Attribute: "_visit_attribute",
+
+    Round: "_visit_round",
+    RoundExact: "_visit_round",
+    RoundAt: "_visit_round_at",
 }
 
 _stmt_dispatch: dict[type[Stmt], str] = {
@@ -105,12 +109,18 @@ class Visitor(ABC):
     def _visit_naryop(self, e: NaryOp, ctx: Any) -> Any:
         ...
 
-    @abstractmethod
-    def _visit_compare(self, e: Compare, ctx: Any) -> Any:
-        ...
+    def _visit_round(self, e: Round | RoundExact, ctx: Any) -> Any:
+        return self._visit_unaryop(e, ctx)
+
+    def _visit_round_at(self, e: RoundAt, ctx: Any) -> Any:
+        return self._visit_binaryop(e, ctx)
 
     @abstractmethod
     def _visit_call(self, e: Call, ctx: Any) -> Any:
+        ...
+
+    @abstractmethod
+    def _visit_compare(self, e: Compare, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -281,13 +291,13 @@ class DefaultVisitor(Visitor):
         for arg in e.args:
             self._visit_expr(arg, ctx)
 
-    def _visit_compare(self, e: Compare, ctx: Any):
-        for c in e.args:
-            self._visit_expr(c, ctx)
-
     def _visit_call(self, e: Call, ctx: Any):
         for arg in e.args:
             self._visit_expr(arg, ctx)
+
+    def _visit_compare(self, e: Compare, ctx: Any):
+        for c in e.args:
+            self._visit_expr(c, ctx)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         for c in e.elts:
@@ -441,14 +451,14 @@ class DefaultTransformVisitor(Visitor):
         else:
             return type(e)(args, e.loc)
 
-    def _visit_compare(self, e: Compare, ctx: Any):
-        args = [self._visit_expr(arg, ctx) for arg in e.args]
-        return Compare(e.ops, args, e.loc)
-
-    def _visit_call(self, e: Call, ctx: None):
+    def _visit_call(self, e: Call, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         kwargs = [ (k, self._visit_expr(v, ctx)) for k, v in e.kwargs ]
         return Call(e.func, e.fn, args, kwargs, e.loc)
+
+    def _visit_compare(self, e: Compare, ctx: Any):
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        return Compare(e.ops, args, e.loc)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Any):
         args = [self._visit_expr(arg, ctx) for arg in e.elts]
