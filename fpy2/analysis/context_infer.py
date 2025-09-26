@@ -52,6 +52,7 @@ class ContextTypeInferInstance(Visitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     type_info: TypeAnalysis
+    unsafe_cast_int: bool
 
     by_def: dict[Definition, TypeContext]
     by_expr: dict[Expr, TypeContext]
@@ -59,10 +60,17 @@ class ContextTypeInferInstance(Visitor):
     rvars: Unionfind[ContextParam]
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, type_info: TypeAnalysis):
+    def __init__(
+        self,
+        func: FuncDef,
+        def_use: DefineUseAnalysis,
+        type_info: TypeAnalysis,
+        unsafe_cast_int: bool
+    ):
         self.func = func
         self.def_use = def_use
         self.type_info = type_info
+        self.unsafe_cast_int = unsafe_cast_int
         self.by_def = {}
         self.by_expr = {}
         self.ret_ty = None
@@ -214,34 +222,59 @@ class ContextTypeInferInstance(Visitor):
         return self._cvt_arg_type(self._lookup_ty(e))
 
     def _visit_decnum(self, e: Decnum, ctx: ContextParam):
-        # C, Γ |- e : real REAL
-        ty = self._from_scalar(self._lookup_ty(e), REAL)
-        assert isinstance(ty, RealTypeContext) # type checking should have concluded this
-        return ty
+        if self.unsafe_cast_int and e.is_integer():
+            # unsafely cast to integer
+            # C, Γ |- e : real INTEGER
+            return RealTypeContext(INTEGER)
+        else:
+            # C, Γ |- e : real REAL
+            ty = self._from_scalar(self._lookup_ty(e), REAL)
+            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            return ty
 
     def _visit_hexnum(self, e: Hexnum, ctx: ContextParam):
-        # C, Γ |- e : real REAL
-        ty = self._from_scalar(self._lookup_ty(e), REAL)
-        assert isinstance(ty, RealTypeContext) # type checking should have concluded this
-        return ty
+        if self.unsafe_cast_int and e.is_integer():
+            # unsafely cast to integer
+            # C, Γ |- e : real INTEGER
+            return RealTypeContext(INTEGER)
+        else:
+            # C, Γ |- e : real REAL
+            ty = self._from_scalar(self._lookup_ty(e), REAL)
+            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            return ty
 
     def _visit_integer(self, e: Integer, ctx: ContextParam):
-        # C, Γ |- e : real REAL
-        ty = self._from_scalar(self._lookup_ty(e), REAL)
-        assert isinstance(ty, RealTypeContext) # type checking should have concluded this
-        return ty
+        if self.unsafe_cast_int and e.is_integer():
+            # unsafely cast to integer
+            # C, Γ |- e : real INTEGER
+            return RealTypeContext(INTEGER)
+        else:
+            # C, Γ |- e : real REAL
+            ty = self._from_scalar(self._lookup_ty(e), REAL)
+            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            return ty
 
     def _visit_rational(self, e: Rational, ctx: ContextParam):
-        # C, Γ |- e : real REAL
-        ty = self._from_scalar(self._lookup_ty(e), REAL)
-        assert isinstance(ty, RealTypeContext) # type checking should have concluded this
-        return ty
+        if self.unsafe_cast_int and e.is_integer():
+            # unsafely cast to integer
+            # C, Γ |- e : real INTEGER
+            return RealTypeContext(INTEGER)
+        else:
+            # C, Γ |- e : real REAL
+            ty = self._from_scalar(self._lookup_ty(e), REAL)
+            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            return ty
 
     def _visit_digits(self, e: Digits, ctx: ContextParam):
-        # C, Γ |- e : real REAL
-        ty = self._from_scalar(self._lookup_ty(e), REAL)
-        assert isinstance(ty, RealTypeContext) # type checking should have concluded this
-        return ty
+        if self.unsafe_cast_int and e.is_integer():
+            # unsafely cast to integer
+            # C, Γ |- e : real INTEGER
+            return RealTypeContext(INTEGER)
+        else:
+            # C, Γ |- e : real REAL
+            ty = self._from_scalar(self._lookup_ty(e), REAL)
+            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            return ty
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: ContextParam):
         #   Γ |- real : T         Γ |- bool : T
@@ -771,25 +804,36 @@ class ContextInfer:
     to infer rounding contexts for every real-valued expression.
     The analysis assigns every statement, definition, and expression
     a rounding context if it can be determined.
-
-    Raises `ContextInferError` if the context cannot be inferred.
     """
 
     @staticmethod
-    def infer(func: FuncDef, def_use: DefineUseAnalysis | None = None):
+    def infer(
+        func: FuncDef,
+        *,
+        def_use: DefineUseAnalysis | None = None,
+        unsafe_cast_int: bool = False
+    ):
         """
         Performs rounding context inference.
-
         Produces a map from definition sites to their rounding contexts.
+
+        Raises `ContextInferError` if the context cannot be inferred.
+
+        Optional arguments:
+        - `def_use`: pre-computed define-use analysis 
+        - `unsafe_cast_int`: allow unrounded integers to be typed
+        as an integer rather than real [default: `False`]
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
+        if not isinstance(unsafe_cast_int, bool):
+            raise TypeError(f'expected a \'bool\' for unsafe_cast_int, got {unsafe_cast_int}')
 
         if def_use is None:
             def_use = DefineUse.analyze(func)
 
         type_info = TypeInfer.check(func, def_use)
-        inst = ContextTypeInferInstance(func, def_use, type_info)
+        inst = ContextTypeInferInstance(func, def_use, type_info, unsafe_cast_int)
         return inst.infer()
 
     @staticmethod

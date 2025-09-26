@@ -54,7 +54,8 @@ class CppCompileError(CompileError):
 class _CppOptions:
     std: CppStandard
     op_table: ScalarOpTable
-    unsafe_allow_int: bool
+    unsafe_finitize_int: bool
+    unsafe_cast_int: bool
 
 
 @dataclasses.dataclass
@@ -189,7 +190,7 @@ class _CppBackendInstance(Visitor):
                     elif ty.ctx.is_equiv(UINT64):
                         return CppScalar.U64
                     elif ty.ctx.is_equiv(INTEGER):
-                        if not self.options.unsafe_allow_int:
+                        if not self.options.unsafe_finitize_int:
                             raise CppCompileError(self.func, 'integer type not allowed (set `unsafe_allow_int=True` to override)')
                         return CppScalar.S64
                     else:
@@ -271,20 +272,54 @@ class _CppBackendInstance(Visitor):
                 raise RuntimeError(f'unreachable: {ty}')
 
     def _visit_decnum(self, e: Decnum, ctx: _CompileCtx):
-        raise CppCompileError(self.func, 'unrounded literals are unsupported')
+        if self.options.unsafe_cast_int and e.is_integer():
+            # unsafe override: treat as unbounded integer
+            v = int(e.as_rational())
+            _, e_ty = self._expr_type(e)
+            return self._compile_number(str(v), e_ty)
+        else:
+            # otherwise unsupported
+            raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_hexnum(self, e: Hexnum, ctx: _CompileCtx):
-        raise CppCompileError(self.func, 'unrounded literals are unsupported')
+        if self.options.unsafe_cast_int and e.is_integer():
+            # unsafe override: treat as unbounded integer
+            v = int(e.as_rational())
+            _, e_ty = self._expr_type(e)
+            return self._compile_number(str(v), e_ty)
+        else:
+            # otherwise unsupported
+            raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_integer(self, e: Integer, ctx: _CompileCtx):
-        raise CppCompileError(self.func, 'unrounded literals are unsupported')
+        if self.options.unsafe_cast_int and e.is_integer():
+            # unsafe override: treat as unbounded integer
+            v = int(e.as_rational())
+            _, e_ty = self._expr_type(e)
+            return self._compile_number(str(v), e_ty)
+        else:
+            # otherwise unsupported
+            raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_rational(self, e: Rational, ctx: _CompileCtx):
-        raise CppCompileError(self.func, 'unrounded literals are unsupported')
+        if self.options.unsafe_cast_int and e.is_integer():
+            # unsafe override: treat as unbounded integer
+            v = int(e.as_rational())
+            _, e_ty = self._expr_type(e)
+            return self._compile_number(str(v), e_ty)
+        else:
+            # otherwise unsupported
+            raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_digits(self, e: Digits, ctx: _CompileCtx):
-        # TODO: this is incorrect since it rounds
-        raise CppCompileError(self.func, 'unrounded literals are unsupported')
+        if self.options.unsafe_cast_int and e.is_integer():
+            # unsafe override: treat as unbounded integer
+            v = int(e.as_rational())
+            _, e_ty = self._expr_type(e)
+            return self._compile_number(str(v), e_ty)
+        else:
+            # otherwise unsupported
+            raise CppCompileError(self.func, 'unrounded literals are unsupported')
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: _CompileCtx):
         raise NotImplementedError
@@ -906,27 +941,42 @@ class _CppBackendInstance(Visitor):
 class CppBackend(Backend):
     """
     Compiler from FPy to C++.
+
+    Major options:
+    - `std: CppStandard`: the C++ standard to target [default: `CppStandard.CXX_11`]
+    - `op_table: ScalarOpTable`: target description to use [default: `None`]
+
+    Unsafe options:
+    - `unsafe_finitize_int`: unbounded integers will be finitized to "int64_t" [default: `False`]
+    - `unsafe_cast_int`: unrounded integer literals will be assumed to be unbounded integers [default: `False`]
     """
 
+    # major options
     std: CppStandard
     op_table: ScalarOpTable
-    unsafe_allow_int: bool
 
+    # unsafe options
+    unsafe_finitize_int: bool
+    unsafe_cast_int: bool
+
+    # cache of compiled functions
     compiled: dict[str, Function]
 
     def __init__(
         self,
+        *,
         std: CppStandard = CppStandard.CXX_11,
         op_table: ScalarOpTable | None = None,
-        *,
-        unsafe_allow_int: bool = False
+        unsafe_finitize_int: bool = False,
+        unsafe_cast_int: bool = False
     ):
         if op_table is None:
             op_table = make_op_table()
 
         self.std = std
         self.op_table = op_table
-        self.unsafe_allow_int = unsafe_allow_int
+        self.unsafe_finitize_int = unsafe_finitize_int
+        self.unsafe_cast_int = unsafe_cast_int
         self.compiled = {}
 
     def headers(self) -> list[str]:
@@ -970,12 +1020,12 @@ class CppBackend(Backend):
         def_use = DefineUse.analyze(ast)
 
         try:
-            ctx_info = ContextInfer.infer(ast, def_use=def_use)
+            ctx_info = ContextInfer.infer(ast, def_use=def_use, unsafe_cast_int=self.unsafe_cast_int)
         except (ContextInferError, TypeInferError) as e:
             raise ValueError(f'{func.name}: context inference failed') from e
 
         # compile
-        options = _CppOptions(self.std, self.op_table, self.unsafe_allow_int)
+        options = _CppOptions(self.std, self.op_table, self.unsafe_finitize_int, self.unsafe_cast_int)
         inst = _CppBackendInstance(options, ast, arg_ctxs, ctx, def_use, ctx_info)
         body_str =  inst.compile()
         return body_str

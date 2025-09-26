@@ -156,7 +156,7 @@ def norm_p(x: list[fp.Real], p: fp.Real) -> fp.Real:
     :param p: Norm parameter (p >= 1).
     :return: p-norm of x.
     """
-    return fp.pow(sum([fp.pow(abs(xi), p) for xi in x]), 1.0 / p)
+    return fp.pow(sum([fp.pow(abs(xi), p) for xi in x]), fp.R(1) / p)
 
 @fp.fpy
 def cosine_similarity(x: list[fp.Real], y: list[fp.Real]) -> fp.Real:
@@ -219,7 +219,7 @@ def mean(x: list[fp.Real]) -> fp.Real:
     :param x: Input vector.
     :return: Mean of elements.
     """
-    return sum(x) / len(x)
+    return sum(x) / fp.R(len(x))
 
 @fp.fpy
 def min_element(x: list[fp.Real]) -> fp.Real:

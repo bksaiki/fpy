@@ -12,6 +12,7 @@ from ...primitive import Primitive
 
 from .types import CppType, CppScalar, ALL_SCALARS, FLOAT_TYPES, INT_TYPES
 
+
 @dataclasses.dataclass
 class UnaryCppOp:
     name: str

@@ -50,74 +50,39 @@ def _compile_obj(cpp_path: Path):
 
 _test_ignore = [
     # unrounded literals
-    'test_integer1',
-    'test_integer2',
-    'test_decnum1',
+    # 'test_integer1',
+    # 'test_integer2',
+    # 'test_decnum1',
     'test_decnum2',
     'test_hexnum1',
     'test_hexnum2', # TODO: implement
     'test_rational1',
     'test_rational2', # TODO: implement
-    'test_digits1',
-    'test_digits2',
-    'test_digits3',
+    # 'test_digits1',
+    # 'test_digits2',
+    # 'test_digits3',
     'test_digits4',
     'test_digits5', # TODO: implement
-    'test_let2',
+    # 'test_let2',
     'test_augassign1',
     'test_augassign2',
     'test_augassign3',
     'test_augassign4',
-    'test_ife2',
-    'test_ife3',
+    # 'test_ife2',
+    # 'test_ife3',
     'test_ife4',
     'test_ife5',
-    'test_tuple2',
-    'test_tuple3',
+    # 'test_tuple2',
+    # 'test_tuple3',
     'test_tuple4',
     'test_tuple5',
     'test_tuple6',
-    'test_list2',
-    'test_list3',
-    'test_list_len2',
-    'test_list_len3',
-    'test_list_dim2',
-    'test_list_dim3',
-    'test_list_size2',
-    'test_list_size3',
-    'test_list_size4',
-    'test_enumerate2',
-    'test_list_zip2',
-    'test_list_zip3',
-    'test_list_zip4',
     'test_list_comp1',
     'test_list_comp2',
     'test_list_comp3',
-    'test_list_ref1',
-    'test_list_ref2',
-    'test_list_ref3',
-    'test_list_ref4',
-    'test_list_ref5',
-    'test_list_ref6',
-    'test_list_set1',
-    'test_list_set2',
-    'test_list_set3',
-    'test_if2',
     'test_if3',
-    'test_if4',
-    'test_if5',
-    'test_if6',
     'test_if7',
-    'test_while2',
-    'test_while3',
     'test_while4',
-    'test_while5',
-    'test_while6',
-    'test_while7',
-    'test_for2',
-    'test_for3',
-    'test_for4',
-    'test_for5',
     # empty list is not monomorphic
     'test_list1',
     'test_list_len1',
@@ -152,7 +117,7 @@ def _test_unit_tests(
     *,
     no_cc: bool = False
 ):
-    compiler = fp.CppBackend(unsafe_allow_int=True)
+    compiler = fp.CppBackend(unsafe_finitize_int=True, unsafe_cast_int=True)
     for func in funcs:
         if func.name in ignore:
             continue
@@ -193,7 +158,7 @@ _library_ignore = [
 ]
 
 def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
-    compiler = fp.CppBackend(unsafe_allow_int=True)
+    compiler = fp.CppBackend(unsafe_finitize_int=True, unsafe_cast_int=True)
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     with open(cpp_path, 'w') as f:

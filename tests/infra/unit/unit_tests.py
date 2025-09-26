@@ -735,6 +735,19 @@ def whetsone1(n: int):
         x4 = (-x1 + x2 + x3 + x4) * t
     return x1, x2, x3, x4
 
+@fp.fpy
+def example_sum(n: fp.Real):
+    x = fp.round(0)
+    for i in range(n):
+        x += fp.round(i)
+    return x
+
+@fp.fpy
+def example_set(y: fp.Real):
+    x = [fp.round(0), fp.round(1)]
+    x[0] = y
+    return x
+
 @fp.fpy(ctx=fp.REAL)
 def _select_ctx(x: fp.Real):
     e = fp.libraries.core.logb(x)
@@ -867,5 +880,7 @@ examples: list[Function] = [
     azimuth,
     lod_anisotropic,
     whetsone1,
+    example_sum,
+    example_set,
     keep_p_1
 ]
