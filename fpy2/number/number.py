@@ -16,6 +16,7 @@ from ..utils import (
     bitmask,
     float_to_bits,
     rcomparable,
+    is_dyadic,
     Ordering,
     FP64_M,
     FP64_EXPMIN,
@@ -468,6 +469,32 @@ class RealFloat(numbers.Rational):
             exp = FP64_EXPMIN + (ebits - 1)
             c = FP64_IMPLICIT1 | mbits
             return RealFloat(s=s, exp=exp, c=c)
+
+    @staticmethod
+    def from_rational(x: numbers.Rational):
+        """
+        Creates a new `RealFloat` value from a `Fraction`.
+
+        Raise a `ValueError` if `x` is not a dyadic rational.
+        """
+        if not isinstance(x, numbers.Rational):
+            raise TypeError(f'expected Rational, got {type(x)}')
+        if not is_dyadic(x):
+            raise ValueError(f'expected a dyadic rational, got `{x}`')
+        if x == 0:
+            # case: 0
+            return RealFloat.zero()
+        else:
+            n = int(x.numerator)
+            d = int(x.denominator)
+            if d == 1:
+                # case: integer
+                return RealFloat.from_int(n)
+            else:
+                # case: has fractional bits
+                exp = d.bit_length() - 1
+                m = n * (2 ** exp) // d
+                return RealFloat(m=m, exp=exp)
 
     @staticmethod
     def zero(s: bool = False):
@@ -1652,6 +1679,20 @@ class Float:
         else:
             xr = RealFloat.from_float(x)
             return Float.from_real(xr, ctx, checked)
+        
+    @staticmethod
+    def from_rational(x: Fraction, ctx: Context | None = None, checked: bool = True):
+        """
+        Converts a `Fraction` to a `Float` number.
+
+        Optionally specify a rounding context under which to
+        construct this value. If a rounding context is specified,
+        `x` must be representable under `ctx` unless `checked=False`.
+        """
+        if not isinstance(x, Fraction):
+            raise TypeError(f'expected Fraction, got {type(x)}')
+        xr = RealFloat.from_rational(x)
+        return Float.from_real(xr, ctx, checked)
 
     def as_real(self) -> RealFloat:
         """Returns the real part of this number."""
@@ -1881,5 +1922,5 @@ class Float:
 ###########################################################
 # Type Aliases
 
-Real: TypeAlias = int | float | Float
+Real: TypeAlias = int | float | Float | Fraction
 

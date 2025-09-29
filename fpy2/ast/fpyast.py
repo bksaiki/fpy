@@ -433,6 +433,11 @@ class RationalVal(RealVal):
         """Returns the represented rational value as a Fraction in simplest form."""
         ...
 
+    def is_integer(self) -> bool:
+        """Returns true if the represented value is an integer."""
+        return self.as_rational().denominator == 1
+
+
 class Decnum(RationalVal):
     """FPy AST: decimal number"""
     __slots__ = ('val',)

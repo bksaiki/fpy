@@ -5,6 +5,7 @@ FPy runtime backed by the Titanic library.
 import copy
 import inspect
 
+from fractions import Fraction
 from typing import Any, Callable, Collection, TypeAlias
 
 from .. import ops
@@ -15,20 +16,25 @@ from ..number import Context, Float, RealFloat, REAL, FP64, INTEGER
 from ..env import ForeignEnv
 from ..function import Function
 from ..primitive import Primitive
+from ..utils import is_dyadic
 
 from .interpreter import Interpreter, FunctionReturnError
 
-ScalarVal: TypeAlias = bool | Float | Context
+RealValue: TypeAlias = Float | Fraction
+"""Type of real values in FPy programs."""
+ScalarValue: TypeAlias = bool | Context | RealValue
 """Type of scalar values in FPy programs."""
-TensorVal: TypeAlias = list
+TensorValue: TypeAlias = list['Value'] | tuple['Value', ...]
 """Type of list values in FPy programs."""
+Value: TypeAlias = ScalarValue | TensorValue
+"""Type of values in FPy programs."""
 
-ScalarArg: TypeAlias = ScalarVal | str | int | float
+ScalarArg: TypeAlias = ScalarValue | str | int | float
 """Type of scalar arguments in FPy programs; includes native Python types"""
 TensorArg: TypeAlias = tuple | list
 """Type of list arguments in FPy programs; includes native Python types"""
 
-_Env: TypeAlias = dict[NamedId, ScalarVal | TensorVal]
+_Env: TypeAlias = dict[NamedId, Value]
 """Type of the environment used by the interpreter."""
 
 # Pre-built lookup tables for better performance
@@ -87,7 +93,6 @@ _UNARY_TABLE: dict[type[UnaryOp], Callable[..., Any]] = {
     IsNan: ops.isnan,
     IsNormal: ops.isnormal,
     Signbit: ops.signbit,
-    Round: ops.round,
     RoundExact: ops.round_exact
 }
 
@@ -176,8 +181,8 @@ class _Interpreter(Visitor):
                         self.env[arg.name] = x
                 case RealTypeAnn():
                     x = self._arg_to_value(val)
-                    if not isinstance(x, Float):
-                        raise NotImplementedError(f'argument is a scalar, got data {val}')
+                    if not isinstance(x, RealValue):
+                        raise TypeError(f'argument expects a real number, got data `{val}`')
                     if isinstance(arg.name, NamedId):
                         self.env[arg.name] = x
                 case TensorTypeAnn():
@@ -208,6 +213,17 @@ class _Interpreter(Visitor):
         except KeyError as exc:
             raise RuntimeError(f'unbound variable {name}') from exc
 
+    def _cvt_float(self, x: Value):
+        match x:
+            case Float():
+                return x
+            case Fraction():
+                if not is_dyadic(x):
+                    raise TypeError(f'expected a dyadic rational, got `{x}`')
+                return Float.from_rational(x, ctx=REAL)
+            case _:
+                raise TypeError(f'expected a real number, got `{x}`')
+
     def _visit_var(self, e: Var, ctx: Context):
         return self._lookup(e.name)
 
@@ -218,34 +234,34 @@ class _Interpreter(Visitor):
         return e.val
 
     def _visit_decnum(self, e: Decnum, ctx: Context):
-        return ctx.round(e.as_rational())
+        return e.as_rational()
 
     def _visit_integer(self, e: Integer, ctx: Context):
-        return ctx.round(e.val)
+        return e.as_rational()
 
     def _visit_hexnum(self, e: Hexnum, ctx: Context):
-        return ctx.round(e.as_rational())
+        return e.as_rational()
 
     def _visit_rational(self, e: Rational, ctx: Context):
-        return ctx.round(e.as_rational())
+        return e.as_rational()
 
     def _visit_digits(self, e: Digits, ctx: Context):
-        return ctx.round(e.as_rational())
+        return e.as_rational()
 
     def _apply_method(self, fn: Callable[..., Any], args: Collection[Expr], ctx: Context):
         # fn: Callable[[Float, ..., Context], Float]
-        vals = tuple(self._visit_expr(arg, ctx) for arg in args)
-        for val in vals:
-            if not isinstance(val, Float):
-                raise TypeError(f'expected a real number argument, got {val}')
+        vals: list[Float] = []
+        for arg in args:
+            val = self._visit_expr(arg, ctx)
+            vals.append(self._cvt_float(val))
         # compute the result
         return fn(*vals, ctx=ctx)
 
     def _apply_not(self, arg: Expr, ctx: Context):
-        arg = self._visit_expr(arg, ctx)
-        if not isinstance(arg, bool):
-            raise TypeError(f'expected a boolean argument, got {arg}')
-        return not arg
+        val = self._visit_expr(arg, ctx)
+        if not isinstance(val, bool):
+            raise TypeError(f'expected a boolean argument, got {val}')
+        return not val
 
     def _apply_and(self, args: Collection[Expr], ctx: Context):
         for arg in args:
@@ -269,21 +285,16 @@ class _Interpreter(Visitor):
         arr = self._visit_expr(arg, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a list, got {arr}')
-        return Float.from_int(len(arr), ctx=ctx)
+        return Float.from_int(len(arr), ctx=INTEGER, checked=False)
 
     def _apply_range(self, arg: Expr, ctx: Context):
-        stop = self._visit_expr(arg, ctx)
-        if not isinstance(stop, Float):
-            raise TypeError(f'expected a real number argument, got {stop}')
+        stop = self._cvt_float(self._visit_expr(arg, ctx))
         if not stop.is_integer():
             raise TypeError(f'expected an integer argument, got {stop}')
-        n = int(stop)
-        return [Float.from_int(i, ctx=ctx) for i in range(n)]
+        return [Float.from_int(i, ctx=INTEGER, checked=False) for i in range(int(stop))]
 
     def _apply_empty(self, arg: Expr, ctx: Context):
-        size = self._visit_expr(arg, ctx)
-        if not isinstance(size, Float):
-            raise TypeError(f'expected a real number argument, got {size}')
+        size = self._cvt_float(self._visit_expr(arg, ctx))
         if not size.is_integer() or size.is_negative():
             raise TypeError(f'expected an integer argument, got {size}')
         return ops.empty(size)
@@ -298,18 +309,13 @@ class _Interpreter(Visitor):
         v = self._visit_expr(arg, ctx)
         if not isinstance(v, list):
             raise TypeError(f'expected a list, got {v}')
-        return [
-            (Float.from_int(i, ctx=ctx), val)
-            for i, val in enumerate(v)
-        ]
+        return [(Float.from_int(i, ctx=INTEGER, checked=False), val) for i, val in enumerate(v)]
 
     def _apply_size(self, arr: Expr, idx: Expr, ctx: Context):
         v = self._visit_expr(arr, ctx)
         if not isinstance(v, list):
             raise TypeError(f'expected a list, got {v}')
-        dim = self._visit_expr(idx, ctx)
-        if not isinstance(dim, Float):
-            raise TypeError(f'expected a real number argument, got {dim}')
+        dim = self._cvt_float(self._visit_expr(idx, ctx))
         if not dim.is_integer():
             raise TypeError(f'expected an integer argument, got {dim}')
         return ops.size(v, dim, ctx)
@@ -330,9 +336,7 @@ class _Interpreter(Visitor):
         """Apply the `min` method to the given n-ary expression."""
         vals: list[Float] = []
         for arg in args:
-            val = self._visit_expr(arg, ctx)
-            if not isinstance(val, Float):
-                raise TypeError(f'expected a real number argument, got {val}')
+            val = self._cvt_float(self._visit_expr(arg, ctx))
             if not val.isnan:
                 vals.append(val)
 
@@ -349,9 +353,7 @@ class _Interpreter(Visitor):
         # evaluate all children
         vals: list[Float] = []
         for arg in args:
-            val = self._visit_expr(arg, ctx)
-            if not isinstance(val, Float):
-                raise TypeError(f'expected a real number argument, got {val}')
+            val = self._cvt_float(self._visit_expr(arg, ctx))
             if not val.isnan:
                 vals.append(val)
 
@@ -368,17 +370,30 @@ class _Interpreter(Visitor):
         val = self._visit_expr(arg, ctx)
         if not isinstance(val, list):
             raise TypeError(f'expected a list, got {val}')
-        if not len(val) > 0:
-            raise ValueError('cannot sum an empty list')
+        
+        if len(val) == 0:
+            return Float.from_int(0, ctx=REAL)
+        else:
+            accum = self._cvt_float(val[0])
+            for x in val[1:]:
+                accum = ops.add(accum, self._cvt_float(x), ctx=ctx)
+            return accum
 
-        for x in val:
-            if not isinstance(x, Float):
-                raise TypeError(f'expected a real number argument, got {x}')
+    def _visit_round(self, e: Round | RoundExact, ctx: Context):
+        val = self._visit_expr(e.arg, ctx)
+        if not isinstance(val, Float | Fraction):
+            raise TypeError(f'expected a real number argument, got {val}')
+        if isinstance(e, Round):
+            return ops.round(val, ctx=ctx)
+        else:
+            return ops.round_exact(val, ctx=ctx)
 
-        accum = val[0]
-        for x in val[1:]:
-            accum = ops.add(accum, x, ctx=ctx)
-        return accum
+    def _visit_round_at(self, e: RoundAt, ctx: Context):
+        val = self._cvt_float(self._visit_expr(e.first, ctx))
+        n = self._cvt_float(self._visit_expr(e.second, ctx))
+        if not n.is_integer():
+            raise TypeError(f'expected an integer argument, got {n}')
+        return ops.round_at(val, n, ctx=ctx)
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         fn = _NULLARY_TABLE.get(type(e))
@@ -390,10 +405,8 @@ class _Interpreter(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: Context):
         fn = _UNARY_TABLE.get(type(e))
         if fn is not None:
-            arg = self._visit_expr(e.arg, ctx)
-            if not isinstance(arg, Float):
-                raise TypeError(f'expected a real number argument, got {arg}')
-            return fn(arg, ctx=ctx)
+            val = self._cvt_float(self._visit_expr(e.arg, ctx))
+            return fn(val, ctx=ctx)
         else:
             match e:
                 case Not():
@@ -416,12 +429,8 @@ class _Interpreter(Visitor):
     def _visit_binaryop(self, e: BinaryOp, ctx: Context):
         fn = _BINARY_TABLE.get(type(e))
         if fn is not None:
-            first = self._visit_expr(e.first, ctx)
-            second = self._visit_expr(e.second, ctx)
-            if not isinstance(first, Float):
-                raise TypeError(f'expected a real number argument, got {first}')
-            if not isinstance(second, Float):
-                raise TypeError(f'expected a real number argument, got {second}')
+            first = self._cvt_float(self._visit_expr(e.first, ctx))
+            second = self._cvt_float(self._visit_expr(e.second, ctx))
             return fn(first, second, ctx=ctx)
         else:
             match e:
@@ -433,15 +442,9 @@ class _Interpreter(Visitor):
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
         fn = _TERNARY_TABLE.get(type(e))
         if fn is not None:
-            first = self._visit_expr(e.first, ctx)
-            second = self._visit_expr(e.second, ctx)
-            third = self._visit_expr(e.third, ctx)
-            if not isinstance(first, Float):
-                raise TypeError(f'expected a real number argument, got {first}')
-            if not isinstance(second, Float):
-                raise TypeError(f'expected a real number argument, got {second}')
-            if not isinstance(third, Float):
-                raise TypeError(f'expected a real number argument, got {third}')
+            first = self._cvt_float(self._visit_expr(e.first, ctx))
+            second = self._cvt_float(self._visit_expr(e.second, ctx))
+            third = self._cvt_float(self._visit_expr(e.third, ctx))
             return fn(first, second, third, ctx=ctx)
         else:
             raise RuntimeError('unknown operator', e)
@@ -464,9 +467,10 @@ class _Interpreter(Visitor):
     def _cvt_context_arg(self, cls: type[Context], name: str, arg: Any, ty: type):
         if ty is int:
             # convert to int
-            if not isinstance(arg, Float) or not arg.is_integer():
+            val = self._cvt_float(arg)
+            if not val.is_integer():
                 raise TypeError(f'expected an integer argument for `{name}={arg}`')
-            return int(arg)
+            return int(val)
         elif ty is float:
             # convert to float
             raise NotImplementedError(arg, ty)
@@ -528,15 +532,16 @@ class _Interpreter(Visitor):
                 # calling foreign function
                 # only `print` is allowed
                 args = [self._visit_expr(arg, ctx) for arg in e.args]
-                kwargs = { k: self._visit_expr(v, ctx) for k, v in e.kwargs }
+                if e.kwargs:
+                    raise RuntimeError('foreign functions do not support keyword arguments', e)
                 if fn == print:
-                    print(*args, **kwargs)
+                    print(*args)
                     # TODO: should we allow `None` to return
                     return None
                 else:
                     raise RuntimeError(f'attempting to call a Python function: `{fn}` at `{e.format()}`')
 
-    def _apply_cmp2(self, op: CompareOp, lhs, rhs):
+    def _apply_cmp2(self, op: CompareOp, lhs: RealValue, rhs: RealValue):
         match op:
             case CompareOp.EQ:
                 return lhs == rhs
@@ -555,8 +560,12 @@ class _Interpreter(Visitor):
 
     def _visit_compare(self, e: Compare, ctx: Context):
         lhs = self._visit_expr(e.args[0], ctx)
+        if not isinstance(lhs, RealValue):
+            raise TypeError(f'expected a real number, got `{lhs}`')
         for op, arg in zip(e.ops, e.args[1:]):
             rhs = self._visit_expr(arg, ctx)
+            if not isinstance(rhs, RealValue):
+                raise TypeError(f'expected a real number, got `{rhs}`')
             if not self._apply_cmp2(op, lhs, rhs):
                 return False
             lhs = rhs
@@ -573,9 +582,7 @@ class _Interpreter(Visitor):
         if not isinstance(arr, list):
             raise TypeError(f'expected a list, got {arr}')
 
-        idx = self._visit_expr(e.index, ctx)
-        if not isinstance(idx, Float):
-            raise TypeError(f'expected a real number index, got {idx}')
+        idx = self._cvt_float(self._visit_expr(e.index, ctx))
         if not idx.is_integer():
             raise TypeError(f'expected an integer index, got {idx}')
         return arr[int(idx)]
@@ -588,9 +595,7 @@ class _Interpreter(Visitor):
         if e.start is None:
             start = 0
         else:
-            val = self._visit_expr(e.start, ctx)
-            if not isinstance(val, Float):
-                raise TypeError(f'expected a real number start index, got {val}')
+            val = self._cvt_float(self._visit_expr(e.start, ctx))
             if not val.is_integer():
                 raise TypeError(f'expected an integer start index, got {val}')
             start = int(val)
@@ -598,9 +603,7 @@ class _Interpreter(Visitor):
         if e.stop is None:
             stop = len(arr)
         else:
-            val = self._visit_expr(e.stop, ctx)
-            if not isinstance(val, Float):
-                raise TypeError(f'expected a real number stop index, got {val}')
+            val = self._cvt_float(self._visit_expr(e.stop, ctx))
             if not val.is_integer():
                 raise TypeError(f'expected an integer stop index, got {val}')
             stop = int(val)
@@ -614,13 +617,11 @@ class _Interpreter(Visitor):
         value = self._visit_expr(e.value, ctx)
         if not isinstance(value, list):
             raise TypeError(f'expected a list, got {value}')
-        array = copy.deepcopy(value) # make a copy
+        array: list = copy.deepcopy(value) # make a copy
 
         slices = []
         for s in e.indices:
-            val = self._visit_expr(s, ctx)
-            if not isinstance(val, Float):
-                raise TypeError(f'expected a real number slice, got {val}')
+            val = self._cvt_float(self._visit_expr(s, ctx))
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
             slices.append(int(val))
@@ -633,7 +634,6 @@ class _Interpreter(Visitor):
 
         array[slices[-1]] = val
         return array
-
 
     def _apply_comp(
         self,
@@ -654,6 +654,8 @@ class _Interpreter(Visitor):
                     case NamedId():
                         self.env[target] = val
                     case TupleBinding():
+                        if not isinstance(val, tuple):
+                            raise TypeError(f'can only unpack tuples, got `{val}` for `{target}`')
                         self._unpack_tuple(target, val, ctx)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
@@ -670,9 +672,7 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _unpack_tuple(self, binding: TupleBinding, val: list, ctx: Context) -> None:
-        if not isinstance(val, tuple):
-            raise TypeError(f'can only unpack tuples, got `{val}` for `{binding}`')
+    def _unpack_tuple(self, binding: TupleBinding, val: tuple, ctx: Context) -> None:
         if len(binding.elts) != len(val):
             raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
         for elt, v in zip(binding.elts, val):
@@ -680,6 +680,8 @@ class _Interpreter(Visitor):
                 case NamedId():
                     self.env[elt] = v
                 case TupleBinding():
+                    if not isinstance(val, tuple):
+                        raise TypeError(f'can only unpack tuples, got `{val}` for `{binding}`')
                     self._unpack_tuple(elt, v, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx: Context) -> None:
@@ -688,6 +690,8 @@ class _Interpreter(Visitor):
             case NamedId():
                 self.env[stmt.target] = val
             case TupleBinding():
+                if not isinstance(val, tuple):
+                    raise TypeError(f'can only unpack tuples, got `{val}` for `{stmt.target}`')
                 self._unpack_tuple(stmt.target, val, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context) -> None:
@@ -697,9 +701,7 @@ class _Interpreter(Visitor):
         # evaluate indices
         slices: list[int] = []
         for slice in stmt.indices:
-            val = self._visit_expr(slice, ctx)
-            if not isinstance(val, Float):
-                raise TypeError(f'expected a real number slice, got {val}')
+            val = self._cvt_float(self._visit_expr(slice, ctx))
             if not val.is_integer():
                 raise TypeError(f'expected an integer slice, got {val}')
             slices.append(int(val))
@@ -758,6 +760,8 @@ class _Interpreter(Visitor):
                 case NamedId():
                     self.env[stmt.target] = val
                 case TupleBinding():
+                    if not isinstance(val, tuple):
+                        raise TypeError(f'can only unpack tuples, got `{val}` for `{stmt.target}`')
                     self._unpack_tuple(stmt.target, val, ctx)
             # evaluate the body of the loop
             self._visit_block(stmt.body, ctx)
@@ -775,7 +779,7 @@ class _Interpreter(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
         # evaluate the context under a real context
-        round_ctx = self._visit_expr(stmt.ctx, REAL)
+        round_ctx = self._visit_expr(stmt.ctx, ctx)
         if not isinstance(round_ctx, Context):
             raise TypeError(f'expected a context, got `{round_ctx}`')
         if isinstance(stmt.target, NamedId):
@@ -812,6 +816,9 @@ class _Interpreter(Visitor):
 
     def _visit_function(self, func: FuncDef, ctx: Context):
         raise NotImplementedError('do not call directly')
+
+    def _visit_expr(self, e: Expr, ctx: Context) -> Value:
+        return super()._visit_expr(e, ctx)
 
 
 class DefaultInterpreter(Interpreter):

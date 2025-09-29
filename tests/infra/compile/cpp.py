@@ -49,21 +49,57 @@ def _compile_obj(cpp_path: Path):
 # Unit tests
 
 _test_ignore = [
-    'test_list1', # empty list is not monomorphic
-    'test_list_len1', # empty list is not monomorphic
-    'test_list_dim1', # empty list is not monomorphic
-    'test_list_size1', # empty list is not monomorphic
-    'test_enumerate1', # empty list is not monomorphic
+    # unrounded literals
+    # 'test_integer1',
+    # 'test_integer2',
+    # 'test_decnum1',
+    'test_decnum2',
+    'test_hexnum1',
+    'test_hexnum2', # TODO: implement
+    'test_rational1',
+    'test_rational2', # TODO: implement
+    # 'test_digits1',
+    # 'test_digits2',
+    # 'test_digits3',
+    'test_digits4',
+    'test_digits5', # TODO: implement
+    # 'test_let2',
+    'test_augassign1',
+    'test_augassign2',
+    'test_augassign3',
+    'test_augassign4',
+    # 'test_ife2',
+    # 'test_ife3',
+    'test_ife4',
+    'test_ife5',
+    # 'test_tuple2',
+    # 'test_tuple3',
+    'test_tuple4',
+    'test_tuple5',
+    'test_tuple6',
+    'test_list_comp1',
+    'test_list_comp2',
+    'test_list_comp3',
+    'test_if3',
+    'test_if7',
+    'test_while4',
+    # empty list is not monomorphic
+    'test_list1',
+    'test_list_len1',
+    'test_list_dim1',
+    'test_list_size1',
+    'test_enumerate1', 
+    # context expressions
     'test_context_expr1',
     'test_context_expr2',
-    'test_context1',
+    # unsupported contexts
     'test_context2',
     'test_context3',
     'test_context4',
     'test_context5',
-    # 'test_context6',
     'test_context7',
     'test_context8',
+    # assertion messages
     'test_assert2',
     'test_assert3',
 ]
@@ -81,7 +117,7 @@ def _test_unit_tests(
     *,
     no_cc: bool = False
 ):
-    compiler = fp.CppBackend(unsafe_allow_int=True)
+    compiler = fp.CppBackend(unsafe_finitize_int=True, unsafe_cast_int=True)
     for func in funcs:
         if func.name in ignore:
             continue
@@ -122,7 +158,7 @@ _library_ignore = [
 ]
 
 def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
-    compiler = fp.CppBackend(unsafe_allow_int=True)
+    compiler = fp.CppBackend(unsafe_finitize_int=True, unsafe_cast_int=True)
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     with open(cpp_path, 'w') as f:

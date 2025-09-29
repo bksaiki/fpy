@@ -49,13 +49,13 @@ class _Eliminator(DefaultTransformVisitor):
         else:
             return super()._visit_assign(assign, ctx)
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+    def _visit_if1(self, stmt: If1Stmt, ctx: None) -> tuple[Stmt | StmtBlock | None, None]:
         if isinstance(stmt.cond, BoolVal):
             if stmt.cond.val:
                 # if True: ... -> ...
                 # return the block directly
                 self.eliminated = True
-                body = self._visit_block(stmt.body, ctx)
+                body, _ = self._visit_block(stmt.body, ctx)
                 return body, ctx
             else:
                 # if False: ... -> (nothing)
@@ -69,7 +69,7 @@ class _Eliminator(DefaultTransformVisitor):
             # nothing to eliminate
             return super()._visit_if1(stmt, ctx)
 
-    def _visit_if(self, stmt: IfStmt, ctx: None):
+    def _visit_if(self, stmt: IfStmt, ctx: None) -> tuple[Stmt | StmtBlock | None, None]:
         if isinstance(stmt.cond, BoolVal):
             if stmt.cond.val:
                 # if True: ... else: ... -> ...
@@ -99,7 +99,7 @@ class _Eliminator(DefaultTransformVisitor):
             # nothing to eliminate
             return super()._visit_if(stmt, ctx)
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> tuple[Stmt | StmtBlock | None, None]:
         # remove `while False: ...`
         # remove `while _: pass`
         if (isinstance(stmt.cond, BoolVal) and not stmt.cond.val) or self._is_empty_block(stmt.body):
@@ -114,7 +114,7 @@ class _Eliminator(DefaultTransformVisitor):
         self.eliminated = True
         return None, ctx
 
-    def _visit_block(self, block: StmtBlock, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None) -> tuple[StmtBlock, None]:
         if self._is_empty_block(block):
             # do nothing
             return block, ctx
@@ -137,6 +137,7 @@ class _Eliminator(DefaultTransformVisitor):
             # empty block -> add a pass statement
             if len(stmts) == 0:
                 stmts.append(PassStmt(None))
+
             return StmtBlock(stmts), ctx
 
     def _visit_function(self, func: FuncDef, ctx: None):

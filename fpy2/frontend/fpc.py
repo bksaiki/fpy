@@ -125,6 +125,8 @@ def _empty(ns: list[Expr]) -> Expr:
     else:
         raise ValueError(f'ns={ns} cannot be empty')
 
+def _round(x: Expr) -> Expr:
+    return Round(NamedId('round'), x, None)
 
 # TODO: clean this up
 class _Ctx:
@@ -183,19 +185,19 @@ class _FPCore2FPy:
         return constants[e.value]
 
     def _visit_decnum(self, e: fpc.Decnum, ctx: _Ctx) -> Expr:
-        return Decnum(str(e.value), None)
+        return _round(Decnum(str(e.value), None))
 
     def _visit_hexnum(self, e: fpc.Hexnum, ctx: _Ctx) -> Expr:
-        return Hexnum(NamedId('hexnum'), str(e.value), None)
+        return _round(Hexnum(NamedId('hexnum'), str(e.value), None))
 
     def _visit_integer(self, e: fpc.Integer, ctx: _Ctx) -> Expr:
-        return Integer(int(e.value), None)
+        return _round(Integer(int(e.value), None))
 
     def _visit_rational(self, e: fpc.Rational, ctx: _Ctx) -> Expr:
-        return Rational(NamedId('rational'), e.p, e.q, None)
+        return _round(Rational(NamedId('rational'), e.p, e.q, None))
 
     def _visit_digits(self, e: fpc.Digits, ctx: _Ctx) -> Expr:
-        return Digits(NamedId('digits'), e.m, e.e, e.b, None)
+        return _round(Digits(NamedId('digits'), e.m, e.e, e.b, None))
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         unary_table = _get_unary_table()
@@ -204,7 +206,7 @@ class _FPCore2FPy:
             return Neg(arg, None)
         elif e.name == 'cast':
             arg = self._visit(e.children[0], ctx)
-            return Round(NamedId('round'), arg, None)
+            return _round(arg)
         elif e.name in unary_table:
             cls = unary_table[e.name]
             arg = self._visit(e.children[0], ctx)

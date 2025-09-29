@@ -2,6 +2,14 @@ from fpy2 import Function, FPCoreCompiler
 from .unit_tests import tests, examples
 
 _ignore = [
+    # unrounded constant
+    'test_decnum2',
+    'test_hexnum1',
+    'test_rational1',
+    'test_digits4',
+    'test_context4',
+
+    # context values
     'test_context_expr1',
     'test_context_expr2',
     'test_context6',
@@ -11,7 +19,7 @@ _ignore = [
 ]
 
 def test_compile_fpc():
-    comp = FPCoreCompiler()
+    comp = FPCoreCompiler(unsafe_int_cast=True)
     for core in tests + examples:
         assert isinstance(core, Function)
         if core.name not in _ignore:

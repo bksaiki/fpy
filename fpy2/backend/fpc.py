@@ -84,10 +84,6 @@ def _get_unary_table() -> dict[type[UnaryOp], type[fpc.Expr]]:
             IsNormal: fpc.Isnormal,
             Signbit: fpc.Signbit,
             Not: fpc.Not,
-            # rounding
-            Round: fpc.Cast,
-            RoundExact: fpc.Cast # TODO: does this have an FPCore translation?
-            # RoundAt: # TODO: cannot translate this to FPCore
         }
     return _unary_table_cache
 
@@ -149,14 +145,18 @@ def _size0_expr(x: str):
 
 class _FPCoreCompileInstance(Visitor):
     """Compilation instance from FPy to FPCore"""
+
     func: FuncDef
     def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    unsafe_int_cast: bool
+
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, unsafe_int_cast: bool = True):
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
+        self.unsafe_int_cast = unsafe_int_cast
 
     def compile(self) -> fpc.FPCore:
         f = self._visit_function(self.func, None)
@@ -224,19 +224,39 @@ class _FPCoreCompileInstance(Visitor):
         raise FPCoreCompileError('unsupported value', e.val)
 
     def _visit_decnum(self, e: Decnum, ctx: None) -> fpc.Expr:
-        return fpc.Decnum(e.val)
+        if e.is_integer() and self.unsafe_int_cast:
+            # unsafe integer cast: compile under integer context
+            v = int(e.as_rational())
+            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(v))
+        raise FPCoreCompileError('cannot compile unrounded constant', e.val)
 
     def _visit_hexnum(self, e: Hexnum, ctx: None):
-        return fpc.Hexnum(e.val)
+        if e.is_integer() and self.unsafe_int_cast:
+            # unsafe integer cast: compile under integer context
+            v = int(e.as_rational())
+            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(v))
+        raise FPCoreCompileError('cannot compile unrounded constant', e.val)
 
     def _visit_integer(self, e: Integer, ctx: None) -> fpc.Expr:
-        return fpc.Integer(e.val)
+        if self.unsafe_int_cast:
+            # unsafe integer cast: compile under integer context
+            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(e.val))
+        else:
+            raise FPCoreCompileError('cannot compile unrounded constant', e.val)
 
     def _visit_rational(self, e: Rational, ctx: None):
-        return fpc.Rational(e.p, e.q)
+        if self.unsafe_int_cast and e.is_integer():
+            # unsafe integer cast: compile under integer context
+            v = int(e.as_rational())
+            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(v))
+        raise FPCoreCompileError('cannot compile unrounded constant', f'{e.p}/{e.q}')
 
     def _visit_digits(self, e: Digits, ctx: None) -> fpc.Expr:
-        return fpc.Digits(e.m, e.e, e.b)
+        if self.unsafe_int_cast and e.e == 0 and e.b == 2:
+            # unsafe integer cast: compile under integer context
+            v = int(e.as_rational())
+            return fpc.Ctx({ 'precision': 'integer' }, fpc.Integer(v))
+        raise FPCoreCompileError('cannot compile unrounded constant', f'digits({e.m}, {e.e}, {e.b})')
 
     def _visit_call(self, e: Call, ctx: None) -> fpc.Expr:
         if e.kwargs:
@@ -250,6 +270,32 @@ class _FPCoreCompileInstance(Visitor):
                 raise RuntimeError('unreachable', e.func)
         args = [self._visit_expr(c, ctx) for c in e.args]
         return fpc.UnknownOperator(*args, name=name)
+
+    def _visit_round(self, e: Round | RoundExact, ctx: None) -> fpc.Expr:
+        # round expression
+        match e.arg:
+            case Decnum():
+                # round(n) => n
+                return fpc.Decnum(e.arg.val)
+            case Hexnum():
+                # round(n) => n
+                return fpc.Hexnum(e.arg.val)
+            case Integer():
+                # round(n) => n
+                return fpc.Integer(e.arg.val)
+            case Rational():
+                # round(p/q) => p/q
+                return fpc.Rational(e.arg.p, e.arg.q)
+            case Digits():
+                # round(digits(m, e, b)) => digits(m, e, b)
+                return fpc.Digits(e.arg.m, e.arg.e, e.arg.b)
+            case _:
+                # round(e) => cast(e)
+                arg = self._visit_expr(e.arg, ctx)
+                return fpc.Cast(arg)
+
+    def _visit_round_at(self, e: RoundAt, ctx: None) -> fpc.Expr:
+        raise FPCoreCompileError('cannot compile `round_at` expression to FPCore', e)
 
     def _visit_len(self, arg: Expr, ctx: None) -> fpc.Expr:
         # length expression
@@ -995,6 +1041,12 @@ class _FPCoreCompileInstance(Visitor):
 class FPCoreCompiler(Backend):
     """Compiler from FPy to FPCore"""
 
+    unsafe_int_cast: bool
+    """any unrounded integer is automatically compiled under an integer context"""
+
+    def __init__(self, *, unsafe_int_cast: bool = False):
+        self.unsafe_int_cast = unsafe_int_cast
+
     def compile(self, func: Function, ctx: Context | None = None) -> fpc.FPCore:
         # TODO: handle ctx
 
@@ -1007,4 +1059,4 @@ class FPCoreCompiler(Backend):
         ast = IfBundling.apply(ast)
         # compile
         def_use = DefineUse.analyze(ast)
-        return _FPCoreCompileInstance(ast, def_use).compile()
+        return _FPCoreCompileInstance(ast, def_use, self.unsafe_int_cast).compile()

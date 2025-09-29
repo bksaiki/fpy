@@ -143,17 +143,17 @@ class _FormatterInstance(Visitor):
             case _:
                 raise RuntimeError('unreachable', e)
 
-    def _visit_compare(self, e: Compare, ctx: _Ctx):
-        first = self._visit_expr(e.args[0], ctx)
-        rest = [self._visit_expr(arg, ctx) for arg in e.args[1:]]
-        s = ' '.join(f'{op.symbol()} {arg}' for op, arg in zip(e.ops, rest))
-        return f'{first} {s}'
-
     def _visit_call(self, e: Call, ctx: _Ctx):
         name = self._visit_function_name(e.func, ctx)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         arg_str = ', '.join(args)
         return f'{name}({arg_str})'
+
+    def _visit_compare(self, e: Compare, ctx: _Ctx):
+        first = self._visit_expr(e.args[0], ctx)
+        rest = [self._visit_expr(arg, ctx) for arg in e.args[1:]]
+        s = ' '.join(f'{op.symbol()} {arg}' for op, arg in zip(e.ops, rest))
+        return f'{first} {s}'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
         num_elts = len(e.elts)

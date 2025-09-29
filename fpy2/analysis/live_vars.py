@@ -67,13 +67,13 @@ class LiveVarsInstance(Visitor):
             live |= self._visit_expr(arg, ctx)
         return live
 
-    def _visit_compare(self, e: Compare, ctx: None) -> _LiveSet:
+    def _visit_call(self, e: Call, ctx: None) -> _LiveSet:
         live: set[NamedId] = set()
         for arg in e.args:
             live |= self._visit_expr(arg, ctx)
         return live
 
-    def _visit_call(self, e: Call, ctx: None) -> _LiveSet:
+    def _visit_compare(self, e: Compare, ctx: None) -> _LiveSet:
         live: set[NamedId] = set()
         for arg in e.args:
             live |= self._visit_expr(arg, ctx)

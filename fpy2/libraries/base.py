@@ -59,3 +59,12 @@ from ..decorator import fpy, pattern, fpy_primitive
 from ..env import ForeignEnv
 from ..function import Function
 from ..primitive import Primitive
+
+# alias for `round`
+R = round
+
+# integer rounding
+@fpy
+def Z(x: Real):
+    with INTEGER:
+        return round(x)
