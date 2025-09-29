@@ -13,9 +13,10 @@ def _is_value(e: Expr) -> bool:
     Is this expression a constant?
 
     <cprop> ::= <bool>
+              | <number>
               | <foreign>
     """
-    return isinstance(e, BoolVal | ForeignVal)
+    return isinstance(e, BoolVal | RealVal | ForeignVal)
 
 class ConstPropagate:
     """
