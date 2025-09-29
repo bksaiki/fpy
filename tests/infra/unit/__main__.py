@@ -1,4 +1,5 @@
 from .context_infer import test_context_infer
+from .const_fold import test_const_fold
 from .const_prop import test_const_prop
 from .copy_prop import test_copy_prop
 from .dead_code import test_dead_code
@@ -26,6 +27,7 @@ def _run_tests():
     # transformations
     test_const_prop()
     test_copy_prop()
+    test_const_fold()
     test_dead_code()
     # compilation
     test_compile_fpc()
