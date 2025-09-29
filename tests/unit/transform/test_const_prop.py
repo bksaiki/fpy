@@ -21,5 +21,30 @@ class TestConstProp(unittest.TestCase):
 
         f = fp.transform.ConstPropagate.apply(test.ast)
         f.name = test_expect.name
-        self.assertTrue(f.is_equiv(test_expect.ast), f'expect:\n{test_expect.format()}\nactual:\n{f.format()}')
+        self.assertTrue(
+            f.is_equiv(test_expect.ast),
+            f'expect:\n{test_expect.format()}\nactual:\n{f.format()}'
+        )
 
+
+    def test_example2(self):
+        @fp.fpy
+        def test():
+            ES = 2
+            NB = 8
+            with fp.IEEEContext(ES, NB):
+                return fp.R(1)
+
+        @fp.fpy
+        def test_expect():
+            ES = 2
+            NB = 8
+            with fp.IEEEContext(2, 8):
+                return fp.R(1)
+
+        f = fp.transform.ConstPropagate.apply(test.ast)
+        f.name = test_expect.name
+        self.assertTrue(
+            f.is_equiv(test_expect.ast),
+            f'expect:\n{test_expect.format()}\nactual:\n{f.format()}'
+        )
