@@ -501,13 +501,10 @@ class _Interpreter(Visitor):
 
 
     def _visit_call(self, e: Call, ctx: Context):
-        match e.func:
-            case NamedId():
-                fn = self.foreign[e.func.base]
-            case Attribute():
-                fn = self._visit_attribute(e.func, ctx)
-            case _:
-                raise RuntimeError('unreachable', e.func)
+        if e.fn is None:
+            fn: object = self._visit_expr(e.func, ctx)
+        else:
+            fn = e.fn
 
         match fn:
             case Function():
@@ -779,7 +776,7 @@ class _Interpreter(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
         # evaluate the context under a real context
-        round_ctx = self._visit_expr(stmt.ctx, ctx)
+        round_ctx = self._visit_expr(stmt.ctx, REAL)
         if not isinstance(round_ctx, Context):
             raise TypeError(f'expected a context, got `{round_ctx}`')
         if isinstance(stmt.target, NamedId):

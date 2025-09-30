@@ -432,12 +432,13 @@ class Parser:
                 func = self._parse_attribute(e.func)
                 fn = self._eval_attribute(func, e.func)
             case ast.Name():
-                func = self._parse_id(e.func)
+                name = self._parse_id(e.func)
+                func = Var(name, None)
                 if isinstance(func, UnderscoreId):
                     raise FPyParserError(loc, 'FPy function call must begin with a named identifier', e)
-                if func.base not in self.env:
-                    raise FPyParserError(loc, f'name \'{func.base}\' not defined:', e)
-                fn = self.env[func.base]
+                if name.base not in self.env:
+                    raise FPyParserError(loc, f'name \'{name.base}\' not defined:', e)
+                fn = self.env[name.base]
             case _:
                 raise RuntimeError('unreachable')
 

@@ -748,6 +748,20 @@ def example_set(y: fp.Real):
     x[0] = y
     return x
 
+@fp.fpy
+def example_static_context1():
+    ES = 2
+    NB = 8
+    with fp.IEEEContext(ES, NB):
+        return fp.round(1)
+
+@fp.fpy
+def example_static_context2():
+    ES = 2
+    NB = 8
+    with fp.IEEEContext(ES + 2, NB + 2):
+        return fp.round(1)
+
 @fp.fpy(ctx=fp.REAL)
 def _select_ctx(x: fp.Real):
     e = fp.libraries.core.logb(x)
@@ -882,5 +896,7 @@ examples: list[Function] = [
     whetsone1,
     example_sum,
     example_set,
+    example_static_context1,
+    example_static_context2,
     keep_p_1
 ]

@@ -262,8 +262,8 @@ class _FPCoreCompileInstance(Visitor):
         if e.kwargs:
             raise FPCoreCompileError('cannot compile keyword arguments to FPCore', e)
         match e.func:
-            case NamedId():
-                name = str(e.func)
+            case Var():
+                name = str(e.func.name)
             case Attribute():
                 raise FPCoreCompileError('cannot compile method call to FPCore', e.func)
             case _:
