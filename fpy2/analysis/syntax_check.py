@@ -175,7 +175,13 @@ class SyntaxCheckInstance(Visitor):
 
     def _visit_call(self, e: Call, ctx: _Ctx):
         env = ctx.env
-        self._visit_expr(e.func, _Ctx(env, True))
+        match e.func:
+            case Var():
+                self._mark_use(e.func.name, env, ignore_missing=self.ignore_unknown)
+            case Attribute():
+                self._visit_attribute(e.func, _Ctx(env, True))
+            case _:
+                raise RuntimeError('unreachable', e.func)
         for arg in e.args:
             self._visit_expr(arg, ctx)
         for _, arg in e.kwargs:
