@@ -170,6 +170,15 @@ class _Interpreter(Visitor):
         except KeyError as exc:
             raise RuntimeError(f'unbound variable {name}') from exc
 
+    def _is_integer(self, x: Float | Fraction) -> bool:
+        match x:
+            case Float():
+                return x.is_integer()
+            case Fraction():
+                return x.denominator == 1
+            case _:
+                raise TypeError(f'expected a real number, got `{x}`')
+
     def _cvt_float(self, x: Value):
         match x:
             case Float():
@@ -205,15 +214,6 @@ class _Interpreter(Visitor):
     def _visit_digits(self, e: Digits, ctx: Context):
         return e.as_rational()
 
-    def _apply_method(self, fn: Callable[..., Any], args: Collection[Expr], ctx: Context):
-        # fn: Callable[[Float, ..., Context], Float]
-        vals: list[Float] = []
-        for arg in args:
-            val = self._visit_expr(arg, ctx)
-            vals.append(self._cvt_float(val))
-        # compute the result
-        return fn(*vals, ctx=ctx)
-
     def _apply_not(self, arg: Expr, ctx: Context):
         val = self._visit_expr(arg, ctx)
         if not isinstance(val, bool):
@@ -245,15 +245,19 @@ class _Interpreter(Visitor):
         return Float.from_int(len(arr), ctx=INTEGER, checked=False)
 
     def _apply_range(self, arg: Expr, ctx: Context):
-        stop = self._cvt_float(self._visit_expr(arg, ctx))
-        if not stop.is_integer():
-            raise TypeError(f'expected an integer argument, got {stop}')
+        stop = self._visit_expr(arg, ctx)
+        if not isinstance(stop, RealValue):
+            raise TypeError(f'expected a real number argument, got {stop}')
+        if not self._is_integer(stop):
+            raise ValueError(f'expected an integer argument, got {stop}')
         return [Float.from_int(i, ctx=INTEGER, checked=False) for i in range(int(stop))]
 
     def _apply_empty(self, arg: Expr, ctx: Context):
-        size = self._cvt_float(self._visit_expr(arg, ctx))
-        if not size.is_integer() or size.is_negative():
-            raise TypeError(f'expected an integer argument, got {size}')
+        size = self._visit_expr(arg, ctx)
+        if not isinstance(size, RealValue):
+            raise TypeError(f'expected a real number argument, got {size}')
+        if not self._is_integer(size) or size < 0:
+            raise ValueError(f'expected a non-negative integer argument, got {size}')
         return ops.empty(size)
 
     def _apply_dim(self, arg: Expr, ctx: Context):
@@ -272,9 +276,11 @@ class _Interpreter(Visitor):
         v = self._visit_expr(arr, ctx)
         if not isinstance(v, list):
             raise TypeError(f'expected a list, got {v}')
-        dim = self._cvt_float(self._visit_expr(idx, ctx))
-        if not dim.is_integer():
-            raise TypeError(f'expected an integer argument, got {dim}')
+        dim = self._visit_expr(idx, ctx)
+        if not isinstance(dim, RealValue):
+            raise TypeError(f'expected a real number argument, got {dim}')
+        if not self._is_integer(dim):
+            raise ValueError(f'expected an integer argument, got {dim}')
         return ops.size(v, dim, ctx)
 
     def _apply_zip(self, args: Collection[Expr], ctx: Context):
@@ -289,12 +295,14 @@ class _Interpreter(Visitor):
                 raise TypeError(f'expected a list argument, got {val}')
         return list(zip(*arrays))
 
-    def _apply_min(self, args: Collection[Expr], ctx: Context):
-        """Apply the `min` method to the given n-ary expression."""
-        vals: list[Float] = []
+    def _apply_mxn(self, aggregate, args: Collection[Expr], ctx: Context):
+        """Apply the `m x n` method to the given n-ary expression."""
+        vals: list[RealValue] = []
         for arg in args:
-            val = self._cvt_float(self._visit_expr(arg, ctx))
-            if not val.isnan:
+            val = self._visit_expr(arg, ctx)
+            if not isinstance(val, RealValue):
+                raise TypeError(f'expected a real number argument, got {val}')
+            if isinstance(val, Fraction) or not val.isnan:
                 vals.append(val)
 
         len_vals = len(vals)
@@ -303,37 +311,32 @@ class _Interpreter(Visitor):
         elif len_vals == 1:
             return vals[0]
         else:
-            return min(*vals)
+            return aggregate(*vals)
+
+    def _apply_min(self, args: Collection[Expr], ctx: Context):
+        """Apply the `min` method to the given n-ary expression."""
+        return self._apply_mxn(min, args, ctx)
 
     def _apply_max(self, args: Collection[Expr], ctx: Context):
         """Apply the `max` method to the given n-ary expression."""
-        # evaluate all children
-        vals: list[Float] = []
-        for arg in args:
-            val = self._cvt_float(self._visit_expr(arg, ctx))
-            if not val.isnan:
-                vals.append(val)
-
-        len_vals = len(vals)
-        if len_vals == 0:
-            return Float(isnan=True, ctx=ctx)
-        elif len_vals == 1:
-            return vals[0]
-        else:
-            return max(*vals)
+        return self._apply_mxn(max, args, ctx)
 
     def _apply_sum(self, arg: Expr, ctx: Context):
         """Apply the `sum` method to the given n-ary expression."""
         val = self._visit_expr(arg, ctx)
         if not isinstance(val, list):
             raise TypeError(f'expected a list, got {val}')
-        
+
         if len(val) == 0:
             return Float.from_int(0, ctx=REAL)
         else:
-            accum = self._cvt_float(val[0])
+            accum = val[0]
+            if not isinstance(accum, RealValue):
+                raise TypeError(f'expected a real number argument, got {accum}')
             for x in val[1:]:
-                accum = ops.add(accum, self._cvt_float(x), ctx=ctx)
+                if not isinstance(x, RealValue):
+                    raise TypeError(f'expected a real number argument, got {x}')
+                accum = ops.add(accum, x, ctx=ctx)
             return accum
 
     def _visit_round(self, e: Round | RoundExact, ctx: Context):
@@ -346,11 +349,15 @@ class _Interpreter(Visitor):
             return ops.round_exact(val, ctx=ctx)
 
     def _visit_round_at(self, e: RoundAt, ctx: Context):
-        val = self._cvt_float(self._visit_expr(e.first, ctx))
-        n = self._cvt_float(self._visit_expr(e.second, ctx))
-        if not n.is_integer():
-            raise TypeError(f'expected an integer argument, got {n}')
-        return ops.round_at(val, n, ctx=ctx)
+        val = self._visit_expr(e.first, ctx)
+        n = self._visit_expr(e.second, ctx)
+        if not isinstance(val, RealValue):
+            raise TypeError(f'expected a real number argument, got {val}')
+        if not isinstance(n, RealValue):
+            raise TypeError(f'expected a real number argument, got {n}')
+        if not self._is_integer(n):
+            raise ValueError(f'expected an integer argument, got {n}')
+        return ops.round_at(val, int(n), ctx=ctx)
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         fn = _NULLARY_TABLE.get(type(e))
@@ -362,7 +369,9 @@ class _Interpreter(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: Context):
         fn = _UNARY_TABLE.get(type(e))
         if fn is not None:
-            val = self._cvt_float(self._visit_expr(e.arg, ctx))
+            val = self._visit_expr(e.arg, ctx)
+            if not isinstance(val, RealValue):
+                raise TypeError(f'expected a real number argument, got {val}')
             return fn(val, ctx=ctx)
         else:
             match e:
@@ -386,8 +395,12 @@ class _Interpreter(Visitor):
     def _visit_binaryop(self, e: BinaryOp, ctx: Context):
         fn = _BINARY_TABLE.get(type(e))
         if fn is not None:
-            first = self._cvt_float(self._visit_expr(e.first, ctx))
-            second = self._cvt_float(self._visit_expr(e.second, ctx))
+            first = self._visit_expr(e.first, ctx)
+            second = self._visit_expr(e.second, ctx)
+            if not isinstance(first, RealValue):
+                raise TypeError(f'expected a real number argument, got {first}')
+            if not isinstance(second, RealValue):
+                raise TypeError(f'expected a real number argument, got {second}')
             return fn(first, second, ctx=ctx)
         else:
             match e:
@@ -399,9 +412,15 @@ class _Interpreter(Visitor):
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
         fn = _TERNARY_TABLE.get(type(e))
         if fn is not None:
-            first = self._cvt_float(self._visit_expr(e.first, ctx))
-            second = self._cvt_float(self._visit_expr(e.second, ctx))
-            third = self._cvt_float(self._visit_expr(e.third, ctx))
+            first = self._visit_expr(e.first, ctx)
+            second = self._visit_expr(e.second, ctx)
+            third = self._visit_expr(e.third, ctx)
+            if not isinstance(first, RealValue):
+                raise TypeError(f'expected a real number argument, got {first}')
+            if not isinstance(second, RealValue):
+                raise TypeError(f'expected a real number argument, got {second}')
+            if not isinstance(third, RealValue):
+                raise TypeError(f'expected a real number argument, got {third}')
             return fn(first, second, third, ctx=ctx)
         else:
             raise RuntimeError('unknown operator', e)
@@ -540,12 +559,13 @@ class _Interpreter(Visitor):
 
     def _visit_list_ref(self, e: ListRef, ctx: Context):
         arr = self._visit_expr(e.value, ctx)
+        idx = self._visit_expr(e.index, ctx)
         if not isinstance(arr, list):
             raise TypeError(f'expected a list, got {arr}')
-
-        idx = self._cvt_float(self._visit_expr(e.index, ctx))
-        if not idx.is_integer():
-            raise TypeError(f'expected an integer index, got {idx}')
+        if not isinstance(idx, RealValue):
+            raise TypeError(f'expected a real number index, got {idx}')
+        if not self._is_integer(idx):
+            raise ValueError(f'expected an integer index, got {idx}')
         return arr[int(idx)]
 
     def _visit_list_slice(self, e: ListSlice, ctx: Context):
@@ -556,16 +576,20 @@ class _Interpreter(Visitor):
         if e.start is None:
             start = 0
         else:
-            val = self._cvt_float(self._visit_expr(e.start, ctx))
-            if not val.is_integer():
+            val = self._visit_expr(e.start, ctx)
+            if not isinstance(val, RealValue):
+                raise TypeError(f'expected a real number start index, got {val}')
+            if not self._is_integer(val):
                 raise TypeError(f'expected an integer start index, got {val}')
             start = int(val)
 
         if e.stop is None:
             stop = len(arr)
         else:
-            val = self._cvt_float(self._visit_expr(e.stop, ctx))
-            if not val.is_integer():
+            val = self._visit_expr(e.stop, ctx)
+            if not isinstance(val, RealValue):
+                raise TypeError(f'expected a real number stop index, got {val}')
+            if not self._is_integer(val):
                 raise TypeError(f'expected an integer stop index, got {val}')
             stop = int(val)
 
@@ -582,8 +606,10 @@ class _Interpreter(Visitor):
 
         slices = []
         for s in e.indices:
-            val = self._cvt_float(self._visit_expr(s, ctx))
-            if not val.is_integer():
+            val = self._visit_expr(s, ctx)
+            if not isinstance(val, RealValue):
+                raise TypeError(f'expected a real number slice, got {val}')
+            if not self._is_integer(val):
                 raise TypeError(f'expected an integer slice, got {val}')
             slices.append(int(val))
 
@@ -662,8 +688,10 @@ class _Interpreter(Visitor):
         # evaluate indices
         slices: list[int] = []
         for slice in stmt.indices:
-            val = self._cvt_float(self._visit_expr(slice, ctx))
-            if not val.is_integer():
+            val = self._visit_expr(slice, ctx)
+            if not isinstance(val, RealValue):
+                raise TypeError(f'expected a real number slice, got {val}')
+            if not self._is_integer(val):
                 raise TypeError(f'expected an integer slice, got {val}')
             slices.append(int(val))
 

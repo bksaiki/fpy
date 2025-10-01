@@ -188,6 +188,10 @@ def _real_to_float(x: Real) -> Float:
             return Float.from_int(x)
         case float():
             return Float.from_float(x)
+        case Fraction():
+            if is_dyadic(x):
+                return Float.from_rational(x)
+            raise ValueError(f'Cannot convert non-dyadic rational to Float: {x}')
         case _:
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
 
