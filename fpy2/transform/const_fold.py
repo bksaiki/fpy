@@ -110,7 +110,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
         e = super()._visit_unaryop(e, ctx)
-        if self.enable_op and ctx is not None and self._is_value(e.arg):
+        if self.enable_op and not isinstance(e, Round | RoundExact) and ctx is not None and self._is_value(e.arg):
             # constant folding is possible
             val = self.rt.eval_expr(e, self._eval_env(), ctx)
             if isinstance(val, Float | Fraction):
@@ -124,7 +124,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context | None):
         e = super()._visit_binaryop(e, ctx)
-        if self.enable_op and ctx is not None and self._is_value(e.first) and self._is_value(e.second):
+        if self.enable_op and not isinstance(e, RoundAt) and ctx is not None and self._is_value(e.first) and self._is_value(e.second):
             # constant folding is possible
             val = self.rt.eval_expr(e, self._eval_env(), ctx)
             match val:

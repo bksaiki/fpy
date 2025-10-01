@@ -403,9 +403,9 @@ class ContextTypeInferInstance(Visitor):
             case Function():
                 # calling a function
                 # TODO: guard against recursion
-                from ..transform import ContextInline
+                from ..transform import ConstFold
 
-                ast = ContextInline.apply(e.fn.ast, e.fn.env)
+                ast = ConstFold.apply(e.fn.ast, e.fn.env, enable_op=False)
                 fn_info = ContextInfer.infer(ast)
                 if len(fn_info.arg_types) != len(e.args):
                     raise ContextInferError(

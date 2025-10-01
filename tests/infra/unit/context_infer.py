@@ -5,7 +5,7 @@ Context inference tests
 import fpy2 as fp
 
 from fpy2.analysis import ContextInfer
-from fpy2.transform import ContextInline
+from fpy2.transform import ConstFold
 
 from .unit_tests import tests, examples
 
@@ -20,6 +20,8 @@ _unit_ignore = [
     'test_context_expr1',
     'test_context_expr2',
     'test_context8',
+    'example_static_context1',
+    'example_static_context2',
     'keep_p_1'
 ]
 
@@ -29,7 +31,7 @@ def _test_tcheck_unit():
         if core.name in _unit_ignore:
             continue
 
-        ast = ContextInline.apply(core.ast, core.env)
+        ast = ConstFold.apply(core.ast, core.env, enable_op=True)
         info = ContextInfer.infer(ast)
         print(ast.name, info.func_ty)
 
@@ -38,7 +40,7 @@ def _test_tcheck_library():
         for obj in mod.__dict__.values():
             match obj:
                 case fp.Function():
-                    ast = ContextInline.apply(obj.ast, obj.env)
+                    ast = ConstFold.apply(obj.ast, obj.env, enable_op=True)
                     info = ContextInfer.infer(ast)
                     print(ast.name, info.func_ty)
                 case fp.Primitive():

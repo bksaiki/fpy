@@ -7,7 +7,7 @@ from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..number import Context
-from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
+from ..transform import ConstFold, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend, CompileError
@@ -1051,7 +1051,7 @@ class FPCoreCompiler(Backend):
         # TODO: handle ctx
 
         # normalization passes
-        ast = ContextInline.apply(func.ast, func.env)
+        ast = ConstFold.apply(func.ast, func.env, enable_op=False)
         ast = FuncUpdate.apply(ast)
         ast = ForUnpack.apply(ast)
         ast = ForBundling.apply(ast)
