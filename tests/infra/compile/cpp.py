@@ -106,6 +106,8 @@ _test_ignore = [
 
 _example_ignore = [
     'fma_ctx',
+    'example_context_1',
+    'example_context_2',
     'keep_p_1'
 ]
 

@@ -46,7 +46,7 @@ class ApplierExprTestCase(_ApplierTestCase):
         matches = m.match(f)
         f2 = a.apply(matches[0])
         self.assertAstEqual(f2, Fma(
-            NamedId('fma'),
+            Var(NamedId('fma'), None),
             Var(NamedId('x'), None),
             Var(NamedId('y'), None),
             Var(NamedId('z'), None),
@@ -60,7 +60,7 @@ class ApplierExprTestCase(_ApplierTestCase):
         matches = m.match(g)
         f2 = a.apply(matches[0])
         self.assertAstEqual(f2, Fma(
-            NamedId('fma'),
+            Var(NamedId('fma'), None),
             Var(NamedId('x'), None),
             Var(NamedId('y'), None),
             Var(NamedId('z'), None),
@@ -107,7 +107,13 @@ class ApplierStmtTestCase(_ApplierTestCase):
                 Assign(
                     NamedId('sum'),
                     None,
-                    Call(NamedId('accum'), accum, [Var(NamedId('lst'), None)], {}, None),
+                    Call(
+                        Var(NamedId('accum'), None),
+                        accum,
+                        [Var(NamedId('lst'), None)],
+                        {},
+                        None
+                    ),
                     None),
             ])
         )

@@ -141,7 +141,7 @@ class Reachability:
 
     The dataflow equation for reachability is:
 
-    OUT[s] = |_| IN[s]
+    `OUT[s] = |_| IN[s]`
 
     The resulting `ReachabilityAnalysis` has four fields:
     - `has_entry`: is the statement reachable?
