@@ -151,7 +151,7 @@ class MPFloatContext(Context):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero()
 
-    def _round_float_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
+    def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
 
@@ -177,33 +177,17 @@ class MPFloatContext(Context):
         # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)
 
+    def round(self, x, *, exact: bool = False) -> Float:
+        x = self._round_prepare(x)
+        return self._round_at(x, None, exact)
+
+    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
+        x = self._round_prepare(x)
+        return self._round_at(x, n, exact)
+
     def round_params(self) -> tuple[int | None, int | None]:
         if self.num_randbits is None:
             return None, None
         else:
             pmax = self.pmax + self.num_randbits
             return pmax, None
-
-    def _round_at(self, x, n: int | None, exact: bool):
-        match x:
-            case Float() | RealFloat():
-                xr = x
-            case float():
-                xr = Float.from_float(x)
-            case int():
-                xr = RealFloat.from_int(x)
-            case Fraction() if x.denominator == 1:
-                xr = RealFloat.from_int(int(x))
-            case str() | Fraction():
-                p, n = self.round_params()
-                xr = mpfr_value(x, prec=p, n=n)
-            case _:
-                raise TypeError(f'not valid argument x={x}')
-
-        return self._round_float_at(xr, n, exact)
-
-    def round(self, x, *, exact: bool = False) -> Float:
-        return self._round_at(x, None, exact)
-
-    def round_at(self, x, n: int, *, exact: bool = False) -> Float:
-        return self._round_at(x, n, exact)

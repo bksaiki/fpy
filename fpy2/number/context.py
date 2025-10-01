@@ -166,7 +166,7 @@ class Context(ABC):
         """
         return self.round_at(x, -1)
 
-    def _round_prepare(self, x, n: int | None) -> Union[RealFloat, Float]:
+    def _round_prepare(self, x) -> Union[RealFloat, Float]:
         """
         Initial step during rounding.
 
@@ -181,6 +181,9 @@ class Context(ABC):
         - Python numbers: `int`, `float`, `Fraction`
         - Python strings: `str`
         """
+        # get around circular import issues
+        from .number import Float, RealFloat
+
         match x:
             case Float() | RealFloat():
                 return x
