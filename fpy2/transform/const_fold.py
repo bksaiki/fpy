@@ -21,7 +21,7 @@ ScalarValue: TypeAlias = bool | Float | Fraction | Context
 TupleValue: TypeAlias = tuple['Value', ...]
 Value: TypeAlias = ScalarValue | TupleValue
 
-# Pre-built lookup tables for better performance
+# Table from `fpy2/interpret/default.py`
 _NULLARY_TABLE: dict[type[NullaryOp], Callable[..., Float]] = {
     ConstNan: ops.nan,
     ConstInf: ops.inf,
@@ -39,6 +39,66 @@ _NULLARY_TABLE: dict[type[NullaryOp], Callable[..., Float]] = {
     ConstSqrt1_2: ops.const_sqrt1_2,
 }
 
+_UNARY_TABLE: dict[type[UnaryOp], Callable[..., Float | bool]] = {
+    Fabs: ops.fabs,
+    Sqrt: ops.sqrt,
+    Neg: ops.neg,
+    Cbrt: ops.cbrt,
+    Ceil: ops.ceil,
+    Floor: ops.floor,
+    NearbyInt: ops.nearbyint,
+    RoundInt: ops.roundint,
+    Trunc: ops.trunc,
+    Acos: ops.acos,
+    Asin: ops.asin,
+    Atan: ops.atan,
+    Cos: ops.cos,
+    Sin: ops.sin,
+    Tan: ops.tan,
+    Acosh: ops.acosh,
+    Asinh: ops.asinh,
+    Atanh: ops.atanh,
+    Cosh: ops.cosh,
+    Sinh: ops.sinh,
+    Tanh: ops.tanh,
+    Exp: ops.exp,
+    Exp2: ops.exp2,
+    Expm1: ops.expm1,
+    Log: ops.log,
+    Log10: ops.log10,
+    Log1p: ops.log1p,
+    Log2: ops.log2,
+    Erf: ops.erf,
+    Erfc: ops.erfc,
+    Lgamma: ops.lgamma,
+    Tgamma: ops.tgamma,
+    IsFinite: ops.isfinite,
+    IsInf: ops.isinf,
+    IsNan: ops.isnan,
+    IsNormal: ops.isnormal,
+    Signbit: ops.signbit,
+    RoundExact: ops.round_exact
+}
+
+_BINARY_TABLE: dict[type[BinaryOp], Callable[..., Float]] = {
+    Add: ops.add,
+    Sub: ops.sub,
+    Mul: ops.mul,
+    Div: ops.div,
+    Copysign: ops.copysign,
+    Fdim: ops.fdim,
+    Fmod: ops.fmod,
+    Remainder: ops.remainder,
+    Hypot: ops.hypot,
+    Atan2: ops.atan2,
+    Pow: ops.pow,
+    RoundAt: ops.round_at
+}
+
+_TERNARY_TABLE: dict[type[TernaryOp], Callable[..., Float]] = {
+    Fma: ops.fma,
+}
+
 class _ConstFoldInstance(DefaultTransformVisitor):
     """
     Constant folding instance for a function.
@@ -51,6 +111,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
     enable_op: bool
 
     vals: dict[Definition, Value]
+    remap: dict[Var, Var]
 
     def __init__(
         self,
@@ -66,11 +127,12 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         self.enable_context = enable_context
         self.enable_op = enable_op
         self.vals = {}
+        self.remap = {}
 
     def _is_value(self, e: Expr) -> bool:
         match e:
             case Var():
-                d = self.def_use.find_def_from_use(e)
+                d = self.def_use.find_def_from_use(self.remap.get(e, e))
                 return d in self.vals
             case BoolVal() | RationalVal() | ForeignVal():
                 return True
@@ -84,7 +146,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
     def _value(self, e: Expr) -> Value:
         match e:
             case Var():
-                d = self.def_use.find_def_from_use(e)
+                d = self.def_use.find_def_from_use(self.remap.get(e, e))
                 if d not in self.vals:
                     raise RuntimeError(f'variable `{e.name}` is not a constant')
                 return self.vals[d]
@@ -105,6 +167,15 @@ class _ConstFoldInstance(DefaultTransformVisitor):
             case _:
                 raise NotImplementedError(e)
 
+    def _rational_as_ast(self, x: Fraction, loc: Location | None) -> Expr:
+        if x.denominator == 1:
+            return Integer(int(x), loc)
+        else:
+            # TODO: emitting a rational node requires a name:
+            # could be `rational` or `fp.rational` or `fpy2.rational`
+            func = Attribute(Var(NamedId('fp'), loc), 'rational', loc)
+            return Rational(func, x.numerator, x.denominator, loc)
+
     def _cvt_float(self, x: Value) -> Float:
         match x:
             case Float():
@@ -116,7 +187,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
             case _:
                 raise TypeError(f'expected a real number, got `{x}`')
 
-    def _cvt_context_arg(self, cls: type[Context], name: str, arg: Any, ty: type):
+    def _cvt_context_arg(self, name: str, arg: Any, ty: type):
         if ty is int:
             # convert to int
             val = self._cvt_float(arg)
@@ -140,7 +211,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         ctor_args = []
         for arg, name in zip(args, params[1:]):
             param = sig.parameters[name]
-            ctor_arg = self._cvt_context_arg(cls, name, arg, param.annotation)
+            ctor_arg = self._cvt_context_arg(name, arg, param.annotation)
             ctor_args.append(ctor_arg)
 
         ctor_kwargs = {}
@@ -148,9 +219,14 @@ class _ConstFoldInstance(DefaultTransformVisitor):
             if name not in sig.parameters:
                 raise TypeError(f'unknown parameter {name} for constructor {cls}')
             param = sig.parameters[name]
-            ctor_kwargs[name] = self._cvt_context_arg(cls, name, val, param.annotation)
+            ctor_kwargs[name] = self._cvt_context_arg(name, val, param.annotation)
 
         return cls(*ctor_args, **ctor_kwargs)
+
+    def _visit_var(self, e: Var, ctx: Context | None):
+        e2 = super()._visit_var(e, ctx)
+        self.remap[e2] = e
+        return e2
 
     def _visit_attribute(self, e: Attribute, ctx: Context | None):
         value = self._visit_expr(e.value, ctx)
@@ -167,15 +243,96 @@ class _ConstFoldInstance(DefaultTransformVisitor):
             return Attribute(value, e.attr, e.loc)
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context | None):
-        if ctx is None or not self.enable_op:
-            # context is unknown so we cannot evaluate
-            return super()._visit_nullaryop(e, ctx)
+        cls = type(e)
+        if not self.enable_op or ctx is None or cls not in _NULLARY_TABLE:
+            # one of the following is true:
+            # - constant folding for operations is disabled
+            # - context is unknown so we cannot evaluate
+            # - operation is unknown
+            return cls(e.func, e.loc)
 
-        # we can evaluate it
-        fn = _NULLARY_TABLE.get(type(e), None)
-        if fn is None:
-            raise RuntimeError(f'unknown nullary op {e}')
-        return fn(ctx=ctx)
+        # evaluate the operation
+        fn = _NULLARY_TABLE[cls]
+        val = fn(ctx=ctx)
+        return self._rational_as_ast(val.as_rational(), e.loc)
+
+    def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
+        cls = type(e)
+        arg = self._visit_expr(e.arg, ctx)
+        if not self.enable_op or ctx is None or cls not in _UNARY_TABLE or not self._is_value(arg):
+            # one of the following is true:
+            # - constant folding for operations is disabled
+            # - context is unknown so we cannot evaluate
+            # - operation is unknown
+            # - argument is not a constant
+            if isinstance(e, NamedUnaryOp):
+                return type(e)(e.func, arg, e.loc)
+            else:
+                return type(e)(arg, e.loc)
+
+        # real -> real or real -> bool operation
+        arg_val = self._value(arg)
+        if not isinstance(arg_val, (Float, Fraction)):
+            raise TypeError(f'expected a real number, got `{arg_val}`')
+
+        # evaluate the operation
+        fn = _UNARY_TABLE[cls]
+        val = fn(self._cvt_float(arg_val), ctx=ctx)
+        match val:
+            case Float():
+                return self._rational_as_ast(val.as_rational(), e.loc)
+            case bool():
+                return BoolVal(val, e.loc)
+            case _:
+                raise RuntimeError(f'unexpected return value `{val}` from `{fn}`')
+
+    def _visit_binaryop(self, e: BinaryOp, ctx: Context | None):
+        cls = type(e)
+        first = self._visit_expr(e.first, ctx)
+        second = self._visit_expr(e.second, ctx)
+        if not self.enable_op or ctx is None or cls not in _BINARY_TABLE or not (self._is_value(first) and self._is_value(second)):
+            # one of the following is true:
+            # - constant folding for operations is disabled
+            # - context is unknown so we cannot evaluate
+            # - operation is unknown
+            # - argument is not a constant
+            return cls(first, second, e.loc)
+
+        # real -> real operation
+        first_val = self._value(first)
+        second_val = self._value(second)
+        if not isinstance(first_val, (Float, Fraction)) or not isinstance(second_val, (Float, Fraction)):
+            raise TypeError(f'expected real numbers, got `{first_val}` and `{second_val}`')
+
+        # evaluate the operation
+        fn = _BINARY_TABLE[cls]
+        val = fn(self._cvt_float(first_val), self._cvt_float(second_val), ctx=ctx)
+        return self._rational_as_ast(val.as_rational(), e.loc)
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx: Context | None):
+        cls = type(e)
+        first = self._visit_expr(e.first, ctx)
+        second = self._visit_expr(e.second, ctx)
+        third = self._visit_expr(e.third, ctx)
+        if not self.enable_op or ctx is None or cls not in _TERNARY_TABLE or not (self._is_value(first) and self._is_value(second) and self._is_value(third)):
+            # one of the following is true:
+            # - constant folding for operations is disabled
+            # - context is unknown so we cannot evaluate
+            # - operation is unknown
+            # - argument is not a constant
+            return cls(first, second, third, e.loc)
+
+        # real -> real operation
+        first_val = self._value(first)
+        second_val = self._value(second)
+        third_val = self._value(third)
+        if not isinstance(first_val, (Float, Fraction)) or not isinstance(second_val, (Float, Fraction)) or not isinstance(third_val, (Float, Fraction)):
+            raise TypeError(f'expected real numbers, got `{first_val}`, `{second_val}`, and `{third_val}`')
+
+        # evaluate the operation
+        fn = _TERNARY_TABLE[cls]
+        val = fn(self._cvt_float(first_val), self._cvt_float(second_val), self._cvt_float(third_val), ctx=ctx)
+        return self._rational_as_ast(val.as_rational(), e.loc)
 
     def _visit_call(self, e: Call, ctx: Context | None):
         args = [ self._visit_expr(arg, ctx) for arg in e.args ]
@@ -198,7 +355,6 @@ class _ConstFoldInstance(DefaultTransformVisitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context | None):
         ctx_e = self._visit_expr(stmt.ctx, ctx)
-        print(ctx_e)
         if isinstance(ctx_e, ForeignVal) and isinstance(ctx_e.val, Context):
             # we can determine the context
             new_ctx = ctx_e.val

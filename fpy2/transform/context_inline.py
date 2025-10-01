@@ -107,8 +107,8 @@ class _ContextInlineInstance(DefaultTransformVisitor):
 
     def _eval_call(self, e: Call):
         match e.func:
-            case NamedId():
-                func = self._lookup(e.func)
+            case Var():
+                func = self._lookup(e.func.name)
             case Attribute():
                 func = self._eval_attribute(e.func)
             case _:
