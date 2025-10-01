@@ -128,7 +128,8 @@ class _DefineUseInstance(DefaultVisitor):
         self._add_use(e.name, e, ctx)
 
     def _visit_call(self, e: Call, ctx: DefCtx):
-        self._visit_expr(e.func, ctx)
+        if e.fn is not None:
+            self._visit_expr(e.func, ctx)
         for arg in e.args:
             self._visit_expr(arg, ctx)
         for _, kwarg in e.kwargs:
@@ -174,4 +175,5 @@ class DefineUse:
         if not isinstance(ast, FuncDef | StmtBlock):
             raise TypeError(f'Expected \'FuncDef\' or \'StmtBlock\', got {type(ast)} for {ast}')
         reaching_defs = ReachingDefs.analyze(ast)
+        print(reaching_defs.format(), flush=True)
         return _DefineUseInstance(ast, reaching_defs).analyze()
