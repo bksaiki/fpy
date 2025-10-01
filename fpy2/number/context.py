@@ -4,8 +4,17 @@ This module defines the rounding context type.
 
 from abc import ABC, abstractmethod
 from typing import TypeAlias, Self, Union
+from fractions import Fraction
 
 from . import number
+from ..utils import is_dyadic
+
+__all__ = [
+    'Context',
+    'OrdinalContext',
+    'SizedContext',
+    'EncodableContext'
+]
 
 # avoids circular dependency issues (useful for type checking)
 Float: TypeAlias = 'number.Float'
@@ -156,6 +165,43 @@ class Context(ABC):
         This is equivalent to `self.round_at(x, -1)`.
         """
         return self.round_at(x, -1)
+
+    def _round_prepare(self, x, n: int | None) -> Union[RealFloat, Float]:
+        """
+        Initial step during rounding.
+
+        Converts a value to a `RealFloat` or a `Float` instance that
+        can be rounded under this context.
+
+        The value produced may not be numerically equal to `x`,
+        but the rounded result will be the same as if `x` was rounded directly.
+
+        Values supported:
+        - FPy values: `Float`, `RealFloat`
+        - Python numbers: `int`, `float`, `Fraction`
+        - Python strings: `str`
+        """
+        match x:
+            case Float() | RealFloat():
+                return x
+            case float():
+                return Float.from_float(x)
+            case int():
+                return RealFloat.from_int(x)
+            case Fraction():
+                if x.denominator == 1:
+                    return RealFloat.from_int(int(x))
+                elif is_dyadic(x):
+                    return RealFloat.from_rational(x)
+
+        # not a special case so we use MPFR as a fallback
+
+        # get around circular import issues
+        from .gmp import mpfr_value
+
+        # round the value using RTO such that we can re-round
+        p, n = self.round_params()
+        return mpfr_value(x, prec=p, n=n)
 
 
 class OrdinalContext(Context):

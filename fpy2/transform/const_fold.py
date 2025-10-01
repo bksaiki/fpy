@@ -156,7 +156,6 @@ class _ConstFoldInstance(DefaultTransformVisitor):
 
     def _visit_call(self, e: Call, ctx: Context | None):
         e = super()._visit_call(e, ctx)
-        print(e.format(), ctx)
         if (
             self.enable_context 
             and isinstance(e.fn, type)

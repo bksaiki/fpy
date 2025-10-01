@@ -21,6 +21,7 @@ def _all_contexts():
         fp.MPBFloatContext(24, -127, fp.RealFloat.from_int(2 ** 100).normalize(24), fp.RM.RNE),
         fp.MPFixedContext(-8, fp.RM.RNE),
         fp.MPBFixedContext(-8, fp.RealFloat.from_int(2 ** 30), fp.RM.RNE, fp.OV.SATURATE),
+        fp.ExpContext(8),
         fp.RealContext()
     ]
 

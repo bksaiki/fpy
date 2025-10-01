@@ -184,7 +184,7 @@ class MPFloatContext(Context):
             pmax = self.pmax + self.num_randbits
             return pmax, None
 
-    def _round_at(self, x, n: int | None, exact: bool) -> Float:
+    def _round_at(self, x, n: int | None, exact: bool):
         match x:
             case Float() | RealFloat():
                 xr = x
