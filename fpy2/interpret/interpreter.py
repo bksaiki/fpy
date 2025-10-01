@@ -3,7 +3,9 @@ Defines the abstract base class for FPy interpreters.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
+from ..ast.fpyast import Expr, NamedId
 from ..fpc_context import FPCoreContext
 from ..function import Function, set_default_function_call
 from ..number import Context, IEEEContext, RM
@@ -18,6 +20,20 @@ class Interpreter(ABC):
 
     @abstractmethod
     def eval(self, func: Function, args, ctx: Context | None = None):
+        """
+        Evaluates a function `func` on arguments `args` under
+        a rounding context `ctx`. If `ctx` is None, the rounding
+        context is the native Python floating-point context.
+        """
+        ...
+
+    @abstractmethod
+    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
+        """
+        Evaluates an expression `expr` under an environment `env` and
+        rounding context `ctx`. Unlike `eval`, this method requires and
+        explicit rounding context.
+        """
         ...
 
     def _func_ctx(self, func: Function, ctx: Context | None = None) -> Context:
@@ -27,19 +43,20 @@ class Interpreter(ABC):
         If `func` specifies a context, it will be used.
         Otherwise, the provided context `ctx` will be used.
         """
-        if func.ast.ctx is None:
+        override_ctx = func.ast.ctx
+        if override_ctx is None:
             if ctx is None:
-                ctx = _PY_CTX
+                return _PY_CTX
+            else:
+                return ctx
         else:
-            match func.ast.ctx:
+            match override_ctx:
                 case Context():
-                    ctx = func.ast.ctx
+                    return override_ctx
                 case FPCoreContext():
-                    ctx = func.ast.ctx.to_context()
+                    return override_ctx.to_context()
                 case _:
-                    raise RuntimeError('unreachable', func.ast.ctx)
-
-        return ctx
+                    raise RuntimeError('unreachable', override_ctx)
 
 
 class FunctionReturnError(Exception):

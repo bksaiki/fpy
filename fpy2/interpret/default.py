@@ -164,49 +164,6 @@ class _Interpreter(Visitor):
             case _:
                 return arg
 
-    def eval(self, func: FuncDef, args: Collection[Any], ctx: Context):
-        # check arity
-        if len(args) != len(func.args):
-            raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
-
-        # possibly override the context
-        eval_ctx = self._eval_ctx(ctx)
-
-        # process arguments and add to environment
-        for val, arg in zip(args, func.args):
-            match arg.type:
-                case AnyTypeAnn() | None:
-                    x = self._arg_to_value(val)
-                    if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
-                case RealTypeAnn():
-                    x = self._arg_to_value(val)
-                    if not isinstance(x, RealValue):
-                        raise TypeError(f'argument expects a real number, got data `{val}`')
-                    if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
-                case TensorTypeAnn():
-                    # TODO: check shape
-                    x = self._arg_to_value(val)
-                    if not isinstance(x, list):
-                        raise NotImplementedError(f'argument is a list, got data {val}')
-                    if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
-                case _:
-                    raise NotImplementedError(f'unknown argument type {arg.type}')
-
-        # process free variables
-        for var in func.free_vars:
-            x = self._arg_to_value(self.foreign[var.base])
-            self.env[var] = x
-
-        # evaluation
-        try:
-            self._visit_block(func.body, eval_ctx)
-            raise RuntimeError('no return statement encountered')
-        except FunctionReturnError as e:
-            return e.value
-
     def _lookup(self, name: NamedId):
         try:
             return self.env[name]
@@ -812,10 +769,66 @@ class _Interpreter(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _visit_function(self, func: FuncDef, ctx: Context):
-        raise NotImplementedError('do not call directly')
+        # process free variables
+        for var in func.free_vars:
+            x = self._arg_to_value(self.foreign[var.base])
+            self.env[var] = x
+
+        # evaluation
+        try:
+            self._visit_block(func.body, ctx)
+            raise RuntimeError('no return statement encountered')
+        except FunctionReturnError as e:
+            return e.value
 
     def _visit_expr(self, e: Expr, ctx: Context) -> Value:
         return super()._visit_expr(e, ctx)
+
+    def eval(self, func: FuncDef, args: Collection[Any], ctx: Context):
+        # check arity
+        if len(args) != len(func.args):
+            raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
+
+        # possibly override the context
+        eval_ctx = self._eval_ctx(ctx)
+
+        # process arguments and add to environment
+        for val, arg in zip(args, func.args):
+            match arg.type:
+                case AnyTypeAnn() | None:
+                    x = self._arg_to_value(val)
+                    if isinstance(arg.name, NamedId):
+                        self.env[arg.name] = x
+                case RealTypeAnn():
+                    x = self._arg_to_value(val)
+                    if not isinstance(x, RealValue):
+                        raise TypeError(f'argument expects a real number, got data `{val}`')
+                    if isinstance(arg.name, NamedId):
+                        self.env[arg.name] = x
+                case TensorTypeAnn():
+                    # TODO: check shape
+                    x = self._arg_to_value(val)
+                    if not isinstance(x, list):
+                        raise NotImplementedError(f'argument is a list, got data {val}')
+                    if isinstance(arg.name, NamedId):
+                        self.env[arg.name] = x
+                case _:
+                    raise NotImplementedError(f'unknown argument type {arg.type}')
+
+        # evaluate the function body
+        return self._visit_function(func, eval_ctx)
+
+    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
+        # possibly override the context
+        eval_ctx = self._eval_ctx(ctx)
+
+        # process environment
+        for name, val in env.items():
+            x = self._arg_to_value(val)
+            self.env[name] = x
+
+        # evaluate the expression
+        return self._visit_expr(expr, eval_ctx)
 
 
 class DefaultInterpreter(Interpreter):
@@ -825,6 +838,8 @@ class DefaultInterpreter(Interpreter):
     Values:
      - booleans are Python `bool` values,
      - real numbers are FPy `Float` values,
+     - contexts are FPy `Context` values,
+     - tuples are Python `tuple` values,
      - lists are Python `list` values.
 
     All operations are correctly-rounded.
@@ -843,8 +858,18 @@ class DefaultInterpreter(Interpreter):
         ctx: Context | None = None
     ):
         if not isinstance(func, Function):
-            raise TypeError(f'Expected Function, got {func}')
-
+            raise TypeError(f'Expected Function, got `{func}`')
         rt = _Interpreter(func.env, override_ctx=self.ctx)
         ctx = self._func_ctx(func, ctx)
         return rt.eval(func.ast, args, ctx)
+
+    def eval_expr(
+        self,
+        expr: Expr,
+        env: dict[NamedId, Any],
+        ctx: Context
+    ):
+        if not isinstance(expr, Expr):
+            raise TypeError(f'Expected Expr, got `{expr}`')
+        rt = _Interpreter(ForeignEnv.empty(), override_ctx=self.ctx)
+        return rt.eval_expr(expr, env, ctx)
