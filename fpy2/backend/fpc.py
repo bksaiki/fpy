@@ -7,7 +7,7 @@ from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..number import Context
-from ..transform import ContextInline, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
+from ..transform import ConstFold, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend, CompileError
@@ -262,8 +262,8 @@ class _FPCoreCompileInstance(Visitor):
         if e.kwargs:
             raise FPCoreCompileError('cannot compile keyword arguments to FPCore', e)
         match e.func:
-            case NamedId():
-                name = str(e.func)
+            case Var():
+                name = str(e.func.name)
             case Attribute():
                 raise FPCoreCompileError('cannot compile method call to FPCore', e.func)
             case _:
@@ -1051,7 +1051,7 @@ class FPCoreCompiler(Backend):
         # TODO: handle ctx
 
         # normalization passes
-        ast = ContextInline.apply(func.ast, func.env)
+        ast = ConstFold.apply(func.ast, func.env, enable_op=False)
         ast = FuncUpdate.apply(ast)
         ast = ForUnpack.apply(ast)
         ast = ForBundling.apply(ast)

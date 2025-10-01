@@ -39,10 +39,10 @@ class _FormatterInstance(Visitor):
     def _add_line(self, line: str, indent: int):
         self.fmt += '    ' * indent + line + '\n'
 
-    def _visit_function_name(self, func: NamedId | Attribute, ctx: _Ctx) -> str:
+    def _visit_function_name(self, func: Var | Attribute, ctx: _Ctx) -> str:
         match func:
-            case NamedId():
-                return str(func)
+            case Var():
+                return self._visit_var(func, ctx)
             case Attribute():
                 return self._visit_attribute(func, ctx)
             case _:

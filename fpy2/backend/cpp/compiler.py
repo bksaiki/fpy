@@ -24,7 +24,7 @@ from ...number import (
     INTEGER
 )
 from ...primitive import Primitive
-from ...transform import ContextInline
+from ...transform import ConstFold
 from ...utils import Gensym, enum_repr
 
 from ..backend import Backend, CompileError
@@ -1014,7 +1014,7 @@ class CppBackend(Backend):
         self.compiled[func.name] = func
 
         # normalization passes
-        ast = ContextInline.apply(func.ast, func.env)
+        ast = ConstFold.apply(func.ast, func.env, enable_op=False)
 
         # analyses
         def_use = DefineUse.analyze(ast)

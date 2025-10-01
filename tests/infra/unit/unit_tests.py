@@ -748,6 +748,44 @@ def example_set(y: fp.Real):
     x[0] = y
     return x
 
+@fp.fpy
+def example_static_context1():
+    ES = 2
+    NB = 8
+    with fp.IEEEContext(ES, NB):
+        return fp.round(1)
+
+@fp.fpy
+def example_static_context2():
+    ES = 2
+    NB = 8
+    with fp.IEEEContext(ES + 2, NB + 2):
+        return fp.round(1)
+
+@fp.fpy
+def example_fold_op1():
+    with fp.FP64:
+        t = fp.const_pi()
+        return t
+
+@fp.fpy
+def example_fold_op2():
+    with fp.FP64:
+        t = fp.sin(1)
+        return t
+
+@fp.fpy
+def example_fold_op3():
+    with fp.FP64:
+        t = 1 + 2
+        return t
+
+@fp.fpy
+def example_fold_op4():
+    with fp.FP64:
+        t = fp.fma(3, 2, 1)
+        return t
+
 @fp.fpy(ctx=fp.REAL)
 def _select_ctx(x: fp.Real):
     e = fp.libraries.core.logb(x)
@@ -882,5 +920,11 @@ examples: list[Function] = [
     whetsone1,
     example_sum,
     example_set,
+    example_static_context1,
+    example_static_context2,
+    example_fold_op1,
+    example_fold_op2,
+    example_fold_op3,
+    example_fold_op4,
     keep_p_1
 ]

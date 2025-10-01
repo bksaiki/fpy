@@ -43,6 +43,10 @@ The AST can be formatted to a string representation using the :py:class:`fpy2.as
 Analyses
 ---------------------------
 
+.. autoclass:: fpy2.analysis.ContextInfer
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.analysis.DefineUse
    :members:
    :show-inheritance:
@@ -51,18 +55,38 @@ Analyses
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.analysis.Purity
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.analysis.Reachability
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.analysis.SyntaxCheck
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.analysis.TypeInfer
    :members:
    :show-inheritance:
 
 Tranformations
 ---------------------------
 
+.. automodule:: fpy2.transform.ConstFold
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.ConstPropagate
+   :members:
+   :show-inheritance:
+
 .. automodule:: fpy2.transform.CopyPropagate
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.transform.ContextInline
+.. autoclass:: fpy2.transform.DeadCodeEliminate
    :members:
    :show-inheritance:
 
@@ -78,11 +102,19 @@ Tranformations
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.transform.IfBundling
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.transform.RenameTarget
    :members:
    :show-inheritance:
 
 .. autoclass:: fpy2.transform.SimplifyIf
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.SubstVar
    :members:
    :show-inheritance:
 

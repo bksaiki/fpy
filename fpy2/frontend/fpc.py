@@ -26,20 +26,20 @@ def _get_constants():
         _constants_cache = {
             'TRUE': BoolVal(True, None),
             'FALSE': BoolVal(False, None),
-            'NAN': ConstNan(NamedId('nan'), None),
-            'INFINITY': ConstInf(NamedId('inf'), None),
-            'PI': ConstPi(NamedId('const_pi'), None),
-            'E': ConstE(NamedId('const_e'), None),
-            'LOG2E': ConstLog2E(NamedId('const_log2e'), None),
-            'LOG10E': ConstLog10E(NamedId('const_log10e'), None),
-            'LN2': ConstLn2(NamedId('const_ln2'), None),
-            'PI_2': ConstPi_2(NamedId('const_pi_2'), None),
-            'PI_4': ConstPi_4(NamedId('const_pi_4'), None),
-            'M_1_PI': Const1_Pi(NamedId('const_1_pi'), None),
-            'M_2_PI': Const2_Pi(NamedId('const_2_pi'), None),
-            'M_2_SQRTPI': Const2_SqrtPi(NamedId('const_2_sqrtpi'), None),
-            'SQRT2': ConstSqrt2(NamedId('const_sqrt2'), None),
-            'SQRT1_2': ConstSqrt1_2(NamedId('const_sqrt1_2'), None),
+            'NAN': ConstNan(_func_symbol('nan'), None),
+            'INFINITY': ConstInf(_func_symbol('inf'), None),
+            'PI': ConstPi(_func_symbol('const_pi'), None),
+            'E': ConstE(_func_symbol('const_e'), None),
+            'LOG2E': ConstLog2E(_func_symbol('const_log2e'), None),
+            'LOG10E': ConstLog10E(_func_symbol('const_log10e'), None),
+            'LN2': ConstLn2(_func_symbol('const_ln2'), None),
+            'PI_2': ConstPi_2(_func_symbol('const_pi_2'), None),
+            'PI_4': ConstPi_4(_func_symbol('const_pi_4'), None),
+            'M_1_PI': Const1_Pi(_func_symbol('const_1_pi'), None),
+            'M_2_PI': Const2_Pi(_func_symbol('const_2_pi'), None),
+            'M_2_SQRTPI': Const2_SqrtPi(_func_symbol('const_2_sqrtpi'), None),
+            'SQRT2': ConstSqrt2(_func_symbol('const_sqrt2'), None),
+            'SQRT1_2': ConstSqrt1_2(_func_symbol('const_sqrt1_2'), None),
         }
     return _constants_cache
 
@@ -116,17 +116,20 @@ def _get_ternary_table():
         }
     return _ternary_table_cache
 
+def _func_symbol(name: str):
+    return Var(NamedId(name), None)
+
 def _empty(ns: list[Expr]) -> Expr:
     if len(ns) == 1:
-        return Empty(NamedId('empty'), ns[0], None)
+        return Empty(_func_symbol('empty'), ns[0], None)
     elif len(ns) > 1:
         elt = _empty(ns[1:])
-        return ListComp([UnderscoreId()], [Range(NamedId('range'), ns[0], None)], elt, None)
+        return ListComp([UnderscoreId()], [Range(_func_symbol('range'), ns[0], None)], elt, None)
     else:
         raise ValueError(f'ns={ns} cannot be empty')
 
 def _round(x: Expr) -> Expr:
-    return Round(NamedId('round'), x, None)
+    return Round(_func_symbol('round'), x, None)
 
 # TODO: clean this up
 class _Ctx:
@@ -188,16 +191,16 @@ class _FPCore2FPy:
         return _round(Decnum(str(e.value), None))
 
     def _visit_hexnum(self, e: fpc.Hexnum, ctx: _Ctx) -> Expr:
-        return _round(Hexnum(NamedId('hexnum'), str(e.value), None))
+        return _round(Hexnum(_func_symbol('hexnum'), str(e.value), None))
 
     def _visit_integer(self, e: fpc.Integer, ctx: _Ctx) -> Expr:
         return _round(Integer(int(e.value), None))
 
     def _visit_rational(self, e: fpc.Rational, ctx: _Ctx) -> Expr:
-        return _round(Rational(NamedId('rational'), e.p, e.q, None))
+        return _round(Rational(_func_symbol('rational'), e.p, e.q, None))
 
     def _visit_digits(self, e: fpc.Digits, ctx: _Ctx) -> Expr:
-        return _round(Digits(NamedId('digits'), e.m, e.e, e.b, None))
+        return _round(Digits(_func_symbol('digits'), e.m, e.e, e.b, None))
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         unary_table = _get_unary_table()
@@ -211,7 +214,7 @@ class _FPCore2FPy:
             cls = unary_table[e.name]
             arg = self._visit(e.children[0], ctx)
             if issubclass(cls, NamedUnaryOp):
-                return cls(NamedId(e.name), arg, None)
+                return cls(_func_symbol(e.name), arg, None)
             else:
                 return cls(arg, None)
         else:
@@ -224,7 +227,7 @@ class _FPCore2FPy:
             left = self._visit(e.children[0], ctx)
             right = self._visit(e.children[1], ctx)
             if issubclass(cls, NamedBinaryOp):
-                return cls(NamedId(e.name), left, right, None)
+                return cls(_func_symbol(e.name), left, right, None)
             else:
                 return cls(left, right, None)
         else:
@@ -232,11 +235,11 @@ class _FPCore2FPy:
                 case 'fmin':
                     left = self._visit(e.children[0], ctx)
                     right = self._visit(e.children[1], ctx)
-                    return Min(NamedId('min'), (left, right), None)
+                    return Min(_func_symbol('min'), (left, right), None)
                 case 'fmax':
                     left = self._visit(e.children[0], ctx)
                     right = self._visit(e.children[1], ctx)
-                    return Max(NamedId('max'), (left, right), None)
+                    return Max(_func_symbol('max'), (left, right), None)
                 case _:
                     raise NotImplementedError(f'unsupported binary operation {e.name}')
 
@@ -248,7 +251,7 @@ class _FPCore2FPy:
             arg1 = self._visit(e.children[1], ctx)
             arg2 = self._visit(e.children[2], ctx)
             if issubclass(cls, NamedTernaryOp):
-                return cls(NamedId(e.name), arg0, arg1, arg2, None)
+                return cls(_func_symbol(e.name), arg0, arg1, arg2, None)
             else:
                 return cls(arg0, arg1, arg2, None)
         else:
@@ -299,11 +302,11 @@ class _FPCore2FPy:
                     raise ValueError('size operator expects 2 arguments')
                 arg0 = self._visit(e.children[0], ctx)
                 arg1 = self._visit(e.children[1], ctx)
-                return Size(NamedId('size'), arg0, arg1, None)
+                return Size(_func_symbol('size'), arg0, arg1, None)
             case fpc.UnknownOperator():
                 ident = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
-                return Call(NamedId(ident), None, exprs, {}, None)
+                return Call(_func_symbol(ident), None, exprs, {}, None)
             case _:
                 raise NotImplementedError('unexpected FPCore expression', e)
 
@@ -448,7 +451,7 @@ class _FPCore2FPy:
             t = iter_vars[0]
             n = range_vars[0]
             inner_stmts: list[Stmt] = []
-            e = Range(NamedId('range'), Var(n, None), None)
+            e = Range(_func_symbol('range'), Var(n, None), None)
             stmt = ForStmt(t, e, StmtBlock(inner_stmts), None)
             stmts.append(stmt)
             return self._make_tensor_body(iter_vars[1:], range_vars[1:], inner_stmts)
@@ -756,7 +759,7 @@ class _FPCore2FPy:
                             case str():
                                 # named dimension
                                 dim_id = self.gensym.fresh(dim)
-                                size_e = Size(NamedId('size'), Var(t, None), Integer(i, None), None)
+                                size_e = Size(_func_symbol('size'), Var(t, None), Integer(i, None), None)
                                 stmt = Assign(dim_id, None, size_e, None)
                                 ctx.stmts.append(stmt)
                                 # TODO: duplicate dimension names means a runtime check

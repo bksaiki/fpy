@@ -1740,11 +1740,11 @@ class FuncDef(Ast):
 ###########################################################
 # Type aliases
 
-FuncSymbol: TypeAlias = NamedId | Attribute
+FuncSymbol: TypeAlias = Var | Attribute
 """
 FPy function symbols have the recursive form
 
-symbol ::= Id
+symbol ::= Var ( symbol )
          | Attribute ( symbol, _ )
 
 This type alias only shallowly checks the type

@@ -176,8 +176,8 @@ class SyntaxCheckInstance(Visitor):
     def _visit_call(self, e: Call, ctx: _Ctx):
         env = ctx.env
         match e.func:
-            case NamedId():
-                self._mark_use(e.func, env, ignore_missing=self.ignore_unknown)
+            case Var():
+                self._mark_use(e.func.name, env, ignore_missing=self.ignore_unknown)
             case Attribute():
                 self._visit_attribute(e.func, _Ctx(env, True))
             case _:

@@ -106,6 +106,12 @@ _test_ignore = [
 
 _example_ignore = [
     'fma_ctx',
+    'example_static_context1',
+    'example_static_context2',
+    'example_fold_op1',
+    'example_fold_op2',
+    'example_fold_op3',
+    'example_fold_op4',
     'keep_p_1'
 ]
 

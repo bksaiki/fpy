@@ -15,6 +15,8 @@ _ignore = [
     'test_context6',
     'test_context7',
     'test_context8',
+    'example_static_context1',
+    'example_static_context2',
     'keep_p_1',
 ]
 
