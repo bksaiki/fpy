@@ -459,7 +459,14 @@ class _Interpreter(Visitor):
 
     def _visit_call(self, e: Call, ctx: Context):
         if e.fn is None:
-            fn: object = self._visit_expr(e.func, ctx)
+            # unknown call
+            match e.func:
+                case Var():
+                    fn = self.foreign[e.func.name.base]
+                case Attribute():
+                    fn = self._visit_attribute(e.func, ctx)
+                case _:
+                    raise RuntimeError('unreachable', e.func)
         else:
             fn = e.fn
 
