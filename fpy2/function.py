@@ -4,8 +4,6 @@ from typing import Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKIN
 from titanfp.fpbench.fpcast import FPCore
 
 from . import ast as fpyast
-
-from .env import ForeignEnv
 from .number import Context
 
 # avoids circular dependency issues (useful for type checking)

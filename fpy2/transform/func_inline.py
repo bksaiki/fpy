@@ -8,6 +8,7 @@ from typing import Iterable
 from ..analysis import AssignDef, DefineUse, DefineUseAnalysis, ReachingDefs, SyntaxCheck
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
+from ..env import ForeignEnv
 from ..function import Function
 from ..number import REAL
 from ..utils import Gensym
@@ -42,13 +43,18 @@ class _FuncInline(DefaultTransformVisitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     funcs: set[FuncDef] | None
+
     gensym: Gensym
+    free_vars: set[NamedId]
+    env: ForeignEnv
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, funcs: set[FuncDef] | None):
         self.func = func
         self.def_use = def_use
         self.funcs = funcs
         self.gensym = Gensym(self.def_use.names())
+        self.free_vars = set(func.free_vars)
+        self.env = func.env.copy()
 
     def _visit_call(self, e: Call, ctx: _Ctx):
         if not isinstance(e.fn, Function):
@@ -68,7 +74,15 @@ class _FuncInline(DefaultTransformVisitor):
                 subst[d.name] = self.gensym.refresh(d.name)
         ast = RenameTarget.apply(e.fn.ast, subst)
 
-        # TODO: check that free variables agree
+        # merge free variables
+        for name in ast.free_vars:
+            if str(name) in self.env:
+                # already in the environment, check that it is the same
+                val = self.env.get(str(name))
+                if val != e.fn.env.get(str(name)):
+                    raise RuntimeError(f'cannot inline function `{e.fn.name}` due to conflicting free variable `{name}`')
+        self.env = self.env.merge(ast.env, keys=map(str, ast.free_vars))
+        self.free_vars |= ast.free_vars
 
         # bind arguments to parameters
         for arg, param in zip(e.args, ast.args):
@@ -109,6 +123,11 @@ class _FuncInline(DefaultTransformVisitor):
             block_ctx.stmts.append(stmt)
         b = StmtBlock(block_ctx.stmts)
         return b, None
+
+    def _visit_function(self, func: FuncDef, ctx: None):
+        body, _ = self._visit_block(func.body, None)
+        f = FuncDef(func.name, func.args, self.free_vars, func.ctx, body, func.spec, func.meta, self.env, loc=func.loc)
+        return f
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)

@@ -25,6 +25,9 @@ class ForeignEnv:
             return self.builtins[key]
         raise KeyError(key)
 
+    def copy(self) -> 'ForeignEnv':
+        return ForeignEnv(self.globals.copy(), self.nonlocals.copy(), self.builtins.copy())
+
     def get(self, key, default=None) -> Any:
         """Like `get()` for `dict` instances."""
         if key in self.nonlocals:

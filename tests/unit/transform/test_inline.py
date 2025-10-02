@@ -52,35 +52,33 @@ class TestFuncInline(unittest.TestCase):
         self.assertASTEquiv(h, expect.ast, 'inlining failed')
 
 
-    # def test_example2(self):
-    #     @fp.fpy(ctx=fp.REAL)
-    #     def select_ctx(xs: list[fp.Real], p: fp.Real):
-    #         e, _ = fp.libraries.core.max_e(xs)
-    #         n = e - p
-    #         return fp.MPFixedContext(n, fp.RM.RTZ)
+    def test_example3(self):
+        @fp.fpy(ctx=fp.REAL)
+        def select_ctx(xs: list[fp.Real], p: fp.Real):
+            e, _ = fp.libraries.core.max_e(xs)
+            n = e - p
+            return fp.MPFixedContext(n, fp.RM.RTZ)
 
-    #     @fp.fpy
-    #     def bna(xs: list[fp.Real], p: fp.Real):
-    #         with select_ctx(xs, p):
-    #             return [fp.round(x) for x in xs]
+        @fp.fpy
+        def bna(xs: list[fp.Real], p: fp.Real):
+            with select_ctx(xs, p):
+                return [fp.round(x) for x in xs]
 
-    #     @fp.fpy
-    #     def expect(xs: list[fp.Real], p: fp.Real):
-    #         xs4 = xs
-    #         p5 = p
-    #         with fp.RealContext():
-    #             e, _ = fp.libraries.core.max_e(xs4)
-    #             n = (e - p5)
-    #             t = fp.MPFixedContext(n, fp.RM.RTZ)
-    #         with t:
-    #             return [fp.round(x) for x in xs]
+        @fp.fpy
+        def expect(xs: list[fp.Real], p: fp.Real):
+            xs4 = xs
+            p5 = p
+            with fp.RealContext():
+                e, _ = fp.libraries.core.max_e(xs4)
+                n = (e - p5)
+                t = fp.MPFixedContext(n, fp.RM.RTZ)
+            with t:
+                return [fp.round(x) for x in xs]
 
 
-    #     h = fp.transform.FuncInline.apply(bna.ast)
-    #     h.name = expect.name
-    #     print(h.format())
-    #     print(h.free_vars)
+        h = fp.transform.FuncInline.apply(bna.ast)
+        h.name = expect.name
 
-    #     h = fp.transform.ConstFold.apply(h, bna.env, enable_op=False)
-    #     e = fp.transform.ConstFold.apply(expect.ast, expect.env, enable_op=False)
-    #     self.assertASTEquiv(h, e, 'inlining failed')
+        h = fp.transform.ConstFold.apply(h, enable_op=False)
+        e = fp.transform.ConstFold.apply(expect.ast, enable_op=False)
+        self.assertASTEquiv(h, e, 'inlining failed')
