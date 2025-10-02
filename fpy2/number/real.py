@@ -269,19 +269,19 @@ def _real_rint(x: Float | Fraction, rm: RoundingMode) -> Float:
     return Float(x=r, ctx=REAL)
 
 
-def real_ceil(x: Float | Fraction) -> Float | Fraction:
+def real_ceil(x: Float | Fraction):
     """
     Round a real number up to the nearest integer.
     """
     return _real_rint(x, RoundingMode.RTP)
 
-def real_floor(x: Float) -> Float:
+def real_floor(x: Float | Fraction):
     """
     Round a real number down to the nearest integer.
     """
     return _real_rint(x, RoundingMode.RTN)
 
-def real_trunc(x: Float) -> Float:
+def real_trunc(x: Float | Fraction):
     """
     Rounds a real number towards the nearest integer
     with smaller or equal magnitude to `x`.
@@ -289,7 +289,7 @@ def real_trunc(x: Float) -> Float:
     return _real_rint(x, RoundingMode.RTZ)
 
 
-def real_roundint(x: Float) -> Float:
+def real_roundint(x: Float | Fraction):
     """
     Round a real number to the nearest integer,
     rounding ties away from zero in halfway cases.

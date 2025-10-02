@@ -10,17 +10,12 @@ from hypothesis import given, strategies as st
 
 from ..generators import real_floats, floats
 
-_PREC = 8
-_EXP_MIN = -10
-_EXP_MAX = 10
-
-
 @st.composite
 def number(
     draw,
-    prec: int = _PREC,
-    exp_min: int = _EXP_MIN,
-    exp_max: int = _EXP_MAX
+    prec: int = 8,
+    exp_min: int = -10,
+    exp_max: int = 10
 ):
     """
     Returns a strategy for generating either a
