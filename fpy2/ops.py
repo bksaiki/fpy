@@ -536,7 +536,7 @@ def ceil(x: Real, ctx: Context = REAL):
     match ctx:
         case None | RealContext():
             # use rounding primitives
-            return real_ceil(x)
+            return real_ceil(_cvt_to_real(x))
         case _:
             return ctx.with_params(rm=RoundingMode.RTP).round_integer(x)
 
@@ -552,7 +552,7 @@ def floor(x: Real, ctx: Context = REAL):
     match ctx:
         case None | RealContext():
             # use rounding primitives
-            return real_floor(x)
+            return real_floor(_cvt_to_real(x))
         case _:
             return ctx.with_params(rm=RoundingMode.RTN).round_integer(x)
 
@@ -569,7 +569,7 @@ def trunc(x: Real, ctx: Context = REAL):
     match ctx:
         case None | RealContext():
             # use rounding primitives
-            return real_trunc(x)
+            return real_trunc(_cvt_to_real(x))
         case _:
             return ctx.with_params(rm=RoundingMode.RTZ).round_integer(x)
 
@@ -600,7 +600,7 @@ def roundint(x: Real, ctx: Context = REAL):
     match ctx:
         case None | RealContext():
             # use rounding primitives
-            return real_roundint(x)
+            return real_roundint(_cvt_to_real(x))
         case _:
             return ctx.with_params(rm=RoundingMode.RNA).round_integer(x)
 
