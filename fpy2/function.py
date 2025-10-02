@@ -4,6 +4,8 @@ from typing import Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKIN
 from titanfp.fpbench.fpcast import FPCore
 
 from . import ast as fpyast
+
+from .env import ForeignEnv
 from .number import Context
 
 # avoids circular dependency issues (useful for type checking)
@@ -67,6 +69,7 @@ class Function(Generic[P, R]):
     def from_fpcore(
         core: FPCore,
         *,
+        env: ForeignEnv | None = None,
         default_name: str = 'f',
         ignore_unknown: bool = False
     ):
@@ -82,7 +85,7 @@ class Function(Generic[P, R]):
 
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
-        ir = fpcore_to_fpy(core, default_name=default_name, ignore_unknown=ignore_unknown)
+        ir = fpcore_to_fpy(core, env=env, default_name=default_name, ignore_unknown=ignore_unknown)
         return Function(ir, None)
 
     def with_rt(self, rt: 'Interpreter'):

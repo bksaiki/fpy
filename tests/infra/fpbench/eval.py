@@ -32,9 +32,7 @@ def eval(
     num_inputs: int = 10
 ):
     # convert to FPy
-    fun = Function.from_fpcore(core, ignore_unknown=True)
-    fun.env = env
-
+    fun = Function.from_fpcore(core, env=env, ignore_unknown=True)
     print(fun.format())
 
     # register the function

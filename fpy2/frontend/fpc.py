@@ -172,11 +172,13 @@ class _FPCore2FPy:
     core: fpc.FPCore
     gensym: Gensym
     default_name: str
+    env: ForeignEnv | None
 
-    def __init__(self, core: fpc.FPCore, default_name: str):
+    def __init__(self, core: fpc.FPCore, default_name: str, env: ForeignEnv | None = None):
         self.core = core
         self.gensym = Gensym(rename_hook=pythonize_id)
         self.default_name = default_name
+        self.env = env
 
     def _visit_var(self, e: fpc.Var, ctx: _Ctx) -> Expr:
         if e.value not in ctx.env:
@@ -801,7 +803,8 @@ class _FPCore2FPy:
         block = StmtBlock(ctx.stmts + [ReturnStmt(e, None)])
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
-        return FuncDef(name, args, set(), ctx_val, block, None, props, ForeignEnv.default())
+        env = ForeignEnv.default() if self.env is None else self.env
+        return FuncDef(name, args, set(), ctx_val, block, None, props, env)
 
     def convert(self) -> FuncDef:
         return self._visit_function(self.core)
@@ -810,11 +813,12 @@ class _FPCore2FPy:
 def fpcore_to_fpy(
     core: fpc.FPCore,
     *,
+    env: ForeignEnv | None = None,
     default_name: str = 'f',
     ignore_unknown: bool = False
 ):
     # TODO: support `prefix` argument to list how
     # FPy builtins are printed
-    ast = _FPCore2FPy(core, default_name).convert()
+    ast = _FPCore2FPy(core, default_name, env).convert()
     SyntaxCheck.check(ast, ignore_unknown=ignore_unknown)
     return ast
