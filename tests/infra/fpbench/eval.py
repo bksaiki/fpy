@@ -96,7 +96,7 @@ def eval(
 
 def test_eval():
     rt = mpmf_interpreter()
-    env = ForeignEnv.empty()
+    env = ForeignEnv.default()
     fpbench = fetch_cores()
     for core in fpbench.all_cores():
         eval(rt, env, core)

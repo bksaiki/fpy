@@ -1014,7 +1014,7 @@ class CppBackend(Backend):
         self.compiled[func.name] = func
 
         # normalization passes
-        ast = ConstFold.apply(func.ast, func.env, enable_op=False)
+        ast = ConstFold.apply(func.ast, enable_op=False)
 
         # analyses
         def_use = DefineUse.analyze(ast)

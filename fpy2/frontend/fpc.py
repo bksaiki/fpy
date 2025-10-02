@@ -6,8 +6,10 @@ from typing import Any, TypeAlias
 
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
+
 from ..ast.fpyast import *
 from ..analysis import SyntaxCheck
+from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..utils import Gensym, pythonize_id
 
@@ -799,7 +801,7 @@ class _FPCore2FPy:
         block = StmtBlock(ctx.stmts + [ReturnStmt(e, None)])
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
-        return FuncDef(name, args, set(), ctx_val, block, None, props)
+        return FuncDef(name, args, set(), ctx_val, block, None, ForeignEnv.default(), props)
 
     def convert(self) -> FuncDef:
         return self._visit_function(self.core)

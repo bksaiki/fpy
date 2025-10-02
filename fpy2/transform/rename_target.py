@@ -71,12 +71,18 @@ class _RenameTargetInstance(DefaultTransformVisitor):
     def _visit_function(self, func: FuncDef, ctx: None):
         args: list[Argument] = []
         for arg in func.args:
-            name = self.rename.get(arg.name, arg.name)
-            args.append(Argument(name, arg.type, arg.loc))
+            match arg.name:
+                case NamedId():
+                    name = self.rename.get(arg.name, arg.name)
+                    args.append(Argument(name, arg.type, arg.loc))
+                case UnderscoreId():
+                    args.append(Argument(arg.name, arg.type, arg.loc))
+                case _:
+                    raise RuntimeError('unreachable', arg)
 
         free_vars = { self.rename.get(arg, arg) for arg in func.free_vars }
         body, _ = self._visit_block(func.body, ctx)
-        return FuncDef(func.name, args, free_vars, func.ctx, body, func.spec, func.meta, loc=func.loc)
+        return FuncDef(func.name, args, free_vars, func.ctx, body, func.spec, func.meta, func.env, loc=func.loc)
 
 
 class RenameTarget:

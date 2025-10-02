@@ -40,13 +40,12 @@ class _ConstFoldInstance(DefaultTransformVisitor):
     def __init__(
         self,
         func: FuncDef,
-        env: ForeignEnv,
         def_use: DefineUseAnalysis,
         enable_context: bool,
         enable_op: bool,
     ):
         self.func = func
-        self.env = env
+        self.env = func.env
         self.def_use = def_use
         self.rt = get_default_interpreter()
         self.enable_context = enable_context
@@ -220,7 +219,6 @@ class ConstFold:
     @staticmethod
     def apply(
         func: FuncDef,
-        env: ForeignEnv,
         *,
         def_use: DefineUseAnalysis | None = None,
         enable_context: bool = True,
@@ -237,5 +235,5 @@ class ConstFold:
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
         if def_use is None:
             def_use = DefineUse.analyze(func)
-        inst = _ConstFoldInstance(func, env, def_use, enable_context, enable_op)
+        inst = _ConstFoldInstance(func, def_use, enable_context, enable_op)
         return inst.apply()

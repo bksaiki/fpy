@@ -23,8 +23,8 @@ def _test_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
-                defs = fp.analysis.DefAnalysis.analyze(obj.ast)
                 print('dead_code', obj.name)
+                defs = fp.analysis.DefAnalysis.analyze(obj.ast)
                 print(defs)
 
 def test_defs():

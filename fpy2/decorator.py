@@ -187,7 +187,7 @@ def _apply_fpy_decorator(
 
     # parse the source as an FPy function
     parser = Parser(src_name, src, env, start_line=start_line)
-    ast, _ = parser.parse_function()
+    ast, _ = parser.parse_function(env)
 
     # function may have a global context
     ast.ctx = ctx
@@ -210,7 +210,7 @@ def _apply_fpy_decorator(
         Reachability.analyze(ast, check=True)
 
     # wrap the IR in a Function
-    return Function(ast, None, env)
+    return Function(ast, None)
 
 def _is_valid_context(ctx: Context | str | tuple):
     match ctx:

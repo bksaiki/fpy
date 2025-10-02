@@ -27,20 +27,17 @@ class Function(Generic[P, R]):
 
     ast: fpyast.FuncDef
     sig: Optional['FunctionType']
-    env: ForeignEnv
     runtime: Optional['Interpreter']
 
     def __init__(
         self,
         ast: fpyast.FuncDef,
         sig: Optional['FunctionType'],
-        env: ForeignEnv,
         *,
         runtime: Optional['Interpreter'] = None,
     ):
         self.ast = ast
         self.sig = sig
-        self.env = env
         self.runtime = runtime
 
     def __repr__(self):
@@ -64,6 +61,10 @@ class Function(Generic[P, R]):
     def name(self):
         return self.ast.name
 
+    @property
+    def env(self):
+        return self.ast.env
+
     @staticmethod
     def from_fpcore(
         core: FPCore,
@@ -84,17 +85,17 @@ class Function(Generic[P, R]):
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
         ir = fpcore_to_fpy(core, default_name=default_name, ignore_unknown=ignore_unknown)
-        return Function(ir, None, ForeignEnv.empty())
+        return Function(ir, None)
 
     def with_rt(self, rt: 'Interpreter'):
         if not isinstance(rt, Interpreter):
             raise TypeError(f'expected \'BaseInterpreter\', got {rt}')
-        return Function(self.ast, self.sig, self.env, runtime=rt)
+        return Function(self.ast, self.sig, runtime=rt)
 
     def with_ast(self, ast: fpyast.FuncDef):
         if not isinstance(ast, fpyast.FuncDef):
             raise TypeError(f'expected \'FuncDef\', got {ast}')
-        return Function(ast, self.sig, self.env, runtime=self.runtime)
+        return Function(ast, self.sig, runtime=self.runtime)
 
 ###########################################################
 # Default function call

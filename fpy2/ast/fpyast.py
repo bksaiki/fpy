@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Collection, Iterable, Self, TypeAlias
 from fractions import Fraction
 
+from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..utils import (
@@ -1698,7 +1699,8 @@ class Argument(Ast):
 
 class FuncDef(Ast):
     """FPy AST: function definition"""
-    __slots__ = ('name', 'args', 'body', 'free_vars', 'ctx', 'spec', 'meta')
+    __slots__ = ('name', 'args', 'body', 'free_vars', 'ctx', 'spec', 'meta', '_env')
+
     name: str
     args: tuple[Argument, ...]
     body: StmtBlock
@@ -1706,6 +1708,7 @@ class FuncDef(Ast):
     ctx: Context | FPCoreContext | None
     spec: Any
     meta: dict[str, Any] | None
+    _env: ForeignEnv
 
     def __init__(
         self,
@@ -1716,6 +1719,7 @@ class FuncDef(Ast):
         body: StmtBlock,
         spec: Any,
         meta: dict[str, Any] | None,
+        env: ForeignEnv,
         *,
         loc: Location | None = None
     ):
@@ -1727,6 +1731,11 @@ class FuncDef(Ast):
         self.body = body
         self.spec = spec
         self.meta = meta
+        self._env = env
+
+    @property
+    def env(self) -> ForeignEnv:
+        return self._env
 
     def is_equiv(self, other) -> bool:
         return (

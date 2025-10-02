@@ -602,6 +602,7 @@ class DefaultTransformVisitor(Visitor):
             body,
             func.spec,
             func.meta,
+            func.env,
             loc=func.loc
         )
 
