@@ -304,7 +304,7 @@ class ExpContext(EncodableContext):
                 # zero is considered even for rounding
                 return False
 
-    def _round_float_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
+    def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
 
@@ -312,7 +312,7 @@ class ExpContext(EncodableContext):
         Only overrides rounding behavior when `n > self.nmin`.
         """
         # step 1. round with no exponent bound
-        rounded = self._mp_ctx._round_float_at(x, n, exact)
+        rounded = self._mp_ctx._round_at(x, n, exact)
 
         # step 2. check for special values
         if rounded.isnan:
@@ -374,32 +374,16 @@ class ExpContext(EncodableContext):
                     return self.maxval()
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
-        
+
         # step 4. return rounded result
         return Float(x=rounded, ctx=self)
 
-    def _round_at(self, x, n: int | None, exact: bool) -> Float:
-        match x:
-            case Float() | RealFloat():
-                xr = x
-            case float():
-                xr = Float.from_float(x)
-            case int():
-                xr = RealFloat.from_int(x)
-            case Fraction() if x.denominator == 1:
-                xr = RealFloat.from_int(int(x))
-            case str() | Fraction():
-                p, n = self.round_params()
-                xr = mpfr_value(x, prec=p, n=n)
-            case _:
-                raise TypeError(f'not valid argument x={x}')
-
-        return self._round_float_at(xr, n, exact)
-
     def round(self, x, *, exact: bool = False) -> Float:
+        x = self._round_prepare(x)
         return self._round_at(x, None, exact)
 
     def round_at(self, x, n: int, *, exact: bool = False) -> Float:
+        x = self._round_prepare(x)
         return self._round_at(x, n, exact)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:

@@ -6,11 +6,13 @@ a special rounding mode that ensures that re-rounding
 at less precision is safe.
 """
 
+import enum
 import gmpy2 as gmp
 
 from typing import Callable
 
 from .number import RealFloat, Float
+from ..utils import enum_repr
 
 def _bool_to_sign(b: bool):
     return '-' if b else '+'
@@ -157,35 +159,52 @@ def mpfr_value(x, *, prec: int | None = None, n: int | None = None):
     """
     return _mpfr_call(gmp.mpfr, x, prec=prec, n=n)
 
+@enum_repr
+class Constant(enum.Enum):
+    """
+    All constants defined in C99 standard `math.h`.
+    """
+    E = 0
+    LOG2E = 1
+    LOG10E = 2
+    LN2 = 3
+    LN10 = 4
+    PI = 5
+    PI_2 = 6
+    PI_4 = 7
+    M_1_PI = 8
+    M_2_PI = 9
+    M_2_SQRTPI = 10
+    SQRT2 = 11
+    SQRT1_2 = 12
+    INFINITY = 13
+    NAN = 14
+
+
 # From `titanfp` package
 # TODO: some of these are unsafe
 # TODO: should these be indexed by string or enum?
-_constant_exprs = {
-    'E' : lambda : gmp.exp(1),
-    'LOG2E' : lambda: gmp.log2(gmp.exp(1)), # TODO: may be inaccurate
-    'LOG10E' : lambda: gmp.log10(gmp.exp(1)), # TODO: may be inaccurate
-    'LN2' : gmp.const_log2,
-    'LN10' : lambda: gmp.log(10),
-    'PI' : gmp.const_pi,
-    'PI_2' : lambda: gmp.const_pi() / 2, # division by 2 is exact
-    'PI_4' : lambda: gmp.const_pi() / 4, # division by 4 is exact
-    'M_1_PI' : lambda: 1 / gmp.const_pi(), # TODO: may be inaccurate
-    'M_2_PI' : lambda: 2 / gmp.const_pi(), # TODO: may be inaccurate
-    'M_2_SQRTPI' : lambda: 2 / gmp.sqrt(gmp.const_pi()), # TODO: may be inaccurate
-    'SQRT2': lambda: gmp.sqrt(2),
-    'SQRT1_2': lambda: gmp.sqrt(gmp.div(gmp.mpfr(1), gmp.mpfr(2))),
-    'INFINITY': gmp.inf,
-    'NAN': gmp.nan,
+_constant_exprs: dict[Constant, Callable[[], gmp.mpfr]] = {
+    Constant.E : lambda : gmp.exp(1),
+    Constant.LOG2E : lambda: gmp.log2(gmp.exp(1)), # TODO: may be inaccurate
+    Constant.LOG10E : lambda: gmp.log10(gmp.exp(1)), # TODO: may be inaccurate
+    Constant.LN2 : gmp.const_log2,
+    Constant.LN10 : lambda: gmp.log(10),
+    Constant.PI : gmp.const_pi,
+    Constant.PI_2 : lambda: gmp.const_pi() / 2, # division by 2 is exact
+    Constant.PI_4 : lambda: gmp.const_pi() / 4, # division by 4 is exact
+    Constant.M_1_PI : lambda: 1 / gmp.const_pi(), # TODO: may be inaccurate
+    Constant.M_2_PI : lambda: 2 / gmp.const_pi(), # TODO: may be inaccurate
+    Constant.M_2_SQRTPI : lambda: 2 / gmp.sqrt(gmp.const_pi()), # TODO: may be inaccurate
+    Constant.SQRT2: lambda: gmp.sqrt(2),
+    Constant.SQRT1_2: lambda: gmp.sqrt(gmp.div(gmp.mpfr(1), gmp.mpfr(2))),
 }
 
-def mpfr_constant(x: str, *, prec: int | None = None, n: int | None = None):
+def mpfr_constant(x: Constant, *, prec: int | None = None, n: int | None = None):
     """
     Converts `x` into an MPFR type such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
-    if not isinstance(x, str):
-        raise TypeError(f'Expected a string, got {type(x)}')
-
     try:
         fn = _constant_exprs[x]
         return _mpfr_call(fn, prec=prec, n=n)

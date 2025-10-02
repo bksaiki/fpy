@@ -14,7 +14,7 @@ from .mp_float import MPFloatContext
 from .mpb_fixed import MPBFixedContext
 from .mpb_float import MPBFloatContext
 from .mps_float import MPSFloatContext
-from .real import RealContext
+from .real import RealContext, REAL
 from .sm_fixed import SMFixedContext
 
 # Rounding
@@ -34,12 +34,6 @@ OV: TypeAlias = OverflowMode
 
 ###########################################################
 # Format aliases
-
-REAL = RealContext()
-"""
-Alias for exact computation.
-Operations are never rounded under this context.
-"""
 
 FP256 = IEEEContext(19, 256, RM.RNE)
 """

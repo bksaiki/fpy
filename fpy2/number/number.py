@@ -494,7 +494,7 @@ class RealFloat(numbers.Rational):
                 # case: has fractional bits
                 exp = d.bit_length() - 1
                 m = n * (2 ** exp) // d
-                return RealFloat(m=m, exp=exp)
+                return RealFloat(m=m, exp=-exp)
 
     @staticmethod
     def zero(s: bool = False):

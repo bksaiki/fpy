@@ -261,7 +261,7 @@ class MPFixedContext(OrdinalContext):
             nmin = self.nmin - self.num_randbits
             return None, nmin
 
-    def _round_float_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
+    def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round_at()` but only for `RealFloat` or `Float` instances.
 
@@ -308,28 +308,12 @@ class MPFixedContext(OrdinalContext):
         # step 4. wrap the value in a Float
         return Float(x=xr, ctx=self)
 
-    def _round_at(self, x, n: int | None, exact: bool) -> Float:
-        match x:
-            case Float() | RealFloat():
-                xr = x
-            case float():
-                xr = Float.from_float(x)
-            case int():
-                xr = RealFloat.from_int(x)
-            case Fraction() if x.denominator == 1:
-                xr = RealFloat.from_int(int(x))
-            case str() | Fraction():
-                p, n = self.round_params()
-                xr = mpfr_value(x, prec=p, n=n)
-            case _:
-                raise TypeError(f'not valid argument x={x}')
-
-        return self._round_float_at(xr, n, exact)
-
     def round(self, x, *, exact: bool = False) -> Float:
+        x = self._round_prepare(x)
         return self._round_at(x, None, exact)
 
     def round_at(self, x, n: int, *, exact: bool = False) -> Float:
+        x = self._round_prepare(x)
         return self._round_at(x, n, exact)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:

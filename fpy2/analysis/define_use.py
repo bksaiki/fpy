@@ -175,5 +175,4 @@ class DefineUse:
         if not isinstance(ast, FuncDef | StmtBlock):
             raise TypeError(f'Expected \'FuncDef\' or \'StmtBlock\', got {type(ast)} for {ast}')
         reaching_defs = ReachingDefs.analyze(ast)
-        print(reaching_defs.format(), flush=True)
         return _DefineUseInstance(ast, reaching_defs).analyze()
