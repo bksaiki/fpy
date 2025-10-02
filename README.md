@@ -9,42 +9,21 @@ Important links:
 
 ## Installation
 
+The recommended way to install FPy is through `pip`.
+FPy can also be installed from source for development.
+The following instructions assume a `bash`-like shell.
+
+### Installing with `pip`
+
 Requirements:
  - Python 3.11 or later
 
-The following instructions assume a `bash`-like shell.
-If you do not have a Python virtual environment,
-create one using
+To install the latest stable release of FPy, run:
 ```bash
-python3 -m venv .env/
-```
-and activate it using using
-```bash
-source .env/bin/activate
+pip install fpy2
 ```
 
-To install a _frozen_ instance of FPy, run:
-```bash
-pip install .
-```
-or with `make`, run
-```bash
-make install
-```
-Note that this will not install the necessary dependencies for
-development and installs a copy of the `fpy2` package.
-If you checkout a different commit or branch, you will
-need to reinstall FPy to overwrite the previous version.
-
-To uninstall FPy, run:
-```bash
-pip uninstall fpy2
-```
-
-## Development
-
-Developers of FPy should read this section since
-installing FPy is actually different.
+### Installing from source
 
 Requirements:
  - Python 3.11 or later
@@ -68,6 +47,11 @@ pip install -e .[dev]
 or with `make`, run
 ```bash
 make install-dev
+```
+
+To uninstall FPy, run:
+```bash
+pip uninstall fpy2
 ```
 
 ### Testing
