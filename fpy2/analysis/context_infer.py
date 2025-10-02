@@ -405,7 +405,7 @@ class ContextTypeInferInstance(Visitor):
                 # TODO: guard against recursion
                 from ..transform import ConstFold
 
-                ast = ConstFold.apply(e.fn.ast, e.fn.env, enable_op=False)
+                ast = ConstFold.apply(e.fn.ast, enable_op=False)
                 fn_info = ContextInfer.infer(ast)
                 if len(fn_info.arg_types) != len(e.args):
                     raise ContextInferError(

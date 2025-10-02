@@ -62,6 +62,8 @@ class ForUnpack:
         """
         Apply the transformation to the given function definition.
         """
+        if not isinstance(func, FuncDef):
+            raise TypeError(f'expected a \'FuncDef\', got `{func}`')
         def_use = DefineUse.analyze(func)
         inst = _ForUnpackInstance(func, def_use)
         func = inst.apply()

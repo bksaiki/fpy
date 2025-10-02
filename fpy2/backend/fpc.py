@@ -1051,7 +1051,7 @@ class FPCoreCompiler(Backend):
         # TODO: handle ctx
 
         # normalization passes
-        ast = ConstFold.apply(func.ast, func.env, enable_op=False)
+        ast = ConstFold.apply(func.ast, enable_op=False)
         ast = FuncUpdate.apply(ast)
         ast = ForUnpack.apply(ast)
         ast = ForBundling.apply(ast)

@@ -26,7 +26,7 @@ def test_context_infer():
         if core.name not in _skip_cores:
             print('context infer', core.name, core.ident)
             fn = fp.Function.from_fpcore(core, ignore_unknown=True)
-            ast = ConstFold.apply(fn.ast, fn.env, enable_op=False)
+            ast = ConstFold.apply(fn.ast, enable_op=False)
             info = ContextInfer.infer(ast)
             print(ast.name, info.return_type)
 

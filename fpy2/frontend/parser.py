@@ -814,9 +814,9 @@ class Parser:
         args = self._parse_arguments(f.args.args)
         expr = self._parse_expr(f.body)
         block = StmtBlock([ReturnStmt(expr, expr.loc)])
-        return FuncDef('pre', args, set(), None, block, None, {}, loc=loc)
+        return FuncDef('pre', args, set(), None, block, None, {}, ForeignEnv.default(), loc=loc)
 
-    def _parse_function(self, f: ast.FunctionDef):
+    def _parse_function(self, f: ast.FunctionDef, env: ForeignEnv):
         """Parse a Python function definition."""
         loc = self._parse_location(f)
 
@@ -839,7 +839,7 @@ class Parser:
         block = self._parse_statements(body)
 
         # return AST and decorator list
-        func = FuncDef(f.name, args, set(), None, block, None, {}, loc=loc)
+        func = FuncDef(f.name, args, set(), None, block, None, {}, env, loc=loc)
         return func, f.decorator_list
 
     def _eval(
@@ -865,10 +865,10 @@ class Parser:
         return ptree
 
 
-    def parse_function(self):
+    def parse_function(self, env: ForeignEnv):
         """Parses `self.source` as an FPy `FunctionDef`."""
         ptree = self._start_parse()
-        return self._parse_function(ptree)
+        return self._parse_function(ptree, env)
 
     def parse_signature(self, ignore_ctx: bool = False):
         """Parses `self.source` to extract the arguments."""

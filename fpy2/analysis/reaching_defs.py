@@ -38,9 +38,12 @@ class AssignDef:
     site: DefSite
     """the statement introducing the definition"""
     prev: int | None
+    """index of the previous definition, or `None` if this is the first definition"""
+    is_free: bool
+    """is this definition a free variable?"""
 
     def __hash__(self):
-        return hash((self.name, self.site, self.prev))
+        return hash((self.name, self.site, self.prev, self.is_free))
 
     def __eq__(self, other):
         return (
@@ -48,6 +51,7 @@ class AssignDef:
             and self.name == other.name
             and self.site == other.site
             and self.prev == other.prev
+            and self.is_free == other.is_free
         )
 
     def __lt__(self, other: 'AssignDef'):
@@ -167,6 +171,10 @@ class ReachingDefsAnalysis:
         else:
             return line
 
+    def names(self) -> set[NamedId]:
+        """Returns the set of variable names with definitions."""
+        return set(self.name_to_defs.keys())
+
     def format(self) -> str:
         lines: list[str] = []
         for name, ds in self.name_to_defs.items():
@@ -280,10 +288,10 @@ class _ReachingDefs(DefaultVisitor):
         self.indices.add(i)
         return i
 
-    def _add_assign(self, name: NamedId, site: DefSite, ctx: _DefCtx) -> tuple[int, _DefCtx]:
+    def _add_assign(self, name: NamedId, site: DefSite, ctx: _DefCtx, is_free: bool = False) -> tuple[int, _DefCtx]:
         """Adds a new assignment definition, returning the new context."""
-        prev = ctx.get(name)
-        d = AssignDef(name, site, None if prev is None else prev)
+        prev = ctx.get(name, None)
+        d = AssignDef(name, site, prev, is_free)
         idx = self._add_def(d)
         new_ctx = ctx.copy()
         new_ctx[name] = idx
@@ -443,7 +451,7 @@ class _ReachingDefs(DefaultVisitor):
                 _, ctx = self._add_assign(arg.name, arg, ctx)
         # process free variables
         for v in func.free_vars:
-            _, ctx = self._add_assign(v, func, ctx)
+            _, ctx = self._add_assign(v, func, ctx, is_free=True)
         # visit body
         self._visit_block(func.body, ctx)
 
@@ -466,7 +474,7 @@ class _ReachingDefs(DefaultVisitor):
             match d:
                 case AssignDef():
                     prev = None if d.prev is None else repr_indices[d.prev]
-                    d = AssignDef(d.name, d.site, prev)
+                    d = AssignDef(d.name, d.site, prev, d.is_free)
                 case PhiDef():
                     lhs = repr_indices[d.lhs]
                     rhs = repr_indices[d.rhs]

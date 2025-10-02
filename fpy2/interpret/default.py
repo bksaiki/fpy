@@ -330,9 +330,9 @@ class _Interpreter(Visitor):
         if len(val) == 0:
             return Float.from_int(0, ctx=REAL)
         else:
+            if not isinstance(val[0], RealValue):
+                raise TypeError(f'expected a real number argument, got {val[0]}')
             accum = val[0]
-            if not isinstance(accum, RealValue):
-                raise TypeError(f'expected a real number argument, got {accum}')
             for x in val[1:]:
                 if not isinstance(x, RealValue):
                     raise TypeError(f'expected a real number argument, got {x}')
@@ -906,5 +906,5 @@ class DefaultInterpreter(Interpreter):
     ):
         if not isinstance(expr, Expr):
             raise TypeError(f'Expected Expr, got `{expr}`')
-        rt = _Interpreter(ForeignEnv.empty(), override_ctx=self.ctx)
+        rt = _Interpreter(ForeignEnv.default(), override_ctx=self.ctx)
         return rt.eval_expr(expr, env, ctx)

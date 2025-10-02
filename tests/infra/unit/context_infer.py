@@ -31,7 +31,7 @@ def _test_tcheck_unit():
         if core.name in _unit_ignore:
             continue
 
-        ast = ConstFold.apply(core.ast, core.env, enable_op=True)
+        ast = ConstFold.apply(core.ast, enable_op=True)
         info = ContextInfer.infer(ast)
         print(ast.name, info.func_ty)
 
@@ -40,7 +40,7 @@ def _test_tcheck_library():
         for obj in mod.__dict__.values():
             match obj:
                 case fp.Function():
-                    ast = ConstFold.apply(obj.ast, obj.env, enable_op=True)
+                    ast = ConstFold.apply(obj.ast, enable_op=True)
                     info = ContextInfer.infer(ast)
                     print(ast.name, info.func_ty)
                 case fp.Primitive():

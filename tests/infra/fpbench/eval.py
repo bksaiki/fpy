@@ -32,9 +32,7 @@ def eval(
     num_inputs: int = 10
 ):
     # convert to FPy
-    fun = Function.from_fpcore(core, ignore_unknown=True)
-    fun.env = env
-
+    fun = Function.from_fpcore(core, env=env, ignore_unknown=True)
     print(fun.format())
 
     # register the function
@@ -96,7 +94,7 @@ def eval(
 
 def test_eval():
     rt = mpmf_interpreter()
-    env = ForeignEnv.empty()
+    env = ForeignEnv.default()
     fpbench = fetch_cores()
     for core in fpbench.all_cores():
         eval(rt, env, core)
