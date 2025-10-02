@@ -103,17 +103,6 @@ __all__ = [
     'const_sqrt1_2',
 ]
 
-# _real_ops: dict[Any, Callable[..., Float]] = {
-#     mpfr_fabs: real_abs,
-#     mpfr_neg: real_neg,
-#     mpfr_add: real_add,
-#     mpfr_sub: real_sub,
-#     mpfr_mul: real_mul,
-#     mpfr_fma: real_fma,
-#     mpfr_fmin: min,
-#     mpfr_fmax: max
-# }
-
 ################################################################################
 # Type
 
@@ -191,7 +180,7 @@ def _apply_mpfr(fn: Callable[..., Float], *args: Real, ctx: Context = REAL) -> F
 
 def _apply_mpfr_or_real(
     mpfr_fn: Callable[..., Float],
-    real_fn: Callable[..., Float],
+    real_fn: Callable[..., Float | Fraction],
     *args: Real,
     ctx: Context
 ):
@@ -205,11 +194,14 @@ def _apply_mpfr_or_real(
     The real function only takes `Float | Fraction` arguments.
     """
     p, n = ctx.round_params()
-    if p is None and n is None:
+    if p is None and n is None or any(isinstance(x, Fraction) for x in args):
         # real computation
         r_args = tuple(_cvt_to_real(x) for x in args)
         x = real_fn(*r_args)
-        return ctx.round(x)
+        if isinstance(x, Fraction) and isinstance(ctx, RealContext):
+            return x  # exact rational number
+        else:
+            return ctx.round(x)
     else:
         return _apply_mpfr(mpfr_fn, *args, ctx=ctx)
 
@@ -232,7 +224,7 @@ def add(x: Real, y: Real, ctx: Context = REAL):
     """Adds `x` and `y` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return _apply_mpfr(mpfr_add, x, y, ctx=ctx)
+    return _apply_mpfr_or_real(mpfr_add, real_add, x, y, ctx=ctx)
 
 def asin(x: Real, ctx: Context = REAL):
     """Computes the inverse sine of `x` rounded under `ctx`."""
@@ -337,7 +329,7 @@ def fabs(x: Real, ctx: Context = REAL):
     """Computes `|x|` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return _apply_mpfr(mpfr_fabs, x, ctx=ctx)
+    return _apply_mpfr_or_real(mpfr_fabs, real_abs, x, ctx=ctx)
 
 def fdim(x: Real, y: Real, ctx: Context = REAL):
     """Computes `max(x - y, 0)` rounded under `ctx`."""
@@ -349,19 +341,19 @@ def fma(x: Real, y: Real, z: Real, ctx: Context = REAL):
     """Computes `x * y + z` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return _apply_mpfr(mpfr_fma, x, y, z, ctx=ctx)
+    return _apply_mpfr_or_real(mpfr_fma, real_fma, x, y, z, ctx=ctx)
 
 def fmax(x: Real, y: Real, ctx: Context = REAL):
     """Computes `max(x, y)` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return _apply_mpfr(mpfr_fmax, x, y, ctx=ctx)
+    return _apply_mpfr_or_real(mpfr_fmax, max, x, y, ctx=ctx)
 
 def fmin(x: Real, y: Real, ctx: Context = REAL):
     """Computes `min(x, y)` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return _apply_mpfr(mpfr_fmin, x, y, ctx=ctx)
+    return _apply_mpfr_or_real(mpfr_fmin, min, x, y, ctx=ctx)
 
 def fmod(x: Real, y: Real, ctx: Context = REAL):
     """
@@ -414,13 +406,13 @@ def mul(x: Real, y: Real, ctx: Context = REAL):
     """Multiplies `x` and `y` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return _apply_mpfr(mpfr_mul, x, y, ctx=ctx)
+    return _apply_mpfr_or_real(mpfr_mul, real_mul, x, y, ctx=ctx)
 
 def neg(x: Real, ctx: Context = REAL):
     """Computes `-x` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
-    return _apply_mpfr(mpfr_neg, x, ctx=ctx)
+    return _apply_mpfr_or_real(mpfr_neg, real_neg, x, ctx=ctx)
 
 def pow(x: Real, y: Real, ctx: Context = REAL):
     """Computes `x**y` rounded under `ctx`."""
@@ -461,7 +453,7 @@ def sub(x: Real, y: Real, ctx: Context = REAL):
     """Subtracts `y` from `x` rounded under `ctx`."""
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    return _apply_mpfr(mpfr_sub, x, y, ctx=ctx)
+    return _apply_mpfr_or_real(mpfr_sub, real_sub, x, y, ctx=ctx)
 
 def tan(x: Real, ctx: Context = REAL):
     """Computes the tangent of `x` rounded under `ctx`."""

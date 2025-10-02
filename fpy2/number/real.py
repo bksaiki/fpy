@@ -8,6 +8,7 @@ from ..utils import default_repr, is_dyadic
 from .context import Context
 from .number import Float, RealFloat
 from .round import RoundingMode
+from .gmp import mpfr_value
 
 #####################################################################
 # Real rounding context
@@ -88,162 +89,209 @@ class RealContext(Context):
     def round_at(self, x, n: int, *, exact: bool = False):
         raise RuntimeError('cannot round at a specific position in real context')
 
+
+REAL = RealContext()
+"""
+Alias for exact computation.
+Operations are never rounded under this context.
+"""
+
+#####################################################################
+# Helpers
+
+def _is_nan(x: Float | Fraction) -> bool:
+    return isinstance(x, Float) and x.isnan
+
+def _is_inf(x: Float | Fraction) -> bool:
+    return isinstance(x, Float) and x.isinf
+
+def _is_zero(x: Float | Fraction) -> bool:
+    return x.is_zero() if isinstance(x, Float) else x == 0
+
+def _signbit(x: Float | Fraction) -> bool:
+    return x.s if isinstance(x, Float) else (x < 0)
+
 #####################################################################
 # Real methods
 
-def real_neg(x: Float) -> Float:
+def real_neg(x: Float | Fraction) -> Float | Fraction:
     """
     Negate a real number, exactly.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    return Float(s=not x.s, x=x, ctx=RealContext())
+    match x:
+        case Float():
+            return Float(s=not x.s, x=x, ctx=REAL)
+        case Fraction():
+            return -x
+        case _:
+            raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
 
-def real_abs(x: Float) -> Float:
+
+def real_abs(x: Float | Fraction) -> Float | Fraction:
     """
     Absolute value of a real number, exactly.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    return Float(s=False, x=x, ctx=RealContext())
+    match x:
+        case Float():
+            return Float(s=False, x=x, ctx=REAL)
+        case Fraction():
+            return abs(x)
+        case _:
+            raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
 
-def real_add(x: Float, y: Float) -> Float:
+
+def real_add(x: Float | Fraction, y: Float | Fraction) -> Float | Fraction:
     """
     Add two real numbers, exactly.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    if not isinstance(y, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for y={y}')
+    if not isinstance(x, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
+    if not isinstance(y, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(y)}\' for y={y}')
 
-    if x.isnan or y.isnan:
+    if _is_nan(x) or _is_nan(y):
         # either is NaN
-        return Float(isnan=True, ctx=RealContext())
-    elif x.isinf:
+        return Float(isnan=True, ctx=REAL)
+    elif _is_inf(x):
         # x is Inf
-        if y.isinf:
+        if _is_inf(y):
             # y is also Inf
-            if x.s == y.s:
-                return Float(s=x.s, isinf=True, ctx=RealContext())
+            if _signbit(x) == _signbit(y):
+                # Inf + Inf = Inf
+                return Float(s=_signbit(x), isinf=True, ctx=REAL)
             else:
-                return Float(isnan=True, ctx=RealContext())
+                # Inf + -Inf = NaN
+                return Float(isnan=True, ctx=REAL)
         else:
-            # y is not Inf
-            return Float(s=x.s, isinf=True, ctx=RealContext())
-    elif y.isinf:
-        return Float(s=y.s, isinf=True, ctx=RealContext())
+            # y is finite: Inf + y = Inf
+            return Float(s=_signbit(x), isinf=True, ctx=REAL)
+    elif _is_inf(y):
+        # y is Inf, x is finite: x + Inf = Inf
+        return Float(s=_signbit(y), isinf=True, ctx=REAL)
     else:
         # both are finite
-        r = x.as_real() + y.as_real()
-        return Float(x=r, ctx=RealContext())
+        match x, y:
+            case Float(), Float():
+                r = x.as_real() + y.as_real()
+                return Float(x=r, ctx=REAL)
+            case Fraction(), Fraction():
+                return x + y
+            case Fraction(), Float():
+                return x + y.as_rational()
+            case Float(), Fraction():
+                return x.as_rational() + y
+            case _:
+                raise RuntimeError('unreachable', x, y)
 
-def real_sub(x: Float, y: Float) -> Float:
+
+def real_sub(x: Float | Fraction, y: Float | Fraction) -> Float | Fraction:
     return real_add(x, real_neg(y))
 
-def real_mul(x: Float, y: Float) -> Float:
+
+def real_mul(x: Float | Fraction, y: Float | Fraction) -> Float | Fraction:
     """
     Multiply two real numbers, exactly.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    if not isinstance(y, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for y={y}')
+    if not isinstance(x, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
+    if not isinstance(y, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(y)}\' for y={y}')
 
-    if x.isnan or y.isnan:
+    if _is_nan(x) or _is_nan(y):
         # either is NaN
-        return Float(isnan=True, ctx=RealContext())
-    elif x.isinf:
+        return Float(isnan=True, ctx=REAL)
+    elif _is_inf(x):
         # x is Inf
-        if y.is_zero():
+        if _is_zero(y):
             # Inf * 0 = NaN
-            return Float(isnan=True, ctx=RealContext())
+            return Float(isnan=True, ctx=REAL)
         else:
             # Inf * y = Inf
-            return Float(s=x.s != y.s, isinf=True, ctx=RealContext())
-    elif y.isinf:
+            s = _signbit(x) != _signbit(y)
+            return Float(s=s, isinf=True, ctx=REAL)
+    elif _is_inf(y):
         # y is Inf
-        if x.is_zero():
+        if _is_zero(x):
             # 0 * Inf = NaN
-            return Float(isnan=True, ctx=RealContext())
+            return Float(isnan=True, ctx=REAL)
         else:
             # x * Inf = Inf
-            return Float(s=x.s != y.s, isinf=True, ctx=RealContext())
+            s = _signbit(x) != _signbit(y)
+            return Float(s=s, isinf=True, ctx=REAL)
     else:
         # both are finite
-        r = x.as_real() * y.as_real()
-        return Float(x=r, ctx=RealContext())
+        match x, y:
+            case Float(), Float():
+                r = x.as_real() * y.as_real()
+                return Float(x=r, ctx=REAL)
+            case Fraction(), Fraction():
+                return x * y
+            case Fraction(), Float():
+                return x * y.as_rational()
+            case Float(), Fraction():
+                return x.as_rational() * y
+            case _:
+                raise RuntimeError('unreachable', x, y)
 
-def real_fma(x: Float, y: Float, z: Float) -> Float:
+
+def real_fma(x: Float | Fraction, y: Float | Fraction, z: Float | Fraction) -> Float | Fraction:
     """
     Fused multiply-add operation for real numbers, exactly.
     Computes x * y + z.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-    if not isinstance(y, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(y)}\' for y={y}')
-    if not isinstance(z, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(z)}\' for z={z}')
+    if not isinstance(x, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
+    if not isinstance(y, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(y)}\' for y={y}')
+    if not isinstance(z, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(z)}\' for z={z}')
     return real_add(real_mul(x, y), z)
 
-def real_ceil(x: Float) -> Float:
+
+def _real_rint(x: Float | Fraction, rm: RoundingMode) -> Float:
+    """
+    Round a real number to the nearest integer under a specific rounding mode.
+    """
+    match x:
+        case Float():
+            if x.is_nar():
+                # special value
+                return Float(x=x, ctx=REAL)
+            else:
+                # finite value
+                r = x.as_real().round(None, -1, rm)
+        case Fraction():
+            y = mpfr_value(x, n=-1)
+            r = y.as_real().round(None, -1, rm)
+        case _:
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+
+    return Float(x=r, ctx=REAL)
+
+
+def real_ceil(x: Float | Fraction) -> Float | Fraction:
     """
     Round a real number up to the nearest integer.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-
-    if x.is_nar():
-        # special value
-        return Float(x=x, ctx=RealContext())
-    else:
-        # finite value
-        r = x.as_real().round(None, -1, RoundingMode.RTP)
-        return Float(x=r, ctx=RealContext())
+    return _real_rint(x, RoundingMode.RTP)
 
 def real_floor(x: Float) -> Float:
     """
     Round a real number down to the nearest integer.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-
-    if x.is_nar():
-        # special value
-        return Float(x=x, ctx=RealContext())
-    else:
-        # finite value
-        r = x.as_real().round(None, -1, RoundingMode.RTN)
-        return Float(x=r, ctx=RealContext())
+    return _real_rint(x, RoundingMode.RTN)
 
 def real_trunc(x: Float) -> Float:
     """
     Rounds a real number towards the nearest integer
     with smaller or equal magnitude to `x`.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+    return _real_rint(x, RoundingMode.RTZ)
 
-    if x.is_nar():
-        # special value
-        return Float(x=x, ctx=RealContext())
-    else:
-        # finite value
-        r = x.as_real().round(None, -1, RoundingMode.RTZ)
-        return Float(x=r, ctx=RealContext())
 
 def real_roundint(x: Float) -> Float:
     """
     Round a real number to the nearest integer,
     rounding ties away from zero in halfway cases.
     """
-    if not isinstance(x, Float):
-        raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-
-    if x.is_nar():
-        # special value
-        return Float(x=x, ctx=RealContext())
-    else:
-        # finite value
-        r = x.as_real().round(None, -1, RoundingMode.RNA)
-        return Float(x=r, ctx=RealContext())
+    return _real_rint(x, RoundingMode.RNA)
