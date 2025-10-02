@@ -31,6 +31,30 @@ def _cvt_to_frac(x: int | float | Fraction | fp.RealFloat | fp.Float) -> float |
         case _:
             raise TypeError(f'cannot convert {type(x)} to Fraction or float')
 
+def _ceil(x: float | Fraction):
+    if math.isnan(x):
+        return float('nan')
+    elif math.isinf(x):
+        return x
+    else:
+        return math.ceil(x)
+
+def _floor(x: float | Fraction):
+    if math.isnan(x):
+        return float('nan')
+    elif math.isinf(x):
+        return x
+    else:
+        return math.floor(x)
+
+def _trunc(x: float | Fraction):
+    if math.isnan(x):
+        return float('nan')
+    elif math.isinf(x):
+        return x
+    else:
+        return math.trunc(x)
+
 @st.composite
 def number(
     draw,
@@ -57,9 +81,10 @@ def number(
 class TestOps(unittest.TestCase):
 
     def assertEqualOrNan(self, a: Fraction | float, b: Fraction | float, msg: str = ''):
-        if isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b):
-            return
-        self.assertEqual(a, b, msg)
+        if math.isnan(a) or math.isnan(b):
+            self.assertTrue(math.isnan(a) and math.isnan(b), msg)
+        else:
+            self.assertEqual(a, b, msg)
 
     @given(number())
     def test_neg(self, a):
@@ -101,3 +126,21 @@ class TestOps(unittest.TestCase):
         cf = _cvt_to_frac(c)
         op = _cvt_to_frac(fp.fma(a, b, c))
         self.assertEqualOrNan(op, af * bf + cf, f'Failed FMA: {a} * {b} + {c} ({af} * {bf} + {cf})')
+
+    @given(number())
+    def test_ceil(self, a):
+        af = _cvt_to_frac(a)
+        op = _cvt_to_frac(fp.ceil(a))
+        self.assertEqualOrNan(op, _ceil(af), f'Failed ceiling: {a} ({af})')
+
+    @given(number())
+    def test_floor(self, a):
+        af = _cvt_to_frac(a)
+        op = _cvt_to_frac(fp.floor(a))
+        self.assertEqualOrNan(op, _floor(af), f'Failed floor: {a} ({af})')
+
+    @given(number())
+    def test_trunc(self, a):
+        af = _cvt_to_frac(a)
+        op = _cvt_to_frac(fp.trunc(a))
+        self.assertEqualOrNan(op, _trunc(af), f'Failed truncation: {a} ({af})')
