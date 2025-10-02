@@ -68,6 +68,16 @@ class _RenameTargetInstance(DefaultTransformVisitor):
         s = ForStmt(target, iterable, body, stmt.loc)
         return s, None
 
+    def _visit_function(self, func: FuncDef, ctx: None):
+        args: list[Argument] = []
+        for arg in func.args:
+            name = self.rename.get(arg.name, arg.name)
+            args.append(Argument(name, arg.type, arg.loc))
+
+        free_vars = { self.rename.get(arg, arg) for arg in func.free_vars }
+        body, _ = self._visit_block(func.body, ctx)
+        return FuncDef(func.name, args, free_vars, func.ctx, body, func.spec, func.meta, loc=func.loc)
+
 
 class RenameTarget:
     """Renames targets, that is, left-hand side of assignments, in an FPy program."""
