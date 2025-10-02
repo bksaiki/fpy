@@ -1,9 +1,23 @@
 # Version History
 
-## [next] - ???
+## [0.0.12] - 2025-10-02
 ### Features:
+ - Language:
+   - context statements can bind the context as a variable
+   - add `pass` statement
+   - arithmetic works on fractions (for some operations)
+ - Analyses:
+   - dead code elimination
+   - constant propagation
+   - constant folding
+   - function inlining
  - Numbers:
    - implement comparators between `Float`/`RealFloat` and Python numbers
+
+### Changes:
+ - Language:
+   - [**Semantics**] constants are unrounded
+
 ### Fixes:
  - `RealFloat`: fix `as_rational()`
  - `Float`: fix `is_positive()` and `is_negative()`
