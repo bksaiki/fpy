@@ -9,6 +9,9 @@ from .context import Context
 from .number import Float, RealFloat
 from .round import RoundingMode
 
+#####################################################################
+# Real rounding context
+
 @default_repr
 class RealContext(Context):
     """
@@ -85,6 +88,8 @@ class RealContext(Context):
     def round_at(self, x, n: int, *, exact: bool = False):
         raise RuntimeError('cannot round at a specific position in real context')
 
+#####################################################################
+# Real methods
 
 def real_neg(x: Float) -> Float:
     """
