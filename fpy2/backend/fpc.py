@@ -302,11 +302,36 @@ class _FPCoreCompileInstance(Visitor):
         arr = self._visit_expr(arg, ctx)
         return fpc.Size(arr, fpc.Integer(0))
 
-    def _visit_range(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # expand range expression
+    def _visit_range1(self, stop: Expr, ctx: None) -> fpc.Expr:
+        # range(stop) => (tensor ([i <stop>]) i)
         tuple_id = str(self.gensym.fresh('i'))
-        size = self._visit_expr(arg, ctx)
+        size = self._visit_expr(stop, ctx)
         return fpc.Tensor([(tuple_id, size)], fpc.Var(tuple_id))
+
+    def _visit_range2(self, start: Expr, stop: Expr, ctx: None) -> fpc.Expr:
+        # range(start, stop) => (tensor ([i (! :precision integer (- stop start))]) (! :precision integer (+ i start)))
+        tuple_id = str(self.gensym.fresh('i'))
+        start_expr = self._visit_expr(start, ctx)
+        stop_expr = self._visit_expr(stop, ctx)
+        return fpc.Tensor(
+            [(tuple_id, fpc.Ctx({ 'precision': 'integer' }, fpc.Sub(stop_expr, start_expr)))],
+            fpc.Ctx({ 'precision': 'integer' }, fpc.Add(fpc.Var(tuple_id), start_expr))
+        )
+
+    def _visit_range3(self, start: Expr, stop: Expr, step: Expr, ctx: None) -> fpc.Expr:
+        # range(start, stop, step) =>
+        # (tensor ([i (! :precision integer (ceil (/ (- stop start) step)))])
+        #   (! :precision integer (+ (* i step) start)))
+        tuple_id = str(self.gensym.fresh('i'))
+        start_expr = self._visit_expr(start, ctx)
+        stop_expr = self._visit_expr(stop, ctx)
+        step_expr = self._visit_expr(step, ctx)
+        return fpc.Tensor(
+            [(tuple_id, fpc.Ctx({ 'precision': 'integer' },
+                fpc.Ceil(fpc.Div(fpc.Sub(stop_expr, start_expr), step_expr))))],
+            fpc.Ctx({ 'precision': 'integer' },
+                fpc.Add(fpc.Mul(fpc.Var(tuple_id), step_expr), start_expr))
+        )
 
     def _visit_empty(self, arg: Expr, ctx: None) -> fpc.Expr:
         # tensor with uninitialized values
@@ -425,7 +450,7 @@ class _FPCoreCompileInstance(Visitor):
                     return self._visit_len(e.arg, ctx)
                 case Range1():
                     # range expression
-                    return self._visit_range(e.arg, ctx)
+                    return self._visit_range1(e.arg, ctx)
                 case Empty():
                     # empty expression
                     return self._visit_empty(e.arg, ctx)
@@ -454,6 +479,9 @@ class _FPCoreCompileInstance(Visitor):
                 case Size():
                     # size expression
                     return self._visit_size(e.first, e.second, ctx)
+                case Range2():
+                    # range expression
+                    return self._visit_range2(e.first, e.second, ctx)
                 case _:
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
@@ -468,8 +496,13 @@ class _FPCoreCompileInstance(Visitor):
             arg2 = self._visit_expr(e.third, ctx)
             return cls(arg0, arg1, arg2)
         else:
-            # unknown operator
-            raise NotImplementedError('no FPCore operator for', e)
+            match e:
+                case Range3():
+                    # range expression
+                    return self._visit_range3(e.first, e.second, e.third, ctx)
+                case _:
+                    # unknown operator
+                    raise NotImplementedError('no FPCore operator for', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> fpc.Expr:
         nary_table = _get_nary_table()
