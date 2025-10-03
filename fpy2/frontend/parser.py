@@ -539,7 +539,7 @@ class Parser:
             if kwargs:
                 raise FPyParserError(loc, 'FPy does not support keyword arguments for `len`', e)
             return Size(func, args[0], Integer(0, None), loc)
-        elif fn == range:
+        elif fn is range:
             if kwargs:
                 raise FPyParserError(loc, 'FPy does not support keyword arguments for `range`', e)
             return self._parse_range(e, func)
