@@ -336,6 +336,7 @@ class Parser:
                 start = self._parse_expr(e.args[0])
                 stop = self._parse_expr(e.args[1])
                 step = self._parse_expr(e.args[2])
+                return Range3(func, start, stop, step, loc)
             case _:
                 raise FPyParserError(loc, 'FPy `range` expects 1, 2, or 3 arguments', e)
 
