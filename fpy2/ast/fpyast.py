@@ -168,7 +168,9 @@ __all__ = [
     # Tensor operators
     'Len',
     'Size',
-    'Range',
+    'Range1',
+    'Range2',
+    'Range3',
     'Empty',
     'Dim',
     'Zip',
@@ -1063,8 +1065,16 @@ class Size(NamedBinaryOp):
     """FPy node: size operator"""
     __slots__ = ()
 
-class Range(NamedUnaryOp):
-    """FPy node: range constructor"""
+class Range1(NamedUnaryOp):
+    """FPy node: range(stop)"""
+    __slots__ = ()
+
+class Range2(NamedBinaryOp):
+    """FPy node: range(start, stop)"""
+    __slots__ = ()
+
+class Range3(NamedTernaryOp):
+    """FPy node: range(start, stop, step)"""
     __slots__ = ()
 
 class Empty(NamedUnaryOp):

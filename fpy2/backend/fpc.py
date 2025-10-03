@@ -423,7 +423,7 @@ class _FPCoreCompileInstance(Visitor):
                 case Len():
                     # len expression
                     return self._visit_len(e.arg, ctx)
-                case Range():
+                case Range1():
                     # range expression
                     return self._visit_range(e.arg, ctx)
                 case Empty():

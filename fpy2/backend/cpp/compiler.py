@@ -374,7 +374,7 @@ class _CppBackendInstance(Visitor):
         _, cpp_ty = self._expr_type(e)
         return f'static_cast<{cpp_ty.format()}>({arg_cpp}.size())'
 
-    def _visit_range(self, e: Range, ctx: _CompileCtx):
+    def _visit_range(self, e: Range1, ctx: _CompileCtx):
         # range(n)
         arg_cpp = self._visit_expr(e.arg, ctx)
         _, e_ty = self._expr_type(e)
@@ -518,7 +518,7 @@ class _CppBackendInstance(Visitor):
         match e:
             case Len():
                 return self._visit_len(e, ctx)
-            case Range():
+            case Range1():
                 return self._visit_range(e, ctx)
             case Dim():
                 return self._visit_dim(e, ctx)

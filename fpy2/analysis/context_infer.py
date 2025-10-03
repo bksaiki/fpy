@@ -293,7 +293,7 @@ class ContextTypeInferInstance(Visitor):
                 # sum operator
                 # C, Γ |- sum e : real C
                 return RealTypeContext(ctx)
-            case Range():
+            case Range1():
                 # range operator
                 # C, Γ |- range e : list (real INTEGER)
                 return ListTypeContext(RealTypeContext(INTEGER))

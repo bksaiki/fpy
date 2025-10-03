@@ -379,7 +379,7 @@ class _Interpreter(Visitor):
                     return self._apply_not(e.arg, ctx)
                 case Len():
                     return self._apply_len(e.arg, ctx)
-                case Range():
+                case Range1():
                     return self._apply_range(e.arg, ctx)
                 case Empty():
                     return self._apply_empty(e.arg, ctx)

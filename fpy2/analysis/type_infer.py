@@ -296,7 +296,7 @@ class _TypeInferInstance(Visitor):
                     # length operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
                     return RealType()
-                case Range():
+                case Range1():
                     # range operator
                     self._unify(arg_ty, RealType())
                     return ListType(RealType())

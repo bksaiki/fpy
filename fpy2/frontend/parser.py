@@ -71,7 +71,6 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     round: Round,
     round_exact: RoundExact,
     len: Len,
-    range: Range,
     empty: Empty,
     dim: Dim,
     enumerate: Enumerate,
@@ -320,6 +319,26 @@ class Parser:
             raise FPyParserError(loc, 'FPy `digits` expects an integer as third argument', e)
         return Digits(func, m_e.val, e_e.val, b_e.val, loc)
 
+    def _parse_range(self, e: ast.Call, func: FuncSymbol):
+        loc = self._parse_location(e)
+        match len(e.args):
+            case 1:
+                # range(stop)
+                stop = self._parse_expr(e.args[0])
+                return Range1(func, stop, loc)
+            case 2:
+                # range(start, stop)
+                start = self._parse_expr(e.args[0])
+                stop = self._parse_expr(e.args[1])
+                return Range2(func, start, stop, loc)
+            case 3:
+                # range(start, stop, step)
+                start = self._parse_expr(e.args[0])
+                stop = self._parse_expr(e.args[1])
+                step = self._parse_expr(e.args[2])
+            case _:
+                raise FPyParserError(loc, 'FPy `range` expects 1, 2, or 3 arguments', e)
+
     def _parse_boolop(self, e: ast.BoolOp):
         loc = self._parse_location(e)
         match e.op:
@@ -519,6 +538,10 @@ class Parser:
             if kwargs:
                 raise FPyParserError(loc, 'FPy does not support keyword arguments for `len`', e)
             return Size(func, args[0], Integer(0, None), loc)
+        elif fn == range:
+            if kwargs:
+                raise FPyParserError(loc, 'FPy does not support keyword arguments for `range`', e)
+            return self._parse_range(e, func)
         else:
             return Call(func, fn, args, kwargs, loc)
 
