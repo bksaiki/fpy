@@ -15,3 +15,4 @@ from .rename_target import RenameTarget
 from .simplify_if import SimplifyIf
 from .subst_var import SubstVar
 from .while_bundling import WhileBundling
+from .while_unroll import WhileUnroll
