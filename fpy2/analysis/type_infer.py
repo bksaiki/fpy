@@ -296,7 +296,7 @@ class _TypeInferInstance(Visitor):
                     # length operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
                     return RealType()
-                case Range():
+                case Range1():
                     # range operator
                     self._unify(arg_ty, RealType())
                     return ListType(RealType())
@@ -338,6 +338,11 @@ class _TypeInferInstance(Visitor):
                     self._unify(lhs_ty, ListType(self._fresh_type_var()))
                     self._unify(rhs_ty, RealType())
                     return RealType()
+                case Range2():
+                    # range2 operator
+                    self._unify(lhs_ty, RealType())
+                    self._unify(rhs_ty, RealType())
+                    return ListType(RealType())
                 case _:
                     raise ValueError(f'unknown binary operator: {cls}')
 
@@ -353,7 +358,15 @@ class _TypeInferInstance(Visitor):
             self._unify(fn_ty.arg_types[2], third)
             return fn_ty.return_type
         else:
-            raise ValueError(f'unknown ternary operator: {cls}')
+            match e:
+                case Range3():
+                    # range3 operator
+                    self._unify(first, RealType())
+                    self._unify(second, RealType())
+                    self._unify(third, RealType())
+                    return ListType(RealType())
+                case _:
+                    raise ValueError(f'unknown ternary operator: {cls}')
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> Type:
         match e:

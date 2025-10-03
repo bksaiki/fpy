@@ -251,6 +251,18 @@ def test_list_size3():
     return size(x, 1)
 
 @fpy
+def test_range1():
+    return range(5)
+
+@fpy
+def test_range2():
+    return range(1, 5)
+
+@fpy
+def test_range3():
+    return range(1, 5, 2)
+
+@fpy
 def test_list_size4():
     x = [False, True]
     return size(x, 0)
@@ -852,6 +864,9 @@ tests: list[Function] = [
     test_list_size2,
     test_list_size3,
     test_list_size4,
+    test_range1,
+    test_range2,
+    test_range3,
     test_enumerate1,
     test_enumerate2,
     test_enumerate3,

@@ -87,7 +87,7 @@ def _get_unary_table():
             'isnan': IsNan,
             'isnormal': IsNormal,
             'signbit': Signbit,
-            'range': Range,
+            'range': Range1,
             'dim': Dim,
         }
     return _unary_table_cache
@@ -126,7 +126,7 @@ def _empty(ns: list[Expr]) -> Expr:
         return Empty(_func_symbol('empty'), ns[0], None)
     elif len(ns) > 1:
         elt = _empty(ns[1:])
-        return ListComp([UnderscoreId()], [Range(_func_symbol('range'), ns[0], None)], elt, None)
+        return ListComp([UnderscoreId()], [Range1(_func_symbol('range'), ns[0], None)], elt, None)
     else:
         raise ValueError(f'ns={ns} cannot be empty')
 
@@ -455,7 +455,7 @@ class _FPCore2FPy:
             t = iter_vars[0]
             n = range_vars[0]
             inner_stmts: list[Stmt] = []
-            e = Range(_func_symbol('range'), Var(n, None), None)
+            e = Range1(_func_symbol('range'), Var(n, None), None)
             stmt = ForStmt(t, e, StmtBlock(inner_stmts), None)
             stmts.append(stmt)
             return self._make_tensor_body(iter_vars[1:], range_vars[1:], inner_stmts)

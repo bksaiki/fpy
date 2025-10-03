@@ -244,13 +244,40 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a list, got {arr}')
         return Float.from_int(len(arr), ctx=INTEGER, checked=False)
 
-    def _apply_range(self, arg: Expr, ctx: Context):
-        stop = self._visit_expr(arg, ctx)
-        if not isinstance(stop, RealValue):
-            raise TypeError(f'expected a real number argument, got {stop}')
-        if not self._is_integer(stop):
-            raise ValueError(f'expected an integer argument, got {stop}')
-        return [Float.from_int(i, ctx=INTEGER, checked=False) for i in range(int(stop))]
+    def _apply_range(self, start: Expr | None, stop: Expr, step: Expr | None, ctx: Context):
+        if start is not None:
+            start_val = self._visit_expr(start, ctx)
+            if not isinstance(start_val, RealValue):
+                raise TypeError(f'expected a real number argument, got {start_val}')
+            if not self._is_integer(start_val):
+                raise ValueError(f'expected an integer argument, got {start_val}')
+            start_idx = int(start_val)
+        else:
+            start_idx = 0
+
+        stop_val = self._visit_expr(stop, ctx)
+        if not isinstance(stop_val, RealValue):
+            raise TypeError(f'expected a real number argument, got {stop_val}')
+        if not self._is_integer(stop_val):
+            raise ValueError(f'expected an integer argument, got {stop_val}')
+        stop_idx = int(stop_val)
+
+        if step is not None:
+            step_val = self._visit_expr(step, ctx)
+            if not isinstance(step_val, RealValue):
+                raise TypeError(f'expected a real number argument, got {step_val}')
+            if not self._is_integer(step_val):
+                raise ValueError(f'expected an integer argument, got {step_val}')
+            step_idx = int(step_val)
+            if step_idx == 0:
+                raise ValueError('step argument cannot be zero')
+        else:
+            step_idx = 1
+
+        return [
+            Float.from_int(i, ctx=INTEGER, checked=False)
+            for i in range(start_idx, stop_idx, step_idx)
+        ]
 
     def _apply_empty(self, arg: Expr, ctx: Context):
         size = self._visit_expr(arg, ctx)
@@ -379,8 +406,8 @@ class _Interpreter(Visitor):
                     return self._apply_not(e.arg, ctx)
                 case Len():
                     return self._apply_len(e.arg, ctx)
-                case Range():
-                    return self._apply_range(e.arg, ctx)
+                case Range1():
+                    return self._apply_range(None, e.arg, None, ctx)
                 case Empty():
                     return self._apply_empty(e.arg, ctx)
                 case Dim():
@@ -406,6 +433,8 @@ class _Interpreter(Visitor):
             match e:
                 case Size():
                     return self._apply_size(e.first, e.second, ctx)
+                case Range2():
+                    return self._apply_range(e.first, e.second, None, ctx)
                 case _:
                     raise RuntimeError('unknown operator', e)
 
@@ -423,7 +452,11 @@ class _Interpreter(Visitor):
                 raise TypeError(f'expected a real number argument, got {third}')
             return fn(first, second, third, ctx=ctx)
         else:
-            raise RuntimeError('unknown operator', e)
+            match e:
+                case Range3():
+                    return self._apply_range(e.first, e.second, e.third, ctx)
+                case _:
+                    raise RuntimeError('unknown operator', e)
 
     def _visit_naryop(self, e: NaryOp, ctx: Context):
         match e:

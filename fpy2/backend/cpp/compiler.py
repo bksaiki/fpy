@@ -374,7 +374,7 @@ class _CppBackendInstance(Visitor):
         _, cpp_ty = self._expr_type(e)
         return f'static_cast<{cpp_ty.format()}>({arg_cpp}.size())'
 
-    def _visit_range(self, e: Range, ctx: _CompileCtx):
+    def _visit_range1(self, e: Range1, ctx: _CompileCtx):
         # range(n)
         arg_cpp = self._visit_expr(e.arg, ctx)
         _, e_ty = self._expr_type(e)
@@ -385,6 +385,82 @@ class _CppBackendInstance(Visitor):
         ctx.add_line(f'std::vector<{e_ty.elt.format()}> {t}({s});')
         ctx.add_line(f'std::iota({t}.begin(), {t}.end(), static_cast<{e_ty.elt.format()}>(0));')
         return t
+
+    def _visit_range2(self, e: Range2, ctx: _CompileCtx):
+        # range(start, end) =>
+        # t1 = <start>;
+        # t2 = <end>;
+        # std::vector<T> t3(static_cast<size_t>(t2) - static_cast<size_t>(t1));
+        # std::iota(t3.begin(), t3.end(), static_cast<T>(t1));
+
+        _, start_ty = self._expr_type(e.first)
+        _, end_ty = self._expr_type(e.second)
+        _, e_ty = self._expr_type(e)
+        assert isinstance(e_ty, CppList) and isinstance(e_ty.elt, CppScalar)
+
+        start_cpp = self._visit_expr(e.first, ctx)
+        stop_cpp = self._visit_expr(e.second, ctx)
+
+        t1 = self._fresh_var()
+        t2 = self._fresh_var()
+        t3 = self._fresh_var()
+        ctx.add_line(f'auto {t1} = {start_cpp};')
+        ctx.add_line(f'auto {t2} = {stop_cpp};')
+        start_idx = self._compile_size(t1, start_ty)
+        stop_idx = self._compile_size(t2, end_ty)
+        ctx.add_line(f'std::vector<{e_ty.elt.format()}> {t3}({stop_idx} - {start_idx});')
+        ctx.add_line(f'std::iota({t3}.begin(), {t3}.end(), static_cast<{e_ty.elt.format()}>({t1}));')
+        return t3
+    
+    def _visit_range3(self, e: Range3, ctx: _CompileCtx):
+        # range(start, end, step) =>
+        # t1 = <start>;
+        # t2 = <end>;
+        # t3 = <step>;
+        # // compute size
+        # t4 = static_cast<size_t>(t2) - static_cast<size_t>(t1); // distance
+        # t5 = static_cast<size_t>(t3); // step size
+        # assert t5 > 0 && "step size must be positive";
+        # t6 = (t4 + t5 - 1) / t5; // ceiling division
+        # std::vector<T> t7(t6);
+        # for (size_t i = 0; i < t6; ++i) {
+        #     t7[i] = static_cast<T>(t1 + i * t3);
+        # }
+
+        _, start_ty = self._expr_type(e.first)
+        _, end_ty = self._expr_type(e.second)
+        _, step_ty = self._expr_type(e.third)
+        _, e_ty = self._expr_type(e)
+        assert isinstance(e_ty, CppList) and isinstance(e_ty.elt, CppScalar)
+
+        start_cpp = self._visit_expr(e.first, ctx)
+        stop_cpp = self._visit_expr(e.second, ctx)
+        step_cpp = self._visit_expr(e.third, ctx)
+
+        t1 = self._fresh_var()
+        t2 = self._fresh_var()
+        t3 = self._fresh_var()
+        t4 = self._fresh_var()
+        t5 = self._fresh_var()
+        t6 = self._fresh_var()
+        t7 = self._fresh_var()
+
+        ctx.add_line(f'auto {t1} = {start_cpp};')
+        ctx.add_line(f'auto {t2} = {stop_cpp};')
+        ctx.add_line(f'auto {t3} = {step_cpp};')
+        start_idx = self._compile_size(t1, start_ty)
+        stop_idx = self._compile_size(t2, end_ty)
+        step_idx = self._compile_size(t3, step_ty)
+        ctx.add_line(f'auto {t4} = {stop_idx} - {start_idx};') # distance
+        ctx.add_line(f'auto {t5} = {step_idx};') # step size
+        ctx.add_line(f'assert({t5} > 0 && "step size must be positive");')
+        ctx.add_line(f'auto {t6} = ({t4} + {t5} - 1) / {t5};') # ceiling division
+        ctx.add_line(f'std::vector<{e_ty.elt.format()}> {t7}({t6});')
+        ctx.add_line(f'for (size_t i = 0; i < {t6}; ++i) {{')
+        ctx.indent().add_line(f'{t7}[i] = static_cast<{e_ty.elt.format()}>({t1} + i * {t3});')
+        ctx.add_line('}')
+
+        return t7
 
     def _visit_size(self, arr: Expr, dim: Expr, ctx: _CompileCtx):
         # size(x, n)
@@ -518,8 +594,8 @@ class _CppBackendInstance(Visitor):
         match e:
             case Len():
                 return self._visit_len(e, ctx)
-            case Range():
-                return self._visit_range(e, ctx)
+            case Range1():
+                return self._visit_range1(e, ctx)
             case Dim():
                 return self._visit_dim(e, ctx)
             case Enumerate():
@@ -552,6 +628,8 @@ class _CppBackendInstance(Visitor):
         match e:
             case Size():
                 return self._visit_size(e.first, e.second, ctx)
+            case Range2():
+                return self._visit_range2(e, ctx)
             case _:
                 raise CppCompileError(self.func, f'no matching operator for `{e.format()}`')
 
@@ -574,7 +652,11 @@ class _CppBackendInstance(Visitor):
             # TODO: list options vs. actual signature
             raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
         else:
-            raise CppCompileError(self.func, f'no matching operator for `{e.format()}`')
+            match e:
+                case Range3():
+                    return self._visit_range3(e, ctx)
+                case _:
+                    raise CppCompileError(self.func, f'no matching operator for `{e.format()}`')
 
     def _visit_naryop(self, e: NaryOp, ctx: _CompileCtx):
         # Handle n-ary operations

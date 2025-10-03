@@ -293,7 +293,7 @@ class ContextTypeInferInstance(Visitor):
                 # sum operator
                 # C, Γ |- sum e : real C
                 return RealTypeContext(ctx)
-            case Range():
+            case Range1():
                 # range operator
                 # C, Γ |- range e : list (real INTEGER)
                 return ListTypeContext(RealTypeContext(INTEGER))
@@ -323,6 +323,10 @@ class ContextTypeInferInstance(Visitor):
                 # size operator
                 # C, Γ |- size e : real INTEGER
                 return RealTypeContext(INTEGER)
+            case Range2():
+                # range operator
+                # C, Γ |- range e1 e2 : list (real INTEGER)
+                return ListTypeContext(RealTypeContext(INTEGER))
             case _:
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------
@@ -330,13 +334,19 @@ class ContextTypeInferInstance(Visitor):
                 return self._from_scalar(self._lookup_ty(e), ctx)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: ContextParam):
-        #   Γ |- real : T         Γ |- bool : T
-        # ----------------      ------------------
-        #  C, Γ |- e : real C    C, Γ |- e : bool
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
-        return self._from_scalar(self._lookup_ty(e), ctx)
+        match e:
+            case Range3():
+                # range operator
+                # C, Γ |- range e1 e2 e3 : list (real INTEGER)
+                return ListTypeContext(RealTypeContext(INTEGER))
+            case _:
+                #   Γ |- real : T         Γ |- bool : T
+                # ----------------      ------------------
+                #  C, Γ |- e : real C    C, Γ |- e : bool
+                return self._from_scalar(self._lookup_ty(e), ctx)
 
     def _visit_naryop(self, e: NaryOp, ctx: ContextParam):
         arg_tys = [self._visit_expr(arg, ctx) for arg in e.args]
