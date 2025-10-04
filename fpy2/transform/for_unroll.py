@@ -58,6 +58,9 @@ class _ForUnroll(DefaultTransformVisitor):
     index: int
     strategy: ForUnrollStrategy
     gensym: Gensym
+    temp_id: NamedId
+    len_id: NamedId
+    idx_id: NamedId
 
     def __init__(
         self,
@@ -65,7 +68,10 @@ class _ForUnroll(DefaultTransformVisitor):
         where: int | None,
         times: int,
         strategy: ForUnrollStrategy,
-        reaching_defs: ReachingDefsAnalysis
+        reaching_defs: ReachingDefsAnalysis,
+        temp_id: NamedId,
+        len_id: NamedId,
+        idx_id: NamedId
     ):
         super().__init__()
         self.func = func
@@ -74,6 +80,9 @@ class _ForUnroll(DefaultTransformVisitor):
         self.index = 0
         self.strategy = strategy
         self.gensym = Gensym(reaching_defs.names())
+        self.temp_id = temp_id
+        self.len_id = len_id
+        self.idx_id = idx_id
 
     def _refresh(self, target: Id | TupleBinding) -> tuple[Id | TupleBinding, dict[NamedId, NamedId]]:
         match target:
@@ -94,14 +103,14 @@ class _ForUnroll(DefaultTransformVisitor):
                 raise RuntimeError(f'Unexpected target {target}')
 
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> tuple[Stmt, None]:
-        if self.where is None or self.index == self.where:
+        if (self.where is None or self.index == self.where) and self.times > 1:
             self.index += 1
             iterable = self._visit_expr(stmt.iterable, ctx)
             body, _ = self._visit_block(stmt.body, ctx)
 
-            t = self.gensym.fresh('t')
-            n = self.gensym.fresh('n')
-            idx = self.gensym.fresh('i')
+            t = self.gensym.refresh(self.temp_id)
+            n = self.gensym.refresh(self.len_id)
+            idx = self.gensym.refresh(self.idx_id)
             match self.strategy:
                 case ForUnrollStrategy.STRICT:
                     # need to check that len(t) % times == 0
@@ -132,19 +141,28 @@ class _ForUnroll(DefaultTransformVisitor):
             assign_stmts: list[Stmt] = []
             body_stmts: list[Stmt] = []
             for i in range(self.times):
-                target, subst = self._refresh(stmt.target)
-                renamed_body = RenameTarget.apply_block(body, subst)
-                body_stmts.extend(renamed_body.stmts)
-                assign_stmts.append(Assign(
-                    target,
-                    None,
-                    ListRef(
-                        Var(t, None),
-                        Var(idx, None) if i == 0 else Add(Var(idx, None), Integer(i, None), None),
+                if i == 0:
+                    # first iteration uses (target, body) as is
+                    body_stmts.extend(body.stmts)
+                    assign_stmts.append(Assign(
+                        stmt.target, None,
+                        ListRef(Var(t, None), Var(idx, None), None),
                         None
-                    ),
-                    None
-                ))
+                    ))
+                else:
+                    target, subst = self._refresh(stmt.target)
+                    renamed_body = RenameTarget.apply_block(body, subst)
+                    body_stmts.extend(renamed_body.stmts)
+                    assign_stmts.append(Assign(
+                        target,
+                        None,
+                        ListRef(
+                            Var(t, None),
+                            Add(Var(idx, None), Integer(i, None), None),
+                            None
+                        ),
+                        None
+                    ))
 
             unpack_stmt = ContextStmt(
                 UnderscoreId(),
@@ -168,15 +186,8 @@ class _ForUnroll(DefaultTransformVisitor):
     def _visit_block(self, block: StmtBlock, ctx: _Ctx | None):
         block_ctx = _Ctx.default()
         for stmt in block.stmts:
-            if isinstance(stmt, ForStmt):
-                stmt, _ = self._visit_for(stmt, block_ctx)
-                if isinstance(stmt, PassStmt):
-                    continue
-                block_ctx.stmts.append(stmt)
-            else:
-                stmt, _ = self._visit_statement(stmt, block_ctx)
-                block_ctx.stmts.append(stmt)
-
+            stmt, _ = self._visit_statement(stmt, block_ctx)
+            block_ctx.stmts.append(stmt)
         b = StmtBlock(block_ctx.stmts)
         return b, None
 
@@ -193,9 +204,12 @@ class ForUnroll:
     def apply(
         func: FuncDef,
         where: int | None = None,
-        times: int = 1,
+        times: int = 2,
         strategy: ForUnrollStrategy = ForUnrollStrategy.STRICT,
-        reaching_defs: ReachingDefsAnalysis | None = None
+        reaching_defs: ReachingDefsAnalysis | None = None,
+        temp_id: NamedId | None = None,
+        len_id: NamedId | None = None,
+        idx_id: NamedId | None = None
     ):
         """
         Apply the transformation.
@@ -217,8 +231,14 @@ class ForUnroll:
 
         if reaching_defs is None:
             reaching_defs = ReachingDefs.analyze(func)
+        if temp_id is None:
+            temp_id = NamedId('t')
+        if len_id is None:
+            len_id = NamedId('n')
+        if idx_id is None:
+            idx_id = NamedId('i')
 
-        unroller = _ForUnroll(func, where, times, strategy, reaching_defs)
+        unroller = _ForUnroll(func, where, times, strategy, reaching_defs, temp_id, len_id, idx_id)
         func = unroller.apply()
         SyntaxCheck.check(func, ignore_unknown=True)
         return func
