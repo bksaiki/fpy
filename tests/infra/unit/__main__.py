@@ -11,6 +11,7 @@ from .fpc import test_compile_fpc
 from .reaching_defs import test_reaching_defs
 from .purity import test_purity
 from .tcheck import test_tcheck
+from .while_unroll import test_while_unroll
 
 def _run_tests():
     # formatting
@@ -29,6 +30,7 @@ def _run_tests():
     test_copy_prop()
     test_const_fold()
     test_dead_code()
+    test_while_unroll()
     # compilation
     test_compile_fpc()
 
