@@ -8,7 +8,7 @@ from .const_prop import ConstPropagate
 from .dead_code import DeadCodeEliminate
 from .for_bundling import ForBundling
 from .for_unpack import ForUnpack
-from .for_unroll import ForUnroll
+from .for_unroll import ForUnroll, ForUnrollStrategy
 from .func_inline import FuncInline
 from .func_update import FuncUpdate
 from .if_bundling import IfBundling

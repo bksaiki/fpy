@@ -24,7 +24,7 @@ class TestForUnroll(unittest.TestCase):
                 t -= 1
             return x
 
-        h = fp.transform.WhileUnroll.apply(test.ast, times=1)
+        h = fp.transform.WhileUnroll.apply(test.ast, times=0)
         h.name = test_expect.name
         self.assertTrue(
             h.is_equiv(test_expect.ast),
@@ -51,7 +51,7 @@ class TestForUnroll(unittest.TestCase):
                     t -= 1
             return x
 
-        h = fp.transform.WhileUnroll.apply(test.ast, times=2)
+        h = fp.transform.WhileUnroll.apply(test.ast, times=1)
         h.name = test_expect.name
         self.assertTrue(
             h.is_equiv(test_expect.ast),
@@ -81,7 +81,7 @@ class TestForUnroll(unittest.TestCase):
                         t -= 1
             return x
 
-        h = fp.transform.WhileUnroll.apply(test.ast, times=3)
+        h = fp.transform.WhileUnroll.apply(test.ast, times=2)
         h.name = test_expect.name
         self.assertTrue(
             h.is_equiv(test_expect.ast),

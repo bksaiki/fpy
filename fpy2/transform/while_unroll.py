@@ -39,11 +39,12 @@ class _WhileUnroll(DefaultTransformVisitor):
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         if self.where is None or self.index == self.where:
             self.index += 1
-            # unroll n times
+            # original loop
             cond = self._visit_expr(stmt.cond, ctx)
             body, _ = self._visit_block(stmt.body, ctx)
             ret_stmt: Stmt = WhileStmt(cond, body, stmt.loc)
-            for _ in range(1, self.times):
+            # unroll n times
+            for _ in range(self.times):
                 cond = self._visit_expr(stmt.cond, ctx)
                 body, _ = self._visit_block(stmt.body, ctx)
                 block = StmtBlock(body.stmts + [ret_stmt])
@@ -71,7 +72,7 @@ class WhileUnroll:
     """
 
     @staticmethod
-    def apply(func: FuncDef, where: int | None = None, times: int = 2):
+    def apply(func: FuncDef, where: int | None = None, times: int = 1):
         """
         Apply the transformation.
 
@@ -87,8 +88,8 @@ class WhileUnroll:
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
         if not isinstance(times, int):
             raise TypeError(f"Expected an \'int\' for times, got {times}")
-        if times < 1:
-            raise ValueError(f"Expected a positive integer for times, got {times}")
+        if times < 0:
+            raise ValueError(f"Expected a non-negative integer for times, got {times}")
 
         unroller = _WhileUnroll(func, where, times)
         func = unroller.apply()

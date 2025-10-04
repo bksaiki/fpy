@@ -17,14 +17,14 @@ _modules = [
 def _test_unit():
     for test in tests + examples:
         print('while_unroll', test.name)
+        print('unroll (0x)')
+        fn = fp.transform.WhileUnroll.apply(test.ast, times=0)
+        print(fn.format())
         print('unroll (1x)')
         fn = fp.transform.WhileUnroll.apply(test.ast, times=1)
         print(fn.format())
         print('unroll (2x)')
         fn = fp.transform.WhileUnroll.apply(test.ast, times=2)
-        print(fn.format())
-        print('unroll (3x)')
-        fn = fp.transform.WhileUnroll.apply(test.ast, times=3)
         print(fn.format())
 
 def _test_library():
@@ -33,13 +33,13 @@ def _test_library():
             if isinstance(obj, fp.Function):
                 print('while_unroll', obj.name)
                 print('unroll (1x)')
-                fn = fp.transform.WhileUnroll.apply(obj.ast, times=1)
+                fn = fp.transform.WhileUnroll.apply(obj.ast, times=0)
                 print(fn.format())
                 print('unroll (2x)')
-                fn = fp.transform.WhileUnroll.apply(obj.ast, times=2)
+                fn = fp.transform.WhileUnroll.apply(obj.ast, times=1)
                 print(fn.format())
                 print('unroll (3x)')
-                fn = fp.transform.WhileUnroll.apply(obj.ast, times=3)
+                fn = fp.transform.WhileUnroll.apply(obj.ast, times=2)
                 print(fn.format())
 
 def test_while_unroll():

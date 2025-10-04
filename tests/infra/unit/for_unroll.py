@@ -18,13 +18,13 @@ def _test_unit():
     for test in tests + examples:
         print('for_unroll', test.name)
         print('unroll (1x)')
-        fn = fp.transform.ForUnroll.apply(test.ast, times=1)
+        fn = fp.transform.ForUnroll.apply(test.ast, times=0)
         print(fn.format())
         print('unroll (2x)')
-        fn = fp.transform.ForUnroll.apply(test.ast, times=2)
+        fn = fp.transform.ForUnroll.apply(test.ast, times=1)
         print(fn.format())
         print('unroll (4x)')
-        fn = fp.transform.ForUnroll.apply(test.ast, times=4)
+        fn = fp.transform.ForUnroll.apply(test.ast, times=3)
         print(fn.format())
 
 def _test_library():
@@ -33,13 +33,13 @@ def _test_library():
             if isinstance(obj, fp.Function):
                 print('for_unroll', obj.name)
                 print('unroll (1x)')
-                fn = fp.transform.ForUnroll.apply(obj.ast, times=1)
+                fn = fp.transform.ForUnroll.apply(obj.ast, times=0)
                 print(fn.format())
                 print('unroll (2x)')
-                fn = fp.transform.ForUnroll.apply(obj.ast, times=2)
+                fn = fp.transform.ForUnroll.apply(obj.ast, times=1)
                 print(fn.format())
                 print('unroll (4x)')
-                fn = fp.transform.ForUnroll.apply(obj.ast, times=4)
+                fn = fp.transform.ForUnroll.apply(obj.ast, times=3)
                 print(fn.format())
 
 

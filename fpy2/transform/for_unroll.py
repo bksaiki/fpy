@@ -103,7 +103,7 @@ class _ForUnroll(DefaultTransformVisitor):
                 raise RuntimeError(f'Unexpected target {target}')
 
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> tuple[Stmt, None]:
-        if (self.where is None or self.index == self.where) and self.times > 1:
+        if (self.where is None or self.index == self.where) and self.times > 0:
             self.index += 1
             iterable = self._visit_expr(stmt.iterable, ctx)
             body, _ = self._visit_block(stmt.body, ctx)
@@ -138,31 +138,29 @@ class _ForUnroll(DefaultTransformVisitor):
                 case _:
                     raise RuntimeError(f'unknown strategy `{self.strategy}`')
 
-            assign_stmts: list[Stmt] = []
-            body_stmts: list[Stmt] = []
+            # original iteration uses (target, body) as is
+            body_stmts: list[Stmt] = list(body.stmts)
+            assign_stmts: list[Stmt] = [Assign(
+                stmt.target, None,
+                ListRef(Var(t, None), Var(idx, None), None),
+                None
+            )]
+
             for i in range(self.times):
-                if i == 0:
-                    # first iteration uses (target, body) as is
-                    body_stmts.extend(body.stmts)
-                    assign_stmts.append(Assign(
-                        stmt.target, None,
-                        ListRef(Var(t, None), Var(idx, None), None),
+                # unrolled iteration uses (target, body) with target renamed
+                target, subst = self._refresh(stmt.target)
+                renamed_body = RenameTarget.apply_block(body, subst)
+                body_stmts.extend(renamed_body.stmts)
+                assign_stmts.append(Assign(
+                    target,
+                    None,
+                    ListRef(
+                        Var(t, None),
+                        Add(Var(idx, None), Integer(i, None), None),
                         None
-                    ))
-                else:
-                    target, subst = self._refresh(stmt.target)
-                    renamed_body = RenameTarget.apply_block(body, subst)
-                    body_stmts.extend(renamed_body.stmts)
-                    assign_stmts.append(Assign(
-                        target,
-                        None,
-                        ListRef(
-                            Var(t, None),
-                            Add(Var(idx, None), Integer(i, None), None),
-                            None
-                        ),
-                        None
-                    ))
+                    ),
+                    None
+                ))
 
             unpack_stmt = ContextStmt(
                 UnderscoreId(),
@@ -204,7 +202,7 @@ class ForUnroll:
     def apply(
         func: FuncDef,
         where: int | None = None,
-        times: int = 2,
+        times: int = 1,
         strategy: ForUnrollStrategy = ForUnrollStrategy.STRICT,
         reaching_defs: ReachingDefsAnalysis | None = None,
         temp_id: NamedId | None = None,
@@ -226,8 +224,8 @@ class ForUnroll:
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
         if not isinstance(times, int):
             raise TypeError(f"Expected an \'int\' for times, got {times}")
-        if times < 1:
-            raise ValueError(f"Expected a positive integer for times, got {times}")
+        if times < 0:
+            raise ValueError(f"Expected a non-negative integer for times, got {times}")
 
         if reaching_defs is None:
             reaching_defs = ReachingDefs.analyze(func)
