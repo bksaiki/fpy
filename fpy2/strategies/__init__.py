@@ -11,7 +11,6 @@ __all__ = [
     'unroll_while'
 ]
 
-
 def unroll_while(func: Function, where: int | None = None, times: int = 1) -> Function:
     """
     Unroll `while` loops in the function.

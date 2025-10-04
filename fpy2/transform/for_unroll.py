@@ -156,7 +156,7 @@ class _ForUnroll(DefaultTransformVisitor):
                     None,
                     ListRef(
                         Var(t, None),
-                        Add(Var(idx, None), Integer(i, None), None),
+                        Add(Var(idx, None), Integer(i + 1, None), None),
                         None
                     ),
                     None
