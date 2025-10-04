@@ -16,36 +16,37 @@ _modules = [
 
 def _test_unit():
     for test in tests + examples:
-        print('while_unroll', test.name)
-        print('unroll (0x)')
-        fn = fp.transform.WhileUnroll.apply(test.ast, times=0)
-        print(fn.format())
+        print('for_unroll', test.name)
         print('unroll (1x)')
-        fn = fp.transform.WhileUnroll.apply(test.ast, times=1)
+        fn = fp.transform.ForUnroll.apply(test.ast, times=1)
         print(fn.format())
         print('unroll (2x)')
-        fn = fp.transform.WhileUnroll.apply(test.ast, times=2)
+        fn = fp.transform.ForUnroll.apply(test.ast, times=2)
+        print(fn.format())
+        print('unroll (4x)')
+        fn = fp.transform.ForUnroll.apply(test.ast, times=4)
         print(fn.format())
 
 def _test_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
-                print('while_unroll', obj.name)
-                print('unroll (0x)')
-                fn = fp.transform.WhileUnroll.apply(obj.ast, times=0)
-                print(fn.format())
+                print('for_unroll', obj.name)
                 print('unroll (1x)')
-                fn = fp.transform.WhileUnroll.apply(obj.ast, times=1)
+                fn = fp.transform.ForUnroll.apply(obj.ast, times=1)
                 print(fn.format())
                 print('unroll (2x)')
-                fn = fp.transform.WhileUnroll.apply(obj.ast, times=2)
+                fn = fp.transform.ForUnroll.apply(obj.ast, times=2)
+                print(fn.format())
+                print('unroll (4x)')
+                fn = fp.transform.ForUnroll.apply(obj.ast, times=4)
                 print(fn.format())
 
-def test_while_unroll():
+
+def test_for_unroll():
     _test_unit()
     _test_library()
 
 if __name__ == '__main__':
-    test_while_unroll()
+    test_for_unroll()
 

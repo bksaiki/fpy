@@ -65,7 +65,10 @@ class _WhileUnroll(DefaultTransformVisitor):
                 stmt, _ = self._visit_while(stmt, ctx)
                 if isinstance(stmt, PassStmt):
                     continue
-            new_stmts.append(stmt)
+                new_stmts.append(stmt)
+            else:
+                stmt, _ = self._visit_statement(stmt, ctx)
+                new_stmts.append(stmt)
         return StmtBlock(new_stmts), None
 
     def apply(self):
