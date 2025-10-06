@@ -21,6 +21,7 @@ __all__ = [
 def simplify(func: Function) -> Function:
     """
     Applies simplifying transformations to the function:
+
     - constant folding
     - constant propagation
     - copy propagation
@@ -28,11 +29,12 @@ def simplify(func: Function) -> Function:
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
+    ast = func.ast
 
     # continually simplify until no more can be done
     eliminated = True
     while eliminated:
-        ast = ConstFold.apply(func.ast)
+        ast = ConstFold.apply(ast)
         ast = ConstPropagate.apply(ast)
         ast = CopyPropagate.apply(ast)
         ast, eliminated = DeadCodeEliminate.apply_with_status(ast)

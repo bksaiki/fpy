@@ -25,6 +25,7 @@ Important links:
    install
    lang
    numbers
+   strategies
    rewrite
    backend
    example
