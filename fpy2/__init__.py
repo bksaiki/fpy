@@ -42,6 +42,7 @@ from .backend import (
 from . import ast
 from . import analysis
 from . import transform
+from . import strategies
 from . import utils
 
 ###########################################################
