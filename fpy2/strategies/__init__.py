@@ -4,12 +4,42 @@ Scheduling language constructs for FPy programs.
 
 from ..ast import NamedId
 from ..function import Function
-from ..transform import ForUnroll, ForUnrollStrategy, WhileUnroll
+from ..transform import (
+    ConstFold,
+    CopyPropagate, ConstPropagate,
+    DeadCodeEliminate,
+    ForUnroll, ForUnrollStrategy,
+    WhileUnroll
+)
 
 __all__ = [
     'unroll_for',
     'unroll_while'
 ]
+
+
+def simplify(func: Function) -> Function:
+    """
+    Applies simplifying transformations to the function:
+
+    - constant folding
+    - constant propagation
+    - copy propagation
+    - dead code elimination
+    """
+    if not isinstance(func, Function):
+        raise TypeError(f"Expected a \'Function\', got {func}")
+    ast = func.ast
+
+    # continually simplify until no more can be done
+    eliminated = True
+    while eliminated:
+        ast = ConstFold.apply(ast)
+        ast = ConstPropagate.apply(ast)
+        ast = CopyPropagate.apply(ast)
+        ast, eliminated = DeadCodeEliminate.apply_with_status(ast)
+
+    return func.with_ast(ast)
 
 def unroll_while(func: Function, where: int | None = None, times: int = 1) -> Function:
     """
