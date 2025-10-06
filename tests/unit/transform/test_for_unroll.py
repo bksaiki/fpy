@@ -92,7 +92,7 @@ class TestForUnroll(unittest.TestCase):
                 x += i5
             return x
 
-        h = fp.transform.ForUnroll.apply(test.ast, times=2)
+        h = fp.transform.ForUnroll.apply(test.ast, times=3)
         h.name = test_expect.name
 
         h = fp.transform.ConstFold.apply(h, enable_op=False)

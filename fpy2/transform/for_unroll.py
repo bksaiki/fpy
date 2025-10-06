@@ -124,7 +124,7 @@ class _ForUnroll(DefaultTransformVisitor):
                                 Compare(
                                     [CompareOp.EQ], 
                                     [
-                                        Fmod(Var(NamedId('fmod'), None), Var(n, None), Integer(self.times, None), None),
+                                        Fmod(Var(NamedId('fmod'), None), Var(n, None), Integer(self.times + 1, None), None),
                                         Integer(0, None)
                                     ],
                                     None
@@ -171,7 +171,7 @@ class _ForUnroll(DefaultTransformVisitor):
 
             stmt = ForStmt(
                 idx,
-                Range3(Var(NamedId('range'), None), Integer(0, None), Var(n, None), Integer(self.times, None), None),
+                Range3(Var(NamedId('range'), None), Integer(0, None), Var(n, None), Integer(self.times + 1, None), None),
                 StmtBlock([unpack_stmt] + body_stmts),
                 stmt.loc
             )
