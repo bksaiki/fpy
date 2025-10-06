@@ -163,6 +163,10 @@ class _DeadCodeEliminate:
         self.def_use = def_use
 
     def apply(self):
+        # elimination status
+        eliminated_any = False
+
+        # continually eliminate dead code until no more can be eliminated
         while True:
             # process def-use analysis for definitions without uses
             # specifically interested in assignments, phi variables, and free variables
@@ -200,8 +204,9 @@ class _DeadCodeEliminate:
 
             # run code eliminator
             self.func, eliminated = _Eliminator(self.func, self.def_use, unused_assign, unused_fv)._apply()
+            eliminated_any |= eliminated
             if not eliminated:
-                return self.func
+                return self.func, eliminated_any
 
             # removed something so try again
             self.def_use = DefineUse.analyze(self.func)
@@ -218,10 +223,15 @@ class DeadCodeEliminate:
 
     @staticmethod
     def apply(func: FuncDef, def_use: DefineUseAnalysis | None = None) -> FuncDef:
+        func, _ = DeadCodeEliminate.apply_with_status(func, def_use)
+        return func
+
+    @staticmethod
+    def apply_with_status(func: FuncDef, def_use: DefineUseAnalysis | None = None) -> tuple[FuncDef, bool]:
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
         if def_use is None:
             def_use = DefineUse.analyze(func)
-        func = _DeadCodeEliminate(func, def_use).apply()
+        func, eliminated = _DeadCodeEliminate(func, def_use).apply()
         SyntaxCheck.check(func)
-        return func
+        return func, eliminated
