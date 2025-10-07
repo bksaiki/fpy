@@ -7,7 +7,8 @@ import fpy2 as fp
 from fpy2.analysis import ContextInfer
 from fpy2.transform import ConstFold
 
-from .unit_tests import tests, examples
+from ..examples import all_tests
+
 
 _modules = [
     fp.libraries.core,
@@ -26,7 +27,7 @@ _unit_ignore = [
 ]
 
 def _test_tcheck_unit():
-    for core in tests + examples:
+    for core in all_tests():
         assert isinstance(core, fp.Function)
         if core.name in _unit_ignore:
             continue

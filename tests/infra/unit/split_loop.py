@@ -4,7 +4,7 @@ Tests for split loop.
 
 import fpy2 as fp
 
-from .unit_tests import tests, examples
+from ..examples import all_tests
 
 _modules = [
     fp.libraries.core,
@@ -15,7 +15,7 @@ _modules = [
 
 
 def _test_unit():
-    for test in tests + examples:
+    for test in all_tests():
         print('split_loop', test.name)
         fn = fp.transform.SplitLoop.apply(test.ast, fp.ast.Integer(4, None))
         print(fn.format())

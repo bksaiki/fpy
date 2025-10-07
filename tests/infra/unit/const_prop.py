@@ -4,7 +4,7 @@ Tests for constant propagation.
 
 import fpy2 as fp
 
-from .defs import tests, examples
+from ..examples import all_tests
 
 _modules = [
     fp.libraries.core,
@@ -15,7 +15,7 @@ _modules = [
 
 
 def _test_unit():
-    for test in tests + examples:
+    for test in all_tests():
         print('const_prop', test.name)
         fn = fp.transform.ConstPropagate.apply(test.ast)
         print(fn.format())

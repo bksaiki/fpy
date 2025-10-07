@@ -4,7 +4,7 @@ Tests for `simplify` strategy.
 
 import fpy2 as fp
 
-from .unit_tests import tests, examples
+from ..examples import all_tests
 
 _modules = [
     fp.libraries.core,
@@ -15,7 +15,7 @@ _modules = [
 
 
 def _test_unit():
-    for test in tests + examples:
+    for test in all_tests():
         print('simplify', test.name)
         test = fp.strategies.simplify(test)
         print(test.format())

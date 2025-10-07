@@ -4,7 +4,7 @@ Tests for define-use analysis
 
 import fpy2 as fp
 
-from .unit_tests import tests, examples
+from ..examples import all_tests
 
 _modules = [
     fp.libraries.core,
@@ -14,7 +14,7 @@ _modules = [
 ]
 
 def _test_unit():
-    for test in tests + examples:
+    for test in all_tests():
         print('define_use', test.name)
         defs = fp.analysis.DefineUse.analyze(test.ast)
         print(defs.format())

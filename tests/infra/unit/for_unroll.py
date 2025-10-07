@@ -4,7 +4,7 @@ Tests for while unrolling.
 
 import fpy2 as fp
 
-from .unit_tests import tests, examples
+from ..examples import all_tests
 
 _modules = [
     fp.libraries.core,
@@ -15,7 +15,7 @@ _modules = [
 
 
 def _test_unit():
-    for test in tests + examples:
+    for test in all_tests():
         print('for_unroll', test.name)
         print('unroll (1x)')
         fn = fp.transform.ForUnroll.apply(test.ast, times=0)

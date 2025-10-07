@@ -1,7 +1,7 @@
 from fpy2 import Function
-from .unit_tests import tests, examples
+from ..examples import all_tests
 
 def test_format():
-    for core in tests + examples:
+    for core in all_tests():
         assert isinstance(core, Function)
         print(core.format())
