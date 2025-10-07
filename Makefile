@@ -46,7 +46,7 @@ tests:
 
 infratest:
 	@echo "Running infrastructure tests..."
-	python3 -m tests.infra.unit
+	python3 -m tests.infra
 	python3 -m tests.infra.fpbench
 
 unittest:

@@ -1,7 +1,10 @@
 from fpy2 import Function
-from ..examples import all_tests
+from .examples import all_tests
 
 def test_format():
     for core in all_tests():
         assert isinstance(core, Function)
         print(core.format())
+
+if __name__ == '__main__':
+    test_format()

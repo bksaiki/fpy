@@ -1,6 +1,6 @@
 import fpy2 as fp
 
-from ..examples import all_tests
+from .examples import all_tests
 
 def _gen_arg(ty: fp.ast.TypeAnn, length=3):
     match ty:
