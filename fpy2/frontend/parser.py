@@ -388,6 +388,10 @@ class Parser:
                 lhs = self._parse_expr(e.left)
                 rhs = self._parse_expr(e.right)
                 return Div(lhs, rhs, loc)
+            case ast.Mod():
+                lhs = self._parse_expr(e.left)
+                rhs = self._parse_expr(e.right)
+                return Fmod(Var(NamedId('fmod'), None), lhs, rhs, loc)
             case ast.Pow():
                 base = self._parse_expr(e.left)
                 exp = self._parse_expr(e.right)
