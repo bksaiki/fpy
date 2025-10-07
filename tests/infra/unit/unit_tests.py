@@ -810,6 +810,76 @@ def keep_p_1(x: fp.Real):
         return fp.round(x)
 
 
+@fp.fpy(meta={'cite': 'chatgpt', 'date': '2024-10-07'})
+def example_list_index1(x: list[fp.Real], n: fp.Real):
+    s: fp.Real = 0
+    i = 0
+    while i < n:
+        s += x[i]
+        i += 1
+    return s
+
+@fp.fpy(meta={'cite': 'chatgpt', 'date': '2024-10-07'})
+def example_list_index2(x: list[fp.Real], n: fp.Real):
+    i = 0
+    while i < n:
+        x[i] = i
+        i += 1
+    return x[0]
+
+@fp.fpy(meta={'cite': 'chatgpt', 'date': '2024-10-07'})
+def example_list_index3(x: list[fp.Real], n: fp.Real):
+    s: fp.Real = 0
+    i = 0
+    while i < n:
+        j = (i * 2) % n
+        s += x[j]
+        i += 1
+    return s
+
+@fp.fpy(meta={'cite': 'chatgpt', 'date': '2024-10-07'})
+def _example_list_index3_index(i, n):
+    return (i * 3) % n
+
+@fp.fpy(meta={'cite': 'chatgpt', 'date': '2024-10-07'})
+def example_list_index4(x: list[fp.Real], n: fp.Real):
+    s = 0
+    i = 0
+    while i < n:
+        s += x[_example_list_index3_index(i, n)]
+        i += 1
+    return s
+
+@fp.fpy(meta={'cite': 'chatgpt', 'date': '2024-10-07'})
+def example_list_index5(x: list[fp.Real], n: fp.Real):
+    s: fp.Real = 0
+    i = 0
+    while i < n:
+        if i % 2 == 0:
+            s += x[i]
+        else:
+            s -= x[i - 1]
+        i += 1
+    return s
+
+@fp.fpy(meta={'cite': 'chatgpt', 'date': '2024-10-07'})
+def example_list_index6(x: list[fp.Real], n: fp.Real):
+    i = 1
+    while i < n:
+        x[i] = x[i - 1] + 1
+        i += 1
+    return x[-1]
+
+@fp.fpy(meta={'cite': 'chatgpt', 'date': '2024-10-07'})
+def example_list_index7(x: list[fp.Real], n: fp.Real):
+    s: fp.Real = 0
+    i: fp.Real = 0
+    while i < n:
+        s += x[i]
+        i += x[i] % 3 + 1
+    return s
+
+
 tests: list[Function] = [
     # Tests
     test_bool1,
@@ -941,5 +1011,12 @@ examples: list[Function] = [
     example_fold_op2,
     example_fold_op3,
     example_fold_op4,
+    example_list_index1,
+    example_list_index2,
+    example_list_index3,
+    example_list_index4,
+    example_list_index5,
+    example_list_index6,
+    example_list_index7,
     keep_p_1
 ]
