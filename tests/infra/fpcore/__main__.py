@@ -1,10 +1,19 @@
 """
-FPBench infastructure tests.
+FPCore infastructure tests.
 
 - Tests conversion of FPCore functions to FPy functions.
 - Tests evaluation of FPy functions from FPCore
 - Checks that FPy and FPCore functions are equivalent.
+
+Only runs if FPBENCH_PATH is set.
 """
+
+import os, sys
+
+# only runs if FPBENCH_PATH is set.
+if not os.getenv("FPBENCH_PATH"):
+    print("FPBENCH_PATH not set, skipping fpbench tests")
+    sys.exit(0)
 
 from .context_infer import test_context_infer
 from .eval import test_eval

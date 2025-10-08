@@ -1,10 +1,10 @@
 """
-Tests for definition analysis
+Tests for dead code elimination.
 """
 
 import fpy2 as fp
 
-from .unit_tests import tests, examples
+from ..examples import all_tests
 
 _modules = [
     fp.libraries.core,
@@ -13,23 +13,24 @@ _modules = [
     fp.libraries.matrix
 ]
 
+
 def _test_unit():
-    for test in tests + examples:
+    for test in all_tests():
         print('dead_code', test.name)
-        defs = fp.analysis.DefAnalysis.analyze(test.ast)
-        print(defs)
+        fn = fp.transform.DeadCodeEliminate.apply(test.ast)
+        print(fn.format())
 
 def _test_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
+                fn = fp.transform.DeadCodeEliminate.apply(obj.ast)
                 print('dead_code', obj.name)
-                defs = fp.analysis.DefAnalysis.analyze(obj.ast)
-                print(defs)
+                print(fn.format())
 
-def test_defs():
+def test_dead_code():
     _test_unit()
     _test_library()
 
 if __name__ == '__main__':
-    test_defs()
+    test_dead_code()

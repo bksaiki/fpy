@@ -4,7 +4,8 @@ Tests for function purity analysis.
 
 import fpy2 as fp
 
-from .unit_tests import tests, examples
+from ..examples import all_tests
+
 
 _modules = [
     fp.libraries.core,
@@ -33,7 +34,7 @@ def _test_example():
 
 
 def _test_unit():
-    for core in tests + examples:
+    for core in all_tests():
         is_pure = fp.analysis.Purity.analyze(core.ast)
         print('purity', core.name, is_pure)
 

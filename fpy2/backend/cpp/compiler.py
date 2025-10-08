@@ -622,7 +622,8 @@ class _CppBackendInstance(Visitor):
                     return op.format(lhs, rhs)
 
             # TODO: list options vs. actual signature
-            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+            ty_str = f'{lhs_ty.format()} -> {rhs_ty.format()} -> {e_ty.format()}'
+            raise CppCompileError(self.func, f'no matching signature for `{e.format()}` got `{ty_str}`')
 
         # fallback
         match e:

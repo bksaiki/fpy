@@ -1,10 +1,10 @@
 """
-Tests for split loop.
+Tests for constant folding.
 """
 
 import fpy2 as fp
 
-from .unit_tests import tests, examples
+from ..examples import all_tests
 
 _modules = [
     fp.libraries.core,
@@ -15,23 +15,22 @@ _modules = [
 
 
 def _test_unit():
-    for test in tests + examples:
-        print('split_loop', test.name)
-        fn = fp.transform.SplitLoop.apply(test.ast, fp.ast.Integer(4, None))
+    for test in all_tests():
+        print('const_fold', test.name)
+        fn = fp.transform.ConstFold.apply(test.ast)
         print(fn.format())
 
 def _test_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
             if isinstance(obj, fp.Function):
-                print('split_loop', obj.name)
-                fn = fp.transform.SplitLoop.apply(obj.ast, fp.ast.Integer(4, None))
+                fn = fp.transform.ConstFold.apply(obj.ast)
+                print('const_fold', obj.name)
                 print(fn.format())
 
-def test_split_loop():
+def test_const_fold():
     _test_unit()
     _test_library()
 
 if __name__ == '__main__':
-    test_split_loop()
-
+    test_const_fold()

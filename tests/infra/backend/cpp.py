@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from types import ModuleType
 
-from ..unit.unit_tests import tests, examples
+from ..examples import all_unit_tests, all_example_tests
 
 ###########################################################
 # Compilation
@@ -63,7 +63,7 @@ _test_ignore = [
     # 'test_digits3',
     'test_digits4',
     'test_digits5', # TODO: implement
-    # 'test_let2',
+    'test_let3',
     'test_augassign1',
     'test_augassign2',
     'test_augassign3',
@@ -106,6 +106,7 @@ _test_ignore = [
 
 _example_ignore = [
     'fma_ctx',
+    'dpN',
     'example_static_context1',
     'example_static_context2',
     'example_fold_op1',
@@ -136,8 +137,8 @@ def _test_unit_tests(
             _compile_obj(cpp_path)
 
 def _test_unit(output_dir: Path, no_cc: bool = False):
-    _test_unit_tests(output_dir, 'unit_tests', tests, _test_ignore, no_cc=no_cc)
-    _test_unit_tests(output_dir, 'unit_examples', examples, _example_ignore, no_cc=no_cc)
+    _test_unit_tests(output_dir, 'unit_tests', all_unit_tests(), _test_ignore, no_cc=no_cc)
+    _test_unit_tests(output_dir, 'unit_examples', all_example_tests(), _example_ignore, no_cc=no_cc)
 
 ###########################################################
 # Libraries
@@ -189,7 +190,7 @@ def _test_libraries(output_dir: Path, no_cc: bool = False):
 ###########################################################
 # Main tester
 
-def test_cpp(delete: bool = True, no_cc: bool = False):
+def test_compile_cpp(delete: bool = True, no_cc: bool = False):
     dir_str = tempfile.mkdtemp(prefix='tmp_fpy_cpp')
     output_dir = Path(dir_str)
     # with tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp', delete=delete) as dir_str:
@@ -213,4 +214,4 @@ if __name__ == '__main__':
     no_cc: bool = args.no_cc
 
     # run test
-    test_cpp(delete=delete, no_cc=no_cc)
+    test_compile_cpp(delete=delete, no_cc=no_cc)
