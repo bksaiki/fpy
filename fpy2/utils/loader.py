@@ -4,7 +4,6 @@ Modified import loader that caches original source code of modules as they are l
 FPy reparses function source code to extract the original AST.
 """
 
-import inspect
 import os
 import sys
 import types
@@ -60,24 +59,25 @@ def install_caching_loader():
     """Install the caching loader into sys.meta_path."""
     sys.meta_path.insert(0, _PATH_FINDER)
 
-def get_module_source(mod: types.ModuleType) -> list[str]:
+def get_module_source(mod: types.ModuleType) -> list[str] | None:
     """
     Gets the original source code of a module, if available.
 
-    This returns the exact source code as read from the file, before any
-    transformations by import hooks. If the source is not available, returns `None`.
+    This returns the exact source code as read from the file,
+    before any transformations by import hooks.
+    If the source is not available, returns `None`.
     """
     path = getattr(mod, '__file__', None)
     if path is None:
-        raise ValueError(f"cannot determine source file for module: {mod}")
+        return None
 
     # look up the cached source by the source path
-    lines = _SOURCE.get(path, None)
+    lines = _SOURCE.get(path)
     if lines is None:
         # not in cache yet
         if not os.path.exists(path):
             # can't even find source file
-            raise ValueError(f"no source found for file: {path}")
+            return None
 
         # try to read the source file directly
         with open(path, 'r', encoding='utf-8') as file:
