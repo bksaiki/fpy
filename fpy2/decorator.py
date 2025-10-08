@@ -16,6 +16,7 @@ from .function import Function
 from .number import Context
 from .primitive import Primitive
 from .rewrite import ExprPattern, StmtPattern
+from .utils import get_original_source
 
 
 P = ParamSpec('P')
@@ -172,6 +173,13 @@ def _apply_fpy_decorator(
     meta: dict[str, Any] | None = None,
     decorator: Callable = fpy,
 ):
+    # fetch the module where the function is defined
+    mod = inspect.getmodule(func)
+    if mod is None:
+        raise ValueError(f"cannot determine module for function: {func}")
+    txt = get_original_source(mod)
+    print(func.__name__, mod, txt is not None)
+
     # read the original source the function
     src_name = inspect.getabsfile(func)
     _, start_line = inspect.getsourcelines(func)

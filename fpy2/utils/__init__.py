@@ -27,8 +27,12 @@ from .gensym import Gensym
 from .identifier import Id, NamedId, UnderscoreId, SourceId
 from .inspect import has_keyword
 from .iterator import sliding_window
+from .loader import get_original_source, install_caching_loader
 from .location import Location
 from .ordering import Ordering
 from .string import pythonize_id
 from .uninit import UNINIT
 from .unionfind import Unionfind
+
+# install custom loader
+install_caching_loader()

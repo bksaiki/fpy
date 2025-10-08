@@ -22,6 +22,13 @@ from .libraries.base import *
 # standard library
 from . import libraries
 
+# submodules
+from . import ast
+from . import analysis
+from . import transform
+from . import strategies
+from . import utils
+
 # runtime support
 from .fpc_context import FPCoreContext, NoSuchContextError
 from .interpret import (
@@ -37,13 +44,6 @@ from .backend import (
     CppBackend,
     FPCoreCompiler
 )
-
-# submodules
-from . import ast
-from . import analysis
-from . import transform
-from . import strategies
-from . import utils
 
 ###########################################################
 # typing hints
