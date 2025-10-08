@@ -108,49 +108,8 @@ _nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
 
 class FPyParserError(Exception):
     """Parser error for FPy"""
-    loc: Location
-    why: str
-    where: ast.AST
-    ctx: ast.AST | None
+    pass
 
-    def __init__(
-        self,
-        loc: Location,
-        why: str,
-        where: ast.AST,
-        ctx: ast.AST | None = None
-    ):
-        msg_lines = [why]
-        match where:
-            case ast.expr() | ast.stmt():
-                start_line = loc.start_line
-                start_col = loc.start_column
-                msg_lines.append(f' at: {loc.source}:{start_line}:{start_col}')
-            case _:
-                pass
-
-        msg_lines.append(f' where: {ast.unparse(where)}')
-        if ctx is not None:
-            msg_lines.append(f' in: {ast.unparse(ctx)}')
-
-        super().__init__('\n'.join(msg_lines))
-        self.loc = loc
-        self.why = why
-        self.where = where
-        self.ctx = ctx
-
-
-def _ipow(expr: Expr, n: int, loc: Location):
-    assert n >= 0, "must be a non-negative integer"
-    if n == 0:
-        return Integer(1, loc)
-    elif n == 1:
-        return expr
-    else:
-        e = Mul(expr, expr, loc)
-        for _ in range(2, n):
-            e = Mul(e, expr, loc)
-        return e
 
 class Parser:
     """
@@ -160,35 +119,62 @@ class Parser:
     """
 
     name: str
-    source: str
     env: ForeignEnv
     lines: list[str]
     start_line: int
+    col_offset: int
 
     def __init__(
         self,
         name: str, 
-        source: str,
+        lines: list[str],
         env: ForeignEnv,
-        start_line: int = 1
+        start_line: int = 1,
+        col_offset: int = 0
     ):
         self.name = name
-        self.source = source
         self.env = env
-        self.lines = source.splitlines()
+        self.lines = lines
         self.start_line = start_line
+        self.col_offset = col_offset
 
     def _parse_location(self, e: ast.expr | ast.stmt | ast.arg) -> Location:
-        """Extracts the parse location of a  Python ST node."""
+        """Extracts the parse location of a Python AST node."""
         assert e.end_lineno is not None, "missing end line number"
         assert e.end_col_offset is not None, "missing end column offset"
         return Location(
             self.name,
-            e.lineno + self.start_line - 1,
-            e.col_offset,
-            e.end_lineno + self.start_line - 1,
-            e.end_col_offset
+            e.lineno + self.start_line,
+            e.col_offset + self.col_offset,
+            e.end_lineno + self.start_line,
+            e.end_col_offset + self.col_offset
         )
+
+    def _parse_error(self, why: str, where: ast.AST, ctx: ast.AST | None = None):
+        msg_lines = [why]
+        if isinstance(where, ast.expr | ast.stmt | ast.arg):
+            loc = self._parse_location(where)
+            msg_lines.append(f' at: {self.name}:{loc.start_line}:{loc.start_column}')
+        else:
+            msg_lines.append(f' at: {self.name}:?:?')
+
+        msg_lines.append(f' where: {ast.unparse(where)}')
+        if ctx is not None:
+            msg_lines.append(f' in: {ast.unparse(ctx)}')
+
+        return FPyParserError('\n'.join(msg_lines))
+
+    def _ipow(self, expr: Expr, n: int, loc: Location):
+        assert n >= 0, "must be a non-negative integer"
+        if n == 0:
+            return Integer(1, loc)
+        elif n == 1:
+            return expr
+        else:
+            e = Mul(expr, expr, loc)
+            for _ in range(2, n):
+                e = Mul(e, expr, loc)
+            return e
 
     def _convert_type(self, ty, loc: Location):
         if ty == Real:
@@ -215,7 +201,6 @@ class Parser:
             return AnyTypeAnn(loc)
 
     def _eval_type_annotation(self, ann: ast.expr):
-        loc = self._parse_location(ann)
         match ann:
             case ast.Attribute():
                 attr = self._parse_attribute(ann)
@@ -223,9 +208,9 @@ class Parser:
             case ast.Name():
                 ident = self._parse_id(ann)
                 if isinstance(ident, UnderscoreId):
-                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', ann)
+                    raise self._parse_error('FPy function call must begin with a named identifier', ann)
                 if ident.base not in self.env:
-                    raise FPyParserError(loc, f'name \'{ident.base}\' not defined:', ann)
+                    raise self._parse_error(f'name \'{ident.base}\' not defined:', ann)
                 return self.env[ident.base]
             case ast.Subscript():
                 ctor = self._eval_type_annotation(ann.value)
@@ -281,42 +266,42 @@ class Parser:
             case None:
                 return ForeignVal(e.value, loc)
             case _:
-                raise FPyParserError(loc, 'Unsupported constant', e)
+                raise self._parse_error('Unsupported constant', e)
 
     def _parse_hexfloat(self, e: ast.Call, func: FuncSymbol):
         loc = self._parse_location(e)
         if len(e.args) != 1:
-            raise FPyParserError(loc, 'FPy `hexfloat` expects one argument', e)
+            raise self._parse_error('FPy `hexfloat` expects one argument', e)
         arg = self._parse_expr(e.args[0])
         if not isinstance(arg, ForeignVal):
-            raise FPyParserError(loc, 'FPy `hexfloat` expects a string', e)
+            raise self._parse_error('FPy `hexfloat` expects a string', e)
         return Hexnum(func, arg.val, loc)
 
     def _parse_rational(self, e: ast.Call, func: FuncSymbol):
         loc = self._parse_location(e)
         if len(e.args) != 2:
-            raise FPyParserError(loc, 'FPy `rational` expects two arguments', e)
+            raise self._parse_error('FPy `rational` expects two arguments', e)
         p = self._parse_expr(e.args[0])
         if not isinstance(p, Integer):
-            raise FPyParserError(loc, 'FPy `rational` expects an integer as first argument', e)
+            raise self._parse_error('FPy `rational` expects an integer as first argument', e)
         q = self._parse_expr(e.args[1])
         if not isinstance(q, Integer):
-            raise FPyParserError(loc, 'FPy `rational` expects an integer as second argument', e)
+            raise self._parse_error('FPy `rational` expects an integer as second argument', e)
         return Rational(func, p.val, q.val, loc)
 
     def _parse_digits(self, e: ast.Call, func: FuncSymbol):
         loc = self._parse_location(e)
         if len(e.args) != 3:
-            raise FPyParserError(loc, 'FPy `digits` expects three arguments', e)
+            raise self._parse_error('FPy `digits` expects three arguments', e)
         m_e = self._parse_expr(e.args[0])
         if not isinstance(m_e, Integer):
-            raise FPyParserError(loc, 'FPy `digits` expects an integer as first argument', e)
+            raise self._parse_error('FPy `digits` expects an integer as first argument', e)
         e_e = self._parse_expr(e.args[1])
         if not isinstance(e_e, Integer):
-            raise FPyParserError(loc, 'FPy `digits` expects an integer as second argument', e)
+            raise self._parse_error('FPy `digits` expects an integer as second argument', e)
         b_e = self._parse_expr(e.args[2])
         if not isinstance(b_e, Integer):
-            raise FPyParserError(loc, 'FPy `digits` expects an integer as third argument', e)
+            raise self._parse_error('FPy `digits` expects an integer as third argument', e)
         return Digits(func, m_e.val, e_e.val, b_e.val, loc)
 
     def _parse_range(self, e: ast.Call, func: FuncSymbol):
@@ -338,7 +323,7 @@ class Parser:
                 step = self._parse_expr(e.args[2])
                 return Range3(func, start, stop, step, loc)
             case _:
-                raise FPyParserError(loc, 'FPy `range` expects 1, 2, or 3 arguments', e)
+                raise self._parse_error('FPy `range` expects 1, 2, or 3 arguments', e)
 
     def _parse_boolop(self, e: ast.BoolOp):
         loc = self._parse_location(e)
@@ -350,7 +335,7 @@ class Parser:
                 args = [self._parse_expr(e) for e in e.values]
                 return Or(args, loc)
             case _:
-                raise FPyParserError(loc, 'Not a valid FPy operator', e.op, e)
+                raise self._parse_error('Not a valid FPy operator', e.op, e)
 
     def _parse_unaryop(self, e: ast.UnaryOp):
         loc = self._parse_location(e)
@@ -367,7 +352,7 @@ class Parser:
                 arg = self._parse_expr(e.operand)
                 return Not(arg, loc)
             case _:
-                raise FPyParserError(loc, 'Not a valid FPy operator', e.op, e)
+                raise self._parse_error('Not a valid FPy operator', e.op, e)
 
     def _parse_binop(self, e: ast.BinOp):
         loc = self._parse_location(e)
@@ -392,13 +377,12 @@ class Parser:
                 base = self._parse_expr(e.left)
                 exp = self._parse_expr(e.right)
                 if not isinstance(exp, Integer) or exp.val < 0:
-                    raise FPyParserError(loc, 'FPy only supports `**` for small integer exponent, use `pow()` instead', e.op, e)
-                return _ipow(base, exp.val, loc)
+                    raise self._parse_error('FPy only supports `**` for small integer exponent, use `pow()` instead', e.op, e)
+                return self._ipow(base, exp.val, loc)
             case _:
-                raise FPyParserError(loc, 'Not a valid FPy operator', e.op, e)
+                raise self._parse_error('Not a valid FPy operator', e.op, e)
 
     def _parse_cmpop(self, op: ast.cmpop, e: ast.Compare):
-        loc = self._parse_location(e)
         match op:
             case ast.Lt():
                 return CompareOp.LT
@@ -413,7 +397,7 @@ class Parser:
             case ast.NotEq():
                 return CompareOp.NE
             case _:
-                raise FPyParserError(loc, 'Not a valid FPy comparator', op, e)
+                raise self._parse_error('Not a valid FPy comparator', op, e)
 
     def _parse_compare(self, e: ast.Compare):
         loc = self._parse_location(e)
@@ -423,8 +407,7 @@ class Parser:
 
     def _eval_var(self, v: Var, e: ast.expr):
         if v.name.base not in self.env:
-            loc = self._parse_location(e)
-            raise FPyParserError(loc, f'name \'{v.name}\' not defined:', e)
+            raise self._parse_error(f'name \'{v.name}\' not defined:', e)
         return self.env[v.name.base]
 
     def _eval_attribute(self, a: Attribute, e: ast.expr):
@@ -438,15 +421,13 @@ class Parser:
 
         # lookup the attribute
         if not hasattr(base, a.attr):
-            loc = self._parse_location(e)
-            raise FPyParserError(loc, f'unknown attribute \'{a.attr}\' for {base}', e)
+            raise self._parse_error(f'unknown attribute \'{a.attr}\' for {base}', e)
 
         return getattr(base, a.attr)
 
     def _parse_call(self, e: ast.Call):
         """Parse a Python call function."""
         # parse function expression
-        loc = self._parse_location(e.func)
         match e.func:
             case ast.Attribute():
                 func = self._parse_attribute(e.func)
@@ -455,9 +436,9 @@ class Parser:
                 name = self._parse_id(e.func)
                 func = Var(name, None)
                 if isinstance(func, UnderscoreId):
-                    raise FPyParserError(loc, 'FPy function call must begin with a named identifier', e)
+                    raise self._parse_error('FPy function call must begin with a named identifier', e)
                 if name.base not in self.env:
-                    raise FPyParserError(loc, f'name \'{name.base}\' not defined:', e)
+                    raise self._parse_error(f'name \'{name.base}\' not defined:', e)
                 fn = self.env[name.base]
             case _:
                 raise RuntimeError('unreachable')
@@ -469,24 +450,25 @@ class Parser:
         kwargs: list[tuple[str, Expr]] = []
         for kwarg in e.keywords:
             if kwarg.arg is None:
-                raise FPyParserError(loc, 'FPy does not support **kwargs', e)
+                raise self._parse_error('FPy does not support **kwargs', e)
             kwarg_val = self._parse_expr(kwarg.value)
             kwargs.append((kwarg.arg, kwarg_val))
 
         # lookup builtin symbols
+        loc = self._parse_location(e.func)
         if fn in _nullary_table:
             cls0 = _nullary_table[fn]
             if len(e.args) != 0:
-                raise FPyParserError(loc, f'FPy expects 0 arguments for `{fn}`, got {len(e.args)}', e)
+                raise self._parse_error(f'FPy expects 0 arguments for `{fn}`, got {len(e.args)}', e)
             if kwargs:
-                raise FPyParserError(loc, f'FPy does not support keyword arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             return cls0(func, loc)
         elif fn in _unary_table:
             cls1 = _unary_table[fn]
             if len(args) != 1:
-                raise FPyParserError(loc, f'FPy expects 1 argument for `{fn}`, got {len(e.args)}', e)
+                raise self._parse_error(f'FPy expects 1 argument for `{fn}`, got {len(e.args)}', e)
             if kwargs:
-                raise FPyParserError(loc, f'FPy does not support keyword arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             if issubclass(cls1, NamedUnaryOp):
                 return cls1(func, args[0], loc)
             else:
@@ -494,9 +476,9 @@ class Parser:
         elif fn in _binary_table:
             cls2 = _binary_table[fn]
             if len(args) != 2:
-                raise FPyParserError(loc, f'FPy expects 2 arguments for `{fn}`, got {len(e.args)}', e)
+                raise self._parse_error(f'FPy expects 2 arguments for `{fn}`, got {len(e.args)}', e)
             if kwargs:
-                raise FPyParserError(loc, f'FPy does not support keyword arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             if issubclass(cls2, NamedBinaryOp):
                 return cls2(func, args[0], args[1], loc)
             else:
@@ -504,9 +486,9 @@ class Parser:
         elif fn in _ternary_table:
             cls3 = _ternary_table[fn]
             if len(args) != 3:
-                raise FPyParserError(loc, f'FPy expects 3 arguments for `{fn}`, got {len(e.args)}', e)
+                raise self._parse_error(f'FPy expects 3 arguments for `{fn}`, got {len(e.args)}', e)
             if kwargs:
-                raise FPyParserError(loc, f'FPy does not support keyword arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             if issubclass(cls3, NamedTernaryOp):
                 return cls3(func, args[0], args[1], args[2], loc)
             else:
@@ -514,34 +496,34 @@ class Parser:
         elif fn in _nary_table:
             cls = _nary_table[fn]
             if (cls is Min or cls is Max) and len(args) < 2:
-                raise FPyParserError(loc, f'FPy expects at least 2 arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy expects at least 2 arguments for `{fn}`', e)
             if kwargs:
-                raise FPyParserError(loc, f'FPy does not support keyword arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             if issubclass(cls, NamedNaryOp):
                 return cls(func, args, loc)
             else:
                 return cls(args, loc)
         elif fn == rational:
             if kwargs:
-                raise FPyParserError(loc, f'FPy does not support keyword arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             return self._parse_rational(e, func)
         elif fn == hexfloat:
             if kwargs:
-                raise FPyParserError(loc, f'FPy does not support keyword arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             return self._parse_hexfloat(e, func)
         elif fn == digits:
             if kwargs:
-                raise FPyParserError(loc, f'FPy does not support keyword arguments for `{fn}`', e)
+                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             return self._parse_digits(e, func)
         elif fn == len:
             if len(args) != 1:
-                raise FPyParserError(loc, 'FPy expects 1 argument for `len`', e)
+                raise self._parse_error('FPy expects 1 argument for `len`', e)
             if kwargs:
-                raise FPyParserError(loc, 'FPy does not support keyword arguments for `len`', e)
+                raise self._parse_error('FPy does not support keyword arguments for `len`', e)
             return Size(func, args[0], Integer(0, None), loc)
         elif fn is range:
             if kwargs:
-                raise FPyParserError(loc, 'FPy does not support keyword arguments for `range`', e)
+                raise self._parse_error('FPy does not support keyword arguments for `range`', e)
             return self._parse_range(e, func)
         else:
             return Call(func, fn, args, kwargs, loc)
@@ -559,8 +541,7 @@ class Parser:
             upper = self._parse_expr(e.upper)
 
         if e.step is not None:
-            loc = self._parse_location(e.step)
-            raise FPyParserError(loc, 'FPy does not support slice step', e.step)
+            raise self._parse_error('FPy does not support slice step', e.step)
 
         return lower, upper
 
@@ -605,10 +586,10 @@ class Parser:
 
     def _parse_expr(self, e: ast.expr) -> Expr:
         """Parse a Python expression."""
-        loc = self._parse_location(e)
         match e:
             case ast.Name():
                 ident = self._parse_id(e)
+                loc = self._parse_location(e)
                 return Var(ident, loc)
             case ast.Constant():
                 return self._parse_constant(e)
@@ -625,17 +606,20 @@ class Parser:
             case ast.Attribute():
                 return self._parse_attribute(e)
             case ast.Tuple():
+                loc = self._parse_location(e)
                 return TupleExpr([self._parse_expr(e) for e in e.elts], loc)
             case ast.List():
+                loc = self._parse_location(e)
                 return ListExpr([self._parse_expr(e) for e in e.elts], loc)
             case ast.ListComp():
                 targets: list[Id | TupleBinding] = []
                 iterables: list[Expr] = []
                 for gen in e.generators:
-                    target, iterable = self._parse_comprehension(gen, loc)
+                    target, iterable = self._parse_comprehension(gen)
                     targets.append(target)
                     iterables.append(iterable)
                 elt = self._parse_expr(e.elt)
+                loc = self._parse_location(e)
                 return ListComp(targets, iterables, elt, loc)
             case ast.Subscript():
                 return self._parse_subscript(e)
@@ -643,9 +627,11 @@ class Parser:
                 cond = self._parse_expr(e.test)
                 ift = self._parse_expr(e.body)
                 iff = self._parse_expr(e.orelse)
+                loc = self._parse_location(e)
                 return IfExpr(cond, ift, iff, loc)
             case _:
-                raise FPyParserError(loc, 'expression is unsupported in FPy', e)
+                raise self._parse_error('expression is unsupported in FPy', e)
+                raise RuntimeError('unreachable')
 
     def _parse_tuple_target(self, target: ast.expr, e: ast.AST):
         loc = self._parse_location(target)
@@ -656,19 +642,18 @@ class Parser:
                 elts = [self._parse_tuple_target(elt, e) for elt in target.elts]
                 return TupleBinding(elts, loc)
             case _:
-                raise FPyParserError(loc, 'FPy expects an identifier', target, e)       
+                raise self._parse_error('FPy expects an identifier', target, e)       
 
-    def _parse_comprehension(self, gen: ast.comprehension, loc: Location):
+    def _parse_comprehension(self, gen: ast.comprehension):
         if gen.is_async:
-            raise FPyParserError(loc, 'FPy does not support async comprehensions', gen)
+            raise self._parse_error('FPy does not support async comprehensions', gen)
         if gen.ifs != []:
-            raise FPyParserError(loc, 'FPy does not support if conditions in comprehensions', gen)
+            raise self._parse_error('FPy does not support if conditions in comprehensions', gen)
         target = self._parse_tuple_target(gen.target, gen)
         iterable = self._parse_expr(gen.iter)
         return target, iterable
 
     def _parse_contextdata(self, e: ast.expr):
-        loc = self._parse_location(e)
         match e:
             case ast.Constant():
                 if isinstance(e.value, str):
@@ -680,7 +665,7 @@ class Parser:
             case ast.Name():
                 return self._parse_id(e)
             case _:
-                raise FPyParserError(loc, 'unexpected FPy context data', e)
+                raise self._parse_error('unexpected FPy context data', e)
 
     def _parse_contextname(self, item: ast.withitem):
         var = item.optional_vars
@@ -690,17 +675,16 @@ class Parser:
             case ast.Name():
                 return NamedId(var.id)
             case _:
-                loc = self._parse_location(var)
-                raise FPyParserError(loc, '`Context` can only be optionally bound to an identifier`', var, item)
+                raise self._parse_error('`Context` can only be optionally bound to an identifier`', var, item)
 
     def _parse_augassign(self, stmt: ast.AugAssign):
         loc = self._parse_location(stmt)
         if not isinstance(stmt.target, ast.Name):
-            raise FPyParserError(loc, 'Unsupported target in FPy', stmt)
+            raise self._parse_error('Unsupported target in FPy', stmt)
 
         ident = self._parse_id(stmt.target)
         if not isinstance(ident, NamedId):
-            raise FPyParserError(loc, 'Not a valid FPy identifier', stmt)
+            raise self._parse_error('Not a valid FPy identifier', stmt)
 
         match stmt.op:
             case ast.Add():
@@ -716,7 +700,7 @@ class Parser:
                 value = self._parse_expr(stmt.value)
                 e = Div(Var(ident, loc), value, loc)
             case _:
-                raise FPyParserError(loc, 'Unsupported operator-assignment in FPy', stmt)
+                raise self._parse_error('Unsupported operator-assignment in FPy', stmt)
 
         return Assign(ident, None, e, loc)
 
@@ -728,11 +712,11 @@ class Parser:
                 return self._parse_augassign(stmt)
             case ast.AnnAssign():
                 if not isinstance(stmt.target, ast.Name):
-                    raise FPyParserError(loc, 'Unsupported target in FPy', stmt)
+                    raise self._parse_error('Unsupported target in FPy', stmt)
                 if stmt.annotation is None:
-                    raise FPyParserError(loc, 'FPy requires a type annotation', stmt)
+                    raise self._parse_error('FPy requires a type annotation', stmt)
                 if stmt.value is None:
-                    raise FPyParserError(loc, 'FPy requires a value', stmt)
+                    raise self._parse_error('FPy requires a value', stmt)
 
                 ident = self._parse_id(stmt.target)
                 ty = self._parse_type_annotation(stmt.annotation)
@@ -740,7 +724,7 @@ class Parser:
                 return Assign(ident, ty, value, loc)
             case ast.Assign():
                 if len(stmt.targets) != 1:
-                    raise FPyParserError(loc, 'FPy only supports single assignment', stmt)
+                    raise self._parse_error('FPy only supports single assignment', stmt)
                 target = stmt.targets[0]
                 match target:
                     case ast.Name():
@@ -754,11 +738,11 @@ class Parser:
                     case ast.Subscript():
                         var, slices = self._parse_subscript_target(target)
                         if not isinstance(var, Var):
-                            raise FPyParserError(loc, 'FPy expects a variable', target, stmt)
+                            raise self._parse_error('FPy expects a variable', target, stmt)
                         value = self._parse_expr(stmt.value)
                         return IndexedAssign(var.name, slices, value, loc)
                     case _:
-                        raise FPyParserError(loc, 'Unexpected binding type', stmt)
+                        raise self._parse_error('Unexpected binding type', stmt)
             case ast.If():
                 cond = self._parse_expr(stmt.test)
                 ift = self._parse_statements(stmt.body)
@@ -769,25 +753,25 @@ class Parser:
                     return IfStmt(cond, ift, iff, loc)
             case ast.While():
                 if stmt.orelse != []:
-                    raise FPyParserError(loc, 'FPy does not support else clause in while statement', stmt)
+                    raise self._parse_error('FPy does not support else clause in while statement', stmt)
                 cond = self._parse_expr(stmt.test)
                 block = self._parse_statements(stmt.body)
                 return WhileStmt(cond, block, loc)
             case ast.For():
                 if stmt.orelse != []:
-                    raise FPyParserError(loc, 'FPy does not support else clause in for statement', stmt)
+                    raise self._parse_error('FPy does not support else clause in for statement', stmt)
                 for_target = self._parse_tuple_target(stmt.target, stmt)
                 iterable = self._parse_expr(stmt.iter)
                 block = self._parse_statements(stmt.body)
                 return ForStmt(for_target, iterable, block, loc)
             case ast.Return():
                 if stmt.value is None:
-                    raise FPyParserError(loc, 'Return statement must have value', stmt)
+                    raise self._parse_error('Return statement must have value', stmt)
                 e = self._parse_expr(stmt.value)
                 return ReturnStmt(e, loc)
             case ast.With():
                 if len(stmt.items) != 1:
-                    raise FPyParserError(loc, 'FPy only supports with statements with a single item', stmt)
+                    raise self._parse_error('FPy only supports with statements with a single item', stmt)
                 item = stmt.items[0]
                 name = self._parse_contextname(item)
                 ctx = self._parse_expr(item.context_expr)
@@ -806,7 +790,7 @@ class Parser:
             case ast.Pass():
                 return PassStmt(loc)
             case _:
-                raise FPyParserError(loc, 'statement is unsupported in FPy', stmt)
+                raise self._parse_error('statement is unsupported in FPy', stmt)
 
     def _parse_statements(self, stmts: list[ast.stmt]):
         """Parse a list of Python statements."""
@@ -832,14 +816,6 @@ class Parser:
     def _parse_returns(self, e: ast.expr):
         return self._parse_type_annotation(e)
 
-    def _parse_lambda(self, f: ast.Lambda):
-        """Parse a Python lambda expression."""
-        loc = self._parse_location(f)
-        args = self._parse_arguments(f.args.args)
-        expr = self._parse_expr(f.body)
-        block = StmtBlock([ReturnStmt(expr, expr.loc)])
-        return FuncDef('pre', args, set(), None, block, None, {}, ForeignEnv.default(), loc=loc)
-
     def _parse_function(self, f: ast.FunctionDef, env: ForeignEnv):
         """Parse a Python function definition."""
         loc = self._parse_location(f)
@@ -847,9 +823,9 @@ class Parser:
         # check arguments are only positional
         pos_args = f.args.posonlyargs + f.args.args
         if f.args.vararg:
-            raise FPyParserError(loc, 'FPy does not support variadic arguments', f, f.args.vararg)
+            raise self._parse_error('FPy does not support variadic arguments', f, f.args.vararg)
         if f.args.kwarg:
-            raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
+            raise self._parse_error('FPy does not support keyword arguments', f, f.args.kwarg)
 
         # description
         docstring = ast.get_docstring(f)
@@ -866,28 +842,16 @@ class Parser:
         func = FuncDef(f.name, args, set(), None, block, None, {}, env, loc=loc)
         return func, f.decorator_list
 
-    def _eval(
-        self,
-        e: ast.expr,
-        globals: Mapping[str, Any] | None = None,
-        locals: Mapping[str, object] | None = None
-    ):
-        globals = None if globals is None else dict(globals)
-        return eval(ast.unparse(e), globals, locals)
-
     def _start_parse(self):
-        start_loc = Location(self.name, self.start_line, 0, self.start_line, 0)
-
-        mod = ast.parse(self.source, self.name)
+        mod = ast.parse('\n'.join(self.lines), self.name)
         if len(mod.body) > 1:
-            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
+            raise self._parse_error('FPy only supports single function definitions', mod)
 
         ptree = mod.body[0]
         if not isinstance(ptree, ast.FunctionDef):
-            raise FPyParserError(start_loc, 'FPy only supports single function definitions', mod)
+            raise self._parse_error('FPy only supports single function definitions', mod)
 
         return ptree
-
 
     def parse_function(self, env: ForeignEnv):
         """Parses `self.source` as an FPy `FunctionDef`."""
@@ -897,18 +861,17 @@ class Parser:
     def parse_signature(self, ignore_ctx: bool = False):
         """Parses `self.source` to extract the arguments."""
         f = self._start_parse()
-        loc = self._parse_location(f)
 
         # check arguments are only positional
         pos_args = f.args.posonlyargs + f.args.args
         if f.args.vararg:
-            raise FPyParserError(loc, 'FPy does not support variadic arguments', f, f.args.vararg)
+            raise self._parse_error('FPy does not support variadic arguments', f, f.args.vararg)
         if f.args.kwarg:
-            raise FPyParserError(loc, 'FPy does not support keyword arguments', f, f.args.kwarg)
+            raise self._parse_error('FPy does not support keyword arguments', f, f.args.kwarg)
 
         # check that there's a return annotation
         if f.returns is None:
-            raise FPyParserError(loc, 'FPy requires a return annotation', f, f.returns)
+            raise self._parse_error('FPy requires a return annotation', f, f.returns)
 
         # prune context argument
         if ignore_ctx and len(pos_args) >= 1:
@@ -921,55 +884,3 @@ class Parser:
 
         arg_types = [arg.type for arg in args]
         return arg_types, returns
-
-    def find_decorator(
-        self,
-        decorator_list: list[ast.expr],
-        decorator: Any,
-        globals: Mapping[str, Any] | None = None,
-        locals: Mapping[str, object] | None = None
-    ):
-        """Returns the decorator AST for a particular decorator"""
-        for dec in reversed(decorator_list):
-            match dec:
-                case ast.Call():
-                    f = self._eval(dec.func, globals=globals, locals=locals)
-                    if isinstance(f, FunctionType) and f == decorator:
-                        return dec
-                case ast.Name() | ast.Attribute():
-                    f = self._eval(dec, globals=globals, locals=locals)
-                    if isinstance(f, FunctionType) and f == decorator:
-                        return dec
-
-        raise RuntimeError('unreachable')
-
-    # reparse
-    def parse_decorator(self, decorator: ast.expr) -> dict[str, Any]:
-        """
-        (Re)-parses the `@fpy` decorator.
-
-        Returns a `dict` where each key is only the set of keywords that must be parsed.
-        Supported keywords include:
-
-        - `pre`: a precondition expression
-        """
-        match decorator:
-            case ast.Name() | ast.Attribute():
-                return {}
-            case ast.Call():
-                if decorator.args != []:
-                    loc = self._parse_location(decorator)
-                    raise FPyParserError(loc, 'FPy decorators do not accept arguments', decorator)
-
-                props: dict[str, Any] = {}
-                for kwd in decorator.keywords:
-                    match kwd.arg:
-                        case 'pre':
-                            # TODO: check arguments are a strict subset?
-                            if not isinstance(kwd.value, ast.Lambda):
-                                loc = self._parse_location(kwd.value)
-                                raise FPyParserError(loc, 'FPy `pre` expects a lambda expression', kwd.value)
-                            props['pre'] = self._parse_lambda(kwd.value)
-                return props
-            case _:
-                raise NotImplementedError('unsupported decorator', decorator)

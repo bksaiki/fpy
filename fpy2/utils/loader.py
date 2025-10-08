@@ -4,13 +4,15 @@ Modified import loader that caches original source code of modules as they are l
 FPy reparses function source code to extract the original AST.
 """
 
+import inspect
+import os
 import sys
 import types
 
 from importlib.machinery import SourceFileLoader, PathFinder
 from importlib.util import source_from_cache
 
-_ORIG_BY_PATH: dict[str, bytes] = {}  # path -> bytes
+_SOURCE: dict[str, list[str]] = {}  # path -> lines
 
 class CachingSourceFileLoader(SourceFileLoader):
     """Source file loader that caches the original source code as read."""
@@ -22,7 +24,7 @@ class CachingSourceFileLoader(SourceFileLoader):
         elif path.endswith('.py'):
             # loading a source file
             data = super().get_data(path)
-            _ORIG_BY_PATH[path] = data
+            _SOURCE[path] = data.decode('utf-8').splitlines(keepends=True)
             return data
         elif path.endswith('.pyc'):
             # loading a cached file
@@ -30,7 +32,7 @@ class CachingSourceFileLoader(SourceFileLoader):
             src_path = source_from_cache(path)
             try:
                 data = super().get_data(src_path)
-                _ORIG_BY_PATH[src_path] = data
+                _SOURCE[src_path] = data.decode('utf-8').splitlines(keepends=True)
             except FileNotFoundError:
                 pass
 
@@ -51,27 +53,35 @@ class CachingPathFinder:
         spec.loader = CachingSourceFileLoader(spec.loader.name, spec.loader.path)
         return spec
 
+_PATH_FINDER = CachingPathFinder()
+"""Modified path finder that uses `CachingSourceFileLoader`."""
+
 def install_caching_loader():
     """Install the caching loader into sys.meta_path."""
-    sys.meta_path.insert(0, CachingPathFinder())
+    sys.meta_path.insert(0, _PATH_FINDER)
 
-def get_original_source(module: types.ModuleType) -> str | None:
+def get_module_source(mod: types.ModuleType) -> list[str]:
     """
-    Get the original source code of a module, if available.
+    Gets the original source code of a module, if available.
 
     This returns the exact source code as read from the file, before any
     transformations by import hooks. If the source is not available, returns `None`.
     """
-    # get the source file path
-    path = getattr(module, '__file__', None)
+    path = getattr(mod, '__file__', None)
     if path is None:
-        return None
+        raise ValueError(f"cannot determine source file for module: {mod}")
 
     # look up the cached source by the source path
-    data = _ORIG_BY_PATH.get(path, None)
-    if data is None:
-        return None
+    lines = _SOURCE.get(path, None)
+    if lines is None:
+        # not in cache yet
+        if not os.path.exists(path):
+            # can't even find source file
+            raise ValueError(f"no source found for file: {path}")
 
-    return data.decode('utf-8')
+        # try to read the source file directly
+        with open(path, 'r', encoding='utf-8') as file:
+            lines = file.read().splitlines(keepends=True)
+            _SOURCE[path] = lines
 
-
+    return lines
