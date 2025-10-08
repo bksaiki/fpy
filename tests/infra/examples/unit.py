@@ -640,9 +640,9 @@ def test_pass1():
 
 def test_meta(n):
     @fp.fpy
-    def bar(x):
+    def test_meta_inner(x):
        return x + n
-    return bar
+    return test_meta_inner
 
 test_meta0 = test_meta(0)
 test_meta1 = test_meta(1)
