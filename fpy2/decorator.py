@@ -4,7 +4,6 @@ Decorators for the FPy language.
 
 import builtins
 import inspect
-import textwrap
 
 from typing import Any, Callable, ParamSpec, TypeVar, overload
 
@@ -16,6 +15,7 @@ from .function import Function
 from .number import Context
 from .primitive import Primitive
 from .rewrite import ExprPattern, StmtPattern
+from .utils import getfunclines
 
 
 P = ParamSpec('P')
@@ -146,6 +146,11 @@ def fpy_primitive(
 ###########################################################
 # Utilities
 
+def _trim_source(lines: list[str], col_offset: int):
+    if col_offset > 0:
+        for i in range(len(lines)):
+            lines[i] = lines[i][col_offset:]
+
 def _function_env(func: Callable) -> ForeignEnv:
     globs = func.__globals__
     built_ins = {
@@ -172,10 +177,9 @@ def _apply_fpy_decorator(
     meta: dict[str, Any] | None = None,
     decorator: Callable = fpy,
 ):
-    # read the original source the function
-    src_name = inspect.getabsfile(func)
-    _, start_line = inspect.getsourcelines(func)
-    src = textwrap.dedent(inspect.getsource(func))
+    # fetch the source for the function
+    lines, src_name, start_line, col_offset = getfunclines(func)
+    _trim_source(lines, col_offset)
 
     # get defining environment
     cvars = inspect.getclosurevars(func)
@@ -186,7 +190,7 @@ def _apply_fpy_decorator(
     free_vars = { NamedId(name) for name in cfree_vars }
 
     # parse the source as an FPy function
-    parser = Parser(src_name, src, env, start_line=start_line)
+    parser = Parser(src_name, lines, env, start_line=start_line, col_offset=col_offset)
     ast, _ = parser.parse_function(env)
 
     # function may have a global context
@@ -276,15 +280,13 @@ def _apply_fpy_prim_decorator(
     """
     Applies the `@fpy_prim` decorator to a function.
     """
-
     # reparse for the typing annotations
-    src_name = inspect.getabsfile(func)
-    _, start_line = inspect.getsourcelines(func)
-    src = textwrap.dedent(inspect.getsource(func))
+    lines, src_name, start_line, col_offset = getfunclines(func)
+    _trim_source(lines, col_offset)
 
     # parse for the type signature
     env = _function_env(func)
-    parser = Parser(src_name, src, env, start_line=start_line)
+    parser = Parser(src_name, lines, env, start_line=start_line, col_offset=col_offset)
     arg_types, return_type = parser.parse_signature(ignore_ctx=True)
 
     # check primitive context signature

@@ -102,6 +102,8 @@ _test_ignore = [
     # assertion messages
     'test_assert2',
     'test_assert3',
+    # not monomorphic
+    'test_meta_inner'
 ]
 
 _example_ignore = [

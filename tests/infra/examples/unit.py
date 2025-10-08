@@ -637,3 +637,12 @@ def test_assert3():
 def test_pass1():
     pass
     return True
+
+def test_meta(n):
+    @fp.fpy
+    def test_meta_inner(x):
+       return x + n
+    return test_meta_inner
+
+test_meta0 = test_meta(0)
+test_meta1 = test_meta(1)
