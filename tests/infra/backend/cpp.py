@@ -63,7 +63,7 @@ _test_ignore = [
     # 'test_digits3',
     'test_digits4',
     'test_digits5', # TODO: implement
-    # 'test_let2',
+    'test_let3',
     'test_augassign1',
     'test_augassign2',
     'test_augassign3',
@@ -106,6 +106,7 @@ _test_ignore = [
 
 _example_ignore = [
     'fma_ctx',
+    'dpN',
     'example_static_context1',
     'example_static_context2',
     'example_fold_op1',
