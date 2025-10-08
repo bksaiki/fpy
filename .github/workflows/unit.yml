@@ -104,7 +104,7 @@ jobs:
       - name: Install
         run: pip install -e .[dev]
       - name: Compilation tests
-        run: python3 -m tests.infra.fpbench
+        run: python3 -m tests.infra.fpcore
 
   cpp:
     name: "C++ tests"

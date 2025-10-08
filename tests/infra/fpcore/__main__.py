@@ -1,5 +1,5 @@
 """
-FPBench infastructure tests.
+FPCore infastructure tests.
 
 - Tests conversion of FPCore functions to FPy functions.
 - Tests evaluation of FPy functions from FPCore

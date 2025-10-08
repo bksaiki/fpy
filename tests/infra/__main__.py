@@ -34,8 +34,6 @@ def _run_tests():
     test_simplify()
     # compilation
     test_compile_fpc()
-    test_compile_cpp()
-
 
 _run_tests()
 
