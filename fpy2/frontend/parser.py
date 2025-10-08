@@ -145,9 +145,9 @@ class Parser:
         return Location(
             self.name,
             e.lineno + self.start_line,
-            e.col_offset + self.col_offset,
+            e.col_offset + self.col_offset + 1,
             e.end_lineno + self.start_line,
-            e.end_col_offset + self.col_offset
+            e.end_col_offset + self.col_offset + 1
         )
 
     def _parse_error(self, why: str, where: ast.AST, ctx: ast.AST | None = None):
