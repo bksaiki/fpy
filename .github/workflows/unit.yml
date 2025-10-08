@@ -81,7 +81,7 @@ jobs:
       - name: Unit Tests
         run: python3 -m unittest -v
       - name: Infrastucture Tests
-        run: python3 -m tests.infra.unit
+        run: python3 -m tests.infra
 
   fpcore:
     name: "FPCore tests"
@@ -127,4 +127,4 @@ jobs:
       - name: Install
         run: pip install -e .[dev]
       - name: Tests (C++)
-        run: python3 -m tests.infra.compile.cpp
+        run: python3 -m tests.infra.backend.cpp
