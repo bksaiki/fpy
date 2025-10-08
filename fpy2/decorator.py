@@ -181,11 +181,6 @@ def _apply_fpy_decorator(
     lines, src_name, start_line, col_offset = getfunclines(func)
     _trim_source(lines, col_offset)
 
-    # trim all source lines based on the column offset
-    if col_offset > 0:
-        for i in range(len(lines)):
-            lines[i] = lines[i][col_offset:]
-
     # get defining environment
     cvars = inspect.getclosurevars(func)
     cfree_vars = cvars.nonlocals.keys() | cvars.globals.keys() | cvars.builtins.keys()

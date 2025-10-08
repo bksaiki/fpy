@@ -843,7 +843,8 @@ class Parser:
         return func, f.decorator_list
 
     def _start_parse(self):
-        mod = ast.parse('\n'.join(self.lines), self.name)
+        src = ''.join(self.lines)
+        mod = ast.parse(src, self.name)
         if len(mod.body) > 1:
             raise self._parse_error('FPy only supports single function definitions', mod)
 
