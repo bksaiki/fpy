@@ -26,7 +26,10 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             case BoolType():
                 return BoolTypeAnn(None)
             case RealType():
-                return RealTypeAnn(ty.ctx, None)
+                if isinstance(ty.ctx, NamedId):
+                    return RealTypeAnn(None, None)
+                else:
+                    return RealTypeAnn(ty.ctx, None)
             case ContextType():
                 return ContextTypeAnn(None)
             case TupleType():
@@ -46,10 +49,10 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             return Argument(arg.name, AnyTypeAnn(None), arg.loc)
 
     def _visit_function(self, func: FuncDef, ctx: None) -> FuncDef:
-        ctx = self.fn_ty.ctx
+        fn_ctx = self.fn_ty.ctx if isinstance(self.fn_ty.ctx, Context) else func.ctx
         args = [self._visit_argument(arg, ty) for arg, ty in zip(func.args, self.fn_ty.arg_types)]
         body, _ = self._visit_block(func.body, None)
-        return FuncDef(func.name, args, func.free_vars, ctx, body, func.spec, func.meta, func.env, loc=func.loc)
+        return FuncDef(func.name, args, func.free_vars, fn_ctx, body, func.spec, func.meta, func.env, loc=func.loc)
 
     def apply(self):
         return self._visit_function(self.func, None)
@@ -86,7 +89,7 @@ class Monomorphize:
             and isinstance(ty_info.fn_type.ctx, Context)
             and not ctx.is_equiv(ty_info.fn_type.ctx)
         ):
-            raise ValueError(f'Conflicting context info: cannot override {ty_info.fn_type.ctx.format()} with {ctx.format()}')
+            raise ValueError(f'Conflicting context info: cannot override {ty_info.fn_type.ctx} with {ctx}')
 
         fn_type = ty_info.fn_type.subst_type(subst)
         assert isinstance(fn_type, FunctionType)
@@ -151,7 +154,7 @@ class Monomorphize:
             and isinstance(ty_info.fn_type.ctx, Context)
             and not ctx.is_equiv(ty_info.fn_type.ctx)
         ):
-            raise ValueError(f'Conflicting context info: cannot override {ty_info.fn_type.ctx.format()} with {ctx.format()}')
+            raise ValueError(f'Conflicting context info: cannot override {ty_info.fn_type.ctx} with {ctx}')
 
         fn_type = ty_info.fn_type.subst_type(subst)
         assert isinstance(fn_type, FunctionType)

@@ -23,7 +23,7 @@ from ...number import (
     INTEGER
 )
 from ...primitive import Primitive
-from ...transform import ConstFold
+from ...transform import ConstFold, Monomorphize
 from ...utils import Gensym, enum_repr
 
 from ..backend import Backend, CompileError
@@ -83,14 +83,11 @@ class _CppBackendInstance(Visitor):
     Per-function compilation instance.
     """
 
-    options: _CppOptions
     func: FuncDef
+    options: _CppOptions
 
-    arg_ctxs: tuple[Context | None, ...]
-    caller_ctx: Context | None
     def_use: DefineUseAnalysis
     ctx_info: ContextAnalysis
-    ctx_args: dict[NamedId, Context]
 
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
@@ -98,21 +95,16 @@ class _CppBackendInstance(Visitor):
 
     def __init__(
         self,
-        options: _CppOptions,
         func: FuncDef,
-        arg_ctxs: Iterable[Context | None],
-        caller_ctx: Context | None,
+        options: _CppOptions,
         def_use: DefineUseAnalysis,
         ctx_info: ContextAnalysis
     ):
-        self.options = options
         self.func = func
+        self.options = options
 
-        self.arg_ctxs = tuple(arg_ctxs)
-        self.caller_ctx = caller_ctx
         self.def_use = def_use
         self.ctx_info = ctx_info
-        self.ctx_args = {}
 
         self.decl_phis = set()
         self.decl_assigns = set()
@@ -123,23 +115,6 @@ class _CppBackendInstance(Visitor):
         self._visit_function(self.func, ctx)
         return '\n'.join(ctx.lines)
 
-
-    def _override_arg_type(self, ty: Type, ctx: Context | None):
-        match ty:
-            case BoolType() | ContextType():
-                pass
-            case RealType():
-                if isinstance(ty.ctx, NamedId) and isinstance(ctx, Context):
-                    self.ctx_args[ty.ctx] = ctx
-            case TupleType():
-                # TODO: how does user specify overriding contexts for tuple arguments>
-                for t in ty.elts:
-                    self._override_arg_type(t, ctx)
-            case ListType():
-                self._override_arg_type(ty.elt, ctx)
-            case _:
-                raise RuntimeError(f'unreachable: {ty}')
-
     def _monomorphize_type(self, ty: Type):
         match ty:
             case VarType():
@@ -147,12 +122,10 @@ class _CppBackendInstance(Visitor):
             case BoolType():
                 return ty
             case RealType():
+                assert ty.ctx is not None
                 if isinstance(ty.ctx, NamedId):
-                    if ty.ctx not in self.ctx_args:
-                        raise CppCompileError(self.func, f'types must be monomorphic `{ty}`')
-                    return RealType(self.ctx_args[ty.ctx])
-                else:
-                    return ty
+                    raise CppCompileError(self.func, f'types must be monomorphic `{ty}`')
+                return ty
             case TupleType():
                 return TupleType(*(self._monomorphize_type(t) for t in ty.elts))
             case ListType():
@@ -996,15 +969,6 @@ class _CppBackendInstance(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _visit_function(self, func: FuncDef, ctx: _CompileCtx):
-        # apply caller context
-        if isinstance(self.ctx_info.body_ctx, NamedId):
-            if self.caller_ctx is not None:
-                self.ctx_args[self.ctx_info.body_ctx] = self.caller_ctx
-
-        # apply argument contexts
-        for caller_arg, arg_ty in zip(self.arg_ctxs, self.ctx_info.arg_types):
-            self._override_arg_type(arg_ty, caller_arg)
-
         # compile arguments
         arg_strs: list[str] = []
         for arg, arg_ty in zip(func.args, self.ctx_info.arg_types):
@@ -1042,9 +1006,6 @@ class CppBackend(Backend):
     unsafe_finitize_int: bool
     unsafe_cast_int: bool
 
-    # cache of compiled functions
-    compiled: dict[str, Function]
-
     def __init__(
         self,
         *,
@@ -1060,7 +1021,6 @@ class CppBackend(Backend):
         self.op_table = op_table
         self.unsafe_finitize_int = unsafe_finitize_int
         self.unsafe_cast_int = unsafe_cast_int
-        self.compiled = {}
 
     def headers(self) -> list[str]:
         """
@@ -1078,8 +1038,8 @@ class CppBackend(Backend):
         self,
         func: Function,
         *,
-        arg_ctxs: None | Iterable[Context | None] = None,
-        ctx: Context | None = None
+        ctx: Context | None = None,
+        arg_types: list[Type | None] | None = None,
     ) -> str:
         """
         Compiles the given FPy function to a C++ program
@@ -1088,20 +1048,24 @@ class CppBackend(Backend):
         if not isinstance(func, Function):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
         if ctx is not None and not isinstance(ctx, Context):
-            raise TypeError(f'Expected `Context`, got {type(ctx)} for {ctx}')
-        if arg_ctxs is None:
-            arg_ctxs = tuple(None for _ in func.args)
+            raise TypeError(f'Expected `Context` or `None`, got {type(ctx)} for {ctx}')
+        if arg_types is not None and not isinstance(arg_types, list):
+            raise TypeError(f'Expected `list` or `None`, got {type(arg_types)} for {arg_types}')
 
-        if func.name in self.compiled:
-            raise ValueError(f'Function `{func.name}` has already been compiled')
-        self.compiled[func.name] = func
+        # monomorphizing (optional)
+        ast = func.ast
+        if ctx is not None or arg_types is not None:
+            if arg_types is None:
+                arg_types = [None for _ in func.args]
+            ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
 
         # normalization passes
-        ast = ConstFold.apply(func.ast, enable_op=False)
+        ast = ConstFold.apply(ast, enable_op=False)
 
         # analyses
         def_use = DefineUse.analyze(ast)
 
+        # run type checking with static context inference
         try:
             ctx_info = ContextInfer.infer(ast, def_use=def_use, unsafe_cast_int=self.unsafe_cast_int)
         except (ContextInferError, TypeInferError) as e:
@@ -1109,6 +1073,6 @@ class CppBackend(Backend):
 
         # compile
         options = _CppOptions(self.std, self.op_table, self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _CppBackendInstance(options, ast, arg_ctxs, ctx, def_use, ctx_info)
+        inst = _CppBackendInstance(ast, options, def_use, ctx_info)
         body_str =  inst.compile()
         return body_str
