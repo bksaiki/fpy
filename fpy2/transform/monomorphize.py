@@ -26,7 +26,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             case BoolType():
                 return BoolTypeAnn(None)
             case RealType():
-                return RealTypeAnn(None, None)
+                return RealTypeAnn(ty.ctx, None)
             case ContextType():
                 return ContextTypeAnn(None)
             case TupleType():
@@ -46,15 +46,16 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             return Argument(arg.name, AnyTypeAnn(None), arg.loc)
 
     def _visit_function(self, func: FuncDef, ctx: None) -> FuncDef:
+        ctx = self.fn_ty.ctx
         args = [self._visit_argument(arg, ty) for arg, ty in zip(func.args, self.fn_ty.arg_types)]
         body, _ = self._visit_block(func.body, None)
-        return FuncDef(func.name, args, func.free_vars, func.ctx, body, func.spec, func.meta, func.env, loc=func.loc)
+        return FuncDef(func.name, args, func.free_vars, ctx, body, func.spec, func.meta, func.env, loc=func.loc)
 
     def apply(self):
         return self._visit_function(self.func, None)
 
 
-class MonomorphizeType:
+class Monomorphize:
     """
     Monomorphize pass.
 
@@ -64,6 +65,7 @@ class MonomorphizeType:
     @staticmethod
     def apply(
         func: FuncDef,
+        ctx: ContextParam | None,
         subst: dict[NamedId, Type],
         *,
         ty_info: TypeAnalysis | None = None
@@ -79,13 +81,24 @@ class MonomorphizeType:
             if key not in free_vars:
                 raise ValueError(f'Unbound type variable `{key}` in {func.name} : {ty_info.fn_type.format()}')
 
+        if (
+            isinstance(ctx, Context)
+            and isinstance(ty_info.fn_type.ctx, Context)
+            and not ctx.is_equiv(ty_info.fn_type.ctx)
+        ):
+            raise ValueError(f'Conflicting context info: cannot override {ty_info.fn_type.ctx.format()} with {ctx.format()}')
+
         fn_type = ty_info.fn_type.subst_type(subst)
         assert isinstance(fn_type, FunctionType)
+        if ctx is not None:
+            fn_type = FunctionType(ctx, fn_type.arg_types, fn_type.return_type)
+
         return _MonomorphizeVisitor(func, fn_type).apply()
 
     @staticmethod
     def apply_by_arg(
         func: FuncDef,
+        ctx: ContextParam | None,
         arg_types: list[Type | None],
         *,
         ty_info: TypeAnalysis | None = None
@@ -133,6 +146,16 @@ class MonomorphizeType:
             if new_ty is not None:
                 _merge(curr_ty, new_ty, curr_ty, new_ty)
 
+        if (
+            isinstance(ctx, Context)
+            and isinstance(ty_info.fn_type.ctx, Context)
+            and not ctx.is_equiv(ty_info.fn_type.ctx)
+        ):
+            raise ValueError(f'Conflicting context info: cannot override {ty_info.fn_type.ctx.format()} with {ctx.format()}')
+
         fn_type = ty_info.fn_type.subst_type(subst)
         assert isinstance(fn_type, FunctionType)
+        if ctx is not None:
+            fn_type = FunctionType(ctx, fn_type.arg_types, fn_type.return_type)
+
         return _MonomorphizeVisitor(func, fn_type).apply()

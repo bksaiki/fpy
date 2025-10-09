@@ -181,7 +181,10 @@ class RealType(Type):
         return self.ctx is not None
 
     def format(self) -> str:
-        return "real"
+        if self.ctx is None:
+            return "real"
+        else:
+            return f"real[{self.ctx}]"
 
     def free_type_vars(self) -> set[NamedId]:
         return set()
@@ -338,7 +341,11 @@ class FunctionType(Type):
         )
 
     def format(self) -> str:
-        return ' -> '.join([arg.format() for arg in self.arg_types] + [self.return_type.format()])
+        raw_fmt = ' -> '.join([arg.format() for arg in self.arg_types] + [self.return_type.format()])
+        if self.ctx is None:
+            return raw_fmt
+        else:
+            return f'[{self.ctx}] {raw_fmt}'
 
     def free_type_vars(self) -> set[NamedId]:
         fvs: set[NamedId] = set()
