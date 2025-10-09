@@ -178,15 +178,15 @@ class Parser:
 
     def _convert_type(self, ty, loc: Location):
         if ty == Real:
-            return RealTypeAnn(loc)
+            return RealTypeAnn(None, loc)
         elif isinstance(ty, type):
             if issubclass(ty, bool):
                 return BoolTypeAnn(loc)
             elif issubclass(ty, int) or issubclass(ty, float):
                 # TODO: more specific type
-                return RealTypeAnn(loc)
+                return RealTypeAnn(None, loc)
             elif issubclass(ty, Float):
-                return RealTypeAnn(loc)
+                return RealTypeAnn(None, loc)
             else:
                 # TODO: implement
                 return AnyTypeAnn(loc)

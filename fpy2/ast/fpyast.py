@@ -36,10 +36,8 @@ __all__ = [
 
     # Type annotations
     'AnyTypeAnn',
-    'ScalarTypeAnn',
     'RealTypeAnn',
     'BoolTypeAnn',
-    'TensorTypeAnn',
     'TupleTypeAnn',
     'ListTypeAnn',
     'SizedTensorTypeAnn',
@@ -244,6 +242,17 @@ class TypeAnn(Ast):
     def __init__(self, loc: Location | None):
         super().__init__(loc)
 
+    @abstractmethod
+    def is_equiv(self, other) -> bool:
+        """
+        Check if this type annotation is equivalent to another type annotation.
+
+        This is essentially a recursive equality check.
+        The dunder method `__eq__` is used to check if two expressions
+        represent exactly the same tree, e.g., `id(self) == id(other)`.
+        """
+        ...
+
 class AnyTypeAnn(TypeAnn):
     """FPy AST: any type annotation"""
     __slots__ = ()
@@ -251,31 +260,21 @@ class AnyTypeAnn(TypeAnn):
     def __init__(self, loc: Location | None):
         super().__init__(loc)
 
-    def __eq__(self, other: object) -> bool:
+    def is_equiv(self, other):
         return isinstance(other, AnyTypeAnn)
-
-    def __hash__(self) -> int:
-        return hash(())
-
-class ScalarTypeAnn(TypeAnn):
-    """FPy AST: scalar type annotation"""
-    __slots__ = ()
-
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
 
 class RealTypeAnn(TypeAnn):
     """FPy AST: real type annotation"""
-    __slots__ = ()
+    __slots__ = ('ctx',)
 
-    def __init__(self, loc: Location | None):
+    ctx: Context | None
+
+    def __init__(self, ctx: Context | None, loc: Location | None):
         super().__init__(loc)
+        self.ctx = ctx
 
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, RealTypeAnn)
-
-    def __hash__(self) -> int:
-        return hash(())
+    def is_equiv(self, other):
+        return isinstance(other, RealTypeAnn) and self.ctx == other.ctx
 
 class BoolTypeAnn(TypeAnn):
     """FPy AST: boolean type annotation"""
@@ -284,20 +283,11 @@ class BoolTypeAnn(TypeAnn):
     def __init__(self, loc: Location | None):
         super().__init__(loc)
 
-    def __eq__(self, other: object) -> bool:
+    def is_equiv(self, other):
         return isinstance(other, BoolTypeAnn)
 
-    def __hash__(self) -> int:
-        return hash(())
 
-class TensorTypeAnn(TypeAnn):
-    """FPy AST: tensor type annotation"""
-    __slots__ = ()
-
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
-class TupleTypeAnn(TensorTypeAnn):
+class TupleTypeAnn(TypeAnn):
     """FPy AST: native tuple type annotation"""
     __slots__ = ('elts',)
     elts: tuple[TypeAnn, ...]
@@ -306,15 +296,14 @@ class TupleTypeAnn(TensorTypeAnn):
         super().__init__(loc)
         self.elts = tuple(elts)
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, TupleTypeAnn):
-            return False
-        return self.elts == other.elts
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, TupleTypeAnn)
+            and len(self.elts) == len(other.elts)
+            and all(a.is_equiv(b) for a, b in zip(self.elts, other.elts))
+        )
 
-    def __hash__(self) -> int:
-        return hash(self.elts)
-
-class ListTypeAnn(TensorTypeAnn):
+class ListTypeAnn(TypeAnn):
     """FPy AST: native list type annotation"""
     __slots__ = ('elt',)
     elt: TypeAnn
@@ -323,15 +312,10 @@ class ListTypeAnn(TensorTypeAnn):
         super().__init__(loc)
         self.elt = elt
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, ListTypeAnn):
-            return False
-        return self.elt == other.elt
+    def is_equiv(self, other) -> bool:
+        return isinstance(other, ListTypeAnn) and self.elt.is_equiv(other.elt)
 
-    def __hash__(self) -> int:
-        return hash(self.elt)
-
-class SizedTensorTypeAnn(TensorTypeAnn):
+class SizedTensorTypeAnn(TypeAnn):
     """FPy AST: sized, homogenous tensor type annotation"""
     __slots__ = ('dims', 'elt')
     dims: tuple[int | NamedId, ...]
@@ -342,13 +326,13 @@ class SizedTensorTypeAnn(TensorTypeAnn):
         self.dims = tuple(dims)
         self.elt = elt
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SizedTensorTypeAnn):
-            return False
-        return self.dims == other.dims and self.elt == other.elt
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, SizedTensorTypeAnn)
+            and self.dims == other.dims
+            and self.elt.is_equiv(other.elt)
+        )
 
-    def __hash__(self) -> int:
-        return hash((self.dims, self.elt))
 
 class Expr(Ast):
     """FPy AST: expression"""
