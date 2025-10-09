@@ -14,7 +14,6 @@ from ...analysis import (
     TypeInferError
 )
 from ...types import *
-from ...context_types import *
 from ...function import Function
 from ...number import (
     RM,
@@ -125,47 +124,48 @@ class _CppBackendInstance(Visitor):
         return '\n'.join(ctx.lines)
 
 
-    def _override_arg_type(self, ty: TypeContext, ctx: Context | None):
+    def _override_arg_type(self, ty: Type, ctx: Context | None):
         match ty:
-            case BoolTypeContext() | ContextTypeContext():
+            case BoolType() | ContextType():
                 pass
-            case RealTypeContext():
+            case RealType():
                 if isinstance(ty.ctx, NamedId) and isinstance(ctx, Context):
                     self.ctx_args[ty.ctx] = ctx
-            case TupleTypeContext():
+            case TupleType():
                 # TODO: how does user specify overriding contexts for tuple arguments>
                 for t in ty.elts:
                     self._override_arg_type(t, ctx)
-            case ListTypeContext():
+            case ListType():
                 self._override_arg_type(ty.elt, ctx)
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
-    def _monomorphize_type(self, ty: TypeContext):
+    def _monomorphize_type(self, ty: Type):
         match ty:
-            case VarTypeContext():
+            case VarType():
                 raise CppCompileError(self.func, f'types must be monomorphic `{ty}`')
-            case BoolTypeContext():
+            case BoolType():
                 return ty
-            case RealTypeContext():
+            case RealType():
                 if isinstance(ty.ctx, NamedId):
                     if ty.ctx not in self.ctx_args:
                         raise CppCompileError(self.func, f'types must be monomorphic `{ty}`')
-                    return RealTypeContext(self.ctx_args[ty.ctx])
+                    return RealType(self.ctx_args[ty.ctx])
                 else:
                     return ty
-            case TupleTypeContext():
-                return TupleTypeContext(*(self._monomorphize_type(t) for t in ty.elts))
-            case ListTypeContext():
-                return ListTypeContext(self._monomorphize_type(ty.elt))
+            case TupleType():
+                return TupleType(*(self._monomorphize_type(t) for t in ty.elts))
+            case ListType():
+                return ListType(self._monomorphize_type(ty.elt))
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
-    def _compile_type(self, ty: TypeContext):
+    def _compile_type(self, ty: Type):
         match ty:
-            case BoolTypeContext():
+            case BoolType():
                 return CppScalar.BOOL
-            case RealTypeContext():
+            case RealType():
+                assert ty.ctx is not None
                 if isinstance(ty.ctx, NamedId):
                     raise CppCompileError(self.func, f'types must be monomorphic: `{ty}`')
                 else:
@@ -195,9 +195,9 @@ class _CppBackendInstance(Visitor):
                         return CppScalar.S64
                     else:
                         raise CppCompileError(self.func, f'unsupported context: `{ty.ctx}`')
-            case TupleTypeContext():
+            case TupleType():
                 return CppTuple(self._compile_type(t) for t in ty.elts)
-            case ListTypeContext():
+            case ListType():
                 return CppList(self._compile_type(ty.elt))
             case _:
                 raise CppCompileError(self.func, f'unsupported type: `{ty.format()}`')
@@ -959,7 +959,7 @@ class _CppBackendInstance(Visitor):
         if isinstance(stmt.target, NamedId):
             raise CppCompileError(self.func, f'Cannot bind rounding context in C++: `{stmt.format()}`')
         rctx = stmt.ctx.val
-        cpp_ctx = self._compile_type(RealTypeContext(rctx))
+        cpp_ctx = self._compile_type(RealType(rctx))
         if cpp_ctx.is_float():
             assert isinstance(rctx, type(FP64))
             fenv = self._fresh_var()

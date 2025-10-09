@@ -13,7 +13,6 @@ from ..number import Context, INTEGER, REAL
 from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind
 
-from ..context_types import *
 from ..types import *
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 from .type_infer import TypeInfer, TypeAnalysis
@@ -24,9 +23,9 @@ class ContextInferError(Exception):
 
 @dataclass(frozen=True)
 class ContextAnalysis:
-    fn_type: FunctionTypeContext
-    by_def: dict[Definition, TypeContext]
-    by_expr: dict[Expr, TypeContext]
+    fn_type: FunctionType
+    by_def: dict[Definition, Type]
+    by_expr: dict[Expr, Type]
 
     @property
     def body_ctx(self):
@@ -54,9 +53,9 @@ class ContextTypeInferInstance(Visitor):
     type_info: TypeAnalysis
     unsafe_cast_int: bool
 
-    by_def: dict[Definition, TypeContext]
-    by_expr: dict[Expr, TypeContext]
-    ret_ty: TypeContext | None
+    by_def: dict[Definition, Type]
+    by_expr: dict[Expr, Type]
+    ret_ty: Type | None
     rvars: Unionfind[ContextParam]
     gensym: Gensym
 
@@ -83,15 +82,15 @@ class ContextTypeInferInstance(Visitor):
     def _from_scalar(self, ty: Type, ctx: ContextParam):
         match ty:
             case BoolType():
-                return BoolTypeContext()
+                return BoolType()
             case RealType():
-                return RealTypeContext(ctx)
+                return RealType(ctx)
             case ContextType():
-                return ContextTypeContext()
+                return ContextType()
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
-    def _set_context(self, site: Definition, ty: TypeContext):
+    def _set_context(self, site: Definition, ty: Type):
         self.by_def[site] = ty
 
     def _fresh_context_var(self) -> NamedId:
@@ -102,38 +101,39 @@ class ContextTypeInferInstance(Visitor):
     def _resolve_context(self, ctx: ContextParam) -> ContextParam:
         return self.rvars.get(ctx, ctx)
 
-    def _resolve(self, ty: TypeContext) -> TypeContext:
+    def _resolve(self, ty: Type) -> Type:
         match ty:
-            case BoolTypeContext() | ContextTypeContext() | VarTypeContext():
+            case BoolType() | ContextType() | VarType():
                 return ty
-            case RealTypeContext():
+            case RealType():
+                assert ty.ctx is not None
                 ctx = self._resolve_context(ty.ctx)
-                return RealTypeContext(ctx)
-            case TupleTypeContext():
+                return RealType(ctx)
+            case TupleType():
                 elts = (self._resolve(elt) for elt in ty.elts)
-                return TupleTypeContext(*elts)
-            case ListTypeContext():
+                return TupleType(*elts)
+            case ListType():
                 elt = self._resolve(ty.elt)
-                return ListTypeContext(elt)
+                return ListType(elt)
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
-    def _instantiate(self, ty: TypeContext) -> TypeContext:
+    def _instantiate(self, ty: Type) -> Type:
         subst: dict[NamedId, ContextParam] = {}
-        for fv in sorted(ty.free_vars()):
+        for fv in sorted(ty.free_context_vars()):
             subst[fv] = self._fresh_context_var()
-        return ty.subst(subst)
+        return ty.subst_context(subst)
 
-    def _generalize(self, ty: TypeContext) -> tuple[TypeContext, dict[NamedId, ContextParam]]:
+    def _generalize(self, ty: Type) -> tuple[Type, dict[NamedId, ContextParam]]:
         subst: dict[NamedId, ContextParam] = {}
-        for i, fv in enumerate(sorted(ty.free_vars())):
+        for i, fv in enumerate(sorted(ty.free_context_vars())):
             t = self.rvars.find(fv)
             match t: 
                 case NamedId():
                     subst[fv] = NamedId(f'r{i + 1}')
                 case _:
                     subst[fv] = t
-        ty = ty.subst(subst)
+        ty = ty.subst_context(subst)
         return ty, subst
 
     def _unify_contexts(self, a: ContextParam, b: ContextParam) -> ContextParam:
@@ -151,78 +151,79 @@ class ContextTypeInferInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable case: {a}, {b}')
 
-    def _unify(self, a_ty: TypeContext, b_ty: TypeContext) -> TypeContext:
+    def _unify(self, a_ty: Type, b_ty: Type) -> Type:
         match a_ty, b_ty:
-            case VarTypeContext(), VarTypeContext():
+            case VarType(), VarType():
                 if a_ty != b_ty:
                     raise ContextInferError(f'incompatible types: {a_ty} != {b_ty}')
                 return a_ty
-            case (BoolTypeContext(), BoolTypeContext()) | (ContextTypeContext(), ContextTypeContext()):
+            case (BoolType(), BoolType()) | (ContextType(), ContextType()):
                 return a_ty
-            case RealTypeContext(), RealTypeContext():
+            case RealType(), RealType():
+                assert a_ty.ctx is not None and b_ty.ctx is not None
                 ctx = self._unify_contexts(a_ty.ctx, b_ty.ctx)
-                return RealTypeContext(ctx)
-            case TupleTypeContext(), TupleTypeContext():
+                return RealType(ctx)
+            case TupleType(), TupleType():
                 assert len(a_ty.elts) == len(b_ty.elts)
                 elts = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a_ty.elts, b_ty.elts)]
-                return TupleTypeContext(*elts)
-            case ListTypeContext(), ListTypeContext():
+                return TupleType(*elts)
+            case ListType(), ListType():
                 elt = self._unify(a_ty.elt, b_ty.elt)
-                return ListTypeContext(elt)
+                return ListType(elt)
             case _:
                 raise RuntimeError(f'unreachable: {a_ty}, {b_ty}')
 
-    def _cvt_type(self, ty: Type) -> TypeContext:
+    def _cvt_type(self, ty: Type) -> Type:
         match ty:
             case VarType():
-                return VarTypeContext(ty.name)
+                return VarType(ty.name)
             case BoolType():
-                return BoolTypeContext()
+                return BoolType()
             case RealType():
-                return RealTypeContext(self._fresh_context_var())
+                return RealType(self._fresh_context_var())
             case ContextType():
-                return ContextTypeContext()
+                return ContextType()
             case TupleType():
                 elts = [self._cvt_type(elt) for elt in ty.elts]
-                return TupleTypeContext(*elts)
+                return TupleType(*elts)
             case ListType():
                 elt = self._cvt_type(ty.elt)
-                return ListTypeContext(elt)
+                return ListType(elt)
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
     def _cvt_arg_type(self, ty: Type, ann: TypeAnn):
         match ty:
             case VarType():
-                return VarTypeContext(ty.name)
+                return VarType(ty.name)
             case BoolType():
-                return BoolTypeContext()
+                return BoolType()
             case RealType():
                 if isinstance(ann, RealTypeAnn) and ann.ctx is not None:
-                    return RealTypeContext(ann.ctx)
+                    return RealType(ann.ctx)
                 else:
-                    return RealTypeContext(self._fresh_context_var())
+                    return RealType(self._fresh_context_var())
             case ContextType():
-                return ContextTypeContext()
+                return ContextType()
             case TupleType():
                 if isinstance(ann, TupleTypeAnn):
                     assert len(ann.elts) == len(ty.elts)
                     elts = [self._cvt_arg_type(elt, ann) for elt, ann in zip(ty.elts, ann.elts)]
-                    return TupleTypeContext(*elts)
+                    return TupleType(*elts)
                 else:
                     elts = [self._cvt_arg_type(elt, AnyTypeAnn(None)) for elt in ty.elts]
-                    return TupleTypeContext(*elts)
+                    return TupleType(*elts)
             case ListType():
                 if isinstance(ann, ListTypeAnn):
                     elt = self._cvt_arg_type(ty.elt, ann.elt)
-                    return ListTypeContext(elt)
+                    return ListType(elt)
                 else:
                     elt = self._cvt_arg_type(ty.elt, AnyTypeAnn(None))
-                    return ListTypeContext(elt)
+                    return ListType(elt)
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
-    def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ty: TypeContext):
+    def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ty: Type):
         match target:
             case NamedId():
                 d = self.def_use.find_def_from_site(target, site)
@@ -230,7 +231,7 @@ class ContextTypeInferInstance(Visitor):
             case UnderscoreId():
                 pass
             case TupleBinding():
-                assert isinstance(ty, TupleTypeContext) and len(ty.elts) == len(target.elts)
+                assert isinstance(ty, TupleType) and len(ty.elts) == len(target.elts)
                 for elt, elt_ctx in zip(target.elts, ty.elts):
                     self._visit_binding(site, elt, elt_ctx)
             case _:
@@ -246,7 +247,7 @@ class ContextTypeInferInstance(Visitor):
     def _visit_bool(self, e: BoolVal, ctx: ContextParam):
         # C, Γ |- e : bool
         ty = self._from_scalar(self._lookup_ty(e), ctx)
-        assert isinstance(ty, BoolTypeContext) # type checking should have concluded this
+        assert isinstance(ty, BoolType) # type checking should have concluded this
         return ty
 
     def _visit_foreign(self, e: ForeignVal, ctx: ContextParam):
@@ -256,55 +257,55 @@ class ContextTypeInferInstance(Visitor):
         if self.unsafe_cast_int and e.is_integer():
             # unsafely cast to integer
             # C, Γ |- e : real INTEGER
-            return RealTypeContext(INTEGER)
+            return RealType(INTEGER)
         else:
             # C, Γ |- e : real REAL
             ty = self._from_scalar(self._lookup_ty(e), REAL)
-            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            assert isinstance(ty, RealType) # type checking should have concluded this
             return ty
 
     def _visit_hexnum(self, e: Hexnum, ctx: ContextParam):
         if self.unsafe_cast_int and e.is_integer():
             # unsafely cast to integer
             # C, Γ |- e : real INTEGER
-            return RealTypeContext(INTEGER)
+            return RealType(INTEGER)
         else:
             # C, Γ |- e : real REAL
             ty = self._from_scalar(self._lookup_ty(e), REAL)
-            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            assert isinstance(ty, RealType) # type checking should have concluded this
             return ty
 
     def _visit_integer(self, e: Integer, ctx: ContextParam):
         if self.unsafe_cast_int and e.is_integer():
             # unsafely cast to integer
             # C, Γ |- e : real INTEGER
-            return RealTypeContext(INTEGER)
+            return RealType(INTEGER)
         else:
             # C, Γ |- e : real REAL
             ty = self._from_scalar(self._lookup_ty(e), REAL)
-            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            assert isinstance(ty, RealType) # type checking should have concluded this
             return ty
 
     def _visit_rational(self, e: Rational, ctx: ContextParam):
         if self.unsafe_cast_int and e.is_integer():
             # unsafely cast to integer
             # C, Γ |- e : real INTEGER
-            return RealTypeContext(INTEGER)
+            return RealType(INTEGER)
         else:
             # C, Γ |- e : real REAL
             ty = self._from_scalar(self._lookup_ty(e), REAL)
-            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            assert isinstance(ty, RealType) # type checking should have concluded this
             return ty
 
     def _visit_digits(self, e: Digits, ctx: ContextParam):
         if self.unsafe_cast_int and e.is_integer():
             # unsafely cast to integer
             # C, Γ |- e : real INTEGER
-            return RealTypeContext(INTEGER)
+            return RealType(INTEGER)
         else:
             # C, Γ |- e : real REAL
             ty = self._from_scalar(self._lookup_ty(e), REAL)
-            assert isinstance(ty, RealTypeContext) # type checking should have concluded this
+            assert isinstance(ty, RealType) # type checking should have concluded this
             return ty
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: ContextParam):
@@ -319,15 +320,15 @@ class ContextTypeInferInstance(Visitor):
             case Len() | Dim():
                 # length / dimension
                 # C, Γ |- len e : real INTEGER
-                return RealTypeContext(INTEGER)
+                return RealType(INTEGER)
             case Sum():
                 # sum operator
                 # C, Γ |- sum e : real C
-                return RealTypeContext(ctx)
+                return RealType(ctx)
             case Range1():
                 # range operator
                 # C, Γ |- range e : list (real INTEGER)
-                return ListTypeContext(RealTypeContext(INTEGER))
+                return ListType(RealType(INTEGER))
             case Empty():
                 # empty operator
                 # C, Γ |- empty e : list T
@@ -337,9 +338,9 @@ class ContextTypeInferInstance(Visitor):
                 #          C, Γ |- e : list T
                 # -----------------------------------------
                 #  C, Γ |- enumerate e : list [real INTEGER] x T
-                assert isinstance(arg_ty, ListTypeContext)
-                elt_ty = TupleTypeContext(RealTypeContext(INTEGER), arg_ty.elt)
-                return ListTypeContext(elt_ty)
+                assert isinstance(arg_ty, ListType)
+                elt_ty = TupleType(RealType(INTEGER), arg_ty.elt)
+                return ListType(elt_ty)
             case _:
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------
@@ -353,11 +354,11 @@ class ContextTypeInferInstance(Visitor):
             case Size():
                 # size operator
                 # C, Γ |- size e : real INTEGER
-                return RealTypeContext(INTEGER)
+                return RealType(INTEGER)
             case Range2():
                 # range operator
                 # C, Γ |- range e1 e2 : list (real INTEGER)
-                return ListTypeContext(RealTypeContext(INTEGER))
+                return ListType(RealType(INTEGER))
             case _:
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------
@@ -372,7 +373,7 @@ class ContextTypeInferInstance(Visitor):
             case Range3():
                 # range operator
                 # C, Γ |- range e1 e2 e3 : list (real INTEGER)
-                return ListTypeContext(RealTypeContext(INTEGER))
+                return ListType(RealType(INTEGER))
             case _:
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------
@@ -394,7 +395,7 @@ class ContextTypeInferInstance(Visitor):
             case And() | Or():
                 # and / or operator
                 # C, Γ |- e : bool
-                return BoolTypeContext()
+                return BoolType()
             case Zip():
                 # zip operator
                 #  C, Γ |- e_1 : list T_1 ... C, Γ |- e_n : list T_n
@@ -402,9 +403,9 @@ class ContextTypeInferInstance(Visitor):
                 #        C, Γ |- e : list [T_1 x ... x T_n]
                 elt_tys = []
                 for arg_ty in arg_tys:
-                    assert isinstance(arg_ty, ListTypeContext)
+                    assert isinstance(arg_ty, ListType)
                     elt_tys.append(arg_ty.elt)
-                return ListTypeContext(TupleTypeContext(*elt_tys))
+                return ListType(TupleType(*elt_tys))
             case _:
                 raise ValueError(f'unknown n-ary operator: {type(e)}')
 
@@ -412,7 +413,7 @@ class ContextTypeInferInstance(Visitor):
         # C, Γ |- e : bool
         for arg in e.args:
             self._visit_expr(arg, ctx)
-        return BoolTypeContext()
+        return BoolType()
 
     def _visit_call(self, e: Call, ctx: ContextParam):
         # get around circular imports
@@ -427,8 +428,9 @@ class ContextTypeInferInstance(Visitor):
                 # calling a primitive => can't conclude anything
                 fn_ty = ContextInfer.infer_primitive(e.fn)
                 # instantiate the function context
-                fn_ty = cast(FunctionTypeContext, self._instantiate(fn_ty))
+                fn_ty = cast(FunctionType, self._instantiate(fn_ty))
                 # merge caller context
+                assert fn_ty.ctx is not None
                 self._unify_contexts(ctx, fn_ty.ctx)
                 # merge arguments
                 if len(fn_ty.arg_types) != len(e.args):
@@ -455,8 +457,9 @@ class ContextTypeInferInstance(Visitor):
                     )
 
                 # instantiate the function context
-                fn_ctx = cast(FunctionTypeContext, self._instantiate(fn_info.fn_type))
+                fn_ctx = cast(FunctionType, self._instantiate(fn_info.fn_type))
                 # merge caller context
+                assert fn_ctx.ctx is not None
                 self._unify_contexts(ctx, fn_ctx.ctx)
                 # merge arguments
                 for arg, expect_ty in zip(e.args, fn_ctx.arg_types):
@@ -476,7 +479,7 @@ class ContextTypeInferInstance(Visitor):
         # -----------------------------------------
         #        C, Γ |- e : T_1 x ... x T_n
         arg_tys = [self._visit_expr(arg, ctx) for arg in e.elts]
-        return TupleTypeContext(*arg_tys)
+        return TupleType(*arg_tys)
 
     def _visit_list_expr(self, e: ListExpr, ctx: ContextParam):
         #  C, Γ |- e_1 : T ... C, Γ |- e_n : T
@@ -487,7 +490,7 @@ class ContextTypeInferInstance(Visitor):
         else:
             # type checking ensures the base type is the same
             elts = [self._visit_expr(arg, ctx) for arg in e.elts]
-            return ListTypeContext(elts[0])
+            return ListType(elts[0])
 
     def _visit_list_comp(self, e: ListComp, ctx: ContextParam):
         #       C, Γ |- elt: T
@@ -495,10 +498,10 @@ class ContextTypeInferInstance(Visitor):
         #  C, Γ |- for ... : list T
         for target, iterable in zip(e.targets, e.iterables):
             iterable_ty = self._visit_expr(iterable, ctx)
-            assert isinstance(iterable_ty, ListTypeContext)
+            assert isinstance(iterable_ty, ListType)
             self._visit_binding(e, target, iterable_ty.elt)
         ty = self._visit_expr(e.elt, ctx)
-        return ListTypeContext(ty)
+        return ListType(ty)
 
     def _visit_list_ref(self, e: ListRef, ctx: ContextParam):
         #      C, Γ |- e: list T       C, Γ |- i : real C
@@ -506,7 +509,7 @@ class ContextTypeInferInstance(Visitor):
         #            C, Γ |- e[i] : T
         ty = self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
-        assert isinstance(ty, ListTypeContext)
+        assert isinstance(ty, ListType)
         return ty.elt
 
     def _visit_list_slice(self, e: ListSlice, ctx: ContextParam):
@@ -600,7 +603,7 @@ class ContextTypeInferInstance(Visitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: ContextParam):
         iter_ty = self._visit_expr(stmt.iterable, ctx)
-        assert isinstance(iter_ty, ListTypeContext)
+        assert isinstance(iter_ty, ListType)
         self._visit_binding(stmt, stmt.target, iter_ty.elt)
 
         # add types to phi variables
@@ -664,7 +667,7 @@ class ContextTypeInferInstance(Visitor):
                 body_ctx = func.ctx
 
         # generate context variables for each argument
-        arg_types: list[TypeContext] = []
+        arg_types: list[Type] = []
         for arg, ty in zip(func.args, self.type_info.arg_types):
             arg_ty = self._cvt_arg_type(ty, arg.type)
             arg_types.append(arg_ty)
@@ -680,14 +683,14 @@ class ContextTypeInferInstance(Visitor):
 
         # visit body
         self._visit_block(func.body, body_ctx)
-        assert isinstance(self.ret_ty, TypeContext) # function has no return statement
+        assert isinstance(self.ret_ty, Type) # function has no return statement
 
         # generalize the function context
         arg_types = [self._resolve(ty) for ty in arg_types]
         ret_ty = self._resolve(self.ret_ty)
-        return FunctionTypeContext(body_ctx, arg_types, ret_ty)
+        return FunctionType(body_ctx, arg_types, ret_ty)
 
-    def _visit_expr(self, expr: Expr, ctx: ContextParam) -> TypeContext:
+    def _visit_expr(self, expr: Expr, ctx: ContextParam) -> Type:
         ty = super()._visit_expr(expr, ctx)
         self.by_expr[expr] = ty
         return ty
@@ -698,7 +701,7 @@ class ContextTypeInferInstance(Visitor):
 
         # generalize the output context
         fn_ctx, subst = self._generalize(ctx)
-        fn_ctx = cast(FunctionTypeContext, fn_ctx)
+        fn_ctx = cast(FunctionType, fn_ctx)
 
         # rename unbound context variables
         for t in self.rvars:
@@ -707,11 +710,11 @@ class ContextTypeInferInstance(Visitor):
 
         # resolve definition/expr contexts
         by_defs = {
-            d: self._resolve(ctx).subst(subst)
+            d: self._resolve(ctx).subst_context(subst)
             for d, ctx in self.by_def.items()
         }
         by_expr = {
-            e: self._resolve(ctx).subst(subst)
+            e: self._resolve(ctx).subst_context(subst)
             for e, ctx in self.by_expr.items()
         }
         return ContextAnalysis(fn_ctx, by_defs, by_expr)
@@ -737,83 +740,83 @@ class _ContextInferPrimitive:
     def _fresh_context_var(self) -> NamedId:
         return self.gensym.fresh('r')
 
-    def _cvt_arg_type(self, ty: Type, ctx: str | tuple | None) -> TypeContext:
+    def _cvt_arg_type(self, ty: Type, ctx: str | tuple | None) -> Type:
         match ty:
             case VarType():
-                return VarTypeContext(ty.name)
+                return VarType(ty.name)
             case BoolType():
-                return BoolTypeContext()
+                return BoolType()
             case RealType():
                 if ctx is None:
-                    return RealTypeContext(self._fresh_context_var())
+                    return RealType(self._fresh_context_var())
                 else:
                     if not isinstance(ctx, str):
                         raise ValueError(f"expected context variable for argument of type {ty}, got {ctx}")
                     if ctx not in self.subst:
                         self.subst[ctx] = self._fresh_context_var()
-                    return RealTypeContext(self.subst[ctx])
+                    return RealType(self.subst[ctx])
             case ContextType():
-                return ContextTypeContext()
+                return ContextType()
             case TupleType():
                 if ctx is None:
                     elts = [self._cvt_arg_type(t, None) for t in ty.elts]
-                    return TupleTypeContext(*elts)
+                    return TupleType(*elts)
                 else:
                     if not isinstance(ctx, tuple):
                         raise ValueError(f"expected tuple context for argument of type {ty}, got {ctx}")
                     if len(ty.elts) != len(ctx):
                         raise ValueError(f"tuple context length mismatch: expected {len(ty.elts)}, got {len(ctx)}")
                     elts = [self._cvt_arg_type(t, c) for t, c in zip(ty.elts, ctx)]
-                    return TupleTypeContext(*elts)
+                    return TupleType(*elts)
             case ListType():
                 if ctx is None:
                     elt = self._cvt_arg_type(ty.elt, None)
-                    return ListTypeContext(elt)
+                    return ListType(elt)
                 else:
-                    return ListTypeContext(self._cvt_arg_type(ty.elt, ctx))
+                    return ListType(self._cvt_arg_type(ty.elt, ctx))
             case _:
                 raise RuntimeError(f'unknown type: {ty}')
 
-    def _cvt_ret_type(self, ty: Type, ctx: Context | str | tuple | None) -> TypeContext:
+    def _cvt_ret_type(self, ty: Type, ctx: Context | str | tuple | None) -> Type:
         match ty:
             case VarType():
-                return VarTypeContext(ty.name)
+                return VarType(ty.name)
             case BoolType():
-                return BoolTypeContext()
+                return BoolType()
             case RealType():
                 if ctx is None:
-                    return RealTypeContext(self._fresh_context_var())
+                    return RealType(self._fresh_context_var())
                 elif isinstance(ctx, Context):
-                    return RealTypeContext(ctx)
+                    return RealType(ctx)
                 else:
                     if not isinstance(ctx, str):
                         raise ValueError(f"expected context variable for return of type {ty}, got {ctx}")
                     if ctx not in self.subst:
                         raise ValueError(f"unbound context variable '{ctx}' in return type")
-                    return RealTypeContext(self.subst[ctx])
+                    return RealType(self.subst[ctx])
             case ContextType():
-                return ContextTypeContext()
+                return ContextType()
             case TupleType():
                 if ctx is None:
                     elts = [self._cvt_ret_type(t, None) for t in ty.elts]
-                    return TupleTypeContext(*elts)
+                    return TupleType(*elts)
                 else:
                     if not isinstance(ctx, tuple):
                         raise ValueError(f"expected tuple context for return of type {ty}, got {ctx}")
                     if len(ty.elts) != len(ctx):
                         raise ValueError(f"tuple context length mismatch: expected {len(ty.elts)}, got {len(ctx)}")
                     elts = [self._cvt_ret_type(t, c) for t, c in zip(ty.elts, ctx)]
-                    return TupleTypeContext(*elts)
+                    return TupleType(*elts)
             case ListType():
                 if ctx is None:
                     elt = self._cvt_ret_type(ty.elt, None)
-                    return ListTypeContext(elt)
+                    return ListType(elt)
                 else:
-                    return ListTypeContext(self._cvt_ret_type(ty.elt, ctx)) 
+                    return ListType(self._cvt_ret_type(ty.elt, ctx)) 
             case _:
                 raise RuntimeError(f'unknown type: {ty}')
 
-    def infer(self) -> FunctionTypeContext:
+    def infer(self) -> FunctionType:
         # perform standard type inference
         fn_ty = TypeInfer.infer_primitive(self.prim)
 
@@ -833,7 +836,7 @@ class _ContextInferPrimitive:
         # interpret return context
         ret_type = self._cvt_ret_type(fn_ty.return_type, self.prim.ret_ctx)
 
-        return FunctionTypeContext(ctx, arg_types, ret_type)
+        return FunctionType(ctx, arg_types, ret_type)
 
 
 ###########################################################
@@ -880,7 +883,7 @@ class ContextInfer:
         return inst.infer()
 
     @staticmethod
-    def infer_primitive(prim: Primitive) -> FunctionTypeContext:
+    def infer_primitive(prim: Primitive) -> FunctionType:
         """
         Infers the context of a primitive.
         """

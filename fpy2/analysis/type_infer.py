@@ -15,12 +15,12 @@ from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 #####################################################################
 # Type Inference
 
-_Bool1ary = FunctionType([BoolType()], BoolType())
-_Real0ary = FunctionType([], RealType())
-_Real1ary = FunctionType([RealType()], RealType())
-_Real2ary = FunctionType([RealType(), RealType()], RealType())
-_Real3ary = FunctionType([RealType(), RealType(), RealType()], RealType())
-_Predicate = FunctionType([RealType()], BoolType())
+_Bool1ary = FunctionType(None, [BoolType()], BoolType())
+_Real0ary = FunctionType(None, [], RealType(None))
+_Real1ary = FunctionType(None, [RealType(None)], RealType(None))
+_Real2ary = FunctionType(None, [RealType(None), RealType(None)], RealType(None))
+_Real3ary = FunctionType(None, [RealType(None), RealType(None), RealType(None)], RealType(None))
+_Predicate = FunctionType(None, [RealType(None)], BoolType())
 
 _nullary_table: dict[type[NullaryOp], FunctionType] = {
     ConstNan: _Real0ary,
@@ -110,7 +110,7 @@ def _ann_to_type(ty: TypeAnn | None, fresh_var: Callable[[], VarType]) -> Type:
             # boolean type
             return BoolType()
         case RealTypeAnn():
-            return RealType()
+            return RealType(None)
         case TupleTypeAnn():
             # tuple type
             elt_tys = [_ann_to_type(elt, fresh_var) for elt in ty.elts]
@@ -230,21 +230,21 @@ class _TypeInferInstance(Visitor):
                 raise TypeInferError(f'attempting to unify `{a_ty.format()}` and `{b_ty.format()}`')
 
     def _instantiate(self, ty: Type) -> Type:
-        subst: dict[VarType, Type] = {}
-        for fv in sorted(ty.free_vars()):
+        subst: dict[NamedId, Type] = {}
+        for fv in sorted(ty.free_type_vars()):
             subst[fv] = self._fresh_type_var()
-        return ty.subst(subst)
+        return ty.subst_type(subst)
 
-    def _generalize(self, ty: Type) -> tuple[Type, dict[VarType, Type]]:
-        subst: dict[VarType, Type] = {}
-        for i, fv in enumerate(sorted(ty.free_vars())):
-            t = self.tvars.find(fv)
+    def _generalize(self, ty: Type) -> tuple[Type, dict[NamedId, Type]]:
+        subst: dict[NamedId, Type] = {}
+        for i, fv in enumerate(sorted(ty.free_type_vars())):
+            t = self.tvars.find(VarType(fv))
             match t: 
                 case VarType():
                     subst[fv] = VarType(NamedId(f't{i + 1}'))
                 case _:
                     subst[fv] = t
-        ty = ty.subst(subst)
+        ty = ty.subst_type(subst)
         return ty, subst
 
     def _ann_to_type(self, ty: TypeAnn | None) -> Type:
@@ -261,19 +261,19 @@ class _TypeInferInstance(Visitor):
         return self._fresh_type_var()
 
     def _visit_decnum(self, e: Decnum, ctx: None) -> RealType:
-        return RealType()
+        return RealType(None)
 
     def _visit_hexnum(self, e: Hexnum, ctx: None) -> RealType:
-        return RealType()
+        return RealType(None)
 
     def _visit_integer(self, e: Integer, ctx: None) -> RealType:
-        return RealType()
+        return RealType(None)
 
     def _visit_rational(self, e: Rational, ctx: None) -> RealType:
-        return RealType()
+        return RealType(None)
 
     def _visit_digits(self, e: Digits, ctx: None) -> RealType:
-        return RealType()
+        return RealType(None)
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> Type:
         cls = type(e)
@@ -295,30 +295,30 @@ class _TypeInferInstance(Visitor):
                 case Len():
                     # length operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
-                    return RealType()
+                    return RealType(None)
                 case Range1():
                     # range operator
-                    self._unify(arg_ty, RealType())
-                    return ListType(RealType())
+                    self._unify(arg_ty, RealType(None))
+                    return ListType(RealType(None))
                 case Empty():
                     # arg : real
-                    self._unify(arg_ty, RealType())
+                    self._unify(arg_ty, RealType(None))
                     # result is list[A]
                     ty = self._fresh_type_var()
                     return ListType(ty)
                 case Dim():
                     # dimension operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
-                    return RealType()
+                    return RealType(None)
                 case Enumerate():
                     # enumerate operator
                     ty = self._fresh_type_var()
                     self._unify(arg_ty, ListType(ty))
-                    return ListType(TupleType(RealType(), ty))
+                    return ListType(TupleType(RealType(None), ty))
                 case Sum():
                     # sum operator
-                    self._unify(arg_ty, ListType(RealType()))
-                    return RealType()
+                    self._unify(arg_ty, ListType(RealType(None)))
+                    return RealType(None)
                 case _:
                     raise ValueError(f'unknown unary operator: {cls}')
 
@@ -336,13 +336,13 @@ class _TypeInferInstance(Visitor):
                 case Size():
                     # size operator
                     self._unify(lhs_ty, ListType(self._fresh_type_var()))
-                    self._unify(rhs_ty, RealType())
-                    return RealType()
+                    self._unify(rhs_ty, RealType(None))
+                    return RealType(None)
                 case Range2():
                     # range2 operator
-                    self._unify(lhs_ty, RealType())
-                    self._unify(rhs_ty, RealType())
-                    return ListType(RealType())
+                    self._unify(lhs_ty, RealType(None))
+                    self._unify(rhs_ty, RealType(None))
+                    return ListType(RealType(None))
                 case _:
                     raise ValueError(f'unknown binary operator: {cls}')
 
@@ -361,10 +361,10 @@ class _TypeInferInstance(Visitor):
             match e:
                 case Range3():
                     # range3 operator
-                    self._unify(first, RealType())
-                    self._unify(second, RealType())
-                    self._unify(third, RealType())
-                    return ListType(RealType())
+                    self._unify(first, RealType(None))
+                    self._unify(second, RealType(None))
+                    self._unify(third, RealType(None))
+                    return ListType(RealType(None))
                 case _:
                     raise ValueError(f'unknown ternary operator: {cls}')
 
@@ -373,8 +373,8 @@ class _TypeInferInstance(Visitor):
             case Min() | Max():
                 for arg in e.args:
                     ty = self._visit_expr(arg, None)
-                    self._unify(ty, RealType())
-                return RealType()
+                    self._unify(ty, RealType(None))
+                return RealType(None)
             case And() | Or():
                 for arg in e.args:
                     ty = self._visit_expr(arg, None)
@@ -394,7 +394,7 @@ class _TypeInferInstance(Visitor):
     def _visit_compare(self, e: Compare, ctx: None) -> BoolType:
         for arg in e.args:
             ty = self._visit_expr(arg, None)
-            self._unify(ty, RealType())
+            self._unify(ty, RealType(None))
         return BoolType()
 
     def _visit_call(self, e: Call, ctx: None) -> Type:
@@ -504,7 +504,7 @@ class _TypeInferInstance(Visitor):
         self._unify(value_ty, ListType(ty))
         # index : real
         index_ty = self._visit_expr(e.index, None)
-        self._unify(index_ty, RealType())
+        self._unify(index_ty, RealType(None))
         # val[index] : A
         return ty
 
@@ -515,10 +515,10 @@ class _TypeInferInstance(Visitor):
         # type check endpoints
         if e.start is not None:
             start_ty = self._visit_expr(e.start, None)
-            self._unify(start_ty, RealType())
+            self._unify(start_ty, RealType(None))
         if e.stop is not None:
             stop_ty = self._visit_expr(e.stop, None)
-            self._unify(stop_ty, RealType())
+            self._unify(stop_ty, RealType(None))
         # same type as value_ty
         return value_ty
 
@@ -530,7 +530,7 @@ class _TypeInferInstance(Visitor):
             ty = self._visit_expr(s, None)
             elt_ty = self._fresh_type_var()
             self._unify(arr_ty, ListType(elt_ty))
-            self._unify(ty, RealType())
+            self._unify(ty, RealType(None))
             iter_ty = elt_ty
 
         val_ty = self._visit_expr(e.expr, None)
@@ -567,7 +567,7 @@ class _TypeInferInstance(Visitor):
             self._unify(arr_ty, ListType(elt_ty))
             # s : real
             ty = self._visit_expr(s, None)
-            self._unify(ty, RealType())
+            self._unify(ty, RealType(None))
             # arr [idx] : A
             arr_ty = elt_ty
 
@@ -696,7 +696,7 @@ class _TypeInferInstance(Visitor):
         # generalize the function type
         arg_tys = [self._resolve_type(ty) for ty in arg_tys]
         ret_ty = self._resolve_type(self.ret_type)
-        return FunctionType(arg_tys, ret_ty)
+        return FunctionType(None, arg_tys, ret_ty)
 
     def _visit_expr(self, expr: Expr, ctx: None) -> Type:
         ret_ty = super()._visit_expr(expr, ctx)
@@ -714,15 +714,15 @@ class _TypeInferInstance(Visitor):
         # rename unbound type variables
         for t in self.tvars:
             if isinstance(t, VarType) and t not in subst:
-                subst[t] = VarType(NamedId(f't{len(subst) + 1}'))
+                subst[t.name] = VarType(NamedId(f't{len(subst) + 1}'))
 
         # resolve definition/expr types
         by_defs = {
-            name: self._resolve_type(ty).subst(subst)
+            name: self._resolve_type(ty).subst_type(subst)
             for name, ty in self.by_def.items()
         }
         by_expr = {
-            e: self._resolve_type(ty).subst(subst)
+            e: self._resolve_type(ty).subst_type(subst)
             for e, ty in self.by_expr.items()
         }
         return TypeAnalysis(fn_ty, by_defs, by_expr, self.tvars)
@@ -754,7 +754,7 @@ class _TypeInferPrimitive:
     def infer(self) -> FunctionType:
         arg_tys = [self._ann_to_type(ty) for ty in self.prim.arg_types]
         ret_ty = self._ann_to_type(self.prim.ret_type)
-        return FunctionType(arg_tys, ret_ty)
+        return FunctionType(None, arg_tys, ret_ty)
 
 
 ###########################################################

@@ -74,16 +74,12 @@ class MonomorphizeType:
         if ty_info is None:
             ty_info = TypeInfer.check(func)
 
-        subst_ty: dict[VarType, Type] = {}
-        for k, v in subst.items():
-            subst_ty[VarType(k)] = v
-
-        free_vars = ty_info.fn_type.free_vars()
-        for key in subst_ty:
+        free_vars = ty_info.fn_type.free_type_vars()
+        for key in subst:
             if key not in free_vars:
                 raise ValueError(f'Unbound type variable `{key}` in {func.name} : {ty_info.fn_type.format()}')
 
-        fn_type = ty_info.fn_type.subst(subst_ty)
+        fn_type = ty_info.fn_type.subst_type(subst)
         assert isinstance(fn_type, FunctionType)
         return _MonomorphizeVisitor(func, fn_type).apply()
 
@@ -104,7 +100,7 @@ class MonomorphizeType:
         if ty_info is None:
             ty_info = TypeInfer.check(func)
 
-        subst: dict[VarType, Type] = {}
+        subst: dict[NamedId, Type] = {}
 
         def _raise_conflict(curr_ty: Type, new_ty: Type):
             raise ValueError(f'Conflicting type info: cannot override {new_ty.format()} with {curr_ty.format()}')
@@ -112,11 +108,11 @@ class MonomorphizeType:
         def _merge(curr_ty: Type, new_ty: Type, a_ty: Type, b_ty: Type):
             match a_ty, b_ty:
                 case VarType(), _:
-                    if a_ty in subst:
-                        if subst[a_ty] != b_ty:
+                    if a_ty.name in subst:
+                        if subst[a_ty.name] != b_ty:
                             _raise_conflict(curr_ty, new_ty)
                     else:
-                        subst[a_ty] = b_ty
+                        subst[a_ty.name] = b_ty
                 case BoolType(), BoolType():
                     pass
                 case RealType(), RealType():
@@ -137,6 +133,6 @@ class MonomorphizeType:
             if new_ty is not None:
                 _merge(curr_ty, new_ty, curr_ty, new_ty)
 
-        fn_type = ty_info.fn_type.subst(subst)
+        fn_type = ty_info.fn_type.subst_type(subst)
         assert isinstance(fn_type, FunctionType)
         return _MonomorphizeVisitor(func, fn_type).apply()
