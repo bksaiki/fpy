@@ -51,6 +51,10 @@ class Type(ABC):
         """Substitutes type variables in the type."""
         ...
 
+    def is_monomorphic(self) -> bool:
+        """The type has no free variables."""
+        return not self.free_vars()
+
 
 class VarType(Type):
     """Type variable"""

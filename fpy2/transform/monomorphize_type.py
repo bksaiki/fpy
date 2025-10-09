@@ -41,12 +41,11 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
                 raise RuntimeError(f'Unsupported argument type `{ty}`')
 
     def _visit_argument(self, arg: Argument, ty: Type):
-        if ty.free_vars():
-            ann: TypeAnn = AnyTypeAnn(None)
+        if ty.is_monomorphic():
+            return Argument(arg.name, AnyTypeAnn(None), arg.loc)
         else:
             ann = self._cvt_arg_type(ty)
-
-        return Argument(arg.name, ann, arg.loc)
+            return Argument(arg.name, ann, arg.loc)
 
     def _visit_function(self, func: FuncDef, ctx: None) -> FuncDef:
         args = [self._visit_argument(arg, ty) for arg, ty in zip(func.args, self.fn_ty.arg_types)]

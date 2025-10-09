@@ -24,21 +24,21 @@ class ContextInferError(Exception):
 
 @dataclass(frozen=True)
 class ContextAnalysis:
-    func_ty: FunctionTypeContext
+    fn_type: FunctionTypeContext
     by_def: dict[Definition, TypeContext]
     by_expr: dict[Expr, TypeContext]
 
     @property
     def body_ctx(self):
-        return self.func_ty.ctx
+        return self.fn_type.ctx
 
     @property
     def arg_types(self):
-        return self.func_ty.args
+        return self.fn_type.arg_types
 
     @property
     def return_type(self):
-        return self.func_ty.ret
+        return self.fn_type.return_type
 
 
 class ContextTypeInferInstance(Visitor):
@@ -431,16 +431,16 @@ class ContextTypeInferInstance(Visitor):
                 # merge caller context
                 self._unify_contexts(ctx, fn_ty.ctx)
                 # merge arguments
-                if len(fn_ty.args) != len(e.args):
+                if len(fn_ty.arg_types) != len(e.args):
                     raise ContextInferError(
-                        f'primitive {e.fn} expects {len(fn_ty.args)} arguments, '
+                        f'primitive {e.fn} expects {len(fn_ty.arg_types)} arguments, '
                         f'got {len(e.args)}'
                     )
-                for arg, expect_ty in zip(e.args, fn_ty.args):
+                for arg, expect_ty in zip(e.args, fn_ty.arg_types):
                     ty = self._visit_expr(arg, ctx)
                     self._unify(ty, expect_ty)
 
-                return fn_ty.ret
+                return fn_ty.return_type
             case Function():
                 # calling a function
                 # TODO: guard against recursion
@@ -455,15 +455,15 @@ class ContextTypeInferInstance(Visitor):
                     )
 
                 # instantiate the function context
-                fn_ctx = cast(FunctionTypeContext, self._instantiate(fn_info.func_ty))
+                fn_ctx = cast(FunctionTypeContext, self._instantiate(fn_info.fn_type))
                 # merge caller context
                 self._unify_contexts(ctx, fn_ctx.ctx)
                 # merge arguments
-                for arg, expect_ty in zip(e.args, fn_ctx.args):
+                for arg, expect_ty in zip(e.args, fn_ctx.arg_types):
                     ty = self._visit_expr(arg, ctx)
                     self._unify(ty, expect_ty)
 
-                return fn_ctx.ret
+                return fn_ctx.return_type
             case type() if issubclass(e.fn, Context):
                 # calling context constructor
                 # TODO: can infer if the arguments are statically known

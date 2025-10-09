@@ -216,39 +216,39 @@ class FunctionTypeContext(TypeContext):
     ctx: ContextParam
     """caller context"""
 
-    args: tuple[TypeContext, ...]
+    arg_types: tuple[TypeContext, ...]
     """argument types"""
 
-    ret: TypeContext
+    return_type: TypeContext
     """return type"""
 
     def __init__(self, ctx: ContextParam, args: Iterable[TypeContext], ret: TypeContext):
         self.ctx = ctx
-        self.args = tuple(args)
-        self.ret = ret
+        self.arg_types = tuple(args)
+        self.return_type = ret
 
     def as_type(self):
         return FunctionType(
-            [arg_ty.as_type() for arg_ty in self.args],
-            self.ret.as_type()
+            [arg_ty.as_type() for arg_ty in self.arg_types],
+            self.return_type.as_type()
         )
 
     def format(self) -> str:
-       fn_ty = ' -> '.join([arg.format() for arg in self.args] + [self.ret.format()])
+       fn_ty = ' -> '.join([arg.format() for arg in self.arg_types] + [self.return_type.format()])
        return f'[{self.ctx}] {fn_ty}'
 
     def free_vars(self) -> set[NamedId]:
         fvs: set[NamedId] = set()
         if isinstance(self.ctx, NamedId):
             fvs.add(self.ctx)
-        for arg in self.args:
+        for arg in self.arg_types:
             fvs |= arg.free_vars()
-        fvs |= self.ret.free_vars()
+        fvs |= self.return_type.free_vars()
         return fvs
 
     def subst(self, subst: dict[NamedId, ContextParam]) -> TypeContext:
         return FunctionTypeContext(
             self._subst(self.ctx, subst),
-            [arg.subst(subst) for arg in self.args],
-            self.ret.subst(subst)
+            [arg.subst(subst) for arg in self.arg_types],
+            self.return_type.subst(subst)
         )
