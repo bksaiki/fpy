@@ -9,8 +9,6 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..types import *
 from ..analysis.type_infer import TypeInfer, TypeAnalysis
 
-
-
 class _MonomorphizeVisitor(DefaultTransformVisitor):
     """Monormize visitor."""
 
@@ -42,10 +40,10 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
 
     def _visit_argument(self, arg: Argument, ty: Type):
         if ty.is_monomorphic():
-            return Argument(arg.name, AnyTypeAnn(None), arg.loc)
-        else:
             ann = self._cvt_arg_type(ty)
             return Argument(arg.name, ann, arg.loc)
+        else:
+            return Argument(arg.name, AnyTypeAnn(None), arg.loc)
 
     def _visit_function(self, func: FuncDef, ctx: None) -> FuncDef:
         args = [self._visit_argument(arg, ty) for arg, ty in zip(func.args, self.fn_ty.arg_types)]
@@ -86,5 +84,59 @@ class MonomorphizeType:
                 raise ValueError(f'Unbound type variable `{key}` in {func.name} : {ty_info.fn_type.format()}')
 
         fn_type = ty_info.fn_type.subst(subst_ty)
+        assert isinstance(fn_type, FunctionType)
+        return _MonomorphizeVisitor(func, fn_type).apply()
+
+    @staticmethod
+    def apply_by_arg(
+        func: FuncDef,
+        arg_types: list[Type | None],
+        *,
+        ty_info: TypeAnalysis | None = None
+    ):
+        if not isinstance(func, FuncDef):
+            raise TypeError(f'Expected \'FuncDef\', got `{func}`')
+        if not isinstance(arg_types, list):
+            raise TypeError(f'Expected \'list\', got `{arg_types}`')
+        if len(func.args) != len(arg_types):
+            raise ValueError(f'Expected {len(func.args)} types, got {len(arg_types)}')
+
+        if ty_info is None:
+            ty_info = TypeInfer.check(func)
+
+        subst: dict[VarType, Type] = {}
+
+        def _raise_conflict(curr_ty: Type, new_ty: Type):
+            raise ValueError(f'Conflicting type info: cannot override {new_ty.format()} with {curr_ty.format()}')
+
+        def _merge(curr_ty: Type, new_ty: Type, a_ty: Type, b_ty: Type):
+            match a_ty, b_ty:
+                case VarType(), _:
+                    if a_ty in subst:
+                        if subst[a_ty] != b_ty:
+                            _raise_conflict(curr_ty, new_ty)
+                    else:
+                        subst[a_ty] = b_ty
+                case BoolType(), BoolType():
+                    pass
+                case RealType(), RealType():
+                    pass
+                case ContextType(), ContextType():
+                    pass
+                case TupleType(), TupleType():
+                    if len(a_ty.elts) != len(b_ty.elts):
+                        _raise_conflict(curr_ty, new_ty)
+                    for a_elt, b_elt in zip(a_ty.elts, b_ty.elts):
+                        _merge(curr_ty, new_ty, a_elt, b_elt)
+                case ListType(), ListType():
+                    _merge(curr_ty, new_ty, a_ty.elt, b_ty.elt)
+                case _:
+                    _raise_conflict(curr_ty, new_ty)
+
+        for curr_ty, new_ty in zip(ty_info.arg_types, arg_types):
+            if new_ty is not None:
+                _merge(curr_ty, new_ty, curr_ty, new_ty)
+
+        fn_type = ty_info.fn_type.subst(subst)
         assert isinstance(fn_type, FunctionType)
         return _MonomorphizeVisitor(func, fn_type).apply()
