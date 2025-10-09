@@ -9,7 +9,7 @@ from ..ast import *
 from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind
 
-from .types import *
+from ..types import *
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
 #####################################################################

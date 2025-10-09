@@ -5,9 +5,20 @@ Strings are not sufficient as identifiers, especially when (re)-generating
 unique identifiers.
 """
 
+import re
+
 from abc import ABC, abstractmethod
 
 from .location import Location
+
+
+def _split_id(name: str) -> tuple[str, int | None]:
+    m = re.match(r"^(.*?)(\d+)$", name)
+    if not m:
+        return name, None
+    base, count = m.groups()
+    return base, int(count)
+
 
 class Id(ABC):
     """Abstract base class for identifiers."""
@@ -75,6 +86,13 @@ class NamedId(Id):
     def __init__(self, base: str, count: int | None = None):
         if not isinstance(base, str):
             raise TypeError(f'expected a str, for {base}')
+
+        if count is None:
+            base, count = _split_id(base)
+        else:
+            base, suffix = _split_id(base)
+            if suffix is not None:
+                raise ValueError(f'base name cannot have a digit suffix: {base}')
         self.base = base
         self.count = count
 
@@ -88,7 +106,11 @@ class NamedId(Id):
             return f'{self.base}{self.count}'
 
     def __eq__(self, other):
-        return isinstance(other, NamedId) and str(self) == str(other)
+        return (
+            isinstance(other, NamedId)
+            and self.base == other.base
+            and self.count == other.count
+        )
 
     def __hash__(self):
         return hash((self.base, self.count))

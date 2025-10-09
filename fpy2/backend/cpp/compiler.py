@@ -13,8 +13,8 @@ from ...analysis import (
     DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
     TypeInferError
 )
-from ...analysis.types import *
-from ...analysis.context_types import *
+from ...types import *
+from ...context_types import *
 from ...function import Function
 from ...number import (
     RM,

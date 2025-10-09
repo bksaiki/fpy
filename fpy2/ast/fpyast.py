@@ -38,6 +38,7 @@ __all__ = [
     'AnyTypeAnn',
     'RealTypeAnn',
     'BoolTypeAnn',
+    'ContextTypeAnn',
     'TupleTypeAnn',
     'ListTypeAnn',
     'SizedTensorTypeAnn',
@@ -285,6 +286,16 @@ class BoolTypeAnn(TypeAnn):
 
     def is_equiv(self, other):
         return isinstance(other, BoolTypeAnn)
+
+class ContextTypeAnn(TypeAnn):
+    """FPy AST: context type annotation"""
+    __slots__ = ()
+
+    def __init__(self, loc: Location | None):
+        super().__init__(loc)
+
+    def is_equiv(self, other):
+        return isinstance(other, ContextTypeAnn)
 
 
 class TupleTypeAnn(TypeAnn):

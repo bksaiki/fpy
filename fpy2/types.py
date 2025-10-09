@@ -19,7 +19,7 @@ function types, and type variables.
 from abc import ABC, abstractmethod
 from typing import Iterable
 
-from ..utils import NamedId, default_repr
+from .utils import NamedId, default_repr
 
 __all__ = [
     'Type',
@@ -205,7 +205,7 @@ class FunctionType(Type):
         self.return_type = return_type
 
     def format(self) -> str:
-        return f'function[{", ".join(arg.format() for arg in self.arg_types)}] -> {self.return_type.format()}'
+        return ' -> '.join([arg.format() for arg in self.arg_types] + [self.return_type.format()])
 
     def free_vars(self) -> set[VarType]:
         fvs: set[VarType] = set()

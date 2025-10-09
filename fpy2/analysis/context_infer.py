@@ -13,10 +13,10 @@ from ..number import Context, INTEGER, REAL
 from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind
 
-from .context_types import *
+from ..context_types import *
+from ..types import *
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 from .type_infer import TypeInfer, TypeAnalysis
-from .types import *
 
 class ContextInferError(Exception):
     """Context inference error for FPy programs."""

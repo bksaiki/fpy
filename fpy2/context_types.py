@@ -23,8 +23,8 @@ the context in which the function is called (this is usually a variable).
 from abc import ABC, abstractmethod
 from typing import Iterable, TypeAlias
 
-from ..number import Context
-from ..utils import NamedId, default_repr
+from .number import Context
+from .utils import NamedId, default_repr
 from .types import *
 
 __all__ = [
@@ -234,7 +234,8 @@ class FunctionTypeContext(TypeContext):
         )
 
     def format(self) -> str:
-        return f'function[{", ".join(arg.format() for arg in self.args)}] -> {self.ret.format()} [{self.ctx}]'
+       fn_ty = ' -> '.join([arg.format() for arg in self.args] + [self.ret.format()])
+       return f'[{self.ctx}] {fn_ty}'
 
     def free_vars(self) -> set[NamedId]:
         fvs: set[NamedId] = set()
