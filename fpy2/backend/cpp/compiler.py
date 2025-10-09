@@ -561,6 +561,7 @@ class _CppBackendInstance(Visitor):
                     return op.format(arg)
 
             # TODO: list options vs. actual signature
+            print(arg_ty.format(), e_ty.format())
             raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
 
         # fallback
@@ -1039,7 +1040,7 @@ class CppBackend(Backend):
         func: Function,
         *,
         ctx: Context | None = None,
-        arg_types: list[Type | None] | None = None,
+        arg_types: Iterable[Type | None] | None = None,
     ) -> str:
         """
         Compiles the given FPy function to a C++ program
@@ -1049,15 +1050,15 @@ class CppBackend(Backend):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
         if ctx is not None and not isinstance(ctx, Context):
             raise TypeError(f'Expected `Context` or `None`, got {type(ctx)} for {ctx}')
-        if arg_types is not None and not isinstance(arg_types, list):
-            raise TypeError(f'Expected `list` or `None`, got {type(arg_types)} for {arg_types}')
+        if arg_types is not None and not isinstance(arg_types, Iterable):
+            raise TypeError(f'Expected `Iterable` or `None`, got {type(arg_types)} for {arg_types}')
 
         # monomorphizing (optional)
         ast = func.ast
         if ctx is not None or arg_types is not None:
             if arg_types is None:
                 arg_types = [None for _ in func.args]
-            ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
+            ast = Monomorphize.apply_by_arg(ast, ctx, list(arg_types))
 
         # normalization passes
         ast = ConstFold.apply(ast, enable_op=False)

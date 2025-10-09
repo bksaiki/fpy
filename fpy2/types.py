@@ -341,7 +341,11 @@ class FunctionType(Type):
         )
 
     def format(self) -> str:
-        raw_fmt = ' -> '.join([arg.format() for arg in self.arg_types] + [self.return_type.format()])
+        if len(self.arg_types) == 0:
+            raw_fmt = '() -> ' + self.return_type.format()
+        else:
+            raw_fmt = ' -> '.join([arg.format() for arg in self.arg_types] + [self.return_type.format()])
+
         if self.ctx is None:
             return raw_fmt
         else:

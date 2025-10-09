@@ -556,7 +556,7 @@ def test_for4():
 def test_for5():
     xs = [1, 2, 3]
     ys = [3, 5, 7]
-    sum = 0.0
+    sum = 0
     for x, y in zip(xs, ys):
         sum += x * y
     return sum

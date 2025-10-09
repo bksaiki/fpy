@@ -116,49 +116,62 @@ class Monomorphize:
         if ty_info is None:
             ty_info = TypeInfer.check(func)
 
-        subst: dict[NamedId, Type] = {}
+        ty_subst: dict[NamedId, Type] = {}
+        ctx_subst: dict[NamedId, Context] = {}
 
         def _raise_conflict(curr_ty: Type, new_ty: Type):
             raise ValueError(f'Conflicting type info: cannot override {new_ty.format()} with {curr_ty.format()}')
 
-        def _merge(curr_ty: Type, new_ty: Type, a_ty: Type, b_ty: Type):
+        def _check_merge(curr_ty: Type, new_ty: Type, a_ty: Type, b_ty: Type):
             match a_ty, b_ty:
                 case VarType(), _:
-                    if a_ty.name in subst:
-                        if subst[a_ty.name] != b_ty:
+                    if a_ty.name in ty_subst:
+                        if ty_subst[a_ty.name] != b_ty:
                             _raise_conflict(curr_ty, new_ty)
                     else:
-                        subst[a_ty.name] = b_ty
+                        ty_subst[a_ty.name] = b_ty
                 case BoolType(), BoolType():
                     pass
                 case RealType(), RealType():
-                    pass
+                    # TODO: how should we handle context merging?
+                    match a_ty.ctx, b_ty.ctx:
+                        case NamedId(), Context():
+                            if a_ty.ctx in ctx_subst:
+                                if not ctx_subst[a_ty.ctx].is_equiv(b_ty.ctx):
+                                    _raise_conflict(curr_ty, new_ty)
+                            else:
+                                ctx_subst[a_ty.ctx] = b_ty.ctx
+                        case _:
+                            pass
                 case ContextType(), ContextType():
                     pass
                 case TupleType(), TupleType():
                     if len(a_ty.elts) != len(b_ty.elts):
                         _raise_conflict(curr_ty, new_ty)
                     for a_elt, b_elt in zip(a_ty.elts, b_ty.elts):
-                        _merge(curr_ty, new_ty, a_elt, b_elt)
+                        _check_merge(curr_ty, new_ty, a_elt, b_elt)
                 case ListType(), ListType():
-                    _merge(curr_ty, new_ty, a_ty.elt, b_ty.elt)
+                    _check_merge(curr_ty, new_ty, a_ty.elt, b_ty.elt)
                 case _:
                     _raise_conflict(curr_ty, new_ty)
 
-        for curr_ty, new_ty in zip(ty_info.arg_types, arg_types):
-            if new_ty is not None:
-                _merge(curr_ty, new_ty, curr_ty, new_ty)
-
-        if (
+        if ctx is None:
+            ctx = ty_info.fn_type.ctx
+        elif (
             isinstance(ctx, Context)
             and isinstance(ty_info.fn_type.ctx, Context)
             and not ctx.is_equiv(ty_info.fn_type.ctx)
         ):
             raise ValueError(f'Conflicting context info: cannot override {ty_info.fn_type.ctx} with {ctx}')
 
-        fn_type = ty_info.fn_type.subst_type(subst)
-        assert isinstance(fn_type, FunctionType)
-        if ctx is not None:
-            fn_type = FunctionType(ctx, fn_type.arg_types, fn_type.return_type)
+        new_arg_types: list[Type] = []
+        for curr_ty, new_ty in zip(ty_info.arg_types, arg_types):
+            if new_ty is None:
+                new_arg_types.append(curr_ty)
+            else:
+                if new_ty is not None:
+                    _check_merge(curr_ty, new_ty, curr_ty, new_ty)
+                new_arg_types.append(new_ty)
 
+        fn_type = FunctionType(ctx, new_arg_types, ty_info.return_type)
         return _MonomorphizeVisitor(func, fn_type).apply()
