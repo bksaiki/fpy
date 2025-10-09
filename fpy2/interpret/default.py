@@ -863,7 +863,7 @@ class _Interpreter(Visitor):
         # process arguments and add to environment
         for val, arg in zip(args, func.args):
             match arg.type:
-                case AnyTypeAnn() | None:
+                case AnyTypeAnn():
                     x = self._arg_to_value(val)
                     if isinstance(arg.name, NamedId):
                         self.env[arg.name] = x

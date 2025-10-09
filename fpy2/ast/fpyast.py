@@ -1676,12 +1676,12 @@ class Argument(Ast):
     """FPy AST: function argument"""
     __slots__ = ('name', 'type')
     name: Id
-    type: TypeAnn | None
+    type: TypeAnn
 
     def __init__(
         self,
         name: Id,
-        type: TypeAnn | None,
+        type: TypeAnn,
         loc: Location | None
     ):
         super().__init__(loc)
@@ -1689,7 +1689,11 @@ class Argument(Ast):
         self.type = type
 
     def is_equiv(self, other) -> bool:
-        return isinstance(other, Argument) and self.name == other.name
+        return (
+            isinstance(other, Argument)
+            and self.name == other.name
+            and self.type.is_equiv(other.type)
+        )
 
 class FuncDef(Ast):
     """FPy AST: function definition"""

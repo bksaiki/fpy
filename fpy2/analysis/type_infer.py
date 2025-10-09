@@ -104,7 +104,7 @@ _ternary_table: dict[type[TernaryOp], FunctionType] = {
 
 def _ann_to_type(ty: TypeAnn | None, fresh_var: Callable[[], VarType]) -> Type:
     match ty:
-        case None | AnyTypeAnn():
+        case AnyTypeAnn():
             return fresh_var()
         case BoolTypeAnn():
             # boolean type

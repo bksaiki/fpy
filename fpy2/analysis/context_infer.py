@@ -172,7 +172,7 @@ class ContextTypeInferInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable: {a_ty}, {b_ty}')
 
-    def _cvt_arg_type(self, ty: Type):
+    def _cvt_type(self, ty: Type) -> TypeContext:
         match ty:
             case VarType():
                 return VarTypeContext(ty.name)
@@ -183,11 +183,42 @@ class ContextTypeInferInstance(Visitor):
             case ContextType():
                 return ContextTypeContext()
             case TupleType():
-                elts = [self._cvt_arg_type(elt) for elt in ty.elts]
+                elts = [self._cvt_type(elt) for elt in ty.elts]
                 return TupleTypeContext(*elts)
             case ListType():
-                elt = self._cvt_arg_type(ty.elt)
+                elt = self._cvt_type(ty.elt)
                 return ListTypeContext(elt)
+            case _:
+                raise RuntimeError(f'unreachable: {ty}')
+
+    def _cvt_arg_type(self, ty: Type, ann: TypeAnn):
+        match ty:
+            case VarType():
+                return VarTypeContext(ty.name)
+            case BoolType():
+                return BoolTypeContext()
+            case RealType():
+                if isinstance(ann, RealTypeAnn) and ann.ctx is not None:
+                    return RealTypeContext(ann.ctx)
+                else:
+                    return RealTypeContext(self._fresh_context_var())
+            case ContextType():
+                return ContextTypeContext()
+            case TupleType():
+                if isinstance(ann, TupleTypeAnn):
+                    assert len(ann.elts) == len(ty.elts)
+                    elts = [self._cvt_arg_type(elt, ann) for elt, ann in zip(ty.elts, ann.elts)]
+                    return TupleTypeContext(*elts)
+                else:
+                    elts = [self._cvt_arg_type(elt, AnyTypeAnn(None)) for elt in ty.elts]
+                    return TupleTypeContext(*elts)
+            case ListType():
+                if isinstance(ann, ListTypeAnn):
+                    elt = self._cvt_arg_type(ty.elt, ann.elt)
+                    return ListTypeContext(elt)
+                else:
+                    elt = self._cvt_arg_type(ty.elt, AnyTypeAnn(None))
+                    return ListTypeContext(elt)
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
@@ -219,7 +250,7 @@ class ContextTypeInferInstance(Visitor):
         return ty
 
     def _visit_foreign(self, e: ForeignVal, ctx: ContextParam):
-        return self._cvt_arg_type(self._lookup_ty(e))
+        return self._cvt_type(self._lookup_ty(e))
 
     def _visit_decnum(self, e: Decnum, ctx: ContextParam):
         if self.unsafe_cast_int and e.is_integer():
@@ -300,7 +331,7 @@ class ContextTypeInferInstance(Visitor):
             case Empty():
                 # empty operator
                 # C, Γ |- empty e : list T
-                return self._cvt_arg_type(self._lookup_ty(e))
+                return self._cvt_type(self._lookup_ty(e))
             case Enumerate():
                 # enumerate operator
                 #          C, Γ |- e : list T
@@ -390,7 +421,7 @@ class ContextTypeInferInstance(Visitor):
         match e.fn:
             case None:
                 # calling None => can't conclude anything
-                ty = self._cvt_arg_type(self._lookup_ty(e))
+                ty = self._cvt_type(self._lookup_ty(e))
                 return ty
             case Primitive():
                 # calling a primitive => can't conclude anything
@@ -452,7 +483,7 @@ class ContextTypeInferInstance(Visitor):
         # -------------------------------------
         #         C, Γ |- e : list T
         if len(e.elts) == 0:
-            return self._cvt_arg_type(self._lookup_ty(e))
+            return self._cvt_type(self._lookup_ty(e))
         else:
             # type checking ensures the base type is the same
             elts = [self._visit_expr(arg, ctx) for arg in e.elts]
@@ -635,7 +666,7 @@ class ContextTypeInferInstance(Visitor):
         # generate context variables for each argument
         arg_types: list[TypeContext] = []
         for arg, ty in zip(func.args, self.type_info.arg_types):
-            arg_ty = self._cvt_arg_type(ty)
+            arg_ty = self._cvt_arg_type(ty, arg.type)
             arg_types.append(arg_ty)
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
@@ -644,7 +675,7 @@ class ContextTypeInferInstance(Visitor):
         # generate context variables for each free variables
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            ty = self._cvt_arg_type(self.type_info.by_def[d])
+            ty = self._cvt_type(self.type_info.by_def[d])
             self._set_context(d, ty)
 
         # visit body
