@@ -14,7 +14,7 @@ def zeros(rows: int, cols: int) -> list[list[fp.Real]]:
     :param cols: Number of columns.
     :return: Zero matrix.
     """
-    return [[0.0 for _ in range(cols)] for _ in range(rows)]
+    return [[fp.round(0) for _ in range(cols)] for _ in range(rows)]
 
 @fp.fpy
 def ones(rows: int, cols: int) -> list[list[fp.Real]]:
@@ -25,7 +25,7 @@ def ones(rows: int, cols: int) -> list[list[fp.Real]]:
     :param cols: Number of columns.
     :return: Matrix of ones.
     """
-    return [[1.0 for _ in range(cols)] for _ in range(rows)]
+    return [[fp.round(1) for _ in range(cols)] for _ in range(rows)]
 
 @fp.fpy
 def identity(n: int) -> list[list[fp.Real]]:
@@ -267,8 +267,8 @@ def trace(A: list[list[fp.Real]]) -> fp.Real:
     :return: Trace of A.
     """
     assert is_square(A) # Matrix must be square
-    
-    result = 0.0
+
+    result = fp.round(0)
     for i in range(len(A)):
         result = result + A[i][i]
     return result
@@ -282,7 +282,7 @@ def frobenius_norm(A: list[list[fp.Real]]) -> fp.Real:
     :return: Frobenius norm ||A||_F.
     """
     rows, cols = len(A), len(A[0])
-    sum_squares = 0.0
+    sum_squares = fp.round(0)
     for i in range(rows):
         for j in range(cols):
             sum_squares = sum_squares + A[i][j] * A[i][j]
@@ -330,7 +330,7 @@ def matvec(A: list[list[fp.Real]], x: list[fp.Real]):
     # assert message: "Vector length must match matrix columns"
     assert len(x) == n
 
-    result = [0.0 for _ in range(m)]
+    result = [fp.round(0) for _ in range(m)]
     for i in range(m):
         for j in range(n):
             result[i] = result[i] + A[i][j] * x[j]
@@ -448,7 +448,7 @@ def sum_elements(A: list[list[fp.Real]]) -> fp.Real:
     :return: Sum of all elements.
     """
     rows, cols = len(A), len(A[0])
-    result = 0.0
+    result = fp.round(0)
     for i in range(rows):
         for j in range(cols):
             result = result + A[i][j]
@@ -464,7 +464,7 @@ def mean_elements(A: list[list[fp.Real]]) -> fp.Real:
     """
     rows, cols = len(A), len(A[0])
     total = sum_elements(A)
-    return total / (rows * cols)
+    return total / (fp.round(rows) * fp.round(cols))
 
 @fp.fpy
 def norm_1(A: list[list[fp.Real]]) -> fp.Real:
@@ -475,10 +475,10 @@ def norm_1(A: list[list[fp.Real]]) -> fp.Real:
     :return: 1-norm of matrix.
     """
     rows, cols = len(A), len(A[0])
-    max_col_sum = 0.0
+    max_col_sum = fp.round(0)
 
     for j in range(cols):
-        col_sum = 0.0
+        col_sum = fp.round(0)
         for i in range(rows):
             col_sum = col_sum + abs(A[i][j])
         if col_sum > max_col_sum:
@@ -495,10 +495,10 @@ def norm_inf(A: list[list[fp.Real]]) -> fp.Real:
     :return: Infinity-norm of matrix.
     """
     rows, cols = len(A), len(A[0])
-    max_row_sum = 0.0
+    max_row_sum = fp.round(0)
 
     for i in range(rows):
-        row_sum = 0.0
+        row_sum = fp.round(0)
         for j in range(cols):
             row_sum = row_sum + abs(A[i][j])
         if row_sum > max_row_sum:
@@ -520,6 +520,6 @@ def vander(x: list[fp.Real], n: int) -> list[list[fp.Real]]:
 
     for i in range(m):
         for j in range(n):
-            result[i][j] = fp.pow(x[i], j)
+            result[i][j] = fp.pow(x[i], fp.round(j))
 
     return result

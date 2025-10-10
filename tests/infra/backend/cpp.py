@@ -173,7 +173,7 @@ _modules = [
     fp.libraries.core,
     fp.libraries.eft,
     fp.libraries.vector,
-    # fp.libraries.matrix
+    fp.libraries.matrix
 ]
 
 _library_ignore = [
@@ -188,6 +188,7 @@ _library_ignore = [
     'classic_2mul', # max_p
     'ideal_fma',
     'classic_2fma', # relies on `fast_2sum`
+    # matrix
 ]
 
 def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
