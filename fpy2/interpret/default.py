@@ -863,7 +863,7 @@ class _Interpreter(Visitor):
         # process arguments and add to environment
         for val, arg in zip(args, func.args):
             match arg.type:
-                case AnyTypeAnn() | None:
+                case AnyTypeAnn():
                     x = self._arg_to_value(val)
                     if isinstance(arg.name, NamedId):
                         self.env[arg.name] = x
@@ -873,7 +873,13 @@ class _Interpreter(Visitor):
                         raise TypeError(f'argument expects a real number, got data `{val}`')
                     if isinstance(arg.name, NamedId):
                         self.env[arg.name] = x
-                case TensorTypeAnn():
+                case TupleTypeAnn():
+                    x = self._arg_to_value(val)
+                    if not isinstance(x, tuple):
+                        raise NotImplementedError(f'argument is a tuple, got data {val}')
+                    if isinstance(arg.name, NamedId):
+                        self.env[arg.name] = x
+                case ListTypeAnn() | SizedTensorTypeAnn():
                     # TODO: check shape
                     x = self._arg_to_value(val)
                     if not isinstance(x, list):

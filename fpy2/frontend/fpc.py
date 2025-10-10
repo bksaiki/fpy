@@ -778,7 +778,7 @@ class _FPCore2FPy:
                     ctx.env[name] = t
                 case None:
                     # scalar argument
-                    arg = Argument(t, None, None)
+                    arg = Argument(t, AnyTypeAnn(None), None)
                     args.append(arg)
                     ctx.env[name] = t
                 case _:

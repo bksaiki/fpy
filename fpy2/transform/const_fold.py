@@ -199,7 +199,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         # bind foreign values
         for name in func.free_vars:
             d = self.def_use.find_def_from_site(name, func)
-            self.vals[d] = self.env[name.base]
+            self.vals[d] = self.env[str(name)]
 
         return super()._visit_function(func, fctx)
 

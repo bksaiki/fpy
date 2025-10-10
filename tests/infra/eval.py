@@ -4,7 +4,7 @@ from .examples import all_tests
 
 def _gen_arg(ty: fp.ast.TypeAnn, length=3):
     match ty:
-        case None | fp.ast.AnyTypeAnn() | fp.ast.RealTypeAnn():
+        case fp.ast.AnyTypeAnn() | fp.ast.RealTypeAnn():
             # assume real for `None` and `Any`
             return 1.0
         case fp.ast.ListTypeAnn():

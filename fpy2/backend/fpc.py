@@ -165,7 +165,7 @@ class _FPCoreCompileInstance(Visitor):
 
     def _compile_arg(self, arg: Argument) -> tuple[str, dict, list[int | str] | None]:
         match arg.type:
-            case AnyTypeAnn() | None:
+            case AnyTypeAnn():
                 return str(arg.name), {}, None
             case RealTypeAnn():
                 return str(arg.name), {}, None

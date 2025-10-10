@@ -10,7 +10,7 @@ from .number import Context
 
 # avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:
-    from .analysis.types import FunctionType
+    from .types import FunctionType
     from .interpret import Interpreter
 
 P = ParamSpec('P')

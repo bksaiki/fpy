@@ -178,15 +178,15 @@ class Parser:
 
     def _convert_type(self, ty, loc: Location):
         if ty == Real:
-            return RealTypeAnn(loc)
+            return RealTypeAnn(None, loc)
         elif isinstance(ty, type):
             if issubclass(ty, bool):
                 return BoolTypeAnn(loc)
             elif issubclass(ty, int) or issubclass(ty, float):
                 # TODO: more specific type
-                return RealTypeAnn(loc)
+                return RealTypeAnn(None, loc)
             elif issubclass(ty, Float):
-                return RealTypeAnn(loc)
+                return RealTypeAnn(None, loc)
             else:
                 # TODO: implement
                 return AnyTypeAnn(loc)
@@ -209,9 +209,10 @@ class Parser:
                 ident = self._parse_id(ann)
                 if isinstance(ident, UnderscoreId):
                     raise self._parse_error('FPy function call must begin with a named identifier', ann)
-                if ident.base not in self.env:
-                    raise self._parse_error(f'name \'{ident.base}\' not defined:', ann)
-                return self.env[ident.base]
+                ident_str = str(ident)
+                if ident_str not in self.env:
+                    raise self._parse_error(f'name \'{ident_str}\' not defined:', ann)
+                return self.env[ident_str]
             case ast.Subscript():
                 ctor = self._eval_type_annotation(ann.value)
                 if ctor is tuple:
@@ -406,9 +407,10 @@ class Parser:
         return Compare(ops, args, loc)
 
     def _eval_var(self, v: Var, e: ast.expr):
-        if v.name.base not in self.env:
-            raise self._parse_error(f'name \'{v.name}\' not defined:', e)
-        return self.env[v.name.base]
+        ident = str(v.name)
+        if ident not in self.env:
+            raise self._parse_error(f'name \'{ident}\' not defined:', e)
+        return self.env[ident]
 
     def _eval_attribute(self, a: Attribute, e: ast.expr):
         match a.value:
@@ -437,9 +439,10 @@ class Parser:
                 func = Var(name, None)
                 if isinstance(func, UnderscoreId):
                     raise self._parse_error('FPy function call must begin with a named identifier', e)
-                if name.base not in self.env:
-                    raise self._parse_error(f'name \'{name.base}\' not defined:', e)
-                fn = self.env[name.base]
+                ident = str(name)
+                if ident not in self.env:
+                    raise self._parse_error(f'name \'{ident}\' not defined:', e)
+                fn = self.env[ident]
             case _:
                 raise RuntimeError('unreachable')
 

@@ -4,6 +4,7 @@ Reaching definitions analysis.
 
 from dataclasses import dataclass
 from typing import TypeAlias
+from unittest import case
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -73,9 +74,11 @@ class PhiDef:
     """second argument of the phi node"""
     is_intro: bool
     """relevant for `If`: is this a variable introduced by (both) branches?"""
+    is_loop: bool
+    """is this a phi node introduced by a loop?"""
 
     def __hash__(self):
-        return hash((self.name, self.site, self.lhs, self.rhs, self.is_intro))
+        return hash((self.name, self.site, self.lhs, self.rhs, self.is_intro, self.is_loop))
 
     def __eq__(self, other):
         return (
@@ -85,6 +88,7 @@ class PhiDef:
             and self.lhs == other.lhs
             and self.rhs == other.rhs
             and self.is_intro == other.is_intro
+            and self.is_loop == other.is_loop
         )
 
 
@@ -198,16 +202,28 @@ class ReachingDefsAnalysis:
         Returns the set of root definitions (i.e., assignments with no predecessors)
         that contribute to this definition.
         """
-        match d:
-            case AssignDef():
-                if d.prev is None:
-                    return {d}
-                else:
-                    return self.roots_of(self.defs[d.prev])
-            case PhiDef():
-                return self.roots_of(self.defs[d.lhs]) | self.roots_of(self.defs[d.rhs])
-            case _:
-                raise RuntimeError(f'unexpected definition {d}')
+
+        cache: set[PhiDef] = set()
+        roots: set[AssignDef] = set()
+
+        def search(d: Definition):
+            match d:
+                case AssignDef():
+                    if d.prev is None:
+                        roots.add(d)
+                    else:
+                        search(self.defs[d.prev])
+                case PhiDef():
+                    if d not in cache:
+                        cache.add(d)
+                        search(self.defs[d.lhs])
+                        search(self.defs[d.rhs])
+                case _:
+                    raise RuntimeError(f'unexpected definition {d}')
+
+        search(d)
+        return roots
+
 
     def phi_prevs(self, d: PhiDef) -> set[PhiDef]:
         """
@@ -218,10 +234,10 @@ class ReachingDefsAnalysis:
         rhs = self.defs[d.rhs]
 
         phis: set[PhiDef] = set()
-        if isinstance(lhs, PhiDef):
+        if isinstance(lhs, PhiDef) and not lhs.is_loop:
             phis.add(lhs)
             phis |= self.phi_prevs(lhs)
-        if isinstance(rhs, PhiDef):
+        if isinstance(rhs, PhiDef) and not rhs.is_loop:
             phis.add(rhs)
             phis |= self.phi_prevs(rhs)
         return phis
@@ -297,9 +313,17 @@ class _ReachingDefs(DefaultVisitor):
         new_ctx[name] = idx
         return idx, new_ctx
 
-    def _add_phi(self, name: NamedId, site: PhiSite, lhs: int, rhs: int, ctx: _DefCtx) -> tuple[int, _DefCtx]:
+    def _add_phi(
+        self,
+        name: NamedId,
+        site: PhiSite,
+        lhs: int,
+        rhs: int,
+        ctx: _DefCtx,
+        is_loop: bool = False
+    ) -> tuple[int, _DefCtx]:
         """Adds a new phi node definition, returning the new context."""
-        d = PhiDef(name, site, lhs, rhs, name not in ctx)
+        d = PhiDef(name, site, lhs, rhs, name not in ctx, is_loop)
         idx = self._add_def(d)
         new_ctx = ctx.copy()
         new_ctx[name] = idx
@@ -373,7 +397,7 @@ class _ReachingDefs(DefaultVisitor):
         mutated = ctx.keys() & self.def_ids[stmt.body]
         for intro in mutated:
             # create (temporary) phi node `x' = phi(x, x)`
-            _, body_in = self._add_phi(intro, stmt, ctx[intro], ctx[intro], body_in)
+            _, body_in = self._add_phi(intro, stmt, ctx[intro], ctx[intro], body_in, is_loop=True)
         # visit condition and body
         self._visit_expr(stmt.cond, body_in)
         body_out = self._visit_block(stmt.body, body_in)
@@ -382,7 +406,7 @@ class _ReachingDefs(DefaultVisitor):
         for name in mutated:
             # create actual phi node `x' = phi(x, x'')` where
             # `x` is on entry and `x''` is after the loop body
-            phi, ctx = self._add_phi(name, stmt, ctx[name], body_out[name], ctx)
+            phi, ctx = self._add_phi(name, stmt, ctx[name], body_out[name], ctx, is_loop=True)
             phis[name] = self._unify_def(phi, body_in[name])
         # record the phi nodes and return the updated context
         self.phis[stmt] = phis
@@ -396,7 +420,7 @@ class _ReachingDefs(DefaultVisitor):
         mutated = ctx.keys() & self.def_ids[stmt.body]
         for intro in mutated:
             # create (temporary) phi node `x' = phi(x, x)`
-            _, body_in = self._add_phi(intro, stmt, ctx[intro], ctx[intro], body_in)
+            _, body_in = self._add_phi(intro, stmt, ctx[intro], ctx[intro], body_in, is_loop=True)
         # introduce new definition for the loop variable
         for name in stmt.target.names():
             _, body_in = self._add_assign(name, stmt, body_in)
@@ -407,7 +431,7 @@ class _ReachingDefs(DefaultVisitor):
         for name in mutated:
             # create actual phi node `x' = phi(x, x'')` where
             # `x` is on entry and `x''` is after the loop body
-            phi, ctx = self._add_phi(name, stmt, ctx[name], body_out[name], ctx)
+            phi, ctx = self._add_phi(name, stmt, ctx[name], body_out[name], ctx, is_loop=True)
             phis[name] = self._unify_def(phi, body_in[name])
         # record the phi nodes and return the updated context
         self.phis[stmt] = phis
@@ -478,7 +502,7 @@ class _ReachingDefs(DefaultVisitor):
                 case PhiDef():
                     lhs = repr_indices[d.lhs]
                     rhs = repr_indices[d.rhs]
-                    d = PhiDef(d.name, d.site, lhs, rhs, d.is_intro)
+                    d = PhiDef(d.name, d.site, lhs, rhs, d.is_intro, d.is_loop)
                 case _:
                     raise RuntimeError(f'unexpected definition {d}')
 

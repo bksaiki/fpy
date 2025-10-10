@@ -27,6 +27,7 @@ from . import ast
 from . import analysis
 from . import transform
 from . import strategies
+from . import types
 from . import utils
 
 # runtime support
@@ -41,7 +42,7 @@ from .interpret import (
 # compiler
 from .backend import (
     Backend,
-    CppBackend,
+    CppCompiler,
     FPCoreCompiler
 )
 

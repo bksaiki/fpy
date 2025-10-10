@@ -5,7 +5,7 @@ C++ backend: compiler to C++
 import enum
 import dataclasses
 
-from typing import Iterable
+from typing import Collection, Iterable
 
 from ...ast import *
 from ...analysis import (
@@ -13,8 +13,7 @@ from ...analysis import (
     DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
     TypeInferError
 )
-from ...analysis.types import *
-from ...analysis.context_types import *
+from ...types import *
 from ...function import Function
 from ...number import (
     RM,
@@ -24,8 +23,8 @@ from ...number import (
     INTEGER
 )
 from ...primitive import Primitive
-from ...transform import ConstFold
-from ...utils import Gensym, enum_repr
+from ...transform import ConstFold, Monomorphize
+from ...utils import Gensym, enum_repr, default_repr
 
 from ..backend import Backend, CompileError
 
@@ -39,6 +38,33 @@ from .utils import CPP_HEADERS, CPP_HELPERS
 class CppStandard(enum.Enum):
     """C++ standards supported by the C++ backend"""
     CXX_11 = 0
+
+@default_repr
+class CppCache:
+    """
+    Cache of compiled C++ code
+    """
+
+    cache: list[tuple[FuncDef, str]]
+    gensym: Gensym
+
+    def __init__(self):
+        self.cache = []
+        self.gensym = Gensym()
+
+    def __contains__(self, func: FuncDef):
+        return any(f.is_equiv(func) for f, _ in self.cache)
+
+    def add(self, func: FuncDef):
+        name = self.gensym.refresh(NamedId(func.name))
+        self.cache.append((func, name))
+        return name
+
+    def get(self, func: FuncDef, default: str | None = None):
+        for f, name in self.cache:
+            if f.is_equiv(func):
+                return name
+        return default
 
 
 class CppCompileError(CompileError):
@@ -84,14 +110,13 @@ class _CppBackendInstance(Visitor):
     Per-function compilation instance.
     """
 
-    options: _CppOptions
     func: FuncDef
+    name: NamedId
+    options: _CppOptions
 
-    arg_ctxs: tuple[Context | None, ...]
-    caller_ctx: Context | None
     def_use: DefineUseAnalysis
     ctx_info: ContextAnalysis
-    ctx_args: dict[NamedId, Context]
+    cache: CppCache
 
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
@@ -99,21 +124,20 @@ class _CppBackendInstance(Visitor):
 
     def __init__(
         self,
-        options: _CppOptions,
         func: FuncDef,
-        arg_ctxs: Iterable[Context | None],
-        caller_ctx: Context | None,
+        name: NamedId,
+        options: _CppOptions,
         def_use: DefineUseAnalysis,
-        ctx_info: ContextAnalysis
+        ctx_info: ContextAnalysis,
+        cache: CppCache,
     ):
-        self.options = options
         self.func = func
+        self.name = name
+        self.options = options
 
-        self.arg_ctxs = tuple(arg_ctxs)
-        self.caller_ctx = caller_ctx
         self.def_use = def_use
         self.ctx_info = ctx_info
-        self.ctx_args = {}
+        self.cache = cache
 
         self.decl_phis = set()
         self.decl_assigns = set()
@@ -124,48 +148,30 @@ class _CppBackendInstance(Visitor):
         self._visit_function(self.func, ctx)
         return '\n'.join(ctx.lines)
 
-
-    def _override_arg_type(self, ty: TypeContext, ctx: Context | None):
+    def _monomorphize_type(self, ty: Type):
         match ty:
-            case BoolTypeContext() | ContextTypeContext():
-                pass
-            case RealTypeContext():
-                if isinstance(ty.ctx, NamedId) and isinstance(ctx, Context):
-                    self.ctx_args[ty.ctx] = ctx
-            case TupleTypeContext():
-                # TODO: how does user specify overriding contexts for tuple arguments>
-                for t in ty.elts:
-                    self._override_arg_type(t, ctx)
-            case ListTypeContext():
-                self._override_arg_type(ty.elt, ctx)
-            case _:
-                raise RuntimeError(f'unreachable: {ty}')
-
-    def _monomorphize_type(self, ty: TypeContext):
-        match ty:
-            case VarTypeContext():
+            case VarType():
                 raise CppCompileError(self.func, f'types must be monomorphic `{ty}`')
-            case BoolTypeContext():
+            case BoolType():
                 return ty
-            case RealTypeContext():
+            case RealType():
+                assert ty.ctx is not None
                 if isinstance(ty.ctx, NamedId):
-                    if ty.ctx not in self.ctx_args:
-                        raise CppCompileError(self.func, f'types must be monomorphic `{ty}`')
-                    return RealTypeContext(self.ctx_args[ty.ctx])
-                else:
-                    return ty
-            case TupleTypeContext():
-                return TupleTypeContext(*(self._monomorphize_type(t) for t in ty.elts))
-            case ListTypeContext():
-                return ListTypeContext(self._monomorphize_type(ty.elt))
+                    raise CppCompileError(self.func, f'types must be monomorphic `{ty}`')
+                return ty
+            case TupleType():
+                return TupleType(*(self._monomorphize_type(t) for t in ty.elts))
+            case ListType():
+                return ListType(self._monomorphize_type(ty.elt))
             case _:
                 raise RuntimeError(f'unreachable: {ty}')
 
-    def _compile_type(self, ty: TypeContext):
+    def _compile_type(self, ty: Type):
         match ty:
-            case BoolTypeContext():
+            case BoolType():
                 return CppScalar.BOOL
-            case RealTypeContext():
+            case RealType():
+                assert ty.ctx is not None
                 if isinstance(ty.ctx, NamedId):
                     raise CppCompileError(self.func, f'types must be monomorphic: `{ty}`')
                 else:
@@ -195,9 +201,9 @@ class _CppBackendInstance(Visitor):
                         return CppScalar.S64
                     else:
                         raise CppCompileError(self.func, f'unsupported context: `{ty.ctx}`')
-            case TupleTypeContext():
+            case TupleType():
                 return CppTuple(self._compile_type(t) for t in ty.elts)
-            case ListTypeContext():
+            case ListType():
                 return CppList(self._compile_type(ty.elt))
             case _:
                 raise CppCompileError(self.func, f'unsupported type: `{ty.format()}`')
@@ -362,7 +368,8 @@ class _CppBackendInstance(Visitor):
                     return op.format(arg)
 
             # TODO: list options vs. actual signature
-            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+            ty_str = f'{arg_ty.format()} -> {e_ty.format()}'
+            raise CppCompileError(self.func, f'no matching signature for `{ty_str}`')
 
 
     def _visit_round_at(self, e: RoundAt, ctx: _CompileCtx):
@@ -552,7 +559,9 @@ class _CppBackendInstance(Visitor):
         for op in self.options.op_table.binary[type(e)]:
             if op.matches(x1_ty, x2_ty, e_ty):
                 return op.format(x1, x2)
-        raise CppCompileError(self.func, f'no matching signature for {e.format()}')
+
+        ty_str = f'{x1_ty.format()} -> {x2_ty.format()} -> {e_ty.format()}'
+        raise CppCompileError(self.func, f'no matching signature for `{e.format()}`: `{ty_str}`')
 
     def _visit_mxn(self, e: Min | Max, ctx: _CompileCtx):
         # min(x1, ..., xn)
@@ -588,7 +597,8 @@ class _CppBackendInstance(Visitor):
                     return op.format(arg)
 
             # TODO: list options vs. actual signature
-            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+            ty_str = f'{arg_ty.format()} -> {e_ty.format()}'
+            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`: `{ty_str}`')
 
         # fallback
         match e:
@@ -651,7 +661,8 @@ class _CppBackendInstance(Visitor):
                     return op.format(arg1, arg2, arg3)
 
             # TODO: list options vs. actual signature
-            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+            ty_str = f'{arg1_ty.format()} -> {arg2_ty.format()} -> {arg3_ty.format()} -> {e_ty.format()}'
+            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`: `{ty_str}`')
         else:
             match e:
                 case Range3():
@@ -682,13 +693,43 @@ class _CppBackendInstance(Visitor):
     def _visit_compare2(self, op: CompareOp, lhs: str, rhs: str):
         return f'({lhs} {op.symbol()} {rhs})'
 
+    def _visit_function_call(self, e: Call, fn: Function, args: Iterable[Expr], ctx: _CompileCtx):
+        # need to monomorphize the function body
+        # compute the context and argument types
+        expr_ctx = self.ctx_info.at_expr[e]
+
+        arg_tys: list[Type] = []
+        for arg in args:
+            arg_ty, _ = self._expr_type(arg)
+            arg_tys.append(arg_ty)
+
+        ast = Monomorphize.apply_by_arg(fn.ast, expr_ctx if isinstance(expr_ctx, Context) else None, arg_tys)
+
+        name = self.cache.get(ast)
+        if name is None:
+            # need to compile the function
+            compiler = CppCompiler(
+                std=self.options.std,
+                op_table=self.options.op_table,
+                unsafe_finitize_int=self.options.unsafe_finitize_int,
+                unsafe_cast_int=self.options.unsafe_cast_int,
+                cache=self.cache,
+            )
+
+            body_str = compiler.compile(fn.with_ast(ast))
+            for i, line in enumerate(body_str.splitlines()):
+                ctx.lines.insert(i, line)
+            name = self.cache.get(ast)
+
+        # function already compiled
+        arg_strs = [self._visit_expr(arg, ctx) for arg in args]
+        return f'{name}({", ".join(arg_strs)})'
+
     def _visit_call(self, e: Call, ctx: _CompileCtx):
         match e.fn:
             case Function():
                 # function call
-                # TODO: monomorphization
-                args = [self._visit_expr(arg, ctx) for arg in e.args]
-                return f'{e.fn.name}({", ".join(args)})'
+                return self._visit_function_call(e, e.fn, e.args, ctx)
             case Primitive():
                 # primitive call
                 if e.fn in self.options.op_table.prims:
@@ -707,7 +748,9 @@ class _CppBackendInstance(Visitor):
                             return op.format(args[0], args[1])
                         elif isinstance(op, TernaryCppOp) and len(args) == 3 and op.matches(arg_tys[0], arg_tys[1], arg_tys[2], e_ty):
                             return op.format(args[0], args[1], args[2])
-                    raise CppCompileError(self.func, f'no matching signature for primitive call `{e.format()}`')
+
+                    ty_str = ' -> '.join(ty.format() for ty in arg_tys + [e_ty])
+                    raise CppCompileError(self.func, f'no matching signature for primitive call `{e.format()}`: `{ty_str}`')
                 else:
                     raise CppCompileError(self.func, f'cannot compile unsupported primitive `{e.format()}`')
             case _:
@@ -959,19 +1002,19 @@ class _CppBackendInstance(Visitor):
         if isinstance(stmt.target, NamedId):
             raise CppCompileError(self.func, f'Cannot bind rounding context in C++: `{stmt.format()}`')
         rctx = stmt.ctx.val
-        cpp_ctx = self._compile_type(RealTypeContext(rctx))
-        if cpp_ctx.is_float():
+        cpp_ty = self._compile_type(RealType(rctx))
+        if cpp_ty.is_float():
             assert isinstance(rctx, type(FP64))
             fenv = self._fresh_var()
             ctx.add_line(f'const auto {fenv} = fegetround();')
             ctx.add_line(f'fesetround({self._compile_rm(rctx.rm)});')
             self._visit_block(stmt.body, ctx)
             ctx.add_line(f'fesetround({fenv});')
-        elif cpp_ctx.is_integer():
+        elif cpp_ty.is_integer():
             # do nothing
             self._visit_block(stmt.body, ctx)
         else:
-            raise RuntimeError(f'unexpected context: `{cpp_ctx}`')
+            raise RuntimeError(f'unexpected context: `{cpp_ty}`')
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _CompileCtx):
         e = self._visit_expr(stmt.test, ctx)
@@ -996,15 +1039,6 @@ class _CppBackendInstance(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _visit_function(self, func: FuncDef, ctx: _CompileCtx):
-        # apply caller context
-        if isinstance(self.ctx_info.body_ctx, NamedId):
-            if self.caller_ctx is not None:
-                self.ctx_args[self.ctx_info.body_ctx] = self.caller_ctx
-
-        # apply argument contexts
-        for caller_arg, arg_ty in zip(self.arg_ctxs, self.ctx_info.arg_types):
-            self._override_arg_type(arg_ty, caller_arg)
-
         # compile arguments
         arg_strs: list[str] = []
         for arg, arg_ty in zip(func.args, self.ctx_info.arg_types):
@@ -1014,14 +1048,14 @@ class _CppBackendInstance(Visitor):
 
         ret_ty = self._monomorphize_type(self.ctx_info.return_type)
         ty = self._compile_type(ret_ty)
-        ctx.add_line(f'{ty.format()} {func.name}({", ".join(arg_strs)}) {{')
+        ctx.add_line(f'{ty.format()} {self.name}({", ".join(arg_strs)}) {{')
 
         # compile body
         self._visit_block(func.body, ctx.indent())
         ctx.add_line('}')  # close function definition
 
 
-class CppBackend(Backend):
+class CppCompiler(Backend):
     """
     Compiler from FPy to C++.
 
@@ -1042,8 +1076,8 @@ class CppBackend(Backend):
     unsafe_finitize_int: bool
     unsafe_cast_int: bool
 
-    # cache of compiled functions
-    compiled: dict[str, Function]
+    # table of known functions
+    cache: CppCache
 
     def __init__(
         self,
@@ -1051,16 +1085,20 @@ class CppBackend(Backend):
         std: CppStandard = CppStandard.CXX_11,
         op_table: ScalarOpTable | None = None,
         unsafe_finitize_int: bool = False,
-        unsafe_cast_int: bool = False
+        unsafe_cast_int: bool = False,
+        cache: CppCache | None = None,
     ):
         if op_table is None:
             op_table = make_op_table()
+        if cache is None:
+            cache = CppCache()
 
         self.std = std
         self.op_table = op_table
         self.unsafe_finitize_int = unsafe_finitize_int
         self.unsafe_cast_int = unsafe_cast_int
-        self.compiled = {}
+        self.cache = cache
+
 
     def headers(self) -> list[str]:
         """
@@ -1078,8 +1116,8 @@ class CppBackend(Backend):
         self,
         func: Function,
         *,
-        arg_ctxs: None | Iterable[Context | None] = None,
-        ctx: Context | None = None
+        ctx: Context | None = None,
+        arg_types: Collection[Type | None] | None = None,
     ) -> str:
         """
         Compiles the given FPy function to a C++ program
@@ -1088,20 +1126,30 @@ class CppBackend(Backend):
         if not isinstance(func, Function):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
         if ctx is not None and not isinstance(ctx, Context):
-            raise TypeError(f'Expected `Context`, got {type(ctx)} for {ctx}')
-        if arg_ctxs is None:
-            arg_ctxs = tuple(None for _ in func.args)
+            raise TypeError(f'Expected `Context` or `None`, got {type(ctx)} for {ctx}')
+        if arg_types is not None and not isinstance(arg_types, Collection):
+            raise TypeError(f'Expected `Collection` or `None`, got {type(arg_types)} for {arg_types}')
 
-        if func.name in self.compiled:
+        # monomorphizing
+        ast = func.ast
+        if arg_types is None:
+            arg_types = [None for _ in func.args]
+        if ast.ctx is not None:
+            ctx = None
+        ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
+
+        # check to see if we've already compiled this function
+        if ast in self.cache:
             raise ValueError(f'Function `{func.name}` has already been compiled')
-        self.compiled[func.name] = func
+        name = self.cache.add(ast)
 
         # normalization passes
-        ast = ConstFold.apply(func.ast, enable_op=False)
+        ast = ConstFold.apply(ast, enable_op=False)
 
         # analyses
         def_use = DefineUse.analyze(ast)
 
+        # run type checking with static context inference
         try:
             ctx_info = ContextInfer.infer(ast, def_use=def_use, unsafe_cast_int=self.unsafe_cast_int)
         except (ContextInferError, TypeInferError) as e:
@@ -1109,6 +1157,6 @@ class CppBackend(Backend):
 
         # compile
         options = _CppOptions(self.std, self.op_table, self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _CppBackendInstance(options, ast, arg_ctxs, ctx, def_use, ctx_info)
+        inst = _CppBackendInstance(ast, name, options, def_use, ctx_info, self.cache)
         body_str =  inst.compile()
         return body_str

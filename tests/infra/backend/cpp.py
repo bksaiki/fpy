@@ -20,7 +20,25 @@ from ..examples import all_unit_tests, all_example_tests
 _CPP_CMD = ['cc']
 _CPP_OPTIONS = ['-std=c++11', '-O0', '-Wall', '-Wextra']
 
-def _compile(output_dir: Path, prefix: str, compiler: fp.CppBackend, func: fp.Function):
+def _inst_type(ty: fp.types.Type):
+    match ty:
+        case fp.types.BoolType() | fp.types.ContextType():
+            return ty
+        case fp.types.VarType() | fp.types.RealType():
+            return fp.types.RealType(fp.FP64)
+        case fp.types.TupleType():
+            return fp.types.TupleType(*[ _inst_type(elt) for elt in ty.elts ])
+        case fp.types.ListType():
+            return fp.types.ListType(_inst_type(ty.elt))
+        case _:
+            raise ValueError(f'Cannot instantiate type: {ty.format()}')
+
+
+def _compile(output_dir: Path, prefix: str, compiler: fp.CppCompiler, func: fp.Function):
+    # substitute context variables with `FP64`
+    ty_info = fp.analysis.TypeInfer.check(func.ast)
+    arg_types = [ _inst_type(ty) for ty in ty_info.arg_types ]
+
     name = hashlib.md5(func.name.encode()).hexdigest()
     cpp_path = output_dir / f'{prefix}_{name}.cpp'
     print(f"Compiling `{func.name}` to `{cpp_path}`")
@@ -30,8 +48,7 @@ def _compile(output_dir: Path, prefix: str, compiler: fp.CppBackend, func: fp.Fu
         print(compiler.helpers(), file=f)
 
         # compile function
-        arg_ctxs = tuple(fp.FP64 for _ in func.args)
-        s = compiler.compile(func, ctx=fp.FP64, arg_ctxs=arg_ctxs)
+        s = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
         print(s, file=f)
         print(file=f)
 
@@ -83,6 +100,13 @@ _test_ignore = [
     'test_if3',
     'test_if7',
     'test_while4',
+    'test_while5',
+    'test_while6',
+    'test_while7',
+    'test_for2',
+    'test_for3',
+    'test_for4',
+    'test_for5',
     # empty list is not monomorphic
     'test_list1',
     'test_list_len1',
@@ -126,7 +150,7 @@ def _test_unit_tests(
     *,
     no_cc: bool = False
 ):
-    compiler = fp.CppBackend(unsafe_finitize_int=True, unsafe_cast_int=True)
+    compiler = fp.CppCompiler(unsafe_finitize_int=True, unsafe_cast_int=True)
     for func in funcs:
         if func.name in ignore:
             continue
@@ -149,7 +173,7 @@ _modules = [
     fp.libraries.core,
     fp.libraries.eft,
     fp.libraries.vector,
-    # fp.libraries.matrix
+    fp.libraries.matrix
 ]
 
 _library_ignore = [
@@ -164,10 +188,11 @@ _library_ignore = [
     'classic_2mul', # max_p
     'ideal_fma',
     'classic_2fma', # relies on `fast_2sum`
+    # matrix
 ]
 
 def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
-    compiler = fp.CppBackend(unsafe_finitize_int=True, unsafe_cast_int=True)
+    compiler = fp.CppCompiler(unsafe_finitize_int=True, unsafe_cast_int=True)
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     with open(cpp_path, 'w') as f:
@@ -175,8 +200,12 @@ def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[s
         print(compiler.helpers(), file=f)
         for func in mod.__dict__.values():
             if isinstance(func, fp.Function) and func.name not in ignore:
-                arg_ctxs = tuple(fp.FP64 for _ in func.args)
-                s = compiler.compile(func, ctx=fp.FP64, arg_ctxs=arg_ctxs)
+                # substitute context variables with `FP64`
+                ty_info = fp.analysis.TypeInfer.check(func.ast)
+                arg_types = [ _inst_type(ty) for ty in ty_info.arg_types ]
+
+                # compile
+                s = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
                 print(s, file=f)
                 print(file=f)
 

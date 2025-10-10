@@ -140,3 +140,88 @@ def _select_ctx(x: fp.Real):
 def keep_p_1(x: fp.Real):
     with _select_ctx(x):
         return fp.round(x)
+
+@fp.fpy
+def test_while4_rounded():
+    x = 0
+    t = 1
+    while x < 1:
+        x = 1
+    with fp.INTEGER:
+        return x + t
+
+@fp.fpy
+def test_while5_rounded():
+    with fp.INTEGER:
+        x = fp.round(0)
+    y = fp.round(0)
+    while x < 5:
+        with fp.INTEGER:
+            x += 1
+        y += fp.round(x)
+    return x, y
+
+@fp.fpy
+def test_while6_rounded():
+    x = fp.round(0)
+    with fp.INTEGER:
+        y = fp.round(0)
+    while x < 5:
+        while y < 25:
+            with fp.INTEGER:
+                y += 1
+            x += fp.round(y)
+    return x, y
+
+@fp.fpy
+def test_while7_rounded():
+    with fp.INTEGER:
+        a = fp.round(0)
+    b = fp.round(0)
+    while a <= 3:
+        with fp.INTEGER:
+            a = a + 1
+            i = fp.round(0)
+        x = fp.round(0)
+        while i <= a:
+            with fp.INTEGER:
+                i = i + 1
+            x = x + fp.round(i)
+        b = x
+    return b
+
+@fp.fpy
+def test_for2_rounded():
+    j = fp.round(0)
+    for i in range(5):
+        j += fp.round(i)
+    return j
+
+@fp.fpy
+def test_for3_rounded():
+    accum = fp.round(0)
+    for i in range(5):
+        i2 = fp.round(i)
+        for j in range(5):
+            accum += i2 * fp.round(j)
+    return accum
+
+@fp.fpy
+def test_for4_rounded():
+    with fp.INTEGER:
+        x = fp.round(0)
+    y = fp.round(0)
+    for i in range(5):
+        with fp.INTEGER:
+            x += i
+        y += fp.round(2) * fp.round(i)
+    return x, y
+
+@fp.fpy
+def test_for5_rounded():
+    xs = [1, 2, 3]
+    ys = [3, 5, 7]
+    sum = fp.round(0)
+    for x, y in zip(xs, ys):
+        sum += fp.round(x) * fp.round(y)
+    return sum
