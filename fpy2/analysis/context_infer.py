@@ -26,6 +26,7 @@ class ContextAnalysis:
     fn_type: FunctionType
     by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
+    at_expr: dict[Expr, ContextParam]
 
     @property
     def body_ctx(self):
@@ -55,6 +56,7 @@ class ContextTypeInferInstance(Visitor):
 
     by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
+    at_expr: dict[Expr, ContextParam]
     ret_ty: Type | None
     rvars: Unionfind[ContextParam]
     gensym: Gensym
@@ -72,6 +74,7 @@ class ContextTypeInferInstance(Visitor):
         self.unsafe_cast_int = unsafe_cast_int
         self.by_def = {}
         self.by_expr = {}
+        self.at_expr = {}
         self.ret_ty = None
         self.rvars = Unionfind()
         self.gensym = Gensym()
@@ -446,27 +449,30 @@ class ContextTypeInferInstance(Visitor):
             case Function():
                 # calling a function
                 # TODO: guard against recursion
-                from ..transform import ConstFold
+                from ..transform import ConstFold, Monomorphize
 
+                # get argument types
+                arg_types = [self.type_info.by_expr[arg] for arg in e.args]
+
+                # TODO: is there a better way to do this? bad complexity
+                # apply constant folding and monomorphization
                 ast = ConstFold.apply(e.fn.ast, enable_op=False)
+                ast = Monomorphize.apply_by_arg(ast, ctx if isinstance(ctx, Context) else None, arg_types)
                 fn_info = ContextInfer.infer(ast)
-                if len(fn_info.arg_types) != len(e.args):
-                    raise ContextInferError(
-                        f'function {e.fn} expects {len(fn_info.arg_types)} arguments, '
-                        f'got {len(e.args)}'
-                    )
 
                 # instantiate the function context
-                fn_ctx = cast(FunctionType, self._instantiate(fn_info.fn_type))
+                fn_type = cast(FunctionType, self._instantiate(fn_info.fn_type))
+
                 # merge caller context
-                assert fn_ctx.ctx is not None
-                self._unify_contexts(ctx, fn_ctx.ctx)
+                assert fn_type.ctx is not None
+                self._unify_contexts(ctx, fn_type.ctx)
+
                 # merge arguments
-                for arg, expect_ty in zip(e.args, fn_ctx.arg_types):
+                for arg, expect_ty in zip(e.args, fn_type.arg_types):
                     ty = self._visit_expr(arg, ctx)
                     self._unify(ty, expect_ty)
 
-                return fn_ctx.return_type
+                return fn_type.return_type
             case type() if issubclass(e.fn, Context):
                 # calling context constructor
                 # TODO: can infer if the arguments are statically known
@@ -693,6 +699,7 @@ class ContextTypeInferInstance(Visitor):
     def _visit_expr(self, expr: Expr, ctx: ContextParam) -> Type:
         ty = super()._visit_expr(expr, ctx)
         self.by_expr[expr] = ty
+        self.at_expr[expr] = ctx
         return ty
 
     def infer(self):
@@ -717,7 +724,12 @@ class ContextTypeInferInstance(Visitor):
             e: self._resolve(ctx).subst_context(subst)
             for e, ctx in self.by_expr.items()
         }
-        return ContextAnalysis(fn_ctx, by_defs, by_expr)
+        at_expr = {
+            e: self._resolve_context(ctx)
+            for e, ctx in self.at_expr.items()
+        }
+
+        return ContextAnalysis(fn_ctx, by_defs, by_expr, at_expr)
 
 
 class _ContextInferPrimitive:

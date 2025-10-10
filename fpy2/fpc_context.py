@@ -15,6 +15,11 @@ from .number import (
     INTEGER
 )
 
+__all__ = [
+    'NoSuchContextError',
+    'FPCoreContext',
+]
+
 ###########################################################
 # Rounding modes
 

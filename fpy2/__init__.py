@@ -42,7 +42,7 @@ from .interpret import (
 # compiler
 from .backend import (
     Backend,
-    CppBackend,
+    CppCompiler,
     FPCoreCompiler
 )
 

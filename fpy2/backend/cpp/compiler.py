@@ -5,7 +5,7 @@ C++ backend: compiler to C++
 import enum
 import dataclasses
 
-from typing import Collection
+from typing import Collection, Iterable
 
 from ...ast import *
 from ...analysis import (
@@ -24,7 +24,7 @@ from ...number import (
 )
 from ...primitive import Primitive
 from ...transform import ConstFold, Monomorphize
-from ...utils import Gensym, enum_repr
+from ...utils import Gensym, enum_repr, default_repr
 
 from ..backend import Backend, CompileError
 
@@ -38,6 +38,33 @@ from .utils import CPP_HEADERS, CPP_HELPERS
 class CppStandard(enum.Enum):
     """C++ standards supported by the C++ backend"""
     CXX_11 = 0
+
+@default_repr
+class CppCache:
+    """
+    Cache of compiled C++ code
+    """
+
+    cache: list[tuple[FuncDef, str]]
+    gensym: Gensym
+
+    def __init__(self):
+        self.cache = []
+        self.gensym = Gensym()
+
+    def __contains__(self, func: FuncDef):
+        return any(f.is_equiv(func) for f, _ in self.cache)
+
+    def add(self, func: FuncDef):
+        name = self.gensym.refresh(NamedId(func.name))
+        self.cache.append((func, name))
+        return name
+
+    def get(self, func: FuncDef, default: str | None = None):
+        for f, name in self.cache:
+            if f.is_equiv(func):
+                return name
+        return default
 
 
 class CppCompileError(CompileError):
@@ -84,10 +111,12 @@ class _CppBackendInstance(Visitor):
     """
 
     func: FuncDef
+    name: NamedId
     options: _CppOptions
 
     def_use: DefineUseAnalysis
     ctx_info: ContextAnalysis
+    cache: CppCache
 
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
@@ -96,15 +125,19 @@ class _CppBackendInstance(Visitor):
     def __init__(
         self,
         func: FuncDef,
+        name: NamedId,
         options: _CppOptions,
         def_use: DefineUseAnalysis,
-        ctx_info: ContextAnalysis
+        ctx_info: ContextAnalysis,
+        cache: CppCache,
     ):
         self.func = func
+        self.name = name
         self.options = options
 
         self.def_use = def_use
         self.ctx_info = ctx_info
+        self.cache = cache
 
         self.decl_phis = set()
         self.decl_assigns = set()
@@ -660,13 +693,43 @@ class _CppBackendInstance(Visitor):
     def _visit_compare2(self, op: CompareOp, lhs: str, rhs: str):
         return f'({lhs} {op.symbol()} {rhs})'
 
+    def _visit_function_call(self, e: Call, fn: Function, args: Iterable[Expr], ctx: _CompileCtx):
+        # need to monomorphize the function body
+        # compute the context and argument types
+        expr_ctx = self.ctx_info.at_expr[e]
+
+        arg_tys: list[Type] = []
+        for arg in args:
+            arg_ty, _ = self._expr_type(arg)
+            arg_tys.append(arg_ty)
+
+        ast = Monomorphize.apply_by_arg(fn.ast, expr_ctx if isinstance(expr_ctx, Context) else None, arg_tys)
+
+        name = self.cache.get(ast)
+        if name is None:
+            # need to compile the function
+            compiler = CppCompiler(
+                std=self.options.std,
+                op_table=self.options.op_table,
+                unsafe_finitize_int=self.options.unsafe_finitize_int,
+                unsafe_cast_int=self.options.unsafe_cast_int,
+                cache=self.cache,
+            )
+
+            body_str = compiler.compile(fn.with_ast(ast))
+            for i, line in enumerate(body_str.splitlines()):
+                ctx.lines.insert(i, line)
+            name = self.cache.get(ast)
+
+        # function already compiled
+        arg_strs = [self._visit_expr(arg, ctx) for arg in args]
+        return f'{name}({", ".join(arg_strs)})'
+
     def _visit_call(self, e: Call, ctx: _CompileCtx):
         match e.fn:
             case Function():
                 # function call
-                # TODO: monomorphization
-                args = [self._visit_expr(arg, ctx) for arg in e.args]
-                return f'{e.fn.name}({", ".join(args)})'
+                return self._visit_function_call(e, e.fn, e.args, ctx)
             case Primitive():
                 # primitive call
                 if e.fn in self.options.op_table.prims:
@@ -985,14 +1048,14 @@ class _CppBackendInstance(Visitor):
 
         ret_ty = self._monomorphize_type(self.ctx_info.return_type)
         ty = self._compile_type(ret_ty)
-        ctx.add_line(f'{ty.format()} {func.name}({", ".join(arg_strs)}) {{')
+        ctx.add_line(f'{ty.format()} {self.name}({", ".join(arg_strs)}) {{')
 
         # compile body
         self._visit_block(func.body, ctx.indent())
         ctx.add_line('}')  # close function definition
 
 
-class CppBackend(Backend):
+class CppCompiler(Backend):
     """
     Compiler from FPy to C++.
 
@@ -1013,21 +1076,29 @@ class CppBackend(Backend):
     unsafe_finitize_int: bool
     unsafe_cast_int: bool
 
+    # table of known functions
+    cache: CppCache
+
     def __init__(
         self,
         *,
         std: CppStandard = CppStandard.CXX_11,
         op_table: ScalarOpTable | None = None,
         unsafe_finitize_int: bool = False,
-        unsafe_cast_int: bool = False
+        unsafe_cast_int: bool = False,
+        cache: CppCache | None = None,
     ):
         if op_table is None:
             op_table = make_op_table()
+        if cache is None:
+            cache = CppCache()
 
         self.std = std
         self.op_table = op_table
         self.unsafe_finitize_int = unsafe_finitize_int
         self.unsafe_cast_int = unsafe_cast_int
+        self.cache = cache
+
 
     def headers(self) -> list[str]:
         """
@@ -1067,6 +1138,11 @@ class CppBackend(Backend):
             ctx = None
         ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
 
+        # check to see if we've already compiled this function
+        if ast in self.cache:
+            raise ValueError(f'Function `{func.name}` has already been compiled')
+        name = self.cache.add(ast)
+
         # normalization passes
         ast = ConstFold.apply(ast, enable_op=False)
 
@@ -1081,6 +1157,6 @@ class CppBackend(Backend):
 
         # compile
         options = _CppOptions(self.std, self.op_table, self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _CppBackendInstance(ast, options, def_use, ctx_info)
+        inst = _CppBackendInstance(ast, name, options, def_use, ctx_info, self.cache)
         body_str =  inst.compile()
         return body_str

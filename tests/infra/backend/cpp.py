@@ -34,7 +34,7 @@ def _inst_type(ty: fp.types.Type):
             raise ValueError(f'Cannot instantiate type: {ty.format()}')
 
 
-def _compile(output_dir: Path, prefix: str, compiler: fp.CppBackend, func: fp.Function):
+def _compile(output_dir: Path, prefix: str, compiler: fp.CppCompiler, func: fp.Function):
     # substitute context variables with `FP64`
     ty_info = fp.analysis.TypeInfer.check(func.ast)
     arg_types = [ _inst_type(ty) for ty in ty_info.arg_types ]
@@ -150,7 +150,7 @@ def _test_unit_tests(
     *,
     no_cc: bool = False
 ):
-    compiler = fp.CppBackend(unsafe_finitize_int=True, unsafe_cast_int=True)
+    compiler = fp.CppCompiler(unsafe_finitize_int=True, unsafe_cast_int=True)
     for func in funcs:
         if func.name in ignore:
             continue
@@ -191,7 +191,7 @@ _library_ignore = [
 ]
 
 def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
-    compiler = fp.CppBackend(unsafe_finitize_int=True, unsafe_cast_int=True)
+    compiler = fp.CppCompiler(unsafe_finitize_int=True, unsafe_cast_int=True)
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     with open(cpp_path, 'w') as f:
