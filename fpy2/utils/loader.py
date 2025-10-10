@@ -11,7 +11,8 @@ import types
 from importlib.machinery import SourceFileLoader, PathFinder
 from importlib.util import source_from_cache
 
-_SOURCE: dict[str, list[str]] = {}  # path -> lines
+_SOURCE: dict[str, bytes] = {}  # path -> bytes
+_LINES: dict[str, list[str]] = {}  # path -> lines
 
 class CachingSourceFileLoader(SourceFileLoader):
     """Source file loader that caches the original source code as read."""
@@ -23,7 +24,7 @@ class CachingSourceFileLoader(SourceFileLoader):
         elif path.endswith('.py'):
             # loading a source file
             data = super().get_data(path)
-            _SOURCE[path] = data.decode('utf-8').splitlines(keepends=True)
+            _SOURCE[path] = data
             return data
         elif path.endswith('.pyc'):
             # loading a cached file
@@ -31,7 +32,7 @@ class CachingSourceFileLoader(SourceFileLoader):
             src_path = source_from_cache(path)
             try:
                 data = super().get_data(src_path)
-                _SOURCE[src_path] = data.decode('utf-8').splitlines(keepends=True)
+                _SOURCE[src_path] = data
             except FileNotFoundError:
                 pass
 
@@ -72,16 +73,16 @@ def get_module_source(mod: types.ModuleType) -> list[str] | None:
         return None
 
     # look up the cached source by the source path
-    lines = _SOURCE.get(path)
+    lines = _LINES.get(path)
     if lines is None:
-        # not in cache yet
-        if not os.path.exists(path):
-            # can't even find source file
+        # not in cache yet, try to load from _SOURCE
+        data = _SOURCE.get(path)
+        if data is None:
             return None
 
-        # try to read the source file directly
-        with open(path, 'r', encoding='utf-8') as file:
-            lines = file.read().splitlines(keepends=True)
-            _SOURCE[path] = lines
+        print('loaded source for', path)
+        lines = data.decode('utf-8').splitlines(keepends=True)
+        _LINES[path] = lines
 
+    print('loaded lines for', path)
     return lines
