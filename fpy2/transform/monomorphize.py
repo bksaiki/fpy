@@ -4,6 +4,8 @@ Monomorphize pass.
 Both type and context monomorphization.
 """
 
+from typing import Collection
+
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..types import *
@@ -102,14 +104,14 @@ class Monomorphize:
     def apply_by_arg(
         func: FuncDef,
         ctx: ContextParam | None,
-        arg_types: list[Type | None],
+        arg_types: Collection[Type | None],
         *,
         ty_info: TypeAnalysis | None = None
     ):
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got `{func}`')
-        if not isinstance(arg_types, list):
-            raise TypeError(f'Expected \'list\', got `{arg_types}`')
+        if not isinstance(arg_types, Collection):
+            raise TypeError(f'Expected \'Collection\', got `{arg_types}`')
         if len(func.args) != len(arg_types):
             raise ValueError(f'Expected {len(func.args)} types, got {len(arg_types)}')
 

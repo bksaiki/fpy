@@ -5,7 +5,7 @@ C++ backend: compiler to C++
 import enum
 import dataclasses
 
-from typing import Iterable
+from typing import Collection
 
 from ...ast import *
 from ...analysis import (
@@ -335,7 +335,8 @@ class _CppBackendInstance(Visitor):
                     return op.format(arg)
 
             # TODO: list options vs. actual signature
-            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+            ty_str = f'{arg_ty.format()} -> {e_ty.format()}'
+            raise CppCompileError(self.func, f'no matching signature for `{ty_str}`')
 
 
     def _visit_round_at(self, e: RoundAt, ctx: _CompileCtx):
@@ -525,7 +526,9 @@ class _CppBackendInstance(Visitor):
         for op in self.options.op_table.binary[type(e)]:
             if op.matches(x1_ty, x2_ty, e_ty):
                 return op.format(x1, x2)
-        raise CppCompileError(self.func, f'no matching signature for {e.format()}')
+
+        ty_str = f'{x1_ty.format()} -> {x2_ty.format()} -> {e_ty.format()}'
+        raise CppCompileError(self.func, f'no matching signature for `{e.format()}`: `{ty_str}`')
 
     def _visit_mxn(self, e: Min | Max, ctx: _CompileCtx):
         # min(x1, ..., xn)
@@ -561,8 +564,8 @@ class _CppBackendInstance(Visitor):
                     return op.format(arg)
 
             # TODO: list options vs. actual signature
-            print(arg_ty.format(), e_ty.format())
-            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+            ty_str = f'{arg_ty.format()} -> {e_ty.format()}'
+            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`: `{ty_str}`')
 
         # fallback
         match e:
@@ -625,7 +628,8 @@ class _CppBackendInstance(Visitor):
                     return op.format(arg1, arg2, arg3)
 
             # TODO: list options vs. actual signature
-            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`')
+            ty_str = f'{arg1_ty.format()} -> {arg2_ty.format()} -> {arg3_ty.format()} -> {e_ty.format()}'
+            raise CppCompileError(self.func, f'no matching signature for `{e.format()}`: `{ty_str}`')
         else:
             match e:
                 case Range3():
@@ -681,7 +685,9 @@ class _CppBackendInstance(Visitor):
                             return op.format(args[0], args[1])
                         elif isinstance(op, TernaryCppOp) and len(args) == 3 and op.matches(arg_tys[0], arg_tys[1], arg_tys[2], e_ty):
                             return op.format(args[0], args[1], args[2])
-                    raise CppCompileError(self.func, f'no matching signature for primitive call `{e.format()}`')
+
+                    ty_str = ' -> '.join(ty.format() for ty in arg_tys + [e_ty])
+                    raise CppCompileError(self.func, f'no matching signature for primitive call `{e.format()}`: `{ty_str}`')
                 else:
                     raise CppCompileError(self.func, f'cannot compile unsupported primitive `{e.format()}`')
             case _:
@@ -933,19 +939,19 @@ class _CppBackendInstance(Visitor):
         if isinstance(stmt.target, NamedId):
             raise CppCompileError(self.func, f'Cannot bind rounding context in C++: `{stmt.format()}`')
         rctx = stmt.ctx.val
-        cpp_ctx = self._compile_type(RealType(rctx))
-        if cpp_ctx.is_float():
+        cpp_ty = self._compile_type(RealType(rctx))
+        if cpp_ty.is_float():
             assert isinstance(rctx, type(FP64))
             fenv = self._fresh_var()
             ctx.add_line(f'const auto {fenv} = fegetround();')
             ctx.add_line(f'fesetround({self._compile_rm(rctx.rm)});')
             self._visit_block(stmt.body, ctx)
             ctx.add_line(f'fesetround({fenv});')
-        elif cpp_ctx.is_integer():
+        elif cpp_ty.is_integer():
             # do nothing
             self._visit_block(stmt.body, ctx)
         else:
-            raise RuntimeError(f'unexpected context: `{cpp_ctx}`')
+            raise RuntimeError(f'unexpected context: `{cpp_ty}`')
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _CompileCtx):
         e = self._visit_expr(stmt.test, ctx)
@@ -1040,7 +1046,7 @@ class CppBackend(Backend):
         func: Function,
         *,
         ctx: Context | None = None,
-        arg_types: Iterable[Type | None] | None = None,
+        arg_types: Collection[Type | None] | None = None,
     ) -> str:
         """
         Compiles the given FPy function to a C++ program
@@ -1050,15 +1056,16 @@ class CppBackend(Backend):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
         if ctx is not None and not isinstance(ctx, Context):
             raise TypeError(f'Expected `Context` or `None`, got {type(ctx)} for {ctx}')
-        if arg_types is not None and not isinstance(arg_types, Iterable):
-            raise TypeError(f'Expected `Iterable` or `None`, got {type(arg_types)} for {arg_types}')
+        if arg_types is not None and not isinstance(arg_types, Collection):
+            raise TypeError(f'Expected `Collection` or `None`, got {type(arg_types)} for {arg_types}')
 
-        # monomorphizing (optional)
+        # monomorphizing
         ast = func.ast
-        if ctx is not None or arg_types is not None:
-            if arg_types is None:
-                arg_types = [None for _ in func.args]
-            ast = Monomorphize.apply_by_arg(ast, ctx, list(arg_types))
+        if arg_types is None:
+            arg_types = [None for _ in func.args]
+        if ast.ctx is not None:
+            ctx = None
+        ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
 
         # normalization passes
         ast = ConstFold.apply(ast, enable_op=False)
