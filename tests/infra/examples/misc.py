@@ -152,7 +152,8 @@ def test_while4_rounded():
 
 @fp.fpy
 def test_while5_rounded():
-    x = 0
+    with fp.INTEGER:
+        x = fp.round(0)
     y = fp.round(0)
     while x < 5:
         with fp.INTEGER:
@@ -163,7 +164,8 @@ def test_while5_rounded():
 @fp.fpy
 def test_while6_rounded():
     x = fp.round(0)
-    y = 0
+    with fp.INTEGER:
+        y = fp.round(0)
     while x < 5:
         while y < 25:
             with fp.INTEGER:
@@ -173,12 +175,13 @@ def test_while6_rounded():
 
 @fp.fpy
 def test_while7_rounded():
-    a = 0
+    with fp.INTEGER:
+        a = fp.round(0)
     b = fp.round(0)
     while a <= 3:
         with fp.INTEGER:
             a = a + 1
-        i = 0
+            i = fp.round(0)
         x = fp.round(0)
         while i <= a:
             with fp.INTEGER:
@@ -205,7 +208,8 @@ def test_for3_rounded():
 
 @fp.fpy
 def test_for4_rounded():
-    x = 0
+    with fp.INTEGER:
+        x = fp.round(0)
     y = fp.round(0)
     for i in range(5):
         with fp.INTEGER:
