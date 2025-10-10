@@ -4,7 +4,6 @@ Modified import loader that caches original source code of modules as they are l
 FPy reparses function source code to extract the original AST.
 """
 
-import os
 import sys
 import types
 
@@ -18,28 +17,25 @@ class CachingSourceFileLoader(SourceFileLoader):
     """Source file loader that caches the original source code as read."""
 
     def get_data(self, path):
-        if 'site-packages' in path:
-            # don't cache files from site-packages
-            return super().get_data(path)
-        elif path.endswith('.py'):
-            # loading a source file
-            data = super().get_data(path)
-            _SOURCE[path] = data
-            return data
-        elif path.endswith('.pyc'):
-            # loading a cached file
-            # find the original source if we can find it
-            src_path = source_from_cache(path)
-            try:
-                data = super().get_data(src_path)
-                _SOURCE[src_path] = data
-            except FileNotFoundError:
-                pass
+        if path not in _SOURCE:
+            # not cached yet, load and cache
+            if path.endswith('.py'):
+                # loading the source file and cache it
+                data = super().get_data(path)
+                _SOURCE[path] = data
+                return data
+            elif path.endswith('.pyc'):
+                # loading a cached file
+                # find the original source if we can find it
+                src_path = source_from_cache(path)
+                try:
+                    data = super().get_data(src_path)
+                    _SOURCE[src_path] = data
+                except FileNotFoundError:
+                    pass
 
-            return super().get_data(path)
-        else:
-            # unknown file type, just load normally
-            return super().get_data(path)
+        return super().get_data(path)
+
 
 class CachingPathFinder:
     """Source file finder that uses `CachingSourceFileLoader`."""
@@ -80,9 +76,7 @@ def get_module_source(mod: types.ModuleType) -> list[str] | None:
         if data is None:
             return None
 
-        print('loaded source for', path)
         lines = data.decode('utf-8').splitlines(keepends=True)
         _LINES[path] = lines
 
-    print('loaded lines for', path)
     return lines
