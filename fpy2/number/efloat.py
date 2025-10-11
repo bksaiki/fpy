@@ -377,6 +377,11 @@ class EFloatContext(EncodableContext):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_ctx.to_ordinal(x, infval=infval)
 
+    def to_fractional_ordinal(self, x: Float):
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mpb_ctx.to_fractional_ordinal(x)
+
     def from_ordinal(self, x: int, infval: bool = False) -> Float:
         y = self._mpb_ctx.from_ordinal(x, infval=infval)
         y._ctx = self

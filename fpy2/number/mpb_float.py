@@ -356,6 +356,10 @@ class MPBFloatContext(SizedContext):
             # finite, real
             return self._mps_ctx.to_ordinal(x)
 
+    def to_fractional_ordinal(self, x: Float):
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mps_ctx.to_fractional_ordinal(x)
 
     def from_ordinal(self, x, infval = False):
         if not isinstance(x, int):

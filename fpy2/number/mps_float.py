@@ -4,6 +4,8 @@ but with a subnormalization, that is multi-precision floating-point
 numbers with subnormals. Hence, "MP-S."
 """
 
+from fractions import Fraction
+
 from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import Context, OrdinalContext
@@ -245,17 +247,8 @@ class MPSFloatContext(OrdinalContext):
         x = self._round_prepare(x)
         return self._round_at(x, n, exact)
 
-    def to_ordinal(self, x: Float, infval = False) -> int:
-        if not isinstance(x, Float) or not self.representable_under(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        if infval:
-            raise ValueError('infval=True is invalid for contexts without a maximum value')
-
-        # case split by class
-        if x.is_nar():
-            # NaN or Inf
-            raise TypeError(f'Expected a finite value for x={x}')
-        elif x.is_zero():
+    def _to_ordinal(self, x: RealFloat):
+        if x.is_zero():
             # zero
             return 0
         elif x.e <= self.emin:
@@ -295,6 +288,47 @@ class MPSFloatContext(OrdinalContext):
 
         uord = (eord << (self.pmax - 1)) + mord
         return (-1 if x.s else 1) * uord
+
+    def to_ordinal(self, x: Float, infval = False) -> int:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
+        if not self.representable_under(x):
+            raise ValueError(f'x={x} is not representable under this context')
+        if infval:
+            raise ValueError('infval=True is invalid for contexts without a maximum value')
+        if x.is_nar():
+            # NaN or Inf
+            raise ValueError(f'Expected a finite value for x={x}')
+        return self._to_ordinal(x.as_real())
+
+    def to_fractional_ordinal(self, x: Float):
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        if x.is_nar():
+            # NaN or Inf
+            raise ValueError(f'Expected a finite value for x={x}')
+
+        if self.representable_under(x):
+            # representable value
+            return Fraction(self._to_ordinal(x.as_real()))
+        else:
+            # not representable value:
+            # step 1. compute the nearest values, above and below `x`
+            xr = x.as_real()
+            above = xr.round(self.pmax, self.nmin, rm=RoundingMode.RTP)
+            below = xr.round(self.pmax, self.nmin, rm=RoundingMode.RTN)
+
+            # step 2. ordinal space is linear between two adjacent floating-point values;
+            # compute the linear interpolation factor
+            delta_x: RealFloat = xr - below
+            delta: RealFloat = above - below
+            t = delta_x.as_rational() / delta.as_rational()
+
+            # step 3. map one endpoint to the ordinals (they are one apart)
+            below_ord = self._to_ordinal(below)
+
+            # step 4. apply linear interpolation
+            return Fraction(below_ord) + t
 
     def from_ordinal(self, x: int, infval = False):
         if not isinstance(x, int):
