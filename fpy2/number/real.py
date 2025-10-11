@@ -63,7 +63,8 @@ class RealContext(Context):
         return (None, None)
 
     def round(self, x, *, exact: bool = False):
-        return self._round_prepare(x)
+        xr = self._round_prepare(x)
+        return Float(x=xr, ctx=self)
 
     def round_at(self, x, n: int, *, exact: bool = False):
         raise RuntimeError('cannot round at a specific position in real context')
