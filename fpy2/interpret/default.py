@@ -859,7 +859,7 @@ class _Interpreter(Visitor):
     def eval(self, func: FuncDef, args: Collection[Any], ctx: Context):
         # check arity
         if len(args) != len(func.args):
-            raise TypeError(f'Expected {len(func.args)} arguments, got {len(args)}')
+            raise RuntimeError(f'{func.name}: expected {len(func.args)} arguments, got {len(args)}')
 
         # possibly override the context
         eval_ctx = self._eval_ctx(ctx)

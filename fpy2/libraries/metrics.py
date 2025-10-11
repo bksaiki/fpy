@@ -7,13 +7,15 @@ Common metrics:
 from fractions import Fraction
 
 from . import base as fp
-from ..utils import is_dyadic
 
 __all__ = [
+    # relative error
     'absolute_error',
     'relative_error',
     'scaled_error',
-    'ordinal_error'
+    'ordinal_error',
+    # condition numbers
+    'sum_condition',
 ]
 
 
@@ -74,3 +76,14 @@ def ordinal_error(x: fp.Float, y: fp.Float, ctx: fp.Context) -> Fraction:
 
     err = abs(a_ord - b_ord)
     return fp.Float.from_rational(err)
+
+@fp.fpy
+def sum_condition(xs: list[fp.Real]):
+    """
+    Computes the condition number of summation over `xs`, i.e.,
+    `|sum(|x_i|)| / |sum(x_i)|`, rounding under the current context.
+    """
+    with fp.REAL:
+        sum_abs = sum([abs(x) for x in xs])
+        abs_sum = abs(sum(xs))
+    return sum_abs / abs_sum
