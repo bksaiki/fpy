@@ -4,15 +4,12 @@ but with subnormalization and a maximum value, that is multi-precision
 and bounded. Hence, "MP-B."
 """
 
-from fractions import Fraction
-
 from ..utils import default_repr, DefaultOr, DEFAULT
 
 from .context import Context, SizedContext
 from .number import RealFloat, Float
 from .mps_float import MPSFloatContext
 from .round import RoundingMode, RoundingDirection, OverflowMode
-from .gmp import mpfr_value
 
 
 @default_repr

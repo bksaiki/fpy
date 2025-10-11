@@ -7,7 +7,7 @@ from .ops import fabs, sub, div
 
 __all__ = [
     'absolute_error',
-    'relative_error'
+    'relative_error',
     'scaled_error'
 ]
 

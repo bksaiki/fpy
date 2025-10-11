@@ -4,15 +4,12 @@ but no most-significand digit, that is, a fixed-point number with arbitrary prec
 Hence, "MP-F".
 """
 
-from fractions import Fraction
-
 from ..utils import default_repr, DEFAULT, DefaultOr
 
 from .context import Context, OrdinalContext
 from .number import Float
 from .real import RealFloat
 from .round import RoundingMode
-from .gmp import mpfr_value
 
 @default_repr
 class MPFixedContext(OrdinalContext):

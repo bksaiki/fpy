@@ -5,11 +5,8 @@ This module implements exponential numbers, i.e.., numbers equal to
 TODO: stochastic rounding
 """
 
-from fractions import Fraction
-
 from ..utils import DEFAULT, DefaultOr, bitmask, default_repr
 from .context import EncodableContext, Context
-from .gmp import mpfr_value
 from .mp_float import MPFloatContext
 from .round import OverflowMode, RoundingMode, RoundingDirection
 from .number import Float, RealFloat

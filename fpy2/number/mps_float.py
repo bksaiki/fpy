@@ -4,15 +4,12 @@ but with a subnormalization, that is multi-precision floating-point
 numbers with subnormals. Hence, "MP-S."
 """
 
-from fractions import Fraction
-
 from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import Context, OrdinalContext
 from .number import RealFloat, Float
 from .mp_float import MPFloatContext
 from .round import RoundingMode
-from .gmp import mpfr_value
 
 @default_repr
 class MPSFloatContext(OrdinalContext):
