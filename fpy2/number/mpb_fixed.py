@@ -442,12 +442,16 @@ class MPBFixedContext(SizedContext):
     def minval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        if s and not self.neg_maxval.is_negative():
+            raise ValueError('negative values are not representable')
         return Float(x=self._mp_ctx.minval(s=s), ctx=self)
 
     def maxval(self, s: bool = False) -> Float:
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         if s:
+            if not self.neg_maxval.is_negative():
+                raise ValueError('negative values are not representable')
             return Float(x=self.neg_maxval, ctx=self)
         else:
             return Float(x=self.pos_maxval, ctx=self)
