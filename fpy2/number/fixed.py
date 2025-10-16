@@ -173,7 +173,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
 
             if self.signed and x.s:
                 # apply 2's complement
-                c = (1 << (self.nbits - 1)) - c
+                c = (1 << self.nbits) - c
 
         # ensure the value fits in the bitmask
         if c > bitmask(self.nbits):
@@ -186,12 +186,19 @@ class FixedContext(MPBFixedContext, EncodableContext):
         if x < 0 or x >= (1 << self.nbits):
             raise ValueError(f'Expected value in range [0, {1 << self.nbits}), got x={x}')
 
-        if self.signed and x >= (1 << (self.nbits - 1)):
-            # negative value encoded in 2's complement
-            c = x - (1 << (self.nbits - 1))
-            s = True
+        if self.signed:
+            # number encoded in 2s complement
+            smask = (1 << (self.nbits - 1))
+            if x & smask == 0:
+                # positive value
+                c = x
+                s = False
+            else:
+                # negative value
+                c = (1 << self.nbits) - x
+                s = True
         else:
-            # positive value
+            # number encoded as unsigned integer
             c = x
             s = False
 

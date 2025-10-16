@@ -148,12 +148,12 @@ class MPSFloatContext(OrdinalContext):
         elif not x.is_nonzero():
             # NaN, Inf, 0
             return True
-        elif x.s:
-            # tight check (negative values)
-            return x <= self._neg_minval
         else:
-            # tight check (non-negative values)
-            return self._pos_minval <= x
+            # tight check on (significant) digit position
+            if isinstance(x, Float):
+                return x._real.is_more_significant(self.nmin)
+            else:
+                return x.is_more_significant(self.nmin)
 
     def canonical_under(self, x):
         if not isinstance(x, Float) or not self.representable_under(x):

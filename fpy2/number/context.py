@@ -280,6 +280,9 @@ class SizedContext(OrdinalContext):
         """
         Returns the (signed) representable value with the maximum magnitude
         under this context.
+
+        If `self.maxval() == 0`, then this context cannot represent
+        any finite, non-zero values.
         """
         ...
 
