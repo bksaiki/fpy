@@ -99,13 +99,15 @@ class MPFloatContext(Context):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
+        # value is finite and non-zero
         # precision is possibly out of bounds
         # check if the value can be normalized with fewer digits
-        p_over = x.p - self.pmax
-        if p_over < 0:
+        if x.p <= self.pmax:
             # precision is within bounds
             return True
         else:
+            # precision is out of bounds, so check if the excess bits are all zero
+            p_over = x.p - self.pmax
             c_lost = x.c & bitmask(p_over) # bits that would be lost via normalization
             return c_lost == 0
 
