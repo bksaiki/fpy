@@ -259,3 +259,35 @@ def fixed_contexts(
         ov = draw(overflow_modes())
     num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
     return fp.FixedContext(signed, scale, nbits, rm, ov, num_randbits=num_randbits)
+
+@st.composite
+def sm_fixed_contexts(
+    draw,
+    min_scale: int | None = None,
+    max_scale: int | None = None,
+    max_nbits: int | None = None,
+    rm: fp.RM | None = None,
+    ov: fp.OV | None = None,
+    max_randbits: int | None = 0,
+):
+    """
+    Returns a strategy for generating a `fp.SMFixedContext`.
+
+    Args:
+        min_scale: Minimum scale for the context.
+        max_scale: Maximum scale for the context.
+        max_nbits: Maximum number of bits for the context (must be >= 2).
+        rm: Rounding mode for the context. If `None`, a random rounding mode is chosen.
+        overflow: Overflow mode for the context. If `None`, a random mode is chosen.
+        max_randbits: Maximum number of random bits for the context. If `0`, rounding is
+            deterministic. If `None`, no limit is set.
+    """
+    scale = draw(st.integers(min_scale, max_scale))
+    nbits = draw(st.integers(1, max_nbits))
+    if rm is None:
+        rm = draw(rounding_modes())
+    if ov is None:
+        ov = draw(overflow_modes())
+    num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
+    return fp.SMFixedContext(scale, nbits, rm, ov, num_randbits=num_randbits
+)

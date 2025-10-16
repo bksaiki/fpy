@@ -12,6 +12,7 @@ from .context import (
     # fixed-point contexts
     fixed_contexts,
     mp_fixed_contexts,
+    sm_fixed_contexts
 )
 
 from .round import overflow_modes, rounding_modes
