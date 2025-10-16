@@ -392,6 +392,11 @@ class ExpContext(EncodableContext):
         x = self._round_prepare(x)
         return self._round_at(x, n, exact)
 
+    def _to_ordinal(self, x: RealFloat | Float) -> int:
+        if isinstance(x, Float) and x.isnan:
+            raise ValueError(f'can only convert a finite value x={x}')
+        return x.e + self.ebias
+
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
@@ -402,7 +407,7 @@ class ExpContext(EncodableContext):
         if x.isnan:
             # NaN
             raise ValueError(f'can only convert a finite value x={x}')
-        return self.encode(x)
+        return self._to_ordinal(x)
 
     def to_fractional_ordinal(self, x: Float):
         if not isinstance(x, Float):
@@ -413,13 +418,16 @@ class ExpContext(EncodableContext):
 
         if self.representable_under(x):
             # representable value
-            return self.encode(x)
+            return Fraction(self.to_ordinal(x))
         else:
             # not representable value
             # step 1. compute the nearest values, above and below `x`
             xr = x.as_real()
             above = xr.round(self.pmax, rm=RoundingMode.RTP)
             below = xr.round(self.pmax, rm=RoundingMode.RTN)
+            if above == below:
+                # not representable, but rounds to the same value without bounds
+                return Fraction(self._to_ordinal(above))
 
             # step 2. ordinal space is linear between two adjacent values;
             # compute the linear interpolation factor
@@ -430,7 +438,7 @@ class ExpContext(EncodableContext):
 
             # step 3. map one endpoint to the ordinals (they are one apart)
             # TODO: what if `below` is not encodable?
-            below_ord = self.encode(below)
+            below_ord = self._to_ordinal(below)
 
             # step 4. apply linear interpolation
             return Fraction(below_ord) + t
