@@ -1,16 +1,9 @@
 """
-Custom generators for Hypothesis tests.
+Custom generators for numbers
 """
 
 import fpy2 as fp
 from hypothesis import strategies as st
-
-@st.composite
-def rounding_modes(draw):
-    """
-    Returns a strategy for generating a rounding mode.
-    """
-    return draw(st.sampled_from([fp.RM.RNE, fp.RM.RNA, fp.RM.RTP, fp.RM.RTN, fp.RM.RTZ, fp.RM.RAZ, fp.RM.RTO, fp.RM.RTE]))
 
 @st.composite
 def real_floats(
