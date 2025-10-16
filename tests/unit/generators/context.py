@@ -5,7 +5,7 @@ Custom generators for rounding contexts.
 import fpy2 as fp
 from hypothesis import strategies as st
 
-from .round import rounding_modes
+from .round import overflow_modes, rounding_modes
 
 ###########################################################
 # Floating-point contexts
@@ -65,7 +65,7 @@ def mps_float_contexts(
 def ieee_contexts(
     draw,
     max_es: int | None = None,
-    max_p: int | None = None,
+    max_nbits: int | None = None,
     rm: fp.RM | None = None,
     max_randbits: int | None = 0
 ):
@@ -73,34 +73,46 @@ def ieee_contexts(
     Returns a strategy for generating a `fp.IEEEContext`.
 
     Args:
-        max_es: Maximum exponent width for the context.
-        max_p: Maximum precision for the context.
+        max_es: Maximum exponent width for the context (must be >= 2).
+        max_nbits: Maximum number of bits for the context (must be >= 2 + `max_es`).
         rm: Rounding mode for the context. If `None`, a random rounding mode is chosen.
         max_randbits: Maximum number of random bits for the context. If `0`, rounding is
             deterministic. If `None`, no limit is set.
     """
     es = draw(st.integers(2, max_es))
-    p = draw(st.integers(2, max_p))
-    nbits = es + p
+    nbits = draw(st.integers(es + 2, max_nbits))
     if rm is None:
         rm = draw(rounding_modes())
     num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
     return fp.IEEEContext(es, nbits, rm=rm, num_randbits=num_randbits)
 
 @st.composite
-def efloat_contexts(
+def efloat_contexts( 
     draw,
     max_es: int | None = None,
-    max_p: int | None = None,
+    max_nbits: int | None = None,
     enable_inf: bool | None = None,
     nan_kind: fp.EFloatNanKind | None = None,
     min_eoffset: int | None = None,
     max_eoffset: int | None = None,
     rm: fp.RM | None = None,
+    ov: fp.OV | None = None,
     max_randbits: int | None = 0
 ):
     """
     Returns a strategy for generating an `fp.EFloatContext`.
+
+    Args:
+        max_es: Maximum exponent width for the context (must be >= 2).
+        max_nbits: Maximum number of bits for the context (must be >= 2 + `max_es`).
+        enable_inf: Whether to enable infinities in the context. If `None`, a random choice is made.
+        nan_kind: Kind of NaN representation for the context. If `None`, a random choice is made.
+        min_eoffset: Smallest exponent offset for the context.
+        max_eoffset: Largest exponent offset for the context.
+        rm: Rounding mode for the context. If `None`, a random rounding mode is chosen.
+        overflow: Overflow mode for the context. If `None`, a random mode is chosen.
+        max_randbits: Maximum number of random bits for the context. If `0`, rounding is
+            deterministic. If `None`, no limit is set.
     """
     if nan_kind is None:
         nan_kind = draw(st.sampled_from(list(fp.EFloatNanKind)))
@@ -108,121 +120,142 @@ def efloat_contexts(
     match nan_kind:
         case fp.EFloatNanKind.IEEE_754:
             es = draw(st.integers(1, max_es))
-            p = draw(st.integers(2, max_p))
+            nbits = draw(st.integers(es + 1, max_nbits))
+            p = nbits - es
             if p == 1:
                 enable_inf = False
 
         case fp.EFloatNanKind.MAX_VAL:
             es = draw(st.integers(0, max_es))
             if es == 0:
-                p = draw(st.integers(2, max_p))
+                nbits = draw(st.integers(es + 2, max_nbits))
+                p = nbits - es
                 if p < 2:
                     enable_inf = False
             elif es == 1:
-                p = draw(st.integers(1, max_p))
+                nbits = draw(st.integers(es + 1, max_nbits))
+                p = nbits - es
                 if p == 1:
                     enable_inf = False
             else:
-                p = draw(st.integers(1, max_p))
+                nbits = draw(st.integers(es + 1, max_nbits))
 
         case fp.EFloatNanKind.NONE | fp.EFloatNanKind.NONE:
             es = draw(st.integers(0, max_es))
             if es == 0:
-                p = draw(st.integers(1, max_p))
+                nbits = draw(st.integers(es + 1, max_nbits))
+                p = nbits - es
                 if p == 1:
                     enable_inf = False
             else:
-                p = draw(st.integers(1, max_p))
+                nbits = draw(st.integers(es + 1, max_nbits))
 
         case _:
             raise ValueError(f'Unknown EFloatNanKind: {nan_kind}')
 
-    nbits = es + p
     if enable_inf is None:
         enable_inf = draw(st.booleans())
     eoffset = draw(st.integers(min_eoffset, max_eoffset))
     if rm is None:
         rm = draw(rounding_modes())
+    if ov is None:
+        ov = draw(overflow_modes())
     num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
-    return fp.EFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm=rm, num_randbits=num_randbits)
-
-###########################################################
-# Abstract contexts
+    return fp.EFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, ov, num_randbits)
 
 @st.composite
-def encodable_contexts(
+def exp_contexts(
     draw,
-    max_p: int | None = None,
-    max_es: int | None = None,
-    enable_inf: bool | None = None,
-    nan_kind: fp.EFloatNanKind | None = None,
+    max_nbits: int | None = None,
     min_eoffset: int | None = None,
     max_eoffset: int | None = None,
     rm: fp.RM | None = None,
-    max_randbits: int | None = 0
+    ov: fp.OV | None = None,
 ):
     """
-    Returns a strategy for generating an `EncodableContext`.
+    Returns a strategy for generating an `fp.ExpContext`.
+
+    Args:
+        max_nbits: Maximum number of bits for the context (must be >= 1).
+        min_eoffset: Smallest exponent offset for the context.
+        max_eoffset: Largest exponent offset for the context.
+        rm: Rounding mode for the context. If `None`, a random rounding mode is chosen.
+        overflow: Overflow mode for the context. If `None`, a random mode is chosen.
+        max_randbits: Maximum number of random bits for the context. If `0`, rounding is
+            deterministic. If `None`, no limit is set.
     """
-    strategies = [efloat_contexts(max_es, max_p, enable_inf, nan_kind, min_eoffset, max_eoffset, rm, max_randbits)]
-    if (
-        enable_inf
-        and nan_kind == fp.EFloatNanKind.IEEE_754
-        and (min_eoffset is None or min_eoffset <= 0)
-        and (max_eoffset is None or max_eoffset >= 0)
-        and (max_es is None or max_es >= 2)
-        and (max_p is None or max_p >= 2)
-    ):
-        strategies.append(ieee_contexts(max_es, max_p, rm, max_randbits))
-    return st.one_of(strategies)
+    nbits = draw(st.integers(1, max_nbits))
+    eoffset = draw(st.integers(min_eoffset, max_eoffset))
+    if rm is None:
+        rm = draw(rounding_modes())
+    if ov is None:
+        ov = draw(overflow_modes())
+
+    return fp.ExpContext(nbits, eoffset, rm, ov)
+
+###########################################################
+# Fixed-point contexts
 
 @st.composite
-def sized_contexts(
+def mp_fixed_contexts(
     draw,
-    max_p: int | None = None,
-    max_es: int | None = None,
+    min_n: int | None = None,
+    max_n: int | None = None,
     rm: fp.RM | None = None,
-    max_randbits: int | None = 0
-):
+    max_randbits: int | None = 0,
+    enable_inf: bool = False,
+    enable_nan: bool = False
+) -> fp.MPFixedContext:
     """
-    Returns a strategy for generating a `SizedContext`.
+    Returns a strategy for generating a `fp.MPFixedContext`.
+
+    Args:
+        min_n: Minimum position for the most significant unrepresentable digit.
+        max_n: Maximum position for the most significant unrepresentable digit.
+        rm: Rounding mode for the context. If `None`, a random rounding mode is chosen.
+        max_randbits: Maximum number of random bits for the context. If `0`, rounding is
+            deterministic. If `None`, no limit is set.
     """
-    return st.one_of(
-        encodable_contexts(max_es=max_es, max_p=max_p, rm=rm, max_randbits=max_randbits),
-    )
+    n = draw(st.integers(min_n, max_n))
+    if rm is None:
+        rm = draw(rounding_modes())
+    num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
+    return fp.MPFixedContext(n, rm, num_randbits, enable_inf=enable_inf, enable_nan=enable_nan)
 
 @st.composite
-def ordinal_contexts(
+def fixed_contexts(
     draw,
-    max_p: int | None = None,
-    max_es: int | None = None,
-    min_emin: int | None = None,
-    max_emin: int | None = None,
+    signed: bool | None = None,
+    min_scale: int | None = None,
+    max_scale: int | None = None,
+    max_nbits: int | None = None,
     rm: fp.RM | None = None,
-    max_randbits: int | None = 0
+    ov: fp.OV | None = None,
+    max_randbits: int | None = 0,
 ):
     """
-    Returns a strategy for generating an `OrdinalContext`.
-    """
-    return (
-        mps_float_contexts(max_p=max_p, min_emin=min_emin, max_emin=max_emin, rm=rm, max_randbits=max_randbits)
-        | sized_contexts(max_es=max_es, max_p=max_p, rm=rm, max_randbits=max_randbits),
-    )
+    Returns a strategy for generating a `fp.FixedContext`.
 
-@st.composite
-def contexts(
-    draw,
-    max_p: int | None = None,
-    max_es: int | None = None,
-    min_emin: int | None = None,
-    max_emin: int | None = None,
-    rm: fp.RM | None = None,
-    max_randbits: int | None = 0
-):
+    Args:
+        signed: Whether the context is signed. If `None`, a random choice is made.
+        min_scale: Minimum scale for the context.
+        max_scale: Maximum scale for the context.
+        max_nbits: Maximum number of bits for the context (must be >= 2 if signed and >= 1 otherwise).
+        rm: Rounding mode for the context. If `None`, a random rounding mode is chosen.
+        overflow: Overflow mode for the context. If `None`, a random mode is chosen.
+        max_randbits: Maximum number of random bits for the context. If `0`, rounding is
+            deterministic. If `None`, no limit is set.
     """
-    Returns a strategy for generating a `Context`.
-    """
-    return (
-        mp_float_contexts(max_p=max_p, rm=rm, max_randbits=max_randbits)
-        | ordinal_contexts(max_p=max_p, max_es=max_es, min_emin=min_emin, max_emin=max_emin, rm=rm, max_randbits=max_randbits)
-    )
+    if signed is None:
+        signed = draw(st.booleans())
+    scale = draw(st.integers(min_scale, max_scale))
+    if signed:
+        nbits = draw(st.integers(2, max_nbits))
+    else:
+        nbits = draw(st.integers(1, max_nbits))
+    if rm is None:
+        rm = draw(rounding_modes())
+    if ov is None:
+        ov = draw(overflow_modes())
+    num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
+    return fp.FixedContext(signed, scale, nbits, rm, ov, num_randbits=num_randbits)

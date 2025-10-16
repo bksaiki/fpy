@@ -10,4 +10,11 @@ def rounding_modes(draw):
     """
     Returns a strategy for generating a rounding mode.
     """
-    return draw(st.sampled_from([fp.RM.RNE, fp.RM.RNA, fp.RM.RTP, fp.RM.RTN, fp.RM.RTZ, fp.RM.RAZ, fp.RM.RTO, fp.RM.RTE]))
+    return draw(st.sampled_from(list(fp.RM)))
+
+@st.composite
+def overflow_modes(draw):
+    """
+    Returns a strategy for generating an overflow mode.
+    """
+    return draw(st.sampled_from(list(fp.OV)))
