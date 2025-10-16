@@ -130,7 +130,7 @@ def efloat_contexts(
             if es == 0:
                 nbits = draw(st.integers(es + 2, max_nbits))
                 p = nbits - es
-                if p < 2:
+                if p == 2:
                     enable_inf = False
             elif es == 1:
                 nbits = draw(st.integers(es + 1, max_nbits))
@@ -140,7 +140,7 @@ def efloat_contexts(
             else:
                 nbits = draw(st.integers(es + 1, max_nbits))
 
-        case fp.EFloatNanKind.NONE | fp.EFloatNanKind.NONE:
+        case fp.EFloatNanKind.NEG_ZERO | fp.EFloatNanKind.NONE:
             es = draw(st.integers(0, max_es))
             if es == 0:
                 nbits = draw(st.integers(es + 1, max_nbits))
@@ -159,7 +159,7 @@ def efloat_contexts(
     if rm is None:
         rm = draw(rounding_modes())
     if ov is None:
-        ov = draw(overflow_modes())
+        ov = draw(overflow_modes().filter(lambda x: x != fp.OV.WRAP))
     num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
     return fp.EFloatContext(es, nbits, enable_inf, nan_kind, eoffset, rm, ov, num_randbits)
 
@@ -189,7 +189,7 @@ def exp_contexts(
     if rm is None:
         rm = draw(rounding_modes())
     if ov is None:
-        ov = draw(overflow_modes())
+        ov = draw(overflow_modes().filter(lambda x: x != fp.OV.WRAP))
 
     return fp.ExpContext(nbits, eoffset, rm, ov)
 
@@ -289,5 +289,20 @@ def sm_fixed_contexts(
     if ov is None:
         ov = draw(overflow_modes())
     num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
-    return fp.SMFixedContext(scale, nbits, rm, ov, num_randbits=num_randbits
-)
+    return fp.SMFixedContext(scale, nbits, rm, ov, num_randbits=num_randbits)
+
+###########################################################
+# Common contexts
+
+_common_contexts: list[fp.Context] | None = None
+
+@st.composite
+def common_contexts(draw):
+    global _common_contexts
+    if _common_contexts is None:
+        _common_contexts = [
+            ctx for ctx in vars(fp).values()
+            if isinstance(ctx, fp.Context)
+        ]
+    return draw(st.sampled_from(_common_contexts))
+

@@ -119,6 +119,9 @@ class ExpContext(EncodableContext):
         *,
         inf_value: Float | None = None
     ):
+        if overflow == OverflowMode.WRAP:
+            raise ValueError('OverflowMode.WRAP is not supported for ExpContext')
+
         emin, emax, mp_ctx, inf_value = _compute_params(nbits, eoffset, rm, overflow, inf_value)
         self.nbits = nbits
         self.eoffset = eoffset
@@ -183,6 +186,10 @@ class ExpContext(EncodableContext):
             inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for ExpContext')
+
+        if overflow == OverflowMode.WRAP:
+            raise ValueError('OverflowMode.WRAP is not supported for ExpContext')
+
         return ExpContext(
             nbits,
             eoffset,

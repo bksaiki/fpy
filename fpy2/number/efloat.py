@@ -825,7 +825,8 @@ def _ext_to_mpb(
 
     # for es == 0, the exponent may be too low
     # we should normalize and ensure the exponent is in range
-    maxval = maxval.normalize(p, expmin - 1)
+    if es == 0:
+        maxval = maxval.normalize(p, expmin - 1)
 
     # create the related MPB context
     return MPBFloatContext(p, emin, maxval, rm, overflow, num_randbits)

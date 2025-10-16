@@ -1,5 +1,5 @@
 """
-Custom generators for Hypothesis tests.
+Custom generators over FPy types for Hypothesis tests.
 """
 
 from .context import (
@@ -12,7 +12,9 @@ from .context import (
     # fixed-point contexts
     fixed_contexts,
     mp_fixed_contexts,
-    sm_fixed_contexts
+    sm_fixed_contexts,
+    # common contexts
+    common_contexts,
 )
 
 from .round import overflow_modes, rounding_modes
