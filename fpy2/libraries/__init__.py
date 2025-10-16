@@ -24,3 +24,6 @@ from . import vector
 
 # matrices
 from . import matrix
+
+# metrics
+from . import metrics

@@ -3,15 +3,12 @@ This module defines fixed-pont numbers with a maximum value,
 that is, multiprecision and bounded. Hence "MP-B".
 """
 
-from fractions import Fraction
-
 from ..utils import default_repr, DefaultOr, DEFAULT
 
 from .context import Context, SizedContext
 from .mp_fixed import MPFixedContext
 from .number import RealFloat, Float
 from .round import RoundingMode, OverflowMode
-from .gmp import mpfr_value
 
 
 @default_repr
@@ -411,6 +408,11 @@ class MPBFixedContext(SizedContext):
         else:
             # finite, real
             return self._mp_ctx.to_ordinal(x)
+
+    def to_fractional_ordinal(self, x: Float):
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return self._mp_ctx.to_fractional_ordinal(x)
 
     def from_ordinal(self, x: int, infval: bool = False) -> Float:
         if not isinstance(x, int):

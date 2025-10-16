@@ -9,7 +9,6 @@ from fractions import Fraction
 
 from ..utils import DEFAULT, DefaultOr, bitmask, default_repr
 from .context import EncodableContext, Context
-from .gmp import mpfr_value
 from .mp_float import MPFloatContext
 from .round import OverflowMode, RoundingMode, RoundingDirection
 from .number import Float, RealFloat
@@ -397,6 +396,38 @@ class ExpContext(EncodableContext):
             # NaN
             raise ValueError(f'can only convert a finite value x={x}')
         return self.encode(x)
+
+    def to_fractional_ordinal(self, x: Float):
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        if x.is_nar():
+            # NaN or Inf
+            raise ValueError(f'Expected a finite value for x={x}')
+
+        if self.representable_under(x):
+            # representable value
+            return self.encode(x)
+        else:
+            # not representable value
+            # step 1. compute the nearest values, above and below `x`
+            xr = x.as_real()
+            above = xr.round(self.pmax, rm=RoundingMode.RTP)
+            below = xr.round(self.pmax, rm=RoundingMode.RTN)
+
+            # step 2. ordinal space is linear between two adjacent values;
+            # compute the linear interpolation factor
+            # TODO: is this true? one could argue the space is exponential
+            delta_x: RealFloat = xr - below
+            delta: RealFloat = above - below
+            t = delta_x.as_rational() / delta.as_rational()
+
+            # step 3. map one endpoint to the ordinals (they are one apart)
+            # TODO: what if `below` is not encodable?
+            below_ord = self.encode(below)
+
+            # step 4. apply linear interpolation
+            return Fraction(below_ord) + t
+
 
     def from_ordinal(self, x: int, infval: bool = False) -> Float:
         if not isinstance(x, int):

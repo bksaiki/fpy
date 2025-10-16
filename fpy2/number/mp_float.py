@@ -3,14 +3,11 @@ This module defines floating-point numbers as implemented by MPFR,
 that is, multi-precision floating-point numbers. Hence, "MP."
 """
 
-from fractions import Fraction
-
 from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import Context
 from .number import RealFloat, Float
 from .round import RoundingMode
-from .gmp import mpfr_value
 
 @default_repr
 class MPFloatContext(Context):

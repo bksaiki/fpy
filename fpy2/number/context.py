@@ -228,6 +228,24 @@ class OrdinalContext(Context):
         ...
 
     @abstractmethod
+    def to_fractional_ordinal(self, x: Float) -> Fraction:
+        """
+        Maps a number to a (fractional) ordinal number.
+
+        Unlike `self.to_ordinal(x)`, the argument `x` does not
+        have to be representable under this context.
+        If `x` is representable, then
+        `self.to_ordinal(x) == self.to_fractional_ordinal(x)`.
+        If `x` is not representable, then
+        `self.to_fractional_ordinal(x)` is not an integer;
+        it is up to the context to decide how to interpolate
+        between representable numbers.
+
+        Raises a `ValueError` when `x.is_nar()` is `True`.
+        """
+        ...
+
+    @abstractmethod
     def from_ordinal(self, x: int, infval: bool = False) -> Float:
         """
         Maps an ordinal number to a number.
