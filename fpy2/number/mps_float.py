@@ -137,9 +137,8 @@ class MPSFloatContext(OrdinalContext):
                 if x.ctx is not None and self.is_equiv(x.ctx):
                     # same context, so representable
                     return True
-                xr = x.as_real()
             case RealFloat():
-                xr = x
+                pass
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
@@ -150,8 +149,11 @@ class MPSFloatContext(OrdinalContext):
             # NaN, Inf, 0
             return True
         else:
-            # tight check on digits
-            return xr.is_more_significant(self.nmin)
+            # tight check on (significant) digit position
+            if isinstance(x, Float):
+                return x._real.is_more_significant(self.nmin)
+            else:
+                return x.is_more_significant(self.nmin)
 
     def canonical_under(self, x):
         if not isinstance(x, Float) or not self.representable_under(x):

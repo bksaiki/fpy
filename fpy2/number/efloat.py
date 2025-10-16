@@ -788,10 +788,18 @@ def _ext_to_mpb(
                     # NaN is in the last binade, and the maximum value is
                     # the usual IEEE 754 maximum value
                     maxval = RealFloat(c=bitmask(p), exp=expmax)
-            elif p == 2 and enable_inf:
-                # NaN and Inf occupy the last binade,
-                # so the maximum value is the usual IEEE 754 maximum value
-                maxval = RealFloat(c=bitmask(p), exp=expmax)
+            elif p == 2:
+                if enable_inf:
+                    # NaN and Inf occupy the last binade,
+                    # so the maximum value is the usual IEEE 754 maximum value
+                    maxval = RealFloat(c=bitmask(p), exp=expmax)
+                elif es == 0:
+                    # 0 and NaN occupy the last binade
+                    maxval = RealFloat.from_int(0)
+                else:
+                    # only NaN occupies the last binade
+                    c = bitmask(p) - 1
+                    maxval = RealFloat(c=c, exp=expmax+1)
             else:
                 # maximum value is in the last binade
                 if enable_inf:

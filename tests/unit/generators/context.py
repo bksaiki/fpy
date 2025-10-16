@@ -283,7 +283,7 @@ def sm_fixed_contexts(
             deterministic. If `None`, no limit is set.
     """
     scale = draw(st.integers(min_scale, max_scale))
-    nbits = draw(st.integers(1, max_nbits))
+    nbits = draw(st.integers(2, max_nbits))
     if rm is None:
         rm = draw(rounding_modes())
     if ov is None:

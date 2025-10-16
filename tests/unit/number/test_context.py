@@ -13,6 +13,7 @@ from ..generators import *
 def _ordinal_contexts():
     return (
         fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8)
+        | sm_fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8)
         | mp_fixed_contexts(min_n=-16, max_n=16)
         | mps_float_contexts(max_p=8, min_emin=-64, max_emin=64)
         | efloat_contexts(max_es=4, max_nbits=8)
@@ -21,6 +22,7 @@ def _ordinal_contexts():
 def _sized_contexts():
     return (
         fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8)
+        | sm_fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8)
         | efloat_contexts(max_es=4, max_nbits=8)
     )
 
@@ -121,12 +123,12 @@ class TestSizedContext(unittest.TestCase):
     def test_maxval_common(self, ctx: fp.SizedContext):
         pos_max = ctx.maxval()
         self.assertIsInstance(pos_max, fp.Float)
-        self.assertTrue(pos_max.is_positive())
+        self.assertFalse(pos_max.is_negative())
 
         try:
             neg_max = ctx.maxval(s=True)
             self.assertIsInstance(neg_max, fp.Float)
-            self.assertTrue(neg_max.is_negative())
+            self.assertFalse(neg_max.is_positive())
         except ValueError: 
             pass
 
@@ -134,12 +136,12 @@ class TestSizedContext(unittest.TestCase):
     def test_maxval(self, ctx: fp.SizedContext):
         pos_max = ctx.maxval()
         self.assertIsInstance(pos_max, fp.Float)
-        self.assertTrue(pos_max.is_positive())
+        self.assertFalse(pos_max.is_negative())
 
         try:
             neg_max = ctx.maxval(s=True)
             self.assertIsInstance(neg_max, fp.Float)
-            self.assertTrue(neg_max.is_negative())
+            self.assertFalse(neg_max.is_positive())
         except ValueError: 
             pass
 
