@@ -101,6 +101,9 @@ __all__ = [
     'const_2_sqrt_pi',
     'const_sqrt2',
     'const_sqrt1_2',
+    # utilities
+    '_cvt_to_real',
+    '_cvt_to_float',
 ]
 
 ################################################################################

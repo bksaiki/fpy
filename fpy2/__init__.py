@@ -25,7 +25,6 @@ from . import libraries
 # submodules
 from . import ast
 from . import analysis
-from . import metrics
 from . import transform
 from . import strategies
 from . import types
