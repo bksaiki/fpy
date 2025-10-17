@@ -374,6 +374,10 @@ class Parser:
                 lhs = self._parse_expr(e.left)
                 rhs = self._parse_expr(e.right)
                 return Div(lhs, rhs, loc)
+            case ast.Mod():
+                lhs = self._parse_expr(e.left)
+                rhs = self._parse_expr(e.right)
+                return Mod(lhs, rhs, loc)
             case ast.Pow():
                 base = self._parse_expr(e.left)
                 exp = self._parse_expr(e.right)
@@ -702,6 +706,9 @@ class Parser:
             case ast.Div():
                 value = self._parse_expr(stmt.value)
                 e = Div(Var(ident, loc), value, loc)
+            case ast.Mod():
+                value = self._parse_expr(stmt.value)
+                e = Mod(Var(ident, loc), value, loc)
             case _:
                 raise self._parse_error('Unsupported operator-assignment in FPy', stmt)
 

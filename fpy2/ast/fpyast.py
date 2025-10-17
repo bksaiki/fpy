@@ -102,6 +102,7 @@ __all__ = [
     # Other arithmetic
     'Max',
     'Min',
+    'Mod',
     'Fmod',
     'Remainder',
     'Cbrt',
@@ -854,12 +855,40 @@ class Min(NamedNaryOp):
     """FPy node: `min(x, y, ...)`"""
     __slots__ = ()
 
+class Mod(BinaryOp):
+    """
+    FPy node: `a % b`
+
+    Represents Python's modulus operator, defined as:
+
+        a = (a // b) * b + (a % b)
+
+    The result has the same sign as the divisor `b`.
+    """
+    __slots__ = ()
+
 class Fmod(NamedBinaryOp):
-    """FPy node: modulus"""
+    """
+    FPy node: `fmod(x, y)`
+
+    Represents the C standard library's `fmod` function, defined as:
+
+        fmod(x, y) = x - trunc(x / y) * y
+
+    The result has the same sign as the dividend `x`.
+    """
     __slots__ = ()
 
 class Remainder(NamedBinaryOp):
-    """FPy node: remainder"""
+    """
+    FPy node: `remainder(x, y)`
+
+    Represents the IEEE 754 `remainder` function, defined as:
+
+        remainder(x, y) = x - round(x / y) * y
+
+    The result is the value closest to zero.
+    """
     __slots__ = ()
 
 class Cbrt(NamedUnaryOp):
