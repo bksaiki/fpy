@@ -211,14 +211,23 @@ class RealFloat(numbers.Rational):
         ord = self.compare(other)
         return ord == Ordering.GREATER or ord == Ordering.EQUAL
 
-    def __add__(self, other: 'RealFloat'):
+    def __add__(self, other):
         """
         Adds `self` and `other` exactly.
 
         This operation never fails when `other` is a `RealFloat`.
         """
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+        match other:
+            case RealFloat():
+                pass
+            case int():
+                other = RealFloat.from_int(other)
+            case float():
+                other = RealFloat.from_float(other)
+            case Fraction():
+                other = RealFloat.from_rational(other)
+            case _:
+                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
 
         if self._c == 0:
             # 0 + b = b
@@ -271,14 +280,23 @@ class RealFloat(numbers.Rational):
         """
         return RealFloat(x=self)
 
-    def __mul__(self, other: 'RealFloat'):
+    def __mul__(self, other):
         """
         Multiplies `self` and `other` exactly.
 
         This operation never fails when `other` is a `RealFloat`.
         """
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'unsupported operand type(s) for *: \'RealFloat\' and \'{type(other)}\'')
+        match other:
+            case RealFloat():
+                pass
+            case int():
+                other = RealFloat.from_int(other)
+            case float():
+                other = RealFloat.from_float(other)
+            case Fraction():
+                other = RealFloat.from_rational(other)
+            case _:
+                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
 
         s = self._s != other._s
         if self._c == 0 or other._c == 0:
@@ -333,16 +351,16 @@ class RealFloat(numbers.Rational):
         return RealFloat(s=False, x=self)
 
     def __trunc__(self) -> int:
-        raise NotImplementedError('do not call directly')
+        return self.round(min_n=-1, rm=RoundingMode.RTZ)
 
     def __floor__(self) -> int:
-        raise NotImplementedError('do not call directly')
+        return self.round(min_n=-1, rm=RoundingMode.RTN)
 
     def __ceil__(self) -> int:
-        raise NotImplementedError('do not call directly')
+        return self.round(min_n=-1, rm=RoundingMode.RTP)
 
     def __round__(self, ndigits=None) -> int:
-        raise NotImplementedError('do not call directly')
+        return self.round(min_n=-1, rm=RoundingMode.RNE)
 
     def __floordiv__(self, other):
         raise NotImplementedError('division cannot be implemented exactly')
