@@ -98,71 +98,34 @@ def real_neg(x: Float | Fraction) -> Float | Fraction:
     """
     Negate a real number, exactly.
     """
-    match x:
-        case Float():
-            return Float(s=not x.s, x=x, ctx=REAL)
-        case Fraction():
-            return -x
-        case _:
-            raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
-
+    if not isinstance(x, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
+    return -x
 
 def real_abs(x: Float | Fraction) -> Float | Fraction:
     """
     Absolute value of a real number, exactly.
     """
-    match x:
-        case Float():
-            return Float(s=False, x=x, ctx=REAL)
-        case Fraction():
-            return abs(x)
-        case _:
-            raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
+    if not isinstance(x, Float | Fraction):
+        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
+    return abs(x)
 
 
 def real_add(x: Float | Fraction, y: Float | Fraction) -> Float | Fraction:
     """
     Add two real numbers, exactly.
     """
-    if not isinstance(x, Float | Fraction):
-        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
-    if not isinstance(y, Float | Fraction):
-        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(y)}\' for y={y}')
-
-    if _is_nan(x) or _is_nan(y):
-        # either is NaN
-        return Float(isnan=True, ctx=REAL)
-    elif _is_inf(x):
-        # x is Inf
-        if _is_inf(y):
-            # y is also Inf
-            if _signbit(x) == _signbit(y):
-                # Inf + Inf = Inf
-                return Float(s=_signbit(x), isinf=True, ctx=REAL)
-            else:
-                # Inf + -Inf = NaN
-                return Float(isnan=True, ctx=REAL)
-        else:
-            # y is finite: Inf + y = Inf
-            return Float(s=_signbit(x), isinf=True, ctx=REAL)
-    elif _is_inf(y):
-        # y is Inf, x is finite: x + Inf = Inf
-        return Float(s=_signbit(y), isinf=True, ctx=REAL)
-    else:
-        # both are finite
-        match x, y:
-            case Float(), Float():
-                r = x.as_real() + y.as_real()
-                return Float(x=r, ctx=REAL)
-            case Fraction(), Fraction():
-                return x + y
-            case Fraction(), Float():
-                return x + y.as_rational()
-            case Float(), Fraction():
-                return x.as_rational() + y
-            case _:
-                raise RuntimeError('unreachable', x, y)
-
+    match x, y:
+        case Float(), Float():
+            return x + y
+        case Fraction(), Fraction():
+            return x + y
+        case Fraction(), Float():
+            return x + y.as_rational()
+        case Float(), Fraction():
+            return x.as_rational() + y
+        case _:
+            raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(y)}\' for y={y}')
 
 def real_sub(x: Float | Fraction, y: Float | Fraction) -> Float | Fraction:
     return real_add(x, real_neg(y))
@@ -172,46 +135,17 @@ def real_mul(x: Float | Fraction, y: Float | Fraction) -> Float | Fraction:
     """
     Multiply two real numbers, exactly.
     """
-    if not isinstance(x, Float | Fraction):
-        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
-    if not isinstance(y, Float | Fraction):
-        raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(y)}\' for y={y}')
-
-    if _is_nan(x) or _is_nan(y):
-        # either is NaN
-        return Float(isnan=True, ctx=REAL)
-    elif _is_inf(x):
-        # x is Inf
-        if _is_zero(y):
-            # Inf * 0 = NaN
-            return Float(isnan=True, ctx=REAL)
-        else:
-            # Inf * y = Inf
-            s = _signbit(x) != _signbit(y)
-            return Float(s=s, isinf=True, ctx=REAL)
-    elif _is_inf(y):
-        # y is Inf
-        if _is_zero(x):
-            # 0 * Inf = NaN
-            return Float(isnan=True, ctx=REAL)
-        else:
-            # x * Inf = Inf
-            s = _signbit(x) != _signbit(y)
-            return Float(s=s, isinf=True, ctx=REAL)
-    else:
-        # both are finite
-        match x, y:
-            case Float(), Float():
-                r = x.as_real() * y.as_real()
-                return Float(x=r, ctx=REAL)
-            case Fraction(), Fraction():
-                return x * y
-            case Fraction(), Float():
-                return x * y.as_rational()
-            case Float(), Fraction():
-                return x.as_rational() * y
-            case _:
-                raise RuntimeError('unreachable', x, y)
+    match x, y:
+        case Float(), Float():
+            return x * y
+        case Fraction(), Fraction():
+            return x * y
+        case Fraction(), Float():
+            return x * y.as_rational()
+        case Float(), Fraction():
+            return x.as_rational() * y
+        case _:
+            raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(y)}\' for y={y}')
 
 
 def real_fma(x: Float | Fraction, y: Float | Fraction, z: Float | Fraction) -> Float | Fraction:
