@@ -52,6 +52,7 @@ __all__ = [
     'log10',
     'log1p',
     'log2',
+    'mod',
     'mul',
     'neg',
     'pow',
@@ -404,6 +405,18 @@ def log2(x: Real, ctx: Context = REAL):
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
     return _apply_mpfr(mpfr_log2, x, ctx=ctx)
+
+def mod(x: Real, y: Real, ctx: Context = REAL):
+    """
+    Computes `x % y` rounded under `ctx`.
+
+    Implements Python's modulus operator, defined as:
+
+        x % y = x - floor(x / y) * y
+    """
+    if ctx is not None and not isinstance(ctx, Context):
+        raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
+    return _apply_mpfr(mpfr_mod, x, y, ctx=ctx)
 
 def mul(x: Real, y: Real, ctx: Context = REAL):
     """Multiplies `x` and `y` rounded under `ctx`."""

@@ -11,8 +11,9 @@ import gmpy2 as gmp
 
 from typing import Callable
 
-from .number import RealFloat, Float
 from ..utils import enum_repr
+from .number import RealFloat, Float
+from .round import RoundingMode
 
 def _bool_to_sign(b: bool):
     return '-' if b else '+'
@@ -463,6 +464,50 @@ def mpfr_log2(x: Float, *, prec: int | None = None, n: int | None = None):
     accurately to `prec` digits of precision.
     """
     return _mpfr_eval(gmp.log2, x, prec=prec, n=n)
+
+def mpfr_mod(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
+    """
+    Computes `x % y` using MPFR such that it may be safely re-rounded
+    accurately to `prec` digits of precision.
+
+    Implements Python's modulus operator, defined as:
+
+        x % y = x - floor(x / y) * y
+    """
+    if x.isnan or y.isnan:
+        # if either argument is NaN, NaN is returned
+        return Float(isnan=True)
+    elif x.isinf:
+        # if x is infinite, NaN is returned
+        return Float(isnan=True)
+    elif y.isinf:
+        # if y is infinite, ...
+        if x.is_zero():
+            # if x is +/-0, returns copysign(x, y)
+            return Float(x=x, s=y.s)
+        elif x.s == y.s:
+            # same sign => returns x
+            return x
+        else:
+            # different sign => returns y
+            return y
+    elif y.is_zero():
+        # if y is zero, NaN is returned
+        return Float(isnan=True)
+    elif x.is_zero():
+        # if x is zero, +/-0 is returned
+        return Float(x=x, s=y.s)
+    else:
+        # x, y are both finite and non-zero
+        # manually compute `x - floor(x / y) * y`
+
+        # step 1. compute `floor(x / y)`
+        q = mpfr_div(x, y, n=-1)
+        qr = q.as_real().round(min_n=-1, rm=RoundingMode.RTN)
+
+        # step 2. compute `x - q * y`
+        return x.as_real() - qr * y.as_real()
+
 
 def mpfr_mul(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
     """
