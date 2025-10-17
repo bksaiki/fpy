@@ -276,9 +276,14 @@ class RealFloat(numbers.Rational):
             # return the result
             return RealFloat(s=s, exp=exp, c=c)
 
-
     def __radd__(self, other):
         return self + other
+
+    def __sub__(self, other):
+        return self + (-other)
+    
+    def __rsub__(self, other):
+        return (-self) + other
 
     def __mul__(self, other):
         """
@@ -1472,6 +1477,12 @@ class Float:
 
     def __radd__(self, other):
         return self + other
+
+    def __sub__(self, other):
+        return self + (-other)
+    
+    def __rsub__(self, other):
+        return (-self) + other
 
     def __mul__(self, other):
         """
