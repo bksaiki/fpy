@@ -155,7 +155,7 @@ class TestModOp(unittest.TestCase):
         else:
             self.assertEqual(a, b, msg)
 
-    def test_mod(self):
+    def test_mod_fixed(self):
         CTX = fp.MPFixedContext(nmin=-1, enable_inf=True, enable_nan=True)
         XS = [5.0, -5.0, 3.0, -3.0, 0.0, float('inf'), float('-inf'), float('nan')]
 
@@ -168,4 +168,14 @@ class TestModOp(unittest.TestCase):
                 actual = fp.mod(x, y, CTX)
                 self.assertEqualOrNan(expect, actual, f'Failed modulus: {x} % {y}')
 
+    @given(st.integers(), st.integers())
+    def test_mod(self, x: int, y: int):
+        CTX = fp.MPFixedContext(nmin=-1, enable_inf=True, enable_nan=True)
 
+        try:
+            expect: int | float = x % y
+        except ZeroDivisionError:
+            expect = float('nan')
+
+        actual = fp.mod(x, y, CTX)
+        self.assertEqualOrNan(_cvt_to_frac(expect), _cvt_to_frac(actual), f'Failed modulus: {x} % {y}')

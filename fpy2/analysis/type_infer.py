@@ -89,6 +89,7 @@ _binary_table: dict[type[BinaryOp], FunctionType] = {
     Div: _Real2ary,
     Copysign: _Real2ary,
     Fdim: _Real2ary,
+    Mod: _Real2ary,
     Fmod: _Real2ary,
     Remainder: _Real2ary,
     Hypot: _Real2ary,

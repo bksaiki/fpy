@@ -8,6 +8,7 @@ at less precision is safe.
 
 import enum
 import gmpy2 as gmp
+import math
 
 from typing import Callable
 
@@ -502,11 +503,10 @@ def mpfr_mod(x: Float, y: Float, *, prec: int | None = None, n: int | None = Non
         # manually compute `x - floor(x / y) * y`
 
         # step 1. compute `floor(x / y)`
-        q = mpfr_div(x, y, n=-1)
-        qr = q.as_real().round(min_n=-1, rm=RoundingMode.RTN)
+        q = math.floor(mpfr_div(x, y, n=-1))
 
         # step 2. compute `x - q * y`
-        return x.as_real() - qr * y.as_real()
+        return x - q * y
 
 
 def mpfr_mul(x: Float, y: Float, *, prec: int | None = None, n: int | None = None):
