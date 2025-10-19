@@ -211,14 +211,40 @@ class RealFloat(numbers.Rational):
         ord = self.compare(other)
         return ord == Ordering.GREATER or ord == Ordering.EQUAL
 
-    def __add__(self, other: 'RealFloat'):
+    def __neg__(self):
+        """
+        Unary minus.
+
+        Returns this `RealFloat` with opposite sign (`self.s`)
+        even when `self.is_zero()`.
+        """
+        return RealFloat(s=not self._s, x=self)
+
+    def __pos__(self):
+        """
+        Unary plus. 
+
+        Returns a copy of `self`.
+        """
+        return RealFloat(x=self)
+
+    def __add__(self, other):
         """
         Adds `self` and `other` exactly.
 
         This operation never fails when `other` is a `RealFloat`.
         """
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+        match other:
+            case RealFloat():
+                pass
+            case int():
+                other = RealFloat.from_int(other)
+            case float():
+                other = RealFloat.from_float(other)
+            case Fraction():
+                other = RealFloat.from_rational(other)
+            case _:
+                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
 
         if self._c == 0:
             # 0 + b = b
@@ -250,35 +276,32 @@ class RealFloat(numbers.Rational):
             # return the result
             return RealFloat(s=s, exp=exp, c=c)
 
-
     def __radd__(self, other):
         return self + other
 
-    def __neg__(self):
-        """
-        Unary minus.
+    def __sub__(self, other):
+        return self + (-other)
+    
+    def __rsub__(self, other):
+        return (-self) + other
 
-        Returns this `RealFloat` with opposite sign (`self.s`)
-        even when `self.is_zero()`.
-        """
-        return RealFloat(s=not self._s, x=self)
-
-    def __pos__(self):
-        """
-        Unary plus. 
-
-        Returns a copy of `self`.
-        """
-        return RealFloat(x=self)
-
-    def __mul__(self, other: 'RealFloat'):
+    def __mul__(self, other):
         """
         Multiplies `self` and `other` exactly.
 
         This operation never fails when `other` is a `RealFloat`.
         """
-        if not isinstance(other, RealFloat):
-            raise TypeError(f'unsupported operand type(s) for *: \'RealFloat\' and \'{type(other)}\'')
+        match other:
+            case RealFloat():
+                pass
+            case int():
+                other = RealFloat.from_int(other)
+            case float():
+                other = RealFloat.from_float(other)
+            case Fraction():
+                other = RealFloat.from_rational(other)
+            case _:
+                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
 
         s = self._s != other._s
         if self._c == 0 or other._c == 0:
@@ -322,7 +345,7 @@ class RealFloat(numbers.Rational):
             return RealFloat(s=s, exp=exp, c=c)
 
     def __rpow__(self, base):
-        raise NotImplementedError
+        raise TypeError(f'unsupported operand type(s) for **: \'{type(base)}\' and \'RealFloat\'')
 
     def __abs__(self):
         """
@@ -333,16 +356,16 @@ class RealFloat(numbers.Rational):
         return RealFloat(s=False, x=self)
 
     def __trunc__(self) -> int:
-        raise NotImplementedError('do not call directly')
+        return int(self.round(min_n=-1, rm=RoundingMode.RTZ))
 
     def __floor__(self) -> int:
-        raise NotImplementedError('do not call directly')
+        return int(self.round(min_n=-1, rm=RoundingMode.RTN))
 
     def __ceil__(self) -> int:
-        raise NotImplementedError('do not call directly')
+        return int(self.round(min_n=-1, rm=RoundingMode.RTP))
 
     def __round__(self, ndigits=None) -> int:
-        raise NotImplementedError('do not call directly')
+        return int(self.round(min_n=-1, rm=RoundingMode.RNE))
 
     def __floordiv__(self, other):
         raise NotImplementedError('division cannot be implemented exactly')
@@ -1382,6 +1405,213 @@ class Float:
         ord = self.compare(other)
         return ord == Ordering.GREATER or ord == Ordering.EQUAL
 
+    def __neg__(self):
+        """
+        Unary minus.
+
+        Returns this `Float` with opposite sign (`self.s`)
+        and no context (`self.ctx is None`).
+        """
+        return Float(s=not self._real._s, x=self, ctx=None)
+
+    def __pos__(self):
+        """
+        Unary plus.
+
+        Returns this `Float` with no context (`self.ctx is None`).
+        """
+        return Float(s=False, x=self, ctx=None)
+
+    def __abs__(self):
+        """
+        Absolute value.
+
+        Returns this `Float` without the sign (`self.s = False`)
+        with no context (`self.ctx is None`).
+        """
+        return Float(s=False, x=self, ctx=None)
+
+    def __add__(self, other):
+        """
+        Addition: `self + other`.
+
+        Returns the exact sum of `self` and `other` as a new `Float`.
+        The result has no context (`self.ctx is None`).
+        """
+        match other:
+            case Float():
+                pass
+            case RealFloat():
+                other = Float.from_real(other)
+            case int():
+                other = Float.from_int(other)
+            case float():
+                other = Float.from_float(other)
+            case Fraction():
+                other = Float.from_rational(other)
+            case _:
+                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+
+        if self.isnan or other.isnan:
+            # either is NaN
+            return Float(isnan=True)
+        elif self.isinf:
+            # self is Inf
+            if other.isinf:
+                # other is Inf
+                if self.s == other.s:
+                    # Inf + Inf
+                    return Float(s=self.s, isinf=True)
+                else:
+                    # Inf - Inf
+                    return Float(isnan=True)
+            else:
+                # other is finite, Inf + y = Inf
+                return Float(s=self.s, isinf=True)
+        elif other.isinf:
+            # self is finite, x + Inf = Inf
+            return Float(s=other.s, isinf=True)
+        else:
+            # both are finite
+            return Float.from_real(self._real + other._real)
+
+    def __radd__(self, other):
+        return self + other
+
+    def __sub__(self, other):
+        return self + (-other)
+    
+    def __rsub__(self, other):
+        return (-self) + other
+
+    def __mul__(self, other):
+        """
+        Multiplication: `self * other`.
+
+        Returns the exact product of `self` and `other` as a new `Float`.
+        The result has no context (`self.ctx is None`).
+        """
+        match other:
+            case Float():
+                pass
+            case RealFloat():
+                other = Float.from_real(other)
+            case int():
+                other = Float.from_int(other)
+            case float():
+                other = Float.from_float(other)
+            case Fraction():
+                other = Float.from_rational(other)
+            case _:
+                raise TypeError(f'unsupported operand type(s) for +: \'RealFloat\' and \'{type(other)}\'')
+
+        if self.isnan or other.isnan:
+            # either is NaN
+            return Float(isnan=True)
+        elif self.isinf:
+            # self is Inf
+            if other.is_zero():
+                # Inf * 0 = NaN
+                return Float(isnan=True)
+            else:
+                # Inf * y = Inf
+                s = self._real._s != other._real._s
+                return Float(s=s, isinf=True)
+        elif other.isinf:
+            # y is Inf
+            if self.is_zero():
+                # 0 * Inf = NaN
+                return Float(isnan=True)
+            else:
+                # x * Inf = Inf
+                s = self._real._s != other._real._s
+                return Float(s=s, isinf=True)
+        else:
+            # both are finite
+            return Float.from_real(self._real * other._real)
+
+    def __rmul__(self, other):
+        return self * other
+
+    def __truediv__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rtruediv__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __pow__(self, exponent: 'Real'):
+        """
+        Raising `self` by `exponent` exactly.
+
+        This operation is only valid for `exponent` of type `int` with `exponent >= 0`.
+        """
+        if not isinstance(exponent, int):
+            raise TypeError(f'unsupported operand type(s) for **: \'RealFloat\' and \'{type(exponent)}\'')
+        if exponent < 0:
+            raise ValueError('negative exponent unsupported; cannot be implemented exactly')
+
+        if self.is_nar():
+            s = self._real._s and (exponent % 2 != 0)
+            return Float(x=self, s=s, ctx=None)
+        else:
+            return Float.from_real(self._real ** exponent)
+
+    def __rpow__(self, base: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __trunc__(self):
+        if self.is_nar():
+            raise ValueError('cannot round infinity or NaN')
+        return self._real.__trunc__()
+
+    def __floor__(self):
+        if self.is_nar():
+            raise ValueError('cannot round infinity or NaN')
+        return self._real.__floor__()
+
+    def __ceil__(self):
+        if self.is_nar():
+            raise ValueError('cannot round infinity or NaN')
+        return self._real.__ceil__()
+
+    def __round__(self, *args, **kwargs):
+        if self.is_nar():
+            raise ValueError('cannot round infinity or NaN')
+        return self._real.__round__()
+
+    def __floordiv__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rfloordiv__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __mod__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
+    def __rmod__(self, other: 'Real'):
+        if TYPE_CHECKING:
+            return Float()
+        else:
+            raise RuntimeError('FPy runtime: do not call directly')
+
     def __float__(self):
         """
         Casts this value exactly to a native Python float.
@@ -1787,137 +2017,6 @@ class Float:
                         return self._real.compare(other)
                 case _:
                     return False
-
-    def __add__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __radd__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __sub__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __rsub__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __neg__(self):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __pos__(self):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __mul__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __rmul__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __truediv__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __rtruediv__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __pow__(self, exponent: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __rpow__(self, base: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __abs__(self):
-        # these guards are due to a limitation of mypy
-        # we cannot just add `Float` as the return type.
-        # In the case of `x : Float | int`, mypy will determine
-        # that `abs(x) : Join[Float, int] = object` which is incorrect.
-        # pyright does not join but unions instead
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __trunc__(self):
-        if TYPE_CHECKING:
-            return 0
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __floor__(self):
-        if TYPE_CHECKING:
-            return 0
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __ceil__(self):
-        if TYPE_CHECKING:
-            return 0
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __round__(self, *args, **kwargs):
-        if TYPE_CHECKING:
-            return 0
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __floordiv__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __rfloordiv__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __mod__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
-
-    def __rmod__(self, other: 'Real'):
-        if TYPE_CHECKING:
-            return Float()
-        else:
-            raise RuntimeError('FPy runtime: do not call directly')
 
 ###########################################################
 # Type Aliases
