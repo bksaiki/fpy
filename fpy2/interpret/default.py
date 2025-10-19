@@ -103,6 +103,7 @@ _BINARY_TABLE: dict[type[BinaryOp], Callable[..., Any]] = {
     Div: ops.div,
     Copysign: ops.copysign,
     Fdim: ops.fdim,
+    Mod: ops.mod,
     Fmod: ops.fmod,
     Remainder: ops.remainder,
     Hypot: ops.hypot,

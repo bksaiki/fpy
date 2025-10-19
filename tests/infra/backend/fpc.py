@@ -9,6 +9,8 @@ _ignore = [
     'test_rational1',
     'test_digits4',
     'test_context4',
+    'test_mod1',
+    'test_augassign5',
 
     # unsupported type
     'dpN',

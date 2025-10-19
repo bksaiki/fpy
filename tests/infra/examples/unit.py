@@ -91,6 +91,39 @@ def test_let3():
     return a + b
 
 @fp.fpy
+def test_neg1():
+    return -1.0
+
+@fp.fpy
+def test_neg2():
+    a = 1.0
+    return -a
+
+@fp.fpy
+def test_abs1():
+    return abs(-1.0)
+
+@fp.fpy
+def test_add1():
+    return 1.0 + 2.0
+
+@fp.fpy
+def test_sub1():
+    return 2.0 - 1.0
+
+@fp.fpy
+def test_mul1():
+    return 2.0 * 3.0
+
+@fp.fpy
+def test_div1():
+    return 6.0 / 2.0
+
+@fp.fpy
+def test_mod1():
+    return 5.0 % 2.0
+
+@fp.fpy
 def test_augassign1():
     x = 1.0
     x += 1.0
@@ -112,6 +145,12 @@ def test_augassign3():
 def test_augassign4():
     x = 1.0
     x /= 2.0
+    return x
+
+@fp.fpy
+def test_augassign5():
+    x = 5.0
+    x %= 2.0
     return x
 
 @fp.fpy

@@ -116,6 +116,8 @@ class _FormatterInstance(Visitor):
                 return f'({lhs} * {rhs})'
             case Div():
                 return f'({lhs} / {rhs})'
+            case Mod():
+                return f'({lhs} % {rhs})'
             case _:
                 raise RuntimeError('unreachable', e)
 

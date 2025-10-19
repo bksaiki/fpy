@@ -144,3 +144,38 @@ class TestOps(unittest.TestCase):
         af = _cvt_to_frac(a)
         op = _cvt_to_frac(fp.trunc(a))
         self.assertEqualOrNan(op, _trunc(af), f'Failed truncation: {a} ({af})')
+
+
+class TestModOp(unittest.TestCase):
+    """Tests FPy's modulus operator."""
+
+    def assertEqualOrNan(self, a: Fraction | float, b: Fraction | float, msg: str = ''):
+        if math.isnan(a) or math.isnan(b):
+            self.assertTrue(math.isnan(a) and math.isnan(b), msg)
+        else:
+            self.assertEqual(a, b, msg)
+
+    def test_mod_fixed(self):
+        CTX = fp.MPFixedContext(nmin=-1, enable_inf=True, enable_nan=True)
+        XS = [5.0, -5.0, 3.0, -3.0, 0.0, float('inf'), float('-inf'), float('nan')]
+
+        for x in XS:
+            for y in XS:
+                try:
+                    expect = x % y
+                except ZeroDivisionError:
+                    expect = float('nan')
+                actual = fp.mod(x, y, CTX)
+                self.assertEqualOrNan(expect, actual, f'Failed modulus: {x} % {y}')
+
+    @given(st.integers(), st.integers())
+    def test_mod(self, x: int, y: int):
+        CTX = fp.MPFixedContext(nmin=-1, enable_inf=True, enable_nan=True)
+
+        try:
+            expect: int | float = x % y
+        except ZeroDivisionError:
+            expect = float('nan')
+
+        actual = fp.mod(x, y, CTX)
+        self.assertEqualOrNan(_cvt_to_frac(expect), _cvt_to_frac(actual), f'Failed modulus: {x} % {y}')

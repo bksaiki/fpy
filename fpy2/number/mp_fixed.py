@@ -277,14 +277,14 @@ class MPFixedContext(OrdinalContext):
             case Float():
                 if x.isnan:
                     if self.enable_nan:
-                        return Float(isnan=True, ctx=self)
+                        return Float(s=x.s, isnan=True, ctx=self)
                     elif self.nan_value is None:
                         raise ValueError('Cannot round NaN under this context')
                     else:
                         return Float(x=self.nan_value, ctx=self)
                 elif x.isinf:
                     if self.enable_inf:
-                        return Float(isinf=True, ctx=self)
+                        return Float(s=x.s, isinf=True, ctx=self)
                     elif self.inf_value is None:
                         raise ValueError('Cannot round infinity under this context')
                     else:
