@@ -150,20 +150,35 @@ class _Interpreter(Visitor):
             case _:
                 raise TypeError(f'Expected `Context` or `FPCoreContext`, got {ctx}')
 
-    def _arg_to_value(self, arg: Any):
+    def _is_value(self, x):
+        match x:
+            case bool() | Float() | Context():
+                return True
+            case tuple() | list():
+                return all(self._is_value(v) for v in x)
+            case _:
+                return False
+
+    def _cvt_arg(self, arg):
         match arg:
-            case Float():
+            case bool() | Float() | Context():
                 return arg
             case int():
                 return Float.from_int(arg, ctx=INTEGER, checked=False)
             case float():
                 return Float.from_float(arg, ctx=FP64, checked=False)
             case tuple():
-                return tuple(self._arg_to_value(x) for x in arg)
+                return tuple(self._cvt_arg(x) for x in arg)
             case list():
-                return [self._arg_to_value(x) for x in arg]
+                return [self._cvt_arg(x) for x in arg]
             case _:
                 return arg
+
+    def _arg_to_value(self, arg: Any):
+        if self._is_value(arg):
+            return arg
+        else:
+            return self._cvt_arg(arg)
 
     def _lookup(self, name: NamedId):
         try:
@@ -656,6 +671,18 @@ class _Interpreter(Visitor):
         array[slices[-1]] = val
         return array
 
+    def _bind(self, target: Id | TupleBinding, val: Value) -> None:
+        match target:
+            case NamedId():
+                self.env[target] = val
+            case TupleBinding():
+                if not isinstance(val, tuple):
+                    raise TypeError(f'can only unpack tuples, got `{val}` for `{target}`')
+                if len(target.elts) != len(val):
+                    raise NotImplementedError(f'unpacking {len(val)} values into {len(target.elts)}')
+                for elt, v in zip(target.elts, val):
+                    self._bind(elt, v)
+
     def _apply_comp(
         self,
         bindings: list[tuple[Id | TupleBinding, Expr]],
@@ -671,13 +698,7 @@ class _Interpreter(Visitor):
             if not isinstance(array, list):
                 raise TypeError(f'expected a list, got {array}')
             for val in array:
-                match target:
-                    case NamedId():
-                        self.env[target] = val
-                    case TupleBinding():
-                        if not isinstance(val, tuple):
-                            raise TypeError(f'can only unpack tuples, got `{val}` for `{target}`')
-                        self._unpack_tuple(target, val, ctx)
+                self._bind(target, val)
                 self._apply_comp(bindings[1:], elt, ctx, elts)
 
     def _visit_list_comp(self, e: ListComp, ctx: Context):
@@ -693,27 +714,9 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a boolean, got {cond}')
         return self._visit_expr(e.ift if cond else e.iff, ctx)
 
-    def _unpack_tuple(self, binding: TupleBinding, val: tuple, ctx: Context) -> None:
-        if len(binding.elts) != len(val):
-            raise NotImplementedError(f'unpacking {len(val)} values into {len(binding.elts)}')
-        for elt, v in zip(binding.elts, val):
-            match elt:
-                case NamedId():
-                    self.env[elt] = v
-                case TupleBinding():
-                    if not isinstance(val, tuple):
-                        raise TypeError(f'can only unpack tuples, got `{val}` for `{binding}`')
-                    self._unpack_tuple(elt, v, ctx)
-
     def _visit_assign(self, stmt: Assign, ctx: Context) -> None:
         val = self._visit_expr(stmt.expr, ctx)
-        match stmt.target:
-            case NamedId():
-                self.env[stmt.target] = val
-            case TupleBinding():
-                if not isinstance(val, tuple):
-                    raise TypeError(f'can only unpack tuples, got `{val}` for `{stmt.target}`')
-                self._unpack_tuple(stmt.target, val, ctx)
+        self._bind(stmt.target, val)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context) -> None:
         # lookup the array
@@ -779,14 +782,8 @@ class _Interpreter(Visitor):
             raise TypeError(f'expected a list, got {iterable}')
         # iterate over each element
         for val in iterable:
-            match stmt.target:
-                case NamedId():
-                    self.env[stmt.target] = val
-                case TupleBinding():
-                    if not isinstance(val, tuple):
-                        raise TypeError(f'can only unpack tuples, got `{val}` for `{stmt.target}`')
-                    self._unpack_tuple(stmt.target, val, ctx)
             # evaluate the body of the loop
+            self._bind(stmt.target, val)
             self._visit_block(stmt.body, ctx)
 
     def _visit_attribute(self, e: Attribute, ctx: Context):
@@ -863,32 +860,31 @@ class _Interpreter(Visitor):
 
         # process arguments and add to environment
         for val, arg in zip(args, func.args):
+            # convert the argument
+            x = self._arg_to_value(val)
+
+            # check the argument type
             match arg.type:
                 case AnyTypeAnn():
-                    x = self._arg_to_value(val)
-                    if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
+                    pass
+                case BoolTypeAnn():
+                    if not isinstance(x, bool):
+                        raise TypeError(f'argument expects a boolean, got data `{x}`')
                 case RealTypeAnn():
-                    x = self._arg_to_value(val)
                     if not isinstance(x, RealValue):
                         raise TypeError(f'argument expects a real number, got data `{val}`')
-                    if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
                 case TupleTypeAnn():
-                    x = self._arg_to_value(val)
                     if not isinstance(x, tuple):
                         raise NotImplementedError(f'argument is a tuple, got data {val}')
-                    if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
                 case ListTypeAnn() | SizedTensorTypeAnn():
                     # TODO: check shape
-                    x = self._arg_to_value(val)
                     if not isinstance(x, list):
                         raise NotImplementedError(f'argument is a list, got data {val}')
-                    if isinstance(arg.name, NamedId):
-                        self.env[arg.name] = x
                 case _:
-                    raise NotImplementedError(f'unknown argument type {arg.type}')
+                    pass
+
+            if isinstance(arg.name, NamedId):
+                self.env[arg.name] = x
 
         # evaluate the function body
         return self._visit_function(func, eval_ctx)
