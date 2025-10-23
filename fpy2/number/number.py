@@ -680,7 +680,7 @@ class RealFloat(numbers.Rational):
         - `p, None`: a copy of `self` that has exactly `p` bits of precision.
         - `None, n`: a copy of `self` where `self.exp == n + 1`.
         - `p, n`: a copy of `self` such that `self.exp >= n + 1` and
-        has maximal precision up to `p` bits.
+            has maximal precision up to `p` bits.
 
         Raises a `ValueError` if no such value exists, i.e.,
         if the value cannot be represented with the given `p` and `n`.
@@ -1981,7 +1981,7 @@ class Float:
         - `p, None`: a copy of `self` that has exactly `p` bits of precision.
         - `None, n`: a copy of `self` where `self.exp == n + 1`.
         - `p, n`: a copy of `self` such that `self.exp >= n + 1` and
-        has maximal precision up to `p` bits.
+            has maximal precision up to `p` bits.
 
         Raises a `ValueError` if no such value exists, i.e.,
         if the value cannot be represented with the given `p` and `n`.
