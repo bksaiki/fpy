@@ -74,6 +74,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             x_rounded = x.round(max_p=2, rm=rm)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}')
+            self.assertLessEqual(x_rounded.p, 2, f'x={x}, rm={rm!r}, x_rounded.p={x_rounded.p}')
 
     @given(
         real_floats(prec=100),
@@ -85,6 +86,10 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         if p is not None or n is not None:
             rounded = x.round(max_p=p, min_n=n, rm=rm)
             self.assertIsInstance(rounded, fp.RealFloat)
+            if p is not None:
+                self.assertLessEqual(rounded.p, p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}')
+            if n is not None:
+                self.assertGreater(rounded.exp, n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}')
 
     def test_round_stochastic_examples(self):
         inputs = [
@@ -120,6 +125,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             x_rounded = x.round(max_p=2, num_randbits=2, randbits=randbits)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
+            self.assertLessEqual(x_rounded.p, 2, f'x={x}, randbits={randbits}, x_rounded.p={x_rounded.p}')
 
     @given(
         real_floats(prec=100),
@@ -139,6 +145,10 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         if p is not None or n is not None:
             rounded = x.round(max_p=p, min_n=n, rm=rm, num_randbits=num_randbits)
             self.assertIsInstance(rounded, fp.RealFloat)
+            if p is not None:
+                self.assertLessEqual(rounded.p, p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}')
+            if n is not None:
+                self.assertGreater(rounded.exp, n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}')
 
     def test_round_at_examples(self):
         inputs = [
@@ -184,6 +194,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             x_rounded = x.round_at(n=-2, rm=rm)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}')
+            self.assertGreater(x_rounded.exp, -2, f'x={x}, rm={rm!r}, x_rounded.exp={x_rounded.exp}')
 
     @given(
         real_floats(prec=100),
@@ -229,6 +240,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             x_rounded = x.round_at(n=-2, num_randbits=2, randbits=randbits)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
+            self.assertGreater(x_rounded.exp, -2, f'x={x}, randbits={randbits}, x_rounded.exp={x_rounded.exp}')
 
     @given(
         real_floats(prec=100),
@@ -245,6 +257,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
     ):
         rounded = x.round_at(n=n, rm=rm, num_randbits=num_randbits)
         self.assertIsInstance(rounded, fp.RealFloat)
+        self.assertGreater(rounded.exp, n, f'x={x}, randbits={num_randbits}, rounded.exp={rounded.exp}')
 
 
 _MAX_PRECISION = 100
