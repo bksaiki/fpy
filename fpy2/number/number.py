@@ -673,36 +673,62 @@ class RealFloat(numbers.Rational):
         bit = self._c & (1 << idx)
         return bit != 0
 
-    def normalize(self, p: int, n: int | None = None):
+    def normalize(self, p: int | None = None, n: int | None = None):
         """
-        Returns a copy of `self` that has exactly `p` bits of precision.
-        Optionally, specify `n` to ensure that if `y = x.normalize(p, n)`,
-        then `y.exp > n` or `y` is zero.
+        Returns a value numerically equivalent to `self` based on
+        precision `p` and position `n`:
 
-        For non-zero values, raises a `ValueError` if any significand digits
-        are shifted off, i.e., `x != x.normalize(p, n)`.
+        - `None, None`: a copy of `self`, i.e., `self.exp == self.normalize().exp`, etc.
+        - `p, None`: a copy of `self` that has exactly `p` bits of precision.
+        - `None, n`: a copy of `self` where `self.exp == n + 1`.
+        - `p, n`: a copy of `self` such that `self.exp >= n + 1` and
+        has maximal precision up to `p` bits.
+
+        Raises a `ValueError` if no such value exists, i.e.,
+        if the value cannot be represented with the given `p` and `n`.
         """
-        if not isinstance(p, int) or p < 0:
-            raise ValueError('expected a non-negative integer', p)
 
-        # special case: 0 has no precision
-        if self.is_zero():
-            return RealFloat()
-
-        # compute maximum shift and resulting exponent
-        shift = p - self.p
-        exp = self._exp - shift
-
-        # test if exponent is below `n`
-        if n is not None and exp <= n:
-            # too small, so adjust accordingly
-            expmin = n + 1
-            adjust = expmin - exp
-            shift -= adjust
-            exp += adjust
+        match p, n:
+            case None, None:
+                # return a copy of self
+                return RealFloat(self._s, self._exp, self._c)
+            case int(), None:
+                # normalize to precision p
+                if p < 0:
+                    raise ValueError(f'precision must be non-negative: p={p}')
+                # compute maximum shift and resulting exponent
+                shift = p - self.p
+                exp = self._exp - shift
+            case None, int():
+                # normalize to absolute position `n`
+                exp = n + 1
+                shift = self._exp - exp
+            case int(), int():
+                # normalize to precision p and position n
+                # prefer absolute precision constraint over position constraint
+                if p < 0:
+                    raise ValueError(f'precision must be non-negative: p={p}')
+                # compute maximum shift and resulting exponent
+                shift = p - self.p
+                exp = self._exp - shift
+                # check if exponent is too small, adjust accordingly
+                if exp <= n:
+                    expmin = n + 1
+                    adjust = expmin - exp
+                    shift -= adjust
+                    exp += adjust
+            case _:
+                if p is not None and not isinstance(p, int):
+                    raise TypeError(f'expected \'int\' or \'None\' for p, got {type(p)}')
+                if n is not None and not isinstance(n, int):
+                    raise TypeError(f'expected \'int\' or \'None\' for n, got {type(n)}')
+                raise RuntimeError('unreachable')
 
         # compute new significand `c`
-        if shift >= 0:
+        if shift == 0:
+            # no shifting
+            c = self._c
+        elif shift > 0:
             # shifting left by a non-negative amount
             c = self._c << shift
         else:
@@ -713,7 +739,6 @@ class RealFloat(numbers.Rational):
             if (self._c & bitmask(shift)) != 0:
                 raise ValueError(f'shifting off digits: p={p}, n={n}, x={self}')
 
-        # return result
         return RealFloat(self._s, exp, c)
 
 

@@ -49,6 +49,36 @@ class TestRealFloatReprMethods(unittest.TestCase):
         self.assertFalse(y.is_more_significant(-1))
         self.assertFalse(y.is_more_significant(0))
 
+    @given(
+        real_floats(prec=128, exp_min=-512, exp_max=512),
+        st.one_of(st.integers(0, 64), st.none()),
+        st.one_of(st.integers(-512, 512), st.none())
+    )
+    def test_normalize(self, x: fp.RealFloat, p: int | None, n: int | None):
+        try:
+            y = x.normalize(p=p, n=n)
+            self.assertIsInstance(y, fp.RealFloat)
+            self.assertEqual(x, y, f'x={x}, p={p}, n={n}, y={y}')
+            if p is not None:
+                self.assertLessEqual(y.p, p, f'x={x}, p={p}, n={n}, y={y}')
+            if n is not None:
+                self.assertGreater(y.exp, n, f'x={x}, p={p}, n={n}, y={y}')
+        except ValueError:
+            self.assertTrue(p is not None or n is not None, f'x={x}, p={p}, n={n}')
+
+            # compute the split point
+            match p, n:
+                case int(), None:
+                    n = x.e - p
+                case None, int():
+                    pass
+                case int(), int():
+                    n = max(x.e - p, n)
+                case _:
+                    raise RuntimeError('unreachable')
+
+            _, lo = x.split(n)
+            self.assertNotEqual(lo, 0, f'x={x}, p={p}, n={n}')
 
 
 class TestRealFloatArithmetic(unittest.TestCase):
