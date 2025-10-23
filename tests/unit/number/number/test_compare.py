@@ -8,7 +8,7 @@ import unittest
 from fractions import Fraction
 from hypothesis import given, strategies as st
 
-from ..generators import real_floats, floats
+from ...generators import real_floats, floats
 
 @st.composite
 def number(
