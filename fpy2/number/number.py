@@ -657,21 +657,16 @@ class RealFloat(numbers.Rational):
         if not isinstance(n, int):
             raise ValueError('expected an integer', n)
 
-        # special case: 0 has no digits set
-        if self.is_zero():
+        # compute digit offset from `self.exp`
+        offset = n - self._exp
+
+        # outside the region of significance
+        if offset < 0 or offset >= self.p:
             return False
 
-        # below the region of significance
-        if n < self._exp:
-            return False
+        # test the `offset`-th bit of `self.c`
+        return (self._c & (1 << offset)) != 0
 
-        # above the region of significane
-        if n > self.e:
-            return False
-
-        idx = n - self._exp
-        bit = self._c & (1 << idx)
-        return bit != 0
 
     def normalize(self, p: int | None = None, n: int | None = None):
         """
