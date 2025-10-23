@@ -5,8 +5,11 @@ import unittest
 from fractions import Fraction
 from hypothesis import given, strategies as st
 
-class TestRealFloatMethods(unittest.TestCase):
-    """Testing `RealFloat` methods"""
+from ...generators import real_floats, rounding_modes
+
+
+class TestRealFloatConstructors(unittest.TestCase):
+    """Testing `RealFloat` constructors."""
 
     @given(st.integers())
     def test_from_int(self, a: int):
@@ -28,6 +31,10 @@ class TestRealFloatMethods(unittest.TestCase):
         self.assertIsInstance(x, fp.RealFloat)
         self.assertEqual(x, a)
 
+
+class TestRealFloatReprMethods(unittest.TestCase):
+    """Testing `RealFloat` representation methods"""
+
     def test_is_more_significant(self):
         x = fp.RealFloat(c=7, exp=0)
         self.assertTrue(x.is_more_significant(-2))
@@ -43,25 +50,49 @@ class TestRealFloatMethods(unittest.TestCase):
         self.assertFalse(y.is_more_significant(0))
 
 
-    def test_round_params(self):
-        inputs = [
-            # float-style rounding
-            (0, 0b101010, 3, None, 3, 2), # 0b101010 * 2 ** 0, max_p=3, min_n=None => p=3, n=2
-            (0, 0b10, 3, None, 3, -2),    # 0b10 * 2 ** 0, max_p=3, min_n=None => p=3, n=-2
-            # fixed-style rounding
-            (0, 0b101010, None, 2, None, 2), # 0b101010 * 2 ** 0, max_p=None, min_n=2 => p=None, n=2
-            (0, 0b101010, None, 7, None, 7), # 0b101010 * 2 ** 0, max_p=None, min_n=7 => p=None, n=7
-            # float-style (with subnormals) rounding
-            (0, 0b101010, 3, 2, 3, 2), # 0b101010 * 2 ** 0, max_p=3, min_n=2 => p=3, n=2
-            (0, 0b101010, 3, 5, 3, 5), # 0b101010 * 2 ** 0, max_p=3, min_n=5 => p=3, n=5
-            (0, 0b10, 3, 3, 3, 3), # 0b10 * 2 ** 0, max_p=3, min_n=3 => p=3, n=3
-        ]
+    @given(real_floats(prec=64, exp_max=512, exp_min=-512), st.integers(-512, 512))
+    def test_split(self, x: fp.RealFloat, n: int):
+        hi, lo = x.split(n)
+        self.assertIsInstance(hi, fp.RealFloat)
+        self.assertIsInstance(lo, fp.RealFloat)
+        self.assertEqual(x, hi + lo, f'x={x}, n={n}, hi={hi}, lo={lo}')
+        self.assertTrue(hi.is_more_significant(n), f'x={x}, n={n}, hi={hi}, lo={lo}')
+        self.assertLessEqual(lo.e, n, f'x={x}, n={n}, hi={hi}, lo={lo}')
 
-        for exp, c, max_p, min_n, expect_p, expect_n in inputs:
-            x = fp.RealFloat(exp=exp, c=c)
-            p, n = x._round_params(max_p=max_p, min_n=min_n)
-            self.assertEqual(p, expect_p, f'x={x}, max_p={max_p}, min_n={min_n}, p={p}, expect_p={expect_p}')
-            self.assertEqual(n, expect_n, f'x={x}, max_p={max_p}, min_n={min_n}, n={n}, expect_n={expect_n}')
+    @given(
+        real_floats(prec=128, exp_min=-512, exp_max=512),
+        st.one_of(st.integers(0, 64), st.none()),
+        st.one_of(st.integers(-512, 512), st.none())
+    )
+    def test_normalize(self, x: fp.RealFloat, p: int | None, n: int | None):
+        try:
+            y = x.normalize(p=p, n=n)
+            self.assertIsInstance(y, fp.RealFloat)
+            self.assertEqual(x, y, f'x={x}, p={p}, n={n}, y={y}')
+            if p is not None:
+                self.assertLessEqual(y.p, p, f'x={x}, p={p}, n={n}, y={y}')
+            if n is not None:
+                self.assertGreater(y.exp, n, f'x={x}, p={p}, n={n}, y={y}')
+        except ValueError:
+            self.assertTrue(p is not None or n is not None, f'x={x}, p={p}, n={n}')
+
+            # compute the split point
+            match p, n:
+                case int(), None:
+                    n = x.e - p
+                case None, int():
+                    pass
+                case int(), int():
+                    n = max(x.e - p, n)
+                case _:
+                    raise RuntimeError('unreachable')
+
+            _, lo = x.split(n)
+            self.assertNotEqual(lo, 0, f'x={x}, p={p}, n={n}')
+
+
+class TestRealFloatArithmetic(unittest.TestCase):
+    """Testing `RealFloat` arithmetic operations."""
 
     @given(st.floats(allow_infinity=False, allow_nan=False))
     def test_abs(self, a: float):

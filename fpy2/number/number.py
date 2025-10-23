@@ -629,6 +629,9 @@ class RealFloat(numbers.Rational):
             _, lo = self.split(n)
             return lo.is_zero()
         """
+        if not isinstance(n, int):
+            raise TypeError(f'expected \'int\' for n, got {n}')
+
         if self.is_zero():
             return True
 
@@ -657,52 +660,73 @@ class RealFloat(numbers.Rational):
         if not isinstance(n, int):
             raise ValueError('expected an integer', n)
 
-        # special case: 0 has no digits set
-        if self.is_zero():
+        # compute digit offset from `self.exp`
+        offset = n - self._exp
+
+        # outside the region of significance
+        if offset < 0 or offset >= self.p:
             return False
 
-        # below the region of significance
-        if n < self._exp:
-            return False
+        # test the `offset`-th bit of `self.c`
+        return (self._c & (1 << offset)) != 0
 
-        # above the region of significane
-        if n > self.e:
-            return False
 
-        idx = n - self._exp
-        bit = self._c & (1 << idx)
-        return bit != 0
-
-    def normalize(self, p: int, n: int | None = None):
+    def normalize(self, p: int | None = None, n: int | None = None):
         """
-        Returns a copy of `self` that has exactly `p` bits of precision.
-        Optionally, specify `n` to ensure that if `y = x.normalize(p, n)`,
-        then `y.exp > n` or `y` is zero.
+        Returns a value numerically equivalent to `self` based on
+        precision `p` and position `n`:
 
-        For non-zero values, raises a `ValueError` if any significand digits
-        are shifted off, i.e., `x != x.normalize(p, n)`.
+        - `None, None`: a copy of `self`, i.e., `self.exp == self.normalize().exp`, etc.
+        - `p, None`: a copy of `self` that has exactly `p` bits of precision.
+        - `None, n`: a copy of `self` where `self.exp == n + 1`.
+        - `p, n`: a copy of `self` such that `self.exp >= n + 1` and
+            has maximal precision up to `p` bits.
+
+        Raises a `ValueError` if no such value exists, i.e.,
+        if the value cannot be represented with the given `p` and `n`.
         """
-        if not isinstance(p, int) or p < 0:
-            raise ValueError('expected a non-negative integer', p)
 
-        # special case: 0 has no precision
-        if self.is_zero():
-            return RealFloat()
-
-        # compute maximum shift and resulting exponent
-        shift = p - self.p
-        exp = self._exp - shift
-
-        # test if exponent is below `n`
-        if n is not None and exp <= n:
-            # too small, so adjust accordingly
-            expmin = n + 1
-            adjust = expmin - exp
-            shift -= adjust
-            exp += adjust
+        match p, n:
+            case None, None:
+                # return a copy of self
+                return RealFloat(self._s, self._exp, self._c)
+            case int(), None:
+                # normalize to precision p
+                if p < 0:
+                    raise ValueError(f'precision must be non-negative: p={p}')
+                # compute maximum shift and resulting exponent
+                shift = p - self.p
+                exp = self._exp - shift
+            case None, int():
+                # normalize to absolute position `n`
+                exp = n + 1
+                shift = self._exp - exp
+            case int(), int():
+                # normalize to precision p and position n
+                # prefer absolute precision constraint over position constraint
+                if p < 0:
+                    raise ValueError(f'precision must be non-negative: p={p}')
+                # compute maximum shift and resulting exponent
+                shift = p - self.p
+                exp = self._exp - shift
+                # check if exponent is too small, adjust accordingly
+                if exp <= n:
+                    expmin = n + 1
+                    adjust = expmin - exp
+                    shift -= adjust
+                    exp += adjust
+            case _:
+                if p is not None and not isinstance(p, int):
+                    raise TypeError(f'expected \'int\' or \'None\' for p, got {type(p)}')
+                if n is not None and not isinstance(n, int):
+                    raise TypeError(f'expected \'int\' or \'None\' for n, got {type(n)}')
+                raise RuntimeError('unreachable')
 
         # compute new significand `c`
-        if shift >= 0:
+        if shift == 0:
+            # no shifting
+            c = self._c
+        elif shift > 0:
             # shifting left by a non-negative amount
             c = self._c << shift
         else:
@@ -713,7 +737,6 @@ class RealFloat(numbers.Rational):
             if (self._c & bitmask(shift)) != 0:
                 raise ValueError(f'shifting off digits: p={p}, n={n}, x={self}')
 
-        # return result
         return RealFloat(self._s, exp, c)
 
 
@@ -1809,6 +1832,25 @@ class Float:
             raise ValueError(f'Float values without a context cannot be normalized: self={self}')
         return self._ctx.normal_under(self)
 
+    def is_more_significant(self, n: int) -> bool:
+        """
+        Returns `True` iff this value only has significant digits above `n`,
+        that is, every non-zero digit in the number is more significant than `n`.
+
+        Raises a `ValueError` when `self.is_nar()`.
+
+        This method is equivalent to::
+
+            assert not self.is_nar()
+            _, lo = self.split(n)
+            return lo.is_zero()
+        """
+        if not isinstance(n, int):
+            raise TypeError(f'expected \'int\' for n, got {n}')
+        if self.is_nar():
+            raise ValueError('cannot check significance of infinity or NaN')
+        return self._real.is_more_significant(n)
+
     def as_rational(self) -> Fraction:
         """
         Converts this value to a `Fraction` representing the same value.
@@ -1909,7 +1951,7 @@ class Float:
         else:
             xr = RealFloat.from_float(x)
             return Float.from_real(xr, ctx, checked)
-        
+
     @staticmethod
     def from_rational(x: Fraction, ctx: Context | None = None, checked: bool = True):
         """
@@ -1930,15 +1972,65 @@ class Float:
             raise ValueError('cannot convert infinity or NaN to real')
         return self._real
 
-    def normalize(self):
+    def normalize(self, p: int | None = None, n: int | None = None):
         """
-        Returns the canonical reprsentation of this number.
+        Returns a value numerically equivalent to `self` based on
+        precision `p` and position `n`:
 
-        Raises a `ValueError` when `self.ctx is None`.
+        - `None, None`: the canonical representation of `self` under `self.ctx`.
+        - `p, None`: a copy of `self` that has exactly `p` bits of precision.
+        - `None, n`: a copy of `self` where `self.exp == n + 1`.
+        - `p, n`: a copy of `self` such that `self.exp >= n + 1` and
+            has maximal precision up to `p` bits.
+
+        Raises a `ValueError` if no such value exists, i.e.,
+        if the value cannot be represented with the given `p` and `n`.
         """
-        if self._ctx is None:
-            raise ValueError(f'cannot normalize without a context: self={self}')
-        return self._ctx.normalize(self)
+        if p is not None:
+            if not isinstance(p, int):
+                raise TypeError(f'expected \'int\' for p={p}, got {type(p)}')
+            if p < 0:
+                raise ValueError(f'expected non-negative integer for p={p}')
+        if n is not None and not isinstance(n, int):
+            raise TypeError(f'expected \'int\' for n={n}, got {type(n)}')
+
+        if p is None and n is None:
+            # normalize under the context
+            if self._ctx is None:
+                raise ValueError(f'cannot normalize without a context: self={self}')
+            return self._ctx.normalize(self)
+        else:
+            # normalize with given parameters
+            if self.isnan:
+                return Float(isnan=True, s=self.s, ctx=self._ctx)
+            elif self.isinf:
+                return Float(isinf=True, s=self.s, ctx=self._ctx)
+            else:
+                xr = self._real.normalize(p, n)
+                return Float(x=xr, ctx=self._ctx)
+
+    def split(self, n: int):
+        """
+        Splits `self` into two `Float` values where the first value represents
+        the digits above `n` and the second value represents the digits below
+        and including `n`.
+        """
+        if not isinstance(n, int):
+            raise TypeError(f'expected \'int\' for n={n}, got {type(n)}')
+
+        if self.isnan:
+            hi = Float(isnan=True, s=self.s, ctx=self._ctx)
+            lo = Float(isnan=True, s=self.s, ctx=self._ctx)
+        elif self.isinf:
+            hi = Float(isinf=True, s=self.s, ctx=self._ctx)
+            lo = Float(isinf=True, s=self.s, ctx=self._ctx)
+        else:
+            hr, lr = self._real.split(n)
+            hi = Float(x=hr, ctx=self._ctx)
+            lo = Float(x=lr, ctx=self._ctx)
+
+        return hi, lo
+
 
     def round(self, ctx: Context):
         """

@@ -5,6 +5,8 @@ import unittest
 from fractions import Fraction
 from hypothesis import given, strategies as st
 
+from ...generators import floats
+
 
 def _cvt_to_fraction(x: float | int | Fraction):
     match x:
@@ -34,7 +36,7 @@ def _cvt_to_real(x: float | int | Fraction | fp.Float):
             raise TypeError(f"Unsupported type: {type(x)}")
 
 
-class TestFloatMethods(unittest.TestCase):
+class FloatTestCast(unittest.TestCase):
 
     def assertEqualOrNan(
         self,
@@ -48,6 +50,9 @@ class TestFloatMethods(unittest.TestCase):
             self.assertTrue(b.isnan, msg=msg)
         else:
             self.assertEqual(a, b, msg=msg)
+
+
+class TestFloatConstructors(FloatTestCast):
 
     @given(st.integers())
     def test_from_int(self, x):
@@ -72,6 +77,9 @@ class TestFloatMethods(unittest.TestCase):
             with self.assertRaises(ValueError):
                 fp.Float.from_rational(x)
 
+
+class TestFloatReprMethods(FloatTestCast):
+
     @given(st.integers())
     def test_as_int(self, x):
         y = fp.Float.from_int(x)
@@ -90,6 +98,54 @@ class TestFloatMethods(unittest.TestCase):
         else:
             with self.assertRaises(ValueError):
                 fp.Float.from_rational(x)
+
+    @given(floats(prec=64, exp_max=512, exp_min=-512), st.integers(-512, 512))
+    def test_split(self, x: fp.Float, n: int):
+        hi, lo = x.split(n)
+        self.assertIsInstance(hi, fp.Float)
+        self.assertIsInstance(lo, fp.Float)
+        if x.is_nar():
+            self.assertEqualOrNan(x, hi, f'x={x}, n={n}, hi={hi}, lo={lo}')
+            self.assertEqualOrNan(x, lo, f'x={x}, n={n}, hi={hi}, lo={lo}')
+        else:
+            self.assertEqual(x, hi + lo, f'x={x}, n={n}, hi={hi}, lo={lo}')
+            self.assertTrue(hi.is_more_significant(n), f'x={x}, n={n}, hi={hi}, lo={lo}')
+            self.assertLessEqual(lo.e, n, f'x={x}, n={n}, hi={hi}, lo={lo}')
+
+    @given(
+        floats(prec=128, exp_min=-512, exp_max=512, ctx=fp.REAL),
+        st.one_of(st.integers(0, 64), st.none()),
+        st.one_of(st.integers(-512, 512), st.none())
+    )
+    def test_normalize(self, x: fp.Float, p: int | None, n: int | None):
+        try:
+            y = x.normalize(p=p, n=n)
+            self.assertIsInstance(y, fp.Float)
+            self.assertEqualOrNan(x, y, f'x={x}, p={p}, n={n}, y={y}')
+            if not x.is_nar():
+                if p is not None:
+                    self.assertLessEqual(y.p, p, f'x={x}, p={p}, n={n}, y={y}')
+                if n is not None:
+                    self.assertGreater(y.exp, n, f'x={x}, p={p}, n={n}, y={y}')
+        except ValueError:
+            self.assertTrue(p is not None or n is not None, f'x={x}, p={p}, n={n}')
+
+            # compute the split point
+            match p, n:
+                case int(), None:
+                    n = x.e - p
+                case None, int():
+                    pass
+                case int(), int():
+                    n = max(x.e - p, n)
+                case _:
+                    raise RuntimeError('unreachable')
+
+            _, lo = x.split(n)
+            self.assertNotEqual(lo, 0, f'x={x}, p={p}, n={n}')
+
+
+class TestFloatArithmetic(FloatTestCast):
 
     @given(st.floats())
     def test_abs(self, a: float):

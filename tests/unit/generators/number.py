@@ -54,10 +54,10 @@ def floats(
 
     float_type = draw(st.sampled_from(classes))
     if float_type == 'nan':
-        return fp.Float.nan()
+        return fp.Float.nan(ctx=ctx)
     elif float_type == 'inf':
         s = draw(st.booleans())
-        return fp.Float.inf(s)
+        return fp.Float.inf(s, ctx=ctx)
     else:  # finite
         if ctx is not None:
             # Generate representable finite float
