@@ -386,6 +386,6 @@ class MPSFloatContext(OrdinalContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         c = 1 << (self.pmax - 1)
-        exp = self.emin
+        exp = self.expmin
         return Float(s=s, c=c, exp=exp, ctx=self)
 
