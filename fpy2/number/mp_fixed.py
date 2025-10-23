@@ -359,7 +359,7 @@ class MPFixedContext(OrdinalContext):
         if x.is_nar():
             # NaN or Inf
             raise ValueError(f'Expected a finite value for x={x}')
-        
+
         if self.representable_under(x):
             # representable value
             return Fraction(self._to_ordinal(x.as_real()))
