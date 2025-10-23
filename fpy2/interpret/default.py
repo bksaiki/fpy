@@ -494,14 +494,20 @@ class _Interpreter(Visitor):
             # convert to int
             val = self._cvt_float(arg)
             if not val.is_integer():
-                raise TypeError(f'expected an integer argument for `{name}={arg}`')
+                raise ValueError(f'expected an integer argument for `{name}={arg}`')
             return int(val)
         elif ty is float:
             # convert to float
-            raise NotImplementedError(arg, ty)
+            val = self._cvt_float(arg)
+            if not FP64.representable_under(val):
+                raise ValueError(f'argument for `{name}={arg}` is not representable as a float')
+            return float(val)
         elif ty is RealFloat:
             # convert to RealFloat
-            raise NotImplementedError(arg, ty)
+            val = self._cvt_float(arg)
+            if val.is_nar():
+                raise ValueError(f'argument for `{name}={arg}` cannot be Inf/NaN')
+            return val.as_real()
         else:
             # don't apply a conversion
             return arg
