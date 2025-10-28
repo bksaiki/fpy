@@ -16,6 +16,12 @@ class Primitive(Generic[P, R]):
     This object is created by the `@fpy_prim` decorator and
     represents arbitrary Python code that may be called from
     the FPy runtime.
+
+    Example::
+
+      @fp.fpy_primitive(ctx='R', ret_ctx='R')
+      def my_primitive(x: fp.Float, ctx: fp.Context) -> fp.Float:
+          return ctx.round(x * 2)
     """
 
     func: Callable[..., R]

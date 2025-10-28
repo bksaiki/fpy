@@ -26,6 +26,7 @@ Important links:
    lang
    numbers
    ops
+   libraries/index
    strategies
    rewrite
    backend

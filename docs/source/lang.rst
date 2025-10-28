@@ -8,7 +8,6 @@ FPy programs are declared using the :py:deco:`fpy2.fpy` decorator.
 
 .. autofunction:: fpy2.fpy
 
-
 FPy primitive are declared using the :py:deco:`fpy2.fpy_primitive` decorator.
 
 .. autofunction:: fpy2.fpy_primitive
