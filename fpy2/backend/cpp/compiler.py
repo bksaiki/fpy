@@ -1060,10 +1060,12 @@ class CppCompiler(Backend):
     Compiler from FPy to C++.
 
     Major options:
+
     - `std: CppStandard`: the C++ standard to target [default: `CppStandard.CXX_11`]
     - `op_table: ScalarOpTable`: target description to use [default: `None`]
 
     Unsafe options:
+
     - `unsafe_finitize_int`: unbounded integers will be finitized to "int64_t" [default: `False`]
     - `unsafe_cast_int`: unrounded integer literals will be assumed to be unbounded integers [default: `False`]
     """
