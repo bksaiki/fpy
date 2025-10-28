@@ -8,6 +8,14 @@ FPy programs are declared using the :py:deco:`fpy2.fpy` decorator.
 
 .. autofunction:: fpy2.fpy
 
+
+FPy primitive are declared using the :py:deco:`fpy2.fpy_primitive` decorator.
+
+.. autofunction:: fpy2.fpy_primitive
+
+Primitives are arbitrary Python functions that can be called with FPy programs.
+They must have type annotations for all arguments and the return value.
+
 Runtime
 ------------------
 
