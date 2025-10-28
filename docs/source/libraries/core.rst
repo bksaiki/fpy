@@ -12,9 +12,9 @@ Splitting Functions
    :module: fpy2.libraries.core
 
    Splits ``x`` into two parts:
-   
-   - all digits of ``x`` that are above the ``n``th digit
-   - all digits of ``x`` that are at or below the ``n``th digit
+
+   - all digits of ``x`` that are above the ``n`` th digit
+   - all digits of ``x`` that are at or below the ``n`` th digit
 
    The operation is performed exactly.
 

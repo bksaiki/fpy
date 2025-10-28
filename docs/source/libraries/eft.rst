@@ -45,7 +45,7 @@ Addition
    Error-free transformation of the sum of two floating-point numbers.
    This algorithm is due to Dekker (1971).
 
-   :param a: First operand (must satisfy |a| >= |b|)
+   :param a: First operand (must satisfy ``|a| >= |b|``)
    :type a: Real
    :param b: Second operand
    :type b: Real
