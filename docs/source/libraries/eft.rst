@@ -11,7 +11,7 @@ Splitting
 .. py:function:: veltkamp_split(x, s)
    :module: fpy2.libraries.eft
 
-   Splits a floating-point number into a high and low part such that the high part is representable in `prec(x) - s` digits and the low part is representable in `s` digits.
+   Splits a floating-point number into a high and low part such that the high part is representable in ``prec(x) - s`` digits and the low part is representable in ``s`` digits.
    
    This algorithm is due to Veltkamp.
 
@@ -34,7 +34,7 @@ Addition
    :type a: Real
    :param b: Second operand
    :type b: Real
-   :return: Tuple (s, t) where `s` is the floating-point sum and `t` is the error term such that `s + t = a + b`
+   :return: Tuple (s, t) where ``s`` is the floating-point sum and ``t`` is the error term such that ``s + t = a + b``
    :rtype: tuple[Real, Real]
 
    This implementation is "ideal" since the error term may not be representable in the caller's rounding context.
@@ -49,12 +49,12 @@ Addition
    :type a: Real
    :param b: Second operand
    :type b: Real
-   :return: Tuple (s, t) where `s` is the floating-point sum and `t` is the error term such that `s + t = a + b`
+   :return: Tuple (s, t) where ``s`` is the floating-point sum and ``t`` is the error term such that ``s + t = a + b``
    :rtype: tuple[Real, Real]
 
    **Assumes:**
    
-   - `|a| >= |b|`
+   - ``|a| >= |b|``
    - the rounding context is floating point
    - the rounding mode is round-nearest
 
@@ -68,7 +68,7 @@ Addition
    :type a: Real
    :param b: Second operand
    :type b: Real
-   :return: Tuple (s, t) where `s` is the floating-point sum and `t` is the error term such that `s + t = a + b`
+   :return: Tuple (s, t) where ``s`` is the floating-point sum and ``t`` is the error term such that ``s + t = a + b``
    :rtype: tuple[Real, Real]
 
    **Assumes:**
@@ -86,7 +86,7 @@ Addition
    :type a: Real
    :param b: Second operand
    :type b: Real
-   :return: Tuple (s, t) where `s` is the faithfully-rounded sum and `t` is the error term such that `s + t = a + b`
+   :return: Tuple (s, t) where ``s`` is the faithfully-rounded sum and ``t`` is the error term such that ``s + t = a + b``
    :rtype: tuple[Real, Real]
 
    **Assumes:**
@@ -105,7 +105,7 @@ Multiplication
    :type a: Real
    :param b: Second operand
    :type b: Real
-   :return: Tuple (p, t) where `p` is the floating-point product and `t` is the error term such that `p + t = a * b`
+   :return: Tuple (p, t) where ``p`` is the floating-point product and ``t`` is the error term such that ``p + t = a * b``
    :rtype: tuple[Real, Real]
 
    This implementation is "ideal" since the error term may not be representable in the caller's rounding context.
@@ -120,7 +120,7 @@ Multiplication
    :type a: Real
    :param b: Second operand
    :type b: Real
-   :return: Tuple (p, t) where `p` is the floating-point product and `t` is the error term such that `p + t = a * b`
+   :return: Tuple (p, t) where ``p`` is the floating-point product and ``t`` is the error term such that ``p + t = a * b``
    :rtype: tuple[Real, Real]
 
    **Assumes:**
@@ -137,7 +137,7 @@ Multiplication
    :type a: Real
    :param b: Second operand
    :type b: Real
-   :return: Tuple (p, t) where `p` is the floating-point product and `t` is the error term such that `p + t = a * b`
+   :return: Tuple (p, t) where ``p`` is the floating-point product and ``t`` is the error term such that ``p + t = a * b``
    :rtype: tuple[Real, Real]
 
    **Assumes:**
@@ -158,7 +158,7 @@ Fused Multiply-Add (FMA)
    :type b: Real
    :param c: Addend
    :type c: Real
-   :return: Tuple (r, t) where `r` is the floating-point result and `t` is the error term such that `r + t = a * b + c`
+   :return: Tuple (r, t) where ``r`` is the floating-point result and ``t`` is the error term such that ``r + t = a * b + c``
    :rtype: tuple[Real, Real]
 
    This implementation is "ideal" since the error term may not be representable in the caller's rounding context.
@@ -175,7 +175,7 @@ Fused Multiply-Add (FMA)
    :type b: Real
    :param c: Addend
    :type c: Real
-   :return: Tuple (r1, r2, r3) where `a * b + c = r1 + r2 + r3`
+   :return: Tuple (r1, r2, r3) where ``a * b + c = r1 + r2 + r3``
    :rtype: tuple[Real, Real, Real]
 
    **Assumes:**
