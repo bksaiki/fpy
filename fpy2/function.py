@@ -23,6 +23,13 @@ class Function(Generic[P, R]):
 
     This object is created by the `@fpy` decorator and represents
     a function in the FPy runtime.
+
+    Example::
+
+      @fp.fpy
+      def my_function(x: fp.Real) -> fp.Real:
+          return x * 2
+
     """
 
     ast: fpyast.FuncDef

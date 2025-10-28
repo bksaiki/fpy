@@ -25,6 +25,8 @@ Important links:
    install
    lang
    numbers
+   ops
+   libraries/index
    strategies
    rewrite
    backend
