@@ -17,7 +17,7 @@ def default_float_convert(x: RealFloat | Float):
     else:
         r = _FP64.round(x)
         if r.inexact:
-            raise ValueError(f'Expected representable value in \'float\': x={x}')
+            raise ValueError(f'{x} is not representable as a Python \'float\'')
 
     return bits_to_float(_FP64.encode(r))
 
