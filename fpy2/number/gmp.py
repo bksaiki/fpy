@@ -19,6 +19,21 @@ from .number import RealFloat, Float
 _MPFR_EMIN = gmp.get_emin_min()
 _MPFR_EMAX = gmp.get_emax_max()
 
+
+def _gmp_neg(x):
+    return -x
+
+def _gmp_abs(x):
+    return abs(x)
+
+def _gmp_pow(x, y):
+    return x ** y
+
+def _gmp_lgamma(x):
+    y, _ = gmp.lgamma(x)
+    return y
+
+
 def _round_odd(x: gmp.mpfr, inexact: bool):
     """Applies the round-to-odd fix up."""
     s = x.is_signed()
@@ -55,22 +70,9 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
         exp = int(exp_)
 
         # round to odd => sticky bit = last bit | inexact
-        if (c & 0x1 == 0) and inexact:
+        if c % 2 == 0 and inexact:
             c += 1
         return Float(s=s, c=c, exp=exp)
-
-def _gmp_neg(x):
-    return -x
-
-def _gmp_abs(x):
-    return abs(x)
-
-def _gmp_pow(x, y):
-    return x ** y
-
-def _gmp_lgamma(x):
-    y, _ = gmp.lgamma(x)
-    return y
 
 def float_to_mpfr(x: RealFloat | Float):
     """

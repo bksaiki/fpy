@@ -16,14 +16,14 @@ def _ordinal_contexts():
         | sm_fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8)
         | mp_fixed_contexts(min_n=-16, max_n=16)
         | mps_float_contexts(max_p=8, min_emin=-64, max_emin=64)
-        | efloat_contexts(max_es=4, max_nbits=8)
+        | efloat_contexts(max_es=4, max_nbits=8, min_eoffset=-16, max_eoffset=16)
     )
 
 def _sized_contexts():
     return (
         fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8)
         | sm_fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8)
-        | efloat_contexts(max_es=4, max_nbits=8)
+        | efloat_contexts(max_es=4, max_nbits=8, min_eoffset=-16, max_eoffset=16)
     )
 
 def _encodable_contexts():
