@@ -141,6 +141,8 @@ def _generate_sample(n: int, num_inputs: int, ictx: fp.EFloatContext, cache_dir:
     _log('_generate_samples', f'saved N={n} sample to `{sample_file}`')
     return sample_file
 
+def _result_path(cache_dir: Path, n: int, p: int) -> Path:
+    return cache_dir / f'result_n{n}_p{p}.pkl.gz'
 
 def _run_one(config: WorkerConfig):
     _log('_run_one', f'running {config.idx} (N={config.n}, P={config.prec})')
@@ -166,7 +168,7 @@ def _run_one(config: WorkerConfig):
     result = WorkerResult(log_rel_errs)
 
     # cache result
-    result_file = config.cache_dir / f'result_n{config.n}_p{config.prec}.pkl.gz'
+    result_file = _result_path(config.cache_dir, config.n, config.prec)
     with gzip.open(result_file, 'wb') as f:
         pickle.dump(result, f)
 
@@ -212,13 +214,19 @@ def _plot(
             ax = axes[row][col]
             result = results[WorkerKey(n, prec)]
 
-            ax.set_title(f'N={n}, P={prec}')
+            if col == 0:
+                ax.set_ylabel(f'N={n}', fontsize=20)
+            if row == 0:
+                ax.set_title(f'P={prec}', fontsize=20)
+
+            # ax.set_title(f'N={n}, P={prec}', fontsize=14)
             ax.hist(result.log_rel_errs, bins=30, range=(LOG_ERR_MIN, LOG_ERR_MAX), alpha=0.7, orientation='horizontal')
-            ax.set_ylabel('log2(relative error)')
-            ax.set_xlabel('Frequency')
             ax.set_xlim(0, max_freq)  # Set consistent x-axis limits for frequency
             ax.grid(True, alpha=0.3)
+            ax.tick_params(labelsize=14)
 
+    # fig.supxlabel('Frequency', fontsize=16)
+    # fig.supylabel('log2(relative error)', fontsize=16)
     fig.tight_layout()
     fig.savefig(output_dir / 'error_histogram.png', dpi=120)
 
@@ -233,41 +241,52 @@ def _run(
     output_dir: Path,
     *,
     method: str = 'repr',
-    threads: int = 1
+    threads: int = 1,
+    replot: bool = False
 ):
     # create cache directory
     cache_dir = output_dir / 'cache'
     if not cache_dir.exists():
         cache_dir.mkdir(parents=True)
 
-    # build worker configs
-    configs: list[WorkerConfig] = []
-    for n in ns:
-        sample_path = _generate_sample(n, num_inputs, ictx, cache_dir, seed, method)
-        for prec in precs:
-            idx = len(configs)
-            config = WorkerConfig(idx, n, prec, octx, cache_dir, sample_path)
-            configs.append(config)
-
-    # run evaluation
-    result_paths: dict[WorkerKey, Path] = {}
-    if threads > 1 and len(configs) > 1:
-        # use concurrent.futures
-        with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
-            futures = { executor.submit(_run_one, config): config for config in configs }
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    key, path = future.result()
-                    result_paths[key] = path
-                except Exception as e:
-                    config = futures[future]
-                    _log('_run', f'Error in config idx={config.idx} (N={config.n}, P={config.prec}): {e}')
+    if replot:
+        # fetch existing result paths
+        result_paths: dict[WorkerKey, Path] = {}
+        for n in ns:
+            for prec in precs:
+                result_file = _result_path(cache_dir, n, prec)
+                if not result_file.exists():
+                    raise FileNotFoundError(f'Result file not found for N={n}, P={prec}: {result_file}')
+                result_paths[WorkerKey(n, prec)] = result_file
     else:
-        # single-threaded
-        _log('_run', f'Running {len(configs)} configs in single-threaded mode')
-        for config in configs:
-            key, path = _run_one(config)
-            result_paths[key] = path
+        # build worker configs
+        configs: list[WorkerConfig] = []
+        for n in ns:
+            sample_path = _generate_sample(n, num_inputs, ictx, cache_dir, seed, method)
+            for prec in precs:
+                idx = len(configs)
+                config = WorkerConfig(idx, n, prec, octx, cache_dir, sample_path)
+                configs.append(config)
+
+        # run evaluation
+        result_paths: dict[WorkerKey, Path] = {}
+        if threads > 1 and len(configs) > 1:
+            # use concurrent.futures
+            with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
+                futures = { executor.submit(_run_one, config): config for config in configs }
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        key, path = future.result()
+                        result_paths[key] = path
+                    except Exception as e:
+                        config = futures[future]
+                        _log('_run', f'Error in config idx={config.idx} (N={config.n}, P={config.prec}): {e}')
+        else:
+            # single-threaded
+            _log('_run', f'Running {len(configs)} configs in single-threaded mode')
+            for config in configs:
+                key, path = _run_one(config)
+                result_paths[key] = path
 
     # load results from cache
     results: dict[WorkerKey, WorkerResult] = {}
@@ -281,7 +300,7 @@ def _run(
 
 
 if __name__ == "__main__":
-    PRECS = [16, 20, 24, 32, 36, 40, 44]
+    PRECS = [16, 20, 24, 28, 32, 36, 40, 44]
     NS = [8, 16, 32, 64]
     ICTX = fp.FP16
     OCTX = fp.FP32
@@ -292,11 +311,13 @@ if __name__ == "__main__":
     parser.add_argument('--threads', type=int, default=1, help='number of threads to use')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
     parser.add_argument('num_inputs', type=int, help='number of input values to use')
+    parser.add_argument('--replot', action='store_true', help='replot from existing results without rerunning experiments')
     args = parser.parse_args()
 
     output_dir: Path = args.output.resolve()
     threads: int = args.threads
     seed: int = args.seed
     num_inputs: int = args.num_inputs
+    replot: bool = args.replot
 
-    _run(PRECS, NS, num_inputs, seed, ICTX, OCTX, output_dir, method=METHOD, threads=threads)
+    _run(PRECS, NS, num_inputs, seed, ICTX, OCTX, output_dir, method=METHOD, threads=threads, replot=replot)
