@@ -1,5 +1,25 @@
 # Version History
 
+## [0.0.13] - 2025-10-31
+### Features:
+ - Language:
+   - support 2-/3-argument `range`
+ - Library:
+   - add metrics under `fpy2.libraries.metrics`
+ - Analyses
+   - Add monomorphizing pass
+   - Add `simplify` strategy
+   - Add `split` strategy
+ - Numbers:
+   - add comparator/arithmetic methods for `Float`
+   - add additional `Float` methods
+ - Testing:
+   - rounding context generator
+
+### Fixes:
+ - Parser:
+   - implements modified loader to stash source
+
 ## [0.0.12] - 2025-10-02
 ### Features:
  - Language:
