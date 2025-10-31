@@ -10,7 +10,7 @@ import enum
 import gmpy2 as gmp
 import math
 
-from typing import Callable
+from typing import Callable, Iterable
 
 from ..utils import enum_repr
 from .number import RealFloat, Float
@@ -99,7 +99,7 @@ def mpfr_to_float(x):
     return _round_odd(x, False)
 
 
-def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr]):
+def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr, ...]):
     """
     Calls an MPFR method `fn` with arguments `args` using `prec` digits
     of precision and round towards zero (RTZ).
@@ -116,7 +116,7 @@ def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp
     ):
         return fn(*args)
 
-def _mpfr_call(fn: Callable[..., gmp.mpfr], *args: gmp.mpfr, prec: int | None = None, n: int | None = None):
+def _mpfr_call(fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr, ...], prec: int | None = None, n: int | None = None):
     """
     Evalutes `fn(args)` such that the result may be safely re-rounded.
     Either specify:
@@ -161,7 +161,7 @@ def mpfr_value(x, *, prec: int | None = None, n: int | None = None):
     Converts `x` into an MPFR type such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
-    return _mpfr_call(gmp.mpfr, x, prec=prec, n=n)
+    return _mpfr_call(gmp.mpfr, (x,), prec=prec, n=n)
 
 @enum_repr
 class Constant(enum.Enum):
@@ -211,7 +211,7 @@ def mpfr_constant(x: Constant, *, prec: int | None = None, n: int | None = None)
     """
     try:
         fn = _constant_exprs[x]
-        return _mpfr_call(fn, prec=prec, n=n)
+        return _mpfr_call(fn, (), prec=prec, n=n)
     except KeyError as e:
         raise ValueError(f'unknown constant {e.args[0]!r}') from None
 
@@ -225,7 +225,7 @@ def _mpfr_eval(gmp_fn: Callable[..., gmp.mpfr], *args: Float, prec: int | None =
     if prec is not None and n is not None:
         raise ValueError('Either `prec` or `n` must be specified, not both')
     gmp_args = tuple(float_to_mpfr(x) for x in args)
-    return _mpfr_call(gmp_fn, *gmp_args, prec=prec, n=n)
+    return _mpfr_call(gmp_fn, gmp_args, prec=prec, n=n)
 
 #####################################################################
 # General operations
