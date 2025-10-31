@@ -9,7 +9,7 @@ from hypothesis import strategies as st
 def real_floats(
     draw,
     signed: bool = True,
-    prec: int | None = None,
+    prec_max: int | None = None,
     exp_min: int | None = None,
     exp_max: int | None = None
 ):
@@ -18,10 +18,10 @@ def real_floats(
     maximum precision `prec`, and exponent range between
     `exp_min` and `exp_max`.
     """
-    if prec is None:
+    if prec_max is None:
         max_value = None
     else:
-        max_value = (1 << prec) - 1
+        max_value = (1 << prec_max) - 1
 
     s = draw(st.booleans()) if signed else False
     exp = draw(st.integers(min_value=exp_min, max_value=exp_max))
@@ -31,7 +31,7 @@ def real_floats(
 @st.composite
 def floats(
     draw,
-    prec: int | None = None,
+    prec_max: int | None = None,
     exp_min: int | None = None,
     exp_max: int | None = None,
     allow_nan: bool = True,
@@ -42,7 +42,7 @@ def floats(
     Returns a strategy for generating a Float. If ctx is provided,
     the generated Float must be representable in that context.
     """
-    if ctx is None and prec is None:
+    if ctx is None and prec_max is None:
         raise ValueError("either 'ctx' or 'prec' must be provided.")
 
     # Choose between finite, infinite, or NaN values
@@ -61,9 +61,9 @@ def floats(
     else:  # finite
         if ctx is not None:
             # Generate representable finite float
-            x = draw(real_floats(prec=prec, exp_min=exp_min, exp_max=exp_max).filter(lambda x: ctx.representable_under(x)))
+            x = draw(real_floats(prec=prec_max, exp_min=exp_min, exp_max=exp_max).filter(lambda x: ctx.representable_under(x)))
             return fp.Float.from_real(x, ctx, checked=False)
         else:
             # Generate arbitrary finite float
-            x = draw(real_floats(prec=prec, exp_min=exp_min, exp_max=exp_max))
+            x = draw(real_floats(prec=prec_max, exp_min=exp_min, exp_max=exp_max))
             return fp.Float.from_real(x)
