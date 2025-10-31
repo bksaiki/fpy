@@ -14,10 +14,25 @@ from typing import Callable
 
 from ..utils import enum_repr
 from .number import RealFloat, Float
-from .round import RoundingMode
 
-def _bool_to_sign(b: bool):
-    return '-' if b else '+'
+
+_MPFR_EMIN = gmp.get_emin_min()
+_MPFR_EMAX = gmp.get_emax_max()
+
+
+def _gmp_neg(x):
+    return -x
+
+def _gmp_abs(x):
+    return abs(x)
+
+def _gmp_pow(x, y):
+    return x ** y
+
+def _gmp_lgamma(x):
+    y, _ = gmp.lgamma(x)
+    return y
+
 
 def _round_odd(x: gmp.mpfr, inexact: bool):
     """Applies the round-to-odd fix up."""
@@ -59,34 +74,20 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
             c += 1
         return Float(s=s, c=c, exp=exp)
 
-def _gmp_neg(x):
-    return -x
-
-def _gmp_abs(x):
-    return abs(x)
-
-def _gmp_pow(x, y):
-    return x ** y
-
-def _gmp_lgamma(x):
-    y, _ = gmp.lgamma(x)
-    return y
-
-
 def float_to_mpfr(x: RealFloat | Float):
     """
     Converts `x` into an MPFR type exactly.
     """
-    if isinstance(x, Float) and x.is_nar():
+    if isinstance(x, Float):
         if x.isnan:
-            s = '-' if x.s else '+'
-            return gmp.mpfr(f'{s}nan')
-        else: # x.isinf
-            s = '-' if x.s else '+'
-            return gmp.mpfr(f'{s}inf')
-    else:
-        fmt = f'{_bool_to_sign(x.s)}{hex(x.c)}p{x.exp}'
-        return gmp.mpfr(fmt, precision=x.p, base=16)
+            # drops sign bit
+            return gmp.nan()
+        elif x.isinf:
+            return gmp.set_sign(gmp.inf(), x.s)
+
+    s_fmt = '-' if x.s else '+'
+    fmt = f'{s_fmt}{hex(x.c)}p{x.exp}'
+    return gmp.mpfr(fmt, precision=x.p, base=16)
 
 def mpfr_to_float(x):
     """
@@ -97,15 +98,15 @@ def mpfr_to_float(x):
     return _round_odd(x, False)
 
 
-def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr]):
+def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr, ...]):
     """
     Calls an MPFR method `fn` with arguments `args` using `prec` digits
     of precision and round towards zero (RTZ).
     """
     with gmp.context(
         precision=prec,
-        emin=gmp.get_emin_min(),
-        emax=gmp.get_emax_max(),
+        emin=_MPFR_EMIN,
+        emax=_MPFR_EMAX,
         trap_underflow=False,
         trap_overflow=False,
         trap_inexact=False,
@@ -114,7 +115,7 @@ def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp
     ):
         return fn(*args)
 
-def _mpfr_call(fn: Callable[..., gmp.mpfr], *args: gmp.mpfr, prec: int | None = None, n: int | None = None):
+def _mpfr_call(fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr, ...], prec: int | None = None, n: int | None = None):
     """
     Evalutes `fn(args)` such that the result may be safely re-rounded.
     Either specify:
@@ -159,7 +160,7 @@ def mpfr_value(x, *, prec: int | None = None, n: int | None = None):
     Converts `x` into an MPFR type such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
-    return _mpfr_call(gmp.mpfr, x, prec=prec, n=n)
+    return _mpfr_call(gmp.mpfr, (x,), prec=prec, n=n)
 
 @enum_repr
 class Constant(enum.Enum):
@@ -209,7 +210,7 @@ def mpfr_constant(x: Constant, *, prec: int | None = None, n: int | None = None)
     """
     try:
         fn = _constant_exprs[x]
-        return _mpfr_call(fn, prec=prec, n=n)
+        return _mpfr_call(fn, (), prec=prec, n=n)
     except KeyError as e:
         raise ValueError(f'unknown constant {e.args[0]!r}') from None
 
@@ -223,7 +224,7 @@ def _mpfr_eval(gmp_fn: Callable[..., gmp.mpfr], *args: Float, prec: int | None =
     if prec is not None and n is not None:
         raise ValueError('Either `prec` or `n` must be specified, not both')
     gmp_args = tuple(float_to_mpfr(x) for x in args)
-    return _mpfr_call(gmp_fn, *gmp_args, prec=prec, n=n)
+    return _mpfr_call(gmp_fn, gmp_args, prec=prec, n=n)
 
 #####################################################################
 # General operations

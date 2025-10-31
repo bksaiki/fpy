@@ -67,7 +67,7 @@ class EncodeTestCase(unittest.TestCase):
                             self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
                             self.assertLess(i, 1 << ctx.nbits, f'x={x}, i={i}')
 
-    @given(floats(prec=3, exp_min=-10, exp_max=10, ctx=IEEEContext(2, 5)))
+    @given(floats(prec_max=3, exp_min=-10, exp_max=10, ctx=IEEEContext(2, 5)))
     def test_ieee2_5(self, x: Float):
         """Test encoding for IEEEContext(2, 5)"""
         ctx = IEEEContext(2, 5)

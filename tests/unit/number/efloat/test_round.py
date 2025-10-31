@@ -14,7 +14,7 @@ _common: list[fp.EFloatContext] = [
 class TestRound(unittest.TestCase):
     """Test rounding behavior."""
 
-    @given(floats(prec=fp.FP16.pmax, exp_min=fp.FP16.expmin, exp_max=fp.FP16.expmax))
+    @given(floats(prec_max=fp.FP16.pmax, exp_min=fp.FP16.expmin, exp_max=fp.FP16.expmax))
     def test_round(self, x: fp.Float):
         # iterate over common contexts
         for ctx in _common:

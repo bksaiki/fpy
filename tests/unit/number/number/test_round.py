@@ -77,7 +77,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             self.assertLessEqual(x_rounded.p, 2, f'x={x}, rm={rm!r}, x_rounded.p={x_rounded.p}')
 
     @given(
-        real_floats(prec=100),
+        real_floats(prec_max=100),
         st.one_of(st.none(), st.integers(min_value=0)),
         st.one_of(st.none(), st.integers()),
         rounding_modes()
@@ -128,7 +128,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             self.assertLessEqual(x_rounded.p, 2, f'x={x}, randbits={randbits}, x_rounded.p={x_rounded.p}')
 
     @given(
-        real_floats(prec=100),
+        real_floats(prec_max=100),
         st.one_of(st.none(), st.integers(min_value=0)),
         st.one_of(st.none(), st.integers()),
         st.one_of(st.none(), st.integers(min_value=1, max_value=100)),
@@ -197,7 +197,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             self.assertGreater(x_rounded.exp, -2, f'x={x}, rm={rm!r}, x_rounded.exp={x_rounded.exp}')
 
     @given(
-        real_floats(prec=100),
+        real_floats(prec_max=100),
         st.integers(),
         st.one_of(st.none(), st.integers()),
         rounding_modes()
@@ -243,7 +243,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             self.assertGreater(x_rounded.exp, -2, f'x={x}, randbits={randbits}, x_rounded.exp={x_rounded.exp}')
 
     @given(
-        real_floats(prec=100),
+        real_floats(prec_max=100),
         st.integers(),
         st.one_of(st.none(), st.integers(min_value=1, max_value=100)),
         rounding_modes()
@@ -308,7 +308,7 @@ class ContextRoundTestCase(unittest.TestCase):
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
 
-    @given(real_floats(prec=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT))
+    @given(real_floats(prec_max=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT))
     def test_round_real_float(self, x: fp.RealFloat):
         for ctx in _all_contexts():
             y = ctx.round(x)
@@ -349,7 +349,7 @@ class ContextRoundAtTestCase(unittest.TestCase):
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
 
-    @given(real_floats(prec=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT), st.integers())
+    @given(real_floats(prec_max=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT), st.integers())
     def test_round_real_float(self, x: fp.RealFloat, n: int):
         for ctx in _all_contexts():
             if not isinstance(ctx, fp.RealContext):
