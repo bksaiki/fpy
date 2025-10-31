@@ -269,7 +269,7 @@ def _run(
                 configs.append(config)
 
         # run evaluation
-        result_paths: dict[WorkerKey, Path] = {}
+        result_paths = {}
         if threads > 1 and len(configs) > 1:
             # use concurrent.futures
             with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:

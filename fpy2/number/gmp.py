@@ -14,7 +14,6 @@ from typing import Callable
 
 from ..utils import enum_repr
 from .number import RealFloat, Float
-from .round import RoundingMode
 
 def _bool_to_sign(b: bool):
     return '-' if b else '+'
@@ -84,9 +83,12 @@ def float_to_mpfr(x: RealFloat | Float):
         else: # x.isinf
             s = '-' if x.s else '+'
             return gmp.mpfr(f'{s}inf')
-    else:
-        fmt = f'{_bool_to_sign(x.s)}{hex(x.c)}p{x.exp}'
-        return gmp.mpfr(fmt, precision=x.p, base=16)
+    elif x.is_zero():
+        return gmp.mpfr(0, precision=2)
+    else: 
+        v = gmp.mpfr(x.m, precision=max(2, x.p))
+        return gmp.set_exp(v, x.e + 1) # MPFR stores significands on [0.5, 1)
+
 
 def mpfr_to_float(x):
     """
