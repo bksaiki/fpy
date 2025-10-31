@@ -20,8 +20,8 @@ class TestRoundedOps(unittest.TestCase):
 
     @given(
         common_contexts(),
-        floats(prec=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
-        floats(prec=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
+        floats(prec_max=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
+        floats(prec_max=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
         st.integers(min_value=0, max_value=16),
         st.integers(min_value=0, max_value=16)
     )
@@ -34,8 +34,8 @@ class TestRoundedOps(unittest.TestCase):
 
     @given(
         common_contexts(),
-        floats(prec=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
-        floats(prec=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
+        floats(prec_max=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
+        floats(prec_max=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
         st.integers(min_value=0, max_value=16),
         st.integers(min_value=0, max_value=16)
     )
@@ -48,7 +48,7 @@ class TestRoundedOps(unittest.TestCase):
 
     @given(
         common_contexts().filter(lambda ctx: ctx is not fp.REAL),
-        floats(prec=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
+        floats(prec_max=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
         st.integers(min_value=0, max_value=16),
         st.integers(min_value=0, max_value=16)
     )
@@ -60,7 +60,7 @@ class TestRoundedOps(unittest.TestCase):
 
     @given(
         common_contexts().filter(lambda ctx: ctx is not fp.REAL),
-        floats(prec=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
+        floats(prec_max=32, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False),
         st.integers(min_value=0, max_value=16),
         st.integers(min_value=0, max_value=16)
     )

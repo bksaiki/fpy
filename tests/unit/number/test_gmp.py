@@ -16,7 +16,7 @@ class TestGMPConversion(unittest.TestCase):
         else:
             self.assertEqual(a, b, msg)
 
-    @given(floats(prec=32, exp_min=-100, exp_max=100))
+    @given(floats(prec_max=32, exp_min=-100, exp_max=100))
     def test_to_gmp(self, x: fp.Float):
         y = float_to_mpfr(x)
         x2 = mpfr_to_float(y)

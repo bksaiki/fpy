@@ -10,13 +10,14 @@ import enum
 import gmpy2 as gmp
 import math
 
-from typing import Callable, Iterable
+from typing import Callable
 
 from ..utils import enum_repr
 from .number import RealFloat, Float
 
-def _bool_to_sign(b: bool):
-    return '-' if b else '+'
+
+_MPFR_EMIN = gmp.get_emin_min()
+_MPFR_EMAX = gmp.get_emax_max()
 
 def _round_odd(x: gmp.mpfr, inexact: bool):
     """Applies the round-to-odd fix up."""
@@ -54,7 +55,7 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
         exp = int(exp_)
 
         # round to odd => sticky bit = last bit | inexact
-        if c % 2 == 0 and inexact:
+        if (c & 0x1 == 0) and inexact:
             c += 1
         return Float(s=s, c=c, exp=exp)
 
@@ -71,24 +72,20 @@ def _gmp_lgamma(x):
     y, _ = gmp.lgamma(x)
     return y
 
-
 def float_to_mpfr(x: RealFloat | Float):
     """
     Converts `x` into an MPFR type exactly.
     """
-    if isinstance(x, Float) and x.is_nar():
+    if isinstance(x, Float):
         if x.isnan:
-            s = '-' if x.s else '+'
-            return gmp.mpfr(f'{s}nan')
-        else: # x.isinf
-            s = '-' if x.s else '+'
-            return gmp.mpfr(f'{s}inf')
-    elif x.is_zero():
-        return gmp.mpfr(0, precision=2)
-    else: 
-        v = gmp.mpfr(x.m, precision=max(2, x.p))
-        return gmp.set_exp(v, x.e + 1) # MPFR stores significands on [0.5, 1)
+            # drops sign bit
+            return gmp.nan()
+        elif x.isinf:
+            return gmp.set_sign(gmp.inf(), x.s)
 
+    s_fmt = '-' if x.s else '+'
+    fmt = f'{s_fmt}{hex(x.c)}p{x.exp}'
+    return gmp.mpfr(fmt, precision=x.p, base=16)
 
 def mpfr_to_float(x):
     """
@@ -106,8 +103,8 @@ def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp
     """
     with gmp.context(
         precision=prec,
-        emin=gmp.get_emin_min(),
-        emax=gmp.get_emax_max(),
+        emin=_MPFR_EMIN,
+        emax=_MPFR_EMAX,
         trap_underflow=False,
         trap_overflow=False,
         trap_inexact=False,

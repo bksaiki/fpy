@@ -33,9 +33,9 @@ def number(
     elif choice == 2:
         return draw(st.fractions())
     elif choice == 3:
-        return draw(floats(prec=prec, exp_min=exp_min, exp_max=exp_max, allow_nan=True, allow_infinity=True))
+        return draw(floats(prec_max=prec, exp_min=exp_min, exp_max=exp_max, allow_nan=True, allow_infinity=True))
     else:
-        return draw(real_floats(signed=True, prec=prec, exp_min=exp_min, exp_max=exp_max))
+        return draw(real_floats(prec_max=prec, signed=True, exp_min=exp_min, exp_max=exp_max))
 
 
 def _cvt_to_frac(x: int | float | Fraction | fp.RealFloat | fp.Float) -> float | Fraction:

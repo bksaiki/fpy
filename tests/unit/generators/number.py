@@ -61,9 +61,9 @@ def floats(
     else:  # finite
         if ctx is not None:
             # Generate representable finite float
-            x = draw(real_floats(prec=prec_max, exp_min=exp_min, exp_max=exp_max).filter(lambda x: ctx.representable_under(x)))
+            x = draw(real_floats(prec_max=prec_max, exp_min=exp_min, exp_max=exp_max).filter(lambda x: ctx.representable_under(x)))
             return fp.Float.from_real(x, ctx, checked=False)
         else:
             # Generate arbitrary finite float
-            x = draw(real_floats(prec=prec_max, exp_min=exp_min, exp_max=exp_max))
+            x = draw(real_floats(prec_max=prec_max, exp_min=exp_min, exp_max=exp_max))
             return fp.Float.from_real(x)

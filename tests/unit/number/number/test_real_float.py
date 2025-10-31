@@ -50,7 +50,7 @@ class TestRealFloatReprMethods(unittest.TestCase):
         self.assertFalse(y.is_more_significant(0))
 
 
-    @given(real_floats(prec=64, exp_max=512, exp_min=-512), st.integers(-512, 512))
+    @given(real_floats(prec_max=64, exp_max=512, exp_min=-512), st.integers(-512, 512))
     def test_split(self, x: fp.RealFloat, n: int):
         hi, lo = x.split(n)
         self.assertIsInstance(hi, fp.RealFloat)
@@ -60,7 +60,7 @@ class TestRealFloatReprMethods(unittest.TestCase):
         self.assertLessEqual(lo.e, n, f'x={x}, n={n}, hi={hi}, lo={lo}')
 
     @given(
-        real_floats(prec=128, exp_min=-512, exp_max=512),
+        real_floats(prec_max=128, exp_min=-512, exp_max=512),
         st.one_of(st.integers(0, 64), st.none()),
         st.one_of(st.integers(-512, 512), st.none())
     )

@@ -75,7 +75,7 @@ def number(
     elif choice == 2:
         return draw(st.fractions())
     else:
-        return draw(floats(prec=prec, exp_min=exp_min, exp_max=exp_max, allow_nan=True, allow_infinity=True))
+        return draw(floats(prec_max=prec, exp_min=exp_min, exp_max=exp_max, allow_nan=True, allow_infinity=True))
 
 
 class TestOps(unittest.TestCase):

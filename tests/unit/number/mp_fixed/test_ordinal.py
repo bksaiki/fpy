@@ -21,7 +21,7 @@ CTX = fp.MPFixedContext(EXPMIN - 1)
 class OrdinalTestCast(unittest.TestCase):
     """Testing ordinal methods of `MPSFloatContext`."""
 
-    @given(floats(prec=PREC, exp_min=CTX.expmin, exp_max=EXPMAX, allow_nan=False, allow_infinity=False))
+    @given(floats(prec_max=PREC, exp_min=CTX.expmin, exp_max=EXPMAX, allow_nan=False, allow_infinity=False))
     def test_to_ordinal(self, x: fp.Float):
         ord = CTX.to_ordinal(x)
         self.assertIsInstance(ord, int)
@@ -37,7 +37,7 @@ class OrdinalTestCast(unittest.TestCase):
         ord2 = CTX.to_ordinal(x)
         self.assertEqual(ord, ord2)
 
-    @given(floats(prec=EXT_PREC, exp_min=EXT_EXPMIN, exp_max=EXT_EXPMAX, allow_nan=False, allow_infinity=False))
+    @given(floats(prec_max=EXT_PREC, exp_min=EXT_EXPMIN, exp_max=EXT_EXPMAX, allow_nan=False, allow_infinity=False))
     def test_to_fractional_ordinal(self, x: fp.Float):
         ord = CTX.to_fractional_ordinal(x)
         ord_above = CTX.to_ordinal(CTX.with_params(rm=fp.RM.RTP).round(x))
