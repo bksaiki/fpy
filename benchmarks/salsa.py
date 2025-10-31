@@ -24,13 +24,15 @@ def odometry(sl: fp.Real, sr: fp.Real):
         delta_d = (delta_dl + delta_dr) * 0.5
         delta_theta = (delta_dr - delta_dl) * inv_l
         arg = theta + delta_theta * 0.5
-        cos = (1.0 - (arg * arg) * 0.5) + (((arg * arg) * arg) * arg) / 240
+        cos = (1.0 - (arg * arg) * 0.5) + \
+            (((arg * arg) * arg) * arg) / 240
         x += delta_d * cos
-        sin = (arg - (((arg * arg) * arg) / 6.0)) + ((((arg * arg) * arg) * arg) * arg) / 120
+        sin = (arg - (((arg * arg) * arg) / 6.0)) + \
+            ((((arg * arg) * arg) * arg) * arg) / 120
         y += delta_d * sin
         theta += delta_theta
         t += 0.1
-    return (x, y)
+    return x, y
 
 @fp.fpy(meta={'cite': ['salsa-fmics15']})
 def pid(m: fp.Real, kp: fp.Real, ki: fp.Real, kd: fp.Real, c: fp.Real):
