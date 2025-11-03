@@ -804,7 +804,8 @@ class _FPCore2FPy:
 
         name = self.default_name if f.ident is None else pythonize_id(f.ident)
         env = ForeignEnv.default() if self.env is None else self.env
-        return FuncDef(name, args, set(), ctx_val, block, None, props, env)
+        meta = FuncMeta(set(), ctx_val, None, props, env)
+        return FuncDef(name, args, block, meta)
 
     def convert(self) -> FuncDef:
         return self._visit_function(self.core)

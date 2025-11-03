@@ -111,7 +111,8 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
 
         args = [self._visit_argument(arg, ty) for arg, ty in zip(func.args, self.arg_types)]
         body, _ = self._visit_block(func.body, None)
-        return FuncDef(func.name, args, func.free_vars, fn_ctx, body, func.spec, func.meta, func.env, loc=func.loc)
+        meta = FuncMeta(func.free_vars, fn_ctx, func.meta.spec, func.meta.props, func.env)
+        return FuncDef(func.name, args, body, meta, loc=func.loc)
 
     def apply(self):
         return self._visit_function(self.func, None)

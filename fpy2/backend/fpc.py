@@ -1029,7 +1029,7 @@ class _FPCoreCompileInstance(Visitor):
         if func.meta is None:
             props = {}
         else:
-            props = func.meta.copy()
+            props = func.meta.props.copy()
 
         # context properties
         if func.ctx is not None:

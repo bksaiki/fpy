@@ -849,7 +849,8 @@ class Parser:
         block = self._parse_statements(body)
 
         # return AST and decorator list
-        func = FuncDef(f.name, args, set(), None, block, None, {}, env, loc=loc)
+        meta = FuncMeta(set(), None, None, {}, env)
+        func = FuncDef(f.name, args, block, meta, loc=loc)
         return func, f.decorator_list
 
     def _start_parse(self):

@@ -3,6 +3,7 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Collection, Iterable, Self, TypeAlias
 from fractions import Fraction
 
@@ -205,6 +206,7 @@ __all__ = [
 
     # Function definition
     'Argument',
+    'FuncMeta',
     'FuncDef',
 
     # Type aliases
@@ -1735,45 +1737,62 @@ class Argument(Ast):
             and self.type.is_equiv(other.type)
         )
 
+@dataclass(frozen=True)
+class FuncMeta:
+    """Function definition metadata"""
+
+    free_vars: set[NamedId]
+    """free variables used in the function body"""
+    ctx: Context | FPCoreContext | None
+    """overriding global context (if any)"""
+    spec: Any
+    """function specification (if any)"""
+    props: dict[str, Any]
+    """additional properties (if any)"""
+    env: ForeignEnv
+    """foreign environment associated with the function"""
+
+
+
 class FuncDef(Ast):
     """FPy AST: function definition"""
-    __slots__ = ('name', 'args', 'body', 'free_vars', 'ctx', 'spec', 'meta', '_env')
+    __slots__ = ('name', 'args', 'body', '_meta')
 
     name: str
     args: tuple[Argument, ...]
     body: StmtBlock
-    free_vars: set[NamedId]
-    ctx: Context | FPCoreContext | None
-    spec: Any
-    meta: dict[str, Any] | None
-    _env: ForeignEnv
+    _meta: FuncMeta
 
     def __init__(
         self,
         name: str,
         args: Iterable[Argument],
-        free_vars: set[NamedId],
-        ctx: Context | FPCoreContext | None,
         body: StmtBlock,
-        spec: Any,
-        meta: dict[str, Any] | None,
-        env: ForeignEnv,
+        meta: FuncMeta,
         *,
         loc: Location | None = None
     ):
         super().__init__(loc)
         self.name = name
         self.args = tuple(args)
-        self.free_vars = free_vars
-        self.ctx = ctx
         self.body = body
-        self.spec = spec
-        self.meta = meta
-        self._env = env
+        self._meta = meta
+
+    @property
+    def ctx(self) -> Context | FPCoreContext | None:
+        return self._meta.ctx
 
     @property
     def env(self) -> ForeignEnv:
-        return self._env
+        return self._meta.env
+
+    @property
+    def meta(self) -> FuncMeta:
+        return self._meta
+
+    @property
+    def free_vars(self) -> set[NamedId]:
+        return self._meta.free_vars
 
     def is_equiv(self, other) -> bool:
         return (
