@@ -51,7 +51,7 @@ def _get_unary_table():
         _unary_table_cache = {
             'neg': Neg,
             'not': Not,
-            'fabs': Fabs,
+            'fabs': Abs,
             'sqrt': Sqrt,
             'cbrt': Cbrt,
             'ceil': Ceil,

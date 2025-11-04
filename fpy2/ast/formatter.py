@@ -94,6 +94,8 @@ class _FormatterInstance(Visitor):
             case NamedUnaryOp():
                 name = self._visit_function_name(e.func, ctx)
                 return f'{name}({arg})'
+            case Abs():
+                return f'abs({arg})'
             case Neg():
                 return f'-{arg}'
             case Not():

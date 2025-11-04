@@ -88,7 +88,7 @@ __all__ = [
     'Sub',
     'Mul',
     'Div',
-    'Fabs',
+    'Abs',
     'Sqrt',
     'Fma',
 
@@ -815,7 +815,7 @@ class Div(BinaryOp):
     """FPy node: subtraction"""
     __slots__ = ()
 
-class Fabs(NamedUnaryOp):
+class Abs(UnaryOp):
     """FPy node: absolute value"""
     __slots__ = ()
 
