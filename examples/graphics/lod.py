@@ -1,7 +1,5 @@
 """
 Examples: Level-of-detail (LOD) algorithm, anisotropic case.
-
-Intended for testing basic language features.
 """
 
 import fpy2 as fp

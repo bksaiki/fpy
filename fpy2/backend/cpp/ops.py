@@ -79,7 +79,7 @@ def _make_unary_table() -> UnaryOpTable:
             UnaryCppOp('-', CppScalar.F64, CppScalar.F64),
             UnaryCppOp('-', CppScalar.F32, CppScalar.F32),
         ],
-        Fabs: [
+        Abs: [
             UnaryCppOp('std::abs', CppScalar.F64, CppScalar.F64),
             UnaryCppOp('std::abs', CppScalar.F32, CppScalar.F32),
         ],

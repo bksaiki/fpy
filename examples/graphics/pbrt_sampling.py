@@ -1,3 +1,7 @@
+"""
+Examples from PBRT v4 sampling methods.
+"""
+
 import fpy2 as fp
 
 #

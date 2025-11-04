@@ -56,7 +56,7 @@ _NULLARY_TABLE: dict[type[NullaryOp], Callable[..., Any]] = {
 }
 
 _UNARY_TABLE: dict[type[UnaryOp], Callable[..., Any]] = {
-    Fabs: ops.fabs,
+    Abs: ops.fabs,
     Sqrt: ops.sqrt,
     Neg: ops.neg,
     Cbrt: ops.cbrt,

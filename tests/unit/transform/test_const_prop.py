@@ -33,14 +33,14 @@ class TestConstProp(unittest.TestCase):
             ES = 2
             NB = 8
             with fp.IEEEContext(ES, NB):
-                return fp.R(1)
+                return fp.round(1)
 
         @fp.fpy
         def test_expect():
             ES = 2
             NB = 8
             with fp.IEEEContext(2, 8):
-                return fp.R(1)
+                return fp.round(1)
 
         f = fp.transform.ConstPropagate.apply(test.ast)
         f.name = test_expect.name

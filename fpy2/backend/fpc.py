@@ -46,7 +46,7 @@ def _get_unary_table() -> dict[type[UnaryOp], type[fpc.Expr]]:
     global _unary_table_cache
     if _unary_table_cache is None:
         _unary_table_cache = {
-            Fabs: fpc.Fabs,
+            Abs: fpc.Fabs,
             Sqrt: fpc.Sqrt,
             Neg: fpc.Neg,
             Cbrt: fpc.Cbrt,
@@ -1029,7 +1029,7 @@ class _FPCoreCompileInstance(Visitor):
         if func.meta is None:
             props = {}
         else:
-            props = func.meta.copy()
+            props = func.meta.props.copy()
 
         # context properties
         if func.ctx is not None:

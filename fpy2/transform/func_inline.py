@@ -126,8 +126,8 @@ class _FuncInline(DefaultTransformVisitor):
 
     def _visit_function(self, func: FuncDef, ctx: None):
         body, _ = self._visit_block(func.body, None)
-        f = FuncDef(func.name, func.args, self.free_vars, func.ctx, body, func.spec, func.meta, self.env, loc=func.loc)
-        return f
+        meta = FuncMeta(self.free_vars, func.meta.ctx, func.meta.spec, func.meta.props, self.env)
+        return FuncDef(func.name, func.args, body, meta, loc=func.loc)
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)

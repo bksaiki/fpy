@@ -8,7 +8,7 @@ import inspect
 from typing import Any, Callable, ParamSpec, TypeVar, overload
 
 from .analysis import Reachability, SyntaxCheck
-from .ast import EffectStmt, NamedId
+from .ast import EffectStmt, NamedId, FuncMeta
 from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function
@@ -193,27 +193,25 @@ def _apply_fpy_decorator(
     parser = Parser(src_name, lines, env, start_line=start_line, col_offset=col_offset)
     ast, _ = parser.parse_function(env)
 
-    # function may have a global context
-    ast.ctx = ctx
-
-    # spec and metadata
-    ast.spec = spec
-    ast.meta = meta
-
     if decorator == pattern:
         # syntax checking
-        ast.free_vars = SyntaxCheck.check(
+        free_vars = SyntaxCheck.check(
             ast,
             free_vars=free_vars,
             ignore_unknown=True,
             allow_wildcard=True
         )
+        # add metadata
+        ast._meta = FuncMeta(free_vars, ctx, spec, meta or {}, env)
     else:
         # syntax checking
-        ast.free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
+        free_vars = SyntaxCheck.check(ast, free_vars=free_vars)
+        # add metadata
+        ast._meta = FuncMeta(free_vars, ctx, spec, meta or {}, env)
+        # reachability analysis
         Reachability.analyze(ast, check=True)
 
-    # wrap the IR in a Function
+    # wrap the AST in a Function
     return Function(ast, None)
 
 def _is_valid_context(ctx: Context | str | tuple):

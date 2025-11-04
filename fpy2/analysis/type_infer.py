@@ -40,7 +40,7 @@ _nullary_table: dict[type[NullaryOp], FunctionType] = {
 }
 
 _unary_table: dict[type[UnaryOp], FunctionType] = {
-    Fabs: _Real1ary,
+    Abs: _Real1ary,
     Sqrt: _Real1ary,
     Neg: _Real1ary,
     Cbrt: _Real1ary,
