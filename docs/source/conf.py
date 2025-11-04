@@ -16,7 +16,7 @@ sys.path.insert(0, str(top_path))
 project = 'fpy2'
 copyright = '2025, Brett Saiki'
 author = 'Brett Saiki'
-release = '0.0.3'
+release = '0.1.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
