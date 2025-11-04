@@ -23,7 +23,7 @@ def dpN(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
 
 @fp.fpy
 def nmse3_1(x: fp.Real):
-    return fp.sqrt(x + fp.R(1)) - fp.sqrt(x)
+    return fp.sqrt(x + fp.round(1)) - fp.sqrt(x)
 
 # TODO: precondition
 @fp.fpy(meta={
@@ -39,13 +39,13 @@ def instCurrent(
 ):
     pi = fp.round(3.14159265359)
     impedance_re = resistance
-    impedance_im = fp.R(2) * pi * frequency * inductance
+    impedance_im = fp.round(2) * pi * frequency * inductance
     denom = impedance_re ** 2+ impedance_im ** 2
     current_re = (maxVoltage - impedance_re) / denom
     current_im = (maxVoltage - impedance_im) / denom
     maxCurrent = fp.sqrt(current_re ** 2 + current_im ** 2)
     theta = fp.atan(current_im / current_re)
-    return maxCurrent * fp.cos(fp.R(2) * pi * frequency * t + theta)
+    return maxCurrent * fp.cos(fp.round(2) * pi * frequency * t + theta)
 
 @fp.fpy(meta={
     'name': 'azimuth',
@@ -67,11 +67,11 @@ def azimuth(lat1: fp.Real, lat2: fp.Real, lon1: fp.Real, lon2: fp.Real):
     'cite': ['Curnow-and-Wichmann-1976'],
 })
 def whetsone1(n: int):
-    t = fp.R(0.499975)
-    x1 = fp.R(1.0)
-    x2 = fp.R(-1.0)
-    x3 = fp.R(-1.0)
-    x4 = fp.R(-1.0)
+    t = fp.round(0.499975)
+    x1 = fp.round(1.0)
+    x2 = fp.round(-1.0)
+    x3 = fp.round(-1.0)
+    x4 = fp.round(-1.0)
     for _ in range(n):
         x1 = (x1 + x2 + x3 - x4) * t
         x2 = (x1 + x2 - x3 - x4) * t

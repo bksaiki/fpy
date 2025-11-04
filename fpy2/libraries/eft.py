@@ -17,7 +17,7 @@ def veltkamp_split(x: fp.Real, s: fp.Real):
     This algorithm is due to Veltkamp.
     """
 
-    C = fp.pow(fp.R(2), s) + fp.R(1)
+    C = fp.pow(fp.round(2), s) + fp.round(1)
     g = C * x
     e = x - g
     s = g + e

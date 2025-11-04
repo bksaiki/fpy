@@ -24,7 +24,7 @@ def lod_anisotropic(
     x_major = dx2 > dy2
     major2 = dx2 if x_major else dy2
     major = fp.sqrt(major2)
-    norm_major = fp.R(1.0) / major
+    norm_major = fp.round(1.0) / major
 
     aniso_dir_u = (dx_u if x_major else dy_u) * norm_major
     aniso_dir_v = (dx_v if x_major else dy_v) * norm_major
@@ -38,8 +38,8 @@ def lod_anisotropic(
         minor = det / major
 
     # clamp LOD
-    if minor < fp.R(1):
-        aniso_ratio = max(fp.R(1), aniso_ratio * minor)
+    if minor < fp.round(1):
+        aniso_ratio = max(fp.round(1), aniso_ratio * minor)
 
     lod = fp.log2(minor)
     return lod, aniso_ratio, aniso_dir_u, aniso_dir_v
