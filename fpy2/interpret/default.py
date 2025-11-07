@@ -853,7 +853,7 @@ class _Interpreter(Visitor):
                     x[i] = self._cvt_return(x[i])
                 return x
             case _:
-                raise RuntimeError(f'unreachable')
+                raise RuntimeError('unreachable')
 
     def _visit_function(self, func: FuncDef, ctx: Context):
         # process free variables
