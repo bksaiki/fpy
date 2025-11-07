@@ -177,10 +177,9 @@ class Runner(ABC, Generic[C, K, R]):
 
             # generate samples
             samples: dict[K, Path] = {}
-            for config in configs:
-                key = keys[config]
-                if key not in samples:
-                    samples[key] = self.sample(key, output_dir, seed, no_cache)
+            for key in { keys[config] for config in configs }:
+                random.seed(seed + hash(key))
+                samples[key] = self.sample(key, output_dir, seed, no_cache)
             self.log('run', f'generated {len(samples)} unique samples')
 
             # create worker configurations
