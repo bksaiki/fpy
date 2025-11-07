@@ -46,6 +46,9 @@ from .backend import (
     FPCoreCompiler
 )
 
+# runner
+from .runner import Runner
+
 ###########################################################
 # typing hints
 # TODO: remove these hints
