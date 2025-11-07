@@ -47,7 +47,7 @@ from .backend import (
 )
 
 # runner
-from .runner import Runner
+from .runner import Runner, RunnerWorkerTask
 
 ###########################################################
 # typing hints
