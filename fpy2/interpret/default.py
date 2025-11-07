@@ -842,7 +842,7 @@ class _Interpreter(Visitor):
 
     def _cvt_return(self, x: Value):
         match x:
-            case bool() | Float():
+            case bool() | Float() | Context():
                 return x
             case Fraction():
                 return Float.from_rational(x) if is_dyadic(x) else x
