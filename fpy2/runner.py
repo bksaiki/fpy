@@ -210,7 +210,7 @@ class Runner(ABC, Generic[C, K, R]):
                     results[task.config] = r
 
             # save results to cache
-            self.log('run', f'saving results to cache')
+            self.log('run', 'saving results to cache')
             self._write_cache(cache_file, (configs, results))
 
         # plot results
