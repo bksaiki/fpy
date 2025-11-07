@@ -840,6 +840,21 @@ class _Interpreter(Visitor):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
+    def _cvt_return(self, x: Value):
+        match x:
+            case bool() | Float():
+                return x
+            case Fraction():
+                return Float.from_rational(x) if is_dyadic(x) else x
+            case tuple():
+                return tuple(self._cvt_return(v) for v in x)
+            case list():
+                for i in range(len(x)):
+                    x[i] = self._cvt_return(x[i])
+                return x
+            case _:
+                raise RuntimeError(f'unreachable')
+
     def _visit_function(self, func: FuncDef, ctx: Context):
         # process free variables
         for var in func.free_vars:
@@ -851,7 +866,7 @@ class _Interpreter(Visitor):
             self._visit_block(func.body, ctx)
             raise RuntimeError('no return statement encountered')
         except FunctionReturnError as e:
-            return e.value
+            return self._cvt_return(e.value)
 
     def _visit_expr(self, e: Expr, ctx: Context) -> Value:
         return super()._visit_expr(e, ctx)
