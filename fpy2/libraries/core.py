@@ -235,6 +235,42 @@ def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
     return (largest_e, any_non_zero)
 
 ############################################################
+# Arithmetic
+
+@fp.fpy
+def tree_sum(xs: list[fp.Real]):
+    """
+    Sums the elements of xs in a tree.
+    Each sum is rounded under the current rounding context.
+
+    Args:
+        xs: A list of real numbers. The length of xs must be positive and a power of 2.
+
+    Returns:
+        The sum of the elements of xs.
+    """
+
+    with fp.INTEGER:
+        n: fp.Real = len(xs)
+        assert n > 0, "Length of xs must be positive"
+
+        depth = fp.log2(n)
+        assert fp.pow(2, depth) == n, "Length of xs must be a power of 2"
+
+    t = [x for x in xs]
+    for _ in range(depth):
+        with fp.INTEGER:
+            n /= 2
+
+        for i in range(n): # type: ignore[arg-type]
+            with fp.INTEGER:
+                j = 2 * i
+                k = 2 * i + 1
+            t[i] = t[j] + t[k]
+
+    return t[0]
+
+############################################################
 # Context operations
 
 @fp.fpy_primitive(ctx='R', ret_ctx='R')

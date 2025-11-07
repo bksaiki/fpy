@@ -189,6 +189,7 @@ _library_ignore = [
     '_modf_spec',
     'isinteger',
     '_ldexp_spec',
+    'tree_sum',
     # eft
     'ideal_2sum',
     'ideal_2mul',
