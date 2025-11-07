@@ -30,7 +30,8 @@ dev = [
   "build",
   "twine",
   "sphinx",
-  "sphinx-rtd-theme"
+  "sphinx-rtd-theme",
+  "sphinx-pyproject"
 ]
 
 [project.urls]
@@ -48,3 +49,12 @@ check_untyped_defs = true
 [tool.ruff.lint]
 extend-select = ["B"]
 ignore = ["F401", "F403", "F405", "B905"]
+
+[tool.sphinx-pyproject]
+project = "fpy2"
+author = "Brett Saiki"
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.coverage', 'sphinx.ext.napoleon']
+templates_path = ['_templates']
+exclude_patterns = []
+html_theme = 'sphinx_rtd_theme'
+html_static_path = ['_static']
