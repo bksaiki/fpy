@@ -1,5 +1,14 @@
 # Version History
 
+## [0.1.1] - 2025-11-07
+#### Features:
+ - Runtime
+   - add `Runner` instance to manage design-space exploration tasks
+
+### Fixes:
+ - Runtime:
+   - interpreter now prefers returning `Float` values over `Fraction`
+
 ## [**0.1.0**] - 2025-11-04
 ### Changes:
  - updates benchmarks, moved under `examples/`
