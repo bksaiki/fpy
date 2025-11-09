@@ -3,12 +3,12 @@ This module defines fixed-pont numbers with a maximum value,
 that is, multiprecision and bounded. Hence "MP-B".
 """
 
-from ..utils import default_repr, DefaultOr, DEFAULT
+from ..number import RealFloat, Float
+from ..round import RoundingMode, OverflowMode
+from ...utils import default_repr, DefaultOr, DEFAULT
 
 from .context import Context, SizedContext
 from .mp_fixed import MPFixedContext
-from .number import RealFloat, Float
-from .round import RoundingMode, OverflowMode
 
 
 @default_repr

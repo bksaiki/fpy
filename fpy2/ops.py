@@ -5,10 +5,9 @@ Mathematical functions under rounding contexts.
 from collections.abc import Callable
 from fractions import Fraction
 
-from .number import Context, Float, Real, REAL, RoundingMode
+from .number import Context, Float, RealContext, RoundingMode, Real, REAL
 from .number.gmp import *
 from .number.real import (
-    RealContext,
     real_add, real_sub, real_mul, real_neg, real_abs,
     real_ceil, real_floor, real_trunc, real_roundint,
     real_fma

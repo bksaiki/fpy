@@ -2,12 +2,12 @@
 This module defines fixed-width, sign-magnitude, fixed-point numbers.
 """
 
-from ..utils import bitmask, default_repr, DefaultOr, DEFAULT
+from ..number import RealFloat, Float
+from ..round import RoundingMode, OverflowMode
+from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import EncodableContext
 from .mpb_fixed import MPBFixedContext
-from .number import RealFloat, Float
-from .round import RoundingMode, OverflowMode
 
 
 @default_repr

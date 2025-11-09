@@ -3,11 +3,12 @@ This module defines the rounding context type.
 """
 
 from abc import ABC, abstractmethod
-from typing import TypeAlias, Self, Union
+from typing import Self
 from fractions import Fraction
 
-from . import number
-from ..utils import is_dyadic
+from ...utils import is_dyadic
+from ..gmp import mpfr_value
+from ..number import Float, RealFloat
 
 __all__ = [
     'Context',
@@ -16,9 +17,6 @@ __all__ = [
     'EncodableContext'
 ]
 
-# avoids circular dependency issues (useful for type checking)
-Float: TypeAlias = 'number.Float'
-RealFloat: TypeAlias = 'number.RealFloat'
 
 class Context(ABC):
     """
@@ -69,7 +67,7 @@ class Context(ABC):
         ...
 
     @abstractmethod
-    def representable_under(self, x: Union[Float, RealFloat]) -> bool:
+    def representable_under(self, x: Float | RealFloat) -> bool:
         """
         Returns if `x` is representable under this context.
 
@@ -166,7 +164,7 @@ class Context(ABC):
         """
         return self.round_at(x, -1)
 
-    def _round_prepare(self, x) -> Union[RealFloat, Float]:
+    def _round_prepare(self, x) -> RealFloat | Float:
         """
         Initial step during rounding.
 
@@ -181,9 +179,6 @@ class Context(ABC):
         - Python numbers: `int`, `float`, `Fraction`
         - Python strings: `str`
         """
-        # get around circular import issues
-        from .number import Float, RealFloat
-
         match x:
             case Float() | RealFloat():
                 return x
@@ -198,10 +193,6 @@ class Context(ABC):
                     return RealFloat.from_rational(x)
 
         # not a special case so we use MPFR as a fallback
-
-        # get around circular import issues
-        from .gmp import mpfr_value
-
         # round the value using RTO such that we can re-round
         p, n = self.round_params()
         return mpfr_value(x, prec=p, n=n)
