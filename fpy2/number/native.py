@@ -3,9 +3,10 @@ Conversion between FPy types and native Python types
 """
 
 from ..utils import bits_to_float
+
+from .context import IEEEContext
 from .gmp import float_to_mpfr
 from .globals import set_current_float_converter, set_current_str_converter
-from .ieee754 import IEEEContext
 from .number import RealFloat, Float
 from .round import RoundingMode
 

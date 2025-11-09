@@ -7,11 +7,13 @@ TODO: stochastic rounding
 
 from fractions import Fraction
 
-from ..utils import DEFAULT, DefaultOr, bitmask, default_repr
+from ..number import Float, RealFloat
+from ..round import OverflowMode, RoundingMode, RoundingDirection
+from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+
 from .context import EncodableContext, Context
 from .mp_float import MPFloatContext
-from .round import OverflowMode, RoundingMode, RoundingDirection
-from .number import Float, RealFloat
+
 
 def _exponent_bounds(nbits: int, eoffset: int) -> tuple[int, int]:
     """

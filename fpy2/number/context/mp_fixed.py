@@ -6,12 +6,12 @@ Hence, "MP-F".
 
 from fractions import Fraction
 
-from ..utils import default_repr, DEFAULT, DefaultOr
+from ..round import RoundingMode
+from ..number import Float, RealFloat
+from ...utils import default_repr, DEFAULT, DefaultOr
 
 from .context import Context, OrdinalContext
-from .number import Float
-from .real import RealFloat
-from .round import RoundingMode
+
 
 @default_repr
 class MPFixedContext(OrdinalContext):

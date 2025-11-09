@@ -15,7 +15,7 @@ from .reals import RealFloat
 
 if TYPE_CHECKING:
     from ..context import Context
-    from .__init__ import Real
+    from . import Real
 else:
     Context = None  # type: ignore
     Real = None  # type: ignore
