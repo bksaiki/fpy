@@ -46,7 +46,7 @@ class TestOrdinalContext(unittest.TestCase):
         except ValueError:
             pass
 
-    @given(_ordinal_contexts())
+    @given(_ordinal_contexts().filter(lambda ctx: not isinstance(ctx, fp.EFloatContext) or ctx.has_nonzero()))
     def test_minval(self, ctx: fp.EncodableContext):
         pos_min = ctx.minval()
         self.assertIsInstance(pos_min, fp.Float)

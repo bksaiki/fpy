@@ -78,6 +78,9 @@ class EFloatContext(EncodableContext):
     _mpb_ctx: MPBFloatContext
     """this context as an `MPBFloatContext`"""
 
+    _has_nonzero: bool
+    """this context can encode non-zero values"""
+
     def __init__(
         self,
         es: int,
@@ -151,6 +154,7 @@ class EFloatContext(EncodableContext):
         self.nan_value = nan_value
         self.inf_value = inf_value
         self._mpb_ctx = mpb_ctx
+        self._has_nonzero = _has_nonzero(self.nbits, self.enable_inf, self.nan_kind)
 
     def __eq__(self, other):
         return (
@@ -287,6 +291,13 @@ class EFloatContext(EncodableContext):
             and self.eoffset == other.eoffset
         )
 
+    def has_nonzero(self) -> bool:
+        """
+        Returns True if a context with the given parameters
+        can represent any non-zero values.
+        """
+        return self._has_nonzero
+
     def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
@@ -306,12 +317,12 @@ class EFloatContext(EncodableContext):
 
         if not self._mpb_ctx.representable_under(x):
             return False
-        elif x.is_zero() and x.s and self.nan_kind == EFloatNanKind.NEG_ZERO:
-            # -0 is not representable in this context
-            return False
+        elif x.is_zero():
+            # -0 is not representable in certain cases
+            return not (x.s and self.nan_kind == EFloatNanKind.NEG_ZERO)
         else:
-            # otherwise, it is representable
-            return True
+            # otherwise, it is representable if we can represent non-zero values
+            return self.has_nonzero()
 
     def canonical_under(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.representable_under(x):
@@ -744,6 +755,30 @@ def _format_is_valid(
             raise RuntimeError(f'unexpected NaN kind{nan_kind}')
 
     return True
+
+
+# possible other implementation: try generating minval()
+def _has_nonzero(nbits: int, enable_inf: bool, nan_style: EFloatNanKind) -> bool:
+    """
+    Returns True if a context with the given parameters
+    can represent any non-zero values.
+    """
+    if nbits > 2:
+        # always room for non-zero values
+        return True
+    elif nbits == 1:
+        # only 0 or NaN
+        return False
+    else:
+        # only space for zero and another value
+        # must not be Inf or NaN
+        return (
+            not enable_inf
+            and (
+                nan_style == EFloatNanKind.NEG_ZERO
+                or nan_style == EFloatNanKind.NONE
+            )
+        )
 
 
 def _binade_max(p: int, emin: int, e: int):
