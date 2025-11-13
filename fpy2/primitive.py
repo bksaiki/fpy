@@ -24,7 +24,9 @@ class Primitive(Generic[P, R]):
           return ctx.round(x * 2)
     """
 
+    # function info
     func: Callable[..., R]
+    has_ctx_kwd: bool
     # type info
     arg_types: tuple[TypeAnn, ...]
     ret_type: TypeAnn
@@ -48,6 +50,7 @@ class Primitive(Generic[P, R]):
         meta: dict[str, Any] | None = None
     ):
         self.func = func
+        self.has_ctx_kwd = has_keyword(func, 'ctx')
         self.arg_types = tuple(arg_types)
         self.ret_type = return_type
         self.ctx = ctx
@@ -61,7 +64,7 @@ class Primitive(Generic[P, R]):
 
     def __call__(self, *args, ctx: Context = FP64):
         args = tuple(self._arg_to_value(arg) for arg in args)
-        if has_keyword(self.func, 'ctx'):
+        if self.has_ctx_kwd:
             return self.func(*args, ctx=ctx)
         else:
             return self.func(*args)
