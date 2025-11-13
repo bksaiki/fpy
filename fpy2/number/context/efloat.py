@@ -78,6 +78,9 @@ class EFloatContext(EncodableContext):
     _mpb_ctx: MPBFloatContext
     """this context as an `MPBFloatContext`"""
 
+    _has_nonzero: bool
+    """this context can encode non-zero values"""
+
     def __init__(
         self,
         es: int,
@@ -151,6 +154,7 @@ class EFloatContext(EncodableContext):
         self.nan_value = nan_value
         self.inf_value = inf_value
         self._mpb_ctx = mpb_ctx
+        self._has_nonzero = _has_nonzero(self.nbits, self.enable_inf, self.nan_kind)
 
     def __eq__(self, other):
         return (
@@ -287,6 +291,13 @@ class EFloatContext(EncodableContext):
             and self.eoffset == other.eoffset
         )
 
+    def has_nonzero(self) -> bool:
+        """
+        Returns True if a context with the given parameters
+        can represent any non-zero values.
+        """
+        return self._has_nonzero
+
     def representable_under(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
@@ -306,12 +317,12 @@ class EFloatContext(EncodableContext):
 
         if not self._mpb_ctx.representable_under(x):
             return False
-        elif x.is_zero() and x.s and self.nan_kind == EFloatNanKind.NEG_ZERO:
-            # -0 is not representable in this context
-            return False
+        elif x.is_zero():
+            # -0 is not representable in certain cases
+            return not (x.s and self.nan_kind == EFloatNanKind.NEG_ZERO)
         else:
-            # otherwise, it is representable
-            return True
+            # otherwise, it is representable if we can represent non-zero values
+            return self.has_nonzero()
 
     def canonical_under(self, x: Float) -> bool:
         if not isinstance(x, Float) or not self.representable_under(x):
@@ -746,6 +757,66 @@ def _format_is_valid(
     return True
 
 
+# possible other implementation: try generating minval()
+def _has_nonzero(nbits: int, enable_inf: bool, nan_style: EFloatNanKind) -> bool:
+    """
+    Returns True if a context with the given parameters
+    can represent any non-zero values.
+    """
+    if nbits > 2:
+        # always room for non-zero values
+        return True
+    elif nbits == 1:
+        # only 0 or NaN
+        return False
+    else:
+        # only space for zero and another value
+        # must not be Inf or NaN
+        return (
+            not enable_inf
+            and (
+                nan_style == EFloatNanKind.NEG_ZERO
+                or nan_style == EFloatNanKind.NONE
+            )
+        )
+
+
+def _binade_max(p: int, emin: int, e: int):
+    """
+    Returns the maximum value in the given binade of `2 ** e`,
+    assuming we are constrained by precision `p` and
+    minimum exponent `emin`.
+    """
+    if e >= emin:
+        # number is full precision
+        exp = e - p + 1
+        return RealFloat(c=bitmask(p), exp=exp)
+    else:
+        # number is subnormal
+        shift = emin - e
+        c = bitmask(p) >> shift
+        exp = emin - p + 1
+        return RealFloat(c=c, exp=exp)
+
+def _next_below(p: int, emin: int, x: RealFloat):
+    """
+    Returns the next representable value below `x`
+    assuming we are constrained by precision `p` and
+    minimum exponent `emin`.
+
+    TODO: this suggests we are missing valuable
+    methods for `RealFloat` to generate the "next" value
+    assuming certain constraints.
+    """
+    expmin = emin - p + 1
+    below = x.next_towards()
+    if below.exp < expmin:
+        # we are below the minimum representable value
+        return RealFloat.from_int(0)
+    else:
+        return below
+
+
 def _ext_to_mpb(
     es: int,
     nbits: int,
@@ -759,14 +830,13 @@ def _ext_to_mpb(
     """Converts between `ExtFloatContext` and `MPBFloatContext` parameters."""
     # IEEE 754 derived parameters
     p = nbits - es
-    emax_0 = 0 if es == 0 else bitmask(es - 1)
-    emin_0 = 1 - emax_0
+    ebias = 0 if es == 0 else bitmask(es - 1)
+    emax_0 = -1 if es == 0 else ebias
+    emin_0 = 1 - ebias
 
     # apply exponent offset to compute final exponent parameters
     emax = emax_0 + eoffset
     emin = emin_0 + eoffset
-    expmax = emax - p + 1
-    expmin = emin - p + 1
 
     # compute the maximum value
     # the maximum value is encoding-dependent since depending
@@ -774,8 +844,9 @@ def _ext_to_mpb(
     # on the presence of infinities and the number of NaNs
     match nan_kind:
         case EFloatNanKind.IEEE_754:
+            # last binade reserved for special values
             # the maximum value is the usual IEEE 754 maximum value
-            maxval = RealFloat(c=bitmask(p), exp=expmax)
+            maxval = _binade_max(p, emin, emax)
 
         case EFloatNanKind.MAX_VAL:
             # there is only 1 NaN and a possible infinity
@@ -784,58 +855,55 @@ def _ext_to_mpb(
                 if enable_inf:
                     # NaN is in the last binade, Inf is in the previous,
                     # and the maximum value before that (1 below the usual IEEE 754 exponent)
-                    maxval = RealFloat(c=bitmask(p), exp=expmax - 1)
+                    maxval = _binade_max(p, emin, emax - 1)
                 else:
                     # NaN is in the last binade, and the maximum value is
                     # the usual IEEE 754 maximum value
-                    maxval = RealFloat(c=bitmask(p), exp=expmax)
-            elif p == 2:
-                if enable_inf:
-                    # NaN and Inf occupy the last binade,
-                    # so the maximum value is the usual IEEE 754 maximum value
-                    maxval = RealFloat(c=bitmask(p), exp=expmax)
-                elif es == 0:
-                    # 0 and NaN occupy the last binade
-                    maxval = RealFloat.from_int(0)
-                else:
-                    # only NaN occupies the last binade
-                    c = bitmask(p) - 1
-                    maxval = RealFloat(c=c, exp=expmax+1)
+                    maxval = _binade_max(p, emin, emax)
+            elif p == 2 and enable_inf:
+                # NaN and Inf occupy the last binade,
+                # and the maximum value is the usual IEEE 754 maximum value
+                maxval = _binade_max(p, emin, emax)
             else:
-                # maximum value is in the last binade
+                # MAX_VAL is in the last binade
                 if enable_inf:
-                    # Inf and NaN occupy two values in the last binade
-                    c = bitmask(p) - 2
-                    maxval = RealFloat(c=c, exp=expmax+1)
+                    # MAX_VAL is two encodings before the maximum
+                    maxval = _binade_max(p, emin, emax + 1)
+                    maxval = _next_below(p, emin, maxval)
+                    maxval = _next_below(p, emin, maxval)
                 else:
-                    # only NaN occupies the last binade
-                    c = bitmask(p) - 1
-                    maxval = RealFloat(c=c, exp=expmax+1)
+                    # MAX_VAL is one encoding before the maximum
+                    maxval = _binade_max(p, emin, emax + 1)
+                    maxval = _next_below(p, emin, maxval)
 
         case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
             # NaN replaces -0 (or no NaN), there may be a possible infinity
             # the maximum value is either the maximum encoding or
             # the "previous" encoding before infinity
-            if p == 1 and enable_inf:
-                # Inf occupies the last binade, so the maximum value is
-                # the usual IEEE 754 maximum value
-                maxval = RealFloat(c=bitmask(p), exp=expmax)
-            elif enable_inf:
-                # Inf is the maximum encoding, so the maximum value is
-                # the "previous" encoding before infinity
-                c = bitmask(p) - 1
-                maxval = RealFloat(c=c, exp=expmax+1)
+            if p == 1:
+                if enable_inf:
+                    # Inf occupies the last binade,
+                    # so the maximum value is the usual IEEE 754 maximum value
+                    maxval = _binade_max(p, emin, emax)
+                else:
+                    # maximum value is the maximum encoding
+                    maxval = _binade_max(p, emin, emax + 1)
             else:
-                # the maximum value is the maximum encoding
-                maxval = RealFloat(c=bitmask(p), exp=expmax+1)
+                if enable_inf:
+                    # MAX_VAL is one encoding before the maximum
+                    maxval = _binade_max(p, emin, emax + 1)
+                    maxval = _next_below(p, emin, maxval)
+                else:
+                    # maximum value is the maximum encoding
+                    maxval = _binade_max(p, emin, emax + 1)
 
         case _:
             raise RuntimeError(f'unexpected NaN kind {nan_kind}')
 
-    # for es == 0, the exponent may be too low
-    # we should normalize and ensure the exponent is in range
-    if es == 0:
-        maxval = maxval.normalize(p, expmin - 1)
+    # if `maxval == 0`, it may have an unexpected exponent
+    # in these cases, we want `expmax + 1 == expmin`
+    if maxval.is_zero():
+        maxval = RealFloat(c=0, exp=emin)
 
     # create the related MPB context
     return MPBFloatContext(p, emin, maxval, rm, overflow, num_randbits)
