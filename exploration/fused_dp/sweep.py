@@ -30,6 +30,7 @@ class Sample:
 
 @dataclass(frozen=True)
 class SampleKey:
+    seed: int
     n: int
 
 @dataclass(frozen=True)
@@ -73,9 +74,6 @@ class Explorer(fp.Runner[Config, SampleKey, Result]):
         self.octx = octx
         self.method = method
 
-    def prefix(self):
-        return 'fused_dp_'
-
     def configs(self):
         configs: list[Config] = []
         for n in self.ns:
@@ -83,8 +81,8 @@ class Explorer(fp.Runner[Config, SampleKey, Result]):
                 configs.append(Config(n, prec))
         return configs
 
-    def sample_key(self, config):
-        return SampleKey(config.n)
+    def sample_key(self, config, seed):
+        return SampleKey(seed, config.n)
 
     def _sample_repr(self, ctx: fp.EFloatContext, expmin: int = -(2 ** 5), expmax: int = 2 ** 5):
         """
@@ -143,8 +141,7 @@ class Explorer(fp.Runner[Config, SampleKey, Result]):
         self.log('_generate_sample', f'sampling for `{key.n}`')
 
         # create cache directory
-        cache_dir = output_dir / '__cache__'
-        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = self._open_cache(output_dir)
 
         # look for existing sample
         sample_file = cache_dir / f'sample_n{key.n}.pkl.gz'

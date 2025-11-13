@@ -56,13 +56,6 @@ class Runner(ABC, Generic[C, K, R]):
         self.logging = logging
 
     @abstractmethod
-    def prefix(self) -> str:
-        """
-        Returns a prefix string for output files.
-        """
-        ...
-
-    @abstractmethod
     def configs(self) -> list[C]:
         """
         Returns a list of configurations to explore.
@@ -70,12 +63,13 @@ class Runner(ABC, Generic[C, K, R]):
         ...
 
     @abstractmethod
-    def sample_key(self, config: C) -> K:
+    def sample_key(self, config: C, seed: int) -> K:
         """
         Extracts the sample key from a given configuration.
 
         Parameters:
         - config: The configuration to extract the sample key from.
+        - seed: A random seed for reproducibility.
 
         Returns:
         - The sample key.
@@ -159,7 +153,7 @@ class Runner(ABC, Generic[C, K, R]):
         self.log('run', f'output directory at `{output_dir}`')
 
         # cache file
-        cache_file = output_dir / f'{self.prefix()}results.pkl.gz'
+        cache_file = output_dir / self._format_cache_name('results.pkl.gz')
 
         if replot:
             # reload configurations and results from cache
@@ -173,7 +167,7 @@ class Runner(ABC, Generic[C, K, R]):
             self.log('run', f'generated {len(configs)} configurations')
 
             # generate sample keys
-            keys: dict[C, K] = { config: self.sample_key(config) for config in configs }
+            keys: dict[C, K] = { config: self.sample_key(config, seed) for config in configs }
 
             # generate samples
             samples: dict[K, Path] = {}
@@ -227,9 +221,32 @@ class Runner(ABC, Generic[C, K, R]):
         self.log('_run_one', f'Completed config {task.config} (idx={task.idx})')
         return result
 
+    def _format_cache_name(self, name: str) -> str:
+        """
+        Formats a cache file name.
+
+        Override this method to customize cache file naming.
+        """
+        return name
+
     def _gen_cache_name(self, key) -> str:
-        skey = '_'.join(str(x) for x in key)
+        """
+        Generates a cache file name from a key.
+        """
+        if isinstance(key, (tuple, list)):
+            skey = '_'.join(str(x) for x in key)
+        else:
+            skey = str(key)
         return hashlib.md5(skey.encode()).hexdigest()
+
+    def _open_cache(self, output_dir: Path, cache_name: str = '__cache__'):
+        """
+        Opens (and creates) a cache directory inside the output directory.
+        """
+        cache_dir = output_dir / self._format_cache_name(cache_name)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self.log('open_cache', f'opened cache directory `{cache_dir}`')
+        return cache_dir
 
     def _write_cache(self, path: Path, data):
         """Writes data to a gzipped cache file."""
@@ -240,5 +257,9 @@ class Runner(ABC, Generic[C, K, R]):
     def _read_cache(self, path: Path):
         """Reads data from a gzipped cache file."""
         self.log('read_cache', f'reading cache from `{path}`')
-        with gzip.open(path, 'rb') as f:
-            return pickle.load(f)
+        try:
+            with gzip.open(path, 'rb') as f:
+                return pickle.load(f)
+        except (pickle.PickleError, gzip.BadGzipFile, EOFError, FileNotFoundError) as e:
+            self.log('read_cache', f'failed to read cache: `{path}`')
+            return None
