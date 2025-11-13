@@ -20,6 +20,25 @@ __all__ = [
 
 
 C = TypeVar("C") # Config type
+K = TypeVar("K") # Sample key type
+R = TypeVar("R") # Result type
+
+@dataclass(frozen=True)
+class SampleWorkerTask(Generic[K]):
+    """
+    Data class representing a worker configuration for sampling.
+    """
+    key: K
+    """the sample key"""
+    output_dir: Path
+    """the output directory for this worker"""
+    seed: int
+    """the random seed for this worker"""
+    no_cache: bool
+    """whether to disable caching for this worker"""
+    idx: int
+    """the index of this worker"""
+
 
 @dataclass(frozen=True)
 class RunnerWorkerTask(Generic[C]):
@@ -36,10 +55,6 @@ class RunnerWorkerTask(Generic[C]):
     """the random seed for this worker"""
     idx: int
     """the index of this worker"""
-
-
-K = TypeVar("K") # Sample key type
-R = TypeVar("R") # Result type
 
 
 class Runner(ABC, Generic[C, K, R]):
@@ -166,59 +181,110 @@ class Runner(ABC, Generic[C, K, R]):
             configs = self.configs()
             self.log('run', f'generated {len(configs)} configurations')
 
-            # generate sample keys
-            keys: dict[C, K] = { config: self.sample_key(config, seed) for config in configs }
+            # generate sampling tasks
+            uniq_keys: set[K] = set()
+            key_by_config: dict[C, K] = {}
+            sampling_tasks: list[SampleWorkerTask[K]] = []
+            for config in configs:
+                key = self.sample_key(config, seed)
+                key_by_config[config] = key
+                if key not in uniq_keys:
+                    task = SampleWorkerTask(key, output_dir, seed, no_cache, len(uniq_keys))
+                    sampling_tasks.append(task)
+                    uniq_keys.add(key)
 
-            # generate samples
-            samples: dict[K, Path] = {}
-            for key in { keys[config] for config in configs }:
-                random.seed(seed + hash(key))
-                samples[key] = self.sample(key, output_dir, seed, no_cache)
-            self.log('run', f'generated {len(samples)} unique samples')
+            # run sampling
+            samples = self._run_sampling(sampling_tasks, num_threads, no_cache)
 
-            # create worker configurations
-            tasks: list[RunnerWorkerTask[C]] = [
-                RunnerWorkerTask(config, samples[keys[config]], output_dir, seed, idx)
+            # generate sweep tasks
+            sweep_tasks: list[RunnerWorkerTask[C]] = [
+                RunnerWorkerTask(config, samples[key_by_config[config]], output_dir, seed, idx)
                 for idx, config in enumerate(configs)
             ]
 
-            # run workers
-            results = {}
-            if num_threads > 1 and len(tasks) > 1:
-                # run with multiple processes
-                self.log('run', f'running {len(tasks)} configs with {num_threads} threads')
-                with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
-                    futures = { executor.submit(self._run_one, task): task for task in tasks }
-                    for future in concurrent.futures.as_completed(futures):
-                        task = futures[future]
-                        try:
-                            r = future.result()
-                            results[task.config] = r
-                        except Exception as e:
-                            self.log('run', f'config {task.config} generated an exception: {e}')
-            else:
-                # single-threaded mode
-                self.log('run', f'running {len(tasks)} configs in single-threaded mode')
-                for task in tasks:
-                    r = self._run_one(task)
-                    results[task.config] = r
-
-            # save results to cache
-            self.log('run', 'saving results to cache')
-            self._write_cache(cache_file, (configs, results))
+            # run sweep
+            results = self._run_sweep(sweep_tasks, cache_file, num_threads)
 
         # plot results
         self.log('run', 'plotting results')
         self.plot(configs, results, output_dir, seed)
 
+    def _run_sampling(self, tasks: list[SampleWorkerTask[K]], num_threads: int, no_cache: bool) -> dict[K, Path]:
+        """
+        Internal method to run a sweep of sampling tasks.
+        """
+        # run workers
+        samples = {}
+        if num_threads > 1 and len(tasks) > 1:
+            # run with multiple processes
+            self.log('run_sampling', f'running {len(tasks)} samples with {num_threads} threads')
+            with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
+                futures = { executor.submit(self._sample_one, task): task for task in tasks }
+                for future in concurrent.futures.as_completed(futures):
+                    task = futures[future]
+                    try:
+                        path = future.result()
+                        samples[task.key] = path
+                    except Exception as e:
+                        self.log('run_sampling', f'sample {task.key} generated an exception')
+                        raise e
+        else:
+            # single-threaded mode
+            self.log('run_sampling', f'running {len(tasks)} samples in single-threaded mode')
+            for task in tasks:
+                path = self._sample_one(task)
+                samples[task.key] = path
+
+        return samples
+
+    def _sample_one(self, task: SampleWorkerTask[K]) -> Path:
+        """
+        Internal method to run a single sampling task.
+        """
+        self.log('_sample_one', f'generating sample for key {task.key} (idx={task.idx})')
+        sample_path = self.sample(task.key, task.output_dir, task.seed, task.no_cache)
+        self.log('_sample_one', f'completed sample for key {task.key} (idx={task.idx})')
+        return sample_path
+
+    def _run_sweep(self, tasks: list[RunnerWorkerTask[C]], cache_path: Path, num_threads: int) -> dict[C, R]:
+        """
+        Internal method to run a sweep of configurations.
+        """
+        # run workers
+        results = {}
+        if num_threads > 1 and len(tasks) > 1:
+            # run with multiple processes
+            self.log('run_sweep', f'running {len(tasks)} configs with {num_threads} threads')
+            with concurrent.futures.ProcessPoolExecutor(max_workers=num_threads) as executor:
+                futures = { executor.submit(self._run_one, task): task for task in tasks }
+                for future in concurrent.futures.as_completed(futures):
+                    task = futures[future]
+                    try:
+                        r = future.result()
+                        results[task.config] = r
+                    except Exception as e:
+                        self.log('run', f'config {task.config} generated an exception')
+                        raise e
+        else:
+            # single-threaded mode
+            self.log('run_sweep', f'running {len(tasks)} configs in single-threaded mode')
+            for task in tasks:
+                r = self._run_one(task)
+                results[task.config] = r
+
+        # save results to cache
+        self.log('run_sweep', 'saving results to cache')
+        configs = [task.config for task in tasks]
+        self._write_cache(cache_path, (configs, results))
+        return results
 
     def _run_one(self, task: RunnerWorkerTask[C]) -> R:
         """
         Internal method to run a single configuration.
         """
-        self.log('_run_one', f'Running config {task.config} (idx={task.idx})')
+        self.log('_run_one', f'running config {task.config} (idx={task.idx})')
         result = self.run_one(task)
-        self.log('_run_one', f'Completed config {task.config} (idx={task.idx})')
+        self.log('_run_one', f'completed config {task.config} (idx={task.idx})')
         return result
 
     def _format_cache_name(self, name: str) -> str:

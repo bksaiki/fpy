@@ -275,6 +275,7 @@ if __name__ == "__main__":
     parser.add_argument('--threads', type=int, default=1, help='number of threads to use')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
     parser.add_argument('num_inputs', type=int, help='number of input values to use')
+    parser.add_argument('--no-cache', action='store_true', help='do not use cached samples/results')
     parser.add_argument('--replot', action='store_true', help='replot from existing results without rerunning experiments')
     args = parser.parse_args()
 
@@ -282,7 +283,8 @@ if __name__ == "__main__":
     threads: int = args.threads
     seed: int = args.seed
     num_inputs: int = args.num_inputs
+    no_cache: bool = args.no_cache
     replot: bool = args.replot
 
     explorer = Explorer(PRECS, NS, num_inputs, ICTX, OCTX, method=METHOD, logging=True)
-    explorer.run(output_dir, seed=seed, num_threads=threads, replot=replot)
+    explorer.run(output_dir, seed=seed, num_threads=threads, no_cache=no_cache, replot=replot)
