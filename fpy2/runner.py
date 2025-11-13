@@ -326,6 +326,6 @@ class Runner(ABC, Generic[C, K, R]):
         try:
             with gzip.open(path, 'rb') as f:
                 return pickle.load(f)
-        except (pickle.PickleError, gzip.BadGzipFile, EOFError, FileNotFoundError) as e:
+        except (pickle.PickleError, gzip.BadGzipFile, EOFError, FileNotFoundError):
             self.log('read_cache', f'failed to read cache: `{path}`')
             return None
