@@ -6,7 +6,7 @@ from fractions import Fraction
 
 from .context import REAL
 from .gmp import mpfr_value
-from .number import Float
+from .number import Float, RealFloat
 from .round import RoundingMode
 
 #####################################################################
@@ -208,3 +208,136 @@ def real_roundint(x: Float | Fraction):
     rounding ties away from zero in halfway cases.
     """
     return _real_rint(x, RoundingMode.RNA)
+
+
+#####################################################################
+
+def rto_recip(x: RealFloat, p: int) -> RealFloat:
+    """Computes `1/x` to `p` bits using round-to-odd mode."""
+    if x == 0:
+        raise ZeroDivisionError('1/0')
+
+    s = x.s # result sign
+    e = -x.e # result normalized exponent
+    exp = e - p + 1 # result unnormalized exponent
+
+    c = x.c # argument significand
+    one = 1 << (x.p - 1) # representation of 1.0 in fixed<-M, M+1>
+
+    if c == one:
+        # special case: c = 1 => q = 1.0
+        q = 1 << (p - 1)
+    else:
+        # general case: c > 1 => q \in (0.5, 1.0)
+        # step 1. digit recurrence for p - 1 digits
+        # trick: skip first iteration since we always extract 0
+        q = 0 # quotient
+        r = one << 1 # remainder (fold first iter)
+        for _ in range(p - 1):
+            q <<= 1
+            if r >= c:
+                q |= 1
+                r -= c
+            r <<= 1
+            print(bin(q), r)
+
+        # step 2. generate last digit by inexactness
+        q <<= 1
+        if r > 0:
+            q |= 1
+
+        # step 3. adjust exponent so that q \in [1.0, 2.0)
+        exp -= 1
+
+    # result
+    return RealFloat(s, exp, q)
+
+
+def rto_recip_sqr(x: RealFloat, p: int) -> RealFloat:
+    """Computes `1/x^2` to `p` bits using round-to-odd mode."""
+    assert x != 0
+
+    # square the argument
+    x = x * x
+
+    e = -x.e # result normalized exponent
+    exp = e - p + 1 # result unnormalized exponent
+
+    m = x.c # argument significand (in 1.m)
+    one = 1 << (x.p - 1) # representation of 1.0 in fixed<-M, M+1>
+
+    if m == one:
+        # special case: c = 1 => q = 1.0
+        q = 1 << (p - 1)
+    else:
+        # general case: c > 1 => q \in (0.5, 1.0)
+        # step 1. digit recurrence algorithm
+        # trick: skip first iteration since we always extract 0
+        q = 0 # quotient
+        r = one << 1 # remainder (constant fold first iter)
+        for _ in range(1, p): # compute p - 1 bits
+            q <<= 1
+            if r >= m:
+                q |= 1
+                r -= m
+            r <<= 1
+
+        # step 2. generate last digit by inexactness
+        q <<= 1
+        if r > 0:
+            q |= 1
+
+        # step 3. adjust exponent so that q \in [1.0, 2.0)
+        exp -= 1
+
+    # result (always non-negative)
+    return RealFloat(False, exp, q)
+
+
+def rto_sqrt(x: RealFloat, p: int) -> RealFloat:
+    """Computes `sqrt(x)` to `p` bits using round-to-odd mode."""
+    assert x >= 0
+
+    s = x.s # result sign
+    e = x.e # argument normalized exponent
+
+    # adjust exponent parity
+    if e % 2 == 1:
+        e -= 1
+        c = x.c << 1
+        xp = x.p + 1
+    else:
+        c = x.c
+        xp = x.p
+
+    e //= 2
+    exp = e - (p - 1) # result unnormalized exponent
+
+    m = c # argument significand (in 1.m)
+    one = 1 << (xp - 1) # representation of 1.0 in fixed<-M, M+1>
+
+    if m == one:
+        # special case: c = 1 => q = 1.0
+        q = 1 << (p - 1)
+    else:
+        # general case: c > 1 => q \in (0.5, 1.0)
+        # step 1. digit recurrence algorithm
+        # trick: skip first iteration since we always extract 0
+        q = 0 # quotient
+        r = m # remainder
+        for _ in range(1, p): # compute p - 1 bits
+            r <<= 2
+            d = 2 * q + 1
+            if r >= d:
+                q = 2 * q + 1
+                r -= d
+            else:
+                q = 2 * q
+
+        # step 2. generate last digit by inexactness
+        q <<= 1
+        if r > 0:
+            q |= 1
+
+    # result
+    return RealFloat(s, exp, q)
