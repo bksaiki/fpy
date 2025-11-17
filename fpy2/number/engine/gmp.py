@@ -5,20 +5,41 @@ This engine wraps the gmpy2/MPFR library to provide
 round-to-odd arithmetic operations.
 """
 
+import enum
 import gmpy2 as gmp
 import math
 
 from fractions import Fraction
 from typing import Callable
 
+from ...utils import enum_repr
 from ..context import Context
-from ..number import Float, RealFloat
-from ..gmp import Constant
+from ..number import Float
+from ..gmp import float_to_mpfr, mpfr_call
+
 from .engine import Engine, EngineArg, EngineRes
 
 
-_MPFR_EMIN = gmp.get_emin_min()
-_MPFR_EMAX = gmp.get_emax_max()
+@enum_repr
+class _Constant(enum.Enum):
+    """
+    All constants defined in C99 standard `math.h`.
+    """
+    E = 0
+    LOG2E = 1
+    LOG10E = 2
+    LN2 = 3
+    LN10 = 4
+    PI = 5
+    PI_2 = 6
+    PI_4 = 7
+    M_1_PI = 8
+    M_2_PI = 9
+    M_2_SQRTPI = 10
+    SQRT2 = 11
+    SQRT1_2 = 12
+    INFINITY = 13
+    NAN = 14
 
 
 def _gmp_neg(x):
@@ -34,122 +55,11 @@ def _gmp_lgamma(x):
     y, _ = gmp.lgamma(x)
     return y
 
-
-def _round_odd(x: gmp.mpfr, inexact: bool):
-    """Applies the round-to-odd fix up."""
-    s = x.is_signed()
-    if x.is_nan():
-        return Float(s=s, isnan=True)
-    elif x.is_infinite():
-        # check for inexactness => only occurs when MPFR overflows
-        # TODO: awkward to use interval information for an infinity
-        if inexact:
-            interval_size = 0
-            interval_down = not s
-            interval_closed = False
-            return Float(
-                s=s,
-                isinf=True,
-                interval_size=interval_size,
-                interval_down=interval_down,
-                interval_closed=interval_closed
-            )
-        else:
-             return Float(s=s, isinf=True)
-    elif x.is_zero():
-        # check for inexactness => only occurs when MPFR overflows
-        # TODO: generate a reasonable inexact value
-        if inexact:
-            exp = gmp.get_emin_min() - 1
-            return Float(s=s, exp=exp, c=1)
-        else:
-            return Float(s=s)
-    else:
-        # extract mantissa and exponent
-        m_, exp_ = x.as_mantissa_exp()
-        c = int(abs(m_))
-        exp = int(exp_)
-
-        # round to odd => sticky bit = last bit | inexact
-        if c % 2 == 0 and inexact:
-            c += 1
-        return Float(s=s, c=c, exp=exp)
-
-
-def _float_to_mpfr(x: RealFloat | Float):
-    """Converts `x` into an MPFR type exactly."""
-    if isinstance(x, Float):
-        if x.isnan:
-            # drops sign bit
-            return gmp.nan()
-        elif x.isinf:
-            return gmp.set_sign(gmp.inf(), x.s)
-
-    s_fmt = '-' if x.s else '+'
-    fmt = f'{s_fmt}{hex(x.c)}p{x.exp}'
-    return gmp.mpfr(fmt, precision=x.p, base=16)
-
-
-def _mpfr_call_with_prec(prec: int, fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr, ...]):
-    """
-    Calls an MPFR method `fn` with arguments `args` using `prec` digits
-    of precision and round towards zero (RTZ).
-    """
-    with gmp.context(
-        precision=prec,
-        emin=_MPFR_EMIN,
-        emax=_MPFR_EMAX,
-        trap_underflow=False,
-        trap_overflow=False,
-        trap_inexact=False,
-        trap_divzero=False,
-        round=gmp.RoundToZero,
-    ):
-        return fn(*args)
-
-
-def _mpfr_call(fn: Callable[..., gmp.mpfr], args: tuple[gmp.mpfr, ...], prec: int | None = None, n: int | None = None):
-    """
-    Evalutes `fn(args)` such that the result may be safely re-rounded.
-    Either specify:
-    - `prec`: the number of digits, or
-    - `n`: the first unrepresentable digit
-    """
-    if prec is None:
-        # computing to re-round safely up to the `n`th absolute digit
-        if n is None:
-            raise ValueError('Either `prec` or `n` must be specified')
-
-        # compute with 2 digits of precision
-        result = _mpfr_call_with_prec(2, fn, args)
-
-        # special cases: NaN, Inf, or 0
-        if result.is_nan() or result.is_infinite() or result.is_zero():
-            return _round_odd(result, result.rc != 0)
-
-        # extract the normalized exponent of `y`
-        # gmp has a messed up definition of exponent
-        e = gmp.get_exp(result) - 1
-
-        # all digits are at or below the `n`th digit, so we can round safely
-        # we at least have two digits of precision, so we can round safely
-        if e <= n:
-            return _round_odd(result, result.rc != 0)
-
-        # need to re-compute with the correct precision
-        # `e - n`` are the number of digits above the `n`th digit
-        # add two digits for the rounding bits
-        prec = e - n
-        result = _mpfr_call_with_prec(prec + 2, fn, args)
-        return _round_odd(result, result.rc != 0)
-    else:
-        # computing to re-round safely to `prec` digits
-        # if `n` is set, we ignore it since having too much precision is okay
-        result = _mpfr_call_with_prec(prec + 2, fn, args)
-        return _round_odd(result, result.rc != 0)
-
-
-def _mpfr_eval(gmp_fn: Callable[..., gmp.mpfr], *args: Float, prec: int | None = None, n: int | None = None):
+def _mpfr_eval(
+    gmp_fn: Callable[..., gmp.mpfr],
+    *args: Float,
+    prec: int | None = None,
+    n: int | None = None):
     """
     Evaluates `gmp_fn(*args)` such that the result may be safely re-rounded.
     Either specify:
@@ -165,37 +75,37 @@ def _mpfr_eval(gmp_fn: Callable[..., gmp.mpfr], *args: Float, prec: int | None =
         case _:
             raise ValueError('Either `prec` or `n` must be specified')
 
-    gmp_args = tuple(_float_to_mpfr(x) for x in args)
-    return _mpfr_call(gmp_fn, gmp_args, prec=prec, n=n)
+    gmp_args = tuple(float_to_mpfr(x) for x in args)
+    return mpfr_call(gmp_fn, gmp_args, prec=prec, n=n)
 
 
 # From `titanfp` package
 # TODO: some of these are unsafe
-_constant_exprs: dict[Constant, Callable[[], gmp.mpfr]] = {
-    Constant.E : lambda : gmp.exp(1),
-    Constant.LOG2E : lambda: gmp.log2(gmp.exp(1)), # TODO: may be inaccurate
-    Constant.LOG10E : lambda: gmp.log10(gmp.exp(1)), # TODO: may be inaccurate
-    Constant.LN2 : gmp.const_log2,
-    Constant.LN10 : lambda: gmp.log(10),
-    Constant.PI : gmp.const_pi,
-    Constant.PI_2 : lambda: gmp.const_pi() / 2, # division by 2 is exact
-    Constant.PI_4 : lambda: gmp.const_pi() / 4, # division by 4 is exact
-    Constant.M_1_PI : lambda: 1 / gmp.const_pi(), # TODO: may be inaccurate
-    Constant.M_2_PI : lambda: 2 / gmp.const_pi(), # TODO: may be inaccurate
-    Constant.M_2_SQRTPI : lambda: 2 / gmp.sqrt(gmp.const_pi()), # TODO: may be inaccurate
-    Constant.SQRT2: lambda: gmp.sqrt(2),
-    Constant.SQRT1_2: lambda: gmp.sqrt(gmp.div(gmp.mpfr(1), gmp.mpfr(2))),
+_constant_exprs: dict[_Constant, Callable[[], gmp.mpfr]] = {
+    _Constant.E : lambda : gmp.exp(1),
+    _Constant.LOG2E : lambda: gmp.log2(gmp.exp(1)), # TODO: may be inaccurate
+    _Constant.LOG10E : lambda: gmp.log10(gmp.exp(1)), # TODO: may be inaccurate
+    _Constant.LN2 : gmp.const_log2,
+    _Constant.LN10 : lambda: gmp.log(10),
+    _Constant.PI : gmp.const_pi,
+    _Constant.PI_2 : lambda: gmp.const_pi() / 2, # division by 2 is exact
+    _Constant.PI_4 : lambda: gmp.const_pi() / 4, # division by 4 is exact
+    _Constant.M_1_PI : lambda: 1 / gmp.const_pi(), # TODO: may be inaccurate
+    _Constant.M_2_PI : lambda: 2 / gmp.const_pi(), # TODO: may be inaccurate
+    _Constant.M_2_SQRTPI : lambda: 2 / gmp.sqrt(gmp.const_pi()), # TODO: may be inaccurate
+    _Constant.SQRT2: lambda: gmp.sqrt(2),
+    _Constant.SQRT1_2: lambda: gmp.sqrt(gmp.div(gmp.mpfr(1), gmp.mpfr(2))),
 }
 
 
-def _mpfr_constant(x: Constant, *, prec: int | None = None, n: int | None = None):
+def _mpfr_constant(x: _Constant, *, prec: int | None = None, n: int | None = None):
     """
     Computes constant `x` such that it may be safely re-rounded
     accurately to `prec` digits of precision.
     """
     try:
         fn = _constant_exprs[x]
-        return _mpfr_call(fn, (), prec=prec, n=n)
+        return mpfr_call(fn, (), prec=prec, n=n)
     except KeyError as e:
         raise ValueError(f'unknown constant {e.args[0]!r}') from None
 
@@ -632,77 +542,77 @@ class MPFREngine(Engine):
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.E, prec=prec, n=n)
+        return _mpfr_constant(_Constant.E, prec=prec, n=n)
 
     def const_log2e(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.LOG2E, prec=prec, n=n)
+        return _mpfr_constant(_Constant.LOG2E, prec=prec, n=n)
 
     def const_log10e(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.LOG10E, prec=prec, n=n)
+        return _mpfr_constant(_Constant.LOG10E, prec=prec, n=n)
 
     def const_ln2(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.LN2, prec=prec, n=n)
+        return _mpfr_constant(_Constant.LN2, prec=prec, n=n)
 
     def const_ln10(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.LN10, prec=prec, n=n)
+        return _mpfr_constant(_Constant.LN10, prec=prec, n=n)
 
     def const_pi(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.PI, prec=prec, n=n)
+        return _mpfr_constant(_Constant.PI, prec=prec, n=n)
 
     def const_pi_2(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.PI_2, prec=prec, n=n)
+        return _mpfr_constant(_Constant.PI_2, prec=prec, n=n)
 
     def const_pi_4(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.PI_4, prec=prec, n=n)
+        return _mpfr_constant(_Constant.PI_4, prec=prec, n=n)
 
     def const_1_pi(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.M_1_PI, prec=prec, n=n)
+        return _mpfr_constant(_Constant.M_1_PI, prec=prec, n=n)
 
     def const_2_pi(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.M_2_PI, prec=prec, n=n)
+        return _mpfr_constant(_Constant.M_2_PI, prec=prec, n=n)
 
     def const_2_sqrtpi(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.M_2_SQRTPI, prec=prec, n=n)
+        return _mpfr_constant(_Constant.M_2_SQRTPI, prec=prec, n=n)
 
     def const_sqrt2(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.SQRT2, prec=prec, n=n)
+        return _mpfr_constant(_Constant.SQRT2, prec=prec, n=n)
 
     def const_sqrt1_2(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        return _mpfr_constant(Constant.SQRT1_2, prec=prec, n=n)
+        return _mpfr_constant(_Constant.SQRT1_2, prec=prec, n=n)
 
