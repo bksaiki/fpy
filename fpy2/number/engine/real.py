@@ -130,7 +130,7 @@ class RealEngine(Engine):
                 raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
 
     def floor(self, x: EngineArg, ctx: Context) -> EngineRes:
-        return self._real_rint(x, RoundingMode.RTP)
+        return self._real_rint(x, RoundingMode.RTN)
 
     def lgamma(self, x: EngineArg, ctx: Context) -> EngineRes:
         return None

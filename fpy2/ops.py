@@ -135,6 +135,12 @@ def _cvt_to_float(x: Real) -> Float:
         case _:
             raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(t)}\' for x={x}')
 
+def _normalize(x: Float | Fraction, ctx: Context):
+    if isinstance(ctx, RealContext) and isinstance(x, Fraction):
+        return x
+    else:
+        return ctx.round(x)
+
 ################################################################################
 # General operations
 
@@ -147,7 +153,7 @@ def acos(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.acos(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'acos() not implemented for ctx={ctx}')
 
@@ -160,7 +166,7 @@ def acosh(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.acosh(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'acosh() not implemented for ctx={ctx}')
 
@@ -174,7 +180,7 @@ def add(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.add(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'add() not implemented for ctx={ctx}')
 
@@ -187,7 +193,7 @@ def asin(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.asin(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'asin() not implemented for ctx={ctx}')
 
@@ -200,7 +206,7 @@ def asinh(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.asinh(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'asinh() not implemented for ctx={ctx}')
 
@@ -213,7 +219,7 @@ def atan(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.atan(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'atan() not implemented for ctx={ctx}')
 
@@ -230,7 +236,7 @@ def atan2(y: Real, x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.atan2(yr, xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'atan2() not implemented for ctx={ctx}')
 
@@ -243,7 +249,7 @@ def atanh(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.atanh(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'atanh() not implemented for ctx={ctx}')
 
@@ -256,7 +262,7 @@ def cbrt(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.cbrt(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'cbrt() not implemented for ctx={ctx}')
 
@@ -270,7 +276,7 @@ def copysign(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.copysign(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'copysign() not implemented for ctx={ctx}')
 
@@ -283,7 +289,7 @@ def cos(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.cos(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'cos() not implemented for ctx={ctx}')
 
@@ -296,7 +302,7 @@ def cosh(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.cosh(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'cosh() not implemented for ctx={ctx}')
 
@@ -310,7 +316,7 @@ def div(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.div(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'div() not implemented for ctx={ctx}')
 
@@ -323,7 +329,7 @@ def erf(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.erf(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'erf() not implemented for ctx={ctx}')
 
@@ -336,7 +342,7 @@ def erfc(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.erfc(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'erfc() not implemented for ctx={ctx}')
 
@@ -349,7 +355,7 @@ def exp(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.exp(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'exp() not implemented for ctx={ctx}')
 
@@ -362,7 +368,7 @@ def exp2(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.exp2(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'exp2() not implemented for ctx={ctx}')
 
@@ -375,7 +381,7 @@ def exp10(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.exp10(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'exp10() not implemented for ctx={ctx}')
 
@@ -388,7 +394,7 @@ def expm1(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.expm1(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'expm1() not implemented for ctx={ctx}')
 
@@ -401,7 +407,7 @@ def fabs(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.fabs(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'fabs() not implemented for ctx={ctx}')
 
@@ -415,7 +421,7 @@ def fdim(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.fdim(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'fdim() not implemented for ctx={ctx}')
 
@@ -430,7 +436,7 @@ def fma(x: Real, y: Real, z: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.fma(xr, yr, zr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'fma() not implemented for ctx={ctx}')
 
@@ -444,7 +450,7 @@ def fmax(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.fmax(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'fmax() not implemented for ctx={ctx}')
 
@@ -458,7 +464,7 @@ def fmin(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.fmin(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'fmin() not implemented for ctx={ctx}')
 
@@ -477,7 +483,7 @@ def fmod(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.fmod(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'fmod() not implemented for ctx={ctx}')
 
@@ -491,7 +497,7 @@ def hypot(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.hypot(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'hypot() not implemented for ctx={ctx}')
 
@@ -504,7 +510,7 @@ def lgamma(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.lgamma(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'lgamma() not implemented for ctx={ctx}')
 
@@ -517,7 +523,7 @@ def log(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.log(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'log() not implemented for ctx={ctx}')
 
@@ -530,7 +536,7 @@ def log10(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.log10(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'log10() not implemented for ctx={ctx}')
 
@@ -543,7 +549,7 @@ def log1p(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.log1p(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'log1p() not implemented for ctx={ctx}')
 
@@ -556,7 +562,7 @@ def log2(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.log2(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'log2() not implemented for ctx={ctx}')
 
@@ -576,7 +582,7 @@ def mod(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.mod(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'mod() not implemented for ctx={ctx}')
 
@@ -590,7 +596,7 @@ def mul(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.mul(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'mul() not implemented for ctx={ctx}')
 
@@ -603,7 +609,7 @@ def neg(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.neg(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'neg() not implemented for ctx={ctx}')
 
@@ -617,7 +623,7 @@ def pow(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.pow(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'pow() not implemented for ctx={ctx}')
 
@@ -636,7 +642,7 @@ def remainder(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.remainder(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'remainder() not implemented for ctx={ctx}')
 
@@ -649,7 +655,7 @@ def sin(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.sin(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'sin() not implemented for ctx={ctx}')
 
@@ -662,7 +668,7 @@ def sinh(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.sinh(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'sinh() not implemented for ctx={ctx}')
 
@@ -675,7 +681,7 @@ def sqrt(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.sqrt(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'sqrt() not implemented for ctx={ctx}')
 
@@ -689,7 +695,7 @@ def sub(x: Real, y: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.sub(xr, yr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'sub() not implemented for ctx={ctx}')
 
@@ -702,7 +708,7 @@ def tan(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.tan(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'tan() not implemented for ctx={ctx}')
 
@@ -715,7 +721,7 @@ def tanh(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.tanh(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'tanh() not implemented for ctx={ctx}')
 
@@ -728,7 +734,7 @@ def tgamma(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.tgamma(xr, ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'tgamma() not implemented for ctx={ctx}')
 
@@ -792,12 +798,14 @@ def ceil(x: Real, ctx: Context = REAL):
     """
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    match ctx:
-        case None | RealContext():
-            # use rounding primitives
-            return real_ceil(_cvt_to_real(x))
-        case _:
-            return ctx.with_params(rm=RoundingMode.RTP).round_integer(x)
+
+    xr = _cvt_to_real(x)
+    for engine in ENGINES:
+        r = engine.ceil(xr, ctx)
+        if r is not None:
+            return _normalize(r, ctx)
+
+    raise NotImplementedError(f'ceil() not implemented for ctx={ctx}')
 
 def floor(x: Real, ctx: Context = REAL):
     """
@@ -808,12 +816,14 @@ def floor(x: Real, ctx: Context = REAL):
     """
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    match ctx:
-        case None | RealContext():
-            # use rounding primitives
-            return real_floor(_cvt_to_real(x))
-        case _:
-            return ctx.with_params(rm=RoundingMode.RTN).round_integer(x)
+
+    xr = _cvt_to_real(x)
+    for engine in ENGINES:
+        r = engine.floor(xr, ctx)
+        if r is not None:
+            return _normalize(r, ctx)
+
+    raise NotImplementedError(f'floor() not implemented for ctx={ctx}')
 
 def trunc(x: Real, ctx: Context = REAL):
     """
@@ -825,12 +835,14 @@ def trunc(x: Real, ctx: Context = REAL):
     """
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    match ctx:
-        case None | RealContext():
-            # use rounding primitives
-            return real_trunc(_cvt_to_real(x))
-        case _:
-            return ctx.with_params(rm=RoundingMode.RTZ).round_integer(x)
+
+    xr = _cvt_to_real(x)
+    for engine in ENGINES:
+        r = engine.trunc(xr, ctx)
+        if r is not None:
+            return _normalize(r, ctx)
+
+    raise NotImplementedError(f'trunc() not implemented for ctx={ctx}')
 
 def nearbyint(x: Real, ctx: Context = REAL):
     """
@@ -856,12 +868,14 @@ def roundint(x: Real, ctx: Context = REAL):
     """
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    match ctx:
-        case None | RealContext():
-            # use rounding primitives
-            return real_roundint(_cvt_to_real(x))
-        case _:
-            return ctx.with_params(rm=RoundingMode.RNA).round_integer(x)
+
+    xr = _cvt_to_real(x)
+    for engine in ENGINES:
+        r = engine.roundint(xr, ctx)
+        if r is not None:
+            return _normalize(r, ctx)
+
+    raise NotImplementedError(f'roundint() not implemented for ctx={ctx}')
 
 #############################################################################
 # Classification
@@ -1050,7 +1064,7 @@ def const_pi(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_pi(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_pi() not implemented for ctx={ctx}')
 
@@ -1065,7 +1079,7 @@ def const_e(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_e(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_e() not implemented for ctx={ctx}')
 
@@ -1080,7 +1094,7 @@ def const_log2e(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_log2e(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_log2e() not implemented for ctx={ctx}')
 
@@ -1095,7 +1109,7 @@ def const_log10e(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_log10e(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_log10e() not implemented for ctx={ctx}')
 
@@ -1110,7 +1124,7 @@ def const_ln2(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_ln2(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_ln2() not implemented for ctx={ctx}')
 
@@ -1125,7 +1139,7 @@ def const_pi_2(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_pi_2(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_pi_2() not implemented for ctx={ctx}')
 
@@ -1140,7 +1154,7 @@ def const_pi_4(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_pi_4(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_pi_4() not implemented for ctx={ctx}')
 
@@ -1155,7 +1169,7 @@ def const_1_pi(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_1_pi(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_1_pi() not implemented for ctx={ctx}')
 
@@ -1170,7 +1184,7 @@ def const_2_pi(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_2_pi(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_2_pi() not implemented for ctx={ctx}')
 
@@ -1185,7 +1199,7 @@ def const_2_sqrt_pi(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_2_sqrtpi(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_2_sqrt_pi() not implemented for ctx={ctx}')
 
@@ -1200,7 +1214,7 @@ def const_sqrt2(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_sqrt2(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_sqrt2() not implemented for ctx={ctx}')
 
@@ -1215,6 +1229,6 @@ def const_sqrt1_2(ctx: Context = REAL) -> Float:
     for engine in ENGINES:
         r = engine.const_sqrt1_2(ctx)
         if r is not None:
-            return ctx.round(r)
+            return _normalize(r, ctx)
 
     raise NotImplementedError(f'const_sqrt1_2() not implemented for ctx={ctx}')
