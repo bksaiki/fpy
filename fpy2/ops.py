@@ -110,11 +110,30 @@ __all__ = [
 ################################################################################
 # Utils
 
-_cvt_to_real = Engine.cvt_to_real
+def _cvt_to_real(x: Real) -> Float | Fraction:
+    """Converts `x` to `Float` or `Fraction`."""
+    match x:
+        case Float():
+            return x
+        case Fraction():
+            return Float.from_rational(x) if is_dyadic(x) else x
+        case int():
+            return Float.from_int(x)
+        case float():
+            return Float.from_float(x)
+        case _:
+            raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(x)}\' for x={x}')
 
 def _cvt_to_float(x: Real) -> Float:
     """Converts `x` to `Float`."""
-    return Engine.cvt_to_float(_cvt_to_real(x))
+    t = _cvt_to_real(x)
+    match t:
+        case Float():
+            return t
+        case Fraction():
+            raise ValueError(f'Cannot convert non-dyadic rational {t} to Float')
+        case _:
+            raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(t)}\' for x={x}')
 
 ################################################################################
 # General operations

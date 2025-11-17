@@ -14,7 +14,7 @@ from typing import Callable
 from ..context import Context
 from ..number import Float, RealFloat
 from ..gmp import Constant
-from .engine import Engine
+from .engine import Engine, EngineArg, EngineRes
 
 
 _MPFR_EMIN = gmp.get_emin_min()
@@ -155,9 +155,16 @@ def _mpfr_eval(gmp_fn: Callable[..., gmp.mpfr], *args: Float, prec: int | None =
     Either specify:
     - `prec`: the number of digits, or
     - `n`: the first unrepresentable digit
+    If both are specified, `prec` takes precedence.
     """
-    if prec is not None and n is not None:
-        raise ValueError('Either `prec` or `n` must be specified, not both')
+    match prec, n:
+        case int(), _:
+            n = None
+        case None, int():
+            pass
+        case _:
+            raise ValueError('Either `prec` or `n` must be specified')
+
     gmp_args = tuple(_float_to_mpfr(x) for x in args)
     return _mpfr_call(gmp_fn, gmp_args, prec=prec, n=n)
 
@@ -199,7 +206,7 @@ _mpfr_engine_inst = None
 
 class MPFREngine(Engine):
     """
-    Engine that uses MPFR (via gmpy2) for round-to-odd arithmetic.
+    Engine that uses MPFR (via gmpy2) and round-to-odd arithmetic.
 
     This engine can handle all operations except exact arithmetic.
     """
@@ -212,233 +219,281 @@ class MPFREngine(Engine):
             _mpfr_engine_inst = MPFREngine()
         return _mpfr_engine_inst
 
-    def acos(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def acos(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.acos, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.acos, x, prec=prec, n=n)
 
-    def acosh(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def acosh(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.acosh, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.acosh, x, prec=prec, n=n)
 
-    def asin(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def asin(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.asin, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.asin, x, prec=prec, n=n)
 
-    def asinh(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def asinh(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.asinh, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.asinh, x, prec=prec, n=n)
 
-    def atan(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def atan(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.atan, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.atan, x, prec=prec, n=n)
 
-    def atanh(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def atanh(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.atanh, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.atanh, x, prec=prec, n=n)
 
-    def cbrt(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def cbrt(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.cbrt, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.cbrt, x, prec=prec, n=n)
 
-    def cos(self, x: Float | Fraction, ctx: Context) -> Float | None:
-        prec, n = ctx.round_params()
-        if prec is None and n is None:
-            return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.cos, xf, prec=prec, n=n)
+    # we don't use MPFR's ceil/floor/trunc/roundint
+    # since their return value is strange
+    def ceil(self, x: EngineArg, ctx: Context) -> EngineRes:
+        return None
 
-    def cosh(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def cos(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.cosh, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.cos, x, prec=prec, n=n)
 
-    def erf(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def cosh(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.erf, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.cosh, x, prec=prec, n=n)
 
-    def erfc(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def erf(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.erfc, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.erf, x, prec=prec, n=n)
 
-    def exp(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def erfc(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.exp, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.erfc, x, prec=prec, n=n)
 
-    def exp2(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def exp(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.exp2, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.exp, x, prec=prec, n=n)
 
-    def exp10(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def exp2(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.exp10, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.exp2, x, prec=prec, n=n)
 
-    def expm1(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def exp10(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.expm1, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.exp10, x, prec=prec, n=n)
 
-    def fabs(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def expm1(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(_gmp_abs, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.expm1, x, prec=prec, n=n)
 
-    def lgamma(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def fabs(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(_gmp_lgamma, xf, prec=prec, n=n)
+        return _mpfr_eval(_gmp_abs, x, prec=prec, n=n)
 
-    def log(self, x: Float | Fraction, ctx: Context) -> Float | None:
-        prec, n = ctx.round_params()
-        if prec is None and n is None:
-            return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.log, xf, prec=prec, n=n)
+    # we don't use MPFR's ceil/floor/trunc/roundint
+    # since their return value is strange
+    def floor(self, x: EngineArg, ctx: Context) -> EngineRes:
+        return None
 
-    def log10(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def lgamma(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.log10, xf, prec=prec, n=n)
+        return _mpfr_eval(_gmp_lgamma, x, prec=prec, n=n)
 
-    def log1p(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def log(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.log1p, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.log, x, prec=prec, n=n)
 
-    def log2(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def log10(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.log2, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.log10, x, prec=prec, n=n)
 
-    def neg(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def log1p(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(_gmp_neg, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.log1p, x, prec=prec, n=n)
 
-    def sin(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def log2(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.sin, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.log2, x, prec=prec, n=n)
 
-    def sinh(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def neg(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.sinh, xf, prec=prec, n=n)
+        return _mpfr_eval(_gmp_neg, x, prec=prec, n=n)
 
-    def sqrt(self, x: Float | Fraction, ctx: Context) -> Float | None:
-        prec, n = ctx.round_params()
-        if prec is None and n is None:
-            return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.sqrt, xf, prec=prec, n=n)
+    # we don't use MPFR's ceil/floor/trunc/roundint
+    # since their return value is strange
+    def roundint(self, x: EngineArg, ctx: Context) -> EngineRes:
+        return None
 
-    def tan(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def sin(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.tan, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.sin, x, prec=prec, n=n)
 
-    def tanh(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def sinh(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.tanh, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.sinh, x, prec=prec, n=n)
 
-    def tgamma(self, x: Float | Fraction, ctx: Context) -> Float | None:
+    def sqrt(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.gamma, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.sqrt, x, prec=prec, n=n)
 
-    def add(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def tan(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.add, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.tan, x, prec=prec, n=n)
 
-    def atan2(self, y: Float | Fraction, x: Float | Fraction, ctx: Context) -> Float | None:
+    def tanh(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        yf = Engine.cvt_to_float(y)
-        xf = Engine.cvt_to_float(x)
-        return _mpfr_eval(gmp.atan2, yf, xf, prec=prec, n=n)
+        return _mpfr_eval(gmp.tanh, x, prec=prec, n=n)
 
-    def copysign(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def tgamma(self, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.copy_sign, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.gamma, x, prec=prec, n=n)
 
-    def div(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    # we don't use MPFR's ceil/floor/trunc/roundint
+    # since their return value is strange
+    def trunc(self, x: EngineArg, ctx: Context) -> EngineRes:
+        return None
+
+    def add(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.div, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.add, x, y, prec=prec, n=n)
+
+    def atan2(self, y: EngineArg, x: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(y, Fraction) or isinstance(x, Fraction):
+            return None
+        prec, n = ctx.round_params()
+        if prec is None and n is None:
+            return None
+        return _mpfr_eval(gmp.atan2, y, x, prec=prec, n=n)
+
+    def copysign(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
+        prec, n = ctx.round_params()
+        if prec is None and n is None:
+            return None
+        return _mpfr_eval(gmp.copy_sign, x, y, prec=prec, n=n)
+
+    def div(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
+        prec, n = ctx.round_params()
+        if prec is None and n is None:
+            return None
+        return _mpfr_eval(gmp.div, x, y, prec=prec, n=n)
 
     def _fdim(self, x: Float, y: Float, prec: int | None, n: int | None) -> Float:
         if x.isnan or y.isnan:
@@ -451,45 +506,45 @@ class MPFREngine(Engine):
             # otherwise, returns +0
             return Float()
 
-    def fdim(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def fdim(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return self._fdim(xf, yf, prec, n)
+        return self._fdim(x, y, prec, n)
 
-    def fmod(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def fmod(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.fmod, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.fmod, x, y, prec=prec, n=n)
 
-    def fmax(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def fmax(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.maxnum, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.maxnum, x, y, prec=prec, n=n)
 
-    def fmin(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def fmin(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.minnum, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.minnum, x, y, prec=prec, n=n)
 
-    def hypot(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def hypot(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.hypot, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.hypot, x, y, prec=prec, n=n)
 
     def _mod(self, x: Float, y: Float, ctx: Context) -> Float:
         if x.isnan or y.isnan:
@@ -525,128 +580,127 @@ class MPFREngine(Engine):
             # step 2. compute `x - q * y`
             return x - q * y
 
-    def mod(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def mod(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return self._mod(xf, yf, ctx)
+        return self._mod(x, y, ctx)
 
-    def mul(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def mul(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.mul, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.mul, x, y, prec=prec, n=n)
 
-    def pow(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def pow(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(_gmp_pow, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(_gmp_pow, x, y, prec=prec, n=n)
 
-    def remainder(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def remainder(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.remainder, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.remainder, x, y, prec=prec, n=n)
 
-    def sub(self, x: Float | Fraction, y: Float | Fraction, ctx: Context) -> Float | None:
+    def sub(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        return _mpfr_eval(gmp.sub, xf, yf, prec=prec, n=n)
+        return _mpfr_eval(gmp.sub, x, y, prec=prec, n=n)
 
-    def fma(self, x: Float | Fraction, y: Float | Fraction, z: Float | Fraction, ctx: Context) -> Float | None:
+    def fma(self, x: EngineArg, y: EngineArg, z: EngineArg, ctx: Context) -> EngineRes:
+        if isinstance(x, Fraction) or isinstance(y, Fraction) or isinstance(z, Fraction):
+            return None
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
-        xf = Engine.cvt_to_float(x)
-        yf = Engine.cvt_to_float(y)
-        zf = Engine.cvt_to_float(z)
-        return _mpfr_eval(gmp.fma, xf, yf, zf, prec=prec, n=n)
+        return _mpfr_eval(gmp.fma, x, y, z, prec=prec, n=n)
 
-    def const_e(self, ctx: Context) -> Float | None:
+    def const_e(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.E, prec=prec, n=n)
 
-    def const_log2e(self, ctx: Context) -> Float | None:
+    def const_log2e(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.LOG2E, prec=prec, n=n)
 
-    def const_log10e(self, ctx: Context) -> Float | None:
+    def const_log10e(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.LOG10E, prec=prec, n=n)
 
-    def const_ln2(self, ctx: Context) -> Float | None:
+    def const_ln2(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.LN2, prec=prec, n=n)
 
-    def const_ln10(self, ctx: Context) -> Float | None:
+    def const_ln10(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.LN10, prec=prec, n=n)
 
-    def const_pi(self, ctx: Context) -> Float | None:
+    def const_pi(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.PI, prec=prec, n=n)
 
-    def const_pi_2(self, ctx: Context) -> Float | None:
+    def const_pi_2(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.PI_2, prec=prec, n=n)
 
-    def const_pi_4(self, ctx: Context) -> Float | None:
+    def const_pi_4(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.PI_4, prec=prec, n=n)
 
-    def const_1_pi(self, ctx: Context) -> Float | None:
+    def const_1_pi(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.M_1_PI, prec=prec, n=n)
 
-    def const_2_pi(self, ctx: Context) -> Float | None:
+    def const_2_pi(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.M_2_PI, prec=prec, n=n)
 
-    def const_2_sqrtpi(self, ctx: Context) -> Float | None:
+    def const_2_sqrtpi(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.M_2_SQRTPI, prec=prec, n=n)
 
-    def const_sqrt2(self, ctx: Context) -> Float | None:
+    def const_sqrt2(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
         return _mpfr_constant(Constant.SQRT2, prec=prec, n=n)
 
-    def const_sqrt1_2(self, ctx: Context) -> Float | None:
+    def const_sqrt1_2(self, ctx: Context) -> EngineRes:
         prec, n = ctx.round_params()
         if prec is None and n is None:
             return None
