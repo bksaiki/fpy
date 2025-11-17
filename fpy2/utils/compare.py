@@ -1,6 +1,9 @@
 """Comparison operators"""
 
+import operator
+
 from enum import Enum
+from typing import Any, Callable
 
 class CompareOp(Enum):
     """Comparison operators as an enumeration"""
@@ -33,6 +36,9 @@ class CompareOp(Enum):
             case _:
                 raise RuntimeError('unreachable')
 
+    def to_operator(self):
+        return _op_table[self]
+
 
 _symbol_table = {
     CompareOp.LT: '<',
@@ -41,4 +47,13 @@ _symbol_table = {
     CompareOp.GT: '>',
     CompareOp.EQ: '==',
     CompareOp.NE: '!='
+}
+
+_op_table: dict[CompareOp, Callable[[Any, Any], bool]] = {
+    CompareOp.LT: operator.__lt__,
+    CompareOp.LE: operator.__le__,
+    CompareOp.GE: operator.__ge__,
+    CompareOp.GT: operator.__gt__,
+    CompareOp.EQ: operator.__eq__,
+    CompareOp.NE: operator.__ne__
 }
