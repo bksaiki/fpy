@@ -433,9 +433,11 @@ class RealFloat(numbers.Rational):
         return self._interval_closed
 
     def as_rational(self) -> Fraction:
-        if self.is_zero():
+        if self._c == 0: # case: zero
             return Fraction(0)
-        else:
+        elif self._exp >= 0: # case: definitely integer
+            return Fraction(self.m * (2 ** self._exp))
+        else: # case: may be fractional
             return self.m * (Fraction(2) ** self._exp)
 
     @staticmethod
