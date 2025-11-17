@@ -576,35 +576,24 @@ class _Interpreter(Visitor):
                 else:
                     raise RuntimeError(f'attempting to call a Python function: `{fn}` at `{e.format()}`')
 
-    def _apply_cmp2(self, op: CompareOp, lhs: RealValue, rhs: RealValue):
-        match op:
-            case CompareOp.EQ:
-                return lhs == rhs
-            case CompareOp.NE:
-                return lhs != rhs
-            case CompareOp.LT:
-                return lhs < rhs
-            case CompareOp.LE:
-                return lhs <= rhs
-            case CompareOp.GT:
-                return lhs > rhs
-            case CompareOp.GE:
-                return lhs >= rhs
-            case _:
-                raise NotImplementedError('unknown comparison operator', op)
+    def _apply_cmp2(self, op: CompareOp, lhs, rhs) -> bool:
+        fn = op.to_operator()
+        return fn(lhs, rhs)
 
     def _visit_compare(self, e: Compare, ctx: Context):
-        lhs = self._visit_expr(e.args[0], ctx)
-        if not isinstance(lhs, RealValue):
-            raise TypeError(f'expected a real number, got `{lhs}`')
-        for op, arg in zip(e.ops, e.args[1:]):
-            rhs = self._visit_expr(arg, ctx)
-            if not isinstance(rhs, RealValue):
-                raise TypeError(f'expected a real number, got `{rhs}`')
-            if not self._apply_cmp2(op, lhs, rhs):
-                return False
-            lhs = rhs
-        return True
+        if len(e.ops) != 2:
+            # special case for two-argument comparisons
+            lhs = self._visit_expr(e.args[0], ctx)
+            rhs = self._visit_expr(e.args[1], ctx)
+            return self._apply_cmp2(e.ops[0], lhs, rhs)
+        else:
+            lhs = self._visit_expr(e.args[0], ctx)
+            for op, arg in zip(e.ops, e.args[1:]):
+                rhs = self._visit_expr(arg, ctx)
+                if not self._apply_cmp2(op, lhs, rhs):
+                    return False
+                lhs = rhs
+            return True
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context):
         return tuple(self._visit_expr(x, ctx) for x in e.elts)

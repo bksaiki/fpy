@@ -6,10 +6,8 @@ Hardware for Machine Learning Accelerators" (Kaul et al., 2019).
 """
 
 import fpy2 as fp
-import gzip
 import matplotlib.pyplot as plt
 import math
-import pickle
 import random
 
 from argparse import ArgumentParser
@@ -148,9 +146,9 @@ class Explorer(fp.Runner[Config, SampleKey, Result]):
         if not no_cache and sample_file.exists():
             # load from cache
             self.log('sample', f'found cached N={key.n} sample at `{sample_file}`')
-            cache: Sample = self._read_cache(sample_file)
-            # check sample size
-            if len(cache.inputs) >= self.num_inputs:
+            cache: Sample | None = self._read_cache(sample_file)
+            if cache is not None and len(cache.inputs) >= self.num_inputs:
+                # cache has sufficient inputs
                 return sample_file
 
         # generate the sample
