@@ -287,6 +287,13 @@ class EncodableContext(SizedContext):
     """
 
     @abstractmethod
+    def max_encoding(self) -> int:
+        """
+        Returns the maximum encoding value for this context.
+        """
+        ...
+
+    @abstractmethod
     def encode(self, x: Float) -> int:
         """
         Encodes a number constructed under this context as a bitstring.

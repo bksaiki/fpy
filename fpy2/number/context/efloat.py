@@ -499,6 +499,10 @@ class EFloatContext(EncodableContext):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         return self._mpb_ctx.infval(s)
 
+    def max_encoding(self) -> int:
+        """Returns the maximum encoding value for this context."""
+        return (1 << self.nbits) - 1
+
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x!r}')

@@ -104,6 +104,10 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
             inf_value=inf_value
         )
 
+    def max_encoding(self) -> int:
+        """Returns the maximum encoding value for this context."""
+        return (1 << self.nbits) - 1
+
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got x={x}')

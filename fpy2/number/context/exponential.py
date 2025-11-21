@@ -465,6 +465,10 @@ class ExpContext(EncodableContext):
             raise ValueError('negative values are not representable')
         return Float(c=1, exp=self.emax, ctx=self)
 
+    def max_encoding(self) -> int:
+        """Returns the maximum encoding value for this context."""
+        return (1 << self.nbits) - 1
+
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
