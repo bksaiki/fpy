@@ -46,6 +46,9 @@ from .backend import (
     FPCoreCompiler
 )
 
+# LUT
+from .lut import LUTGenerator, LUT
+
 # runner
 from .runner import Runner, RunnerWorkerTask
 
