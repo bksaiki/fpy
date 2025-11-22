@@ -109,6 +109,12 @@ class LUT(Iterable):
         """
         return LUTIterator(self)
 
+    def force(self):
+        """
+        Force construction of the lookup table.
+        """
+        self._ensure_table()
+
     def keys(self) -> Iterator[tuple[Float, ...]]:
         """
         Returns an iterator over the keys (Float arguments) in the lookup table.

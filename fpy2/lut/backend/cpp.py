@@ -18,27 +18,39 @@ class _CppLUTCompiler:
     """
     
     lut: LUT
+    func_name: str
     output_type: str
     input_types: list[str]
     num_args: int
     dims: list[int]
     hex_width: int
+    include_guards: bool
+    indent_str: str
     
-    def __init__(self, lut: LUT):
+    def __init__(self, lut: LUT, func_name: str = "lut_lookup", include_guards: bool = True, indent_str: str = "    "):
         self.lut = lut
+        self.func_name = func_name
         self.num_args = len(lut.arg_ctxs)
+        self.include_guards = include_guards
+        self.indent_str = indent_str
         
         if self.num_args == 0:
             raise ValueError("LUT must have at least one argument context")
         
-        # Determine appropriate uint types for each input
-        self.input_types = [
-            self._determine_uint_type(ctx.max_encoding())
-            for ctx in lut.arg_ctxs
-        ]
+        # Determine appropriate uint types for each input (check bounds)
+        self.input_types = []
+        for i, ctx in enumerate(lut.arg_ctxs):
+            try:
+                uint_type = self._determine_uint_type(ctx.max_encoding())
+                self.input_types.append(uint_type)
+            except ValueError as e:
+                raise ValueError(f"Argument {i} context encoding exceeds 64-bit range: {e}") from e
         
-        # Determine output type
-        self.output_type = self._determine_uint_type(lut.ctx.max_encoding())
+        # Determine output type (check bounds)
+        try:
+            self.output_type = self._determine_uint_type(lut.ctx.max_encoding())
+        except ValueError as e:
+            raise ValueError(f"Output context encoding exceeds 64-bit range: {e}") from e
         
         # Calculate dimensions
         self.dims = [ctx.max_encoding() + 1 for ctx in lut.arg_ctxs]
@@ -63,6 +75,9 @@ class _CppLUTCompiler:
             
         Returns:
             C++ type string (e.g., 'uint8_t', 'uint16_t', etc.)
+            
+        Raises:
+            ValueError: If max_encoding exceeds 64-bit unsigned integer range
         """
         if max_encoding <= 0xFF:
             return "uint8_t"
@@ -70,8 +85,13 @@ class _CppLUTCompiler:
             return "uint16_t"
         elif max_encoding <= 0xFFFFFFFF:
             return "uint32_t"
-        else:
+        elif max_encoding <= 0xFFFFFFFFFFFFFFFF:
             return "uint64_t"
+        else:
+            raise ValueError(
+                f"Encoding value {max_encoding} exceeds 64-bit range. "
+                f"Cannot represent in C++ uint64_t (max: {0xFFFFFFFFFFFFFFFF})"
+            )
     
     def _format_hex(self, value: int) -> str:
         """
@@ -85,6 +105,30 @@ class _CppLUTCompiler:
         """
         return f"0x{value:0{self.hex_width}x}"
     
+    def _build_signature(self) -> str:
+        """
+        Builds the C++ function signature.
+        
+        Returns:
+            Function signature string
+        """
+        params = ", ".join(
+            f"{self.input_types[i]} arg{i}"
+            for i in range(self.num_args)
+        )
+        return f"{self.output_type} {self.func_name}({params})"
+    
+    def _build_headers(self) -> list[str]:
+        """
+        Builds the include headers if enabled.
+        
+        Returns:
+            List of header lines
+        """
+        if self.include_guards:
+            return ["#include <cstdint>", ""]
+        return []
+    
     def compile_array(self) -> list[str]:
         """
         Generates array-based lookup implementation.
@@ -96,10 +140,10 @@ class _CppLUTCompiler:
         
         # Build array declaration with appropriate dimensions
         if self.num_args == 1:
-            array_decl = f"    static const {self.output_type} table[{self.dims[0]}]"
+            array_decl = f"{self.indent_str}static const {self.output_type} table[{self.dims[0]}]"
         else:
             dim_str = "][".join(str(d) for d in self.dims)
-            array_decl = f"    static const {self.output_type} table[{dim_str}]"
+            array_decl = f"{self.indent_str}static const {self.output_type} table[{dim_str}]"
         
         lines.append(array_decl + " = {")
         
@@ -110,23 +154,23 @@ class _CppLUTCompiler:
                 encoded = self.lut.ctx.encode(self.lut._table[i])  # type: ignore
                 hex_val = self._format_hex(encoded)
                 comma = "," if i < self.dims[0] - 1 else ""
-                lines.append(f"        {hex_val}{comma}")
+                lines.append(f"{self.indent_str * 2}{hex_val}{comma}")
         else:
             # Multi-dimensional array - format with nesting
             lines.extend(self._format_nested_array(0, 0, indent=2))
         
-        lines.append("    };")
+        lines.append(f"{self.indent_str}}};")  
         lines.append("")
         
         # Generate index calculation and return
         if self.num_args == 1:
-            lines.append("    return table[arg0];")
+            lines.append(f"{self.indent_str}return table[arg0];")
         else:
             # Calculate flat index from multi-dimensional indices
             index_expr = "arg0"
             for i in range(1, self.num_args):
                 index_expr = f"({index_expr} * {self.dims[i]} + arg{i})"
-            lines.append(f"    return table[{index_expr}];")
+            lines.append(f"{self.indent_str}return table[{index_expr}];")
         
         return lines
     
@@ -135,7 +179,7 @@ class _CppLUTCompiler:
         Recursively formats nested array initialization.
         """
         lines = []
-        indent_str = "    " * indent
+        indent_str = self.indent_str * indent
         
         if depth == len(self.dims) - 1:
             # Innermost dimension - output values
@@ -173,7 +217,7 @@ class _CppLUTCompiler:
         lines.extend(self._generate_nested_switch(0, 0, indent=1))
         
         # Default case (should never happen if inputs are valid)
-        lines.append("    return 0; // Should never reach here")
+        lines.append(f"{self.indent_str}return 0; // Should never reach here")
         
         return lines
     
@@ -182,7 +226,7 @@ class _CppLUTCompiler:
         Recursively generates nested switch statements.
         """
         lines = []
-        indent_str = "    " * indent
+        indent_str = self.indent_str * indent
         
         lines.append(f"{indent_str}switch (arg{depth}) {{")
         
@@ -192,7 +236,7 @@ class _CppLUTCompiler:
                 flat_idx = base_index + i
                 encoded = self.lut.ctx.encode(self.lut._table[flat_idx])  # type: ignore
                 hex_val = self._format_hex(encoded)
-                lines.append(f"{indent_str}    case {i}: return {hex_val};")
+                lines.append(f"{indent_str * 2}case {i}: return {hex_val};")
         else:
             # Outer switches - recurse
             stride = 1
@@ -200,7 +244,7 @@ class _CppLUTCompiler:
                 stride *= d
             
             for i in range(self.dims[depth]):
-                lines.append(f"{indent_str}    case {i}:")
+                lines.append(f"{indent_str * 2}case {i}:")
                 new_base = base_index + i * stride
                 lines.extend(self._generate_nested_switch(depth + 1, new_base, indent + 2))
         
@@ -215,11 +259,12 @@ class CppLUT:
     """
 
     @staticmethod
-    def compile(
+    def compile_lut(
         lut: LUT,
         func_name: str = "lut_lookup",
         method: Literal["array", "switch"] = "array",
-        include_guards: bool = True
+        include_guards: bool = True,
+        indent_str: str = 4 * " "
     ) -> str:
         """
         Compiles a LUT instance into a C++ function.
@@ -229,32 +274,27 @@ class CppLUT:
             func_name: Name of the generated C++ function
             method: Either "array" for array-based lookup or "switch" for switch-case
             include_guards: Whether to include necessary headers
+            indent_str: String to use for each indentation level (default: "    " - 4 spaces)
             
         Returns:
             C++ source code as a string
         """
         # Ensure the table is built
-        lut._ensure_table()
+        lut.force()
         
         # Create compiler instance
-        compiler = _CppLUTCompiler(lut)
-        
-        # Build function signature
-        params = ", ".join(
-            f"{compiler.input_types[i]} arg{i}"
-            for i in range(compiler.num_args)
-        )
-        signature = f"{compiler.output_type} {func_name}({params})"
+        compiler = _CppLUTCompiler(lut, func_name, include_guards, indent_str)
         
         # Generate code
         lines = []
         
-        if include_guards:
-            lines.append("#include <cstdint>")
-            lines.append("")
+        # Add headers
+        lines.extend(compiler._build_headers())
         
-        lines.append(f"{signature} {{")
+        # Add function signature
+        lines.append(f"{compiler._build_signature()} {{")
         
+        # Add method implementation
         if method == "array":
             lines.extend(compiler.compile_array())
         elif method == "switch":
