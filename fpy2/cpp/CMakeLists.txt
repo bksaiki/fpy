@@ -7,8 +7,8 @@ project(fpy_numbers
     LANGUAGES CXX
 )
 
-# C++ standard (GoogleTest requires C++17)
-set(CMAKE_CXX_STANDARD 17)
+# C++ standard
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -18,8 +18,8 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Compiler flags
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra -pedantic")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra -pedantic -DFPY_DEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -Wextra -DNDEBUG")
 
 # Options
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
@@ -51,12 +51,15 @@ include_directories(
 # Source files
 # NOTE: Add your source files here as you implement them
 set(SOURCES
-    src/rounding.cpp
+    src/real.cpp
+    src/round.cpp
 )
 
 # Header files (for IDE organization)
 set(HEADERS
-    include/fpy/rounding.hpp
+    include/fpy/params.hpp
+    include/fpy/real.hpp
+    include/fpy/round.hpp
     include/fpy/types.hpp
 )
 

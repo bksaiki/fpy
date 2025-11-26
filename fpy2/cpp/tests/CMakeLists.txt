@@ -2,7 +2,8 @@
 
 # Test executables
 set(TEST_SOURCES
-    test_rounding.cpp
+    test_real.cpp
+    test_round.cpp
 )
 
 # Create test executable
