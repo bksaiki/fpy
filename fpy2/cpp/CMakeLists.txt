@@ -82,10 +82,6 @@ set(HEADERS
 # Create library
 add_library(${PROJECT_NAME} ${SOURCES} ${HEADERS})
 
-# NOTE: Link external libraries here
-# Example for GMP/MPFR:
-# target_link_libraries(${PROJECT_NAME} PUBLIC gmp mpfr)
-
 # Set library properties
 set_target_properties(${PROJECT_NAME} PROPERTIES
     VERSION ${PROJECT_VERSION}
