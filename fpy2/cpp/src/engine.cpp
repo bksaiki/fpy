@@ -1,6 +1,7 @@
 #include <bit>
 #include <cfenv>
 #include <cmath>
+#include <xmmintrin.h>
 
 #include "fpy/engine.hpp"
 
@@ -8,10 +9,11 @@ namespace fpy {
 
 namespace engine {
 
-
 /// @brief Clears all floating-point exceptions.
 inline void clear_exceptions() {
-    std::feclearexcept(FE_ALL_EXCEPT);
+    // clear all exceptions
+    unsigned int mx = _mm_getcsr();
+    _mm_setcsr(mx & ~FE_ALL_EXCEPT);
 }
 
 /// @brief Sets the current rounding mode.
@@ -28,10 +30,8 @@ inline int set_rtz() {
 }
 
 /// @brief Loads the current floating-point exceptions.
-inline fexcept_t load_exceptions() {
-    fexcept_t fexps;
-    std::fegetexceptflag(&fexps, FE_ALL_EXCEPT);
-    return fexps;
+inline unsigned int load_exceptions() {
+    return _mm_getcsr();
 }
 
 double add(double x, double y, prec_t p) {
@@ -62,6 +62,7 @@ double add(double x, double y, prec_t p) {
 
     // check inexactness
     if (fexps & FE_INEXACT) {
+        // set the LSB to emulate round-to-odd
         uint64_t b = std::bit_cast<uint64_t>(result);
         b |= 1; // set LSB
         result = std::bit_cast<double>(b);

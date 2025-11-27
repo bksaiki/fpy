@@ -106,9 +106,3 @@ endif()
 if(BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
-
-# NOTE: Consider adding:
-# - Documentation generation (Doxygen)
-# - Code coverage options
-# - Sanitizer options for debugging
-# - Package config files for easy integration

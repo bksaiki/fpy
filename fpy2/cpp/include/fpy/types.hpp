@@ -23,8 +23,8 @@ using prec_t = uint64_t;
 template <typename T>
 T bitmask(uint64_t k) {
     FPY_STATIC_ASSERT(std::is_integral_v<T> && std::is_unsigned_v<T>, "T must be an unsigned integer");
-    FPY_ASSERT(k < 64, "exceeded maximum bitmask size");
-    FPY_ASSERT(k <= 8 * sizeof(T), "exceeded maximum bitmask size for T");
+    FPY_DEBUG_ASSERT(k < 64, "exceeded maximum bitmask size");
+    FPY_DEBUG_ASSERT(k <= 8 * sizeof(T), "exceeded maximum bitmask size for T");
     return static_cast<T>((1ULL << k) - 1);
 }
 
