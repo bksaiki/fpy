@@ -1,7 +1,7 @@
 #include <fpy/real.hpp>
 #include <gtest/gtest.h>
 
-TEST(ReaFloatTest, Prec) {
+TEST(RealFloat, TestPrec) {
     /// [[x0]] = 0
     fpy::RealFloat x0;
     EXPECT_EQ(x0.prec(), 0);

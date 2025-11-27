@@ -116,7 +116,7 @@ RealFloat RealFloat::round(
 ) const {
     // ensure one rounding parameter is specified
     FPY_ASSERT(
-        !max_p.has_value() && !min_n.has_value(),
+        max_p.has_value() || min_n.has_value(),
         "at least one parameter must be provided"
     );
 
