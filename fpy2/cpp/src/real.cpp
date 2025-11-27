@@ -25,7 +25,7 @@ RealFloat::RealFloat(double x) {
     if (ebits == 0) {
         // zero / subnormal
         this->exp = FP::EXPMIN;
-        this->c = 0;
+        this->c = mbits;
     } else if (ebits == FP::EONES) {
         // infinity or NaN
         FPY_ASSERT(false, "cannot convert infinity or NaN");
@@ -114,16 +114,14 @@ RealFloat RealFloat::normalize(
     if (p.has_value()) {
         // requesting maximum precision
         shift = static_cast<exp_t>(*p) - static_cast<exp_t>(prec());
-        exp = this->exp - static_cast<exp_t>(shift);
-        if (n.has_value()) {
+        exp = this->exp - shift;
+        if (n.has_value() && exp <= *n) {
             // requesting lower bound on digits
-            // check if exponent is too small, adjust if necessary
-            if (exp <= *n) {
-                const exp_t expmin = *n + 1;
-                const exp_t adjust = expmin - exp;
-                shift -= adjust;
-                exp += adjust;
-            }
+            // exponent is too small, adjust if necessary
+            const exp_t expmin = *n + 1;
+            const exp_t adjust = expmin - exp;
+            shift -= adjust;
+            exp += adjust;
         }
     } else {
         // no maximum precision
@@ -148,9 +146,9 @@ RealFloat RealFloat::normalize(
         return RealFloat(s, exp, c << shift);
     } else {
         // shift right by a positive amount
-        const mant_t c_lost = this->c & bitmask<mant_t>(-shift);
+        const mant_t c_lost = c & bitmask<mant_t>(-shift);
         FPY_ASSERT(c_lost == 0, "normalize: losing digits");
-        return RealFloat(s, exp, this->c >> -shift);
+        return RealFloat(s, exp, c >> -shift);
     }
 }
 

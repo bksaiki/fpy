@@ -11,8 +11,10 @@ add_executable(run_tests ${TEST_SOURCES})
 
 # Link with main library and testing framework
 target_link_libraries(run_tests
-    fpy_numbers
+    fpy
     GTest::gtest_main
+    ${GMP_LIBRARY}
+    ${MPFR_LIBRARY}
 )
 
 # Register tests with CTest

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 # NOTE: Update project name, version, and description as needed
-project(fpy_numbers
+project(fpy
     VERSION 0.1.0
     DESCRIPTION "Number library for software floating-point arithmetic"
     LANGUAGES CXX
@@ -11,6 +11,22 @@ project(fpy_numbers
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# GMP
+find_path(GMP_INCLUDE_DIR gmp.h)
+find_library(GMP_LIBRARY gmp)
+
+if(NOT GMP_INCLUDE_DIR OR NOT GMP_LIBRARY)
+    message(FATAL_ERROR "GMP not found")
+endif()
+
+# MPFR
+find_path(MPFR_INCLUDE_DIR mpfr.h)
+find_library(MPFR_LIBRARY mpfr)
+
+if(NOT MPFR_INCLUDE_DIR OR NOT MPFR_LIBRARY)
+    message(FATAL_ERROR "MPFR not found")
+endif()
 
 # Build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -37,15 +53,11 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# NOTE: Add external dependencies here (e.g., GMP, MPFR if needed)
-# Example for GMP/MPFR:
-# find_package(GMP REQUIRED)
-# find_package(MPFR REQUIRED)
-
 # Include directories
 include_directories(
     ${PROJECT_SOURCE_DIR}/include
-    # NOTE: Add additional include directories here
+    ${GMP_INCLUDE_DIR}
+    ${MPFR_INCLUDE_DIR}
 )
 
 # Source files
