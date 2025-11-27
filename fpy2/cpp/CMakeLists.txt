@@ -52,6 +52,7 @@ include_directories(
 # NOTE: Add your source files here as you implement them
 set(SOURCES
     src/engine.cpp
+    src/ops.cpp
     src/real.cpp
     src/round.cpp
 )
@@ -59,6 +60,7 @@ set(SOURCES
 # Header files (for IDE organization)
 set(HEADERS
     include/fpy/engine.hpp
+    include/fpy/ops.hpp
     include/fpy/params.hpp
     include/fpy/real.hpp
     include/fpy/round.hpp

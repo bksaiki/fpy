@@ -16,8 +16,11 @@ constexpr T __bitmask() {
 /// @brief Type trait defining IEEE 754 format constants
 /// @tparam E bitwidth of the exponent field
 /// @tparam N total bitwidth of the format
-template <uint64_t E, uint64_t N>
+template <uint64_t E_, uint64_t N_>
 struct ieee754_consts {
+    static constexpr uint64_t E = E_;
+    static constexpr uint64_t N = N_;
+
     FPY_STATIC_ASSERT(E >= 2, "Invalid IEEE 754 format");
     FPY_STATIC_ASSERT(N >= E + 2, "Invalid IEEE 754 format");
     FPY_STATIC_ASSERT(N <= 64, "Exceeded maximum supported IEEE 754 format");

@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstring>
 
 #include "fpy/real.hpp"
@@ -75,48 +76,82 @@ RealFloat::operator double() const {
     // format-dependent constants for double-precision floats
     using FP = ieee754_consts<11, 64>;
 
-    // handle zero
+    // special case: zero
     if (c == 0) {
         return s ? -0.0 : 0.0;
     }
 
-    // normalize the significand to get actual exponent
-    const exp_t actual_exp = exp + prec() - 1;
+    // normalize to have expected precision / exponent
+    const auto r = normalize(FP::P, FP::EXPMIN - 1);
 
-    // check for overflow (exponent too large)
-    if (actual_exp > FP::EXPMAX) {
-        FPY_ASSERT(false, "cannot convert: overflow to infinity");
-    }
+    // bit fields
+    const uint64_t sbits = r.s ? 1 : 0;
+    const uint64_t ebits = r.prec() == FP::P ? (r.exp - FP::EXPMIN + 1) : 0;
+    const uint64_t mbits = r.c & bitmask<mant_t>(FP::M);
 
-    // check for underflow (exponent too small)
-    if (actual_exp < FP::EXPMIN) {
-        FPY_ASSERT(false, "cannot convert: underflow to zero/subnormal");
-    }
-
-    // compute biased exponent
-    const uint64_t ebits = static_cast<uint64_t>(actual_exp - FP::EXPMIN + 1);
-
-    // normalize mantissa to have implicit leading 1
-    // shift to align with mantissa field width
-    const prec_t p = prec();
-    uint64_t mbits;
-    
-    if (p > FP::M + 1) {
-        // too many bits, need to truncate
-        FPY_ASSERT(false, "cannot convert: precision loss");
-    } else if (p == FP::M + 1) {
-        // exact fit, remove implicit 1
-        mbits = c & FP::MMASK;
-    } else {
-        // need to shift left
-        mbits = (c << (FP::M + 1 - p)) & FP::MMASK;
-    }
-
-    // construct the bit pattern
-    const uint64_t sbits = s ? FP::SMASK : 0;
-    const uint64_t b = sbits | (ebits << FP::M) | mbits;
-
+    // cast to double
+    const uint64_t b = (sbits << (FP::N - 1)) | (ebits << FP::M) | mbits;
     return std::bit_cast<double>(b);
+}
+
+RealFloat RealFloat::normalize(
+    std::optional<prec_t> p,
+    std::optional<exp_t> n
+) const {
+    // precision cannot exceed 64 bits
+    FPY_ASSERT(
+        !p.has_value() || *p <= 64,
+        "normalize: precision exceeds 64 bits"
+    );
+
+    // special case: zero
+    if (c == 0) {
+        return *this;
+    }
+
+    // case split on precision
+    exp_t exp, shift;
+    if (p.has_value()) {
+        // requesting maximum precision
+        shift = static_cast<exp_t>(*p) - static_cast<exp_t>(prec());
+        exp = this->exp - static_cast<exp_t>(shift);
+        if (n.has_value()) {
+            // requesting lower bound on digits
+            // check if exponent is too small, adjust if necessary
+            if (exp <= *n) {
+                const exp_t expmin = *n + 1;
+                const exp_t adjust = expmin - exp;
+                shift -= adjust;
+                exp += adjust;
+            }
+        }
+    } else {
+        // no maximum precision
+        if (n.has_value()) {
+            // requesting lower bound on digits
+            exp = *n + 1;
+            shift = this->exp - exp;
+        } else {
+            // no parameters specified, return copy
+            return *this;
+        }
+    }
+
+    // compute new significand `c`
+    if (shift == 0) {
+        // no shifting required
+        return RealFloat(s, exp, c);
+    } else if (shift > 0) {
+        // shift left by a non-negative amount
+        const prec_t p = std::bit_width(c) + static_cast<prec_t>(shift);
+        FPY_ASSERT(p <= 64, "normalize: precision exceeds 64 bits");
+        return RealFloat(s, exp, c << shift);
+    } else {
+        // shift right by a positive amount
+        const mant_t c_lost = this->c & bitmask<mant_t>(-shift);
+        FPY_ASSERT(c_lost == 0, "normalize: losing digits");
+        return RealFloat(s, exp, this->c >> -shift);
+    }
 }
 
 std::tuple<RealFloat, RealFloat> RealFloat::split(exp_t n) const {
@@ -179,11 +214,11 @@ std::tuple<std::optional<prec_t>, exp_t> RealFloat::round_params(
     // case split on max_p
     if (max_p.has_value()) {
         // requesting maximum precision
-        const auto p = max_p.value();
+        const auto p = *max_p;
         if (min_n.has_value()) {
             // requesting lower bound on digits
             // IEEE 754 style rounding
-            const exp_t n = std::max(min_n.value(), static_cast<exp_t>(e() - p));
+            const exp_t n = std::max(*min_n, static_cast<exp_t>(e() - p));
             return { p, n };
         } else {
             // no lower bound on digits
@@ -194,7 +229,7 @@ std::tuple<std::optional<prec_t>, exp_t> RealFloat::round_params(
     } else {
         // no maximum precision
         FPY_ASSERT(min_n.has_value(), "min_n must be specified if max_p is not");
-        const exp_t n = min_n.value();
+        const exp_t n = *min_n;
         return { std::optional<prec_t>(), n };
     }
 }
