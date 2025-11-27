@@ -10,8 +10,7 @@ RealFloat::RealFloat(double x) {
     using FP = ieee754_consts<11, 64>;
 
     // load floating-point data as unsigned integer
-    uint64_t b;
-    std::memcpy(&b, &x, sizeof(x));
+    uint64_t b = std::bit_cast<uint64_t>(x);
 
     // decompose fields
     const uint64_t sbits = b & FP::SMASK;
@@ -44,11 +43,9 @@ RealFloat::RealFloat(float x) {
     using FP = ieee754_consts<8, 32>;
 
     // load floating-point data as unsigned integer
-    uint32_t b32;
-    std::memcpy(&b32, &x, sizeof(x));
+    uint64_t b = static_cast<uint64_t>(std::bit_cast<uint32_t>(x));
 
     // decompose fields
-    uint64_t b = static_cast<uint64_t>(b32);
     const uint64_t sbits = b & FP::SMASK;
     const uint64_t ebits = (b & FP::EMASK) >> FP::M;
     const uint64_t mbits = b & FP::MMASK;
@@ -72,6 +69,54 @@ RealFloat::RealFloat(float x) {
 
     // flag data
     this->inexact = false;
+}
+
+RealFloat::operator double() const {
+    // format-dependent constants for double-precision floats
+    using FP = ieee754_consts<11, 64>;
+
+    // handle zero
+    if (c == 0) {
+        return s ? -0.0 : 0.0;
+    }
+
+    // normalize the significand to get actual exponent
+    const exp_t actual_exp = exp + prec() - 1;
+
+    // check for overflow (exponent too large)
+    if (actual_exp > FP::EXPMAX) {
+        FPY_ASSERT(false, "cannot convert: overflow to infinity");
+    }
+
+    // check for underflow (exponent too small)
+    if (actual_exp < FP::EXPMIN) {
+        FPY_ASSERT(false, "cannot convert: underflow to zero/subnormal");
+    }
+
+    // compute biased exponent
+    const uint64_t ebits = static_cast<uint64_t>(actual_exp - FP::EXPMIN + 1);
+
+    // normalize mantissa to have implicit leading 1
+    // shift to align with mantissa field width
+    const prec_t p = prec();
+    uint64_t mbits;
+    
+    if (p > FP::M + 1) {
+        // too many bits, need to truncate
+        FPY_ASSERT(false, "cannot convert: precision loss");
+    } else if (p == FP::M + 1) {
+        // exact fit, remove implicit 1
+        mbits = c & FP::MMASK;
+    } else {
+        // need to shift left
+        mbits = (c << (FP::M + 1 - p)) & FP::MMASK;
+    }
+
+    // construct the bit pattern
+    const uint64_t sbits = s ? FP::SMASK : 0;
+    const uint64_t b = sbits | (ebits << FP::M) | mbits;
+
+    return std::bit_cast<double>(b);
 }
 
 std::tuple<RealFloat, RealFloat> RealFloat::split(exp_t n) const {

@@ -47,6 +47,9 @@ public:
     /// @brief constructs a `RealFloat` from a `float`.
     explicit RealFloat(float x);
 
+    /// @brief converts a `RealFloat` to a `double`.
+    explicit operator double() const;
+
     /// @brief Represents 0?
     inline bool is_zero() const {
         return c == 0;
@@ -78,6 +81,20 @@ public:
     inline exp_t n() const {
         return exp - 1;
     }
+
+    /// @brief Returns a value numerically equivalent to this number,
+    /// according to the precision `p` and position `n`.
+    /// If this number is non-zero:
+    ///
+    /// - `std::nullopt, std::nullopt`: a copy of this number.
+    ///
+    /// - `p, std::nullopt`: the result has exactly `p` significant digits.
+    ///
+    /// - `std::nullopt, n`: the result with `exp == n + 1`.
+    ///
+    /// - `p, n`: the result has maximal precision up to `p` digits
+    ///  such that `exp >= n + 1`.
+    RealFloat normalize(std::optional<prec_t> p, std::optional<exp_t> n) const;
 
     /// @brief Splits this number into two values based on
     /// a digit position `n`.
