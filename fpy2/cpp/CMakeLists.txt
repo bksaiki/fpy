@@ -7,10 +7,34 @@ project(fpy
     LANGUAGES CXX
 )
 
+# Build type
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# Options
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(BUILD_TESTS "Build test executables" ON)
+option(BUILD_EXAMPLES "Build example programs" OFF)
+option(ENABLE_PROFILING "Enable profiling support" OFF)
+
 # C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Compiler flags
+set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra -pedantic -DFPY_DEBUG")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -Wextra -DNDEBUG")
+
+# Profiling flags
+if(ENABLE_PROFILING)
+    # Apply profiling flags globally to all targets
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pg -g -fno-omit-frame-pointer")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pg -g -fno-omit-frame-pointer")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pg")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -pg")
+endif()
 
 # GMP
 find_path(GMP_INCLUDE_DIR gmp.h)
@@ -27,20 +51,6 @@ find_library(MPFR_LIBRARY mpfr)
 if(NOT MPFR_INCLUDE_DIR OR NOT MPFR_LIBRARY)
     message(FATAL_ERROR "MPFR not found")
 endif()
-
-# Build type
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
-
-# Compiler flags
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 -Wall -Wextra -pedantic -DFPY_DEBUG")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -Wextra -DNDEBUG")
-
-# Options
-option(BUILD_SHARED_LIBS "Build shared libraries" ON)
-option(BUILD_TESTS "Build test executables" ON)
-option(BUILD_EXAMPLES "Build example programs" OFF)
 
 # Add GoogleTest
 include(FetchContent)

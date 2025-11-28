@@ -107,10 +107,10 @@ int main() {
     std::cout << "Done.\n\n";
     
     // Warm-up runs
-    std::cout << "Running warm-up...\n";
-    benchmark_fpy_add(x_vals, y_vals, PRECISION, ROUNDING_MODE);
-    benchmark_mpfr_add(x_vals, y_vals, PRECISION, ROUNDING_MODE);
-    std::cout << "Done.\n\n";
+    // std::cout << "Running warm-up...\n";
+    // benchmark_fpy_add(x_vals, y_vals, PRECISION, ROUNDING_MODE);
+    // benchmark_mpfr_add(x_vals, y_vals, PRECISION, ROUNDING_MODE);
+    // std::cout << "Done.\n\n";
     
     // Benchmark FPY
     std::cout << "Benchmarking FPY add()...\n";

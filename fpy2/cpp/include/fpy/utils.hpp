@@ -9,7 +9,7 @@
 #define FPY_TOSTRING(x) FPY_STRINGIFY(x)
 
 /// Static assertion
-#define FPY_STATIC_ASSERT(cond, msg) static_assert(cond, msg);
+#define FPY_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
 
 /// Runtime assertion
 #define FPY_ASSERT(cond, msg) \

@@ -17,29 +17,18 @@ class RealFloat {
 
 public:
 
-    // numerical data
-    exp_t exp;
-    mant_t c;
-    bool s;
-
-    // flag data
-    bool inexact;
+    // numerical data (ordered for optimal packing)
+    mant_t c = 0;         // 8 bytes
+    exp_t exp = 0;        // 8 bytes
+    bool s = false;       // 1 byte
+    bool inexact = false; // 1 byte
+                          // 6 bytes padding
 
     /// @brief default constructor: constructs +0
-    explicit RealFloat() {
-        this->s = false;
-        this->exp = 0;
-        this->c = 0;
-        this->inexact = false;
-    }
+    explicit constexpr RealFloat() noexcept = default;
 
     /// @brief constructs a `RealFloat` from the triple `(s, exp, c)`
-    explicit RealFloat(bool s, exp_t exp, mant_t c) {
-        this->s = s;
-        this->exp = exp;
-        this->c = c;
-        this->inexact = false;
-    }
+    explicit constexpr RealFloat(bool s, exp_t exp, mant_t c) noexcept : c(c), exp(exp), s(s) {}
 
     /// @brief constructs a `RealFloat` from a `double`.
     explicit RealFloat(double x);
@@ -51,34 +40,34 @@ public:
     explicit operator double() const;
 
     /// @brief Represents 0?
-    inline bool is_zero() const {
+    inline bool is_zero() const noexcept {
         return c == 0;
     }
 
     /// @brief Represents a positive number?
-    inline bool is_positive() const {
+    inline bool is_positive() const noexcept {
         return c != 0 && !s;
     }
 
     /// @brief Represents a negative number?
-    inline bool is_negative() const {
+    inline bool is_negative() const noexcept {
         return c != 0 && s;
     }
 
     /// @brief the precision of the significand.
-    inline prec_t prec() const {
+    inline prec_t prec() const noexcept {
         return std::bit_width(c);
     }
 
     /// @brief the normalized exponent of this number.
     /// If `this->is_zero()` then this method returns `this->exp - 1`.
-    inline exp_t e() const {
+    inline exp_t e() const noexcept {
         return exp + prec() - 1;
     }
 
     /// @brief the first unrepresentable digit below the significant digits.
     /// This is always `this->exp - 1`.
-    inline exp_t n() const {
+    inline exp_t n() const noexcept {
         return exp - 1;
     }
 
