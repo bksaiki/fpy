@@ -10,7 +10,7 @@ namespace fpy {
 /// 
 /// When a real value is not representable in the target format,
 /// rounding modes determine which floating-point value to choose.
-enum class RoundingMode {
+enum class RoundingMode : uint8_t {
     RNE,               // Round to nearest, ties to even
     RNA,               // Round to nearest, ties away from zero
     RTP,               // Round toward +infinity (ceiling)
@@ -27,7 +27,7 @@ enum class RoundingMode {
 /// A `RoundingMode` can be mapped to a boolean indicating whether
 /// the rounding is a nearest rounding and a `RoundingDirection`.
 ///
-enum class RoundingDirection {
+enum class RoundingDirection : uint8_t {
     TO_ZERO,
     AWAY_ZERO,
     TO_EVEN,
@@ -45,5 +45,31 @@ RoundingDirection get_direction(RoundingMode mode, bool sign);
 
 /// @brief Alias for `RoundingMode`.
 using RM = RoundingMode;
+
+
+/// @brief Summarary of rounding bits.
+enum class RoundingBits : uint8_t {
+    EXACT,          // representable: no rounding needed
+    BELOW_HALFWAY,  // below the halfway point
+    HALFWAY,        // exactly halfway
+    ABOVE_HALFWAY   // above the halfway point
+};
+
+/// @brief Classifies the rounding bits based on the half and sticky bits.
+inline RoundingBits to_rounding_bits(bool half_bit, bool sticky_bit) noexcept {
+    if (half_bit) {
+        if (sticky_bit) {
+            return RoundingBits::ABOVE_HALFWAY;
+        } else {
+            return RoundingBits::HALFWAY;
+        }
+    } else {
+        if (sticky_bit) {
+            return RoundingBits::BELOW_HALFWAY;
+        } else {
+            return RoundingBits::EXACT;
+        }
+    }
+}
 
 } // namespace fpy

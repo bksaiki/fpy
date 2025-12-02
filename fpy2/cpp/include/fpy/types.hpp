@@ -7,7 +7,7 @@
 namespace fpy {
 
 /// @brief floating-point exponent
-using exp_t = int64_t;
+using exp_t = int32_t;
 
 /// @brief container type for a floating-point mantissa
 using mant_t = uint64_t;

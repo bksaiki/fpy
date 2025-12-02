@@ -19,10 +19,10 @@ public:
 
     // numerical data (ordered for optimal packing)
     mant_t c = 0;         // 8 bytes
-    exp_t exp = 0;        // 8 bytes
+    exp_t exp = 0;        // 4 bytes
     bool s = false;       // 1 byte
     bool inexact = false; // 1 byte
-                          // 6 bytes padding
+                          // 2 bytes padding
 
     /// @brief default constructor: constructs +0
     explicit constexpr RealFloat() noexcept = default;
@@ -107,27 +107,46 @@ public:
 
 private:
 
+    /// @brief Returns normalized exponent and significand.
+    /// Implements the core normalization logic. See also
+    /// `RealFloat::normalize()`.
+    std::pair<mant_t, exp_t> normalize_data(
+        const std::optional<prec_t>& p,
+        const std::optional<exp_t>& n
+    ) const;
+
+    /// @brief Concrete rounding parameter instance.
+    ///
+    /// Rounding is specified by a split position `n` where significant
+    /// digits are at positions greater than `n`, an (optional)
+    /// maximum precision `p`, and a rounding mode `rm`.
+    struct round_params_t {
+        prec_t p;
+        exp_t n;
+        RM rm;
+        bool has_p;
+    };
+
     /// @brief Computes the actual rounding parameters `p` and `n`
     /// based on requested rounding parameters `max_p` and `min_n`.
-    std::tuple<std::optional<prec_t>, exp_t> round_params(
+    round_params_t round_params(
         const std::optional<prec_t>& max_p,
-        const std::optional<exp_t>& min_n
+        const std::optional<exp_t>& min_n,
+        RM rm
     ) const;
 
     /// @brief Rounds this value based on the rounding parameters `p` and `n`.
-    RealFloat round_at(const std::optional<prec_t>& p, exp_t n, RM rm) const;
+    RealFloat round_at(const round_params_t& params) const;
 
     /// @brief Finalizes rounding of this number based on rounding digits
     /// and rounding mode. This operation mutates the number.
-    void round_finalize(
-        const std::optional<prec_t>& p,
-        bool half_bit,
-        bool sticky_bit,
-        RM rm
-    );
+    void round_finalize(const round_params_t& params, RoundingBits rb);
+
+    /// @brief Determines if rounding should increment based on rounding bits.
+    bool round_increment(RoundingBits rb, RM rm) const;
 
     /// @brief Determines the direction to round based on the rounding mode.
-    bool round_direction(bool half_bit, bool sticky_bit, RM rm) const;
+    bool round_direction(RM rm) const;
 };
 
 
