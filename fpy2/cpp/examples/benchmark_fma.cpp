@@ -58,6 +58,7 @@ double benchmark_fpy_fma(const std::vector<double>& x_vals,
     
     auto end = high_resolution_clock::now();
     auto duration = duration_cast<nanoseconds>(end - start).count();
+    (void) result; // prevent unused variable warning
     
     return static_cast<double>(duration) / n; // average time per operation in ns
 }
@@ -88,6 +89,7 @@ double benchmark_mpfr_fma(const std::vector<double>& x_vals,
     
     auto end = high_resolution_clock::now();
     auto duration = duration_cast<nanoseconds>(end - start).count();
+    (void) result; // prevent unused variable warning
     
     mpfr_clear(mx);
     mpfr_clear(my);
