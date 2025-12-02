@@ -101,8 +101,8 @@ RealFloat::operator double() const {
 }
 
 RealFloat RealFloat::normalize(
-    std::optional<prec_t> p,
-    std::optional<exp_t> n
+    const std::optional<prec_t>& p,
+    const std::optional<exp_t>& n
 ) const {
     // precision cannot exceed 64 bits
     FPY_DEBUG_ASSERT(
@@ -194,8 +194,8 @@ std::tuple<RealFloat, RealFloat> RealFloat::split(exp_t n) const {
 }
 
 RealFloat RealFloat::round(
-    std::optional<prec_t> max_p,
-    std::optional<exp_t> min_n,
+    const std::optional<prec_t>& max_p,
+    const std::optional<exp_t>& min_n,
     RM rm
 ) const {
     // ensure one rounding parameter is specified
@@ -205,15 +205,15 @@ RealFloat RealFloat::round(
     );
 
     // compute the actual rounding parameters to be used
-    auto [p, n] = round_params(max_p, min_n);
+    const auto [p, n] = round_params(max_p, min_n);
 
     // round
     return round_at(p, n, rm);
 }
 
 std::tuple<std::optional<prec_t>, exp_t> RealFloat::round_params(
-    std::optional<prec_t> max_p,
-    std::optional<exp_t> min_n
+    const std::optional<prec_t>& max_p,
+    const std::optional<exp_t>& min_n
 ) const {
     // case split on max_p
     if (max_p.has_value()) {
@@ -237,9 +237,7 @@ std::tuple<std::optional<prec_t>, exp_t> RealFloat::round_params(
     }
 }
 
-RealFloat RealFloat::round_at(
-    std::optional<prec_t> p, exp_t n, RM rm
-) const {
+RealFloat RealFloat::round_at(const std::optional<prec_t>& p, exp_t n, RM rm) const {
     // step 1. split the number at the rounding position
     auto [hi, lo] = split(n);
 
@@ -261,15 +259,15 @@ RealFloat RealFloat::round_at(
     }
 
     // step 4. finalize rounding based on the rounding mode
-    hi.round_finalize(half_bit, sticky_bit, p, rm);
+    hi.round_finalize(p, half_bit, sticky_bit, rm);
 
     return hi;
 }
 
 void RealFloat::round_finalize(
+    const std::optional<prec_t>& p,
     bool half_bit,
     bool sticky_bit,
-    std::optional<prec_t> p,
     RM rm
 ) {
     // prepare the rounding operation

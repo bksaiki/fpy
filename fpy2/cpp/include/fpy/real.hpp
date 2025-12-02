@@ -83,7 +83,7 @@ public:
     ///
     /// - `p, n`: the result has maximal precision up to `p` digits
     ///  such that `exp >= n + 1`.
-    RealFloat normalize(std::optional<prec_t> p, std::optional<exp_t> n) const;
+    RealFloat normalize(const std::optional<prec_t>& p, const std::optional<exp_t>& n) const;
 
     /// @brief Splits this number into two values based on
     /// a digit position `n`.
@@ -103,26 +103,26 @@ public:
     /// without an exponent bound; the integer significand has at most `max_p` digits.
     /// If both are specified, the rounding is performed like IEEE 754
     /// floating-point arithmetic.
-    RealFloat round(std::optional<prec_t> p, std::optional<exp_t> n, RM rm) const;
+    RealFloat round(const std::optional<prec_t>& p, const std::optional<exp_t>& n, RM rm) const;
 
 private:
 
     /// @brief Computes the actual rounding parameters `p` and `n`
     /// based on requested rounding parameters `max_p` and `min_n`.
     std::tuple<std::optional<prec_t>, exp_t> round_params(
-        std::optional<prec_t> max_p,
-        std::optional<exp_t> min_n
+        const std::optional<prec_t>& max_p,
+        const std::optional<exp_t>& min_n
     ) const;
 
     /// @brief Rounds this value based on the rounding parameters `p` and `n`.
-    RealFloat round_at(std::optional<prec_t> p, exp_t n, RM rm) const;
+    RealFloat round_at(const std::optional<prec_t>& p, exp_t n, RM rm) const;
 
     /// @brief Finalizes rounding of this number based on rounding digits
     /// and rounding mode. This operation mutates the number.
     void round_finalize(
+        const std::optional<prec_t>& p,
         bool half_bit,
         bool sticky_bit,
-        std::optional<prec_t> p,
         RM rm
     );
 
