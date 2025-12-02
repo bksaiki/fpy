@@ -128,7 +128,7 @@ namespace arch {
         return old_mode;
     }
 
-    inline int finalize_rto(int old_mode) {
+    inline int rto_status(int old_mode) {
         unsigned int fpsr, fpcr;
         __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
         __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
@@ -186,7 +186,7 @@ namespace arch {
         return old_mode;
     }
 
-    inline int finalize_rto(int old_mode) {
+    inline int rto_status(int old_mode) {
         const int exceptions = std::fetestexcept(FE_OVERFLOW | FE_UNDERFLOW | FE_INEXACT);
         std::fesetround(old_mode);
         return exceptions;

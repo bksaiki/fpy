@@ -6,6 +6,9 @@ target_link_libraries(benchmark_add
     ${GMP_LIBRARY}
     ${MPFR_LIBRARY}
 )
+if(USE_SOFTFLOAT AND SOFTFLOAT_FOUND)
+    target_link_libraries(benchmark_add SoftFloat::softfloat)
+endif()
 
 add_executable(benchmark_mul benchmark_mul.cpp)
 target_link_libraries(benchmark_mul 
@@ -13,6 +16,9 @@ target_link_libraries(benchmark_mul
     ${GMP_LIBRARY}
     ${MPFR_LIBRARY}
 )
+if(USE_SOFTFLOAT AND SOFTFLOAT_FOUND)
+    target_link_libraries(benchmark_mul SoftFloat::softfloat)
+endif()
 
 add_executable(benchmark_div benchmark_div.cpp)
 target_link_libraries(benchmark_div 
@@ -20,6 +26,9 @@ target_link_libraries(benchmark_div
     ${GMP_LIBRARY}
     ${MPFR_LIBRARY}
 )
+if(USE_SOFTFLOAT AND SOFTFLOAT_FOUND)
+    target_link_libraries(benchmark_div SoftFloat::softfloat)
+endif()
 
 add_executable(benchmark_fma benchmark_fma.cpp)
 target_link_libraries(benchmark_fma 
@@ -27,6 +36,9 @@ target_link_libraries(benchmark_fma
     ${GMP_LIBRARY}
     ${MPFR_LIBRARY}
 )
+if(USE_SOFTFLOAT AND SOFTFLOAT_FOUND)
+    target_link_libraries(benchmark_fma SoftFloat::softfloat)
+endif()
 
 add_executable(benchmark_sqrt benchmark_sqrt.cpp)
 target_link_libraries(benchmark_sqrt 
@@ -34,3 +46,6 @@ target_link_libraries(benchmark_sqrt
     ${GMP_LIBRARY}
     ${MPFR_LIBRARY}
 )
+if(USE_SOFTFLOAT AND SOFTFLOAT_FOUND)
+    target_link_libraries(benchmark_sqrt SoftFloat::softfloat)
+endif()

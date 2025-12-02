@@ -17,6 +17,7 @@ option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(BUILD_TESTS "Build test executables" ON)
 option(BUILD_EXAMPLES "Build example programs" OFF)
 option(ENABLE_PROFILING "Enable profiling support" OFF)
+option(USE_SOFTFLOAT "Enable SoftFloat benchmarks" OFF)
 
 # C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -50,6 +51,19 @@ find_library(MPFR_LIBRARY mpfr)
 
 if(NOT MPFR_INCLUDE_DIR OR NOT MPFR_LIBRARY)
     message(FATAL_ERROR "MPFR not found")
+endif()
+
+# SoftFloat (optional)
+if(USE_SOFTFLOAT)
+    list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
+    find_package(SoftFloat)
+    if(SOFTFLOAT_FOUND)
+        message(STATUS "SoftFloat found: ${SOFTFLOAT_LIBRARIES}")
+        add_definitions(-DUSE_SOFTFLOAT)
+    else()
+        message(WARNING "SoftFloat not found. Run install_softfloat.sh to install it.")
+        set(USE_SOFTFLOAT OFF)
+    endif()
 endif()
 
 # Add GoogleTest
