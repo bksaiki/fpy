@@ -43,8 +43,9 @@ static std::string rm_to_string(fpy::RM rm) {
     }
 }
 
-double benchmark_fpy_add(const std::vector<double>& x_vals, 
+double benchmark_fpy_fma(const std::vector<double>& x_vals, 
                          const std::vector<double>& y_vals,
+                         const std::vector<double>& z_vals,
                          int p, fpy::RM rm) {
     const size_t n = x_vals.size();
     volatile double result = 0.0; // volatile to prevent optimization
@@ -52,7 +53,7 @@ double benchmark_fpy_add(const std::vector<double>& x_vals,
     auto start = high_resolution_clock::now();
     
     for (size_t i = 0; i < n; i++) {
-        result = fpy::add(x_vals[i], y_vals[i], p, rm);
+        result = fpy::fma(x_vals[i], y_vals[i], z_vals[i], p, rm);
     }
     
     auto end = high_resolution_clock::now();
@@ -61,14 +62,16 @@ double benchmark_fpy_add(const std::vector<double>& x_vals,
     return static_cast<double>(duration) / n; // average time per operation in ns
 }
 
-double benchmark_mpfr_add(const std::vector<double>& x_vals,
+double benchmark_mpfr_fma(const std::vector<double>& x_vals,
                           const std::vector<double>& y_vals,
+                          const std::vector<double>& z_vals,
                           int p, fpy::RM rm) {
     const size_t n = x_vals.size();
-    mpfr_t mx, my, mr;
+    mpfr_t mx, my, mz, mr;
     
     mpfr_init2(mx, 53);
     mpfr_init2(my, 53);
+    mpfr_init2(mz, 53);
     mpfr_init2(mr, p);
     
     volatile double result = 0.0; // volatile to prevent optimization
@@ -78,7 +81,8 @@ double benchmark_mpfr_add(const std::vector<double>& x_vals,
     for (size_t i = 0; i < n; i++) {
         mpfr_set_d(mx, x_vals[i], MPFR_RNDN);
         mpfr_set_d(my, y_vals[i], MPFR_RNDN);
-        mpfr_add(mr, mx, my, cvt_rm(rm));
+        mpfr_set_d(mz, z_vals[i], MPFR_RNDN);
+        mpfr_fma(mr, mx, my, mz, cvt_rm(rm));
         result = mpfr_get_d(mr, MPFR_RNDN);
     }
     
@@ -87,6 +91,7 @@ double benchmark_mpfr_add(const std::vector<double>& x_vals,
     
     mpfr_clear(mx);
     mpfr_clear(my);
+    mpfr_clear(mz);
     mpfr_clear(mr);
     
     return static_cast<double>(duration) / n; // average time per operation in ns
@@ -99,7 +104,7 @@ int main() {
     static constexpr fpy::RM ROUNDING_MODE = fpy::RM::RNE;
     
     std::cout << "=================================================\n";
-    std::cout << "     FPY vs MPFR Addition Benchmark\n";
+    std::cout << "     FPY vs MPFR Fused Multiply-Add Benchmark\n";
     std::cout << "=================================================\n";
     std::cout << "Operations:     " << N << "\n";
     std::cout << "Precision:      " << PRECISION << " bits\n";
@@ -115,28 +120,24 @@ int main() {
     
     std::vector<double> x_vals(N);
     std::vector<double> y_vals(N);
+    std::vector<double> z_vals(N);
     
     for (size_t i = 0; i < N; i++) {
         x_vals[i] = dist(rng);
         y_vals[i] = dist(rng);
+        z_vals[i] = dist(rng);
     }
     
     std::cout << "Done.\n\n";
     
-    // Warm-up runs
-    // std::cout << "Running warm-up...\n";
-    // benchmark_fpy_add(x_vals, y_vals, PRECISION, ROUNDING_MODE);
-    // benchmark_mpfr_add(x_vals, y_vals, PRECISION, ROUNDING_MODE);
-    // std::cout << "Done.\n\n";
-    
     // Benchmark FPY
-    std::cout << "Benchmarking FPY add()...\n";
-    double fpy_time = benchmark_fpy_add(x_vals, y_vals, PRECISION, ROUNDING_MODE);
+    std::cout << "Benchmarking FPY fma()...\n";
+    double fpy_time = benchmark_fpy_fma(x_vals, y_vals, z_vals, PRECISION, ROUNDING_MODE);
     std::cout << "Done.\n\n";
     
     // Benchmark MPFR
-    std::cout << "Benchmarking MPFR mpfr_add()...\n";
-    double mpfr_time = benchmark_mpfr_add(x_vals, y_vals, PRECISION, ROUNDING_MODE);
+    std::cout << "Benchmarking MPFR mpfr_fma()...\n";
+    double mpfr_time = benchmark_mpfr_fma(x_vals, y_vals, z_vals, PRECISION, ROUNDING_MODE);
     std::cout << "Done.\n\n";
     
     // Results
@@ -144,8 +145,8 @@ int main() {
     std::cout << "                   RESULTS\n";
     std::cout << "=================================================\n";
     std::cout << std::fixed << std::setprecision(2);
-    std::cout << "FPY add():         " << fpy_time << " ns/op\n";
-    std::cout << "MPFR mpfr_add():   " << mpfr_time << " ns/op\n";
+    std::cout << "FPY fma():         " << fpy_time << " ns/op\n";
+    std::cout << "MPFR mpfr_fma():   " << mpfr_time << " ns/op\n";
     std::cout << "-------------------------------------------------\n";
     
     if (fpy_time < mpfr_time) {

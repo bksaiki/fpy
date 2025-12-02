@@ -10,16 +10,15 @@ RealFloat::RealFloat(double x) {
     // format-dependent constants for double-precision floats
     using FP = ieee754_consts<11, 64>;
 
+    // handle sign separately
+    this->s = std::signbit(x);
+
     // load floating-point data as unsigned integer
     uint64_t b = std::bit_cast<uint64_t>(x);
 
     // decompose fields
-    const uint64_t sbits = b & FP::SMASK;
     const uint64_t ebits = (b & FP::EMASK) >> FP::M;
     const uint64_t mbits = b & FP::MMASK;
-
-    // sign
-    this->s = sbits != 0;
 
     // case split on exponent field
     if (ebits == 0) {

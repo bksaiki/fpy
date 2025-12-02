@@ -1,6 +1,35 @@
 # Examples
+
 add_executable(benchmark_add benchmark_add.cpp)
 target_link_libraries(benchmark_add 
+    fpy
+    ${GMP_LIBRARY}
+    ${MPFR_LIBRARY}
+)
+
+add_executable(benchmark_mul benchmark_mul.cpp)
+target_link_libraries(benchmark_mul 
+    fpy
+    ${GMP_LIBRARY}
+    ${MPFR_LIBRARY}
+)
+
+add_executable(benchmark_div benchmark_div.cpp)
+target_link_libraries(benchmark_div 
+    fpy
+    ${GMP_LIBRARY}
+    ${MPFR_LIBRARY}
+)
+
+add_executable(benchmark_fma benchmark_fma.cpp)
+target_link_libraries(benchmark_fma 
+    fpy
+    ${GMP_LIBRARY}
+    ${MPFR_LIBRARY}
+)
+
+add_executable(benchmark_sqrt benchmark_sqrt.cpp)
+target_link_libraries(benchmark_sqrt 
     fpy
     ${GMP_LIBRARY}
     ${MPFR_LIBRARY}
