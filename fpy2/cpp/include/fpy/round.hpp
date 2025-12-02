@@ -6,7 +6,6 @@
 
 namespace fpy {
 
-///
 /// @brief Rounding modes for floating-point operations
 /// 
 /// When a real value is not representable in the target format,
@@ -22,7 +21,6 @@ enum class RoundingMode {
     RTE,               // Round to even
 };
 
-///
 /// @brief Rounding direction
 ///
 /// Indicates which value to round relative to the original value.
@@ -36,8 +34,14 @@ enum class RoundingDirection {
     TO_ODD,
 };
 
-/// @brief Get the rounding direction based on the rounding mode and sign
-std::tuple<bool, RoundingDirection> to_direction(RoundingMode mode, bool sign);
+//// @brief Returns whether the rounding mode is a nearest rounding mode.
+inline bool is_nearest(RoundingMode mode) noexcept {
+    return mode == RoundingMode::RNE || mode == RoundingMode::RNA;
+}
+
+/// @brief Returns the rounding direction for a given rounding mode and sign.
+/// For nearest rounding modes, the direction is for tie-breaking.
+RoundingDirection get_direction(RoundingMode mode, bool sign);
 
 /// @brief Alias for `RoundingMode`.
 using RM = RoundingMode;

@@ -31,5 +31,5 @@
 #ifdef FPY_DEBUG
     #define FPY_DEBUG_ASSERT(cond, msg) FPY_ASSERT(cond, msg)
 #else
-    #define FPY_DEBUG_ASSERT(cond, msg) static_assert(true);
+    #define FPY_DEBUG_ASSERT(cond, msg) ((void) (cond))
 #endif

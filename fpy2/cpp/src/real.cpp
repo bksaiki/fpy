@@ -81,15 +81,21 @@ RealFloat::operator double() const {
         return s ? -0.0 : 0.0;
     }
 
-    // normalize to have expected precision / exponent
-    const auto r = normalize(FP::P, FP::EXPMIN - 1);
-
-    // bit fields
-    const uint64_t sbits = r.s ? 1 : 0;
-    const uint64_t ebits = r.prec() == FP::P ? (r.exp - FP::EXPMIN + 1) : 0;
-    const uint64_t mbits = r.c & bitmask<mant_t>(FP::M);
+    // case split on normalization
+    uint64_t ebits, mbits;
+    if (prec() == FP::P || exp == FP::EXPMIN) {
+        // expected normalization
+        ebits = prec() == FP::P ? (exp - FP::EXPMIN + 1) : 0;
+        mbits = c & bitmask<mant_t>(FP::M); 
+    } else {
+        // normalize to have expected precision / exponent
+        const auto r = normalize(FP::P, FP::EXPMIN - 1);
+        ebits = r.prec() == FP::P ? (r.exp - FP::EXPMIN + 1) : 0;
+        mbits = r.c & bitmask<mant_t>(FP::M);
+    }
 
     // cast to double
+    uint64_t sbits = s ? 1 : 0;
     const uint64_t b = (sbits << (FP::N - 1)) | (ebits << FP::M) | mbits;
     return std::bit_cast<double>(b);
 }
@@ -99,7 +105,7 @@ RealFloat RealFloat::normalize(
     std::optional<exp_t> n
 ) const {
     // precision cannot exceed 64 bits
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         !p.has_value() || *p <= 64,
         "normalize: precision exceeds 64 bits"
     );
@@ -142,12 +148,12 @@ RealFloat RealFloat::normalize(
     } else if (shift > 0) {
         // shift left by a non-negative amount
         const prec_t p = std::bit_width(c) + static_cast<prec_t>(shift);
-        FPY_ASSERT(p <= 64, "normalize: precision exceeds 64 bits");
+        FPY_DEBUG_ASSERT(p <= 64, "normalize: precision exceeds 64 bits");
         return RealFloat(s, exp, c << shift);
     } else {
         // shift right by a positive amount
         const mant_t c_lost = c & bitmask<mant_t>(-shift);
-        FPY_ASSERT(c_lost == 0, "normalize: losing digits");
+        FPY_DEBUG_ASSERT(c_lost == 0, "normalize: losing digits");
         return RealFloat(s, exp, c >> -shift);
     }
 }
@@ -213,22 +219,21 @@ std::tuple<std::optional<prec_t>, exp_t> RealFloat::round_params(
     if (max_p.has_value()) {
         // requesting maximum precision
         const auto p = *max_p;
+        const exp_t n = e() - p;
         if (min_n.has_value()) {
             // requesting lower bound on digits
             // IEEE 754 style rounding
-            const exp_t n = std::max(*min_n, static_cast<exp_t>(e() - p));
-            return { p, n };
+            return { p, std::max(*min_n, n) };
         } else {
             // no lower bound on digits
             // floating-point style rounding
-            const exp_t n = e() - p;
             return { p, n };
         }
     } else {
         // no maximum precision
-        FPY_ASSERT(min_n.has_value(), "min_n must be specified if max_p is not");
+        FPY_DEBUG_ASSERT(min_n.has_value(), "min_n must be specified if max_p is not");
         const exp_t n = *min_n;
-        return { std::optional<prec_t>(), n };
+        return { std::nullopt, n };
     }
 }
 
@@ -268,12 +273,12 @@ void RealFloat::round_finalize(
     RM rm
 ) {
     // prepare the rounding operation
-    bool increment = round_direction(half_bit, sticky_bit, rm);
+    const bool increment = round_direction(half_bit, sticky_bit, rm);
 
     // increment if necessary
     if (increment) {
         c += 1;
-        if (p.has_value() && prec() > p.value()) {
+        if (p.has_value() && prec() > *p) {
             // adjust the exponent since we exceeded precision limit
             // the resulting value will be a power of two
             c >>= 1;
@@ -286,11 +291,8 @@ void RealFloat::round_finalize(
 }
 
 bool RealFloat::round_direction(bool half_bit, bool sticky_bit, RM rm) const {
-    // convert the rounding mode to a direction
-    auto [nearest, direction] = to_direction(rm, s);
-
     // case split on nearest
-    if (nearest) {
+    if (is_nearest(rm)) {
         // nearest rounding mode
         // case split on halfway bit
         if (half_bit) {
@@ -300,7 +302,7 @@ bool RealFloat::round_direction(bool half_bit, bool sticky_bit, RM rm) const {
                 return true;
             } else {
                 // exact halfway
-                switch (direction) {
+                switch (get_direction(rm, s)) {
                     case RoundingDirection::TO_ZERO:
                         return false;
                     case RoundingDirection::AWAY_ZERO:
@@ -321,7 +323,7 @@ bool RealFloat::round_direction(bool half_bit, bool sticky_bit, RM rm) const {
         // non-nearest rounding mode
         if (half_bit || sticky_bit) {
             // inexact
-            switch (direction) {
+            switch (get_direction(rm, s)) {
                 case RoundingDirection::TO_ZERO:
                     return false;
                 case RoundingDirection::AWAY_ZERO:
