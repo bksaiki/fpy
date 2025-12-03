@@ -7,7 +7,6 @@ using namespace fpy;
 
 using round_test_t = std::tuple<exp_t, mant_t, exp_t, mant_t, fpy::RM>;
 
-// Demonstrate some basic assertions.
 TEST(Round, TestRoundWithPrec) {
     std::vector<round_test_t> inputs = {
         // 8 * 2 ** -3 (representable)

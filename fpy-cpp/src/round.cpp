@@ -26,4 +26,20 @@ RoundingDirection get_direction(RoundingMode mode, bool sign) {
     }
 }
 
+RoundingBits to_rounding_bits(bool half_bit, bool sticky_bit) noexcept {
+    if (half_bit) {
+        if (sticky_bit) {
+            return RoundingBits::ABOVE_HALFWAY;
+        } else {
+            return RoundingBits::HALFWAY;
+        }
+    } else {
+        if (sticky_bit) {
+            return RoundingBits::BELOW_HALFWAY;
+        } else {
+            return RoundingBits::EXACT;
+        }
+    }
+}
+
 } // namespace fpy

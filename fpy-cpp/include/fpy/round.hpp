@@ -1,7 +1,5 @@
 #pragma once
 
-#include <tuple>
-
 #include "types.hpp"
 
 namespace fpy {
@@ -56,20 +54,6 @@ enum class RoundingBits : uint8_t {
 };
 
 /// @brief Classifies the rounding bits based on the half and sticky bits.
-inline RoundingBits to_rounding_bits(bool half_bit, bool sticky_bit) noexcept {
-    if (half_bit) {
-        if (sticky_bit) {
-            return RoundingBits::ABOVE_HALFWAY;
-        } else {
-            return RoundingBits::HALFWAY;
-        }
-    } else {
-        if (sticky_bit) {
-            return RoundingBits::BELOW_HALFWAY;
-        } else {
-            return RoundingBits::EXACT;
-        }
-    }
-}
+RoundingBits to_rounding_bits(bool half_bit, bool sticky_bit) noexcept;
 
 } // namespace fpy

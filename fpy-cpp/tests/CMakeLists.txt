@@ -5,6 +5,7 @@ set(TEST_SOURCES
     test_ops.cpp
     test_real.cpp
     test_round.cpp
+    test_round_opt.cpp
 )
 
 # Create test executable

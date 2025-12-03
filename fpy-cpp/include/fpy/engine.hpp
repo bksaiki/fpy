@@ -24,7 +24,6 @@ double sub(double x, double y, prec_t p);
 /// Otherwise, an exception is thrown.
 double mul(double x, double y, prec_t p);
 
-
 /// @brief Computes `x / y` using round-to-odd arithmetic.
 ///
 /// Ensures the result has at least `p` bits of precision.

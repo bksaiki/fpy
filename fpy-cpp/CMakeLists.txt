@@ -91,6 +91,7 @@ set(SOURCES
     src/ops.cpp
     src/real.cpp
     src/round.cpp
+    src/round_opt.cpp
 )
 
 # Header files (for IDE organization)
@@ -100,6 +101,7 @@ set(HEADERS
     include/fpy/params.hpp
     include/fpy/real.hpp
     include/fpy/round.hpp
+    include/fpy/round_opt.hpp
     include/fpy/types.hpp
 )
 
