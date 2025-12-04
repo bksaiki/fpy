@@ -1,4 +1,5 @@
 #include <cmath>
+#include <iostream>
 
 #include "fpy/params.hpp"
 #include "fpy/round_opt.hpp"
@@ -9,11 +10,6 @@ namespace round_opt {
 
 double round(double x, prec_t p, std::optional<exp_t> n, RM rm) {
     using FP = ieee754_consts<11, 64>; // double precision
-
-    // special case: zero
-    if (x == 0.0) {
-        return x;
-    }
 
     // handle sign separately
     const bool s = std::signbit(x);
@@ -30,7 +26,9 @@ double round(double x, prec_t p, std::optional<exp_t> n, RM rm) {
     // decode floating-point data
     if (ebits == 0) {
         // subnormal
-        FPY_ASSERT(false, "unimplemented");
+        const auto lz = FP::P - std::bit_width(mbits);
+        e = FP::EMIN - lz;
+        c = mbits << lz;
     } else if (ebits == FP::EONES) {
         // infinity or NaN
         return x;
@@ -168,18 +166,21 @@ double round(double x, prec_t p, std::optional<exp_t> n, RM rm) {
         }
     }
 
-    // check if we are subnormal at double-precision
+    // encode exponent and mantissa
+    uint64_t ebits2, mbits2;
     if (e < FP::EMIN) {
         // subnormal result
-        FPY_ASSERT(false, "unimplemented");
+        const exp_t shift = FP::EMIN - e;
+        ebits2 = 0;
+        mbits2 = c >> shift;
+    } else {
+        // normal result
+        ebits2 = e + FP::BIAS;
+        mbits2 = c & FP::MMASK;
     }
 
-    // encoded exponent and mantissa
-    const uint64_t sbits2 = s ? (1ULL << (FP::N - 1)) : 0;
-    const uint64_t ebits2 = e + FP::BIAS;
-    const uint64_t mbits2 = c & FP::MMASK;
-
     // repack the result
+    const uint64_t sbits2 = s ? (1ULL << (FP::N - 1)) : 0;
     const uint64_t b2 = sbits2 | (ebits2 << FP::M) | mbits2;
     return std::bit_cast<double>(b2);
 }
