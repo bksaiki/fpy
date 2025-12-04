@@ -8,7 +8,7 @@ namespace fpy {
 
 namespace engine {
 
-static double finalize(double result, int fexps) {
+static double finalize(double result, unsigned int fexps) {
     // check if overflow or underflow occurred
     FPY_ASSERT(
         !(fexps & (arch::EXCEPT_OVERFLOW | arch::EXCEPT_UNDERFLOW)),
@@ -34,13 +34,13 @@ double add(double x, double y, prec_t p) {
     );
 
     // prepare floating-point environment
-    const auto old_mode = arch::prepare_rto();
+    const auto old_csr = arch::prepare_rto();
 
     // perform addition in RTZ mode
     double result = x + y;
 
     // load exceptions and reset rounding mode
-    const auto fexps = arch::rto_status(old_mode);
+    const auto fexps = arch::rto_status(old_csr);
 
     // finalize result
     return finalize(result, fexps);

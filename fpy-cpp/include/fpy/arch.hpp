@@ -1,16 +1,13 @@
 #pragma once
 
-#include <cfenv>
-
 // Architecture-specific includes and definitions
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     #include <xmmintrin.h>
     #define FPY_ARCH_X86
 #elif defined(__aarch64__) || defined(_M_ARM64)
     #define FPY_ARCH_ARM64
-#elif defined(__arm__) || defined(_M_ARM)
-    #define FPY_ARCH_ARM32
 #else
+    #include <cfenv>
     #define FPY_ARCH_GENERIC
 #endif
 
@@ -18,12 +15,15 @@ namespace fpy {
 namespace arch {
 
 #ifdef FPY_ARCH_X86
+    // default MXCSR value with all exceptions masked
+    static constexpr unsigned int MXCSR_DEFAULT = 0x1F80;
+
     // Rounding mode constants for x86 SSE
     static constexpr int RM_RNE = 0x0;  // Round to Nearest Even
     static constexpr int RM_RTN = 0x1;  // Round Toward Negative
     static constexpr int RM_RTP = 0x2;  // Round Toward Positive  
     static constexpr int RM_RTZ = 0x3;  // Round Toward Zero
-    
+
     // Exception flag constants
     static constexpr unsigned int EXCEPT_INVALID = 0x01;
     static constexpr unsigned int EXCEPT_DENORM = 0x02;
@@ -31,6 +31,7 @@ namespace arch {
     static constexpr unsigned int EXCEPT_OVERFLOW = 0x08;
     static constexpr unsigned int EXCEPT_UNDERFLOW = 0x10;
     static constexpr unsigned int EXCEPT_INEXACT = 0x20;
+    static constexpr unsigned int EXCEPT_ALL = 0x3F;
 
     /// @brief Get the current floating-point status and control register.
     /// @return Architecture-specific floating-point status register value.
@@ -67,23 +68,20 @@ namespace arch {
     /// @brief Prepares for a round-to-odd operation by setting
     /// the rounding mode to RTZ and clearing exceptions.
     /// @return Previous rounding mode.
-    inline int prepare_rto() {
+    inline unsigned int prepare_rto() {
+        static constexpr unsigned int rtz_csr = MXCSR_DEFAULT | (RM_RTZ << 13);
         unsigned int csr = get_fpscr();
-        const int old_mode = (csr >> 13) & 0x3;  // Extract old rounding mode
-        csr = (csr & ~0x6000) | (RM_RTZ << 13);  // Set RTZ mode
-        csr &= ~0x3F;                            // Clear exception flags
-        set_fpscr(csr);
-        return old_mode;
+        set_fpscr(rtz_csr); // set new CSR with RTZ and cleared exceptions
+        return csr;
     }
 
     /// @brief Retrieve exception status to finalize a round-to-odd operation.
     /// @param old_mode Previous rounding mode.
     /// @return Exception flags.
-    inline int rto_status(int old_mode) {
+    inline unsigned int rto_status(unsigned int old_csr) {
         unsigned int csr = get_fpscr();
-        const int exceptions = csr & 0x38;       // Extract overflow, underflow, inexact flags
-        csr = (csr & ~0x6000) | ((old_mode & 0x3) << 13);  // Restore rounding mode
-        set_fpscr(csr);
+        const unsigned int exceptions = csr & EXCEPT_ALL; // extract exception flags
+        set_fpscr(old_csr & ~EXCEPT_ALL); // clear exception flags
         return exceptions;
     }
 
