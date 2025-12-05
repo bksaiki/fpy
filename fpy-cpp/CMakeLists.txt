@@ -96,6 +96,8 @@ set(SOURCES
 
 # Header files (for IDE organization)
 set(HEADERS
+    include/fpy/context.hpp
+    include/fpy/context_mp.hpp
     include/fpy/engine.hpp
     include/fpy/ops.hpp
     include/fpy/params.hpp
