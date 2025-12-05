@@ -48,7 +48,7 @@ public:
     }
 
     inline prec_t round_prec() const override {
-        return prec_;
+        return prec_ + 2;
     }
 
     inline double round(double x) const override {

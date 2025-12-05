@@ -9,7 +9,7 @@ TEST(Context, TestMPContext) {
     EXPECT_EQ(ctx.prec(), 5);
     EXPECT_EQ(ctx.rm(), fpy::RM::RNE);
     // rounding parameters
-    EXPECT_EQ(ctx.round_prec(), 5);
+    EXPECT_EQ(ctx.round_prec(), 7);
     // rounding
     EXPECT_EQ(ctx.round(33.0), 32.0);
 }
@@ -21,7 +21,7 @@ TEST(Context, TestMPSContext) {
     EXPECT_EQ(ctx.emin(), -5);
     EXPECT_EQ(ctx.rm(), fpy::RM::RNE);
     // rounding parameters
-    EXPECT_EQ(ctx.round_prec(), 5);
+    EXPECT_EQ(ctx.round_prec(), 7);
     EXPECT_EQ(ctx.n(), -10);
     // rounding
     EXPECT_EQ(ctx.round(33.0), 32.0);
