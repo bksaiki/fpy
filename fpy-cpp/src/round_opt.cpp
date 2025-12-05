@@ -1,5 +1,4 @@
 #include <cmath>
-#include <iostream>
 
 #include "fpy/params.hpp"
 #include "fpy/round_opt.hpp"
