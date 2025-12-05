@@ -6,6 +6,9 @@
 
 namespace fpy {
 
+/// @brief Rounds `x` according to the given context.
+double round(double x, const Context& ctx);
+
 /// @brief Computes `-x` using the given context.
 /// Must be the case that `ctx.round_prec() <= 64`.
 double neg(double x, const Context& ctx);

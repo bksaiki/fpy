@@ -7,6 +7,10 @@
 
 namespace fpy {
 
+double round(double x, const Context& ctx) {
+    return ctx.round(x);
+}
+
 double neg(double x, const Context& ctx) {
     // negate exactly
     x = -x;
