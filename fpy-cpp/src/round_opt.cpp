@@ -27,12 +27,10 @@ double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
     const uint64_t ebits = (b & FP::EMASK) >> FP::M;
     const uint64_t mbits = b & FP::MMASK;
 
-    // decoded exponent and mantissa
+    // decode floating-point data
     exp_t e;
     mant_t c;
-
-    // decode floating-point data
-    if (ebits == 0) {
+    if (UNLIKELY(ebits == 0)) {
         // subnormal
         const auto lz = FP::P - std::bit_width(mbits);
         e = FP::EMIN - lz;
@@ -78,6 +76,7 @@ double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
     // case split on nearest
     bool incrementp;
     if (is_nearest(rm)) {
+        // nearest rounding
 
         // extract rounding information
         // -1: below halfway
@@ -114,11 +113,9 @@ double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
         // case split on rounding mode
         switch (rm) {
             case RM::RTZ: incrementp = false; break;
-            case RM::RAZ:
-            case RM::RNA: incrementp = true; break;
+            case RM::RAZ: incrementp = true; break;
             case RM::RTP: incrementp = !s; break;
             case RM::RTN: incrementp = s; break;
-            case RM::RNE:
             case RM::RTE: incrementp = (c & one) != 0; break;
             case RM::RTO: incrementp = (c & one) == 0; break;
             default: FPY_UNREACHABLE();
@@ -126,32 +123,22 @@ double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
     }
 
     // apply increment
-    // if (increment) {
-    //     c += one; // "1" at position p
-    //     if (c >= (FP::IMPLICIT1 << 1)) {
-    //         // mantissa overflowed, adjust exponent
-    //         c >>= 1;
-    //         e += 1;
-    //     }
-    // }
-
-    // apply increment
     const mant_t increment = incrementp ? one : static_cast<mant_t>(0);
     c += increment;
 
     // check if we need to carry
-    const bool carryp = (c >= (FP::IMPLICIT1 << 1));
+    const bool carryp = c >= (FP::IMPLICIT1 << 1);
     e += static_cast<exp_t>(carryp);
     c >>= static_cast<uint8_t>(carryp);
 
     // encode exponent and mantissa
     uint64_t ebits2, mbits2;
-    if (c == 0) {
+    if (UNLIKELY(c == 0)) {
         // edge case: subnormalization underflowed to 0
         // `e` might be an unexpected value here
         ebits2 = 0;
         mbits2 = 0;
-    } else if (e < FP::EMIN) {
+    } else if (UNLIKELY(e < FP::EMIN)) {
         // subnormal result
         const exp_t shift = FP::EMIN - e;
         ebits2 = 0;
@@ -163,7 +150,7 @@ double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
     }
 
     // repack the result
-    const uint64_t sbits2 = s ? (1ULL << (FP::N - 1)) : 0;
+    const uint64_t sbits2 = static_cast<uint64_t>(s) << (FP::N - 1);
     const uint64_t b2 = sbits2 | (ebits2 << FP::M) | mbits2;
     return std::bit_cast<double>(b2);
 }
