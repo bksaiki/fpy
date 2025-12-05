@@ -2,7 +2,7 @@
 
 # Test executables
 set(TEST_SOURCES
-    test_context_mp.cpp
+    test_context.cpp
     test_ops.cpp
     test_real.cpp
     test_round.cpp

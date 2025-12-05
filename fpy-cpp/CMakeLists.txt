@@ -98,6 +98,7 @@ set(SOURCES
 set(HEADERS
     include/fpy/context.hpp
     include/fpy/context_mp.hpp
+    include/fpy/context_mps.hpp
     include/fpy/engine.hpp
     include/fpy/ops.hpp
     include/fpy/params.hpp

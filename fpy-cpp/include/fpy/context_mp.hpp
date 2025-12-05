@@ -6,9 +6,15 @@
 
 namespace fpy {
 
+/// @brief MPFR-style floating-point rounding context.
+///
+/// This context represents floating-point values with an arbitrary precision,
+/// no exponent bounds, and a specified rounding mode.
 class MPContext : public Context {
 private:
+    /// @brief Maximum precision of this context.
     prec_t prec_;
+    /// @brief Rounding mode of this context.
     RM rm_;
 
 public:
