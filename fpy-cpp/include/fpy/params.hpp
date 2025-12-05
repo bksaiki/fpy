@@ -28,7 +28,7 @@ struct ieee754_consts {
     static constexpr prec_t P = static_cast<prec_t>(N - E);
     static constexpr prec_t M = P - 1;
 
-    static constexpr exp_t EMAX = static_cast<exp_t>(1ULL << (E - 1)) - 1;
+    static constexpr exp_t EMAX = static_cast<exp_t>(__bitmask<uint32_t, E - 1>());
     static constexpr exp_t EMIN = 1 - EMAX;
     static constexpr exp_t EXPMAX = EMAX - static_cast<exp_t>(P) + 1;
     static constexpr exp_t EXPMIN = EMIN - static_cast<exp_t>(P) + 1;

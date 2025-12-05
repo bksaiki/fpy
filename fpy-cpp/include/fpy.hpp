@@ -2,6 +2,7 @@
 
 // rounding contexts
 #include <fpy/context.hpp>
+#include <fpy/context_ieee754.hpp>
 #include <fpy/context_mp.hpp>
 #include <fpy/context_mps.hpp>
 #include <fpy/context_mpb.hpp>

@@ -46,3 +46,27 @@ TEST(Context, TestMPBContext) {
     EXPECT_EQ(ctx.round(63.0), std::numeric_limits<double>::infinity()); // rounds to maxval
     EXPECT_EQ(ctx.round(64.0), std::numeric_limits<double>::infinity()); // exactly infval
 }
+
+TEST(Context, TestIEEE754ContextFP32) {
+    const IEEE754Context ctx(8, 32, fpy::RM::RNE);
+    // getters
+    EXPECT_EQ(ctx.prec(), 24);
+    EXPECT_EQ(ctx.emin(), -126);
+    EXPECT_EQ(ctx.emax(), 127);
+    EXPECT_EQ(ctx.rm(), fpy::RM::RNE);
+    EXPECT_EQ(ctx.maxval(), 3.4028234663852886e+38);
+    // rounding parameters
+    EXPECT_EQ(ctx.round_prec(), 26);
+}
+
+TEST(Context, TestIEEE754ContextFP16) {
+    const IEEE754Context ctx(5, 16, fpy::RM::RNE);
+    // getters
+    EXPECT_EQ(ctx.prec(), 11);
+    EXPECT_EQ(ctx.emin(), -14);
+    EXPECT_EQ(ctx.emax(), 15);
+    EXPECT_EQ(ctx.rm(), fpy::RM::RNE);
+    EXPECT_EQ(ctx.maxval(), 65504.0);
+    // rounding parameters
+    EXPECT_EQ(ctx.round_prec(), 13);
+}

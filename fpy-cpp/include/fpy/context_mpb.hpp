@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include "context_mps.hpp"
 #include "types.hpp"
 
@@ -31,6 +33,11 @@ public:
     /// @brief Gets the minimum exponent of this context.
     inline exp_t emin() const {
         return mps_ctx_.emin();
+    }
+
+    /// @brief Gets the maximum exponent of this context.
+    inline exp_t emax() const {
+        return maxval_ == 0.0 ? 0 : std::logb(maxval_);
     }
 
     /// @brief Gets the rounding mode of this context.
