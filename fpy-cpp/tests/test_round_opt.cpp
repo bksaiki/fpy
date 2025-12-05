@@ -13,6 +13,18 @@ TEST(RoundOpt, TestRoundExamples) {
     EXPECT_EQ(round_opt::round(0.0, 1, std::nullopt, RM::RNE), 0.0);
     EXPECT_EQ(round_opt::round(std::bit_cast<double>(1ULL), 1, std::nullopt, RM::RNE), std::bit_cast<double>(1ULL));
     EXPECT_EQ(round_opt::round(std::bit_cast<double>(3ULL), 1, std::nullopt, RM::RTZ), std::bit_cast<double>(2ULL));
+
+    EXPECT_EQ(round_opt::round(0.75, 8, -1, RM::RNE), 1.0);
+    EXPECT_EQ(round_opt::round(0.75, 8, -1, RM::RAZ), 1.0);
+    EXPECT_EQ(round_opt::round(0.75, 8, -1, RM::RTZ), 0.0);
+
+    EXPECT_EQ(round_opt::round(0.5, 8, -1, RM::RNE), 0.0);
+    EXPECT_EQ(round_opt::round(0.5, 8, -1, RM::RAZ), 1.0);
+    EXPECT_EQ(round_opt::round(0.5, 8, -1, RM::RTZ), 0.0);
+    
+    EXPECT_EQ(round_opt::round(0.25, 8, -1, RM::RNE), 0.0);
+    EXPECT_EQ(round_opt::round(0.25, 8, -1, RM::RAZ), 1.0);
+    EXPECT_EQ(round_opt::round(0.25, 8, -1, RM::RTZ), 0.0);
 }
 
 TEST(RoundOpt, TestRoundWithPrec) {

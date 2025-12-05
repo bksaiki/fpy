@@ -8,7 +8,7 @@ namespace fpy {
 
 namespace round_opt {
 
-double round(double x, prec_t p, std::optional<exp_t> n, RM rm) {
+double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
     using FP = ieee754_consts<11, 64>; // double precision
 
     // Fast path: if precision is full precision, no rounding needed
@@ -44,12 +44,17 @@ double round(double x, prec_t p, std::optional<exp_t> n, RM rm) {
     }
 
     // our precision might be limited by subnormalization
+    bool overshiftp = false;
     if (n.has_value()) {
         const exp_t nx = e - p;
         const exp_t offset = *n - nx;
         if (offset > 0) {
             // precision reduced due to subnormalization
-            p = (static_cast<prec_t>(offset) >= p) ? 0 : p - static_cast<prec_t>(offset);
+            // "overshift" is set if we shift more than p bits
+            const prec_t offset_pos = static_cast<prec_t>(offset);
+            bool overshiftp = offset_pos > p; // set overshift flag
+            p = overshiftp ? 0 : p - offset_pos; // precision cannot be negative
+            e = overshiftp ? *n : e; // overshift implies e < n, set for correct increment to MIN_VAL
         }
     }
 
@@ -66,18 +71,22 @@ double round(double x, prec_t p, std::optional<exp_t> n, RM rm) {
     // clear discarded bits
     c &= ~c_mask;
 
-    // extract rounding information
-    // -1: below halfway
-    //  0: exactly halfway
-    //  1: above halfway
+    // value of the LSB for precision p
     const mant_t one = 1ULL << p_lost;
-    const mant_t halfway = 1ULL << (p_lost - 1);
-    const int8_t rb = static_cast<int8_t>(c_lost > halfway) - static_cast<int8_t>(c_lost < halfway);
 
     // should we increment?
     // case split on nearest
     bool incrementp;
     if (is_nearest(rm)) {
+
+        // extract rounding information
+        // -1: below halfway
+        //  0: exactly halfway
+        //  1: above halfway
+        const mant_t halfway = 1ULL << (p_lost - 1);
+        const int8_t cmp = static_cast<int8_t>(c_lost > halfway) - static_cast<int8_t>(c_lost < halfway);
+        const int8_t rb = overshiftp ? -1 : cmp; // overshift implies below halfway
+
         // nearest rounding mode
         // case split on rounding bits
         if (rb > 0) {
@@ -127,17 +136,22 @@ double round(double x, prec_t p, std::optional<exp_t> n, RM rm) {
     // }
 
     // apply increment
-    const mant_t increment = incrementp ? one : 0;
+    const mant_t increment = incrementp ? one : static_cast<mant_t>(0);
     c += increment;
-    
+
     // check if we need to carry
     const bool carryp = (c >= (FP::IMPLICIT1 << 1));
-    c >>= static_cast<uint8_t>(carryp);
     e += static_cast<exp_t>(carryp);
+    c >>= static_cast<uint8_t>(carryp);
 
     // encode exponent and mantissa
     uint64_t ebits2, mbits2;
-    if (e < FP::EMIN) {
+    if (c == 0) {
+        // edge case: subnormalization underflowed to 0
+        // `e` might be an unexpected value here
+        ebits2 = 0;
+        mbits2 = 0;
+    } else if (e < FP::EMIN) {
         // subnormal result
         const exp_t shift = FP::EMIN - e;
         ebits2 = 0;
