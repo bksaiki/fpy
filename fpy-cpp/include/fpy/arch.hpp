@@ -51,6 +51,12 @@ namespace arch {
         set_fpscr(csr & ~0x3F); // Clear exception flags (bits 0-5)
     }
 
+    /// @brief Get the current floating-point exception flags.
+    /// @return Current exception flags.
+    inline unsigned int get_exceptions() {
+        return get_fpscr() & EXCEPT_ALL; // Extract exception flags (bits 0-5)
+    }
+
     /// @brief Get the current rounding mode.
     /// @return Current rounding mode value.
     inline int get_rounding_mode() {
@@ -117,6 +123,14 @@ namespace arch {
     inline void clear_exceptions() {
         unsigned int fpsr = 0;
         __asm__ volatile("msr fpsr, %0" : : "r"(fpsr));
+    }
+
+    /// @brief Get the current floating-point exception flags.
+    /// @return Current exception flags.
+    inline unsigned int get_exceptions() {
+        unsigned int fpsr;
+        __asm__ volatile("mrs %0, fpsr" : "=r"(fpsr));
+        return fpsr & 0x1F; // Extract exception flags (bits 0-4)
     }
 
     /// @brief Get the current rounding mode.
@@ -189,6 +203,12 @@ namespace arch {
     /// @brief Clear floating-point exception flags.
     inline void clear_exceptions() {
         std::feclearexcept(FE_ALL_EXCEPT);
+    }
+
+    /// @brief Get the current floating-point exception flags.
+    /// @return Current exception flags.
+    inline int get_exceptions() {
+        return std::fetestexcept(FE_ALL_EXCEPT);
     }
 
     /// @brief Get the current rounding mode.
