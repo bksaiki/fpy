@@ -4,14 +4,14 @@
 
 namespace fpy {
 
-// constexpr version of bitmask
+// compile-time bitmask generator
 template <typename T, uint64_t k>
-constexpr T __bitmask() {
+struct __bitmask {
     FPY_STATIC_ASSERT(std::is_integral_v<T> && std::is_unsigned_v<T>, "T must be an unsigned integer");
     FPY_STATIC_ASSERT(k < 64, "exceeded maximum bitmask size");
     FPY_STATIC_ASSERT(k <= 8 * sizeof(T), "exceeded maximum bitmask size for T");
-    return static_cast<T>((1ULL << k) - 1);
-}
+    static constexpr T val = static_cast<T>((1ULL << k) - 1);
+};
 
 /// @brief Type trait defining IEEE 754 format constants
 /// @tparam E bitwidth of the exponent field
@@ -28,17 +28,17 @@ struct ieee754_consts {
     static constexpr prec_t P = static_cast<prec_t>(N - E);
     static constexpr prec_t M = P - 1;
 
-    static constexpr exp_t EMAX = static_cast<exp_t>(__bitmask<uint32_t, E - 1>());
+    static constexpr exp_t EMAX = static_cast<exp_t>(__bitmask<uint32_t, E - 1>::val);
     static constexpr exp_t EMIN = 1 - EMAX;
     static constexpr exp_t EXPMAX = EMAX - static_cast<exp_t>(P) + 1;
     static constexpr exp_t EXPMIN = EMIN - static_cast<exp_t>(P) + 1;
     static constexpr exp_t BIAS = EMAX;
 
     static constexpr uint64_t SMASK = 1ULL << (N - 1);
-    static constexpr uint64_t EMASK = __bitmask<uint64_t, E>() << M;
-    static constexpr uint64_t MMASK = __bitmask<uint64_t, M>();
+    static constexpr uint64_t EMASK = __bitmask<uint64_t, E>::val << M;
+    static constexpr uint64_t MMASK = __bitmask<uint64_t, M>::val;
 
-    static constexpr uint64_t EONES = __bitmask<uint64_t, E>();
+    static constexpr uint64_t EONES = __bitmask<uint64_t, E>::val;
 
     static constexpr mant_t IMPLICIT1 = 1ULL << M;
 };
