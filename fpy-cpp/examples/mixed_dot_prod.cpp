@@ -46,8 +46,8 @@ static double run_mixed(
         // Quantize inputs to FP16
         const auto x_q = fpy::round(x_vals[i], ctx_quant);
         const auto y_q = fpy::round(y_vals[i], ctx_quant);
-        // Multiply in TF32
-        const auto prod = fpy::mul(x_q, y_q, ctx_mul);
+        // Multiply in TF32 (can be done exactly)
+        const auto prod = fpy::mul<fpy::EngineType::EXACT>(x_q, y_q, ctx_mul);
         // Accumulate in FP32
         dot_product = fpy::add(dot_product, prod, ctx_add);
     }

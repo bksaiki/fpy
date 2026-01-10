@@ -146,6 +146,92 @@ double fma(double x, double y, double z, prec_t p) {
     return finalize(result, fexps);
 }
 
+double add_exact(double x, double y, prec_t p) {
+    // double-precision only guarantees 53 bits of precision
+    FPY_ASSERT(
+        p <= 53,
+        "add_exact: requested precision exceeds double-precision capability"
+    );
+
+#if defined(FPY_DEBUG)
+    // prepare floating-point environment
+    arch::clear_exceptions();
+#endif
+
+    // perform exact addition
+    double result = x + y;
+
+#if defined(FPY_DEBUG)
+    // check for inexactness or overflow
+    const auto fexps = arch::get_exceptions();
+    FPY_ASSERT(
+        !(fexps & (arch::EXCEPT_INEXACT | arch::EXCEPT_OVERFLOW)),
+        "add_exact: addition was not exact"
+    );
+#endif
+
+    // return result
+    return result;
+}
+
+double sub_exact(double x, double y, prec_t p) {
+    // double-precision only guarantees 53 bits of precision
+    FPY_ASSERT(
+        p <= 53,
+        "sub_exact: requested precision exceeds double-precision capability"
+    );
+
+#if defined(FPY_DEBUG)
+    // prepare floating-point environment
+    arch::clear_exceptions();
+#endif
+
+    // perform exact subtraction
+    double result = x - y;
+
+#if defined(FPY_DEBUG)
+    // check for inexactness or overflow
+    const auto fexps = arch::get_exceptions();
+    FPY_ASSERT(
+        !(fexps & (arch::EXCEPT_INEXACT | arch::EXCEPT_OVERFLOW)),
+        "sub_exact: subtraction was not exact"
+    );
+#endif
+
+    // return result
+    return result;
+}
+
+double mul_exact(double x, double y, prec_t p) {
+    // double-precision only guarantees 53 bits of precision
+    FPY_ASSERT(
+        p <= 53,
+        "mul_exact: requested precision exceeds double-precision capability"
+    );
+
+#if defined(FPY_DEBUG)
+    // prepare floating-point environment
+    arch::clear_exceptions();
+#endif
+
+    // perform exact multiplication
+    double result = x * y;
+
+#if defined(FPY_DEBUG)
+    // check for inexactness or overflow
+    const auto fexps = arch::get_exceptions();
+    FPY_ASSERT(
+        !(fexps & (arch::EXCEPT_INEXACT | arch::EXCEPT_OVERFLOW)),
+        "mul_exact: multiplication was not exact"
+    );
+#endif
+
+    // return result
+    return result;
+}
+
+
+
 } // end namespace engine
 
 } // end namespace fpy

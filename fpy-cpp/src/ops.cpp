@@ -27,30 +27,6 @@ double abs(double x, const Context& ctx) {
     return ctx.round(x);
 }
 
-double add(double x, double y, const Context& ctx) {
-    // compute result using RTO engine
-    const double r = engine::add(x, y, ctx.round_prec());
-
-    // use context to round
-    return ctx.round(r);
-}
-
-double sub(double x, double y, const Context& ctx) {
-    // compute result using RTO engine
-    const double r = engine::sub(x, y, ctx.round_prec());
-
-    // use context to round
-    return ctx.round(r);
-}
-
-double mul(double x, double y, const Context& ctx) {
-    // compute result using RTO engine
-    const double r = engine::mul(x, y, ctx.round_prec());
-
-    // use context to round
-    return ctx.round(r);
-}
-
 double div(double x, double y, const Context& ctx) {
     // compute result using RTO engine
     const double r = engine::div(x, y, ctx.round_prec());
@@ -74,5 +50,13 @@ double fma(double x, double y, double z, const Context& ctx) {
     // use context to round
     return ctx.round(r);
 }
+
+// Explicit template instantiations for shared library
+template double add<EngineType::RTO>(double x, double y, const Context& ctx);
+template double add<EngineType::EXACT>(double x, double y, const Context& ctx);
+template double sub<EngineType::RTO>(double x, double y, const Context& ctx);
+template double sub<EngineType::EXACT>(double x, double y, const Context& ctx);
+template double mul<EngineType::RTO>(double x, double y, const Context& ctx);
+template double mul<EngineType::EXACT>(double x, double y, const Context& ctx);
 
 } // end namespace fpy
