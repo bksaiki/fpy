@@ -63,9 +63,9 @@ static double run_mixed(
 
 int main() {
     // Configuration
-    static constexpr size_t N = 100'000'000; // 10 million operations
+    static constexpr size_t N = 100'000'000; // 100 million operations
 
-    // Generate random test data (positive values only for sqrt)
+    // Generate random test data in the range [-1.0, 1.0] for the dot product
     std::cout << "Generating random test data...\n";
     std::random_device rd;
     std::mt19937_64 rng(rd());

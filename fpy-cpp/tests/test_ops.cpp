@@ -159,7 +159,7 @@ TEST(OpsFloat, TestAddUniform) {
     std::mt19937_64 rng(r());
 
     // sweep over precisions from 2 to 8
-    for (int p = 2; p <= 8; p++) {    
+    for (int p = 2; p <= 8; p++) {
         // sweep over rounding modes
         for (const auto rm : rounding_modes) {
             // rounding context

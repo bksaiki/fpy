@@ -24,7 +24,6 @@ static double ieee754_max_value(prec_t es, prec_t nbits) {
     const exp_t emax = ieee754_emax(es);
 
     // encode maximum value as double
-    // TODO: can we assume normal?
     const uint64_t mbits = bitmask<mant_t>(prec - 1) << (FP64::P - prec);
     const uint64_t ebits = static_cast<uint64_t>(emax + FP64::BIAS) << FP64::M;
     const uint64_t bits = ebits | mbits;
