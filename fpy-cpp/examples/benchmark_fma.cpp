@@ -77,11 +77,13 @@ double benchmark_fpy_fma(const std::vector<double>& x_vals,
                          int p, fpy::RM rm) {
     const size_t n = x_vals.size();
     volatile double result = 0.0; // volatile to prevent optimization
+
+    const fpy::MPContext ctx(p, rm);
     
     auto start = high_resolution_clock::now();
     
     for (size_t i = 0; i < n; i++) {
-        result = fpy::fma(x_vals[i], y_vals[i], z_vals[i], p, rm);
+        result = fpy::fma(x_vals[i], y_vals[i], z_vals[i], ctx);
     }
     
     auto end = high_resolution_clock::now();

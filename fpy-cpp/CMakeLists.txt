@@ -85,8 +85,9 @@ include_directories(
 )
 
 # Source files
-# NOTE: Add your source files here as you implement them
 set(SOURCES
+    src/context_ieee754.cpp
+    src/context_mpb.cpp
     src/engine.cpp
     src/ops.cpp
     src/real.cpp
@@ -96,6 +97,11 @@ set(SOURCES
 
 # Header files (for IDE organization)
 set(HEADERS
+    include/fpy/context.hpp
+    include/fpy/context_ieee754.hpp
+    include/fpy/context_mp.hpp
+    include/fpy/context_mps.hpp
+    include/fpy/context_mpb.hpp
     include/fpy/engine.hpp
     include/fpy/ops.hpp
     include/fpy/params.hpp

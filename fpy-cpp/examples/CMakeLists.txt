@@ -49,3 +49,6 @@ target_link_libraries(benchmark_sqrt
 if(USE_SOFTFLOAT AND SOFTFLOAT_FOUND)
     target_link_libraries(benchmark_sqrt SoftFloat::softfloat)
 endif()
+
+add_executable(mixed_dot_prod mixed_dot_prod.cpp)
+target_link_libraries(mixed_dot_prod fpy)

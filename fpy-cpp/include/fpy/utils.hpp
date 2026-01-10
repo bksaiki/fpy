@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iostream>
 #include <stdexcept>
 #include <type_traits>
 #include <string>
@@ -32,4 +33,13 @@
     #define FPY_DEBUG_ASSERT(cond, msg) FPY_ASSERT(cond, msg)
 #else
     #define FPY_DEBUG_ASSERT(cond, msg) ((void) (cond))
+#endif
+
+// Branch prediction hints
+#if defined(__GNUC__) || defined(__clang__)
+    #define LIKELY(x)   __builtin_expect(!!(x), 1)
+    #define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+    #define LIKELY(x)   (x)
+    #define UNLIKELY(x) (x)
 #endif

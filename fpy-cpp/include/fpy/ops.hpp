@@ -1,40 +1,44 @@
 #pragma once
 
+#include "context.hpp"
 #include "engine.hpp"
 #include "round.hpp"
 
 namespace fpy {
 
-/// @brief Computes `-x` to `p` bits of precision under
-/// rounding mode `rm`.
-double neg(double x, prec_t p, RM rm);
+/// @brief Rounds `x` according to the given context.
+double round(double x, const Context& ctx);
 
-/// @brief Computes `|x|` to `p` bits of precision under
-/// rounding mode `rm`.
-double abs(double x, prec_t p, RM rm);
+/// @brief Computes `-x` using the given context.
+/// Must be the case that `ctx.round_prec() <= 64`.
+double neg(double x, const Context& ctx);
 
-/// @brief Computes `x + y` to `p` bits of precision under
-/// rounding mode `rm`.
-double add(double x, double y, prec_t p, RM rm);
+/// @brief Computes `|x|` using the given context.
+/// Must be the case that `ctx.round_prec() <= 64`.
+double abs(double x, const Context& ctx);
 
-/// @brief Computes `x - y` to `p` bits of precision under
-/// rounding mode `rm`.
-double sub(double x, double y, prec_t p, RM rm);
+/// @brief Computes `x + y` using the given context.
+/// Must be the case that `ctx.round_prec() <= 64`.
+double add(double x, double y, const Context& ctx);
 
-/// @brief Computes `x * y` to `p` bits of precision under
-/// rounding mode `rm`.
-double mul(double x, double y, prec_t p, RM rm);
+/// @brief Computes `x - y` using the given context.
+/// Must be the case that `ctx.round_prec() <= 64`.
+double sub(double x, double y, const Context& ctx);
 
-/// @brief Computes `x / y` to `p` bits of precision under
-/// rounding mode `rm`.
-double div(double x, double y, prec_t p, RM rm);
+/// @brief Computes `x * y` using the given context.
+/// Must be the case that `ctx.round_prec() <= 64`.
+double mul(double x, double y, const Context& ctx);
 
-/// @brief Computes `sqrt(x)` to `p` bits of precision under
-/// rounding mode `rm`.
-double sqrt(double x, prec_t p, RM rm);
+/// @brief Computes `x / y` using the given context.
+/// Must be the case that `ctx.round_prec() <= 64`.
+double div(double x, double y, const Context& ctx);
 
-/// @brief Computes `x * y + z` to `p` bits of precision under
-/// rounding mode `rm`.
-double fma(double x, double y, double z, prec_t p, RM rm);
+/// @brief Computes `sqrt(x)` using the given context.
+/// Must be the case that `ctx.round_prec() <= 64`.
+double sqrt(double x, const Context& ctx);
+
+/// @brief Computes `x * y + z` using the given context.
+/// Must be the case that `ctx.round_prec() <= 64`.
+double fma(double x, double y, double z, const Context& ctx);
 
 } // end namespace fpy

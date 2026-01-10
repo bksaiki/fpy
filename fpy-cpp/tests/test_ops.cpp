@@ -162,6 +162,9 @@ TEST(OpsFloat, TestAddUniform) {
     for (int p = 2; p <= 8; p++) {
         // sweep over rounding modes
         for (const auto rm : rounding_modes) {
+            // rounding context
+            const fpy::MPContext ctx(p, rm);
+
             // randomly generate N floating-point values on [-1, 1]
             std::uniform_real_distribution<double> dist(-1.0, 1.0);
             for (size_t i = 0; i < N; i++) {
@@ -169,7 +172,7 @@ TEST(OpsFloat, TestAddUniform) {
                 const double y = dist(rng);
 
                 const double z_ref = ref_add(x, y, p, rm);
-                const double z = fpy::add(x, y, p, rm);
+                const double z = fpy::add(x, y, ctx);
                 EXPECT_EQ(z_ref, z);
             }
         }
@@ -196,6 +199,9 @@ TEST(OpsFloat, TestSubUniform) {
     for (int p = 2; p <= 8; p++) {
         // sweep over rounding modes
         for (const auto rm : rounding_modes) {
+            // rounding context
+            const fpy::MPContext ctx(p, rm);
+
             // randomly generate N floating-point values on [-1, 1]
             std::uniform_real_distribution<double> dist(-1.0, 1.0);
             for (size_t i = 0; i < N; i++) {
@@ -203,7 +209,7 @@ TEST(OpsFloat, TestSubUniform) {
                 const double y = dist(rng);
 
                 const double z_ref = ref_sub(x, y, p, rm);
-                const double z = fpy::sub(x, y, p, rm);
+                const double z = fpy::sub(x, y, ctx);
                 EXPECT_EQ(z_ref, z);
             }
         }
@@ -230,6 +236,9 @@ TEST(OpsFloat, TestMulUniform) {
     for (int p = 2; p <= 8; p++) {
         // sweep over rounding modes
         for (const auto rm : rounding_modes) {
+            // rounding context
+            const fpy::MPContext ctx(p, rm);
+
             // randomly generate N floating-point values on [-1, 1]
             std::uniform_real_distribution<double> dist(-1.0, 1.0);
             for (size_t i = 0; i < N; i++) {
@@ -237,7 +246,7 @@ TEST(OpsFloat, TestMulUniform) {
                 const double y = dist(rng);
 
                 const double z_ref = ref_mul(x, y, p, rm);
-                const double z = fpy::mul(x, y, p, rm);
+                const double z = fpy::mul(x, y, ctx);
                 EXPECT_EQ(z_ref, z);
             }
         }
@@ -264,6 +273,9 @@ TEST(OpsFloat, TestDivUniform) {
     for (int p = 2; p <= 8; p++) {
         // sweep over rounding modes
         for (const auto rm : rounding_modes) {
+            // rounding context
+            const fpy::MPContext ctx(p, rm);
+
             // randomly generate N floating-point values on [-1, 1]
             std::uniform_real_distribution<double> dist(-1.0, 1.0);
             for (size_t i = 0; i < N; i++) {
@@ -274,7 +286,7 @@ TEST(OpsFloat, TestDivUniform) {
                 if (std::abs(y) < 1e-10) continue;
 
                 const double z_ref = ref_div(x, y, p, rm);
-                const double z = fpy::div(x, y, p, rm);
+                const double z = fpy::div(x, y, ctx);
                 EXPECT_EQ(z_ref, z);
             }
         }
@@ -301,13 +313,16 @@ TEST(OpsFloat, TestSqrtUniform) {
     for (int p = 2; p <= 8; p++) {
         // sweep over rounding modes
         for (const auto rm : rounding_modes) {
+            // rounding context
+            const fpy::MPContext ctx(p, rm);
+
             // randomly generate N floating-point values on [0, 1]
             std::uniform_real_distribution<double> dist(0.0, 1.0);
             for (size_t i = 0; i < N; i++) {
                 const double x = dist(rng);
 
                 const double z_ref = ref_sqrt(x, p, rm);
-                const double z = fpy::sqrt(x, p, rm);
+                const double z = fpy::sqrt(x, ctx);
                 EXPECT_EQ(z_ref, z);
             }
         }
@@ -334,6 +349,9 @@ TEST(OpsFloat, TestFmaUniform) {
     for (int p = 2; p <= 8; p++) {
         // sweep over rounding modes
         for (const auto rm : rounding_modes) {
+            // rounding context
+            const fpy::MPContext ctx(p, rm);
+
             // randomly generate N floating-point values on [-1, 1]
             std::uniform_real_distribution<double> dist(-1.0, 1.0);
             for (size_t i = 0; i < N; i++) {
@@ -342,7 +360,7 @@ TEST(OpsFloat, TestFmaUniform) {
                 const double z = dist(rng);
 
                 const double w_ref = ref_fma(x, y, z, p, rm);
-                const double w = fpy::fma(x, y, z, p, rm);
+                const double w = fpy::fma(x, y, z, ctx);
                 EXPECT_EQ(w_ref, w);
             }
         }

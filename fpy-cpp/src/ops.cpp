@@ -1,73 +1,78 @@
 #include <cmath>
 
+#include "fpy/context.hpp"
 #include "fpy/ops.hpp"
 #include "fpy/real.hpp"
 #include "fpy/round_opt.hpp"
 
 namespace fpy {
 
-double neg(double x, prec_t p, RM rm) {
+double round(double x, const Context& ctx) {
+    return ctx.round(x);
+}
+
+double neg(double x, const Context& ctx) {
     // negate exactly
     x = -x;
 
-    // use rounding library
-    return round_opt::round(x, p, std::nullopt, rm);
+    // use context to round
+    return ctx.round(x);
 }
 
-double abs(double x, prec_t p, RM rm) {
+double abs(double x, const Context& ctx) {
     // take absolute value exactly
     x = std::abs(x);
 
-    // use rounding library
-    return round_opt::round(x, p, std::nullopt, rm);
+    // use context to round
+    return ctx.round(x);
 }
 
-double add(double x, double y, prec_t p, RM rm) {
+double add(double x, double y, const Context& ctx) {
     // compute result using RTO engine
-    const double r = engine::add(x, y, p + 2);
+    const double r = engine::add(x, y, ctx.round_prec());
 
-    // use rounding library
-    return round_opt::round(r, p, std::nullopt, rm);
+    // use context to round
+    return ctx.round(r);
 }
 
-double sub(double x, double y, prec_t p, RM rm) {
+double sub(double x, double y, const Context& ctx) {
     // compute result using RTO engine
-    const double r = engine::sub(x, y, p + 2);
+    const double r = engine::sub(x, y, ctx.round_prec());
 
-    // use rounding library
-    return round_opt::round(r, p, std::nullopt, rm);
+    // use context to round
+    return ctx.round(r);
 }
 
-double mul(double x, double y, prec_t p, RM rm) {
+double mul(double x, double y, const Context& ctx) {
     // compute result using RTO engine
-    const double r = engine::mul(x, y, p + 2);
+    const double r = engine::mul(x, y, ctx.round_prec());
 
-    // use rounding library
-    return round_opt::round(r, p, std::nullopt, rm);
+    // use context to round
+    return ctx.round(r);
 }
 
-double div(double x, double y, prec_t p, RM rm) {
+double div(double x, double y, const Context& ctx) {
     // compute result using RTO engine
-    const double r = engine::div(x, y, p + 2);
+    const double r = engine::div(x, y, ctx.round_prec());
 
-    // use rounding library
-    return round_opt::round(r, p, std::nullopt, rm);
+    // use context to round
+    return ctx.round(r);
 }
 
-double sqrt(double x, prec_t p, RM rm) {
+double sqrt(double x, const Context& ctx) {
     // compute result using RTO engine
-    const double r = engine::sqrt(x, p + 2);
+    const double r = engine::sqrt(x, ctx.round_prec());
 
-    // use rounding library
-    return round_opt::round(r, p, std::nullopt, rm);
+    // use context to round
+    return ctx.round(r);
 }
 
-double fma(double x, double y, double z, prec_t p, RM rm) {
+double fma(double x, double y, double z, const Context& ctx) {
     // compute result using RTO engine
-    const double r = engine::fma(x, y, z, p + 2);
+    const double r = engine::fma(x, y, z, ctx.round_prec());
 
-    // use rounding library
-    return round_opt::round(r, p, std::nullopt, rm);
+    // use context to round
+    return ctx.round(r);
 }
 
 } // end namespace fpy
