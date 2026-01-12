@@ -77,7 +77,7 @@ double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
     if (is_nearest(rm)) {
         // nearest rounding
 
-        // extract rounding information
+        // clever way to extract rounding information
         // -1: below halfway
         //  0: exactly halfway
         //  1: above halfway
@@ -85,12 +85,8 @@ double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
         const int8_t cmp = static_cast<int8_t>(c_lost > halfway) - static_cast<int8_t>(c_lost < halfway);
         const int8_t rb = overshiftp ? -1 : cmp; // overshift implies below halfway
 
-        // nearest rounding mode
         // case split on rounding bits
-        if (rb > 0) {
-            // above halfway
-            incrementp = true;
-        } else if (rb == 0) {
+        if (rb == 0) {
             // exactly halfway
             switch (rm) {
                 case RM::RTZ: incrementp = false; break;
@@ -104,8 +100,8 @@ double round(double x, prec_t p, const std::optional<exp_t>& n, RM rm) {
                 default: FPY_UNREACHABLE();
             }
         } else {
-            // below halfway
-            incrementp = false;
+            // above or below halfway
+            incrementp = rb > 0;
         }
     } else {
         // non-nearest
