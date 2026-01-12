@@ -49,7 +49,9 @@ __all__ = [
     'VarType',
     'TupleType',
     'ListType',
-    'FunctionType'
+    'FunctionType',
+    # aliases
+    'ScalarType',
 ]
 
 
@@ -62,7 +64,7 @@ class Type(ABC):
     """Base class for all FPy types."""
 
     @abstractmethod
-    def is_context_type(self):
+    def is_context_type(self) -> bool:
         """Does this type also encode rounding context information?"""
         ...
 
@@ -377,3 +379,7 @@ class FunctionType(Type):
         arg_types = [arg.subst_context(subst) for arg in self.arg_types]
         return_type = self.return_type.subst_context(subst)
         return FunctionType(ctx, arg_types, return_type)
+
+
+ScalarType: TypeAlias = BoolType | RealType | ContextType
+"""Scalar types"""

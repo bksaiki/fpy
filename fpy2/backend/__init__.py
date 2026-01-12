@@ -8,3 +8,6 @@ from .cpp import CppCompiler, CppCompileError
 
 # FPCore backend
 from .fpc import FPCoreCompiler, FPCoreCompileError
+
+# FPy-C++ backend
+from .fpy_cpp import CppFpyBackend
