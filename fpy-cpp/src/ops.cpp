@@ -58,5 +58,6 @@ template double sub<EngineType::RTO>(double x, double y, const Context& ctx);
 template double sub<EngineType::EXACT>(double x, double y, const Context& ctx);
 template double mul<EngineType::RTO>(double x, double y, const Context& ctx);
 template double mul<EngineType::EXACT>(double x, double y, const Context& ctx);
+template double mul<EngineType::FIXED>(double x, double y, const Context& ctx);
 
 } // end namespace fpy

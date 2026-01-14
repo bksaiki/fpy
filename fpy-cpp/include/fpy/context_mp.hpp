@@ -38,6 +38,10 @@ public:
     inline double round(double x) const override {
         return round_opt::round(x, prec_, std::nullopt, rm_);
     }
+
+    inline double round(int64_t m, exp_t exp) const override {
+        return round_opt::round(m, exp, prec_, std::nullopt, rm_);
+    }
 };
 
 } // namespace fpy

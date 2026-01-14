@@ -67,6 +67,13 @@ double sub_exact(double x, double y, prec_t p);
 /// when compiled with FPY_DEBUG.
 double mul_exact(double x, double y, prec_t p);
 
+
+/// @brief Computes `x * y` using fixed-point arithmetic.
+/// Returns a fixed-point representation `m * 2^exp`
+/// where `m` is an `int64_t` integer significand
+/// and `exp` is a base-2 exponent.
+std::tuple<int64_t, exp_t> mul_fixed(double x, double y, prec_t p);
+
 } // end namespace engine
 
 } // end namespace fpy

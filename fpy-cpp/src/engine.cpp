@@ -2,6 +2,7 @@
 #include <cmath>
 
 #include "fpy/arch.hpp"
+#include "fpy/convert.hpp"
 #include "fpy/engine.hpp"
 
 namespace fpy {
@@ -228,6 +229,26 @@ double mul_exact(double x, double y, prec_t p) {
 
     // return result
     return result;
+}
+
+
+std::tuple<int64_t, exp_t> mul_fixed(double x, double y, prec_t p) {
+    // fixed-point only guarantees 63 bits of precision
+    FPY_ASSERT(
+        p <= 63,
+        "mul_fixed: requested precision exceeds capability"
+    );
+
+    // decode into fixed-point
+    const auto [xm, xexp] = to_fixed(x);
+    const auto [ym, yexp] = to_fixed(y);
+
+    // perform multiplication (possible overflow)
+    const int64_t m = xm * ym;
+    const exp_t exp = xexp + yexp;
+
+    // return result
+    return std::make_tuple(m, exp);
 }
 
 

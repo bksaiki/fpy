@@ -88,6 +88,7 @@ include_directories(
 set(SOURCES
     src/context_ieee754.cpp
     src/context_mpb.cpp
+    src/convert.cpp
     src/engine.cpp
     src/ops.cpp
     src/real.cpp
@@ -102,6 +103,7 @@ set(HEADERS
     include/fpy/context_mp.hpp
     include/fpy/context_mps.hpp
     include/fpy/context_mpb.hpp
+    include/fpy/convert.hpp
     include/fpy/engine.hpp
     include/fpy/ops.hpp
     include/fpy/params.hpp

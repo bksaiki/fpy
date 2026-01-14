@@ -70,6 +70,8 @@ public:
     }
 
     double round(double x) const override;
+
+    double round(int64_t m, exp_t exp) const override;
 };
 
 } // namespace fpy
