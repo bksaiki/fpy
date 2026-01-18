@@ -12,16 +12,16 @@ using namespace std::chrono;
 static constexpr size_t N = 100'000'000; // 100 million operations
 
 // Global rounding context (target precision for multiplication)
-static const fpy::IEEE754Context ROUND_CTX(8, 32, fpy::RM::RNE); // FP32
+static const fpy::IEEE754Context ROUND_CTX(8, 32, fpy::RM::RNE); // BF16
 
 // Global input context for sampling
-static const fpy::IEEE754Context INPUT_CTX(5, 16, fpy::RM::RNE); // FP16
+static const fpy::IEEE754Context INPUT_CTX(8, 32, fpy::RM::RNE); // MX_E5M2
 
 static void generate_inputs(std::vector<double>& x_vals, std::vector<double>& y_vals) {
     std::cout << "Generating " << N << " random test pairs...\n";
     std::random_device rd;
     std::mt19937_64 rng(rd());
-    std::uniform_real_distribution<float> dist(-1.0, 1.0);
+    std::uniform_real_distribution<double> dist(-1.0, 1.0);
     
     for (size_t i = 0; i < N; i++) {
         // Sample and quantize inputs according to input context
@@ -114,8 +114,8 @@ static double run_fixed_engine(
 int main() {
     std::cout << "=== Multiplication Engine Benchmark ===\n";
     std::cout << "Operations: " << N << "\n";
-    std::cout << "Rounding context: FP32 (8-bit exponent, 32-bit total)\n";
-    std::cout << "Input context: FP16 (5-bit exponent, 16-bit total)\n\n";
+    std::cout << "Rounding context: BF16 (8-bit exponent, 16-bit total)\n";
+    std::cout << "Input context: MX_E5M2 (5-bit exponent, 8-bit total)\n\n";
 
     // Generate inputs
     std::vector<double> x_vals(N);

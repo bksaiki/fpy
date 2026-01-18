@@ -9,6 +9,11 @@ std::tuple<int64_t, exp_t> to_fixed(double x) {
     using FP = ieee754_consts<11, 64>; // double precision
     FPY_ASSERT(std::isfinite(x), "to_fixed: input must be finite");
 
+    // fast path: zero
+    if (x == 0.0) {
+        return std::make_tuple(0, FP::EXPMIN);
+    }
+
     // load floating-point data as integer
     const uint64_t b = std::bit_cast<uint64_t>(x);
     const bool s = (b >> (FP::N - 1)) != 0;
@@ -19,7 +24,7 @@ std::tuple<int64_t, exp_t> to_fixed(double x) {
     exp_t exp; // unnormalized exponent
     mant_t c;  // integer significand
     if (ebits == 0) {
-        // zero or subnormal
+        // subnormal
         exp = FP::EXPMIN;
         c = mbits;
     } else {
