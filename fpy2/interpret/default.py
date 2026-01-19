@@ -163,6 +163,8 @@ class _Interpreter(Visitor):
         match arg:
             case bool() | Float() | Context():
                 return arg
+            case RealFloat():
+                return Float.from_real(arg, ctx=REAL)
             case int():
                 return Float.from_int(arg, ctx=INTEGER, checked=False)
             case float():
