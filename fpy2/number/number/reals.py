@@ -3,6 +3,8 @@ This module defines the `RealFloat` number type,
 an arbitrary-precision, floating-point number without infinities and NaN.
 """
 
+import dataclasses
+
 import math
 import numbers
 import random
@@ -26,6 +28,9 @@ from ...utils import (
     FP64_IMPLICIT1,
 )
 
+__all__ = [
+    'RealFloat',
+]
 
 class RealFloat(numbers.Rational):
     """
@@ -745,15 +750,15 @@ class RealFloat(numbers.Rational):
             hi = RealFloat(self._s, n + 1, 0)
             lo = RealFloat(self._s, n, 0)
             return (hi, lo)
-        elif n >= self.e:
-            # check if all digits are in the lower part
-            hi = RealFloat(self._s, n + 1, 0)
-            lo = RealFloat(self._s, self._exp, self._c)
-            return (hi, lo)
         elif n < self._exp:
             # check if all digits are in the upper part
             hi = RealFloat(self._s, self._exp, self._c)
             lo = RealFloat(self._s, n, 0)
+            return (hi, lo)
+        elif n >= self.e:
+            # check if all digits are in the lower part
+            hi = RealFloat(self._s, n + 1, 0)
+            lo = RealFloat(self._s, self._exp, self._c)
             return (hi, lo)
         else:
             # splitting the digits
@@ -931,33 +936,41 @@ class RealFloat(numbers.Rational):
 
         return p, n
 
-    def _round_direction(
-        self,
-        kept: Self,
-        half_bit: bool,
-        lower_bits: bool,
-        rm: RoundingMode,
-    ):
+    def _round_direction(self, kept: Self, lost: Self, n: int, rm: RoundingMode):
         """
         Determines the direction to round based on the rounding mode.
         Also computes the rounding envelope.
+
+        Assumes that `lost != 0` and `kept._exp > n >= lost._exp`.
         """
 
         # convert the rounding mode to a direction
         nearest, direction = rm.to_direction(kept._s)
 
         # rounding envelope
-        interval_size: int | None = None
+        interval_size: int = 0
         interval_closed: bool = False
         increment: bool = False
 
         # case split on nearest mode
         if nearest:
             # nearest rounding mode
+            interval_size = -1
+
+            # extract the halfway bit and lower bits from `lost`
+            if lost.e == n:
+                # the MSB of lo is at position n
+                lower_p = lost.p - 1
+                half_bit = (lost._c >> lower_p) != 0
+                lower_bits = (lost._c & bitmask(lower_p)) != 0
+            else:
+                # the MSB of lo is below position n
+                half_bit = False
+                lower_bits = True
+
             # case split on halfway bit
             if half_bit:
                 # at least halfway
-                interval_size = -1
                 if lower_bits:
                     # above halfway
                     increment = True
@@ -975,55 +988,47 @@ class RealFloat(numbers.Rational):
                         case RoundingDirection.RTO:
                             is_even = (kept._c & 1) == 0
                             increment = is_even
+                        case _:
+                            raise RuntimeError('unreachable')
             else:
                 # below halfway
                 increment = False
-                interval_closed = False
-                if lower_bits:
-                    # inexact
-                    interval_size = -1
-                else:
-                    # exact
-                    interval_size = None
         else:
             # non-nearest rounding mode
-            interval_closed = False
-            if half_bit or lower_bits:
-                # inexact
-                interval_size = 0
-                match direction:
-                    case RoundingDirection.RTZ:
-                        increment = False
-                    case RoundingDirection.RAZ:
-                        increment = True
-                    case RoundingDirection.RTE:
-                        is_even = (kept._c & 1) == 0
-                        increment = not is_even
-                    case RoundingDirection.RTO:
-                        is_even = (kept._c & 1) == 0
-                        increment = is_even
-            else:
-                # exact
-                interval_size = None
-                increment = False
+            interval_size = 0
+            match direction:
+                case RoundingDirection.RTZ:
+                    increment = False
+                case RoundingDirection.RAZ:
+                    increment = True
+                case RoundingDirection.RTE:
+                    is_even = (kept._c & 1) == 0
+                    increment = not is_even
+                case RoundingDirection.RTO:
+                    is_even = (kept._c & 1) == 0
+                    increment = is_even
+                case _:
+                    raise RuntimeError('unreachable')
 
         return interval_size, interval_closed, increment
 
     def _round_finalize(
         self,
         kept: Self,
-        half_bit: bool,
-        lower_bits: bool,
+        lost: Self,
         p: int | None,
+        n: int,
         rm: RoundingMode
     ):
         """
         Completes the rounding operation using truncated digits
         and additional rounding information.
+
+        Assumes that `lost != 0` and `kept._exp > n >= lost._exp`.
         """
 
         # prepare the rounding operation
-        interval_size, interval_closed, increment = self._round_direction(kept, half_bit, lower_bits, rm)
+        interval_size, interval_closed, increment = self._round_direction(kept, lost, n, rm)
 
         # increment if necessary
         if increment:
@@ -1072,17 +1077,8 @@ class RealFloat(numbers.Rational):
         if exact:
             raise ValueError(f'rounding off digits: self={self}, n={n}')
 
-        # step 3. recover the rounding bits
-        if lost.e == n:
-            # the MSB of lo is at position n
-            half_bit = (lost._c >> (lost.p - 1)) != 0
-            lower_bits = (lost._c & bitmask(lost.p - 1)) != 0
-        else:
-            # the MSB of lo is below position n
-            half_bit = False
-            lower_bits = True
-
-        return self._round_finalize(kept, half_bit, lower_bits, p, rm)
+        # step 3. determine how to round based on the lost bits
+        return self._round_finalize(kept, lost, p, n, rm)
 
     def _round_at_stochastic(
         self,

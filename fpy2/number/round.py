@@ -15,6 +15,8 @@ __all__ = [
     'OV',
 ]
 
+###########################################################
+# Rounding behaviors
 
 @enum_repr
 class RoundingDirection(Enum):

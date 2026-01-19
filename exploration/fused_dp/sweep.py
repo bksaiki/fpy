@@ -200,6 +200,7 @@ class Explorer(fp.Runner[Config, SampleKey, Result]):
         p = config.prec - 1
 
         # compute relative error
+        self.log('run_one', f'computing metrics for N={config.n}, P={config.prec}')
         log_rel_errs: list[float] = []
         for (xs, ys), ref_val in zip(inputs, ref_vals):
             impl_val = self._force_float(dot_prod_impl(xs, ys, p, ctx=self.octx))
