@@ -8,8 +8,9 @@ import math
 from fractions import Fraction
 from typing import Optional, Self, TYPE_CHECKING
 
-from ..globals import get_current_float_converter, get_current_str_converter
 from ...utils import DefaultOr, Ordering, rcomparable, DEFAULT
+from ..globals import get_current_float_converter, get_current_str_converter
+from ..round import RoundingInterval
 from .reals import RealFloat
 
 
@@ -78,9 +79,7 @@ class Float:
         m: int | None = None,
         isinf: bool | None = None,
         isnan: bool | None = None,
-        interval_size: int | None = None,
-        interval_down: bool | None = None,
-        interval_closed: bool | None = None,
+        interval: RoundingInterval | None = None,
         ctx: DefaultOr[Optional[Context]] = DEFAULT
     ):
         match x:
@@ -123,9 +122,7 @@ class Float:
             and c is None
             and e is None
             and m is None
-            and interval_size is None
-            and interval_down is None
-            and interval_closed is None):
+            and interval is None):
             # no fields are overriden
             if real is None:
                 # use the default `RealFloat`
@@ -141,9 +138,7 @@ class Float:
                 x=real,
                 e=e,
                 m=m,
-                interval_size=interval_size,
-                interval_down=interval_down,
-                interval_closed=interval_closed
+                interval=interval
             )
 
     def __repr__(self):
@@ -153,9 +148,7 @@ class Float:
             + ', c=' + repr(self._real._c)
             + ', isinf=' + repr(self._isinf)
             + ', isnan=' + repr(self._isnan)
-            + ', interval_size=' + repr(self._real._interval_size)
-            + ', interval_down=' + repr(self._real._interval_size)
-            + ', interval_closed=' + repr(self._real._interval_closed)
+            + ', interval=' + repr(self._real._interval)
             + ', ctx=' + repr(self._ctx)
             + ')'
         )
@@ -494,16 +487,6 @@ class Float:
         if self.is_nar():
             raise ValueError('cannot compute significand of infinity or NaN')
         return self._real.m
-
-    @property
-    def interval_size(self) -> int | None:
-        """Rounding envelope: size relative to `2**exp`."""
-        return self._real._interval_size
-
-    @property
-    def interval_down(self) -> bool | None:
-        """Rounding envelope: extends below the value."""
-        return self._real._interval_down
 
     @property
     def inexact(self) -> bool:

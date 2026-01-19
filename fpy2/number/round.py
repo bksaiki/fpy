@@ -2,6 +2,7 @@
 This module defines rounding utilities.
 """
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import TypeAlias
 
@@ -11,6 +12,7 @@ __all__ = [
     'RoundingDirection',
     'RoundingMode',
     'OverflowMode',
+    'RoundingInterval',
     'RM',
     'OV',
 ]
@@ -92,8 +94,24 @@ class OverflowMode(Enum):
     WRAP = 2
 
 ###########################################################
-# Type aliases
+# Rounding interval
 
+@dataclass(frozen=True)
+class RoundingInterval:
+    """Rounding interval information."""
+
+    size: int
+    """
+    size of the rounding interval relative to `2**-exp`
+    (`None` if should always be non-positive)
+    """
+    down: bool
+    """does the interval extend towards zero?"""
+    closed: bool
+    """is the interval closed at the other endpoint?"""
+
+###########################################################
+# Type aliases
 RM: TypeAlias = RoundingMode
 """alias for `RoundingMode`"""
 

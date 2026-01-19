@@ -13,7 +13,7 @@ from fractions import Fraction
 from typing import Self
 
 from ..globals import get_current_float_converter, get_current_str_converter
-from ..round import RoundingMode, RoundingDirection
+from ..round import RoundingMode, RoundingDirection, RoundingInterval
 from ...utils import (
     bitmask,
     float_to_bits,
@@ -57,7 +57,7 @@ class RealFloat(numbers.Rational):
     It must be the case that `interval_size <= 0`.
     """
 
-    __slots__ = ('_s', '_exp', '_c', '_interval_size', '_interval_down', '_interval_closed')
+    __slots__ = ('_s', '_exp', '_c', '_interval')
 
     _s: bool
     """is the sign negative?"""
@@ -66,12 +66,8 @@ class RealFloat(numbers.Rational):
     _c: int
     """integer significand"""
 
-    _interval_size: int | None
-    """rounding envelope: size relative to `2**exp`"""
-    _interval_down: bool
-    """rounding envelope: does the interval extend towards zero?"""
-    _interval_closed: bool
-    """rounding envelope: is the interval closed at the other endpoint?"""
+    _interval: RoundingInterval | None
+    """rounding envelope"""
 
     def __init__(
         self,
@@ -82,9 +78,7 @@ class RealFloat(numbers.Rational):
         x: Self | None = None,
         e: int | None = None,
         m: int | None = None,
-        interval_size: int | None = None,
-        interval_down: bool | None = None,
-        interval_closed: bool | None = None,
+        interval: RoundingInterval | None = None
     ):
         """
         Creates a new `RealFloat` value.
@@ -140,40 +134,22 @@ class RealFloat(numbers.Rational):
         else:
             self._exp = 0
 
-        # rounding envelope size
-        if interval_size is not None:
-            if interval_size > 0:
-                raise ValueError(f'cannot specify interval_size={interval_size}, must be <= 0')
-            self._interval_size = interval_size
+        # interval
+        if interval is not None:
+            self._interval = interval
         elif x is not None:
-            self._interval_size = x._interval_size
+            self._interval = x._interval
         else:
-            self._interval_size = None
+            self._interval = None
 
-        # rounding envelope direction
-        if interval_down is not None:
-            self._interval_down = interval_down
-        elif x is not None:
-            self._interval_down = x._interval_down
-        else:
-            self._interval_down = False
-
-        # rounding envelope endpoint
-        if interval_closed is not None:
-            self._interval_closed = interval_closed
-        elif x is not None:
-            self._interval_closed = x._interval_closed
-        else:
-            self._interval_closed = False
 
     def __repr__(self):
-        return (f'{self.__class__.__name__}('
+        return (
+            f'{self.__class__.__name__}('
             + 's=' + repr(self._s)
             + ', exp=' + repr(self._exp)
             + ', c=' + repr(self._c)
-            + ', interval_size=' + repr(self._interval_size)
-            + ', interval_down=' + repr(self._interval_down)
-            + ', interval_closed=' + repr(self._interval_closed)
+            + ', interval=' + repr(self._interval)
             + ')'
         )
 
@@ -423,19 +399,76 @@ class RealFloat(numbers.Rational):
         return self._c
 
     @property
+    def interval(self) -> RoundingInterval | None:
+        """property: rounding envelope"""
+        return self._interval
+
+    @property
     def interval_size(self) -> int | None:
         """property: rounding envelope size relative to `2**exp`"""
-        return self._interval_size
+        return self._interval.size if self._interval is not None else None
 
     @property
     def interval_down(self) -> bool:
         """property: rounding envelope extends towards zero"""
-        return self._interval_down
+        return self._interval.down if self._interval is not None else False
 
     @property
     def interval_closed(self) -> bool:
         """property: rounding envelope is closed at the other endpoint"""
-        return self._interval_closed
+        return self._interval.closed if self._interval is not None else False
+
+    @property
+    def base(self):
+        """Integer base of this number. Always 2."""
+        return 2
+
+    @property
+    def p(self):
+        """Minimum number of binary digits required to represent this number."""
+        return self._c.bit_length()
+
+    @property
+    def e(self) -> int:
+        """
+        Normalized exponent of this number.
+
+        When `self.c == 0` (i.e. the number is zero), this method returns
+        `self.exp - 1`. In other words, `self.c != 0` iff `self.e >= self.exp`.
+
+        The interval `[self.exp, self.e]` represents the absolute positions
+        of digits in the significand.
+        """
+        return self._exp + self._c.bit_length() - 1
+
+    @property
+    def n(self) -> int:
+        """
+        Position of the first unrepresentable digit below the significant digits.
+        This is exactly `self.exp - 1`.
+        """
+        return self._exp - 1
+
+    @property
+    def m(self) -> int:
+        """
+        Signed significand.
+        This is exactly `(-1)^self.s * self.c`.
+        """
+        return -self._c if self._s else self._c
+
+    @property
+    def inexact(self) -> bool:
+        """Is this value inexact?"""
+        return self._interval is not None
+
+    @property
+    def numerator(self):
+        return self.as_rational().numerator
+
+    @property
+    def denominator(self):
+        return self.as_rational().denominator
 
     def as_rational(self) -> Fraction:
         if self.is_zero():
@@ -543,59 +576,6 @@ class RealFloat(numbers.Rational):
         if not isinstance(exp, int):
             raise TypeError(f'expected integer exponent, got {type(exp)}')
         return RealFloat(s=s, exp=exp, c=1)
-
-
-    @property
-    def base(self):
-        """Integer base of this number. Always 2."""
-        return 2
-
-    @property
-    def p(self):
-        """Minimum number of binary digits required to represent this number."""
-        return self._c.bit_length()
-
-    @property
-    def e(self) -> int:
-        """
-        Normalized exponent of this number.
-
-        When `self.c == 0` (i.e. the number is zero), this method returns
-        `self.exp - 1`. In other words, `self.c != 0` iff `self.e >= self.exp`.
-
-        The interval `[self.exp, self.e]` represents the absolute positions
-        of digits in the significand.
-        """
-        return self._exp + self.p - 1
-
-    @property
-    def n(self) -> int:
-        """
-        Position of the first unrepresentable digit below the significant digits.
-        This is exactly `self.exp - 1`.
-        """
-        return self._exp - 1
-
-    @property
-    def m(self) -> int:
-        """
-        Signed significand.
-        This is exactly `(-1)^self.s * self.c`.
-        """
-        return -self._c if self._s else self._c
-
-    @property
-    def inexact(self) -> bool:
-        """Is this value inexact?"""
-        return self._interval_size is not None
-
-    @property
-    def numerator(self):
-        return self.as_rational().numerator
-
-    @property
-    def denominator(self):
-        return self.as_rational().denominator
 
     def is_zero(self) -> bool:
         """Returns whether this value represents zero."""
@@ -849,14 +829,11 @@ class RealFloat(numbers.Rational):
         """Is the value encoded identically to another `RealFloat` value?"""
         if not isinstance(other, RealFloat):
             return TypeError(f'expected RealFloat, got {type(other)}')
-
         return (
             self._s == other._s
             and self._exp == other._exp
             and self._c == other._c
-            and self._interval_size == other._interval_size
-            and self._interval_down == other._interval_down
-            and self._interval_closed == other._interval_closed
+            and self._interval == other._interval
         )
 
 
@@ -936,16 +913,19 @@ class RealFloat(numbers.Rational):
 
         return p, n
 
-    def _round_direction(self, kept: Self, lost: Self, n: int, rm: RoundingMode):
+    def _round_direction(self, lost: Self, n: int, rm: RoundingMode):
         """
         Determines the direction to round based on the rounding mode.
         Also computes the rounding envelope.
 
-        Assumes that `lost != 0` and `kept._exp > n >= lost._exp`.
+        Assumes that:
+        - `lost != 0`,
+        - `self._exp == n + 1`,
+        - `lost._e <= n`.
         """
 
         # convert the rounding mode to a direction
-        nearest, direction = rm.to_direction(kept._s)
+        nearest, direction = rm.to_direction(self._s)
 
         # rounding envelope
         interval_size: int = 0
@@ -983,10 +963,10 @@ class RealFloat(numbers.Rational):
                         case RoundingDirection.RAZ:
                             increment = True
                         case RoundingDirection.RTE:
-                            is_even = (kept._c & 1) == 0
+                            is_even = (self._c & 1) == 0
                             increment = not is_even
                         case RoundingDirection.RTO:
-                            is_even = (kept._c & 1) == 0
+                            is_even = (self._c & 1) == 0
                             increment = is_even
                         case _:
                             raise RuntimeError('unreachable')
@@ -1002,10 +982,10 @@ class RealFloat(numbers.Rational):
                 case RoundingDirection.RAZ:
                     increment = True
                 case RoundingDirection.RTE:
-                    is_even = (kept._c & 1) == 0
+                    is_even = (self._c & 1) == 0
                     increment = not is_even
                 case RoundingDirection.RTO:
-                    is_even = (kept._c & 1) == 0
+                    is_even = (self._c & 1) == 0
                     increment = is_even
                 case _:
                     raise RuntimeError('unreachable')
@@ -1014,7 +994,6 @@ class RealFloat(numbers.Rational):
 
     def _round_finalize(
         self,
-        kept: Self,
         lost: Self,
         p: int | None,
         n: int,
@@ -1023,35 +1002,33 @@ class RealFloat(numbers.Rational):
         """
         Completes the rounding operation using truncated digits
         and additional rounding information.
+        This operation is performed in-place on `self`.
 
-        Assumes that `lost != 0` and `kept._exp > n >= lost._exp`.
+        Assumes that:
+        - `lost != 0`,
+        - `self._exp == n + 1`,
+        - `lost._e <= n`.
         """
 
         # prepare the rounding operation
-        interval_size, interval_closed, increment = self._round_direction(kept, lost, n, rm)
+        interval_size, interval_closed, increment = self._round_direction(lost, n, rm)
 
         # increment if necessary
         if increment:
-            kept._c += 1
-            if p is not None and kept._c.bit_length() > p:
+            self._c += 1
+            if p is not None and self._c.bit_length() > p:
                 # adjust the exponent since we exceeded precision bounds
                 # the value is guaranteed to be a power of two
-                kept._c >>= 1
-                kept._exp += 1
-
-                assert interval_size is not None, 'interval_size is None when rounding is exact'
+                self._c >>= 1
+                self._exp += 1
                 interval_size -= 1
 
         # interval direction is opposite of if we incremented
         interval_down = not increment
 
-        # return the rounded value
-        return RealFloat(
-            x=kept,
-            interval_size=interval_size,
-            interval_down=interval_down,
-            interval_closed=interval_closed
-        )
+        # set the rounding interval
+        self._interval = RoundingInterval(interval_size, interval_down, interval_closed)
+
 
     def _round_at(
         self,
@@ -1069,16 +1046,22 @@ class RealFloat(numbers.Rational):
 
         # step 1. split the number at the rounding position
         kept, lost = self.split(n)
+        # assert kept._exp >= n + 1
 
         # step 2. check if rounding was exact (if so, we're done)
-        if lost.is_zero():
-            return kept
+        if not lost.is_zero():
+            # there are lost digits to consider
+            # assert kept._exp == n + 1 (since lost != 0)
 
-        if exact:
-            raise ValueError(f'rounding off digits: self={self}, n={n}')
+            # check if rounding is allowed
+            if exact:
+                raise ValueError(f'rounding off digits: self={self}, n={n}')
 
-        # step 3. determine how to round based on the lost bits
-        return self._round_finalize(kept, lost, p, n, rm)
+            # step 3. determine how to round based on the lost bits
+            kept._round_finalize(lost, p, n, rm)
+
+        return kept
+
 
     def _round_at_stochastic(
         self,
