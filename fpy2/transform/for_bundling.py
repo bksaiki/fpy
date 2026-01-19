@@ -96,7 +96,7 @@ class _ForBundlingInstance(DefaultTransformVisitor):
             # transform target
             match stmt.target:
                 case Id():
-                    target = stmt.target
+                    target: Id | TupleBinding = stmt.target
                 case TupleBinding():
                     target = self._visit_tuple_binding(stmt.target, rename)
                 case _:
