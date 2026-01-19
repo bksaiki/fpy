@@ -339,7 +339,7 @@ class _Interpreter(Visitor):
         return list(zip(*arrays))
 
     def _apply_mxn(self, aggregate, args: Collection[Expr], ctx: Context):
-        """Apply the `m x n` method to the given n-ary expression."""
+        """Apply the `mxn` method to the given n-ary expression."""
         vals: list[RealValue] = []
         for arg in args:
             val = self._visit_expr(arg, ctx)
@@ -689,29 +689,23 @@ class _Interpreter(Visitor):
                 for elt, v in zip(target.elts, val):
                     self._bind(elt, v)
 
-    def _apply_comp(
-        self,
-        bindings: list[tuple[Id | TupleBinding, Expr]],
-        elt: Expr,
-        ctx: Context,
-        elts: list[Any]
-    ):
-        if bindings == []:
-            elts.append(self._visit_expr(elt, ctx))
+    def _apply_comp(self, e: ListComp, idx: int, ctx: Context, elts: list[Any]):
+        if idx >= len(e.targets):
+            val = self._visit_expr(e.elt, ctx)
+            elts.append(val)
         else:
-            target, iterable = bindings[0]
+            target = e.targets[idx]
+            iterable = e.iterables[idx]
             array = self._visit_expr(iterable, ctx)
             if not isinstance(array, list):
                 raise TypeError(f'expected a list, got {array}')
             for val in array:
                 self._bind(target, val)
-                self._apply_comp(bindings[1:], elt, ctx, elts)
+                self._apply_comp(e, idx + 1, ctx, elts)
 
     def _visit_list_comp(self, e: ListComp, ctx: Context):
-        # evaluate comprehension
         elts: list[Any] = []
-        bindings = list(zip(e.targets, e.iterables))
-        self._apply_comp(bindings, e.elt, ctx, elts)
+        self._apply_comp(e, 0, ctx, elts)
         return elts
 
     def _visit_if_expr(self, e: IfExpr, ctx: Context):
@@ -759,13 +753,7 @@ class _Interpreter(Visitor):
         cond = self._visit_expr(stmt.cond, ctx)
         if not isinstance(cond, bool):
             raise TypeError(f'expected a boolean, got {cond}')
-
-        if cond:
-            # evaluate the if-true branch
-            self._visit_block(stmt.ift, ctx)
-        else:
-            # evaluate the if-false branch
-            self._visit_block(stmt.iff, ctx)
+        return self._visit_block(stmt.ift if cond else stmt.iff, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Context) -> None:
         # evaluate the condition
