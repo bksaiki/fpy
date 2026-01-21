@@ -245,6 +245,14 @@ class MPBFixedContext(SizedContext):
             inf_value=inf_value
         )
 
+    @property
+    def expmin(self) -> int:
+        """
+        The minimum exponent for this context.
+        This is equal to `nmin + 1`.
+        """
+        return self.nmin + 1
+
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
 
