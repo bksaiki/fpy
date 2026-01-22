@@ -13,6 +13,7 @@ from...utils import default_repr
 
 __all__ = [
     'AbstractFormat',
+    'SupporedContext'
 ]
 
 SupportedContext: TypeAlias = (
@@ -58,10 +59,18 @@ class AbstractFormat:
     ):
         if prec is None and exp is None:
             raise ValueError("At least one of `prec` or `exp` must be specified.")
+
         self.prec = prec
         self.exp = exp
         self.pos_bound = pos_bound
-        self.neg_bound = neg_bound
+
+        if neg_bound is None:
+            if pos_bound is None:
+                self.neg_bound = None
+            else:
+                self.neg_bound = -pos_bound
+        else:
+            self.neg_bound = neg_bound
 
     def __hash__(self):
         return hash((self.prec, self.exp, self.pos_bound, self.neg_bound))
@@ -134,29 +143,25 @@ class AbstractFormat:
         return self.prec
 
     def _effective_params(self):
-        # maximum (effective) precision
         prec = self._effective_prec()
         if prec is None:
             prec = float('inf')
 
-        # minimum unnormalized exponent
-        if self.exp is None:
-            exp = float('-inf')
-        else:
-            exp = self.exp
+        exp = -float('inf') if self.exp is None else self.exp
+        pos_bound = float('inf') if self.bound is None else self.bound
+        neg_bound = float('inf') if self.neg_bound is None else abs(self.neg_bound)
 
-        # maximum representable value
-        if self.bound is None:
-            bound: RealFloat | float = float('inf')
-        else:
-            bound = self.bound
-
-        return prec, exp, bound
+        return prec, exp, pos_bound, neg_bound
 
     def contains(self, other: 'AbstractFormat') -> bool:
         """Check if this format contains another format."""
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
-        prec1, exp1, bound1 = self._effective_params()
-        prec2, exp2, bound2 = other._effective_params()
-        return prec1 <= prec2 and exp1 >= exp2 and bound1 <= bound2
+        prec1, exp1, pos_bound1, neg_bound1 = self._effective_params()
+        prec2, exp2, pos_bound2, neg_bound2 = other._effective_params()
+        return (
+            prec1 <= prec2
+            and exp1 >= exp2
+            and pos_bound1 <= pos_bound2
+            and neg_bound1 <= neg_bound2
+        )

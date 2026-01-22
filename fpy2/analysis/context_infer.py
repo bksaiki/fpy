@@ -27,6 +27,7 @@ class ContextAnalysis:
     by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
     at_expr: dict[Expr, ContextParam]
+    type_info: TypeAnalysis
 
     @property
     def body_ctx(self):
@@ -40,6 +41,10 @@ class ContextAnalysis:
     def return_type(self):
         return self.fn_type.return_type
 
+    @property
+    def def_use(self):
+        return self.type_info.def_use
+
 
 class ContextTypeInferInstance(Visitor):
     """
@@ -50,7 +55,6 @@ class ContextTypeInferInstance(Visitor):
     """
 
     func: FuncDef
-    def_use: DefineUseAnalysis
     type_info: TypeAnalysis
     unsafe_cast_int: bool
 
@@ -64,12 +68,10 @@ class ContextTypeInferInstance(Visitor):
     def __init__(
         self,
         func: FuncDef,
-        def_use: DefineUseAnalysis,
         type_info: TypeAnalysis,
         unsafe_cast_int: bool
     ):
         self.func = func
-        self.def_use = def_use
         self.type_info = type_info
         self.unsafe_cast_int = unsafe_cast_int
         self.by_def = {}
@@ -78,6 +80,10 @@ class ContextTypeInferInstance(Visitor):
         self.ret_ty = None
         self.rvars = Unionfind()
         self.gensym = Gensym()
+
+    @property
+    def def_use(self):
+        return self.type_info.def_use
 
     def _lookup_ty(self, e: Expr):
         return self.type_info.by_expr[e]
@@ -729,7 +735,7 @@ class ContextTypeInferInstance(Visitor):
             for e, ctx in self.at_expr.items()
         }
 
-        return ContextAnalysis(fn_ctx, by_defs, by_expr, at_expr)
+        return ContextAnalysis(fn_ctx, by_defs, by_expr, at_expr, self.type_info)
 
 
 class _ContextInferPrimitive:
@@ -869,6 +875,7 @@ class ContextInfer:
         func: FuncDef,
         *,
         def_use: DefineUseAnalysis | None = None,
+        type_info: TypeAnalysis | None = None,
         unsafe_cast_int: bool = False
     ):
         """
@@ -887,11 +894,12 @@ class ContextInfer:
         if not isinstance(unsafe_cast_int, bool):
             raise TypeError(f'expected a \'bool\' for unsafe_cast_int, got {unsafe_cast_int}')
 
-        if def_use is None:
-            def_use = DefineUse.analyze(func)
+        if type_info is None:
+            if def_use is None:
+                def_use = DefineUse.analyze(func)
+            type_info = TypeInfer.check(func, def_use)
 
-        type_info = TypeInfer.check(func, def_use)
-        inst = ContextTypeInferInstance(func, def_use, type_info, unsafe_cast_int)
+        inst = ContextTypeInferInstance(func, type_info, unsafe_cast_int)
         return inst.infer()
 
     @staticmethod

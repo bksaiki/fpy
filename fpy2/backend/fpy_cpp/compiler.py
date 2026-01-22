@@ -4,22 +4,23 @@ C++/FPy backend: compiler to C++ number library.
 
 import dataclasses
 
-from typing import Collection, Iterable
+from typing import Collection
 
 from ...ast import *
 from ...analysis import (
     ContextAnalysis, ContextInfer, ContextInferError,
-    DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
+    DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
     TypeInferError
 )
 from ...function import Function
 from ...number import IEEEContext, OV, RM
-from ...primitive import Primitive
-from ...transform import ConstFold, ConstPropagate, Monomorphize
+from ...transform import Monomorphize
 from ...strategies import simplify
 from ...types import *
 from ...utils import Gensym
 from ..backend import Backend, CompileError
+
+from .format_infer import FormatInfer, FormatAnalysis, FormatInferError
 
 
 class CppFpyCompileError(CompileError):
@@ -72,9 +73,7 @@ class _CppBackendInstance(Visitor):
     func: FuncDef
     name: NamedId
     options: _CppOptions
-
-    def_use: DefineUseAnalysis
-    ctx_info: ContextAnalysis
+    format_info: FormatAnalysis
 
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
@@ -85,19 +84,24 @@ class _CppBackendInstance(Visitor):
         func: FuncDef,
         name: NamedId,
         options: _CppOptions,
-        def_use: DefineUseAnalysis,
-        ctx_info: ContextAnalysis,
+        format_info: FormatAnalysis,
     ):
         self.func = func
         self.name = name
         self.options = options
-
-        self.def_use = def_use
-        self.ctx_info = ctx_info
+        self.format_info = format_info
 
         self.decl_phis = set()
         self.decl_assigns = set()
         self.gensym = Gensym(self.def_use.names())
+
+    @property
+    def def_use(self) -> DefineUseAnalysis:
+        return self.format_info.def_use
+
+    @property
+    def ctx_info(self) -> ContextAnalysis:
+        return self.format_info.ctx_info
 
     def compile(self):
         # TODO: generate context name more intelligently
@@ -615,18 +619,16 @@ class CppFpyBackend(Backend):
         func = simplify(func.with_ast(ast))
         ast = func.ast
 
-        # analyses
-        def_use = DefineUse.analyze(ast)
-
         # run type checking with static context inference
         try:
-            ctx_info = ContextInfer.infer(ast, def_use=def_use, unsafe_cast_int=self.unsafe_cast_int)
-        except (ContextInferError, TypeInferError) as e:
+            ctx_info = ContextInfer.infer(ast, unsafe_cast_int=self.unsafe_cast_int)
+            format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
+        except (ContextInferError, TypeInferError, FormatInferError) as e:
             raise ValueError(f'{func.name}: context inference failed') from e
 
         # compile
         options = _CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _CppBackendInstance(ast, func.name, options, def_use, ctx_info)
+        inst = _CppBackendInstance(ast, func.name, options,format_info)
         body_str = inst.compile()
 
         return body_str
