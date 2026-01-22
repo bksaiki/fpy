@@ -153,8 +153,8 @@ class AbstractFormat:
 
         return prec, exp, pos_bound, neg_bound
 
-    def contains(self, other: 'AbstractFormat') -> bool:
-        """Check if this format contains another format."""
+    def contained_in(self, other: 'AbstractFormat') -> bool:
+        """Check if this format is contained in another format."""
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
         prec1, exp1, pos_bound1, neg_bound1 = self._effective_params()

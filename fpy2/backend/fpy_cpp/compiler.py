@@ -2,65 +2,29 @@
 C++/FPy backend: compiler to C++ number library.
 """
 
-import dataclasses
-
 from typing import Collection
 
 from ...ast import *
 from ...analysis import (
-    ContextAnalysis, ContextInfer, ContextInferError,
+    ContextInfer, ContextInferError,
     DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
     TypeInferError
 )
 from ...function import Function
-from ...number import IEEEContext, OV, RM
+from ...number import IEEEContext, OV, RM, FP64, INTEGER
 from ...transform import Monomorphize
 from ...strategies import simplify
-from ...types import *
+from ...types import BoolType, RealType, VarType, Type
 from ...utils import Gensym
-from ..backend import Backend, CompileError
+from ..backend import Backend
 
-from .format_infer import FormatInfer, FormatAnalysis, FormatInferError
-
-
-class CppFpyCompileError(CompileError):
-    """Compiler error for C++ backend"""
-
-    def __init__(self, func: FuncDef, msg: str, *args):
-        lines: list[str] = [f'C++ backend: {msg} in function `{func.name}`']
-        lines.extend(str(arg) for arg in args)
-        super().__init__('\n '.join(lines))
-
-
-@dataclasses.dataclass
-class _CompileCtx:
-    ctx_name: str
-    lines: list[str]
-    indent_str: str
-    indent_level: int
-
-    @staticmethod
-    def default(ctx_name: str, indent_str: str = ' ' * 4):
-        return _CompileCtx(ctx_name, [], indent_str, 0)
-
-    def indent(self):
-        return _CompileCtx(self.ctx_name, self.lines, self.indent_str, self.indent_level + 1)
-
-    def dedent(self):
-        assert self.indent_level > 0
-        return _CompileCtx(self.ctx_name, self.lines, self.indent_str, self.indent_level - 1)
-
-    def with_ctx(self, ctx_name: str):
-        return _CompileCtx(ctx_name, self.lines, self.indent_str, self.indent_level)
-
-    def add_line(self, line: str):
-        self.lines.append(self.indent_str * self.indent_level + line)
-
-
-@dataclasses.dataclass
-class _CppOptions:
-    unsafe_finitize_int: bool
-    unsafe_cast_int: bool
+from .format import AbstractFormat
+from .format_infer import (
+    FormatAnalysis, FormatInfer, FormatInferError,
+    FormatType, ListFormatType, TupleFormatType
+)
+from .types import *
+from .utils import CppFpyCompileError, CompileCtx, CppOptions
 
 
 class _CppBackendInstance(Visitor):
@@ -72,8 +36,8 @@ class _CppBackendInstance(Visitor):
 
     func: FuncDef
     name: NamedId
-    options: _CppOptions
-    format_info: FormatAnalysis
+    options: CppOptions
+    fmt_info: FormatAnalysis
 
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
@@ -83,13 +47,13 @@ class _CppBackendInstance(Visitor):
         self,
         func: FuncDef,
         name: NamedId,
-        options: _CppOptions,
-        format_info: FormatAnalysis,
+        options: CppOptions,
+        fmt_info: FormatAnalysis,
     ):
         self.func = func
         self.name = name
         self.options = options
-        self.format_info = format_info
+        self.fmt_info = fmt_info
 
         self.decl_phis = set()
         self.decl_assigns = set()
@@ -97,32 +61,27 @@ class _CppBackendInstance(Visitor):
 
     @property
     def def_use(self) -> DefineUseAnalysis:
-        return self.format_info.def_use
-
-    @property
-    def ctx_info(self) -> ContextAnalysis:
-        return self.format_info.ctx_info
+        return self.fmt_info.def_use
 
     def compile(self):
         # TODO: generate context name more intelligently
         ctx_name = self._fresh_var()
-        ctx = _CompileCtx.default(ctx_name)
+        ctx = CompileCtx.default(ctx_name)
         self._visit_function(self.func, ctx)
         return '\n'.join(ctx.lines)
 
-    def _check_type(self, ty: Type):
+    def _check_type(self, ty: FormatType):
         match ty:
+            case BoolType() | AbstractFormat():
+                pass
             case VarType():
                 raise CppFpyCompileError(self.func, f'Type is not monomorphic: {ty}')
-            case BoolType():
-                pass
             case RealType():
-                if ty.ctx is None or isinstance(ty.ctx, NamedId):
-                    raise CppFpyCompileError(self.func, f'Type is not monomorphic: {ty.ctx}')
-            case TupleType():
+                raise CppFpyCompileError(self.func, f'Cannot compile an unbounded real number: {ty.ctx}')
+            case TupleFormatType():
                 for elem_ty in ty.elts:
                     self._check_type(elem_ty)
-            case ListType():
+            case ListFormatType():
                 self._check_type(ty.elt)
             case _:
                 raise RuntimeError(f'Unhandled type: {ty}')
@@ -170,7 +129,7 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'Unhandled context: {ctx}')
 
-    def _compile_literal(self, s: str, ty: Type) -> str:
+    def _compile_literal(self, s: str, ty: FormatType) -> str:
         """Compile a numerical literal given as a string."""
         # TODO: integer?
         if '.' in s:
@@ -178,7 +137,7 @@ class _CppBackendInstance(Visitor):
         else:
             return f'{s}.0'
 
-    def _compile_real(self, e: RealVal, ty: Type) -> str:
+    def _compile_real(self, e: RealVal, ty: FormatType) -> str:
         """Compile a (rounded) numerical literal."""
         match e:
             case Decnum():
@@ -202,7 +161,7 @@ class _CppBackendInstance(Visitor):
         return d.prev is None and d not in self.decl_assigns
 
     def _def_type(self, d: Definition):
-        ty = self.ctx_info.by_def[d]
+        ty = self.fmt_info.by_def[d]
         self._check_type(ty)
         return ty
 
@@ -211,44 +170,48 @@ class _CppBackendInstance(Visitor):
         return self._def_type(d)
 
     def _expr_type(self, e: Expr):
-        ty = self.ctx_info.by_expr[e]
+        ty = self.fmt_info.by_expr[e]
         self._check_type(ty)
         return ty
 
-    def _compile_type(self, ty: Type) -> str:
+    def _compile_type(self, ty: FormatType) -> CppType:
         match ty:
             case BoolType():
-                return 'bool'
-            case RealType():
-                # using `double` as a container type
-                return 'double'
-            case TupleType():
+                return CppBoolType()
+            case AbstractFormat():
+                if ty.contained_in(AbstractFormat.from_context(FP64)):
+                    # fits within a double 
+                    return CppDoubleType()
+                elif ty.contained_in(AbstractFormat.from_context(INTEGER)):
+                    # fits with an int64_t
+                    return CppInt64Type()
+                else:
+                    raise CppFpyCompileError(self.func, f'no container type for: {ty}')
+            case TupleFormatType():
                 # compile recursively
-                elem_strs = [self._compile_type(elem_ty) for elem_ty in ty.elts]
-                return f'std::tuple<{", ".join(elem_strs)}>'
-            case ListType():
+                return CppTupleType(self._compile_type(elem_ty) for elem_ty in ty.elts)
+            case ListFormatType():
                 # compile recursively
-                elt_str = self._compile_type(ty.elt)
-                return f'std::vector<{elt_str}>'
+                return CppListType(self._compile_type(ty.elt))
             case _:
                 raise RuntimeError(f'Unhandled type: {ty}')
 
-    def _compile_number(self, s: str, ty: Type):
+    def _compile_number(self, s: str, ty: FormatType):
         # TODO: check context for rounding
         raise NotImplementedError
 
-    def _compile_size(self, e: str, ty: Type):
-        if not isinstance(ty, RealType):
+    def _compile_size(self, e: str, ty: FormatType):
+        if not isinstance(ty, RealType | AbstractFormat):
             raise RuntimeError(f'size type must be RealType, got {ty}')
         return f'static_cast<size_t>({e})'
 
-    def _visit_var(self, e: Var, ctx: _CompileCtx):
+    def _visit_var(self, e: Var, ctx: CompileCtx):
         return str(e.name)
 
-    def _visit_bool(self, e: BoolVal, ctx: _CompileCtx):
+    def _visit_bool(self, e: BoolVal, ctx: CompileCtx):
         return 'true' if e.val else 'false'
 
-    def _visit_foreign(self, e: ForeignVal, ctx: _CompileCtx):
+    def _visit_foreign(self, e: ForeignVal, ctx: CompileCtx):
         raise NotImplementedError
 
     def _visit_decnum(self, e, ctx):
@@ -266,12 +229,12 @@ class _CppBackendInstance(Visitor):
     def _visit_digits(self, e, ctx):
         raise NotImplementedError
 
-    def _visit_nullaryop(self, e, ctx: _CompileCtx):
+    def _visit_nullaryop(self, e, ctx: CompileCtx):
         match e:
             case _:
                 raise CppFpyCompileError(self.func, f'Unsupported nullary operation to compile: {e}')
 
-    def _visit_unaryop(self, e, ctx: _CompileCtx):
+    def _visit_unaryop(self, e, ctx: CompileCtx):
         arg_str = self._visit_expr(e.arg, ctx)
         match e:
             case Neg():
@@ -285,7 +248,7 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise CppFpyCompileError(self.func, f'Unsupported unary operation to compile: {e}')
 
-    def _visit_binaryop(self, e, ctx: _CompileCtx):
+    def _visit_binaryop(self, e, ctx: CompileCtx):
         lhs_str = self._visit_expr(e.first, ctx)
         rhs_str = self._visit_expr(e.second, ctx)
         match e:
@@ -300,7 +263,7 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise CppFpyCompileError(self.func, f'Unsupported binary operation to compile: {e}')
 
-    def _visit_ternaryop(self, e, ctx: _CompileCtx):
+    def _visit_ternaryop(self, e, ctx: CompileCtx):
         fst_str = self._visit_expr(e.first, ctx)
         snd_str = self._visit_expr(e.second, ctx)
         trd_str = self._visit_expr(e.third, ctx)
@@ -310,7 +273,7 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise CppFpyCompileError(self.func, f'Unsupported ternary operation to compile: {e}')
 
-    def _visit_zip(self, e: Zip, ctx: _CompileCtx):
+    def _visit_zip(self, e: Zip, ctx: CompileCtx):
         # zip(x1, ..., xn) =>
         # auto x1 = <x1>;
         # ...
@@ -322,7 +285,7 @@ class _CppBackendInstance(Visitor):
         # }
 
         xs: list[str] = []
-        arg_tys: list[Type] = []
+        arg_tys: list[FormatType] = []
         for arg in e.args:
             x = self._fresh_var()
             arg_cpp = self._visit_expr(arg, ctx)
@@ -330,13 +293,13 @@ class _CppBackendInstance(Visitor):
             xs.append(x)
 
             arg_ty = self._expr_type(arg)
-            if not isinstance(arg_ty, ListType):
+            if not isinstance(arg_ty, ListFormatType):
                 raise CppFpyCompileError(self.func, f'expected list for `{arg.format()}`')
             arg_tys.append(arg_ty.elt)
 
         t = self._fresh_var()
         i = self._fresh_var()
-        tmpl = ', '.join(self._compile_type(ty) for ty in arg_tys)
+        tmpl = ', '.join(self._compile_type(ty).to_cpp() for ty in arg_tys)
         ctx.add_line(f'std::vector<std::tuple<{tmpl}>> {t}({xs[0]}.size());')
         ctx.add_line(f'for (size_t {i} = 0; {i} < {xs[0]}.size(); ++{i}) {{')
         ctx.indent().add_line(f'{t}[{i}] = std::make_tuple({", ".join(f"{x}[{i}]" for x in xs)});')
@@ -344,7 +307,7 @@ class _CppBackendInstance(Visitor):
 
         return t
 
-    def _visit_naryop(self, e, ctx: _CompileCtx):
+    def _visit_naryop(self, e, ctx: CompileCtx):
         args_str = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case Zip():
@@ -352,7 +315,7 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise CppFpyCompileError(self.func, f'Unsupported nary operation to compile: {e}')
 
-    def _visit_round(self, e: Round | RoundExact, ctx: _CompileCtx):
+    def _visit_round(self, e: Round | RoundExact, ctx: CompileCtx):
         if isinstance(e.arg, RealVal):
             # special case: rounded literal
             ty = self._expr_type(e)
@@ -364,14 +327,14 @@ class _CppBackendInstance(Visitor):
             ty = self._expr_type(e)
             return f'fpy::round({arg}, {ctx.ctx_name})'
 
-    def _visit_round_at(self, e: RoundAt, ctx: _CompileCtx):
+    def _visit_round_at(self, e: RoundAt, ctx: CompileCtx):
         raise CppFpyCompileError(self.func, '`round_at` is unsupported')
 
-    def _visit_len(self, e: Len, ctx: _CompileCtx):
+    def _visit_len(self, e: Len, ctx: CompileCtx):
         # len(x)
         arg_cpp = self._visit_expr(e.arg, ctx)
-        ty_str = self._compile_type(self._expr_type(e))
-        return f'static_cast<{ty_str}>({arg_cpp}.size())'
+        ty = self._expr_type(e)
+        return self._compile_size(f'{arg_cpp}.size()', ty)
 
     def _visit_call(self, e, ctx):
         raise NotImplementedError
@@ -388,7 +351,7 @@ class _CppBackendInstance(Visitor):
     def _visit_list_comp(self, e, ctx):
         raise NotImplementedError
 
-    def _visit_list_ref(self, e: ListRef, ctx: _CompileCtx):
+    def _visit_list_ref(self, e: ListRef, ctx: CompileCtx):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
         index_ty = self._expr_type(e.index)
@@ -407,11 +370,11 @@ class _CppBackendInstance(Visitor):
     def _visit_attribute(self, e, ctx):
         raise NotImplementedError
 
-    def _visit_decl(self, name: Id, e: str, site: DefSite, ctx: _CompileCtx):
+    def _visit_decl(self, name: Id, e: str, site: DefSite, ctx: CompileCtx):
         match name:
             case NamedId():
                 if self._var_is_decl(name, site):
-                    ty_str = self._compile_type(self._var_type(name, site))
+                    ty_str = self._compile_type(self._var_type(name, site)).to_cpp()
                     ctx.add_line(f'{ty_str} {name} = {e};')
                 else:
                     ctx.add_line(f'{name} = {e};')
@@ -420,7 +383,7 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable: {name}')
 
-    def _visit_tuple_binding(self, t_id: str, binding: TupleBinding, site: DefSite, ctx: _CompileCtx):
+    def _visit_tuple_binding(self, t_id: str, binding: TupleBinding, site: DefSite, ctx: CompileCtx):
         for i, elt in enumerate(binding.elts):
             match elt:
                 case NamedId():
@@ -437,7 +400,7 @@ class _CppBackendInstance(Visitor):
                 case _:
                     raise RuntimeError(f'unreachable: {elt}')
 
-    def _visit_assign(self, stmt: Assign, ctx: _CompileCtx):
+    def _visit_assign(self, stmt: Assign, ctx: CompileCtx):
         e = self._visit_expr(stmt.expr, ctx)
         match stmt.target:
             case Id():
@@ -450,7 +413,7 @@ class _CppBackendInstance(Visitor):
             case _:
                 raise NotImplementedError(stmt.binding)
 
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _CompileCtx):
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: CompileCtx):
         # compile indices
         indices: list[str] = []
         for index in stmt.indices:
@@ -463,19 +426,19 @@ class _CppBackendInstance(Visitor):
         index_str = ''.join(f'[{i}]' for i in indices)
         ctx.add_line(f'{stmt.var}{index_str} = {e};')
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: _CompileCtx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: CompileCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         ctx.add_line(f'if ({cond}) {{')
         self._visit_block(stmt.body, ctx.indent())
         ctx.add_line('}')  # close if
 
-    def _visit_if(self, stmt: IfStmt, ctx: _CompileCtx):
+    def _visit_if(self, stmt: IfStmt, ctx: CompileCtx):
         # variables need to be declared if they are assigned
         # within the branches but not before defined in the branches
         for phi in self.def_use.phis[stmt]:
             if phi.is_intro and phi not in self.decl_phis:
                 # need a declaration for the phi assignment
-                ty_str = self._compile_type(self._def_type(phi))
+                ty_str = self._compile_type(self._def_type(phi)).to_cpp()
                 ctx.add_line(f'{ty_str} {phi.name}; // phi')
                 # record this phi so that we don't revisit it
                 self.decl_phis |= self.def_use.phi_prevs(phi)
@@ -489,13 +452,13 @@ class _CppBackendInstance(Visitor):
         self._visit_block(stmt.iff, ctx.indent())
         ctx.add_line('}')  # close if
 
-    def _visit_while(self, stmt: WhileStmt, ctx: _CompileCtx):
+    def _visit_while(self, stmt: WhileStmt, ctx: CompileCtx):
         cond = self._visit_expr(stmt.cond, ctx)
         ctx.add_line(f'while ({cond}) {{')
         self._visit_block(stmt.body, ctx.indent())
         ctx.add_line('}')  # close if
 
-    def _visit_for(self, stmt: ForStmt, ctx: _CompileCtx):
+    def _visit_for(self, stmt: ForStmt, ctx: CompileCtx):
         if isinstance(stmt.target, Id) and isinstance(stmt.iterable, Range1):
             # special case: for i in range(n)
             # for (size_t i = 0; i < n; ++i) {
@@ -517,7 +480,7 @@ class _CppBackendInstance(Visitor):
         self._visit_block(stmt.body, ctx.indent())
         ctx.add_line('}')  # close if
 
-    def _visit_context(self, stmt: ContextStmt, ctx: _CompileCtx):
+    def _visit_context(self, stmt: ContextStmt, ctx: CompileCtx):
         if not isinstance(stmt.ctx, ForeignVal):
             raise CppFpyCompileError(self.func, f'Rounding context cannot be compiled `{stmt.ctx}`')
 
@@ -534,7 +497,7 @@ class _CppBackendInstance(Visitor):
         # compile body
         self._visit_block(stmt.body, ctx.with_ctx(ctx_name))
 
-    def _visit_assert(self, stmt: AssertStmt, ctx: _CompileCtx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: CompileCtx):
         e = self._visit_expr(stmt.test, ctx)
         if stmt.msg is None:
             ctx.add_line(f'assert({e});')
@@ -542,31 +505,31 @@ class _CppBackendInstance(Visitor):
             msg = self._visit_expr(stmt.msg, ctx)
             ctx.add_line(f'assert(({e}) && ({msg}));')
 
-    def _visit_effect(self, stmt: EffectStmt, ctx: _CompileCtx):
+    def _visit_effect(self, stmt: EffectStmt, ctx: CompileCtx):
         raise CppFpyCompileError(self.func, 'FPy effects are not supported')
 
-    def _visit_return(self, stmt: ReturnStmt, ctx: _CompileCtx):
+    def _visit_return(self, stmt: ReturnStmt, ctx: CompileCtx):
         e = self._visit_expr(stmt.expr, ctx)
         ctx.add_line(f'return {e};')
 
-    def _visit_pass(self, stmt: PassStmt, ctx: _CompileCtx):
+    def _visit_pass(self, stmt: PassStmt, ctx: CompileCtx):
         pass
 
-    def _visit_block(self, block: StmtBlock, ctx: _CompileCtx):
+    def _visit_block(self, block: StmtBlock, ctx: CompileCtx):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
-    def _visit_function(self, func: FuncDef, ctx: _CompileCtx):
+    def _visit_function(self, func: FuncDef, ctx: CompileCtx):
         # compile arguments
         arg_strs: list[str] = []
-        for arg, arg_ty in zip(func.args, self.ctx_info.arg_types):
+        for arg, arg_ty in zip(func.args, self.fmt_info.arg_types):
             self._check_type(arg_ty)
-            ty_str = self._compile_type(arg_ty)
+            ty_str = self._compile_type(arg_ty).to_cpp()
             arg_strs.append(f'{ty_str} {arg.name}')
 
-        ret_ty = self.ctx_info.return_type
+        ret_ty = self.fmt_info.return_type
         self._check_type(ret_ty)
-        ty_str = self._compile_type(ret_ty)
+        ty_str = self._compile_type(ret_ty).to_cpp()
         ctx.add_line(f'{ty_str} {self.name}({", ".join(arg_strs)}) {{')
 
         # compile body
@@ -627,7 +590,7 @@ class CppFpyBackend(Backend):
             raise ValueError(f'{func.name}: context inference failed') from e
 
         # compile
-        options = _CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
+        options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
         inst = _CppBackendInstance(ast, func.name, options,format_info)
         body_str = inst.compile()
 

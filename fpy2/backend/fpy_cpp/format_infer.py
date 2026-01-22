@@ -3,7 +3,7 @@ Abstract format inference for FPy programs.
 """
 
 from dataclasses import dataclass
-from typing import NoReturn, TypeAlias, Collection
+from typing import NoReturn, TypeAlias, Iterable
 
 from ...ast import *
 from ...analysis import ContextAnalysis, ContextInfer, Definition, DefSite
@@ -16,6 +16,10 @@ from .format import AbstractFormat, SupportedContext
 __all__ = [
     'FormatInfer',
     'FormatInferError',
+    'FormatAnalysis',
+    'FormatType',
+    'ListFormatType',
+    'TupleFormatType'
 ]
 
 
@@ -38,7 +42,7 @@ class TupleFormatType:
     """Tuple type: element types can be abstract formats"""
     elts: tuple['FormatType', ...]
 
-    def __init__(self, elts: Collection['FormatType']):
+    def __init__(self, elts: Iterable['FormatType']):
         self.elts = tuple(elts)
 
     def __hash__(self):
@@ -47,10 +51,31 @@ class TupleFormatType:
     def __eq__(self, other):
         return isinstance(other, TupleFormatType) and self.elts == other.elts
 
+@default_repr
+class FunctionFormatType:
+    """Function type: argument and return types can be abstract formats"""
+    arg_types: tuple['FormatType', ...]
+    ret_type: 'FormatType'
+
+    def __init__(self, arg_types: Iterable['FormatType'], ret_type: 'FormatType'):
+        self.arg_types = tuple(arg_types)
+        self.ret_type = ret_type
+
+    def __hash__(self):
+        return hash((FunctionFormatType, self.arg_types, self.ret_type))
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, FunctionFormatType)
+            and self.arg_types == other.arg_types
+            and self.ret_type == other.ret_type
+        )
+
 
 FormatType: TypeAlias = (
-    ListFormatType | TupleFormatType | AbstractFormat
+    ListFormatType | TupleFormatType | FunctionFormatType
     | BoolType | ContextType | RealType
+    | AbstractFormat
 )
 """The normal type system extended with abstract formats."""
 
@@ -69,14 +94,22 @@ class FormatAnalysis:
     - `by_def`: mapping from definitions to inferred abstract formats
     - `by_expr`: mapping from expressions to inferred abstract formats
     """
+    fn_type: FunctionFormatType
     by_def: dict[Definition, FormatType]
     by_expr: dict[Expr, FormatType]
     ctx_info: ContextAnalysis
 
     @property
+    def arg_types(self):
+        return self.fn_type.arg_types
+
+    @property
+    def return_type(self):
+        return self.fn_type.ret_type
+
+    @property
     def def_use(self):
         return self.ctx_info.def_use
-
 
 
 class _FormatInfernce(Visitor):
@@ -86,22 +119,25 @@ class _FormatInfernce(Visitor):
 
     func: FuncDef
     ctx_info: ContextAnalysis
+
     by_def: dict[Definition, FormatType]
     by_expr: dict[Expr, FormatType]
+    ret_ty: FormatType | None
 
     def __init__(self, func: FuncDef, ctx_info: ContextAnalysis):
         self.func = func
         self.ctx_info = ctx_info
         self.by_def = {}
         self.by_expr = {}
+        self.ret_ty = None
 
     @property
     def def_use(self):
         return self.ctx_info.def_use
 
     def infer(self):
-        self._visit_function(self.func, None)
-        return FormatAnalysis(self.by_def, self.by_expr, self.ctx_info)
+        fn_ty = self._visit_function(self.func, None)
+        return FormatAnalysis(fn_ty, self.by_def, self.by_expr, self.ctx_info)
 
     def raise_error(self, msg: str) -> NoReturn:
         raise FormatInferError(f'In function {self.func.name}: {msg}')
@@ -295,7 +331,7 @@ class _FormatInfernce(Visitor):
         self._visit_expr(stmt.expr, ctx)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: Context):
-        self._visit_expr(stmt.expr, ctx)
+        self.ret_ty = self._visit_expr(stmt.expr, ctx)
 
     def _visit_pass(self, stmt: PassStmt, ctx: Context):
         pass
@@ -315,14 +351,20 @@ class _FormatInfernce(Visitor):
             raise FormatInferError('no concrete context')
 
         # function arguments
-        for arg in func.args:
+        arg_types: list[FormatType] = []
+        for arg, ty in zip(func.args, self.ctx_info.arg_types, strict=True):
+            fmt_ty = self._cvt_type(ty)
+            arg_types.append(fmt_ty)
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
-                ty = self.ctx_info.by_def[d]
-                self.by_def[d] = self._cvt_type(ty)
+                self.by_def[d] = fmt_ty
 
         # function body
         self._visit_block(func.body, func.ctx)
+
+        # function return type
+        assert self.ret_ty is not None
+        return FunctionFormatType(arg_types, self.ret_ty)
 
 
 ###########################################################

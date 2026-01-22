@@ -57,44 +57,44 @@ class TestAbstractFormat(unittest.TestCase):
         # FP32 \subseteq FP64
         CTX1 = AbstractFormat.from_context(fp.FP32)
         CTX2 = AbstractFormat.from_context(fp.FP64)
-        self.assertTrue(CTX1.contains(CTX2), "Expected FP32 to be contained in FP64.")
+        self.assertTrue(CTX1.contained_in(CTX2), "Expected FP32 to be contained in FP64.")
 
         # MX_E5M2 \subseteq FP32
         CTX1 = AbstractFormat.from_context(fp.MX_E5M2)
         CTX2 = AbstractFormat.from_context(fp.FP32)
-        self.assertTrue(CTX1.contains(CTX2), "Expected MX_E5M2 to be contained in FP32.")
+        self.assertTrue(CTX1.contained_in(CTX2), "Expected MX_E5M2 to be contained in FP32.")
 
         # FP64 ⊄ FP32
         CTX1 = AbstractFormat.from_context(fp.FP64)
         CTX2 = AbstractFormat.from_context(fp.FP32)
-        self.assertFalse(CTX1.contains(CTX2), "Expected FP64 to not be contained in FP32.")
+        self.assertFalse(CTX1.contained_in(CTX2), "Expected FP64 to not be contained in FP32.")
 
         # MX_E4M3 ⊄ MX_E5M2
         CTX1 = AbstractFormat.from_context(fp.MX_E4M3)
         CTX2 = AbstractFormat.from_context(fp.MX_E5M2)
-        self.assertFalse(CTX1.contains(CTX2), "Expected MX_E4M3 to not be contained in MX_E5M2.")
+        self.assertFalse(CTX1.contained_in(CTX2), "Expected MX_E4M3 to not be contained in MX_E5M2.")
 
         # MX_E4M3 \subseteq fixed<-9, 32>
         CTX1 = AbstractFormat.from_context(fp.MX_E4M3)
         CTX2 = AbstractFormat.from_context(fp.FixedContext(True, -9, 32))
-        self.assertTrue(CTX1.contains(CTX2), "Expected MX_E4M3 to be contained in fixed<-9, 32>.")
+        self.assertTrue(CTX1.contained_in(CTX2), "Expected MX_E4M3 to be contained in fixed<-9, 32>.")
 
         # MX_E5M2 ⊄ fixed<-9, 32>
         CTX1 = AbstractFormat.from_context(fp.MX_E5M2)
         CTX2 = AbstractFormat.from_context(fp.FixedContext(True, -9, 32))
-        self.assertFalse(CTX1.contains(CTX2), "Expected MX_E5M2 to not be contained in fixed<-9, 32>.")
+        self.assertFalse(CTX1.contained_in(CTX2), "Expected MX_E5M2 to not be contained in fixed<-9, 32>.")
 
         # INT8 \subseteq FP32
         CTX1 = AbstractFormat.from_context(fp.SINT8)
         CTX2 = AbstractFormat.from_context(fp.FP32)
-        self.assertTrue(CTX1.contains(CTX2), "Expected INT8 to be contained in FP32.")
+        self.assertTrue(CTX1.contained_in(CTX2), "Expected INT8 to be contained in FP32.")
 
         # INT4 \subseteq A(3, 0, 4)
         CTX1 = AbstractFormat.from_context(fp.FixedContext(True, 0, 4))
         CTX2 = AbstractFormat(3, 0, fp.RealFloat.from_int(8))
-        self.assertTrue(CTX1.contains(CTX2), "Expected INT4 to be contained in A(3, 0, 4).")
+        self.assertTrue(CTX1.contained_in(CTX2), "Expected INT4 to be contained in A(3, 0, 4).")
 
         # INT4 \subseteq A(4, 0, 12)
         CTX1 = AbstractFormat.from_context(fp.FixedContext(True, 0, 4))
         CTX2 = AbstractFormat(4, 0, fp.RealFloat.from_int(12))
-        self.assertTrue(CTX1.contains(CTX2), "Expected INT4 to be contained in A(4, 0, 12).")
+        self.assertTrue(CTX1.contained_in(CTX2), "Expected INT4 to be contained in A(4, 0, 12).")
