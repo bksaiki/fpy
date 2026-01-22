@@ -83,3 +83,18 @@ class TestAbstractFormat(unittest.TestCase):
         CTX1 = AbstractFormat.from_context(fp.MX_E5M2)
         CTX2 = AbstractFormat.from_context(fp.FixedContext(True, -9, 32))
         self.assertFalse(CTX1.contains(CTX2), "Expected MX_E5M2 to not be contained in fixed<-9, 32>.")
+
+        # INT8 \subseteq FP32
+        CTX1 = AbstractFormat.from_context(fp.SINT8)
+        CTX2 = AbstractFormat.from_context(fp.FP32)
+        self.assertTrue(CTX1.contains(CTX2), "Expected INT8 to be contained in FP32.")
+
+        # INT4 \subseteq A(3, 0, 4)
+        CTX1 = AbstractFormat.from_context(fp.FixedContext(True, 0, 4))
+        CTX2 = AbstractFormat(3, 0, fp.RealFloat.from_int(8))
+        self.assertTrue(CTX1.contains(CTX2), "Expected INT4 to be contained in A(3, 0, 4).")
+
+        # INT4 \subseteq A(4, 0, 12)
+        CTX1 = AbstractFormat.from_context(fp.FixedContext(True, 0, 4))
+        CTX2 = AbstractFormat(4, 0, fp.RealFloat.from_int(12))
+        self.assertTrue(CTX1.contains(CTX2), "Expected INT4 to be contained in A(4, 0, 12).")

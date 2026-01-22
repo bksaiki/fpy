@@ -5,7 +5,7 @@ Abstract number system.
 from typing import TypeAlias
 
 from ...number import (
-    MPFixedContext, MPBFixedContext,
+    MPFixedContext, MPBFixedContext, FixedContext,
     MPFloatContext, MPSFloatContext, MPBFloatContext, EFloatContext,
     RealFloat
 )
@@ -39,76 +39,83 @@ class AbstractFormat:
     Abstract number system.
     - `prec`: maximum precision
     - `exp`: minimum unnormalized exponent
-    - `bound`: maximum representable number
+    - `pos_bound`: largest positive representable number
+    - `neg_bound`: largest negative representable number
     """
 
     prec: int | None
     exp: int | None
-    bound: RealFloat | None
+    pos_bound: RealFloat | None
+    neg_bound: RealFloat | None
 
-    def __init__(self, prec: int | None, exp: int | None, bound: RealFloat | None):
+    def __init__(
+        self,
+        prec: int | None,
+        exp: int | None,
+        pos_bound: RealFloat | None,
+        *,
+        neg_bound: RealFloat | None = None,
+    ):
         if prec is None and exp is None:
             raise ValueError("At least one of `prec` or `exp` must be specified.")
-        if bound is not None and bound < 0:
-            raise ValueError(f"`bound={bound}` must be non-negative.")
         self.prec = prec
         self.exp = exp
-        self.bound = bound
+        self.pos_bound = pos_bound
+        self.neg_bound = neg_bound
 
     def __hash__(self):
-        return hash((self.prec, self.exp, self.bound))
+        return hash((self.prec, self.exp, self.pos_bound, self.neg_bound))
 
     def __eq__(self, other):
         return (
             isinstance(other, AbstractFormat)
             and self.prec == other.prec
             and self.exp == other.exp
-            and self.bound == other.bound
+            and self.pos_bound == other.pos_bound
+            and self.neg_bound == other.neg_bound
         )
+
+    @property
+    def bound(self) -> RealFloat | None:
+        if self.pos_bound is None:
+            if self.neg_bound is None:
+                return None
+            else:
+                return abs(self.neg_bound)
+        elif self.neg_bound is None:
+            return self.pos_bound
+        else:
+            return max(self.pos_bound, abs(self.neg_bound))
 
     @staticmethod
     def from_context(ctx: SupportedContext) -> 'AbstractFormat':
         match ctx:
+            case FixedContext() if not ctx.signed:
+                pos_maxval = ctx.maxval().as_real()
+                neg_maxval = RealFloat.from_int(0)
+                return AbstractFormat(None, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
             case MPFloatContext():
                 return AbstractFormat(ctx.pmax, None, None)
             case MPSFloatContext():
                 return AbstractFormat(ctx.pmax, ctx.expmin, None)
             case MPBFloatContext():
-                maxval = max(ctx.pos_maxval, abs(ctx.neg_maxval))
-                return AbstractFormat(ctx.pmax, ctx.expmin, maxval)
+                pos_maxval = ctx.maxval().as_real()
+                neg_maxval = abs(ctx.maxval(True)).as_real()
+                return AbstractFormat(ctx.pmax, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
             case EFloatContext():
-                maxval = max(ctx.maxval(), abs(ctx.maxval(True)))
-                return AbstractFormat(ctx.pmax, ctx.expmin, maxval)
+                pos_maxval = ctx.maxval().as_real()
+                neg_maxval = abs(ctx.maxval(True)).as_real()
+                return AbstractFormat(ctx.pmax, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
             case MPFixedContext():
                 return AbstractFormat(None, ctx.expmin, None)
             case MPBFixedContext():
-                maxval = max(ctx.pos_maxval, abs(ctx.neg_maxval))
-                return AbstractFormat(None, ctx.expmin, maxval)
+                pos_maxval = ctx.maxval().as_real()
+                neg_maxval = abs(ctx.maxval(True)).as_real()
+                return AbstractFormat(None, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
             case _:
                 raise TypeError(f'Unsupported context type: {type(ctx)}')
 
-    def _effective_params(self):
-        # maximum precision
-        if self.prec is None:
-            prec = float('inf')
-        else:
-            prec = self.prec
-
-        # minimum unnormalized exponent
-        if self.exp is None:
-            exp = float('-inf')
-        else:
-            exp = self.exp
-
-        # maximum representable value
-        if self.bound is None:
-            bound: RealFloat | float = float('inf')
-        else:
-            bound = self.bound
-
-        return prec, exp, bound
-
-    def effective_prec(self):
+    def _effective_prec(self):
         """Effective maximum precision."""
         if self.prec is None and self.bound is not None:
             # bounded fixed-point format
@@ -126,6 +133,25 @@ class AbstractFormat:
         # everything else
         return self.prec
 
+    def _effective_params(self):
+        # maximum (effective) precision
+        prec = self._effective_prec()
+        if prec is None:
+            prec = float('inf')
+
+        # minimum unnormalized exponent
+        if self.exp is None:
+            exp = float('-inf')
+        else:
+            exp = self.exp
+
+        # maximum representable value
+        if self.bound is None:
+            bound: RealFloat | float = float('inf')
+        else:
+            bound = self.bound
+
+        return prec, exp, bound
 
     def contains(self, other: 'AbstractFormat') -> bool:
         """Check if this format contains another format."""
