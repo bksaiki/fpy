@@ -59,6 +59,8 @@ class AbstractFormat:
     ):
         if prec is None and exp is None:
             raise ValueError("At least one of `prec` or `exp` must be specified.")
+        if prec is not None and prec <= 0:
+            raise ValueError("`prec` must be positive.")
 
         self.prec = prec
         self.exp = exp
@@ -165,3 +167,47 @@ class AbstractFormat:
             and pos_bound1 <= pos_bound2
             and neg_bound1 <= neg_bound2
         )
+
+    def with_prec_offset(self, delta: int) -> 'AbstractFormat':
+        """
+        Return a new format with precision adjusted by delta.
+        
+        Args:
+            delta: Amount to add to precision (can be negative).
+        Returns:
+            New AbstractFormat with adjusted precision.
+        """
+        if self.prec is None:
+            raise ValueError("Cannot adjust precision when prec is None")
+        new_prec = max(1, self.prec + delta)
+        return AbstractFormat(new_prec, self.exp, self.pos_bound, neg_bound=self.neg_bound)
+
+    def with_exp_offset(self, delta: int) -> 'AbstractFormat':
+        """
+        Return a new format with exponent adjusted by delta.
+        
+        Args:
+            delta: Amount to add to exponent (can be negative).
+        Returns:
+            New AbstractFormat with adjusted exponent.
+        """
+        if self.exp is None:
+            raise ValueError("Cannot adjust exponent when exp is None")
+        new_exp = self.exp + delta
+        return AbstractFormat(self.prec, new_exp, self.pos_bound, neg_bound=self.neg_bound)
+
+    def with_bounds_scale(self, factor: RealFloat) -> 'AbstractFormat':
+        """
+        Return a new format with bounds scaled by factor.
+        
+        Args:
+            factor: Factor to multiply bounds by (must be positive).
+        Returns:
+            New AbstractFormat with scaled bounds.
+        """
+        if factor <= 0:
+            raise ValueError("Factor must be positive")
+        
+        new_pos_bound = None if self.pos_bound is None else self.pos_bound * factor
+        new_neg_bound = None if self.neg_bound is None else self.neg_bound * factor
+        return AbstractFormat(self.prec, self.exp, new_pos_bound, neg_bound=new_neg_bound)

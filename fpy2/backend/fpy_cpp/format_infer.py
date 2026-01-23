@@ -202,7 +202,7 @@ class _FormatInfernce(Visitor):
         return self._expr_type(e)
 
     def _visit_integer(self, e: Integer, ctx: Context):
-        return self._expr_type(e)
+        return AbstractFormat.from_context(INTEGER)
 
     def _visit_rational(self, e: Rational, ctx: Context):
         raise NotImplementedError

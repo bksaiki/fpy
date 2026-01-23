@@ -23,6 +23,10 @@ from .format_infer import (
     FormatAnalysis, FormatInfer, FormatInferError,
     FormatType, ListFormatType, TupleFormatType
 )
+from .instr import (
+    NegInstr, AbsInstr, SqrtInstr,
+    AddInstr, SubInstr, MulInstr, DivInstr, FMAInstr
+)
 from .types import *
 from .utils import CppFpyCompileError, CompileCtx, CppOptions
 
@@ -174,6 +178,11 @@ class _CppBackendInstance(Visitor):
         self._check_type(ty)
         return ty
 
+    def _expr_ctx(self, e: Expr) -> Context:
+        ty = self.fmt_info.ctx_info.by_expr[e]
+        assert isinstance(ty, RealType) and isinstance(ty.ctx, Context)
+        return ty.ctx
+
     def _compile_type(self, ty: FormatType) -> CppType:
         match ty:
             case BoolType():
@@ -221,7 +230,7 @@ class _CppBackendInstance(Visitor):
         raise NotImplementedError
 
     def _visit_integer(self, e, ctx):
-        raise NotImplementedError
+        return str(e.val)
 
     def _visit_rational(self, e, ctx):
         raise NotImplementedError
@@ -238,11 +247,26 @@ class _CppBackendInstance(Visitor):
         arg_str = self._visit_expr(e.arg, ctx)
         match e:
             case Neg():
-                return f'fpy::neg({arg_str}, {ctx.ctx_name})'
+                arg_ty = self._expr_type(e.arg)
+                e_ctx = self._expr_ctx(e)
+                gen = NegInstr.generator(arg_ty, e_ctx)
+                if gen is None:
+                    raise CppFpyCompileError(self.func, f'No suitable implementation found for negation: {e}')
+                return gen(arg_str, ctx.ctx_name)
             case Abs():
-                return f'fpy::abs({arg_str}, {ctx.ctx_name})'
+                arg_ty = self._expr_type(e.arg)
+                e_ctx = self._expr_ctx(e)
+                gen = AbsInstr.generator(arg_ty, e_ctx)
+                if gen is None:
+                    raise CppFpyCompileError(self.func, f'No suitable implementation found for absolute value: {e}')
+                return gen(arg_str, ctx.ctx_name)
             case Sqrt():
-                return f'fpy::sqrt({arg_str}, {ctx.ctx_name})'
+                arg_ty = self._expr_type(e.arg)
+                e_ctx = self._expr_ctx(e)
+                gen = SqrtInstr.generator(arg_ty, e_ctx)
+                if gen is None:
+                    raise CppFpyCompileError(self.func, f'No suitable implementation found for square root: {e}')
+                return gen(arg_str, ctx.ctx_name)
             case Len():
                 return self._visit_len(e, ctx)
             case _:
@@ -253,13 +277,37 @@ class _CppBackendInstance(Visitor):
         rhs_str = self._visit_expr(e.second, ctx)
         match e:
             case Add():
-                return f'fpy::add({lhs_str}, {rhs_str}, {ctx.ctx_name})'
+                lhs_ty = self._expr_type(e.first)
+                rhs_ty = self._expr_type(e.second)
+                e_ctx = self._expr_ctx(e)
+                gen = AddInstr.generator(lhs_ty, rhs_ty, e_ctx)
+                if gen is None:
+                    raise CppFpyCompileError(self.func, f'No suitable implementation found for addition: {e}')
+                return gen(lhs_str, rhs_str, ctx.ctx_name)
             case Sub():
-                return f'fpy::sub({lhs_str}, {rhs_str}, {ctx.ctx_name})'
+                lhs_ty = self._expr_type(e.first)
+                rhs_ty = self._expr_type(e.second)
+                e_ctx = self._expr_ctx(e)
+                gen = SubInstr.generator(lhs_ty, rhs_ty, e_ctx)
+                if gen is None:
+                    raise CppFpyCompileError(self.func, f'No suitable implementation found for subtraction: {e}')
+                return gen(lhs_str, rhs_str, ctx.ctx_name)
             case Mul():
-                return f'fpy::mul({lhs_str}, {rhs_str}, {ctx.ctx_name})'
+                lhs_ty = self._expr_type(e.first)
+                rhs_ty = self._expr_type(e.second)
+                e_ctx = self._expr_ctx(e)
+                gen = MulInstr.generator(lhs_ty, rhs_ty, e_ctx)
+                if gen is None:
+                    raise CppFpyCompileError(self.func, f'No suitable implementation found for multiplication: {e}')
+                return gen(lhs_str, rhs_str, ctx.ctx_name)
             case Div():
-                return f'fpy::div({lhs_str}, {rhs_str}, {ctx.ctx_name})'
+                lhs_ty = self._expr_type(e.first)
+                rhs_ty = self._expr_type(e.second)
+                e_ctx = self._expr_ctx(e)
+                gen = DivInstr.generator(lhs_ty, rhs_ty, e_ctx)
+                if gen is None:
+                    raise CppFpyCompileError(self.func, f'No suitable implementation found for division: {e}')
+                return gen(lhs_str, rhs_str, ctx.ctx_name)
             case _:
                 raise CppFpyCompileError(self.func, f'Unsupported binary operation to compile: {e}')
 
@@ -269,7 +317,14 @@ class _CppBackendInstance(Visitor):
         trd_str = self._visit_expr(e.third, ctx)
         match e:
             case Fma():
-                return f'fpy::fma({fst_str}, {snd_str}, {trd_str}, {ctx.ctx_name})'
+                fst_ty = self._expr_type(e.first)
+                snd_ty = self._expr_type(e.second)
+                trd_ty = self._expr_type(e.third)
+                e_ctx = self._expr_ctx(e)
+                gen = FMAInstr.generator(fst_ty, snd_ty, trd_ty, e_ctx)
+                if gen is None:
+                    raise CppFpyCompileError(self.func, f'No suitable implementation found for fused multiply-add: {e}')
+                return gen(fst_str, snd_str, trd_str, ctx.ctx_name)
             case _:
                 raise CppFpyCompileError(self.func, f'Unsupported ternary operation to compile: {e}')
 
