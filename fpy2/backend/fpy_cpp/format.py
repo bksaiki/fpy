@@ -2,6 +2,8 @@
 Abstract number system.
 """
 
+import math
+
 from typing import TypeAlias
 
 from ...number import (
@@ -38,41 +40,38 @@ def _maxval_precision(bound: RealFloat, exp: int) -> int:
 class AbstractFormat:
     """
     Abstract number system.
-    - `prec`: maximum precision
-    - `exp`: minimum unnormalized exponent
-    - `pos_bound`: largest positive representable number
-    - `neg_bound`: largest negative representable number
+    - `prec`: maximum precision (use float('inf') for unbounded)
+    - `exp`: minimum unnormalized exponent (use float('-inf') for unbounded)
+    - `pos_bound`: largest positive representable number (use float('inf') for unbounded)
+    - `neg_bound`: largest negative representable number (use float('inf') for unbounded magnitude)
     """
 
-    prec: int | None
-    exp: int | None
-    pos_bound: RealFloat | None
-    neg_bound: RealFloat | None
+    prec: int | float
+    exp: int | float
+    pos_bound: RealFloat | float
+    neg_bound: RealFloat | float
 
     def __init__(
         self,
-        prec: int | None,
-        exp: int | None,
-        pos_bound: RealFloat | None,
+        prec: int | float,
+        exp: int | float,
+        bound: RealFloat | float,
         *,
-        neg_bound: RealFloat | None = None,
+        neg_bound: RealFloat | float | None = None,
     ):
-        if prec is None and exp is None:
-            raise ValueError("At least one of `prec` or `exp` must be specified.")
-        if prec is not None and prec <= 0:
+        if prec <= 0 or math.isnan(prec):
             raise ValueError("`prec` must be positive.")
+        if math.isnan(exp):
+            raise ValueError("`exp` cannot be NaN")
+        if math.isnan(bound):
+            raise ValueError("`pos_bound` must not be NaN")
+        if neg_bound is not None and math.isnan(neg_bound):
+            raise ValueError("`neg_bound` must not be NaN")
 
         self.prec = prec
         self.exp = exp
-        self.pos_bound = pos_bound
-
-        if neg_bound is None:
-            if pos_bound is None:
-                self.neg_bound = None
-            else:
-                self.neg_bound = -pos_bound
-        else:
-            self.neg_bound = neg_bound
+        self.pos_bound = bound
+        self.neg_bound = -bound if neg_bound is None else neg_bound
 
     def __hash__(self):
         return hash((self.prec, self.exp, self.pos_bound, self.neg_bound))
@@ -86,17 +85,23 @@ class AbstractFormat:
             and self.neg_bound == other.neg_bound
         )
 
+    def __mul__(self, other: 'AbstractFormat') -> 'AbstractFormat':
+        """Multiply two formats."""
+        if not isinstance(other, AbstractFormat):
+            raise TypeError(f'Expected \'AbstractFormat\', got {other}')
+        # precision: p1 + p2
+        # exponent: e1 + e2
+        # bounds: b1 * b2
+        prec = self.prec + other.prec
+        exp = self.exp + other.exp
+        pos_bound = max(self.pos_bound * other.pos_bound, self.neg_bound * other.neg_bound)
+        neg_bound = max(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
+        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+
     @property
-    def bound(self) -> RealFloat | None:
-        if self.pos_bound is None:
-            if self.neg_bound is None:
-                return None
-            else:
-                return abs(self.neg_bound)
-        elif self.neg_bound is None:
-            return self.pos_bound
-        else:
-            return max(self.pos_bound, abs(self.neg_bound))
+    def bound(self) -> RealFloat | float:
+        """Maximum magnitude bound (pos or neg)."""
+        return max(self.pos_bound, abs(self.neg_bound))
 
     @staticmethod
     def from_context(ctx: SupportedContext) -> 'AbstractFormat':
@@ -104,36 +109,36 @@ class AbstractFormat:
             case FixedContext() if not ctx.signed:
                 pos_maxval = ctx.maxval().as_real()
                 neg_maxval = RealFloat.from_int(0)
-                return AbstractFormat(None, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
+                return AbstractFormat(float('inf'), ctx.expmin, pos_maxval, neg_bound=neg_maxval)
             case MPFloatContext():
-                return AbstractFormat(ctx.pmax, None, None)
+                return AbstractFormat(ctx.pmax, float('-inf'), float('inf'))
             case MPSFloatContext():
-                return AbstractFormat(ctx.pmax, ctx.expmin, None)
+                return AbstractFormat(ctx.pmax, ctx.expmin, float('inf'))
             case MPBFloatContext():
                 pos_maxval = ctx.maxval().as_real()
-                neg_maxval = abs(ctx.maxval(True)).as_real()
+                neg_maxval = ctx.maxval(True).as_real()
                 return AbstractFormat(ctx.pmax, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
             case EFloatContext():
                 pos_maxval = ctx.maxval().as_real()
-                neg_maxval = abs(ctx.maxval(True)).as_real()
+                neg_maxval = ctx.maxval(True).as_real()
                 return AbstractFormat(ctx.pmax, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
             case MPFixedContext():
-                return AbstractFormat(None, ctx.expmin, None)
+                return AbstractFormat(float('inf'), ctx.expmin, float('inf'))
             case MPBFixedContext():
                 pos_maxval = ctx.maxval().as_real()
-                neg_maxval = abs(ctx.maxval(True)).as_real()
-                return AbstractFormat(None, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
+                neg_maxval = ctx.maxval(True).as_real()
+                return AbstractFormat(float('inf'), ctx.expmin, pos_maxval, neg_bound=neg_maxval)
             case _:
                 raise TypeError(f'Unsupported context type: {type(ctx)}')
 
     def _effective_prec(self):
         """Effective maximum precision."""
-        if self.prec is None and self.bound is not None:
+        if isinstance(self.prec, float) and not isinstance(self.bound, float):
             # bounded fixed-point format
-            assert self.exp is not None
+            assert not isinstance(self.exp, float)
             return _maxval_precision(self.bound, self.exp)
 
-        if self.prec is not None and self.exp is not None and self.bound is not None:
+        if not isinstance(self.prec, float) and not isinstance(self.bound, float) and not isinstance(self.exp, float):
             # bounded floating-point format
             # check against the cutoff value
             cutoff = RealFloat(False, self.exp, 1 << self.prec)
@@ -144,62 +149,47 @@ class AbstractFormat:
         # everything else
         return self.prec
 
-    def _effective_params(self):
-        prec = self._effective_prec()
-        if prec is None:
-            prec = float('inf')
-
-        exp = -float('inf') if self.exp is None else self.exp
-        pos_bound = float('inf') if self.bound is None else self.bound
-        neg_bound = float('inf') if self.neg_bound is None else abs(self.neg_bound)
-
-        return prec, exp, pos_bound, neg_bound
-
     def contained_in(self, other: 'AbstractFormat') -> bool:
         """Check if this format is contained in another format."""
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
-        prec1, exp1, pos_bound1, neg_bound1 = self._effective_params()
-        prec2, exp2, pos_bound2, neg_bound2 = other._effective_params()
         return (
-            prec1 <= prec2
-            and exp1 >= exp2
-            and pos_bound1 <= pos_bound2
-            and neg_bound1 <= neg_bound2
+            self._effective_prec() <= other._effective_prec()
+            and self.exp >= other.exp
+            and self.pos_bound <= other.pos_bound
+            and self.neg_bound >= other.neg_bound
         )
 
     def with_prec_offset(self, delta: int) -> 'AbstractFormat':
         """
         Return a new format with precision adjusted by delta.
-        
+
         Args:
             delta: Amount to add to precision (can be negative).
         Returns:
             New AbstractFormat with adjusted precision.
         """
-        if self.prec is None:
-            raise ValueError("Cannot adjust precision when prec is None")
-        new_prec = max(1, self.prec + delta)
+        new_prec = self.prec + delta
+        if new_prec < 1:
+            raise ValueError("resulting precision must be at least 1")
         return AbstractFormat(new_prec, self.exp, self.pos_bound, neg_bound=self.neg_bound)
 
     def with_exp_offset(self, delta: int) -> 'AbstractFormat':
         """
         Return a new format with exponent adjusted by delta.
-        
+
         Args:
             delta: Amount to add to exponent (can be negative).
         Returns:
             New AbstractFormat with adjusted exponent.
         """
-        if self.exp is None:
-            raise ValueError("Cannot adjust exponent when exp is None")
         new_exp = self.exp + delta
         return AbstractFormat(self.prec, new_exp, self.pos_bound, neg_bound=self.neg_bound)
 
     def with_bounds_scale(self, factor: RealFloat) -> 'AbstractFormat':
         """
         Return a new format with bounds scaled by factor.
-        
+
         Args:
             factor: Factor to multiply bounds by (must be positive).
         Returns:
@@ -207,7 +197,8 @@ class AbstractFormat:
         """
         if factor <= 0:
             raise ValueError("Factor must be positive")
-        
-        new_pos_bound = None if self.pos_bound is None else self.pos_bound * factor
-        new_neg_bound = None if self.neg_bound is None else self.neg_bound * factor
+
+        # inf * positive = inf, so no need to check
+        new_pos_bound = self.pos_bound * factor
+        new_neg_bound = self.neg_bound * factor
         return AbstractFormat(self.prec, self.exp, new_pos_bound, neg_bound=new_neg_bound)

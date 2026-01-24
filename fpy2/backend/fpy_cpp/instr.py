@@ -161,9 +161,18 @@ class MulInstr:
     def generator(lhs_ty: AbstractFormat, rhs_ty: AbstractFormat, ctx: Context):
         """Generate C++ code for multiplication."""
 
-        if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty) and _rto_is_valid(ctx):
-            # use the FP-RTO backed implementation
-            return lambda lhs, rhs, ctx: f'fpy::mul({lhs}, {rhs}, {ctx})'
+        if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
+            exact_ty = lhs_ty * rhs_ty
+            ctx_ty = _cvt_context(ctx)
+            if ctx_ty is not None and exact_ty.contained_in(ctx_ty):
+                # multiplication is exact
+                return lambda lhs, rhs, ctx: f'{lhs} * {rhs}'
+            if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                # use direct multiplication if the result fits in double
+                return lambda lhs, rhs, ctx: f'fpy::mul<fpy::EngineType::EXACT>({lhs}, {rhs}, {ctx})'
+            if _rto_is_valid(ctx):
+                # use the FP-RTO backed implementation
+                return lambda lhs, rhs, ctx: f'fpy::mul({lhs}, {rhs}, {ctx})'
 
         # no suitable implementation found
         return None

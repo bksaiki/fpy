@@ -11,7 +11,7 @@ namespace engine {
 
 static double finalize(double result, unsigned int fexps) {
     // check if overflow or underflow occurred
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         !(fexps & (arch::EXCEPT_OVERFLOW | arch::EXCEPT_UNDERFLOW)),
         "rto_add: overflow or underflow occurred"
     );
@@ -29,7 +29,7 @@ static double finalize(double result, unsigned int fexps) {
 
 double add(double x, double y, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "rto_add: requested precision exceeds double-precision capability"
     );
@@ -49,7 +49,7 @@ double add(double x, double y, prec_t p) {
 
 double sub(double x, double y, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "sub: requested precision exceeds double-precision capability"
     );
@@ -69,7 +69,7 @@ double sub(double x, double y, prec_t p) {
 
 double mul(double x, double y, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "mul: requested precision exceeds double-precision capability"
     );
@@ -89,7 +89,7 @@ double mul(double x, double y, prec_t p) {
 
 double div(double x, double y, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "div: requested precision exceeds double-precision capability"
     );
@@ -109,7 +109,7 @@ double div(double x, double y, prec_t p) {
 
 double sqrt(double x, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "sqrt: requested precision exceeds double-precision capability"
     );
@@ -129,7 +129,7 @@ double sqrt(double x, prec_t p) {
 
 double fma(double x, double y, double z, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "fma: requested precision exceeds double-precision capability"
     );
@@ -149,7 +149,7 @@ double fma(double x, double y, double z, prec_t p) {
 
 double add_exact(double x, double y, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "add_exact: requested precision exceeds double-precision capability"
     );
@@ -165,7 +165,7 @@ double add_exact(double x, double y, prec_t p) {
 #if defined(FPY_DEBUG)
     // check for inexactness or overflow
     const auto fexps = arch::get_exceptions();
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         !(fexps & (arch::EXCEPT_INEXACT | arch::EXCEPT_OVERFLOW)),
         "add_exact: addition was not exact"
     );
@@ -177,7 +177,7 @@ double add_exact(double x, double y, prec_t p) {
 
 double sub_exact(double x, double y, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "sub_exact: requested precision exceeds double-precision capability"
     );
@@ -193,7 +193,7 @@ double sub_exact(double x, double y, prec_t p) {
 #if defined(FPY_DEBUG)
     // check for inexactness or overflow
     const auto fexps = arch::get_exceptions();
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         !(fexps & (arch::EXCEPT_INEXACT | arch::EXCEPT_OVERFLOW)),
         "sub_exact: subtraction was not exact"
     );
@@ -205,7 +205,7 @@ double sub_exact(double x, double y, prec_t p) {
 
 double mul_exact(double x, double y, prec_t p) {
     // double-precision only guarantees 53 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 53,
         "mul_exact: requested precision exceeds double-precision capability"
     );
@@ -221,7 +221,7 @@ double mul_exact(double x, double y, prec_t p) {
 #if defined(FPY_DEBUG)
     // check for inexactness or overflow
     const auto fexps = arch::get_exceptions();
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         !(fexps & (arch::EXCEPT_INEXACT | arch::EXCEPT_OVERFLOW)),
         "mul_exact: multiplication was not exact"
     );
@@ -234,7 +234,7 @@ double mul_exact(double x, double y, prec_t p) {
 
 std::tuple<int64_t, exp_t> mul_fixed(double x, double y, prec_t p) {
     // fixed-point only guarantees 63 bits of precision
-    FPY_ASSERT(
+    FPY_DEBUG_ASSERT(
         p <= 63,
         "mul_fixed: requested precision exceeds capability"
     );

@@ -83,7 +83,10 @@ double __round_finalize(bool s, exp_t e, mant_t c, prec_t p, const std::optional
                     case RM::RNE:
                     case RM::RTE: incrementp = (c & one) != 0; break;
                     case RM::RTO: incrementp = (c & one) == 0; break;
-                    default: FPY_UNREACHABLE();
+                    default:
+                        incrementp = false;
+                        FPY_DEBUG_ASSERT(false, "unreachable");
+                        break;
                 }
             } else {
                 // above or below halfway
@@ -99,7 +102,10 @@ double __round_finalize(bool s, exp_t e, mant_t c, prec_t p, const std::optional
                 case RM::RTN: incrementp = s; break;
                 case RM::RTE: incrementp = (c & one) != 0; break;
                 case RM::RTO: incrementp = (c & one) == 0; break;
-                default: FPY_UNREACHABLE();
+                default:
+                    incrementp = false;
+                    FPY_DEBUG_ASSERT(false, "unreachable");
+                    break;
             }
         }
 
