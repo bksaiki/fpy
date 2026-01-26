@@ -8,7 +8,7 @@ import numbers
 import random
 
 from fractions import Fraction
-from typing import Self
+from typing import Self, overload
 
 from ..globals import get_current_float_converter, get_current_str_converter
 from ..round import RoundingMode, RoundingDirection
@@ -219,6 +219,15 @@ class RealFloat(numbers.Rational):
         """
         return RealFloat(x=self)
 
+    @overload
+    def __add__(self, other: Self) -> Self: ...
+    @overload
+    def __add__(self, other: int) -> Self: ...
+    @overload
+    def __add__(self, other: float) -> Self | float: ...
+    @overload
+    def __add__(self, other: Fraction) -> Self: ...
+
     def __add__(self, other):
         """
         Adds `self` and `other` exactly.
@@ -231,7 +240,11 @@ class RealFloat(numbers.Rational):
             case int():
                 other = RealFloat.from_int(other)
             case float():
-                other = RealFloat.from_float(other)
+                if math.isnan(other) or math.isinf(other):
+                    # Convert self to float and perform float arithmetic
+                    return float(self) + other
+                else:
+                    other = RealFloat.from_float(other)
             case Fraction():
                 other = RealFloat.from_rational(other)
             case _:
@@ -267,14 +280,50 @@ class RealFloat(numbers.Rational):
             # return the result
             return RealFloat(s=s, exp=exp, c=c)
 
+    @overload
+    def __radd__(self, other: Self) -> Self: ...
+    @overload
+    def __radd__(self, other: int) -> Self: ...
+    @overload
+    def __radd__(self, other: float) -> Self | float: ...
+    @overload
+    def __radd__(self, other: Fraction) -> Self: ...
+
     def __radd__(self, other):
         return self + other
+
+    @overload
+    def __sub__(self, other: Self) -> Self: ...
+    @overload
+    def __sub__(self, other: int) -> Self: ...
+    @overload
+    def __sub__(self, other: float) -> Self | float: ...
+    @overload
+    def __sub__(self, other: Fraction) -> Self: ...
 
     def __sub__(self, other):
         return self + (-other)
     
+    @overload
+    def __rsub__(self, other: Self) -> Self: ...
+    @overload
+    def __rsub__(self, other: int) -> Self: ...
+    @overload
+    def __rsub__(self, other: float) -> Self | float: ...
+    @overload
+    def __rsub__(self, other: Fraction) -> Self: ...
+
     def __rsub__(self, other):
         return (-self) + other
+
+    @overload
+    def __mul__(self, other: Self) -> Self: ...
+    @overload
+    def __mul__(self, other: int) -> Self: ...
+    @overload
+    def __mul__(self, other: float) -> Self | float: ...
+    @overload
+    def __mul__(self, other: Fraction) -> Self: ...
 
     def __mul__(self, other):
         """
@@ -288,7 +337,14 @@ class RealFloat(numbers.Rational):
             case int():
                 other = RealFloat.from_int(other)
             case float():
-                other = RealFloat.from_float(other)
+                if math.isnan(other) or math.isinf(other):
+                    # Convert self to float and perform float arithmetic
+                    other_sgn = math.copysign(1.0, other) # extract the sign bit
+                    s = self._s != (other_sgn < 0)
+                    res_sgn = -1.0 if s else 1.0
+                    return other * res_sgn
+                else:
+                    other = RealFloat.from_float(other)
             case Fraction():
                 other = RealFloat.from_rational(other)
             case _:
@@ -304,6 +360,15 @@ class RealFloat(numbers.Rational):
             exp = self._exp + other._exp
             c = self._c * other._c
             return RealFloat(s=s, exp=exp, c=c)
+
+    @overload
+    def __rmul__(self, other: Self) -> Self: ...
+    @overload
+    def __rmul__(self, other: int) -> Self: ...
+    @overload
+    def __rmul__(self, other: float) -> Self | float: ...
+    @overload
+    def __rmul__(self, other: Fraction) -> Self: ...
 
     def __rmul__(self, other):
         return self * other

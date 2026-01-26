@@ -8,3 +8,6 @@ from .cpp import CppCompiler, CppCompileError
 
 # FPCore backend
 from .fpc import FPCoreCompiler, FPCoreCompileError
+
+# MPFX backend
+from .mpfx import MPFXCompiler, MPFXCompileError

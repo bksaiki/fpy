@@ -43,7 +43,8 @@ from .interpret import (
 from .backend import (
     Backend,
     CppCompiler,
-    FPCoreCompiler
+    FPCoreCompiler,
+    MPFXCompiler,
 )
 
 # runner

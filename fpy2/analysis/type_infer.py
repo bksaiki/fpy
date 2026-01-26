@@ -142,6 +142,7 @@ class TypeAnalysis:
     by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
     tvars: Unionfind[Type]
+    def_use: DefineUseAnalysis
 
     @property
     def arg_types(self):
@@ -726,7 +727,7 @@ class _TypeInferInstance(Visitor):
             e: self._resolve_type(ty).subst_type(subst)
             for e, ty in self.by_expr.items()
         }
-        return TypeAnalysis(fn_ty, by_defs, by_expr, self.tvars)
+        return TypeAnalysis(fn_ty, by_defs, by_expr, self.tvars, self.def_use)
 
 ###########################################################
 # Primitives
