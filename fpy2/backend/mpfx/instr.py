@@ -101,7 +101,6 @@ class NegInstr:
     @staticmethod
     def generator(arg_ty: AbstractFormat, ctx: Context):
         """Generate C++ code for negation."""
-        ret_ty = _cvt_context(ctx)
         if _fits_in_double(arg_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
             return lambda operand, ctx: f'mpfx::neg({operand}, {ctx})'
@@ -130,7 +129,6 @@ class SqrtInstr:
     @staticmethod
     def generator(arg_ty: AbstractFormat, ctx: Context):
         """Generate C++ code for square root."""
-        ret_ty = _cvt_context(ctx)
         if _fits_in_double(arg_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
             return lambda operand, ctx: f'mpfx::sqrt({operand}, {ctx})'
@@ -145,7 +143,6 @@ class SubInstr:
     @staticmethod
     def generator(lhs_ty: AbstractFormat, rhs_ty: AbstractFormat, ctx: Context):
         """Generate C++ code for subtraction."""
-        ret_ty = _cvt_context(ctx)
         if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
             return lambda lhs, rhs, ctx: f'mpfx::sub({lhs}, {rhs}, {ctx})'

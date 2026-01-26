@@ -363,7 +363,6 @@ class _MPFXBackendInstance(Visitor):
         return t
 
     def _visit_naryop(self, e, ctx: CompileCtx):
-        args_str = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case Zip():
                 return self._visit_zip(e, ctx)

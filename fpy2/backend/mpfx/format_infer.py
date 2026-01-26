@@ -269,7 +269,7 @@ class _FormatInfernce(Visitor):
     def _visit_if_expr(self, e: IfExpr, ctx: Context):
         self._visit_expr(e.cond, ctx)
         ift_ty = self._visit_expr(e.ift, ctx)
-        iff_ty = self._visit_expr(e.iff, ctx)
+        _ = self._visit_expr(e.iff, ctx)
         # TODO: unify ift_ty and iff_ty?
         return ift_ty
 
@@ -314,8 +314,8 @@ class _FormatInfernce(Visitor):
 
         # TODO: unify?
         for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            _ = self.by_def[self.def_use.defs[phi.lhs]]
+            _ = self.by_def[self.def_use.defs[phi.rhs]]
 
         return ctx
 

@@ -15,7 +15,7 @@ from...utils import default_repr
 
 __all__ = [
     'AbstractFormat',
-    'SupporedContext'
+    'SupportedContext'
 ]
 
 SupportedContext: TypeAlias = (
