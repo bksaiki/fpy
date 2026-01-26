@@ -1,5 +1,5 @@
 """
-C++/FPy: common utilities
+MPFX: common utilities
 """
 
 from dataclasses import dataclass
@@ -8,16 +8,16 @@ from ...ast import FuncDef
 from ..backend import CompileError
 
 __all__ = [
-    'CppFpyCompileError',
+    'MPFXCompileError',
     'CompileCtx',
     'CppOptions',
 ]
 
-class CppFpyCompileError(CompileError):
-    """Compiler error for C++ backend"""
+class MPFXCompileError(CompileError):
+    """Compiler error for MPFX backend"""
 
     def __init__(self, func: FuncDef, msg: str, *args):
-        lines: list[str] = [f'C++ backend: {msg} in function `{func.name}`']
+        lines: list[str] = [f'MPFX backend: {msg} in function `{func.name}`']
         lines.extend(str(arg) for arg in args)
         super().__init__('\n '.join(lines))
 

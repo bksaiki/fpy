@@ -86,7 +86,7 @@ class AddInstr:
         """
         if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
-            return lambda lhs, rhs, ctx: f'fpy::add({lhs}, {rhs}, {ctx})'
+            return lambda lhs, rhs, ctx: f'mpfx::add({lhs}, {rhs}, {ctx})'
         elif _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty) and isinstance(ctx, RealContext):
             # use integer addition for real addition under INTEGER context
             return lambda lhs, rhs, ctx: f'({lhs} + {rhs})'
@@ -104,7 +104,7 @@ class NegInstr:
         ret_ty = _cvt_context(ctx)
         if _fits_in_double(arg_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
-            return lambda operand, ctx: f'fpy::neg({operand}, {ctx})'
+            return lambda operand, ctx: f'mpfx::neg({operand}, {ctx})'
 
         # no suitable implementation found
         return None
@@ -118,7 +118,7 @@ class AbsInstr:
         """Generate C++ code for absolute value."""
         if _fits_in_double(arg_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
-            return lambda operand, ctx: f'fpy::abs({operand}, {ctx})'
+            return lambda operand, ctx: f'mpfx::abs({operand}, {ctx})'
 
         # no suitable implementation found
         return None
@@ -133,7 +133,7 @@ class SqrtInstr:
         ret_ty = _cvt_context(ctx)
         if _fits_in_double(arg_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
-            return lambda operand, ctx: f'fpy::sqrt({operand}, {ctx})'
+            return lambda operand, ctx: f'mpfx::sqrt({operand}, {ctx})'
 
         # no suitable implementation found
         return None
@@ -148,7 +148,7 @@ class SubInstr:
         ret_ty = _cvt_context(ctx)
         if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
-            return lambda lhs, rhs, ctx: f'fpy::sub({lhs}, {rhs}, {ctx})'
+            return lambda lhs, rhs, ctx: f'mpfx::sub({lhs}, {rhs}, {ctx})'
 
         # no suitable implementation found
         return None
@@ -169,10 +169,10 @@ class MulInstr:
                 return lambda lhs, rhs, ctx: f'{lhs} * {rhs}'
             if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
                 # use direct multiplication if the result fits in double
-                return lambda lhs, rhs, ctx: f'fpy::mul<fpy::EngineType::EXACT>({lhs}, {rhs}, {ctx})'
+                return lambda lhs, rhs, ctx: f'mpfx::mul<mpfx::EngineType::EXACT>({lhs}, {rhs}, {ctx})'
             if _rto_is_valid(ctx):
                 # use the FP-RTO backed implementation
-                return lambda lhs, rhs, ctx: f'fpy::mul({lhs}, {rhs}, {ctx})'
+                return lambda lhs, rhs, ctx: f'mpfx::mul({lhs}, {rhs}, {ctx})'
 
         # no suitable implementation found
         return None
@@ -186,7 +186,7 @@ class DivInstr:
         """Generate C++ code for division."""
         if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
-            return lambda lhs, rhs, ctx: f'fpy::div({lhs}, {rhs}, {ctx})'
+            return lambda lhs, rhs, ctx: f'mpfx::div({lhs}, {rhs}, {ctx})'
 
         # no suitable implementation found
         return None
@@ -205,7 +205,7 @@ class FMAInstr:
             and _rto_is_valid(ctx)
         ):
             # use the FP-RTO backed implementation
-            return lambda a, b, c, ctx: f'fpy::fma({a}, {b}, {c}, {ctx})'
+            return lambda a, b, c, ctx: f'mpfx::fma({a}, {b}, {c}, {ctx})'
 
         # no suitable implementation found
         return None

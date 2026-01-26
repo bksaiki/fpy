@@ -1,5 +1,5 @@
 """
-C++/FPy backend: compiler to C++ number library.
+MPFX backend: compiler to MPFX number library.
 """
 
 from typing import Collection
@@ -28,10 +28,10 @@ from .instr import (
     AddInstr, SubInstr, MulInstr, DivInstr, FMAInstr
 )
 from .types import *
-from .utils import CppFpyCompileError, CompileCtx, CppOptions
+from .utils import MPFXCompileError, CompileCtx, CppOptions
 
 
-class _CppBackendInstance(Visitor):
+class _MPFXBackendInstance(Visitor):
     """
     Per-function compilation instance.
 
@@ -79,9 +79,9 @@ class _CppBackendInstance(Visitor):
             case BoolType() | AbstractFormat():
                 pass
             case VarType():
-                raise CppFpyCompileError(self.func, f'Type is not monomorphic: {ty}')
+                raise MPFXCompileError(self.func, f'Type is not monomorphic: {ty}')
             case RealType():
-                raise CppFpyCompileError(self.func, f'Cannot compile an unbounded real number: {ty.ctx}')
+                raise MPFXCompileError(self.func, f'Cannot compile an unbounded real number: {ty.ctx}')
             case TupleFormatType():
                 for elem_ty in ty.elts:
                     self._check_type(elem_ty)
@@ -93,43 +93,43 @@ class _CppBackendInstance(Visitor):
     def _compile_rm(self, rm: RM) -> str:
         match rm:
             case RM.RNE:
-                return 'fpy::RoundingMode::RNE'
+                return 'mpfx::RoundingMode::RNE'
             case RM.RNA:
-                return 'fpy::RoundingMode::RNA'
+                return 'mpfx::RoundingMode::RNA'
             case RM.RTP:
-                return 'fpy::RoundingMode::RTP'
+                return 'mpfx::RoundingMode::RTP'
             case RM.RTN:
-                return 'fpy::RoundingMode::RTN'
+                return 'mpfx::RoundingMode::RTN'
             case RM.RTZ:
-                return 'fpy::RoundingMode::RTZ'
+                return 'mpfx::RoundingMode::RTZ'
             case RM.RAZ:
-                return 'fpy::RoundingMode::RAZ'
+                return 'mpfx::RoundingMode::RAZ'
             case RM.RTO:
-                return 'fpy::RoundingMode::RTO'
+                return 'mpfx::RoundingMode::RTO'
             case RM.RTE:
-                return 'fpy::RoundingMode::RTE'
+                return 'mpfx::RoundingMode::RTE'
             case _:
-                raise CppFpyCompileError(self.func, f'Unsupported rounding mode to compile: {rm}')
+                raise MPFXCompileError(self.func, f'Unsupported rounding mode to compile: {rm}')
 
     def _compile_context(self, ctx: Context) -> str:
         match ctx:
             case IEEEContext():
                 # ES <= 9
                 if ctx.es > 9:
-                    raise CppFpyCompileError(self.func, f'IEEE 754: exponent too large to compile: {ctx.es}')
+                    raise MPFXCompileError(self.func, f'IEEE 754: exponent too large to compile: {ctx.es}')
                 # P <= 51
                 if ctx.pmax > 51:
-                    raise CppFpyCompileError(self.func, f'IEEE 754: precision too large to compile: {ctx.pmax}')
+                    raise MPFXCompileError(self.func, f'IEEE 754: precision too large to compile: {ctx.pmax}')
                 # overflow
                 if ctx.overflow != OV.OVERFLOW:
-                    raise CppFpyCompileError(self.func, 'IEEE 754: overflow mode RAISE cannot be compiled')
+                    raise MPFXCompileError(self.func, 'IEEE 754: overflow mode RAISE cannot be compiled')
                 # no random
                 if ctx.num_randbits != 0:
-                    raise CppFpyCompileError(self.func, 'IEEE 754: stochastic rounding cannot be compiled')
+                    raise MPFXCompileError(self.func, 'IEEE 754: stochastic rounding cannot be compiled')
 
                 # compile rounding
                 rm = self._compile_rm(ctx.rm)
-                return f'fpy::IEEE754Context({ctx.es}, {ctx.nbits}, {rm})'
+                return f'mpfx::IEEE754Context({ctx.es}, {ctx.nbits}, {rm})'
             case _:
                 raise RuntimeError(f'Unhandled context: {ctx}')
 
@@ -147,13 +147,13 @@ class _CppBackendInstance(Visitor):
             case Decnum():
                 return self._compile_literal(str(e.val), ty)
             case Hexnum():
-                raise CppFpyCompileError(self.func, 'hexadecimal literals are unsupported')
+                raise MPFXCompileError(self.func, 'hexadecimal literals are unsupported')
             case Integer():
                 return self._compile_literal(str(e.val), ty)
             case Rational():
-                raise CppFpyCompileError(self.func, 'rational values are unsupported')
+                raise MPFXCompileError(self.func, 'rational values are unsupported')
             case Digits():
-                raise CppFpyCompileError(self.func, '`digits(m, e, b)` is unsupported')
+                raise MPFXCompileError(self.func, '`digits(m, e, b)` is unsupported')
             case _:
                 raise RuntimeError(f'unreachable: {e}')
 
@@ -195,7 +195,7 @@ class _CppBackendInstance(Visitor):
                     # fits with an int64_t
                     return CppInt64Type()
                 else:
-                    raise CppFpyCompileError(self.func, f'no container type for: {ty}')
+                    raise MPFXCompileError(self.func, f'no container type for: {ty}')
             case TupleFormatType():
                 # compile recursively
                 return CppTupleType(self._compile_type(elem_ty) for elem_ty in ty.elts)
@@ -241,7 +241,7 @@ class _CppBackendInstance(Visitor):
     def _visit_nullaryop(self, e, ctx: CompileCtx):
         match e:
             case _:
-                raise CppFpyCompileError(self.func, f'Unsupported nullary operation to compile: {e}')
+                raise MPFXCompileError(self.func, f'Unsupported nullary operation to compile: {e}')
 
     def _visit_unaryop(self, e, ctx: CompileCtx):
         arg_str = self._visit_expr(e.arg, ctx)
@@ -251,26 +251,26 @@ class _CppBackendInstance(Visitor):
                 e_ctx = self._expr_ctx(e)
                 gen = NegInstr.generator(arg_ty, e_ctx)
                 if gen is None:
-                    raise CppFpyCompileError(self.func, f'No suitable implementation found for negation: {e}')
+                    raise MPFXCompileError(self.func, f'No suitable implementation found for negation: {e}')
                 return gen(arg_str, ctx.ctx_name)
             case Abs():
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
                 gen = AbsInstr.generator(arg_ty, e_ctx)
                 if gen is None:
-                    raise CppFpyCompileError(self.func, f'No suitable implementation found for absolute value: {e}')
+                    raise MPFXCompileError(self.func, f'No suitable implementation found for absolute value: {e}')
                 return gen(arg_str, ctx.ctx_name)
             case Sqrt():
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
                 gen = SqrtInstr.generator(arg_ty, e_ctx)
                 if gen is None:
-                    raise CppFpyCompileError(self.func, f'No suitable implementation found for square root: {e}')
+                    raise MPFXCompileError(self.func, f'No suitable implementation found for square root: {e}')
                 return gen(arg_str, ctx.ctx_name)
             case Len():
                 return self._visit_len(e, ctx)
             case _:
-                raise CppFpyCompileError(self.func, f'Unsupported unary operation to compile: {e}')
+                raise MPFXCompileError(self.func, f'Unsupported unary operation to compile: {e}')
 
     def _visit_binaryop(self, e, ctx: CompileCtx):
         lhs_str = self._visit_expr(e.first, ctx)
@@ -282,7 +282,7 @@ class _CppBackendInstance(Visitor):
                 e_ctx = self._expr_ctx(e)
                 gen = AddInstr.generator(lhs_ty, rhs_ty, e_ctx)
                 if gen is None:
-                    raise CppFpyCompileError(self.func, f'No suitable implementation found for addition: {e}')
+                    raise MPFXCompileError(self.func, f'No suitable implementation found for addition: {e}')
                 return gen(lhs_str, rhs_str, ctx.ctx_name)
             case Sub():
                 lhs_ty = self._expr_type(e.first)
@@ -290,7 +290,7 @@ class _CppBackendInstance(Visitor):
                 e_ctx = self._expr_ctx(e)
                 gen = SubInstr.generator(lhs_ty, rhs_ty, e_ctx)
                 if gen is None:
-                    raise CppFpyCompileError(self.func, f'No suitable implementation found for subtraction: {e}')
+                    raise MPFXCompileError(self.func, f'No suitable implementation found for subtraction: {e}')
                 return gen(lhs_str, rhs_str, ctx.ctx_name)
             case Mul():
                 lhs_ty = self._expr_type(e.first)
@@ -298,7 +298,7 @@ class _CppBackendInstance(Visitor):
                 e_ctx = self._expr_ctx(e)
                 gen = MulInstr.generator(lhs_ty, rhs_ty, e_ctx)
                 if gen is None:
-                    raise CppFpyCompileError(self.func, f'No suitable implementation found for multiplication: {e}')
+                    raise MPFXCompileError(self.func, f'No suitable implementation found for multiplication: {e}')
                 return gen(lhs_str, rhs_str, ctx.ctx_name)
             case Div():
                 lhs_ty = self._expr_type(e.first)
@@ -306,10 +306,10 @@ class _CppBackendInstance(Visitor):
                 e_ctx = self._expr_ctx(e)
                 gen = DivInstr.generator(lhs_ty, rhs_ty, e_ctx)
                 if gen is None:
-                    raise CppFpyCompileError(self.func, f'No suitable implementation found for division: {e}')
+                    raise MPFXCompileError(self.func, f'No suitable implementation found for division: {e}')
                 return gen(lhs_str, rhs_str, ctx.ctx_name)
             case _:
-                raise CppFpyCompileError(self.func, f'Unsupported binary operation to compile: {e}')
+                raise MPFXCompileError(self.func, f'Unsupported binary operation to compile: {e}')
 
     def _visit_ternaryop(self, e, ctx: CompileCtx):
         fst_str = self._visit_expr(e.first, ctx)
@@ -323,10 +323,10 @@ class _CppBackendInstance(Visitor):
                 e_ctx = self._expr_ctx(e)
                 gen = FMAInstr.generator(fst_ty, snd_ty, trd_ty, e_ctx)
                 if gen is None:
-                    raise CppFpyCompileError(self.func, f'No suitable implementation found for fused multiply-add: {e}')
+                    raise MPFXCompileError(self.func, f'No suitable implementation found for fused multiply-add: {e}')
                 return gen(fst_str, snd_str, trd_str, ctx.ctx_name)
             case _:
-                raise CppFpyCompileError(self.func, f'Unsupported ternary operation to compile: {e}')
+                raise MPFXCompileError(self.func, f'Unsupported ternary operation to compile: {e}')
 
     def _visit_zip(self, e: Zip, ctx: CompileCtx):
         # zip(x1, ..., xn) =>
@@ -349,7 +349,7 @@ class _CppBackendInstance(Visitor):
 
             arg_ty = self._expr_type(arg)
             if not isinstance(arg_ty, ListFormatType):
-                raise CppFpyCompileError(self.func, f'expected list for `{arg.format()}`')
+                raise MPFXCompileError(self.func, f'expected list for `{arg.format()}`')
             arg_tys.append(arg_ty.elt)
 
         t = self._fresh_var()
@@ -368,7 +368,7 @@ class _CppBackendInstance(Visitor):
             case Zip():
                 return self._visit_zip(e, ctx)
             case _:
-                raise CppFpyCompileError(self.func, f'Unsupported nary operation to compile: {e}')
+                raise MPFXCompileError(self.func, f'Unsupported nary operation to compile: {e}')
 
     def _visit_round(self, e: Round | RoundExact, ctx: CompileCtx):
         if isinstance(e.arg, RealVal):
@@ -380,10 +380,10 @@ class _CppBackendInstance(Visitor):
             # TODO: what about integer -> double
             arg = self._visit_expr(e.arg, ctx)
             ty = self._expr_type(e)
-            return f'fpy::round({arg}, {ctx.ctx_name})'
+            return f'mpfx::round({arg}, {ctx.ctx_name})'
 
     def _visit_round_at(self, e: RoundAt, ctx: CompileCtx):
-        raise CppFpyCompileError(self.func, '`round_at` is unsupported')
+        raise MPFXCompileError(self.func, '`round_at` is unsupported')
 
     def _visit_len(self, e: Len, ctx: CompileCtx):
         # len(x)
@@ -537,7 +537,7 @@ class _CppBackendInstance(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: CompileCtx):
         if not isinstance(stmt.ctx, ForeignVal):
-            raise CppFpyCompileError(self.func, f'Rounding context cannot be compiled `{stmt.ctx}`')
+            raise MPFXCompileError(self.func, f'Rounding context cannot be compiled `{stmt.ctx}`')
 
         # name to bind context
         if isinstance(stmt.target, NamedId):
@@ -561,7 +561,7 @@ class _CppBackendInstance(Visitor):
             ctx.add_line(f'assert(({e}) && ({msg}));')
 
     def _visit_effect(self, stmt: EffectStmt, ctx: CompileCtx):
-        raise CppFpyCompileError(self.func, 'FPy effects are not supported')
+        raise MPFXCompileError(self.func, 'FPy effects are not supported')
 
     def _visit_return(self, stmt: ReturnStmt, ctx: CompileCtx):
         e = self._visit_expr(stmt.expr, ctx)
@@ -592,9 +592,9 @@ class _CppBackendInstance(Visitor):
         ctx.add_line('}')
 
 
-class CppFpyBackend(Backend):
+class MPFXCompiler(Backend):
     """
-    C++/FPy backend: compiler to C++ number library.
+    MPFX backend: compiler to MPFX number library.
 
     TODO: need a name for the library.
     """
@@ -646,7 +646,7 @@ class CppFpyBackend(Backend):
 
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _CppBackendInstance(ast, func.name, options,format_info)
+        inst = _MPFXBackendInstance(ast, func.name, options,format_info)
         body_str = inst.compile()
 
         return body_str

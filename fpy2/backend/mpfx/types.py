@@ -1,5 +1,5 @@
 """
-C++/FPy backend: target-specific types.
+MPFX backend: target-specific types.
 """
 
 from abc import ABC, abstractmethod
