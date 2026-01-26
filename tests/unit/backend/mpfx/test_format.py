@@ -5,7 +5,7 @@ Test for the abstract number format `A(p, exp, bound)`.
 import fpy2 as fp
 import unittest
 
-from fpy2.backend.fpy_cpp.format import AbstractFormat
+from fpy2.backend.mpfx.format import AbstractFormat
 
 class TestAbstractFormat(unittest.TestCase):
 
