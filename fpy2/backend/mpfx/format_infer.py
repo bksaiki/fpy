@@ -234,7 +234,9 @@ class _FormatInfernce(Visitor):
         return self._expr_type(e) # get the expected type
 
     def _visit_naryop(self, e: NaryOp, ctx: Context):
-        raise NotImplementedError
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        return self._expr_type(e) # get the expected type
 
     def _visit_call(self, e: Call, ctx: Context):
         for arg in e.args:

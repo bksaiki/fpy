@@ -66,4 +66,4 @@ class CppContextType(CppType):
     """C++ context type."""
 
     def to_cpp(self) -> str:
-        return 'mpfx::Context'
+        return 'auto'

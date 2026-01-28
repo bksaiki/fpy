@@ -13,7 +13,6 @@ from ...analysis import (
 from ...function import Function
 from ...number import IEEEContext, OV, RM, FP64, INTEGER
 from ...transform import Monomorphize
-from ...strategies import simplify
 from ...types import BoolType, ContextType, RealType, VarType, Type
 from ...utils import Gensym
 from ..backend import Backend
@@ -531,12 +530,67 @@ class _MPFXBackendInstance(Visitor):
         self._visit_block(stmt.body, ctx.indent())
         ctx.add_line('}')  # close if
 
-    def _visit_for(self, stmt: ForStmt, ctx: CompileCtx):
-        if isinstance(stmt.target, Id) and isinstance(stmt.iterable, Range1):
+    def _visit_for_range(self, target: Id, iterable: Range1 | Range2 | Range3, ctx: CompileCtx):
+        if isinstance(iterable, Range1):
             # special case: for i in range(n)
             # for (size_t i = 0; i < n; ++i) {
-            n = self._visit_expr(stmt.iterable.arg, ctx)
-            ctx.add_line(f'for (size_t {stmt.target} = 0; {stmt.target} < {n}; ++{stmt.target}) {{')
+            n = self._visit_expr(iterable.arg, ctx)
+            ctx.add_line(f'for (size_t {target} = 0; {target} < {n}; ++{target}) {{')
+        elif isinstance(iterable, Range2):
+            # special case: for i in range(m, n)
+            # for (size_t i = m; i < n; ++i) {
+            m = self._visit_expr(iterable.first, ctx)
+            n = self._visit_expr(iterable.second, ctx)
+            ctx.add_line(f'for (size_t {target} = {m}; {target} < {n}; ++{target}) {{')
+        elif isinstance(iterable, Range3):
+            # special case: for i in range(m, n, s)
+            # for (size_t i = m; i < n; i += s) {
+            m = self._visit_expr(iterable.first, ctx)
+            n = self._visit_expr(iterable.second, ctx)
+            s = self._visit_expr(iterable.third, ctx)
+            ctx.add_line(f'for (size_t {target} = {m}; {target} < {n}; {target} += {s}) {{')
+        else:
+            raise RuntimeError(f'unreachable: {iterable}')
+
+
+    def _visit_for_zip(self, stmt: ForStmt, target: TupleBinding, iterable: Zip, ctx: CompileCtx):
+        # special case: for (a, b, ...) in zip(x1, x2, ...)
+        # auto t1 = x1;
+        # ...
+        # auto tn = xn;
+        # for (size_t i = 0; i < t1.size(); ++i) {
+        #     auto a = t1[i];
+        #     auto b = t2[i];
+        #     ...
+        ts: list[str] = []
+        for arg in iterable.args:
+            t = self._fresh_var()
+            arg_cpp = self._visit_expr(arg, ctx)
+            ctx.add_line(f'auto {t} = {arg_cpp};')
+            ts.append(t)
+
+        i = self._fresh_var()
+        ctx.add_line(f'for (size_t {i} = 0; {i} < {ts[0]}.size(); ++{i}) {{')
+        ctx = ctx.indent()
+        for elt, t in zip(target.elts, ts):
+            match elt:
+                case Id():
+                    self._visit_decl(elt, f'{t}[{i}]', stmt, ctx)
+                case TupleBinding():
+                    # emit temporary variable for the tuple
+                    t2 = self._fresh_var()
+                    ctx.add_line(f'auto {t2} = {t}[{i}];')
+                    self._visit_tuple_binding(t2, elt, stmt, ctx)
+                case _:
+                    raise RuntimeError(f'unreachable: {elt}')
+
+    def _visit_for(self, stmt: ForStmt, ctx: CompileCtx):
+        if isinstance(stmt.target, Id) and isinstance(stmt.iterable, Range1 | Range2 | Range3):
+            # optimized: iterating over [0, n)
+            self._visit_for_range(stmt.target, stmt.iterable, ctx)
+        elif isinstance(stmt.target, TupleBinding) and isinstance(stmt.iterable, Zip):
+            # optimized: iterating over zip(...)
+            self._visit_for_zip(stmt, stmt.target, stmt.iterable, ctx)
         else:
             # general case: for x in iterable
             iterable = self._visit_expr(stmt.iterable, ctx)
