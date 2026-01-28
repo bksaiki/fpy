@@ -22,6 +22,7 @@ def _run_tests():
     test_define_use()
     test_tcheck()
     test_context_infer()
+    test_partial_eval()
     test_purity()
     # transformations
     test_const_prop()
