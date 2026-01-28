@@ -7,14 +7,14 @@ from typing import Collection
 from ...ast import *
 from ...analysis import (
     ContextInfer, ContextInferError,
-    DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
-    TypeInferError
+    DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
+    PartialEval, PartialEvalInfo, TypeInferError
 )
 from ...function import Function
 from ...number import IEEEContext, OV, RM, FP64, INTEGER
 from ...transform import Monomorphize
 from ...strategies import simplify
-from ...types import BoolType, RealType, VarType, Type
+from ...types import BoolType, ContextType, RealType, VarType, Type
 from ...utils import Gensym
 from ..backend import Backend
 
@@ -42,6 +42,7 @@ class _MPFXBackendInstance(Visitor):
     name: NamedId
     options: CppOptions
     fmt_info: FormatAnalysis
+    eval_info: PartialEvalInfo
 
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
@@ -53,11 +54,13 @@ class _MPFXBackendInstance(Visitor):
         name: NamedId,
         options: CppOptions,
         fmt_info: FormatAnalysis,
+        eval_info: PartialEvalInfo,
     ):
         self.func = func
         self.name = name
         self.options = options
         self.fmt_info = fmt_info
+        self.eval_info = eval_info
 
         self.decl_phis = set()
         self.decl_assigns = set()
@@ -87,6 +90,8 @@ class _MPFXBackendInstance(Visitor):
                     self._check_type(elem_ty)
             case ListFormatType():
                 self._check_type(ty.elt)
+            case ContextType():
+                pass
             case _:
                 raise RuntimeError(f'Unhandled type: {ty}')
 
@@ -202,6 +207,8 @@ class _MPFXBackendInstance(Visitor):
             case ListFormatType():
                 # compile recursively
                 return CppListType(self._compile_type(ty.elt))
+            case ContextType():
+                return CppContextType()
             case _:
                 raise RuntimeError(f'Unhandled type: {ty}')
 
@@ -391,7 +398,13 @@ class _MPFXBackendInstance(Visitor):
         return self._compile_size(f'{arg_cpp}.size()', ty)
 
     def _visit_call(self, e, ctx):
-        raise NotImplementedError
+        if e not in self.eval_info.by_expr:
+            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
+        val = self.eval_info.by_expr[e]
+        if isinstance(val, Context):
+            return self._compile_context(val)
+        else:
+            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
 
     def _visit_compare(self, e, ctx):
         raise NotImplementedError
@@ -422,7 +435,13 @@ class _MPFXBackendInstance(Visitor):
         raise NotImplementedError
 
     def _visit_attribute(self, e, ctx):
-        raise NotImplementedError
+        if e not in self.eval_info.by_expr:
+            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
+        val = self.eval_info.by_expr[e]
+        if isinstance(val, Context):
+            return self._compile_context(val)
+        else:
+            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
 
     def _visit_decl(self, name: Id, e: str, site: DefSite, ctx: CompileCtx):
         match name:
@@ -535,9 +554,6 @@ class _MPFXBackendInstance(Visitor):
         ctx.add_line('}')  # close if
 
     def _visit_context(self, stmt: ContextStmt, ctx: CompileCtx):
-        if not isinstance(stmt.ctx, ForeignVal):
-            raise MPFXCompileError(self.func, f'Rounding context cannot be compiled `{stmt.ctx}`')
-
         # name to bind context
         if isinstance(stmt.target, NamedId):
             ctx_name = str(stmt.target)
@@ -545,7 +561,7 @@ class _MPFXBackendInstance(Visitor):
             ctx_name = self._fresh_var()
 
         # compile context
-        ctx_str = self._compile_context(stmt.ctx.val)
+        ctx_str = self._visit_expr(stmt.ctx, ctx)
         ctx.add_line(f'auto {ctx_name} = {ctx_str};')
 
         # compile body
@@ -632,20 +648,20 @@ class MPFXCompiler(Backend):
             ctx = None
         ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
 
-        # normalization passes
-        func = simplify(func.with_ast(ast))
-        ast = func.ast
+        # partial evaluation
+        def_use = DefineUse.analyze(ast)
+        eval_info = PartialEval.apply(ast, def_use=def_use)
 
         # run type checking with static context inference
         try:
-            ctx_info = ContextInfer.infer(ast, unsafe_cast_int=self.unsafe_cast_int)
+            ctx_info = ContextInfer.infer(ast, def_use=def_use, unsafe_cast_int=self.unsafe_cast_int)
             format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
         except (ContextInferError, TypeInferError, FormatInferError) as e:
             raise ValueError(f'{func.name}: context inference failed') from e
 
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _MPFXBackendInstance(ast, func.name, options,format_info)
+        inst = _MPFXBackendInstance(ast, func.name, options, format_info, eval_info)
         body_str = inst.compile()
 
         return body_str

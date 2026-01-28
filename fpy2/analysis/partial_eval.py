@@ -219,11 +219,7 @@ class PartialEval:
     """
 
     @staticmethod
-    def apply(
-        func: FuncDef,
-        *,
-        def_use: DefineUseAnalysis | None = None,
-    ):
+    def apply(func: FuncDef, *, def_use: DefineUseAnalysis | None = None):
         """
         Applies partial evaluation.
         """

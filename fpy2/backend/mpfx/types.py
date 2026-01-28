@@ -11,7 +11,8 @@ __all__ = [
     'CppDoubleType',
     'CppInt64Type',
     'CppTupleType',
-    'CppListType'
+    'CppListType',
+    'CppContextType',
 ]
 
 class CppType(ABC):
@@ -61,3 +62,8 @@ class CppListType(CppType):
     def to_cpp(self) -> str:
         return f'std::vector<{self.elt.to_cpp()}>'
 
+class CppContextType(CppType):
+    """C++ context type."""
+
+    def to_cpp(self) -> str:
+        return 'mpfx::Context'
