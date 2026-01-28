@@ -7,6 +7,7 @@ from .define_use import (
     DefCtx, UseSite
 )
 from .live_vars import LiveVars
+from .partial_eval import PartialEval, PartialEvalInfo
 from .purity import Purity
 from .reachability import Reachability
 from .reaching_defs import (

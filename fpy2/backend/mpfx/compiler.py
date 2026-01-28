@@ -7,14 +7,13 @@ from typing import Collection
 from ...ast import *
 from ...analysis import (
     ContextInfer, ContextInferError,
-    DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
-    TypeInferError
+    DefineUse, DefineUseAnalysis, Definition, DefSite, AssignDef, PhiDef,
+    PartialEval, PartialEvalInfo, TypeInferError
 )
 from ...function import Function
 from ...number import IEEEContext, OV, RM, FP64, INTEGER
 from ...transform import Monomorphize
-from ...strategies import simplify
-from ...types import BoolType, RealType, VarType, Type
+from ...types import BoolType, ContextType, RealType, VarType, Type
 from ...utils import Gensym
 from ..backend import Backend
 
@@ -42,6 +41,7 @@ class _MPFXBackendInstance(Visitor):
     name: NamedId
     options: CppOptions
     fmt_info: FormatAnalysis
+    eval_info: PartialEvalInfo
 
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
@@ -53,11 +53,13 @@ class _MPFXBackendInstance(Visitor):
         name: NamedId,
         options: CppOptions,
         fmt_info: FormatAnalysis,
+        eval_info: PartialEvalInfo,
     ):
         self.func = func
         self.name = name
         self.options = options
         self.fmt_info = fmt_info
+        self.eval_info = eval_info
 
         self.decl_phis = set()
         self.decl_assigns = set()
@@ -87,6 +89,8 @@ class _MPFXBackendInstance(Visitor):
                     self._check_type(elem_ty)
             case ListFormatType():
                 self._check_type(ty.elt)
+            case ContextType():
+                pass
             case _:
                 raise RuntimeError(f'Unhandled type: {ty}')
 
@@ -202,6 +206,8 @@ class _MPFXBackendInstance(Visitor):
             case ListFormatType():
                 # compile recursively
                 return CppListType(self._compile_type(ty.elt))
+            case ContextType():
+                return CppContextType()
             case _:
                 raise RuntimeError(f'Unhandled type: {ty}')
 
@@ -391,7 +397,13 @@ class _MPFXBackendInstance(Visitor):
         return self._compile_size(f'{arg_cpp}.size()', ty)
 
     def _visit_call(self, e, ctx):
-        raise NotImplementedError
+        if e not in self.eval_info.by_expr:
+            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
+        val = self.eval_info.by_expr[e]
+        if isinstance(val, Context):
+            return self._compile_context(val)
+        else:
+            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
 
     def _visit_compare(self, e, ctx):
         raise NotImplementedError
@@ -422,7 +434,13 @@ class _MPFXBackendInstance(Visitor):
         raise NotImplementedError
 
     def _visit_attribute(self, e, ctx):
-        raise NotImplementedError
+        if e not in self.eval_info.by_expr:
+            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
+        val = self.eval_info.by_expr[e]
+        if isinstance(val, Context):
+            return self._compile_context(val)
+        else:
+            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
 
     def _visit_decl(self, name: Id, e: str, site: DefSite, ctx: CompileCtx):
         match name:
@@ -512,12 +530,67 @@ class _MPFXBackendInstance(Visitor):
         self._visit_block(stmt.body, ctx.indent())
         ctx.add_line('}')  # close if
 
-    def _visit_for(self, stmt: ForStmt, ctx: CompileCtx):
-        if isinstance(stmt.target, Id) and isinstance(stmt.iterable, Range1):
+    def _visit_for_range(self, target: Id, iterable: Range1 | Range2 | Range3, ctx: CompileCtx):
+        if isinstance(iterable, Range1):
             # special case: for i in range(n)
             # for (size_t i = 0; i < n; ++i) {
-            n = self._visit_expr(stmt.iterable.arg, ctx)
-            ctx.add_line(f'for (size_t {stmt.target} = 0; {stmt.target} < {n}; ++{stmt.target}) {{')
+            n = self._visit_expr(iterable.arg, ctx)
+            ctx.add_line(f'for (size_t {target} = 0; {target} < {n}; ++{target}) {{')
+        elif isinstance(iterable, Range2):
+            # special case: for i in range(m, n)
+            # for (size_t i = m; i < n; ++i) {
+            m = self._visit_expr(iterable.first, ctx)
+            n = self._visit_expr(iterable.second, ctx)
+            ctx.add_line(f'for (size_t {target} = {m}; {target} < {n}; ++{target}) {{')
+        elif isinstance(iterable, Range3):
+            # special case: for i in range(m, n, s)
+            # for (size_t i = m; i < n; i += s) {
+            m = self._visit_expr(iterable.first, ctx)
+            n = self._visit_expr(iterable.second, ctx)
+            s = self._visit_expr(iterable.third, ctx)
+            ctx.add_line(f'for (size_t {target} = {m}; {target} < {n}; {target} += {s}) {{')
+        else:
+            raise RuntimeError(f'unreachable: {iterable}')
+
+
+    def _visit_for_zip(self, stmt: ForStmt, target: TupleBinding, iterable: Zip, ctx: CompileCtx):
+        # special case: for (a, b, ...) in zip(x1, x2, ...)
+        # auto t1 = x1;
+        # ...
+        # auto tn = xn;
+        # for (size_t i = 0; i < t1.size(); ++i) {
+        #     auto a = t1[i];
+        #     auto b = t2[i];
+        #     ...
+        ts: list[str] = []
+        for arg in iterable.args:
+            t = self._fresh_var()
+            arg_cpp = self._visit_expr(arg, ctx)
+            ctx.add_line(f'auto {t} = {arg_cpp};')
+            ts.append(t)
+
+        i = self._fresh_var()
+        ctx.add_line(f'for (size_t {i} = 0; {i} < {ts[0]}.size(); ++{i}) {{')
+        ctx = ctx.indent()
+        for elt, t in zip(target.elts, ts):
+            match elt:
+                case Id():
+                    self._visit_decl(elt, f'{t}[{i}]', stmt, ctx)
+                case TupleBinding():
+                    # emit temporary variable for the tuple
+                    t2 = self._fresh_var()
+                    ctx.add_line(f'auto {t2} = {t}[{i}];')
+                    self._visit_tuple_binding(t2, elt, stmt, ctx)
+                case _:
+                    raise RuntimeError(f'unreachable: {elt}')
+
+    def _visit_for(self, stmt: ForStmt, ctx: CompileCtx):
+        if isinstance(stmt.target, Id) and isinstance(stmt.iterable, Range1 | Range2 | Range3):
+            # optimized: iterating over [0, n)
+            self._visit_for_range(stmt.target, stmt.iterable, ctx)
+        elif isinstance(stmt.target, TupleBinding) and isinstance(stmt.iterable, Zip):
+            # optimized: iterating over zip(...)
+            self._visit_for_zip(stmt, stmt.target, stmt.iterable, ctx)
         else:
             # general case: for x in iterable
             iterable = self._visit_expr(stmt.iterable, ctx)
@@ -535,9 +608,6 @@ class _MPFXBackendInstance(Visitor):
         ctx.add_line('}')  # close if
 
     def _visit_context(self, stmt: ContextStmt, ctx: CompileCtx):
-        if not isinstance(stmt.ctx, ForeignVal):
-            raise MPFXCompileError(self.func, f'Rounding context cannot be compiled `{stmt.ctx}`')
-
         # name to bind context
         if isinstance(stmt.target, NamedId):
             ctx_name = str(stmt.target)
@@ -545,7 +615,7 @@ class _MPFXBackendInstance(Visitor):
             ctx_name = self._fresh_var()
 
         # compile context
-        ctx_str = self._compile_context(stmt.ctx.val)
+        ctx_str = self._visit_expr(stmt.ctx, ctx)
         ctx.add_line(f'auto {ctx_name} = {ctx_str};')
 
         # compile body
@@ -632,20 +702,20 @@ class MPFXCompiler(Backend):
             ctx = None
         ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
 
-        # normalization passes
-        func = simplify(func.with_ast(ast))
-        ast = func.ast
+        # partial evaluation
+        def_use = DefineUse.analyze(ast)
+        eval_info = PartialEval.apply(ast, def_use=def_use)
 
         # run type checking with static context inference
         try:
-            ctx_info = ContextInfer.infer(ast, unsafe_cast_int=self.unsafe_cast_int)
+            ctx_info = ContextInfer.infer(ast, def_use=def_use, unsafe_cast_int=self.unsafe_cast_int)
             format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
         except (ContextInferError, TypeInferError, FormatInferError) as e:
             raise ValueError(f'{func.name}: context inference failed') from e
 
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _MPFXBackendInstance(ast, func.name, options,format_info)
+        inst = _MPFXBackendInstance(ast, func.name, options, format_info, eval_info)
         body_str = inst.compile()
 
         return body_str

@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from typing import NoReturn, TypeAlias, Iterable
 
 from ...ast import *
-from ...analysis import ContextAnalysis, ContextInfer, Definition, DefSite
+from ...analysis import (
+    ContextAnalysis, ContextInfer, PartialEval, PartialEvalInfo,
+    Definition, DefSite
+)
 from ...number import Context, INTEGER
 from ...types import *
 from ...utils import default_repr
@@ -119,14 +122,16 @@ class _FormatInfernce(Visitor):
 
     func: FuncDef
     ctx_info: ContextAnalysis
+    eval_info: PartialEvalInfo
 
     by_def: dict[Definition, FormatType]
     by_expr: dict[Expr, FormatType]
     ret_ty: FormatType | None
 
-    def __init__(self, func: FuncDef, ctx_info: ContextAnalysis):
+    def __init__(self, func: FuncDef, ctx_info: ContextAnalysis, eval_info: PartialEvalInfo):
         self.func = func
         self.ctx_info = ctx_info
+        self.eval_info = eval_info
         self.by_def = {}
         self.by_expr = {}
         self.ret_ty = None
@@ -229,10 +234,21 @@ class _FormatInfernce(Visitor):
         return self._expr_type(e) # get the expected type
 
     def _visit_naryop(self, e: NaryOp, ctx: Context):
-        raise NotImplementedError
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        return self._expr_type(e) # get the expected type
 
     def _visit_call(self, e: Call, ctx: Context):
-        raise NotImplementedError
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        for _, kwarg in e.kwargs:
+            self._visit_expr(kwarg, ctx)
+
+        val = self.eval_info.by_expr[e]
+        if isinstance(val, Context):
+            return ContextType()
+        else:
+            raise NotImplementedError(e)
 
     def _visit_compare(self, e: Compare, ctx: Context):
         for arg in e.args:
@@ -274,7 +290,13 @@ class _FormatInfernce(Visitor):
         return ift_ty
 
     def _visit_attribute(self, e: Attribute, ctx: Context):
-        raise NotImplementedError
+        if e not in self.eval_info.by_expr:
+            self.raise_error(f'cannot determine a compilable type for `{e.format()}`')
+        val = self.eval_info.by_expr[e]
+        if isinstance(val, Context):
+            return ContextType()
+        else:
+            self.raise_error(f'cannot determine a compilable type for `{e.format()}`')
 
     def _visit_assign(self, stmt: Assign, ctx: Context):
         ty = self._visit_expr(stmt.expr, ctx)
@@ -320,9 +342,20 @@ class _FormatInfernce(Visitor):
         return ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context):
-        if not (isinstance(stmt.ctx, ForeignVal) and isinstance(stmt.ctx.val, Context)):
-            self.raise_error('no concrete context in context statement')
-        self._visit_block(stmt.body, stmt.ctx.val)
+        if isinstance(stmt.ctx, ForeignVal) and isinstance(stmt.ctx.val, Context):
+            # check if the context is a concrete context
+            body_ctx = stmt.ctx.val
+        elif stmt.ctx in self.eval_info.by_expr:
+            # backup is to lookup partial eval info
+            val = self.eval_info.by_expr[stmt.ctx]
+            if isinstance(val, Context):
+                body_ctx = val
+            else:
+                self.raise_error(f'cannot infer context for `{stmt.ctx.format()}` at `{stmt.format()}`')
+        else:
+            self.raise_error(f'cannot infer context for `{stmt.ctx.format()}` at `{stmt.format()}`')
+
+        self._visit_block(stmt.body, body_ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: Context):
         self._visit_expr(stmt.test, ctx)
@@ -379,7 +412,11 @@ class FormatInfer:
     """
 
     @staticmethod
-    def infer(func: FuncDef, *, ctx_info: ContextAnalysis | None = None):
+    def infer(
+        func: FuncDef, *,
+        ctx_info: ContextAnalysis | None = None,
+        eval_info: PartialEvalInfo | None = None
+    ):
         """
         Performs format inference on the given function definition.
 
@@ -396,7 +433,10 @@ class FormatInfer:
         if ctx_info is None:
             ctx_info = ContextInfer.infer(func)
 
+        if eval_info is None:
+            eval_info = PartialEval.apply(func, def_use=ctx_info.def_use)
+
         # perform format inference
-        format_info = _FormatInfernce(func, ctx_info).infer()
+        format_info = _FormatInfernce(func, ctx_info, eval_info).infer()
 
         return format_info

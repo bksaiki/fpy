@@ -16,6 +16,7 @@ from ..utils import Gensym, NamedId, Unionfind
 from ..types import *
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 from .type_infer import TypeInfer, TypeAnalysis
+from .partial_eval import PartialEval, PartialEvalInfo
 
 class ContextInferError(Exception):
     """Context inference error for FPy programs."""
@@ -56,6 +57,7 @@ class ContextTypeInferInstance(Visitor):
 
     func: FuncDef
     type_info: TypeAnalysis
+    eval_info: PartialEvalInfo
     unsafe_cast_int: bool
 
     by_def: dict[Definition, Type]
@@ -69,10 +71,12 @@ class ContextTypeInferInstance(Visitor):
         self,
         func: FuncDef,
         type_info: TypeAnalysis,
+        eval_info: PartialEvalInfo,
         unsafe_cast_int: bool
     ):
         self.func = func
         self.type_info = type_info
+        self.eval_info = eval_info
         self.unsafe_cast_int = unsafe_cast_int
         self.by_def = {}
         self.by_expr = {}
@@ -482,7 +486,7 @@ class ContextTypeInferInstance(Visitor):
             case type() if issubclass(e.fn, Context):
                 # calling context constructor
                 # TODO: can infer if the arguments are statically known
-                raise ContextInferError(f'cannot infer context `{e.fn}`')
+                return self._cvt_type(self._lookup_ty(e))
             case _:
                 raise ContextInferError(f'cannot infer context for call with `{e.fn}`')
 
@@ -555,7 +559,9 @@ class ContextTypeInferInstance(Visitor):
         return self._unify(ift_ty, iff_ty)
 
     def _visit_attribute(self, e: Attribute, ctx: ContextParam):
-        raise NotImplementedError
+        self._visit_expr(e.value, ctx)
+        ty = self.type_info.by_expr[e]
+        return self._cvt_type(ty)
 
     def _visit_assign(self, stmt: Assign, ctx: ContextParam):
         ty = self._visit_expr(stmt.expr, ctx)
@@ -634,9 +640,18 @@ class ContextTypeInferInstance(Visitor):
         return ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: ContextParam):
-        if not isinstance(stmt.ctx, ForeignVal) or not isinstance(stmt.ctx.val, Context):
+        if isinstance(stmt.ctx, ForeignVal) and isinstance(stmt.ctx.val, Context):
+            # check if the context is a concrete context
+            body_ctx = stmt.ctx.val
+        elif stmt.ctx in self.eval_info.by_expr:
+            # backup is to lookup partial eval info
+            val = self.eval_info.by_expr[stmt.ctx]
+            if isinstance(val, Context):
+                body_ctx = val
+            else:
+                raise ContextInferError(f'cannot infer context for `{stmt.ctx.format()}` at `{stmt.format()}`')
+        else:
             raise ContextInferError(f'cannot infer context for `{stmt.ctx.format()}` at `{stmt.format()}`')
-        body_ctx = stmt.ctx.val
 
         # interpreted under a real rounding context
         # REAL, Γ |- ctx : context
@@ -899,7 +914,9 @@ class ContextInfer:
                 def_use = DefineUse.analyze(func)
             type_info = TypeInfer.check(func, def_use)
 
-        inst = ContextTypeInferInstance(func, type_info, unsafe_cast_int)
+        eval_info = PartialEval.apply(func, def_use=def_use)
+
+        inst = ContextTypeInferInstance(func, type_info, eval_info, unsafe_cast_int)
         return inst.infer()
 
     @staticmethod
