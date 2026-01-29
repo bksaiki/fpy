@@ -92,10 +92,20 @@ class AbstractFormat:
         # precision: p1 + p2
         # exponent: e1 + e2
         # bounds: b1 * b2
-        prec = self.prec + other.prec
+        prec = self.effective_prec() + other.effective_prec()
         exp = self.exp + other.exp
         pos_bound = max(self.pos_bound * other.pos_bound, self.neg_bound * other.neg_bound)
         neg_bound = max(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
+        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+
+    def __and__(self, other: 'AbstractFormat') -> 'AbstractFormat':
+        """Intersection of two formats."""
+        if not isinstance(other, AbstractFormat):
+            raise TypeError(f'Expected \'AbstractFormat\', got {other}')
+        prec = min(self.prec, other.prec)
+        exp = max(self.exp, other.exp)
+        pos_bound = min(self.pos_bound, other.pos_bound)
+        neg_bound = max(self.neg_bound, other.neg_bound)
         return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
     @property
@@ -131,7 +141,7 @@ class AbstractFormat:
             case _:
                 raise TypeError(f'Unsupported context type: {type(ctx)}')
 
-    def _effective_prec(self):
+    def effective_prec(self):
         """Effective maximum precision."""
         if isinstance(self.prec, float) and not isinstance(self.bound, float):
             # bounded fixed-point format
@@ -154,7 +164,7 @@ class AbstractFormat:
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
         return (
-            self._effective_prec() <= other._effective_prec()
+            self.effective_prec() <= other.effective_prec()
             and self.exp >= other.exp
             and self.pos_bound <= other.pos_bound
             and self.neg_bound >= other.neg_bound

@@ -223,9 +223,22 @@ class _FormatInfernce(Visitor):
         return self._expr_type(e) # get the expected type
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context):
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        return self._expr_type(e) # get the expected type
+        a_ty = self._visit_expr(e.first, ctx)
+        b_ty = self._visit_expr(e.second, ctx)
+        e_ty = self._expr_type(e)
+        if isinstance(e, Mul) and isinstance(a_ty, AbstractFormat) and isinstance(b_ty, AbstractFormat):
+            # possible optimization: if A and B are both abstract formats,
+            # then the "minimal" format can be computed directly
+            m_ty = a_ty * b_ty
+            if isinstance(e_ty, AbstractFormat):
+                # take intersection with expected type
+                return e_ty & m_ty
+            else:
+                # expected type might be smaller but we can't be sure
+                return m_ty
+
+        # return the most conservative type
+        return e_ty
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
         self._visit_expr(e.first, ctx)
