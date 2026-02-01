@@ -58,14 +58,8 @@ class AbstractFormat:
         *,
         neg_bound: RealFloat | float | None = None,
     ):
-        if prec <= 0 or math.isnan(prec):
+        if prec <= 0:
             raise ValueError("`prec` must be positive.")
-        if math.isnan(exp):
-            raise ValueError("`exp` cannot be NaN")
-        if math.isnan(bound):
-            raise ValueError("`pos_bound` must not be NaN")
-        if neg_bound is not None and math.isnan(neg_bound):
-            raise ValueError("`neg_bound` must not be NaN")
 
         self.prec = prec
         self.exp = exp
@@ -83,6 +77,18 @@ class AbstractFormat:
             and self.pos_bound == other.pos_bound
             and self.neg_bound == other.neg_bound
         )
+
+    def __pos__(self) -> 'AbstractFormat':
+        """Identity of the format."""
+        return AbstractFormat(self.prec, self.exp, self.pos_bound, neg_bound=self.neg_bound)
+
+    def __neg__(self) -> 'AbstractFormat':
+        """Negation of the format (swaps positive and negative bounds)."""
+        return AbstractFormat(self.prec, self.exp, -self.neg_bound, neg_bound=-self.pos_bound)
+
+    def __abs__(self) -> 'AbstractFormat':
+        """Absolute value of the format (makes negative bound equal to positive bound)."""
+        return AbstractFormat(self.prec, self.exp, self.pos_bound, neg_bound=0)
 
     def __add__(self, other: 'AbstractFormat') -> 'AbstractFormat':
         """

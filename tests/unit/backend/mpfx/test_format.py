@@ -112,7 +112,62 @@ class TestAbstractFormat(unittest.TestCase):
             fmt = AbstractFormat(p, e, b)
             self.assertLessEqual(fmt.effective_prec(), p)
 
-    def test_add(self, logging: bool = True):
+    def test_pos(self):
+        """Testing positive bound calculation."""
+        precs: list[int | float] = [2, 4, 8, float('inf')]
+        exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
+        bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]
+
+        for p, e, b in itertools.product(precs, exps, bounds):
+            if p == float('inf') and e == float('-inf'):
+                continue  # skip invalid format
+            fmt1 = AbstractFormat(p, e, b)
+            fmt = +fmt1
+
+            # should be an exact copy
+            self.assertEqual(fmt.prec, p)
+            self.assertEqual(fmt.exp, e)
+            self.assertEqual(fmt.pos_bound, b)
+            self.assertEqual(fmt.neg_bound, -b)
+
+    def test_neg(self):
+        """Testing negative bound calculation."""
+        precs: list[int | float] = [2, 4, 8, float('inf')]
+        exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
+        bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]
+
+        for p, e, b in itertools.product(precs, exps, bounds):
+            if p == float('inf') and e == float('-inf'):
+                continue  # skip invalid format
+            fmt1 = AbstractFormat(p, e, b)
+            fmt = -fmt1
+
+            # should be an exact copy
+            self.assertEqual(fmt.prec, p)
+            self.assertEqual(fmt.exp, e)
+            self.assertEqual(fmt.pos_bound, b)
+            self.assertEqual(fmt.neg_bound, -b)
+
+    def test_abs(self):
+        """Testing absolute bound calculation."""
+        precs: list[int | float] = [2, 4, 8, float('inf')]
+        exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
+        bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]
+
+        for p, e, b in itertools.product(precs, exps, bounds):
+            if p == float('inf') and e == float('-inf'):
+                continue  # skip invalid format
+            fmt1 = AbstractFormat(p, e, b)
+            fmt = abs(fmt1)
+
+            # should be an exact copy
+            self.assertEqual(fmt.prec, p)
+            self.assertEqual(fmt.exp, e)
+            self.assertEqual(fmt.pos_bound, b)
+            self.assertEqual(fmt.neg_bound, 0)
+
+
+    def test_add(self, logging: bool = False):
         precs: list[int | float] = [2, 4, 8, float('inf')]
         exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
         bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]

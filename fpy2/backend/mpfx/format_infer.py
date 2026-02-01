@@ -10,7 +10,7 @@ from ...analysis import (
     ContextAnalysis, ContextInfer, PartialEval, PartialEvalInfo,
     Definition, DefSite
 )
-from ...number import Context, INTEGER
+from ...number import Context, INTEGER, REAL
 from ...types import *
 from ...utils import default_repr
 
@@ -147,7 +147,7 @@ class _FormatInfernce(Visitor):
     def raise_error(self, msg: str) -> NoReturn:
         raise FormatInferError(f'In function {self.func.name}: {msg}')
 
-    def _expr_type(self, e: Expr) -> FormatType:
+    def _expr_type(self, e: Expr):
         ty = self.ctx_info.by_expr[e]
         return self._cvt_type(ty)
 
@@ -157,7 +157,7 @@ class _FormatInfernce(Visitor):
         else:
             return None
 
-    def _cvt_type(self, ty: Type) -> FormatType:
+    def _cvt_type(self, ty: Type):
         match ty:
             case BoolType() | ContextType():
                 return ty
@@ -219,23 +219,55 @@ class _FormatInfernce(Visitor):
         raise NotImplementedError
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Context):
-        self._visit_expr(e.arg, ctx)
-        return self._expr_type(e) # get the expected type
+        a_ty = self._visit_expr(e.arg, ctx)
+        e_ty = self._expr_type(e) # get the expected type
+
+        if isinstance(a_ty, AbstractFormat):
+            # possible optimization: if A are both abstract formats,
+            # then the "minimal" format can be computed directly
+            match e:
+                case Round():
+                    m_ty: AbstractFormat | None = a_ty
+                case Neg():
+                    m_ty = -a_ty
+                case _:
+                    m_ty = None
+
+            if m_ty is not None:
+                if isinstance(e_ty, AbstractFormat):
+                    # intersect with expected type to get the most precise type needed
+                    return e_ty & m_ty
+                elif isinstance(e_ty, RealType) and e_ty.ctx == REAL:
+                    # intersecting with REAL
+                    return m_ty
+
+        return e_ty
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context):
         a_ty = self._visit_expr(e.first, ctx)
         b_ty = self._visit_expr(e.second, ctx)
         e_ty = self._expr_type(e)
-        if isinstance(e, Mul) and isinstance(a_ty, AbstractFormat) and isinstance(b_ty, AbstractFormat):
+
+        if isinstance(a_ty, AbstractFormat) and isinstance(b_ty, AbstractFormat):
             # possible optimization: if A and B are both abstract formats,
             # then the "minimal" format can be computed directly
-            m_ty = a_ty * b_ty
-            if isinstance(e_ty, AbstractFormat):
-                # take intersection with expected type
-                return e_ty & m_ty
-            else:
-                # expected type might be smaller but we can't be sure
-                return m_ty
+            match e:
+                case Add():
+                    m_ty: AbstractFormat | None = a_ty + b_ty
+                case Sub():
+                    m_ty = a_ty - b_ty
+                case Mul():
+                    m_ty = a_ty * b_ty
+                case _:
+                    m_ty = None
+
+            if m_ty is not None:
+                if isinstance(e_ty, AbstractFormat):
+                    # intersect with expected type to get the most precise type needed
+                    return e_ty & m_ty
+                elif isinstance(e_ty, RealType) and e_ty.ctx == REAL:
+                    # intersecting with REAL
+                    return m_ty
 
         # return the most conservative type
         return e_ty
