@@ -30,7 +30,6 @@ def _maxval_precision(bound: RealFloat, exp: int) -> int:
     with the exponent `exp`, i.e., the number of bits
     required to represent `c` where `bound = c * 2**exp`.
     """
-    assert not bound.is_zero()
     n = exp - 1
     bound = bound.normalize(n=n)
     return bound.c.bit_length()
@@ -85,8 +84,84 @@ class AbstractFormat:
             and self.neg_bound == other.neg_bound
         )
 
+    def __add__(self, other: 'AbstractFormat') -> 'AbstractFormat':
+        """
+        Addition of two formats.
+
+        Produces a format that can represent the sum of any
+        pair of representable numbers from the two formats.
+        """
+        if not isinstance(other, AbstractFormat):
+            raise TypeError(f'Expected \'AbstractFormat\', got {other}')
+        # exponent: min(e1, e2)
+        # bounds: b1 + b2
+        exp = min(self.exp, other.exp)
+        pos_bound = self.pos_bound + other.pos_bound
+        neg_bound = self.neg_bound + other.neg_bound
+
+        # compute precision based on bounds and exponent
+        if isinstance(pos_bound, float) or isinstance(neg_bound, float):
+            # precision must be unbounded since we need to represent
+            # any sum of the form `+HUGE - quantum`
+            prec = float('inf')
+        elif isinstance(exp, float):
+            # no subnormalization point means we need to represent
+            # any sum of the form `+x - SMALL`
+            prec = float('inf')
+        else:
+            # compute the magnitude of the largest bound
+            max_bound = max(pos_bound, abs(neg_bound))
+
+            # normalize the largest bound with the desired quantum
+            # its precision is the required precision
+            max_bound = max_bound.normalize(n=exp - 1)
+            prec = max_bound.p
+
+        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+
+    def __sub__(self, other: 'AbstractFormat') -> 'AbstractFormat':
+        """
+        Subtraction of two formats.
+
+        Produces a format that can represent the difference of any
+        pair of representable numbers from the two formats.
+        """
+        if not isinstance(other, AbstractFormat):
+            raise TypeError(f'Expected \'AbstractFormat\', got {other}')
+        # exponent: min(e1, e2)
+        # bounds: b1 + b2
+        exp = min(self.exp, other.exp)
+        pos_bound = self.pos_bound + abs(other.neg_bound)
+        neg_bound = self.neg_bound + abs(other.pos_bound)
+
+        # compute precision based on bounds and exponent
+        if isinstance(pos_bound, float) or isinstance(neg_bound, float):
+            # precision must be unbounded since we need to represent
+            # any difference of the form `+HUGE - quantum`
+            prec = float('inf')
+        elif isinstance(exp, float):
+            # no subnormalization point means we need to represent
+            # any difference of the form `+x - SMALL`
+            prec = float('inf')
+        else:
+            # compute the magnitude of the largest bound
+            max_bound = max(pos_bound, abs(neg_bound))
+
+            # normalize the largest bound with the desired quantum
+            # its precision is the required precision
+            max_bound = max_bound.normalize(n=exp - 1)
+            prec = max_bound.p
+
+        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+
+
     def __mul__(self, other: 'AbstractFormat') -> 'AbstractFormat':
-        """Multiply two formats."""
+        """
+        Multiplication of two formats.
+
+        Produces a format that can represent the product of any
+        pair of representable numbers from the two formats.
+        """
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
         # precision: p1 + p2

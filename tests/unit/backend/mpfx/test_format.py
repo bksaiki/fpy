@@ -3,6 +3,7 @@ Test for the abstract number format `A(p, exp, bound)`.
 """
 
 import fpy2 as fp
+import itertools
 import unittest
 
 from fpy2.backend.mpfx.format import AbstractFormat
@@ -98,3 +99,68 @@ class TestAbstractFormat(unittest.TestCase):
         CTX1 = AbstractFormat.from_context(fp.FixedContext(True, 0, 4))
         CTX2 = AbstractFormat(4, 0, fp.RealFloat.from_int(12))
         self.assertTrue(CTX1.contained_in(CTX2), "Expected INT4 to be contained in A(4, 0, 12).")
+
+    def test_effective_prec(self):
+        """Testing effective precision calculation."""
+        precs: list[int | float] = [2, 4, 8, float('inf')]
+        exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
+        bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]
+
+        for p, e, b in itertools.product(precs, exps, bounds):
+            if p == float('inf') and e == float('-inf'):
+                continue  # skip invalid format
+            fmt = AbstractFormat(p, e, b)
+            self.assertLessEqual(fmt.effective_prec(), p)
+
+    def test_add(self, logging: bool = True):
+        precs: list[int | float] = [2, 4, 8, float('inf')]
+        exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
+        bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]
+
+        # iterator over all combinations
+        for p1, e1, b1 in itertools.product(precs, exps, bounds):
+            if p1 == float('inf') and e1 == float('-inf'):
+                continue  # skip invalid format
+
+            fmt1 = AbstractFormat(p1, e1, b1)
+            for p2, e2, b2 in itertools.product(precs, exps, bounds):
+                if p2 == float('inf') and e2 == float('-inf'):
+                    continue  # skip invalid format
+
+                fmt2 = AbstractFormat(p2, e2, b2)
+                fmt = fmt1 + fmt2
+
+                if logging:
+                    fmt1_str = f"A({fmt1.prec}, {fmt1.exp}, {float(fmt1.pos_bound)})"
+                    fmt2_str = f"A({fmt2.prec}, {fmt2.exp}, {float(fmt2.pos_bound)})"
+                    fmt_str = f"A({fmt.prec}, {fmt.exp}, {float(fmt.pos_bound)})"
+                    print(f"{fmt1_str} + {fmt2_str} = {fmt_str}")
+
+                self.assertEqual(fmt.exp, min(e1, e2))
+                self.assertEqual(fmt.pos_bound, b1 + b2)
+
+
+    def test_mul(self):
+        precs: list[int | float] = [2, 4, 8, float('inf')]
+        exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
+        bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]
+
+        # iterator over all combinations
+        params1 = itertools.product(precs, exps, bounds)
+        params2 = itertools.product(precs, exps, bounds)
+
+        for p1, e1, b1 in params1:
+            if p1 == float('inf') and e1 == float('-inf'):
+                continue  # skip invalid format
+
+            fmt1 = AbstractFormat(p1, e1, b1)
+            for p2, e2, b2 in params2:
+                if p2 == float('inf') and e2 == float('-inf'):
+                    continue  # skip invalid format
+
+                fmt2 = AbstractFormat(p2, e2, b2)
+                fmt = fmt1 * fmt2
+
+                self.assertEqual(fmt.effective_prec(), fmt1.effective_prec() + fmt2.effective_prec())
+                self.assertEqual(fmt.exp, e1 + e2)
+                self.assertEqual(fmt.pos_bound, b1 * b2)
