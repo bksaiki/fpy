@@ -9,6 +9,7 @@ from typing import TypeAlias
 from ...number import (
     MPFixedContext, MPBFixedContext, FixedContext,
     MPFloatContext, MPSFloatContext, MPBFloatContext, EFloatContext,
+    ExpContext,
     RealFloat
 )
 from...utils import default_repr
@@ -19,7 +20,7 @@ __all__ = [
 ]
 
 SupportedContext: TypeAlias = (
-    MPFixedContext | MPBFixedContext |
+    MPFixedContext | MPBFixedContext | ExpContext |
     MPFloatContext | MPSFloatContext | MPBFloatContext | EFloatContext
 )
 
@@ -77,6 +78,9 @@ class AbstractFormat:
             and self.pos_bound == other.pos_bound
             and self.neg_bound == other.neg_bound
         )
+
+    def __str__(self) -> str:
+        return f'A({self.prec}, {self.exp}, +{str(self.pos_bound)}, {str(self.neg_bound)})'
 
     def __pos__(self) -> 'AbstractFormat':
         """Identity of the format."""
@@ -219,6 +223,11 @@ class AbstractFormat:
                 pos_maxval = ctx.maxval().as_real()
                 neg_maxval = ctx.maxval(True).as_real()
                 return AbstractFormat(float('inf'), ctx.expmin, pos_maxval, neg_bound=neg_maxval)
+            case ExpContext():
+                pos_maxval = ctx.maxval().as_real()
+                neg_maxval = RealFloat.from_int(0)
+                expmin = ctx.minval().exp
+                return AbstractFormat(1, expmin, pos_maxval, neg_bound=neg_maxval)
             case _:
                 raise TypeError(f'Unsupported context type: {type(ctx)}')
 

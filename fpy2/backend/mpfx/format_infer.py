@@ -201,7 +201,8 @@ class _FormatInfernce(Visitor):
                 raise RuntimeError(f'unreachable: {target}')
 
     def _visit_var(self, e: Var, ctx: Context):
-        return self._expr_type(e)
+        d = self.def_use.find_def_from_use(e)
+        return self.by_def[d]
 
     def _visit_bool(self, e: BoolVal, ctx: Context):
         return self._expr_type(e)
@@ -319,7 +320,12 @@ class _FormatInfernce(Visitor):
         return ListFormatType(elts[0])
 
     def _visit_list_comp(self, e: ListComp, ctx: Context):
-        raise NotImplementedError
+        for target, iterable in zip(e.targets, e.iterables, strict=True):
+            iter_ty = self._visit_expr(iterable, ctx)
+            assert isinstance(iter_ty, ListFormatType)
+            self._visit_binding(e, target, iter_ty.elt)
+
+        return ListFormatType(self._visit_expr(e.elt, ctx))
 
     def _visit_list_ref(self, e: ListRef, ctx: Context):
         # Γ |- e: list T   Γ |- i: real A
@@ -429,6 +435,7 @@ class _FormatInfernce(Visitor):
 
     def _visit_expr(self, expr: Expr, ctx: Context) -> FormatType:
         ty = super()._visit_expr(expr, ctx)
+        # print(expr.format(), '::', ty)
         self.by_expr[expr] = ty
         return ty
 

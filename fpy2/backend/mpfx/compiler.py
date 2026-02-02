@@ -12,20 +12,18 @@ from ...analysis import (
 )
 from ...function import Function
 from ...number import IEEEContext, OV, RM, FP64, INTEGER
-from ...transform import Monomorphize
+from ...transform import DeadCodeEliminate, Monomorphize
 from ...types import BoolType, ContextType, RealType, VarType, Type
 from ...utils import Gensym
 from ..backend import Backend
 
-from .format import AbstractFormat
+from .elim_round import ElimRound
+from .format import AbstractFormat, SupportedContext
 from .format_infer import (
     FormatAnalysis, FormatInfer, FormatInferError,
     FormatType, ListFormatType, TupleFormatType
 )
-from .instr import (
-    NegInstr, AbsInstr, SqrtInstr,
-    AddInstr, SubInstr, MulInstr, DivInstr, FMAInstr
-)
+from .instr import InstrGenerator
 from .types import *
 from .utils import MPFXCompileError, CompileCtx, CppOptions
 
@@ -43,6 +41,7 @@ class _MPFXBackendInstance(Visitor):
     fmt_info: FormatAnalysis
     eval_info: PartialEvalInfo
 
+    instr_gen: InstrGenerator
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
     gensym: Gensym
@@ -61,6 +60,7 @@ class _MPFXBackendInstance(Visitor):
         self.fmt_info = fmt_info
         self.eval_info = eval_info
 
+        self.instr_gen = InstrGenerator(func)
         self.decl_phis = set()
         self.decl_assigns = set()
         self.gensym = Gensym(self.def_use.names())
@@ -255,24 +255,15 @@ class _MPFXBackendInstance(Visitor):
             case Neg():
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
-                gen = NegInstr.generator(arg_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for negation: {e}')
-                return gen(arg_str, ctx.ctx_name)
+                return self.instr_gen.neg(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Abs():
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
-                gen = AbsInstr.generator(arg_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for absolute value: {e}')
-                return gen(arg_str, ctx.ctx_name)
+                return self.instr_gen.abs(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Sqrt():
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
-                gen = SqrtInstr.generator(arg_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for square root: {e}')
-                return gen(arg_str, ctx.ctx_name)
+                return self.instr_gen.sqrt(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Len():
                 return self._visit_len(e, ctx)
             case _:
@@ -286,34 +277,22 @@ class _MPFXBackendInstance(Visitor):
                 lhs_ty = self._expr_type(e.first)
                 rhs_ty = self._expr_type(e.second)
                 e_ctx = self._expr_ctx(e)
-                gen = AddInstr.generator(lhs_ty, rhs_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for addition: {e}')
-                return gen(lhs_str, rhs_str, ctx.ctx_name)
+                return self.instr_gen.add(lhs_str, rhs_str, ctx.ctx_name, lhs_ty, rhs_ty, e_ctx)
             case Sub():
                 lhs_ty = self._expr_type(e.first)
                 rhs_ty = self._expr_type(e.second)
                 e_ctx = self._expr_ctx(e)
-                gen = SubInstr.generator(lhs_ty, rhs_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for subtraction: {e}')
-                return gen(lhs_str, rhs_str, ctx.ctx_name)
+                return self.instr_gen.sub(lhs_str, rhs_str, ctx.ctx_name, lhs_ty, rhs_ty, e_ctx)
             case Mul():
                 lhs_ty = self._expr_type(e.first)
                 rhs_ty = self._expr_type(e.second)
                 e_ctx = self._expr_ctx(e)
-                gen = MulInstr.generator(lhs_ty, rhs_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for multiplication: {e}')
-                return gen(lhs_str, rhs_str, ctx.ctx_name)
+                return self.instr_gen.mul(lhs_str, rhs_str, ctx.ctx_name, lhs_ty, rhs_ty, e_ctx)
             case Div():
                 lhs_ty = self._expr_type(e.first)
                 rhs_ty = self._expr_type(e.second)
                 e_ctx = self._expr_ctx(e)
-                gen = DivInstr.generator(lhs_ty, rhs_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for division: {e}')
-                return gen(lhs_str, rhs_str, ctx.ctx_name)
+                return self.instr_gen.div(lhs_str, rhs_str, ctx.ctx_name, lhs_ty, rhs_ty, e_ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported binary operation to compile: {e}')
 
@@ -327,10 +306,7 @@ class _MPFXBackendInstance(Visitor):
                 snd_ty = self._expr_type(e.second)
                 trd_ty = self._expr_type(e.third)
                 e_ctx = self._expr_ctx(e)
-                gen = FMAInstr.generator(fst_ty, snd_ty, trd_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for fused multiply-add: {e}')
-                return gen(fst_str, snd_str, trd_str, ctx.ctx_name)
+                return self.instr_gen.fma(fst_str, snd_str, trd_str, ctx.ctx_name, fst_ty, snd_ty, trd_ty, e_ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported ternary operation to compile: {e}')
 
@@ -608,15 +584,16 @@ class _MPFXBackendInstance(Visitor):
         ctx.add_line('}')  # close if
 
     def _visit_context(self, stmt: ContextStmt, ctx: CompileCtx):
-        # name to bind context
-        if isinstance(stmt.target, NamedId):
-            ctx_name = str(stmt.target)
-        else:
-            ctx_name = self._fresh_var()
+        # context must be statically known
+        ctx_val = self.eval_info.by_expr[stmt.ctx]
 
-        # compile context
-        ctx_str = self._visit_expr(stmt.ctx, ctx)
-        ctx.add_line(f'auto {ctx_name} = {ctx_str};')
+        # bind it if we can compile it
+        if isinstance(ctx_val, SupportedContext):
+            ctx_name: str | None = self._fresh_var()
+            ctx_str = self._compile_context(ctx_val)
+            ctx.add_line(f'auto {ctx_name} = {ctx_str};')
+        else:
+            ctx_name = None
 
         # compile body
         self._visit_block(stmt.body, ctx.with_ctx(ctx_name))
@@ -682,6 +659,7 @@ class MPFXCompiler(Backend):
         *,
         ctx: Context | None = None,
         arg_types: Collection[Type | None] | None = None,
+        elim_round: bool = True
     ) -> str:
         """
         Compiles the given FPy function to a C++ program
@@ -712,6 +690,18 @@ class MPFXCompiler(Backend):
             format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
         except (ContextInferError, TypeInferError, FormatInferError) as e:
             raise ValueError(f'{func.name}: context inference failed') from e
+
+        if elim_round:
+            # perform rounding elimination
+            ast = ElimRound.apply(ast, eval_info=eval_info)
+
+            # dead-code elimination could be done here
+            ast = DeadCodeEliminate.apply(ast)
+            print(ast.format())
+
+            # reanalyze
+            format_info = FormatInfer.infer(ast)
+            eval_info = PartialEval.apply(ast, def_use=format_info.def_use)
 
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)

@@ -3,6 +3,7 @@ Dead code elimination.
 
 TODO:
 - rewrite `if True: ... else: ...` to just the `if` body
+- eliminate unused context statement
 """
 
 from typing import cast
@@ -41,9 +42,16 @@ class _Eliminator(DefaultTransformVisitor):
         return len(block.stmts) == 1 and isinstance(block.stmts[0], PassStmt)
 
     def _visit_assign(self, assign: Assign, ctx: None):
-        # remove any assignment marked for deletion
         if assign in self.unused_assign:
-            # eliminate unused assignment
+            # remove any assignment marked for deletion
+            self.eliminated = True
+            return None, ctx
+        if (
+            isinstance(assign.target, NamedId)
+            and isinstance(assign.expr, Var)
+            and assign.target == assign.expr.name
+        ):
+            # remove self-assignment
             self.eliminated = True
             return None, ctx
         else:
@@ -108,6 +116,20 @@ class _Eliminator(DefaultTransformVisitor):
             return None, ctx
         else:
             return super()._visit_while(stmt, ctx)
+
+    def _visit_context(self, stmt: ContextStmt, ctx: None):
+        # eliminate if the body is empty
+        body, _ = self._visit_block(stmt.body, ctx)
+        if len(body.stmts) == 1 and isinstance(body.stmts[0], PassStmt):
+            # empty body -> eliminate context statement
+            self.eliminated = True
+            return None, ctx
+        elif len(body.stmts) == 1 and isinstance(body.stmts[0], ContextStmt):
+            # nested context statements -> eliminate this level
+            self.eliminated = True
+            return body.stmts[0], ctx
+        else:
+            return super()._visit_context(stmt, ctx)
 
     def _visit_pass(self, stmt: PassStmt, ctx: None):
         # unnecessary pass statement
