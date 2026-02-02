@@ -6,7 +6,7 @@ import fpy2 as fp
 import itertools
 import unittest
 
-from fpy2.backend.mpfx.format import AbstractFormat
+from fpy2.backend.mpfx import AbstractFormat
 
 class TestAbstractFormat(unittest.TestCase):
 

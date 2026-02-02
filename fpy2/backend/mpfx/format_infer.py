@@ -82,6 +82,40 @@ FormatType: TypeAlias = (
 )
 """The normal type system extended with abstract formats."""
 
+def _cvt_context(ctx: Context):
+    if isinstance(ctx, SupportedContext):
+        return AbstractFormat.from_context(ctx)
+    else:
+        return None
+
+def convert_type(ty: Type) -> FormatType:
+    """
+    Converts a normal type to a format type by replacing real types
+    with abstract formats.
+
+    Args:
+        ty: The type to convert.
+    Returns:
+        The converted format type.
+    """
+    match ty:
+        case BoolType() | ContextType():
+            return ty
+        case RealType():
+            if isinstance(ty.ctx, Context):
+                fmt = _cvt_context(ty.ctx)
+                return ty if fmt is None else fmt
+            else:
+                return ty
+        case ListType():
+            elt = convert_type(ty.elt)
+            return ListFormatType(elt)
+        case TupleType():
+            elts = [convert_type(t) for t in ty.elts]
+            return TupleFormatType(elts)
+        case _:
+            raise RuntimeError(f'Unsupported type: {ty}')
+
 
 class FormatInferError(Exception):
     """
@@ -149,32 +183,7 @@ class _FormatInfernce(Visitor):
 
     def _expr_type(self, e: Expr):
         ty = self.ctx_info.by_expr[e]
-        return self._cvt_type(ty)
-
-    def _cvt_context(self, ctx: Context):
-        if isinstance(ctx, SupportedContext):
-            return AbstractFormat.from_context(ctx)
-        else:
-            return None
-
-    def _cvt_type(self, ty: Type):
-        match ty:
-            case BoolType() | ContextType():
-                return ty
-            case RealType():
-                if isinstance(ty.ctx, Context):
-                    fmt = self._cvt_context(ty.ctx)
-                    return ty if fmt is None else fmt
-                else:
-                    return ty
-            case ListType():
-                elt = self._cvt_type(ty.elt)
-                return ListFormatType(elt)
-            case TupleType():
-                elts = [self._cvt_type(t) for t in ty.elts]
-                return TupleFormatType(elts)
-            case _:
-                raise RuntimeError(f'Unsupported type: {ty}')
+        return convert_type(ty)
 
     def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ty: FormatType):
         match target:
@@ -431,7 +440,7 @@ class _FormatInfernce(Visitor):
         # function arguments
         arg_types: list[FormatType] = []
         for arg, ty in zip(func.args, self.ctx_info.arg_types, strict=True):
-            fmt_ty = self._cvt_type(ty)
+            fmt_ty = convert_type(ty)
             arg_types.append(fmt_ty)
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
