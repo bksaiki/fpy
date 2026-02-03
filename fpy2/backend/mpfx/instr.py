@@ -2,6 +2,7 @@
 MPFX backend: target-specific instructions.
 """
 
+from enum import Enum
 from typing import NoReturn
 
 from ...ast.fpyast import FuncDef
@@ -71,50 +72,50 @@ def _rto_is_valid(ctx: Context) -> bool:
 #####################################################################
 # Instruction generator
 
+class FP64Engine(Enum):
+    """MPFX engine type."""
+    FP_RTO = 0
+    EFT = 1
+    SOFTFLOAT = 2
+    FLOPPYFLOAT = 3
+
+    def to_cpp(self) -> str:
+        match self:
+            case FP64Engine.FP_RTO:
+                return 'mpfx::Engine::FP_RTO'
+            case FP64Engine.EFT:
+                return 'mpfx::Engine::EFT'
+            case FP64Engine.SOFTFLOAT:
+                return 'mpfx::Engine::SOFTFLOAT'
+            case FP64Engine.FLOPPYFLOAT:
+                return 'mpfx::Engine::FFLOAT'
+            case _:
+                raise ValueError(f"Unsupported FP64 engine: {self}")
+
+
 class InstrGenerator:
     """Instruction generator."""
     func: FuncDef
+    engine: FP64Engine
 
-    def __init__(self, func: FuncDef):
+    def __init__(self, func: FuncDef, engine: FP64Engine = FP64Engine.EFT):
         self.func = func
+        self.engine = engine
 
     def raise_error(self, msg: str) -> NoReturn:
         raise MPFXCompileError(self.func, msg)
-    
-    def add(
+
+    def cast(
         self,
-        lhs_str: str,
-        rhs_str: str,
+        arg_str: str,
         ctx_str: str | None,
-        lhs_ty: AbstractFormat,
-        rhs_ty: AbstractFormat,
+        arg_ty: AbstractFormat,
         ctx: Context
     ):
-        if ctx is REAL:
-            # exact multiplication
-            if _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty) and ctx is REAL:
-                # use integer addition for real addition under INTEGER context
-                return f'({lhs_str} + {rhs_str})'
-            if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
-                exact_ty = lhs_ty + rhs_ty
-                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
-                    # multiplication is exact
-                    return f'({lhs_str} + {rhs_str})'
-        else:
-            if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
-                exact_ty = lhs_ty + rhs_ty
-                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
-                    # use direct multiplication if the result fits in double
-                    if ctx_str is None:
-                        self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
-                    return f'mpfx::add<mpfx::EngineType::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
-                if _rto_is_valid(ctx):
-                    # use the FP-RTO backed implementation
-                    if ctx_str is None:
-                        self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
-                    return f'mpfx::add({lhs_str}, {rhs_str}, {ctx_str})'
-
-        self.raise_error(f'cannot compile `{lhs_str} + {rhs_str}`: {lhs_ty} + {rhs_ty} under context {ctx}')
+        if arg_ty.contained_in(_cvt_context(ctx)):
+            # no cast needed
+            return arg_str
+        self.raise_error(f'cannot compile `cast({arg_str})`: {arg_ty} under context {ctx}')
 
     def neg(
         self,
@@ -157,9 +158,46 @@ class InstrGenerator:
             # use the FP-RTO backed implementation
             if ctx_str is None:
                 self.raise_error(f'unsupported context `sqrt({arg_str})`: {ctx}')
-            return f'mpfx::sqrt({arg_str}, {ctx_str})'
+            engine_str = self.engine.to_cpp()
+            return f'mpfx::sqrt<{engine_str}>({arg_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `sqrt({arg_str})`: {arg_ty} under context {ctx}')
+
+    def add(
+        self,
+        lhs_str: str,
+        rhs_str: str,
+        ctx_str: str | None,
+        lhs_ty: AbstractFormat,
+        rhs_ty: AbstractFormat,
+        ctx: Context
+    ):
+        if ctx is REAL:
+            # exact addition
+            if _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty) and ctx is REAL:
+                # use integer addition for real addition under INTEGER context
+                return f'({lhs_str} + {rhs_str})'
+            if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
+                exact_ty = lhs_ty + rhs_ty
+                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                    # addition is exact
+                    return f'({lhs_str} + {rhs_str})'
+        else:
+            if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
+                exact_ty = lhs_ty + rhs_ty
+                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                    # use direct addition if the result fits in double
+                    if ctx_str is None:
+                        self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
+                    return f'mpfx::add<mpfx::Engine::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
+                if _rto_is_valid(ctx):
+                    # use the FP-RTO backed implementation
+                    if ctx_str is None:
+                        self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
+                    engine_str = self.engine.to_cpp()
+                    return f'mpfx::add<{engine_str}>({lhs_str}, {rhs_str}, {ctx_str})'
+
+        self.raise_error(f'cannot compile `{lhs_str} + {rhs_str}`: {lhs_ty} + {rhs_ty} under context {ctx}')
 
     def sub(
         self,
@@ -170,11 +208,30 @@ class InstrGenerator:
         rhs_ty: AbstractFormat,
         ctx: Context
     ):
-        if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty) and _rto_is_valid(ctx):
-            # use the FP-RTO backed implementation
-            if ctx_str is None:
-                self.raise_error(f'unsupported context `{lhs_str} - {rhs_str}`: {ctx}')
-            return f'mpfx::sub({lhs_str}, {rhs_str}, {ctx_str})'
+        if ctx is REAL:
+            # exact subtraction
+            if _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty) and ctx is REAL:
+                # use integer subtraction for real subtraction under INTEGER context
+                return f'({lhs_str} - {rhs_str})'
+            if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
+                exact_ty = lhs_ty - rhs_ty
+                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                    # subtraction is exact
+                    return f'({lhs_str} - {rhs_str})'
+        else:
+            if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
+                exact_ty = lhs_ty - rhs_ty
+                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                    # use direct subtraction if the result fits in double
+                    if ctx_str is None:
+                        self.raise_error(f'unsupported context `{lhs_str} - {rhs_str}`: {ctx}')
+                    return f'mpfx::sub<mpfx::Engine::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
+                if _rto_is_valid(ctx):
+                    # use the FP-RTO backed implementation
+                    if ctx_str is None:
+                        self.raise_error(f'unsupported context `{lhs_str} - {rhs_str}`: {ctx}')
+                    engine_str = self.engine.to_cpp()
+                    return f'mpfx::sub<{engine_str}>({lhs_str}, {rhs_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `{lhs_str} - {rhs_str}`: {lhs_ty} - {rhs_ty} under context {ctx}')
 
@@ -201,12 +258,13 @@ class InstrGenerator:
                     # use direct multiplication if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} * {rhs_str}`: {ctx}')
-                    return f'mpfx::mul<mpfx::EngineType::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
+                    return f'mpfx::mul<mpfx::Engine::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
                 if _rto_is_valid(ctx):
                     # use the FP-RTO backed implementation
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} * {rhs_str}`: {ctx}')
-                    return f'mpfx::mul({lhs_str}, {rhs_str}, {ctx_str})'
+                    engine_str = self.engine.to_cpp()
+                    return f'mpfx::mul<{engine_str}>({lhs_str}, {rhs_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `{lhs_str} * {rhs_str}`: {lhs_ty} * {rhs_ty} under context {ctx}')
 
@@ -223,7 +281,8 @@ class InstrGenerator:
             # use the FP-RTO backed implementation
             if ctx_str is None:
                 self.raise_error(f'unsupported context `{lhs_str} / {rhs_str}`: {ctx}')
-            return f'mpfx::div({lhs_str}, {rhs_str}, {ctx_str})'
+            engine_str = self.engine.to_cpp()
+            return f'mpfx::div<{engine_str}>({lhs_str}, {rhs_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `{lhs_str} / {rhs_str}`: {lhs_ty} / {rhs_ty} under context {ctx}')
 
@@ -247,6 +306,7 @@ class InstrGenerator:
             # use the FP-RTO backed implementation
             if ctx_str is None:
                 self.raise_error(f'unsupported context `fma({a_str}, {b_str}, {c_str})`: {ctx}')
-            return f'mpfx::fma({a_str}, {b_str}, {c_str}, {ctx_str})'
+            engine_str = self.engine.to_cpp()
+            return f'mpfx::fma<{engine_str}>({a_str}, {b_str}, {c_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `fma({a_str}, {b_str}, {c_str})`: fma({a_ty}, {b_ty}, {c_ty}) under context {ctx}')

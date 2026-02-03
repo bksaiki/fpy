@@ -257,7 +257,7 @@ class _FormatInfernce(Visitor):
             # possible optimization: if A are both abstract formats,
             # then the "minimal" format can be computed directly
             match e:
-                case Round():
+                case Round() | Cast():
                     m_ty: AbstractFormat | None = a_ty
                 case Neg():
                     m_ty = -a_ty
@@ -383,17 +383,35 @@ class _FormatInfernce(Visitor):
         return ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context):
-        raise NotImplementedError
+        for idx in stmt.indices:
+            self._visit_expr(idx, ctx)
+        self._visit_expr(stmt.expr, ctx)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: Context):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
+
+        # add types to phi variables
+        for phi in self.def_use.phis[stmt]:
+            # TODO: unify?
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            self.by_def[phi] = lhs_ty
+
         return ctx
 
     def _visit_if(self, stmt: IfStmt, ctx: Context):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
+
+        # unify any merged variable
+        # add types to phi variables
+        for phi in self.def_use.phis[stmt]:
+            # TODO: unify?
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            _ = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = lhs_ty
+
         return ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: Context):
@@ -407,6 +425,7 @@ class _FormatInfernce(Visitor):
 
         # add types to phi variables
         for phi in self.def_use.phis[stmt]:
+            # TODO: unify?
             lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
             self.by_def[phi] = lhs_ty
 

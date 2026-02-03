@@ -890,6 +890,7 @@ class ContextInfer:
         func: FuncDef,
         *,
         def_use: DefineUseAnalysis | None = None,
+        eval_info: PartialEvalInfo | None = None,
         type_info: TypeAnalysis | None = None,
         unsafe_cast_int: bool = False
     ):
@@ -909,12 +910,14 @@ class ContextInfer:
         if not isinstance(unsafe_cast_int, bool):
             raise TypeError(f'expected a \'bool\' for unsafe_cast_int, got {unsafe_cast_int}')
 
+        if def_use is None:
+            def_use = DefineUse.analyze(func)
+
         if type_info is None:
-            if def_use is None:
-                def_use = DefineUse.analyze(func)
             type_info = TypeInfer.check(func, def_use)
 
-        eval_info = PartialEval.apply(func, def_use=def_use)
+        if eval_info is None:
+            eval_info = PartialEval.apply(func, def_use=def_use)
 
         inst = ContextTypeInferInstance(func, type_info, eval_info, unsafe_cast_int)
         return inst.infer()

@@ -10,7 +10,7 @@ from typing import cast
 
 from ..ast import *
 from ..analysis import (
-    DefineUse, DefineUseAnalysis, AssignDef, PhiDef,
+    DefineUse, DefineUseAnalysis, AssignDef, PhiDef, DefSite,
     Purity, SyntaxCheck
 )
 
@@ -206,6 +206,7 @@ class _DeadCodeEliminate:
                             unused_fv.add(d.name)
                         elif (
                             isinstance(d.site, Assign)
+                            and isinstance(d.site.target, Id)
                             and Purity.analyze_expr(d.site.expr, self.def_use)
                         ):
                             # assignment
@@ -220,9 +221,9 @@ class _DeadCodeEliminate:
             for phi in unused_phi:
                 lhs = self.def_use.defs[phi.lhs]
                 rhs = self.def_use.defs[phi.rhs]
-                if isinstance(lhs, AssignDef) and isinstance(lhs.site, Assign):
+                if isinstance(lhs, AssignDef) and isinstance(lhs.site, Assign) and isinstance(lhs.site.target, Id):
                     unused_assign.add(lhs.site)
-                if isinstance(rhs, AssignDef) and isinstance(rhs.site, Assign):
+                if isinstance(rhs, AssignDef) and isinstance(rhs.site, Assign) and isinstance(rhs.site.target, Id):
                     unused_assign.add(rhs.site)
 
             # run code eliminator

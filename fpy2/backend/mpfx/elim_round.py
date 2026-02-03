@@ -43,8 +43,13 @@ class _ElimRoundVisitor(DefaultTransformVisitor):
                     and isinstance(e_ty, AbstractFormat)
                     and a_ty.contained_in(e_ty)
                 ):
-                    # rounding is unnecessary; eliminate it
-                    return self._visit_expr(e.arg, ctx)
+                    # rounding is unnecessary;
+                    # replace with a `cast` operation to ensure context inference works
+                    return Cast(
+                        Attribute(Var(NamedId('fp', None), None), 'cast', None),
+                        self._visit_expr(e.arg, ctx),
+                        None
+                    )
 
         # default transform
         return super()._visit_unaryop(e, ctx)
@@ -56,7 +61,6 @@ class _ElimRoundVisitor(DefaultTransformVisitor):
                     # check if rounding is necessary
                     r_ty = convert_type(self.format_info.ctx_info.by_expr[e])
                     e_ty = self.format_info.preround[e]
-                    print(e.format(), r_ty, e_ty)
                     if (
                         isinstance(e_ty, AbstractFormat)
                         and isinstance(r_ty, AbstractFormat)
@@ -77,15 +81,13 @@ class _ElimRoundVisitor(DefaultTransformVisitor):
                             None
                         ))
 
-                        return Var(tid, None)
-
-                    # push statement and return `round(tid)`
-                    # so that context inference can work correctly
-                    # return Round(
-                    #     Attribute(Var(NamedId('fp', None), None), 'round', None),
-                    #     Var(tid, None),
-                    #     None
-                    # )
+                        # push statement and return `round(tid)`
+                        # so that context inference can work correctly
+                        return Cast(
+                            Attribute(Var(NamedId('fp', None), None), 'cast', None),
+                            Var(tid, None),
+                            None
+                        )
 
         # default transform
         return super()._visit_binaryop(e, ctx)

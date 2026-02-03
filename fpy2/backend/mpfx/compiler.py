@@ -252,6 +252,10 @@ class _MPFXBackendInstance(Visitor):
     def _visit_unaryop(self, e, ctx: CompileCtx):
         arg_str = self._visit_expr(e.arg, ctx)
         match e:
+            case Cast():
+                arg_ty = self._expr_type(e.arg)
+                e_ctx = self._expr_ctx(e)
+                return self.instr_gen.cast(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Neg():
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
@@ -266,6 +270,8 @@ class _MPFXBackendInstance(Visitor):
                 return self.instr_gen.sqrt(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Len():
                 return self._visit_len(e, ctx)
+            case Empty():
+                return self._visit_empty(e, ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported unary operation to compile: {e}')
 
@@ -371,6 +377,16 @@ class _MPFXBackendInstance(Visitor):
         arg_cpp = self._visit_expr(e.arg, ctx)
         ty = self._expr_type(e)
         return self._compile_size(f'{arg_cpp}.size()', ty)
+    
+    def _visit_empty(self, e: Empty, ctx: CompileCtx):
+        # size(x) => std::vector<T>(static_cast<size_t>(size))
+        size_cpp = self._visit_expr(e.arg, ctx)
+        size_ty = self._expr_type(e.arg)
+        size_str = self._compile_size(size_cpp, size_ty)
+
+        elt_ty = self._expr_type(e)
+        elt_cpp_ty = self._compile_type(elt_ty).to_cpp()
+        return f'std::vector<{elt_cpp_ty}>({size_str})'
 
     def _visit_call(self, e, ctx):
         if e not in self.eval_info.by_expr:
@@ -381,11 +397,34 @@ class _MPFXBackendInstance(Visitor):
         else:
             raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
 
+    def _visit_compare2(self, op: CompareOp, lhs: str, rhs: str) -> str:
+        return f'{lhs} {op.symbol()} {rhs}'
+
     def _visit_compare(self, e, ctx):
-        raise NotImplementedError
+        if len(e.args) == 2:
+            # easy case: 2-argument comparison
+            lhs = self._visit_expr(e.args[0], ctx)
+            rhs = self._visit_expr(e.args[1], ctx)
+            return self._visit_compare2(e.ops[0], lhs, rhs)
+        else:
+            # harder case:
+            # - emit temporaries to bind expressions
+            # - form (t1 op t2) && (t2 op t3) && ...
+            args: list[str] = []
+            for arg in e.args:
+                t = self._fresh_var()
+                cpp_arg = self._visit_expr(arg, ctx)
+                ctx.add_line(f'auto {t} = {cpp_arg};')
+                args.append(t)
+
+            return ' && '.join(
+                self._visit_compare2(e.ops[i], args[i], args[i + 1])
+                for i in range(len(args) - 1)
+            )
 
     def _visit_tuple_expr(self, e, ctx):
-        raise NotImplementedError
+        args = [self._visit_expr(arg, ctx) for arg in e.elts]
+        return f'std::make_tuple({", ".join(args)})'
 
     def _visit_list_expr(self, e, ctx):
         raise NotImplementedError
@@ -400,8 +439,38 @@ class _MPFXBackendInstance(Visitor):
         size = self._compile_size(index, index_ty)
         return f'{value}[{size}]'
 
-    def _visit_list_slice(self, e, ctx):
-        raise NotImplementedError
+    def _visit_list_slice(self, e: ListSlice, ctx: CompileCtx):
+        # x[<start>:<stop>] =>
+        # auto v = <x>
+        # auto start = static_cast<size_t>(<start>) OR 0;
+        # auto stop = static_cast<size_t>(<stop>) OR x.size();
+        # <result> = std::vector<T>(v.begin() + start, v.end() + end);
+
+        # temporarily bind array
+        t = self._fresh_var()
+        arr = self._visit_expr(e.value, ctx)
+        e_ty = self._expr_type(e)
+        ctx.add_line(f'auto {t} = {arr};')
+
+        # compile start
+        if e.start is None:
+            start = '0'
+        else:
+            start = self._visit_expr(e.start, ctx)
+            start_ty = self._expr_type(e.start)
+            start = self._compile_size(start, start_ty)
+
+        # compile stop
+        if e.stop is None:
+            stop = f'{t}.size()'
+        else:
+            stop = self._visit_expr(e.stop, ctx)
+            stop_ty = self._expr_type(e.stop)
+            stop = self._compile_size(stop, stop_ty)
+
+        # result
+        ty_str = self._compile_type(e_ty).to_cpp()
+        return f'{ty_str}({t}.begin() + {start}, {t}.begin() + {stop})'
 
     def _visit_list_set(self, e, ctx):
         raise NotImplementedError
@@ -686,7 +755,7 @@ class MPFXCompiler(Backend):
 
         # run type checking with static context inference
         try:
-            ctx_info = ContextInfer.infer(ast, def_use=def_use, unsafe_cast_int=self.unsafe_cast_int)
+            ctx_info = ContextInfer.infer(ast, def_use=def_use, eval_info=eval_info, unsafe_cast_int=self.unsafe_cast_int)
             format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
         except (ContextInferError, TypeInferError, FormatInferError) as e:
             raise ValueError(f'{func.name}: context inference failed') from e
@@ -694,10 +763,11 @@ class MPFXCompiler(Backend):
         if elim_round:
             # perform rounding elimination
             ast = ElimRound.apply(ast, eval_info=eval_info)
+            print(ast.format())
 
             # dead-code elimination could be done here
             ast = DeadCodeEliminate.apply(ast)
-            print(ast.format())
+            # print(ast.format())
 
             # reanalyze
             format_info = FormatInfer.infer(ast)

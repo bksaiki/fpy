@@ -26,7 +26,12 @@ class CopyPropagate:
             if names is not None and d.name not in names:
                 continue
 
-            if isinstance(d, AssignDef) and isinstance(d.site, Assign) and isinstance(d.site.expr, Var):
+            if (
+                isinstance(d, AssignDef)
+                and isinstance(d.site, Assign)
+                and isinstance(d.site.target, Id)
+                and isinstance(d.site.expr, Var)
+            ):
                 # direct assignment: x = y
                 # substitute all occurences of this definition of `x` with `y`
                 if len(def_use.uses[d]) > 0:
