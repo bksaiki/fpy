@@ -61,6 +61,7 @@ __all__ = [
     'round',
     'round_exact',
     'round_at',
+    'cast',
     # Round-to-integer operations
     'ceil',
     'floor',
@@ -778,6 +779,22 @@ def round_at(x: Real, n: Real, ctx: Context = REAL) -> Float:
             raise ValueError(f'round_at() not supported for ctx={ctx}')
         case _:
             return ctx.round_at(x, int(n))
+
+def cast(x: Real, ctx: Context = REAL):
+    """
+    Identity operation that checks if `x` is representable in the context `ctx`.
+    
+    Returns `x` if it can be represented in `ctx`, otherwise raises an error.
+    This is useful for asserting that a value fits within a specific rounding context.
+    """
+    match ctx:
+        case None | RealContext():
+            # real computation; always representable
+            return x
+        case _:
+            # Check if x can be exactly represented in ctx
+            rounded = ctx.round(x, exact=True)
+            return rounded
 
 #############################################################################
 # Round-to-integer operations

@@ -80,6 +80,7 @@ _unary_table: dict[type[UnaryOp], FunctionType] = {
     Not: _Bool1ary,
     Round: _Real1ary,
     RoundExact: _Real1ary,
+    Cast: _Real1ary,
 }
 
 _binary_table: dict[type[BinaryOp], FunctionType] = {

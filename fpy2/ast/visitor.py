@@ -33,6 +33,7 @@ _expr_dispatch: dict[type[Expr], str] = {
     Round: "_visit_round",
     RoundExact: "_visit_round",
     RoundAt: "_visit_round_at",
+    Cast: "_visit_unaryop",
 }
 
 _stmt_dispatch: dict[type[Stmt], str] = {
