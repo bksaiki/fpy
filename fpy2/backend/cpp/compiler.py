@@ -602,6 +602,8 @@ class _CppBackendInstance(Visitor):
 
         # fallback
         match e:
+            case Cast():
+                return self._visit_expr(e.arg, ctx)
             case Len():
                 return self._visit_len(e, ctx)
             case Range1():
