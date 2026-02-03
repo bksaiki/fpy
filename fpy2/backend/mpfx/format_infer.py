@@ -134,6 +134,7 @@ class FormatAnalysis:
     fn_type: FunctionFormatType
     by_def: dict[Definition, FormatType]
     by_expr: dict[Expr, FormatType]
+    preround: dict[Expr, FormatType]
     ctx_info: ContextAnalysis
 
     @property
@@ -160,6 +161,7 @@ class _FormatInfernce(Visitor):
 
     by_def: dict[Definition, FormatType]
     by_expr: dict[Expr, FormatType]
+    preround: dict[Expr, FormatType]
     ret_ty: FormatType | None
 
     def __init__(self, func: FuncDef, ctx_info: ContextAnalysis, eval_info: PartialEvalInfo):
@@ -168,6 +170,7 @@ class _FormatInfernce(Visitor):
         self.eval_info = eval_info
         self.by_def = {}
         self.by_expr = {}
+        self.preround = {}
         self.ret_ty = None
 
     @property
@@ -176,7 +179,7 @@ class _FormatInfernce(Visitor):
 
     def infer(self):
         fn_ty = self._visit_function(self.func, None)
-        return FormatAnalysis(fn_ty, self.by_def, self.by_expr, self.ctx_info)
+        return FormatAnalysis(fn_ty, self.by_def, self.by_expr, self.preround, self.ctx_info)
 
     def raise_error(self, msg: str) -> NoReturn:
         raise FormatInferError(f'In function {self.func.name}: {msg}')
@@ -228,6 +231,24 @@ class _FormatInfernce(Visitor):
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         raise NotImplementedError
 
+    def _record_preround(self, e: Expr, m_ty: AbstractFormat, e_ty: AbstractFormat | RealType):
+        """
+        Records that an expression `e` has inferred context `m_ty`
+        but has expected context `e_ty`.
+        """
+        if isinstance(e_ty, AbstractFormat):
+            if m_ty.contained_in(e_ty):
+                self.preround[e] = m_ty
+            # intersect with expected type to get the most precise type needed
+            return e_ty & m_ty
+        elif isinstance(e_ty, RealType) and e_ty.ctx == REAL:
+            # intersecting with REAL
+            self.preround[e] = m_ty
+            return m_ty
+        else:
+            return m_ty
+
+
     def _visit_unaryop(self, e: UnaryOp, ctx: Context):
         a_ty = self._visit_expr(e.arg, ctx)
         e_ty = self._expr_type(e) # get the expected type
@@ -244,12 +265,8 @@ class _FormatInfernce(Visitor):
                     m_ty = None
 
             if m_ty is not None:
-                if isinstance(e_ty, AbstractFormat):
-                    # intersect with expected type to get the most precise type needed
-                    return e_ty & m_ty
-                elif isinstance(e_ty, RealType) and e_ty.ctx == REAL:
-                    # intersecting with REAL
-                    return m_ty
+                assert isinstance(e_ty, AbstractFormat | RealType)
+                e_ty = self._record_preround(e, m_ty, e_ty)
 
         return e_ty
 
@@ -272,12 +289,8 @@ class _FormatInfernce(Visitor):
                     m_ty = None
 
             if m_ty is not None:
-                if isinstance(e_ty, AbstractFormat):
-                    # intersect with expected type to get the most precise type needed
-                    return e_ty & m_ty
-                elif isinstance(e_ty, RealType) and e_ty.ctx == REAL:
-                    # intersecting with REAL
-                    return m_ty
+                assert isinstance(e_ty, AbstractFormat | RealType)
+                e_ty = self._record_preround(e, m_ty, e_ty)
 
         # return the most conservative type
         return e_ty
@@ -337,7 +350,13 @@ class _FormatInfernce(Visitor):
         return ty.elt
 
     def _visit_list_slice(self, e: ListSlice, ctx: Context):
-        raise NotImplementedError
+        if e.start is not None:
+            self._visit_expr(e.start, ctx)
+        if e.stop is not None:
+            self._visit_expr(e.stop, ctx)
+        ty = self._visit_expr(e.value, ctx)
+        assert isinstance(ty, ListFormatType)
+        return ty
 
     def _visit_list_set(self, e: ListSet, ctx: Context):
         raise NotImplementedError

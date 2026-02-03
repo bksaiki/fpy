@@ -50,34 +50,42 @@ class _ElimRoundVisitor(DefaultTransformVisitor):
         return super()._visit_unaryop(e, ctx)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _BlockCtx):
-        match e:
-            case Add() | Sub() | Mul():
-                # check if rounding is necessary
-                r_ty = convert_type(self.format_info.ctx_info.by_expr[e])
-                e_ty = self.format_info.by_expr[e]
-                if (
-                    isinstance(e_ty, AbstractFormat)
-                    and isinstance(r_ty, AbstractFormat)
-                    and e_ty.contained_in(r_ty)
-                ):
-                    # rounding is unnecessary;
-                    # insert a real rounding instead
-                    fst = self._visit_expr(e.first, ctx)
-                    snd = self._visit_expr(e.second, ctx)
+        if e in self.format_info.preround:
+            match e:
+                case Add() | Sub() | Mul():
+                    # check if rounding is necessary
+                    r_ty = convert_type(self.format_info.ctx_info.by_expr[e])
+                    e_ty = self.format_info.preround[e]
+                    print(e.format(), r_ty, e_ty)
+                    if (
+                        isinstance(e_ty, AbstractFormat)
+                        and isinstance(r_ty, AbstractFormat)
+                        and e_ty.contained_in(r_ty)
+                    ):
+                        # rounding is unnecessary;
+                        # insert a real rounding instead
+                        fst = self._visit_expr(e.first, ctx)
+                        snd = self._visit_expr(e.second, ctx)
 
-                    # TODO: how to get the namespace of 'fp'?
-                    cls = type(e)
-                    tid = self.gensym.fresh()
-                    stmt = ContextStmt(
-                        UnderscoreId(),
-                        Attribute(Var(NamedId('fp', None), None), 'REAL', None),
-                        StmtBlock([Assign(tid, None, cls(fst, snd, None), None)]),
-                        None
-                    )
+                        # TODO: how to get the namespace of 'fp'?
+                        cls = type(e)
+                        tid = self.gensym.fresh()
+                        ctx.stmts.append(ContextStmt(
+                            UnderscoreId(),
+                            Attribute(Var(NamedId('fp', None), None), 'REAL', None),
+                            StmtBlock([Assign(tid, None, cls(fst, snd, None), None)]),
+                            None
+                        ))
 
-                    # push statement and return the variable
-                    ctx.stmts.append(stmt)
-                    return Var(tid, None)
+                        return Var(tid, None)
+
+                    # push statement and return `round(tid)`
+                    # so that context inference can work correctly
+                    # return Round(
+                    #     Attribute(Var(NamedId('fp', None), None), 'round', None),
+                    #     Var(tid, None),
+                    #     None
+                    # )
 
         # default transform
         return super()._visit_binaryop(e, ctx)

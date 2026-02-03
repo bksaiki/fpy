@@ -102,17 +102,17 @@ class InstrGenerator:
                     return f'({lhs_str} + {rhs_str})'
         else:
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
-                exact_ty = lhs_ty * rhs_ty
+                exact_ty = lhs_ty + rhs_ty
                 if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
                     # use direct multiplication if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
-                    return f'mpfx::mul<mpfx::EngineType::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
+                    return f'mpfx::add<mpfx::EngineType::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
                 if _rto_is_valid(ctx):
                     # use the FP-RTO backed implementation
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
-                    return f'mpfx::mul({lhs_str}, {rhs_str}, {ctx_str})'
+                    return f'mpfx::add({lhs_str}, {rhs_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `{lhs_str} + {rhs_str}`: {lhs_ty} + {rhs_ty} under context {ctx}')
 
