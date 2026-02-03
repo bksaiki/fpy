@@ -658,6 +658,12 @@ def test_context8():
                 return a / b
 
 @fp.fpy
+def test_context9():
+    with fp.FP32:
+        x = fp.round(1)
+        return fp.cast(x)
+
+@fp.fpy
 def test_assert1():
     assert True
     return False

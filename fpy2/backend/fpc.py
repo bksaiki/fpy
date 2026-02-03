@@ -84,6 +84,7 @@ def _get_unary_table() -> dict[type[UnaryOp], type[fpc.Expr]]:
             IsNormal: fpc.Isnormal,
             Signbit: fpc.Signbit,
             Not: fpc.Not,
+            Cast: fpc.Cast,
         }
     return _unary_table_cache
 
