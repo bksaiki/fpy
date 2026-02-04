@@ -18,14 +18,21 @@ _modules = [
 def _test_tcheck_unit():
     for core in all_tests():
         assert isinstance(core, fp.Function)
+        print(core.name)
         info = fp.analysis.ArraySizeInfer.infer(core.ast)
+        for e, v in info.by_expr.items():
+            if isinstance(v, fp.analysis.array_size._Array):
+                print(f'  {e.format()} : {v}')
 
 def _test_tcheck_library():
     for mod in _modules:
         for obj in mod.__dict__.values():
-            match obj:
-                case fp.Function():
-                    info = fp.analysis.ArraySizeInfer.infer(obj.ast)
+            if isinstance(obj, fp.Function):
+                print(obj.name)
+                info = fp.analysis.ArraySizeInfer.infer(obj.ast)
+                for e, v in info.by_expr.items():
+                    if isinstance(v, fp.analysis.array_size._Array):
+                        print(f'  {e.format()} : {v}')
 
 def test_array_size_infer():
     _test_tcheck_unit()
