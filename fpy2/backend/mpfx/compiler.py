@@ -127,6 +127,7 @@ class _MPFXBackendInstance(Visitor):
         options: CppOptions,
         fmt_info: FormatAnalysis,
         eval_info: PartialEvalInfo,
+        allow_exact: bool = True,
     ):
         self.func = func
         self.name = name
@@ -134,7 +135,7 @@ class _MPFXBackendInstance(Visitor):
         self.fmt_info = fmt_info
         self.eval_info = eval_info
 
-        self.instr_gen = InstrGenerator(func)
+        self.instr_gen = InstrGenerator(func, allow_exact=allow_exact)
         self.decl_phis = set()
         self.decl_assigns = set()
         self.gensym = Gensym(self.def_use.names())
@@ -731,9 +732,15 @@ class MPFXCompiler(Backend):
     unsafe_cast_int: bool
     unsafe_finitize_int: bool
 
-    def __init__(self, *, unsafe_cast_int: bool = False, unsafe_finitize_int: bool = False):
+    # compilation options
+    elim_round: bool
+    allow_exact: bool
+
+    def __init__(self, *, unsafe_cast_int: bool = False, unsafe_finitize_int: bool = False, elim_round: bool = True, allow_exact: bool = True):
         self.unsafe_cast_int = unsafe_cast_int
         self.unsafe_finitize_int = unsafe_finitize_int
+        self.elim_round = elim_round
+        self.allow_exact = allow_exact
 
     def compile_context(self, ctx: Context):
         return _compile_context(ctx)
@@ -765,7 +772,6 @@ class MPFXCompiler(Backend):
         name: str | None = None,
         ctx: Context | None = None,
         arg_types: Collection[Type | None] | None = None,
-        elim_round: bool = True
     ) -> str:
         """
         Compiles the given FPy function to a C++ program
@@ -801,7 +807,7 @@ class MPFXCompiler(Backend):
         except (ContextInferError, TypeInferError, FormatInferError) as e:
             raise ValueError(f'{func.name}: context inference failed') from e
 
-        if elim_round:
+        if self.elim_round:
             # perform rounding elimination
             ast = ElimRound.apply(ast, eval_info=eval_info)
             # print(ast.format())
@@ -816,7 +822,7 @@ class MPFXCompiler(Backend):
 
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _MPFXBackendInstance(ast, name, options, format_info, eval_info)
+        inst = _MPFXBackendInstance(ast, name, options, format_info, eval_info, allow_exact=self.allow_exact)
         body_str = inst.compile()
 
         return body_str

@@ -24,8 +24,9 @@ def run_eval(config: EvalConfig, examples: list[ExampleType]) -> None:
     benchmarks: list[tuple[ExampleType, CompileConfig]] = []
     for func, ctxs in examples:
         for elim_round in (False, True):
-            compile_config = CompileConfig(elim_round=elim_round)
-            benchmarks.append(((func, ctxs), compile_config))
+            for allow_exact in (False, True):
+                compile_config = CompileConfig(elim_round=elim_round, allow_exact=allow_exact)
+                benchmarks.append(((func, ctxs), compile_config))
 
     for i, benchmark in enumerate(benchmarks):
         (func, ctxs), compile_config = benchmark

@@ -10,3 +10,4 @@ class EvalConfig:
 @dataclass(frozen=True)
 class CompileConfig:
     elim_round: bool
+    allow_exact: bool

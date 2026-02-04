@@ -41,8 +41,8 @@ def compile(
     compile_config: CompileConfig
 ) -> str:
     """Compiles an FPy function for given contexts."""
-    compiler = fp.MPFXCompiler()
-    code = compiler.compile(func, name=NAME, arg_types=arg_types, elim_round=compile_config.elim_round)
+    compiler = fp.MPFXCompiler(elim_round=compile_config.elim_round, allow_exact=compile_config.allow_exact)
+    code = compiler.compile(func, name=NAME, arg_types=arg_types)
     return code
 
 ###########################################################

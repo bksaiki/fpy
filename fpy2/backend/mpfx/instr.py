@@ -97,10 +97,12 @@ class InstrGenerator:
     """Instruction generator."""
     func: FuncDef
     engine: FP64Engine
+    allow_exact: bool
 
-    def __init__(self, func: FuncDef, engine: FP64Engine = FP64Engine.EFT):
+    def __init__(self, func: FuncDef, engine: FP64Engine = FP64Engine.EFT, allow_exact: bool = True):
         self.func = func
         self.engine = engine
+        self.allow_exact = allow_exact
 
     def raise_error(self, msg: str) -> NoReturn:
         raise MPFXCompileError(self.func, msg)
@@ -185,7 +187,7 @@ class InstrGenerator:
         else:
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty + rhs_ty
-                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if self.allow_exact and exact_ty.contained_in(AbstractFormat.from_context(FP64)):
                     # use direct addition if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
@@ -221,7 +223,7 @@ class InstrGenerator:
         else:
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty - rhs_ty
-                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if self.allow_exact and exact_ty.contained_in(AbstractFormat.from_context(FP64)):
                     # use direct subtraction if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} - {rhs_str}`: {ctx}')
@@ -254,7 +256,7 @@ class InstrGenerator:
         else:
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty * rhs_ty
-                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if self.allow_exact and exact_ty.contained_in(AbstractFormat.from_context(FP64)):
                     # use direct multiplication if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} * {rhs_str}`: {ctx}')
@@ -297,16 +299,18 @@ class InstrGenerator:
         c_ty: AbstractFormat,
         ctx: Context
     ):
-        if (
-            _fits_in_double(a_ty)
-            and _fits_in_double(b_ty)
-            and _fits_in_double(c_ty)
-            and _rto_is_valid(ctx)
-        ):
-            # use the FP-RTO backed implementation
-            if ctx_str is None:
-                self.raise_error(f'unsupported context `fma({a_str}, {b_str}, {c_str})`: {ctx}')
-            engine_str = self.engine.to_cpp()
-            return f'mpfx::fma<{engine_str}>({a_str}, {b_str}, {c_str}, {ctx_str})'
+        if _fits_in_double(a_ty) and _fits_in_double(b_ty) and _fits_in_double(c_ty):
+            # exact_ty = a_ty * b_ty + c_ty
+            # if self.allow_exact and exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+            #     # use direct FMA if the result fits in double
+            #     if ctx_str is None:
+            #         self.raise_error(f'unsupported context `fma({a_str}, {b_str}, {c_str})`: {ctx}')
+            #     return f'mpfx::fma<mpfx::Engine::FP_EXACT>({a_str}, {b_str}, {c_str}, {ctx_str})'
+            if _rto_is_valid(ctx):
+                # use the FP-RTO backed implementation
+                if ctx_str is None:
+                    self.raise_error(f'unsupported context `fma({a_str}, {b_str}, {c_str})`: {ctx}')
+                engine_str = self.engine.to_cpp()
+                return f'mpfx::fma<{engine_str}>({a_str}, {b_str}, {c_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `fma({a_str}, {b_str}, {c_str})`: fma({a_ty}, {b_ty}, {c_ty}) under context {ctx}')
