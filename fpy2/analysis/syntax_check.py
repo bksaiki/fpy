@@ -105,139 +105,100 @@ class SyntaxCheckInstance(Visitor):
                     raise FPySyntaxError('wildcard `_` not allowed in this context')
             case _:
                 raise FPySyntaxError(f'expected a NamedId, got {e.name}')
-        return env
 
     def _visit_bool(self, e: BoolVal, ctx: _Ctx):
-        env = ctx.env
-        return env
+        pass
 
     def _visit_foreign(self, e: ForeignVal, ctx: _Ctx):
-        env = ctx.env
-        return env
-
-    def _visit_context_val(self, e, ctx):
-        env = ctx.env
-        return env
+        pass
 
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
-        env = ctx.env
-        return env
+        pass
 
     def _visit_hexnum(self, e: Hexnum, ctx: _Ctx):
-        env = ctx.env
-        return env
+        pass
 
     def _visit_integer(self, e: Integer, ctx: _Ctx):
-        env = ctx.env
-        return env
+        pass
 
     def _visit_rational(self, e: Rational, ctx: _Ctx):
-        env = ctx.env
-        return env
+        pass
 
     def _visit_digits(self, e: Digits, ctx: _Ctx):
-        env = ctx.env
-        return env
+        pass
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: _Ctx):
-        env = ctx.env
-        return env
+        pass
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
-        env = ctx.env
         self._visit_expr(e.arg, ctx)
-        return env
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx):
-        env = ctx.env
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
-        return env
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx):
-        env = ctx.env
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
-        return env
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
-        env = ctx.env
         for c in e.args:
             self._visit_expr(c, ctx)
-        return env
 
     def _visit_compare(self, e: Compare, ctx: _Ctx):
-        env = ctx.env
         for c in e.args:
             self._visit_expr(c, ctx)
-        return env
 
     def _visit_call(self, e: Call, ctx: _Ctx):
-        env = ctx.env
         match e.func:
             case Var():
-                self._mark_use(e.func.name, env, ignore_missing=self.ignore_unknown)
+                self._mark_use(e.func.name, ctx.env, ignore_missing=self.ignore_unknown)
             case Attribute():
-                self._visit_attribute(e.func, _Ctx(env, True))
+                self._visit_attribute(e.func, _Ctx(ctx.env, True))
             case _:
                 raise RuntimeError('unreachable', e.func)
         for arg in e.args:
             self._visit_expr(arg, ctx)
         for _, arg in e.kwargs:
             self._visit_expr(arg, ctx)
-        return env
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: _Ctx):
-        env = ctx.env
         for c in e.elts:
             self._visit_expr(c, ctx)
-        return env
 
     def _visit_list_expr(self, e: ListExpr, ctx: _Ctx):
-        env = ctx.env
         for c in e.elts:
             self._visit_expr(c, ctx)
-        return env
 
     def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
-        env = ctx.env
-        for iterable in e.iterables:
+        for target, iterable in zip(e.targets, e.iterables):
             self._visit_expr(iterable, ctx)
-        for target in e.targets:
-            env = self._visit_binding(target, env)
-        self._visit_expr(e.elt, _Ctx(env, False))
-        return env
+            env = self._visit_binding(target, ctx.env)
+            ctx = _Ctx(env, ctx.within_call)
+        self._visit_expr(e.elt, _Ctx(env, ctx.within_call))
 
     def _visit_list_ref(self, e: ListRef, ctx: _Ctx):
-        env = ctx.env
         self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
-        return env
 
     def _visit_list_slice(self, e: ListSlice, ctx: _Ctx):
-        env = ctx.env
         self._visit_expr(e.value, ctx)
         if e.start is not None:
             self._visit_expr(e.start, ctx)
         if e.stop is not None:
             self._visit_expr(e.stop, ctx)
-        return env
 
     def _visit_list_set(self, e: ListSet, ctx: _Ctx):
-        env = ctx.env
         self._visit_expr(e.value, ctx)
         for s in e.indices:
             self._visit_expr(s, ctx)
         self._visit_expr(e.expr, ctx)
-        return env
 
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
-        env = ctx.env
         self._visit_expr(e.cond, ctx)
         self._visit_expr(e.ift, ctx)
         self._visit_expr(e.iff, ctx)
-        return env
 
     def _visit_attribute(self, e: Attribute, ctx: _Ctx):
         if ctx.within_call and not isinstance(e.value, Var | Attribute):
@@ -251,14 +212,10 @@ class SyntaxCheckInstance(Visitor):
             case UnderscoreId():
                 pass
             case TupleBinding():
-                env = self._visit_tuple_binding(binding, env)
+                for elt in binding.elts:
+                    env = self._visit_binding(elt, env)
             case _:
                 raise RuntimeError('unreachable', binding)
-        return env
-
-    def _visit_tuple_binding(self, binding: TupleBinding, env: _Env):
-        for elt in binding.elts:
-            env = self._visit_binding(elt, env)
         return env
 
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
@@ -346,7 +303,7 @@ class SyntaxCheckInstance(Visitor):
         return super()._visit_statement(stmt, ctx)
 
     # override to get typing hint
-    def _visit_expr(self, e: Expr, ctx: _Ctx) -> _Env:
+    def _visit_expr(self, e: Expr, ctx: _Ctx) -> None:
         return super()._visit_expr(e, ctx)
 
 

@@ -136,10 +136,9 @@ class _DefineUseInstance(DefaultVisitor):
             self._visit_expr(kwarg, ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx: DefCtx):
-        for iterable in e.iterables:
-            self._visit_expr(iterable, ctx)
         ctx = ctx.copy()
-        for target in e.targets:
+        for target, iterable in zip(e.targets, e.iterables):
+            self._visit_expr(iterable, ctx)
             for name in target.names():
                 ctx[name] = self.reaching_defs.find_def_from_site(name, e)
         self._visit_expr(e.elt, ctx)

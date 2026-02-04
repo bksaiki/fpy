@@ -337,9 +337,8 @@ class _ReachingDefs(DefaultVisitor):
         return self.indices.union(i1, i2)
 
     def _visit_list_comp(self, e: ListComp, ctx: _DefCtx):
-        for iterable in e.iterables:
+        for target, iterable in zip(e.targets, e.iterables):
             self._visit_expr(iterable, ctx)
-        for target in e.targets:
             for name in target.names():
                 _, ctx = self._add_assign(name, e, ctx)
         self._visit_expr(e.elt, ctx)
