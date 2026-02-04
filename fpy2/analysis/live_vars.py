@@ -93,9 +93,8 @@ class LiveVarsInstance(Visitor):
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> _LiveSet:
         live = self._visit_expr(e.elt, ctx)
-        for target in e.targets:
-            live |= target.names()
-        for iterable in e.iterables:
+        for target, iterable in zip(reversed(e.targets), reversed(e.iterables)):
+            live -= target.names()
             live |= self._visit_expr(iterable, ctx)
         return live
 

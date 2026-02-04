@@ -789,37 +789,32 @@ class _CppBackendInstance(Visitor):
 
     def _visit_list_comp(self, e: ListComp, ctx: _CompileCtx):
         # [<e> for <x1> in <iterable1> ... for <xN> in <iterableN>] =>
-        # auto <t1> = <iterable1>;
-        # ...
-        # auto <tN> = <iterableN>;
-        # std::vector<T> t(t1.size() * ... * t2.size());
-        # size_t i = 0;
-        # for (auto <x1> : <t1>) {
-        #   ...
-        #      for (auto <xN> : <tN>) {
-        #         t[i] = <e>;
-        #         i++;
-        #      }
+        # std::vector<T> v;
+        # for (auto <x1> : <iterable1>) {
+        #   auto <t2> = <iterable2>;  // evaluated in context of x1
+        #   for (auto <x2> : <t2>) {
+        #     ...
+        #       auto <tN> = <iterableN>;  // evaluated in context of x1, x2, ...
+        #       for (auto <xN> : <tN>) {
+        #         v.push_back(<e>);
+        #       }
+        #   }
         # }
 
-        # emit temporaries for iterables
-        ts = [self._fresh_var() for _ in e.iterables]
-        for t, iterable in zip(ts, e.iterables):
-            ctx.add_line(f'auto {t} = {self._visit_expr(iterable, ctx)};')
-
-        # reserve output vector
+        # create output vector
         v = self._fresh_var()
         _, cpp_ty = self._expr_type(e)
-        size = ' * '.join(f'{t}.size()' for t in ts)
-        ctx.add_line(f'{cpp_ty.format()} {v}({size});')
+        ctx.add_line(f'{cpp_ty.format()} {v};')
 
-        # initialize the counter
-        i = self._fresh_var()
-        ctx.add_line(f'size_t {i} = 0;')
-
-        # fill the vector
+        # build nested loops - each iterable is evaluated in its proper context
         body_ctx = ctx
-        for target, t in zip(e.targets, ts):
+        for target, iterable in zip(e.targets, e.iterables):
+            # evaluate iterable in current loop context
+            t = self._fresh_var()
+            iterable_cpp = self._visit_expr(iterable, body_ctx)
+            body_ctx.add_line(f'auto {t} = {iterable_cpp};')
+            
+            # open the for loop
             match target:
                 case Id():
                     body_ctx.add_line(f'for (auto {target} : {t}) {{')
@@ -831,10 +826,9 @@ class _CppBackendInstance(Visitor):
                     raise RuntimeError(f'unreachable {target}')
             body_ctx = body_ctx.indent()
 
-        # compute the element
+        # compute the element and add to result
         elt = self._visit_expr(e.elt, body_ctx)
-        body_ctx.add_line(f'{v}[{i}] = {elt};')
-        body_ctx.add_line(f'{i}++;')
+        body_ctx.add_line(f'{v}.push_back({elt});')
 
         # closing braces
         while body_ctx.indent_level > ctx.indent_level:

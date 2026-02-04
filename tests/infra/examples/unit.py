@@ -388,6 +388,10 @@ def test_list_comp4():
     return [x and y for x, y in zip([True, False], [False, True])]
 
 @fp.fpy
+def test_list_comp5():
+    return [x for xs in [[1, 2], [3, 4]] for x in xs]
+
+@fp.fpy
 def test_list_ref1():
     x = [1.0, 2.0, 3.0]
     return x[0]
