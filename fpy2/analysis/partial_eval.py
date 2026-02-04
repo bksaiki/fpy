@@ -23,6 +23,7 @@ Value: TypeAlias = ScalarValue | TupleValue
 class PartialEvalInfo:
     by_def: dict[Definition, Value]
     by_expr: dict[Expr, Value]
+    def_use: DefineUseAnalysis
 
 
 class _PartialEvalInstance(DefaultVisitor):
@@ -50,7 +51,7 @@ class _PartialEvalInstance(DefaultVisitor):
 
     def apply(self) -> PartialEvalInfo:
         self._visit_function(self.func, None)
-        return PartialEvalInfo(self.by_def, self.by_expr)
+        return PartialEvalInfo(self.by_def, self.by_expr, self.def_use)
 
     def _eval_env(self):
         return { d.name: v for d, v in self.by_def.items() }

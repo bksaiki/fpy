@@ -1,5 +1,6 @@
 """Program analyses for FPy programs"""
 
+from .array_size import ArraySizeInfer, ArraySizeAnalysis
 from .context_infer import ContextInfer, ContextAnalysis, ContextInferError
 from .defs import DefAnalysis
 from .define_use import (
