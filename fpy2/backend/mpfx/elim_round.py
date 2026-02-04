@@ -41,7 +41,7 @@ class _ElimRoundVisitor(DefaultTransformVisitor):
                 if (
                     isinstance(a_ty, AbstractFormat)
                     and isinstance(e_ty, AbstractFormat)
-                    and a_ty.contained_in(e_ty)
+                    and a_ty <= e_ty
                 ):
                     # rounding is unnecessary;
                     # replace with a `cast` operation to ensure context inference works
@@ -64,7 +64,7 @@ class _ElimRoundVisitor(DefaultTransformVisitor):
                     if (
                         isinstance(e_ty, AbstractFormat)
                         and isinstance(r_ty, AbstractFormat)
-                        and e_ty.contained_in(r_ty)
+                        and e_ty <= r_ty
                     ):
                         # rounding is unnecessary;
                         # insert a real rounding instead

@@ -237,7 +237,7 @@ class _FormatInfernce(Visitor):
         but has expected context `e_ty`.
         """
         if isinstance(e_ty, AbstractFormat):
-            if m_ty.contained_in(e_ty):
+            if m_ty <= e_ty:
                 self.preround[e] = m_ty
             # intersect with expected type to get the most precise type needed
             return e_ty & m_ty

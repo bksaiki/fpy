@@ -12,7 +12,8 @@ from ...number import (
     ExpContext,
     RealFloat
 )
-from...utils import default_repr
+from ...utils import default_repr
+from ...utils.ordering import Ordering
 
 __all__ = [
     'AbstractFormat',
@@ -193,6 +194,28 @@ class AbstractFormat:
         neg_bound = max(self.neg_bound, other.neg_bound)
         return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
+    def __lt__(self, other) -> bool:
+        if not isinstance(other, AbstractFormat):
+            return NotImplemented
+        return self.compare(other) == Ordering.LESS
+
+    def __le__(self, other) -> bool:
+        if not isinstance(other, AbstractFormat):
+            return NotImplemented
+        result = self.compare(other)
+        return result == Ordering.LESS or result == Ordering.EQUAL
+
+    def __gt__(self, other) -> bool:
+        if not isinstance(other, AbstractFormat):
+            return NotImplemented
+        return self.compare(other) == Ordering.GREATER
+
+    def __ge__(self, other) -> bool:
+        if not isinstance(other, AbstractFormat):
+            return NotImplemented
+        result = self.compare(other)
+        return result == Ordering.GREATER or result == Ordering.EQUAL
+
     @property
     def bound(self) -> RealFloat | float:
         """Maximum magnitude bound (pos or neg)."""
@@ -249,16 +272,54 @@ class AbstractFormat:
         # everything else
         return self.prec
 
-    def contained_in(self, other: 'AbstractFormat') -> bool:
-        """Check if this format is contained in another format."""
+    def compare(self, other: 'AbstractFormat') -> Ordering | None:
+        """Compare this format with another using the containment partial order.
+
+        Returns:
+            Ordering.LESS if this format is contained in other,
+            Ordering.EQUAL if both formats contain each other,
+            Ordering.GREATER if other is contained in this format,
+            None if formats are incomparable.
+        """
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
-        return (
-            self.effective_prec() <= other.effective_prec()
-            and self.exp >= other.exp
-            and self.pos_bound <= other.pos_bound
-            and self.neg_bound >= other.neg_bound
-        )
+
+        prec = self.effective_prec()
+        other_prec = other.effective_prec()
+
+        polarity: bool | None = None # True if larger, False if smaller
+        if prec != other_prec:
+            polarity = prec > other_prec
+        if self.exp != other.exp:
+            exp_polarity = self.exp < other.exp
+            if polarity is None:
+                polarity = exp_polarity
+            elif polarity != exp_polarity:
+                return None
+        if self.pos_bound != other.pos_bound:
+            bound_polarity = self.pos_bound > other.pos_bound
+            if polarity is None:
+                polarity = bound_polarity
+            elif polarity != bound_polarity:
+                return None
+        if self.neg_bound != other.neg_bound:
+            bound_polarity = self.neg_bound < other.neg_bound
+            if polarity is None:
+                polarity = bound_polarity
+            elif polarity != bound_polarity:
+                return None
+
+        if polarity is None:
+            return Ordering.EQUAL
+        elif polarity:
+            return Ordering.GREATER
+        else:
+            return Ordering.LESS
+
+    def contained_in(self, other: 'AbstractFormat') -> bool:
+        """Check if this format is contained in another format."""
+        result = self.compare(other)
+        return result == Ordering.LESS or result == Ordering.EQUAL
 
     def with_prec_offset(self, delta: int) -> 'AbstractFormat':
         """

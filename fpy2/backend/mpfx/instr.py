@@ -35,11 +35,11 @@ def _round_mode(ctx: Context):
 
 def _fits_in_integer(ty: AbstractFormat) -> bool:
     """Does this type fit in an integer?"""
-    return ty.contained_in(AbstractFormat.from_context(INTEGER))
+    return ty <= AbstractFormat.from_context(INTEGER)
 
 def _fits_in_double(ty: AbstractFormat) -> bool:
     """Does this type fit in a double?"""
-    return ty.contained_in(AbstractFormat.from_context(FP64))
+    return ty <= AbstractFormat.from_context(FP64)
 
 
 def _rto_is_valid(ctx: Context) -> bool:
@@ -67,7 +67,7 @@ def _rto_is_valid(ctx: Context) -> bool:
         case _:
             raise ValueError(f"Unsupported rounding mode: {rm}")
 
-    return eff_fmt.contained_in(AbstractFormat.from_context(FP64))
+    return eff_fmt <= AbstractFormat.from_context(FP64)
 
 #####################################################################
 # Instruction generator
@@ -114,7 +114,7 @@ class InstrGenerator:
         arg_ty: AbstractFormat,
         ctx: Context
     ):
-        if arg_ty.contained_in(_cvt_context(ctx)):
+        if arg_ty <= _cvt_context(ctx):
             # no cast needed
             return arg_str
         self.raise_error(f'cannot compile `cast({arg_str})`: {arg_ty} under context {ctx}')
@@ -181,13 +181,13 @@ class InstrGenerator:
                 return f'({lhs_str} + {rhs_str})'
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty + rhs_ty
-                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if exact_ty <= AbstractFormat.from_context(FP64):
                     # addition is exact
                     return f'({lhs_str} + {rhs_str})'
         else:
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty + rhs_ty
-                if self.allow_exact and exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if self.allow_exact and exact_ty <= AbstractFormat.from_context(FP64):
                     # use direct addition if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
@@ -217,13 +217,13 @@ class InstrGenerator:
                 return f'({lhs_str} - {rhs_str})'
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty - rhs_ty
-                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if exact_ty <= AbstractFormat.from_context(FP64):
                     # subtraction is exact
                     return f'({lhs_str} - {rhs_str})'
         else:
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty - rhs_ty
-                if self.allow_exact and exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if self.allow_exact and exact_ty <= AbstractFormat.from_context(FP64):
                     # use direct subtraction if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} - {rhs_str}`: {ctx}')
@@ -250,13 +250,13 @@ class InstrGenerator:
             # exact multiplication
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty * rhs_ty
-                if exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if exact_ty <= AbstractFormat.from_context(FP64):
                     # multiplication is exact
                     return f'({lhs_str} * {rhs_str})'
         else:
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty * rhs_ty
-                if self.allow_exact and exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+                if self.allow_exact and exact_ty <= AbstractFormat.from_context(FP64):
                     # use direct multiplication if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} * {rhs_str}`: {ctx}')
@@ -301,7 +301,7 @@ class InstrGenerator:
     ):
         if _fits_in_double(a_ty) and _fits_in_double(b_ty) and _fits_in_double(c_ty):
             # exact_ty = a_ty * b_ty + c_ty
-            # if self.allow_exact and exact_ty.contained_in(AbstractFormat.from_context(FP64)):
+            # if self.allow_exact and exact_ty <= AbstractFormat.from_context(FP64):
             #     # use direct FMA if the result fits in double
             #     if ctx_str is None:
             #         self.raise_error(f'unsupported context `fma({a_str}, {b_str}, {c_str})`: {ctx}')

@@ -39,10 +39,10 @@ def _compile_type(ty: FormatType, func: FuncDef | None = None) -> CppType:
         case BoolType():
             return CppBoolType()
         case AbstractFormat():
-            if ty.contained_in(AbstractFormat.from_context(FP64)):
+            if ty <= AbstractFormat.from_context(FP64):
                 # fits within a double 
                 return CppDoubleType()
-            elif ty.contained_in(AbstractFormat.from_context(INTEGER)):
+            elif ty <= AbstractFormat.from_context(INTEGER):
                 # fits with an int64_t
                 return CppInt64Type()
             else:
