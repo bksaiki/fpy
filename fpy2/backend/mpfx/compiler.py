@@ -2,7 +2,7 @@
 MPFX backend: compiler to MPFX number library.
 """
 
-from typing import Collection
+from typing import Collection, NoReturn
 
 from ...ast import *
 from ...analysis import (
@@ -13,7 +13,7 @@ from ...analysis import (
 from ...function import Function
 from ...number import IEEEContext, OV, RM, FP64, INTEGER
 from ...transform import DeadCodeEliminate, Monomorphize
-from ...types import BoolType, ContextType, RealType, VarType, Type
+from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListType, Type
 from ...utils import Gensym
 from ..backend import Backend
 
@@ -28,6 +28,80 @@ from .types import *
 from .utils import MPFXCompileError, CompileCtx, CppOptions
 
 
+def _emit_error(msg, func: FuncDef | None = None) -> NoReturn:
+    if func:
+        raise MPFXCompileError(func, msg)
+    else:
+        raise RuntimeError(msg)
+
+def _compile_type(ty: FormatType, func: FuncDef | None = None) -> CppType:
+    match ty:
+        case BoolType():
+            return CppBoolType()
+        case AbstractFormat():
+            if ty.contained_in(AbstractFormat.from_context(FP64)):
+                # fits within a double 
+                return CppDoubleType()
+            elif ty.contained_in(AbstractFormat.from_context(INTEGER)):
+                # fits with an int64_t
+                return CppInt64Type()
+            else:
+                _emit_error(f'no container type for: {ty}', func)
+        case TupleFormatType():
+            # compile recursively
+            return CppTupleType(_compile_type(elem_ty) for elem_ty in ty.elts)
+        case ListFormatType():
+            # compile recursively
+            return CppListType(_compile_type(ty.elt))
+        case ContextType():
+            return CppContextType()
+        case _:
+            raise RuntimeError(f'Unhandled type: {ty}')
+
+def _compile_rm(rm:RM, func: FuncDef | None) -> str:
+    match rm:
+        case RM.RNE:
+            return 'mpfx::RoundingMode::RNE'
+        case RM.RNA:
+            return 'mpfx::RoundingMode::RNA'
+        case RM.RTP:
+            return 'mpfx::RoundingMode::RTP'
+        case RM.RTN:
+            return 'mpfx::RoundingMode::RTN'
+        case RM.RTZ:
+            return 'mpfx::RoundingMode::RTZ'
+        case RM.RAZ:
+            return 'mpfx::RoundingMode::RAZ'
+        case RM.RTO:
+            return 'mpfx::RoundingMode::RTO'
+        case RM.RTE:
+            return 'mpfx::RoundingMode::RTE'
+        case _:
+            _emit_error(f'Unsupported rounding mode to compile: {rm}', func)
+
+def _compile_context(ctx: Context, func: FuncDef | None = None) -> str:
+    match ctx:
+        case IEEEContext():
+            # ES <= 9
+            if ctx.es > 9:
+                _emit_error(f'IEEE 754: exponent too large to compile: {ctx.es}', func)
+            # P <= 51
+            if ctx.pmax > 51:
+                _emit_error(f'IEEE 754: precision too large to compile: {ctx.pmax}', func)
+            # overflow
+            if ctx.overflow != OV.OVERFLOW:
+                _emit_error(f'IEEE 754: overflow mode {ctx.overflow} cannot be compiled', func)
+            # no random
+            if ctx.num_randbits != 0:
+                _emit_error(f'IEEE 754: random bits cannot be compiled', func)
+
+            # compile rounding
+            rm = _compile_rm(ctx.rm, func)
+            return f'mpfx::IEEE754Context({ctx.es}, {ctx.nbits}, {rm})'
+        case _:
+            _emit_error(f'Unhandled context: {ctx}', func)
+
+
 class _MPFXBackendInstance(Visitor):
     """
     Per-function compilation instance.
@@ -36,7 +110,7 @@ class _MPFXBackendInstance(Visitor):
     """
 
     func: FuncDef
-    name: NamedId
+    name: str
     options: CppOptions
     fmt_info: FormatAnalysis
     eval_info: PartialEvalInfo
@@ -49,7 +123,7 @@ class _MPFXBackendInstance(Visitor):
     def __init__(
         self,
         func: FuncDef,
-        name: NamedId,
+        name: str,
         options: CppOptions,
         fmt_info: FormatAnalysis,
         eval_info: PartialEvalInfo,
@@ -94,48 +168,8 @@ class _MPFXBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'Unhandled type: {ty}')
 
-    def _compile_rm(self, rm: RM) -> str:
-        match rm:
-            case RM.RNE:
-                return 'mpfx::RoundingMode::RNE'
-            case RM.RNA:
-                return 'mpfx::RoundingMode::RNA'
-            case RM.RTP:
-                return 'mpfx::RoundingMode::RTP'
-            case RM.RTN:
-                return 'mpfx::RoundingMode::RTN'
-            case RM.RTZ:
-                return 'mpfx::RoundingMode::RTZ'
-            case RM.RAZ:
-                return 'mpfx::RoundingMode::RAZ'
-            case RM.RTO:
-                return 'mpfx::RoundingMode::RTO'
-            case RM.RTE:
-                return 'mpfx::RoundingMode::RTE'
-            case _:
-                raise MPFXCompileError(self.func, f'Unsupported rounding mode to compile: {rm}')
-
     def _compile_context(self, ctx: Context) -> str:
-        match ctx:
-            case IEEEContext():
-                # ES <= 9
-                if ctx.es > 9:
-                    raise MPFXCompileError(self.func, f'IEEE 754: exponent too large to compile: {ctx.es}')
-                # P <= 51
-                if ctx.pmax > 51:
-                    raise MPFXCompileError(self.func, f'IEEE 754: precision too large to compile: {ctx.pmax}')
-                # overflow
-                if ctx.overflow != OV.OVERFLOW:
-                    raise MPFXCompileError(self.func, 'IEEE 754: overflow mode RAISE cannot be compiled')
-                # no random
-                if ctx.num_randbits != 0:
-                    raise MPFXCompileError(self.func, 'IEEE 754: stochastic rounding cannot be compiled')
-
-                # compile rounding
-                rm = self._compile_rm(ctx.rm)
-                return f'mpfx::IEEE754Context({ctx.es}, {ctx.nbits}, {rm})'
-            case _:
-                raise RuntimeError(f'Unhandled context: {ctx}')
+        return _compile_context(ctx, self.func)
 
     def _compile_literal(self, s: str, ty: FormatType) -> str:
         """Compile a numerical literal given as a string."""
@@ -188,28 +222,7 @@ class _MPFXBackendInstance(Visitor):
         return ty.ctx
 
     def _compile_type(self, ty: FormatType) -> CppType:
-        match ty:
-            case BoolType():
-                return CppBoolType()
-            case AbstractFormat():
-                if ty.contained_in(AbstractFormat.from_context(FP64)):
-                    # fits within a double 
-                    return CppDoubleType()
-                elif ty.contained_in(AbstractFormat.from_context(INTEGER)):
-                    # fits with an int64_t
-                    return CppInt64Type()
-                else:
-                    raise MPFXCompileError(self.func, f'no container type for: {ty}')
-            case TupleFormatType():
-                # compile recursively
-                return CppTupleType(self._compile_type(elem_ty) for elem_ty in ty.elts)
-            case ListFormatType():
-                # compile recursively
-                return CppListType(self._compile_type(ty.elt))
-            case ContextType():
-                return CppContextType()
-            case _:
-                raise RuntimeError(f'Unhandled type: {ty}')
+        return _compile_type(ty, self.func)
 
     def _compile_number(self, s: str, ty: FormatType):
         # TODO: check context for rounding
@@ -384,9 +397,9 @@ class _MPFXBackendInstance(Visitor):
         size_ty = self._expr_type(e.arg)
         size_str = self._compile_size(size_cpp, size_ty)
 
-        elt_ty = self._expr_type(e)
-        elt_cpp_ty = self._compile_type(elt_ty).to_cpp()
-        return f'std::vector<{elt_cpp_ty}>({size_str})'
+        e_ty = self._expr_type(e)
+        cpp_ty = self._compile_type(e_ty).to_cpp()
+        return f'{cpp_ty}({size_str})'
 
     def _visit_call(self, e, ctx):
         if e not in self.eval_info.by_expr:
@@ -694,7 +707,7 @@ class _MPFXBackendInstance(Visitor):
         arg_strs: list[str] = []
         for arg, arg_ty in zip(func.args, self.fmt_info.arg_types):
             self._check_type(arg_ty)
-            ty_str = self._compile_type(arg_ty).to_cpp()
+            ty_str = self._compile_type(arg_ty).to_cpp(is_arg=True)
             arg_strs.append(f'{ty_str} {arg.name}')
 
         ret_ty = self.fmt_info.return_type
@@ -722,10 +735,34 @@ class MPFXCompiler(Backend):
         self.unsafe_cast_int = unsafe_cast_int
         self.unsafe_finitize_int = unsafe_finitize_int
 
+    def compile_context(self, ctx: Context):
+        return _compile_context(ctx)
+
+    def compile_type(self, ty: Type):
+        match ty:
+            case BoolType() | ContextType():
+                return _compile_type(ty)
+            case VarType():
+                raise TypeError(f'Type is not monomorphic: {ty}')
+            case RealType():
+                if isinstance(ty.ctx, SupportedContext):
+                    return _compile_type(AbstractFormat.from_context(ty.ctx))
+                else:
+                    raise TypeError(f'Cannot compile an unbounded real number: {ty.ctx}')
+            case TupleType():
+                # compile recursively
+                return CppTupleType([self.compile_type(elem_ty) for elem_ty in ty.elts])
+            case ListType():
+                # compile recursively
+                return CppListType(self.compile_type(ty.elt))
+            case _:
+                raise RuntimeError(f'Unhandled type: {ty}')
+
     def compile(
         self,
         func: Function,
         *,
+        name: str | None = None,
         ctx: Context | None = None,
         arg_types: Collection[Type | None] | None = None,
         elim_round: bool = True
@@ -740,6 +777,10 @@ class MPFXCompiler(Backend):
             raise TypeError(f'Expected `Context` or `None`, got {type(ctx)} for {ctx}')
         if arg_types is not None and not isinstance(arg_types, Collection):
             raise TypeError(f'Expected `Collection` or `None`, got {type(arg_types)} for {arg_types}')
+
+        # compiled name
+        if name is None:
+            name = func.name
 
         # monomorphizing
         ast = func.ast
@@ -763,7 +804,7 @@ class MPFXCompiler(Backend):
         if elim_round:
             # perform rounding elimination
             ast = ElimRound.apply(ast, eval_info=eval_info)
-            print(ast.format())
+            # print(ast.format())
 
             # dead-code elimination could be done here
             ast = DeadCodeEliminate.apply(ast)
@@ -775,7 +816,7 @@ class MPFXCompiler(Backend):
 
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _MPFXBackendInstance(ast, func.name, options, format_info, eval_info)
+        inst = _MPFXBackendInstance(ast, name, options, format_info, eval_info)
         body_str = inst.compile()
 
         return body_str

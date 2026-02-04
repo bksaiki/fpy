@@ -189,7 +189,7 @@ class InstrGenerator:
                     # use direct addition if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} + {rhs_str}`: {ctx}')
-                    return f'mpfx::add<mpfx::Engine::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
+                    return f'mpfx::add<mpfx::Engine::FP_EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
                 if _rto_is_valid(ctx):
                     # use the FP-RTO backed implementation
                     if ctx_str is None:
@@ -225,7 +225,7 @@ class InstrGenerator:
                     # use direct subtraction if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} - {rhs_str}`: {ctx}')
-                    return f'mpfx::sub<mpfx::Engine::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
+                    return f'mpfx::sub<mpfx::Engine::FP_EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
                 if _rto_is_valid(ctx):
                     # use the FP-RTO backed implementation
                     if ctx_str is None:
@@ -258,7 +258,7 @@ class InstrGenerator:
                     # use direct multiplication if the result fits in double
                     if ctx_str is None:
                         self.raise_error(f'unsupported context `{lhs_str} * {rhs_str}`: {ctx}')
-                    return f'mpfx::mul<mpfx::Engine::EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
+                    return f'mpfx::mul<mpfx::Engine::FP_EXACT>({lhs_str}, {rhs_str}, {ctx_str})'
                 if _rto_is_valid(ctx):
                     # use the FP-RTO backed implementation
                     if ctx_str is None:
