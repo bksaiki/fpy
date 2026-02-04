@@ -27,9 +27,9 @@ def _test_tcheck_library():
                 case fp.Function():
                     info = fp.analysis.ArraySizeInfer.infer(obj.ast)
 
-def test_context_infer():
+def test_array_size_infer():
     _test_tcheck_unit()
     _test_tcheck_library()
 
 if __name__ == '__main__':
-    test_context_infer()
+    test_array_size_infer()

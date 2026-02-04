@@ -813,7 +813,7 @@ class _CppBackendInstance(Visitor):
             t = self._fresh_var()
             iterable_cpp = self._visit_expr(iterable, body_ctx)
             body_ctx.add_line(f'auto {t} = {iterable_cpp};')
-            
+
             # open the for loop
             match target:
                 case Id():

@@ -2,6 +2,8 @@
 Array size inference.
 """
 
+import math
+
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import TypeAlias, Union
@@ -17,7 +19,7 @@ from .partial_eval import PartialEval, PartialEvalInfo
 from .type_infer import TypeInfer, TypeAnalysis
 
 
-ArraySize: TypeAlias = int | NamedId
+ArraySize: TypeAlias = int | None
 """array size: either symbolic or concrete"""
 
 _Type: TypeAlias = Union['_Array', '_Tuple', None]
@@ -26,20 +28,20 @@ _Type: TypeAlias = Union['_Array', '_Tuple', None]
 @dataclass
 class _Array:
     """symbolic array"""
-    elt: Union['_Array', '_Tuple', None]
+    elt: _Type
     size: ArraySize
 
 @dataclass
 class _Tuple:
     """symbolic tuple"""
-    elts: tuple[Union['_Array', '_Tuple', None], ...]
+    elts: tuple[_Type, ...]
 
 @dataclass
 class ArraySizeAnalysis:
     """result of array size analysis"""
-    by_expr: dict[Expr, _Array]
-    by_def: dict[Definition, _Array]
-    ret_size: _Array | None
+    by_expr: dict[Expr, _Type]
+    by_def: dict[Definition, _Type]
+    ret_size: _Type | None
     def_use: DefineUseAnalysis
 
 
@@ -48,18 +50,14 @@ class _ArraySizeVisitor(DefaultVisitor):
     partial_eval: PartialEvalInfo
     type_info: TypeAnalysis
 
-    gensym: Gensym
-    size_vars: Unionfind[ArraySize]
-    by_expr: dict[Expr, _Array]
-    by_def: dict[Definition, _Array]
-    ret_size: _Array | None
+    by_expr: dict[Expr, _Type]
+    by_def: dict[Definition, _Type]
+    ret_size: _Type | None
 
     def __init__(self, func: FuncDef, partial_eval: PartialEvalInfo, type_info: TypeAnalysis):
         self.func = func
         self.partial_eval = partial_eval
         self.type_info = type_info
-        self.gensym = Gensym()
-        self.size_vars = Unionfind()
         self.by_def = {}
         self.by_expr = {}
         self.ret_size = None
@@ -72,17 +70,26 @@ class _ArraySizeVisitor(DefaultVisitor):
         self._visit_function(self.func, None)
         return ArraySizeAnalysis(self.by_expr, self.by_def, self.ret_size, self.partial_eval.def_use)
 
-    def _fresh_var(self) -> NamedId:
-        var = self.gensym.fresh('n')
-        self.size_vars.add(var)
-        return var
-
     def _cvt_list_type(self, ty: ListType) -> _Array:
         if isinstance(ty.elt, ListType):
             elt = self._cvt_list_type(ty.elt)
-            return _Array(elt, self._fresh_var())
         else:
-            return _Array(None, self._fresh_var())
+            elt = None
+        return _Array(elt, None)
+
+    def _unify(self, t1: _Type, t2: _Type) -> _Type:
+        match t1, t2:
+            case _Array(), _Array():
+                elt = self._unify(t1.elt, t2.elt)
+                size = t1.size if t1.size == t2.size else None
+                return _Array(elt, size)
+            case _Tuple(), _Tuple():
+                elts = tuple(self._unify(e1, e2) for e1, e2 in zip(t1.elts, t2.elts, strict=True))
+                return _Tuple(elts)
+            case None, None:
+                return None
+            case _:
+                raise TypeError(f'Cannot unify types: {t1} and {t2}')
 
     def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ty: _Array | _Tuple | None):
         match target:
@@ -106,7 +113,7 @@ class _ArraySizeVisitor(DefaultVisitor):
         self._visit_expr(e.arg, ctx)
         match e:
             case Range1():
-                stop = self.partial_eval.by_expr[e]
+                stop = self.partial_eval.by_expr[e.arg]
                 if isinstance(stop, Float | Fraction):
                     size = int(INTEGER.round(stop))
                     return _Array(None, size)
@@ -130,25 +137,9 @@ class _ArraySizeVisitor(DefaultVisitor):
         self._visit_expr(e.third, ctx)
         match e:
             case Range3():
-                # TODO: implemnent
+                # TODO: implement
                 # for now just return a symbolic list
-                return _Array(None, self._fresh_var())
-
-    def _visit_list_comp(self, e: ListComp, ctx: None):
-        # process iterables and bindings
-        iter_tys: list[_Type] = []
-        for target, iterable in zip(e.targets, e.iterables, strict=True):
-            ty = self._visit_expr(iterable, ctx)
-            assert isinstance(ty, _Array)
-            self._visit_binding(e, target, ty)
-            iter_tys.append(ty)
-
-        # process element expression
-        elt_ty = self._visit_expr(e.elt, ctx)
-        if all([ ])
-
-
-        return super()._visit_list_comp(e, ctx)
+                return _Array(None, None)
 
     def _visit_list_expr(self, e: ListExpr, ctx: None):
         elt_sizes = [self._visit_expr(elt, ctx) for elt in e.elts]
@@ -162,22 +153,133 @@ class _ArraySizeVisitor(DefaultVisitor):
             elt_size = None
         return _Array(elt_size, len(e.elts))
 
+    def _visit_list_comp(self, e: ListComp, ctx: None):
+        # process iterables and bindings
+        iter_tys: list[_Array] = []
+        for target, iterable in zip(e.targets, e.iterables, strict=True):
+            ty = self._visit_expr(iterable, ctx)
+            assert isinstance(ty, _Array)
+            self._visit_binding(e, target, ty)
+            iter_tys.append(ty)
+
+        # process element expression
+        elt_ty = self._visit_expr(e.elt, ctx)
+
+        # try to compute size
+        size: int = 1
+        for ty in iter_tys:
+            if isinstance(ty.size, int):
+                size *= ty.size
+            else:
+                return _Array(elt_ty, None)
+
+        return _Array(elt_ty, size)
+
+    def _visit_list_ref(self, e: ListRef, ctx: None):
+        ty = self._visit_expr(e.value, ctx)
+        self._visit_expr(e.index, ctx)
+        assert isinstance(ty, _Array)
+        return ty.elt
+
+    def _visit_list_slice(self, e: ListSlice, ctx: None):
+        ty = self._visit_expr(e.value, ctx)
+        assert isinstance(ty, _Array)
+
+        if e.start is None:
+            start = 0
+        else:
+            self._visit_expr(e.start, ctx)
+            start_val = self.partial_eval.by_expr[e.start]
+            if isinstance(start_val, Float | Fraction):
+                start = int(INTEGER.round(start_val))
+            else:
+                start = None
+
+        if e.stop is None:
+            stop = None
+        else:
+            self._visit_expr(e.stop, ctx)
+            stop_val = self.partial_eval.by_expr[e.stop]
+            if isinstance(stop_val, Float | Fraction):
+                stop = int(INTEGER.round(stop_val))
+            else:
+                stop = None
+
+        if ty.size is None or start is None or stop is None:
+            # list size or slice indices are unknown
+            size = None
+        else:
+            # can compute size of the slice
+            size = max(0, (stop % ty.size) - (start % ty.size))
+
+        return _Array(ty.elt, size)
+
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         return _Tuple(tuple(self._visit_expr(elt, ctx) for elt in e.elts))
+
+    def _visit_if_expr(self, e: IfExpr, ctx: None):
+        self._visit_expr(e.cond, ctx)
+        ift = self._visit_expr(e.ift, ctx)
+        iff = self._visit_expr(e.iff, ctx)
+        return self._unify(ift, iff)
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         ty = self._visit_expr(stmt.expr, ctx)
         self._visit_binding(stmt, stmt.target, ty)
+
+    def _visit_if1(self, stmt: If1Stmt, ctx: None):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.body, ctx)
+
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+
+    def _visit_if(self, stmt: IfStmt, ctx: None):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.ift, ctx)
+        self._visit_block(stmt.iff, ctx)
+
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+
+    def _visit_while(self, stmt: WhileStmt, ctx: None):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.body, ctx)
+
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+
+    def _visit_for(self, stmt, ctx):
+        # process iterable and binding
+        iter_ty = self._visit_expr(stmt.iterable, ctx)
+        assert isinstance(iter_ty, _Array)
+        self._visit_binding(stmt, stmt.target, iter_ty.elt)
+
+        # visit body
+        self._visit_block(stmt.body, ctx)
+
+        # unify any merged variable
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None):
         ret_size = self._visit_expr(stmt.expr, ctx)
         if isinstance(ret_size, _Array):
             self.ret_size = ret_size
 
-    def _visit_expr(self, expr: Expr, ctx: None) -> _Array | _Tuple | None:
+    def _visit_expr(self, expr: Expr, ctx: None) -> _Type:
         ty = super()._visit_expr(expr, ctx)
-        if isinstance(ty, _Array):
-            self.by_expr[expr] = ty
+        self.by_expr[expr] = ty
         return ty
 
     def _visit_function(self, func: FuncDef, ctx: None):
