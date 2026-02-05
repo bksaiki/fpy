@@ -465,52 +465,93 @@ class _MPFXBackendInstance(Visitor):
         return f'{cpp_ty.to_cpp()}({{{args}}})'
 
     def _visit_list_comp(self, e: ListComp, ctx: CompileCtx):
-        # [<e> for <x1> in <iterable1> ... for <xN> in <iterableN>] =>
-        # std::vector<T> v;
-        # for (auto <x1> : <iterable1>) {
-        #   auto <t2> = <iterable2>;  // evaluated in context of x1
-        #   for (auto <x2> : <t2>) {
-        #     ...
-        #       auto <tN> = <iterableN>;  // evaluated in context of x1, x2, ...
-        #       for (auto <xN> : <tN>) {
-        #         v.push_back(<e>);
-        #       }
-        #   }
-        # }
+        if len(e.targets) == 1:
+            # simple case: single for-loop
+            # [<e> for <x> in <iterable>] =>
+            # auto <t> = <iterable>;
+            # std::vector<T> v(t.size());
+            # for (size_t i = 0; i < t.size(); ++i) {
+            #   v[i] = <e>;
+            # }
 
-        # create output vector
-        v = self._fresh_var()
-        cpp_ty = self._compile_type(self._expr_type(e))
-        ctx.add_line(f'{cpp_ty.to_cpp()} {v};')
+            target = e.targets[0]
+            iterable = e.iterables[0]
 
-        # build nested loops - each iterable is evaluated in its proper context
-        body_ctx = ctx
-        for target, iterable in zip(e.targets, e.iterables):
-            # evaluate iterable in current loop context
+            # evaluate iterable
             t = self._fresh_var()
-            iterable_cpp = self._visit_expr(iterable, body_ctx)
-            body_ctx.add_line(f'auto {t} = {iterable_cpp};')
+            iterable_cpp = self._visit_expr(iterable, ctx)
+            ctx.add_line(f'auto {t} = {iterable_cpp};')
 
-            # open the for loop
+            # create output vector
+            v = self._fresh_var()
+            e_ty = self._expr_type(e)
+            cpp_ty = self._compile_type(e_ty)
+            ctx.add_line(f'{cpp_ty.to_cpp()} {v}({t}.size());')
+
+            # build the for loop
+            i = self._fresh_var()
+            ctx.add_line(f'for (size_t {i} = 0; {i} < {t}.size(); ++{i}) {{')
             match target:
                 case Id():
-                    body_ctx.add_line(f'for (auto {target} : {t}) {{')
+                    ctx.indent().add_line(f'auto {target} = {t}[{i}];')
                 case TupleBinding():
-                    t2 = self._fresh_var()
-                    body_ctx.add_line(f'for (auto {t2} : {t}) {{')
-                    self._visit_tuple_binding(t2, target, e, body_ctx.indent())
+                    temp = self._fresh_var()
+                    ctx.indent().add_line(f'auto {temp} = {t}[{i}];')
+                    self._visit_tuple_binding(temp, target, e, ctx.indent())
                 case _:
                     raise RuntimeError(f'unreachable {target}')
-            body_ctx = body_ctx.indent()
 
-        # compute the element and add to result
-        elt = self._visit_expr(e.elt, body_ctx)
-        body_ctx.add_line(f'{v}.push_back({elt});')
+            # compute the element and add to result
+            elt = self._visit_expr(e.elt, ctx.indent())
+            ctx.indent().add_line(f'{v}[{i}] = {elt};')
+            ctx.add_line('}')  # closing brace
+        else:
+            # [<e> for <x1> in <iterable1> ... for <xN> in <iterableN>] =>
+            # std::vector<T> v;
+            # for (auto <x1> : <iterable1>) {
+            #   auto <t2> = <iterable2>;  // evaluated in context of x1
+            #   for (auto <x2> : <t2>) {
+            #     ...
+            #       auto <tN> = <iterableN>;  // evaluated in context of x1, x2, ...
+            #       for (auto <xN> : <tN>) {
+            #         v.push_back(<e>);
+            #       }
+            #   }
+            # }
 
-        # closing braces
-        while body_ctx.indent_level > ctx.indent_level:
-            body_ctx = body_ctx.dedent()
-            body_ctx.add_line('}')
+            # create output vector
+            v = self._fresh_var()
+            cpp_ty = self._compile_type(self._expr_type(e))
+            ctx.add_line(f'{cpp_ty.to_cpp()} {v};')
+
+            # build nested loops - each iterable is evaluated in its proper context
+            body_ctx = ctx
+            for target, iterable in zip(e.targets, e.iterables):
+                # evaluate iterable in current loop context
+                t = self._fresh_var()
+                iterable_cpp = self._visit_expr(iterable, body_ctx)
+                body_ctx.add_line(f'auto {t} = {iterable_cpp};')
+
+                # open the for loop
+                match target:
+                    case Id():
+                        body_ctx.add_line(f'for (auto {target} : {t}) {{')
+                    case TupleBinding():
+                        t2 = self._fresh_var()
+                        body_ctx.add_line(f'for (auto {t2} : {t}) {{')
+                        self._visit_tuple_binding(t2, target, e, body_ctx.indent())
+                    case _:
+                        raise RuntimeError(f'unreachable {target}')
+                body_ctx = body_ctx.indent()
+
+            # compute the element and add to result
+            elt = self._visit_expr(e.elt, body_ctx)
+            body_ctx.add_line(f'{v}.push_back({elt});')
+
+            # closing braces
+            while body_ctx.indent_level > ctx.indent_level:
+                body_ctx = body_ctx.dedent()
+                body_ctx.add_line('}')
 
         return v
 
@@ -735,16 +776,20 @@ class _MPFXBackendInstance(Visitor):
         ctx.add_line('}')  # close if
 
     def _visit_context(self, stmt: ContextStmt, ctx: CompileCtx):
-        # context must be statically known
-        ctx_val = self.eval_info.by_expr[stmt.ctx]
-
-        # bind it if we can compile it
-        if isinstance(ctx_val, SupportedContext):
-            ctx_name: str | None = self._fresh_var()
-            ctx_str = self._compile_context(ctx_val)
-            ctx.add_line(f'auto {ctx_name} = {ctx_str};')
+        if isinstance(stmt.ctx, Var):
+            # context variable: must be bound already
+            ctx_name = str(stmt.ctx.name)
         else:
-            ctx_name = None
+            # context must be statically known
+            ctx_val = self.eval_info.by_expr[stmt.ctx]
+
+            # bind it if we can compile it
+            if isinstance(ctx_val, SupportedContext):
+                ctx_name: str | None = self._fresh_var()
+                ctx_str = self._compile_context(ctx_val)
+                ctx.add_line(f'auto {ctx_name} = {ctx_str};')
+            else:
+                ctx_name = None
 
         # compile body
         self._visit_block(stmt.body, ctx.with_ctx(ctx_name))
