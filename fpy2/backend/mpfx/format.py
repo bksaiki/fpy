@@ -194,6 +194,16 @@ class AbstractFormat:
         neg_bound = max(self.neg_bound, other.neg_bound)
         return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
+    def __or__(self, other: 'AbstractFormat') -> 'AbstractFormat':
+        """Union of two formats."""
+        if not isinstance(other, AbstractFormat):
+            raise TypeError(f'Expected \'AbstractFormat\', got {other}')
+        prec = max(self.prec, other.prec)
+        exp = min(self.exp, other.exp)
+        pos_bound = max(self.pos_bound, other.pos_bound)
+        neg_bound = min(self.neg_bound, other.neg_bound)
+        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+
     def __lt__(self, other) -> bool:
         if not isinstance(other, AbstractFormat):
             return NotImplemented

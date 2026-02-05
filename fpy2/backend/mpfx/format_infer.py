@@ -7,6 +7,7 @@ from typing import NoReturn, TypeAlias, Iterable
 
 from ...ast import *
 from ...analysis import (
+    ArraySizeInfer, ArraySizeAnalysis, ArraySizeType,
     ContextAnalysis, ContextInfer, PartialEval, PartialEvalInfo,
     Definition, DefSite
 )
@@ -158,16 +159,24 @@ class _FormatInfernce(Visitor):
     func: FuncDef
     ctx_info: ContextAnalysis
     eval_info: PartialEvalInfo
+    array_size: ArraySizeAnalysis
 
     by_def: dict[Definition, FormatType]
     by_expr: dict[Expr, FormatType]
     preround: dict[Expr, FormatType]
     ret_ty: FormatType | None
 
-    def __init__(self, func: FuncDef, ctx_info: ContextAnalysis, eval_info: PartialEvalInfo):
+    def __init__(
+        self,
+        func: FuncDef,
+        ctx_info: ContextAnalysis,
+        eval_info: PartialEvalInfo,
+        array_size: ArraySizeAnalysis
+    ):
         self.func = func
         self.ctx_info = ctx_info
         self.eval_info = eval_info
+        self.array_size = array_size
         self.by_def = {}
         self.by_expr = {}
         self.preround = {}
@@ -183,6 +192,29 @@ class _FormatInfernce(Visitor):
 
     def raise_error(self, msg: str) -> NoReturn:
         raise FormatInferError(f'In function {self.func.name}: {msg}')
+
+    def _unify(self, a: FormatType, b: FormatType) -> FormatType:
+        match a, b:
+            case AbstractFormat(), AbstractFormat():
+                return a | b
+            case AbstractFormat(), RealType():
+                return b
+            case RealType(), AbstractFormat():
+                return a
+            case RealType(), RealType():
+                return a
+            case BoolType(), BoolType():
+                return a
+            case ContextType(), ContextType():
+                return a
+            case ListFormatType(), ListFormatType():
+                elt_ty = self._unify(a.elt, b.elt)
+                return ListFormatType(elt_ty)
+            case TupleFormatType(), TupleFormatType():
+                elt_tys = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a.elts, b.elts, strict=True)]
+                return TupleFormatType(elt_tys)
+            case _:
+                self.raise_error(f'cannot unify types: {a} and {b}')
 
     def _expr_type(self, e: Expr):
         ty = self.ctx_info.by_expr[e]
@@ -221,6 +253,7 @@ class _FormatInfernce(Visitor):
 
     def _visit_integer(self, e: Integer, ctx: Context):
         return AbstractFormat.from_context(INTEGER)
+        # return self._expr_type(e)
 
     def _visit_rational(self, e: Rational, ctx: Context):
         raise NotImplementedError
@@ -253,20 +286,34 @@ class _FormatInfernce(Visitor):
         a_ty = self._visit_expr(e.arg, ctx)
         e_ty = self._expr_type(e) # get the expected type
 
-        if isinstance(a_ty, AbstractFormat):
-            # possible optimization: if A are both abstract formats,
-            # then the "minimal" format can be computed directly
-            match e:
-                case Round() | Cast():
-                    m_ty: AbstractFormat | None = a_ty
-                case Neg():
-                    m_ty = -a_ty
-                case _:
-                    m_ty = None
+        match e:
+            case Round() | Cast() | Neg():
+                if isinstance(a_ty, AbstractFormat):
+                    # possible optimization: if A is an abstract format,
+                    # then the "minimal" format can be computed directly
+                    match e:
+                        case Round() | Cast():
+                            m_ty: AbstractFormat | None = a_ty
+                        case Neg():
+                            m_ty = -a_ty
+                        case _:
+                            m_ty = None
 
-            if m_ty is not None:
-                assert isinstance(e_ty, AbstractFormat | RealType)
-                e_ty = self._record_preround(e, m_ty, e_ty)
+                    if m_ty is not None:
+                        assert isinstance(e_ty, AbstractFormat | RealType)
+                        e_ty = self._record_preround(e, m_ty, e_ty)
+
+            case Sum():
+                assert isinstance(a_ty, ListFormatType)
+                if isinstance(a_ty.elt, AbstractFormat):
+                    size_ty = self.array_size.by_expr.get(e.arg, None)
+                    if isinstance(size_ty, ArraySizeType) and size_ty.size is not None:
+                        m_ty = a_ty.elt
+                        for _ in range(size_ty.size - 1):
+                            m_ty += a_ty.elt
+
+                        assert isinstance(e_ty, AbstractFormat | RealType)
+                        e_ty = self._record_preround(e, m_ty, e_ty)
 
         return e_ty
 
@@ -528,14 +575,18 @@ class FormatInfer:
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
 
-        # run context inference if need be
+        # context inference
         if ctx_info is None:
             ctx_info = ContextInfer.infer(func)
 
+        # partial evaluation
         if eval_info is None:
             eval_info = PartialEval.apply(func, def_use=ctx_info.def_use)
 
+        # array size inference
+        array_size = ArraySizeInfer.infer(func, partial_eval=eval_info, type_info=ctx_info.type_info)
+
         # perform format inference
-        format_info = _FormatInfernce(func, ctx_info, eval_info).infer()
+        format_info = _FormatInfernce(func, ctx_info, eval_info, array_size).infer()
 
         return format_info

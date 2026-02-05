@@ -92,7 +92,7 @@ class _PartialEvalInstance(DefaultVisitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
         self._visit_expr(e.arg, ctx)
-        if self._is_value(e.arg) and ctx is not None:
+        if not isinstance(e, Empty) and self._is_value(e.arg) and ctx is not None:
             e_arg = ForeignVal(self.by_expr[e.arg], None)
             if isinstance(e, NamedUnaryOp):
                 e_eval: UnaryOp = type(e)(e.func, e_arg, e.loc)

@@ -569,9 +569,16 @@ class ContextTypeInferInstance(Visitor):
         return ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: ContextParam):
+        d = self.def_use.find_def_from_use(stmt)
+        ty = self.by_def[d]
+
         for s in stmt.indices:
             self._visit_expr(s, ctx)
-        self._visit_expr(stmt.expr, ctx)
+            assert isinstance(ty, ListType)
+            ty = ty.elt
+
+        elt_ty = self._visit_expr(stmt.expr, ctx)
+        self._unify(ty, elt_ty)
         return ctx
 
     def _visit_if1(self, stmt: If1Stmt, ctx: ContextParam):

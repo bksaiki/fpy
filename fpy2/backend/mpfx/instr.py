@@ -8,7 +8,7 @@ from typing import NoReturn
 from ...ast.fpyast import FuncDef
 from ...number import RM, Context, INTEGER, FP64, REAL
 from .format import AbstractFormat, SupportedContext
-from .utils import MPFXCompileError
+from .utils import MPFXCompileError, CompileCtx
 
 __all__ = [
     'AddInstr',
@@ -314,3 +314,33 @@ class InstrGenerator:
                 return f'mpfx::fma<{engine_str}>({a_str}, {b_str}, {c_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `fma({a_str}, {b_str}, {c_str})`: fma({a_ty}, {b_ty}, {c_ty}) under context {ctx}')
+
+    def sum(
+        self,
+        tid: str,
+        arr_str: list[str],
+        ctx: CompileCtx,
+        elt_ty: AbstractFormat,
+        e_ty: AbstractFormat,
+        rctx: Context
+    ):
+        if rctx is REAL:
+            # exact summation
+            if _fits_in_double(elt_ty) and _fits_in_double(e_ty):
+                # sum directly with double-precision addition
+                # for (auto x : arr) sum += x;
+                ctx.add_line(f'double {tid} = 0;')
+                ctx.add_line(f'for (auto x : {arr_str}) {{')
+
+                ctx = ctx.indent()
+                ctx.add_line(f'{tid} += x;')
+                ctx = ctx.dedent()
+
+                ctx.add_line('}')
+                return
+        else:
+            # sum with a loop
+            raise NotImplementedError()
+
+        self.raise_error(f'cannot compile `sum({arr_str})`: sum(list[{elt_ty}]) under context {rctx}'
+    )

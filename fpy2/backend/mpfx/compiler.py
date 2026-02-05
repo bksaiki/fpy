@@ -11,7 +11,7 @@ from ...analysis import (
     PartialEval, PartialEvalInfo, TypeInferError
 )
 from ...function import Function
-from ...number import IEEEContext, OV, RM, FP64, INTEGER
+from ...number import EFloatContext, IEEEContext, OV, RM, FP64, INTEGER
 from ...transform import DeadCodeEliminate, Monomorphize
 from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListType, Type
 from ...utils import Gensym
@@ -98,6 +98,14 @@ def _compile_context(ctx: Context, func: FuncDef | None = None) -> str:
             # compile rounding
             rm = _compile_rm(ctx.rm, func)
             return f'mpfx::IEEE754Context({ctx.es}, {ctx.nbits}, {rm})'
+        case EFloatContext():
+            # TODO: saturation, special values
+            p = ctx.pmax
+            n = ctx.nmin
+            b = float(ctx.maxval())
+            # compile rounding mode
+            rm = _compile_rm(ctx.rm, func)
+            return f'mpfx::Context({p}, {n}, {b}, {rm})'
         case _:
             _emit_error(f'Unhandled context: {ctx}', func)
 
@@ -264,24 +272,35 @@ class _MPFXBackendInstance(Visitor):
                 raise MPFXCompileError(self.func, f'Unsupported nullary operation to compile: {e}')
 
     def _visit_unaryop(self, e, ctx: CompileCtx):
-        arg_str = self._visit_expr(e.arg, ctx)
         match e:
             case Cast():
+                arg_str = self._visit_expr(e.arg, ctx)
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
                 return self.instr_gen.cast(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Neg():
+                arg_str = self._visit_expr(e.arg, ctx)
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
                 return self.instr_gen.neg(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Abs():
+                arg_str = self._visit_expr(e.arg, ctx)
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
                 return self.instr_gen.abs(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Sqrt():
+                arg_str = self._visit_expr(e.arg, ctx)
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
                 return self.instr_gen.sqrt(arg_str, ctx.ctx_name, arg_ty, e_ctx)
+            case Sum():
+                tid = self._fresh_var()
+                arg_str = self._visit_expr(e.arg, ctx)
+                arg_ty = self._expr_type(e.arg)
+                e_ty = self._expr_type(e)
+                e_ctx = self._expr_ctx(e)
+                self.instr_gen.sum(tid, arg_str, ctx, arg_ty.elt, e_ty, e_ctx)
+                return tid
             case Len():
                 return self._visit_len(e, ctx)
             case Empty():
@@ -391,7 +410,7 @@ class _MPFXBackendInstance(Visitor):
         arg_cpp = self._visit_expr(e.arg, ctx)
         ty = self._expr_type(e)
         return self._compile_size(f'{arg_cpp}.size()', ty)
-    
+
     def _visit_empty(self, e: Empty, ctx: CompileCtx):
         # size(x) => std::vector<T>(static_cast<size_t>(size))
         size_cpp = self._visit_expr(e.arg, ctx)
@@ -440,11 +459,60 @@ class _MPFXBackendInstance(Visitor):
         args = [self._visit_expr(arg, ctx) for arg in e.elts]
         return f'std::make_tuple({", ".join(args)})'
 
-    def _visit_list_expr(self, e, ctx):
-        raise NotImplementedError
+    def _visit_list_expr(self, e: ListExpr, ctx: CompileCtx):
+        cpp_ty = self._compile_type(self._expr_type(e))
+        args = ', '.join(self._visit_expr(arg, ctx) for arg in e.elts)
+        return f'{cpp_ty.to_cpp()}({{{args}}})'
 
-    def _visit_list_comp(self, e, ctx):
-        raise NotImplementedError
+    def _visit_list_comp(self, e: ListComp, ctx: CompileCtx):
+        # [<e> for <x1> in <iterable1> ... for <xN> in <iterableN>] =>
+        # std::vector<T> v;
+        # for (auto <x1> : <iterable1>) {
+        #   auto <t2> = <iterable2>;  // evaluated in context of x1
+        #   for (auto <x2> : <t2>) {
+        #     ...
+        #       auto <tN> = <iterableN>;  // evaluated in context of x1, x2, ...
+        #       for (auto <xN> : <tN>) {
+        #         v.push_back(<e>);
+        #       }
+        #   }
+        # }
+
+        # create output vector
+        v = self._fresh_var()
+        cpp_ty = self._compile_type(self._expr_type(e))
+        ctx.add_line(f'{cpp_ty.to_cpp()} {v};')
+
+        # build nested loops - each iterable is evaluated in its proper context
+        body_ctx = ctx
+        for target, iterable in zip(e.targets, e.iterables):
+            # evaluate iterable in current loop context
+            t = self._fresh_var()
+            iterable_cpp = self._visit_expr(iterable, body_ctx)
+            body_ctx.add_line(f'auto {t} = {iterable_cpp};')
+
+            # open the for loop
+            match target:
+                case Id():
+                    body_ctx.add_line(f'for (auto {target} : {t}) {{')
+                case TupleBinding():
+                    t2 = self._fresh_var()
+                    body_ctx.add_line(f'for (auto {t2} : {t}) {{')
+                    self._visit_tuple_binding(t2, target, e, body_ctx.indent())
+                case _:
+                    raise RuntimeError(f'unreachable {target}')
+            body_ctx = body_ctx.indent()
+
+        # compute the element and add to result
+        elt = self._visit_expr(e.elt, body_ctx)
+        body_ctx.add_line(f'{v}.push_back({elt});')
+
+        # closing braces
+        while body_ctx.indent_level > ctx.indent_level:
+            body_ctx = body_ctx.dedent()
+            body_ctx.add_line('}')
+
+        return v
 
     def _visit_list_ref(self, e: ListRef, ctx: CompileCtx):
         value = self._visit_expr(e.value, ctx)
@@ -686,8 +754,7 @@ class _MPFXBackendInstance(Visitor):
         if stmt.msg is None:
             ctx.add_line(f'assert({e});')
         else:
-            msg = self._visit_expr(stmt.msg, ctx)
-            ctx.add_line(f'assert(({e}) && ({msg}));')
+            ctx.add_line(f'assert({e}); // {stmt.msg.format()}')
 
     def _visit_effect(self, stmt: EffectStmt, ctx: CompileCtx):
         raise MPFXCompileError(self.func, 'FPy effects are not supported')
