@@ -149,14 +149,22 @@ class ContextTypeInferInstance(Visitor):
         ty = ty.subst_context(subst)
         return ty, subst
 
+    def _unify_rvars(self, a: ContextParam, b: ContextParam) -> ContextParam:
+        r = self.rvars.union(a, b)
+        for k in self.rvars:
+            v = self.rvars.find(k)
+            if isinstance(k, Context) and isinstance(v, Context) and not k.is_equiv(v):
+                raise ContextInferError(f'incompatible contexts: {k} != {v}')
+        return r
+
     def _unify_contexts(self, a: ContextParam, b: ContextParam) -> ContextParam:
         match a, b:
             case _, NamedId():
                 a = self.rvars.add(a)
-                return self.rvars.union(a, b)
+                return self._unify_rvars(a, b)
             case NamedId(), _:
                 b = self.rvars.add(b)
-                return self.rvars.union(b, a)
+                return self._unify_rvars(b, a)
             case Context(), Context():
                 if not a.is_equiv(b):
                     raise ContextInferError(f'incompatible contexts: {a} != {b}')
@@ -332,27 +340,41 @@ class ContextTypeInferInstance(Visitor):
         match e:
             case Len() | Dim():
                 # length / dimension
-                # C, Γ |- len e : real INTEGER
-                return RealType(INTEGER)
+                if self.unsafe_cast_int:
+                    # C, Γ |- len e : real INTEGER
+                    return RealType(INTEGER)
+                else:
+                    # C, Γ |- len e : real REAL
+                    return RealType(REAL)
             case Sum():
                 # sum operator
                 # C, Γ |- sum e : real C
                 return RealType(ctx)
             case Range1():
                 # range operator
-                # C, Γ |- range e : list (real INTEGER)
-                return ListType(RealType(INTEGER))
+                if self.unsafe_cast_int:
+                    # C, Γ |- range e : list (real INTEGER)
+                    return ListType(RealType(INTEGER))
+                else:
+                    # C, Γ |- range e : list (real REAL)
+                    return ListType(RealType(REAL))
             case Empty():
                 # empty operator
                 # C, Γ |- empty e : list T
                 return self._cvt_type(self._lookup_ty(e))
             case Enumerate():
                 # enumerate operator
-                #          C, Γ |- e : list T
-                # -----------------------------------------
-                #  C, Γ |- enumerate e : list [real INTEGER] x T
                 assert isinstance(arg_ty, ListType)
-                elt_ty = TupleType(RealType(INTEGER), arg_ty.elt)
+                if self.unsafe_cast_int:
+                    #          C, Γ |- e : list T
+                    # -----------------------------------------
+                    #  C, Γ |- enumerate e : list [real INTEGER] x T
+                    elt_ty = TupleType(RealType(INTEGER), arg_ty.elt)
+                else:
+                    #          C, Γ |- e : list T
+                    # -----------------------------------------
+                    #  C, Γ |- enumerate e : list [real REAL] x T
+                    elt_ty = TupleType(RealType(REAL), arg_ty.elt)
                 return ListType(elt_ty)
             case _:
                 #   Γ |- real : T         Γ |- bool : T
@@ -366,12 +388,20 @@ class ContextTypeInferInstance(Visitor):
         match e:
             case Size():
                 # size operator
-                # C, Γ |- size e : real INTEGER
-                return RealType(INTEGER)
+                if self.unsafe_cast_int:
+                    # C, Γ |- size e : real INTEGER
+                    return RealType(INTEGER)
+                else:
+                    # C, Γ |- size e : real REAL
+                    return RealType(REAL)
             case Range2():
                 # range operator
-                # C, Γ |- range e1 e2 : list (real INTEGER)
-                return ListType(RealType(INTEGER))
+                if self.unsafe_cast_int:
+                    # C, Γ |- range e1 e2 : list (real INTEGER)
+                    return ListType(RealType(INTEGER))
+                else:
+                    # C, Γ |- range e1 e2 : list (real REAL)
+                    return ListType(RealType(REAL))
             case _:
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------
@@ -385,8 +415,12 @@ class ContextTypeInferInstance(Visitor):
         match e:
             case Range3():
                 # range operator
-                # C, Γ |- range e1 e2 e3 : list (real INTEGER)
-                return ListType(RealType(INTEGER))
+                if self.unsafe_cast_int:
+                    # C, Γ |- range e1 e2 e3 : list (real INTEGER)
+                    return ListType(RealType(INTEGER))
+                else:
+                    # C, Γ |- range e1 e2 e3 : list (real REAL)
+                    return ListType(RealType(REAL))
             case _:
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------
@@ -726,6 +760,7 @@ class ContextTypeInferInstance(Visitor):
 
     def _visit_expr(self, expr: Expr, ctx: ContextParam) -> Type:
         ty = super()._visit_expr(expr, ctx)
+        # print(expr.format(), ':', ty)
         self.by_expr[expr] = ty
         self.at_expr[expr] = ctx
         return ty

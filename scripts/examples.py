@@ -80,20 +80,24 @@ def dot_prod_blocked(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Rea
     # perform the dot product
     n = len(xs)
     for start in range(0, n, K):
-        # extract block of size K
+        # end index for the block
         end = start + K
-        if end <= n:
-            x_block = xs[start:end]
-            y_block = ys[start:end]
-        else:
-            x_block = fp.empty(K)
-            y_block = fp.empty(K)
-            for j in range(start, n):
-                x_block[j - start] = xs[j]
-                y_block[j - start] = ys[j]
-            for j in range(n, end):
-                x_block[j - start] = 0
-                y_block[j - start] = 0
+
+        # extract block of size K
+        x_block = fp.empty(K)
+        y_block = fp.empty(K)
+        for i in range(start, min(end, n)):
+            with QUANT_CTX:
+                x = fp.round(xs[i])
+                y = fp.round(ys[i])
+            x_block[i - start] = x
+            y_block[i - start] = y
+        for i in range(min(end, n), end):
+            with QUANT_CTX:
+                x = fp.round(0)
+                y = fp.round(0)
+            x_block[i - start] = x
+            y_block[i - start] = y
 
         # initialize internal accumulator
         with ACCUM_CTX:
@@ -101,14 +105,9 @@ def dot_prod_blocked(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Rea
 
         # process dot product
         for x, y in zip(x_block, y_block):
-            # quantize inputs
-            with QUANT_CTX:
-                xq = fp.round(x)
-                yq = fp.round(y)
-
             # multiply
             with MUL_CTX:
-                t = xq * yq
+                t = x * y
 
             # accumulate
             with ACCUM_CTX:

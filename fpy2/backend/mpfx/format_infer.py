@@ -253,7 +253,6 @@ class _FormatInfernce(Visitor):
 
     def _visit_integer(self, e: Integer, ctx: Context):
         return AbstractFormat.from_context(INTEGER)
-        # return self._expr_type(e)
 
     def _visit_rational(self, e: Rational, ctx: Context):
         raise NotImplementedError
@@ -287,21 +286,28 @@ class _FormatInfernce(Visitor):
         e_ty = self._expr_type(e) # get the expected type
 
         match e:
+            case Len():
+                # len => INTEGER
+                return AbstractFormat.from_context(INTEGER)
+            case Range1():
+                # range1 => list[INTEGER]
+                return ListFormatType(AbstractFormat.from_context(INTEGER))
+            case Enumerate():
+                # enumerate => list[tuple(INTEGER, A)]
+                return ListFormatType(TupleFormatType((AbstractFormat.from_context(INTEGER), a_ty)))
+
             case Round() | Cast() | Neg():
                 if isinstance(a_ty, AbstractFormat):
                     # possible optimization: if A is an abstract format,
                     # then the "minimal" format can be computed directly
                     match e:
                         case Round() | Cast():
-                            m_ty: AbstractFormat | None = a_ty
+                            m_ty = a_ty
                         case Neg():
                             m_ty = -a_ty
-                        case _:
-                            m_ty = None
 
-                    if m_ty is not None:
-                        assert isinstance(e_ty, AbstractFormat | RealType)
-                        e_ty = self._record_preround(e, m_ty, e_ty)
+                    assert isinstance(e_ty, AbstractFormat | RealType)
+                    e_ty = self._record_preround(e, m_ty, e_ty)
 
             case Sum():
                 assert isinstance(a_ty, ListFormatType)
@@ -322,22 +328,28 @@ class _FormatInfernce(Visitor):
         b_ty = self._visit_expr(e.second, ctx)
         e_ty = self._expr_type(e)
 
-        if isinstance(a_ty, AbstractFormat) and isinstance(b_ty, AbstractFormat):
-            # possible optimization: if A and B are both abstract formats,
-            # then the "minimal" format can be computed directly
-            match e:
-                case Add():
-                    m_ty: AbstractFormat | None = a_ty + b_ty
-                case Sub():
-                    m_ty = a_ty - b_ty
-                case Mul():
-                    m_ty = a_ty * b_ty
-                case _:
-                    m_ty = None
+        match e:
+            case Size():
+                # size => INTEGER
+                return AbstractFormat.from_context(INTEGER)
+            case Range2():
+                # range2 => list[INTEGER]
+                return ListFormatType(AbstractFormat.from_context(INTEGER))
+            case Add() | Sub() | Mul():
+                # add/sub/mul => A (if A and B are both abstract formats)
+                if isinstance(a_ty, AbstractFormat) and isinstance(b_ty, AbstractFormat):
+                    # possible optimization: if A and B are both abstract formats,
+                    # then the "minimal" format can be computed directly
+                    match e:
+                        case Add():
+                            m_ty = a_ty + b_ty
+                        case Sub():
+                            m_ty = a_ty - b_ty
+                        case Mul():
+                            m_ty = a_ty * b_ty
 
-            if m_ty is not None:
-                assert isinstance(e_ty, AbstractFormat | RealType)
-                e_ty = self._record_preround(e, m_ty, e_ty)
+                    assert isinstance(e_ty, AbstractFormat | RealType)
+                    e_ty = self._record_preround(e, m_ty, e_ty)
 
         # return the most conservative type
         return e_ty
@@ -346,11 +358,22 @@ class _FormatInfernce(Visitor):
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
+
+        match e:
+            case Range3():
+                # range3 => list[INTEGER]
+                return ListFormatType(AbstractFormat.from_context(INTEGER))
+
         return self._expr_type(e) # get the expected type
 
     def _visit_naryop(self, e: NaryOp, ctx: Context):
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
+        e_tys = [e_ty for e_ty in (self._visit_expr(arg, ctx) for arg in e.args)]
+
+        match e:
+            case Min() | Max():
+                # min/max: TODO: unify
+                return e_tys[0]
+
         return self._expr_type(e) # get the expected type
 
     def _visit_call(self, e: Call, ctx: Context):

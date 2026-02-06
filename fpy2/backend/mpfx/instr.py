@@ -176,9 +176,9 @@ class InstrGenerator:
     ):
         if ctx is REAL:
             # exact addition
-            if _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty) and ctx is REAL:
-                # use integer addition for real addition under INTEGER context
-                return f'({lhs_str} + {rhs_str})'
+            if _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty):
+                # use integer addition for real addition
+                return f'static_cast<int64_t>({lhs_str} + {rhs_str})'
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty + rhs_ty
                 if exact_ty <= AbstractFormat.from_context(FP64):
@@ -212,9 +212,9 @@ class InstrGenerator:
     ):
         if ctx is REAL:
             # exact subtraction
-            if _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty) and ctx is REAL:
-                # use integer subtraction for real subtraction under INTEGER context
-                return f'({lhs_str} - {rhs_str})'
+            if _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty):
+                # use integer subtraction for real subtraction
+                return f'static_cast<int64_t>({lhs_str} - {rhs_str})'
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty - rhs_ty
                 if exact_ty <= AbstractFormat.from_context(FP64):
@@ -248,6 +248,9 @@ class InstrGenerator:
     ):
         if ctx is REAL:
             # exact multiplication
+            if _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty):
+                # use integer multiplication for real multiplication
+                return f'static_cast<int64_t>({lhs_str} * {rhs_str})'
             if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty):
                 exact_ty = lhs_ty * rhs_ty
                 if exact_ty <= AbstractFormat.from_context(FP64):

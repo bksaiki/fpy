@@ -237,9 +237,7 @@ class _MPFXBackendInstance(Visitor):
         # TODO: check context for rounding
         raise NotImplementedError
 
-    def _compile_size(self, e: str, ty: FormatType):
-        if not isinstance(ty, RealType | AbstractFormat):
-            raise RuntimeError(f'size type must be RealType, got {ty}')
+    def _compile_size(self, e: str):
         return f'static_cast<size_t>({e})'
 
     def _visit_var(self, e: Var, ctx: CompileCtx):
@@ -382,11 +380,21 @@ class _MPFXBackendInstance(Visitor):
         ctx.add_line('}')
 
         return t
+    
+    def _visit_minmax(self, e: Min | Max, ctx: CompileCtx):
+        op_str = 'std::min' if isinstance(e, Min) else 'std::max'
+        arg_str = self._visit_expr(e.args[0], ctx)
+        for next_arg in e.args[1:]:
+            next_arg_str = self._visit_expr(next_arg, ctx)
+            arg_str = f'{op_str}({arg_str}, {next_arg_str})'
+        return arg_str
 
     def _visit_naryop(self, e, ctx: CompileCtx):
         match e:
             case Zip():
                 return self._visit_zip(e, ctx)
+            case Min() | Max():
+                return self._visit_minmax(e, ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported nary operation to compile: {e}')
 
@@ -408,14 +416,12 @@ class _MPFXBackendInstance(Visitor):
     def _visit_len(self, e: Len, ctx: CompileCtx):
         # len(x)
         arg_cpp = self._visit_expr(e.arg, ctx)
-        ty = self._expr_type(e)
-        return self._compile_size(f'{arg_cpp}.size()', ty)
+        return self._compile_size(f'{arg_cpp}.size()')
 
     def _visit_empty(self, e: Empty, ctx: CompileCtx):
         # size(x) => std::vector<T>(static_cast<size_t>(size))
         size_cpp = self._visit_expr(e.arg, ctx)
-        size_ty = self._expr_type(e.arg)
-        size_str = self._compile_size(size_cpp, size_ty)
+        size_str = self._compile_size(size_cpp)
 
         e_ty = self._expr_type(e)
         cpp_ty = self._compile_type(e_ty).to_cpp()
@@ -558,8 +564,7 @@ class _MPFXBackendInstance(Visitor):
     def _visit_list_ref(self, e: ListRef, ctx: CompileCtx):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
-        index_ty = self._expr_type(e.index)
-        size = self._compile_size(index, index_ty)
+        size = self._compile_size(index)
         return f'{value}[{size}]'
 
     def _visit_list_slice(self, e: ListSlice, ctx: CompileCtx):
@@ -580,16 +585,14 @@ class _MPFXBackendInstance(Visitor):
             start = '0'
         else:
             start = self._visit_expr(e.start, ctx)
-            start_ty = self._expr_type(e.start)
-            start = self._compile_size(start, start_ty)
+            start = self._compile_size(start)
 
         # compile stop
         if e.stop is None:
             stop = f'{t}.size()'
         else:
             stop = self._visit_expr(e.stop, ctx)
-            stop_ty = self._expr_type(e.stop)
-            stop = self._compile_size(stop, stop_ty)
+            stop = self._compile_size(stop)
 
         # result
         ty_str = self._compile_type(e_ty).to_cpp()
@@ -658,8 +661,7 @@ class _MPFXBackendInstance(Visitor):
         indices: list[str] = []
         for index in stmt.indices:
             i = self._visit_expr(index, ctx)
-            idx_ty = self._expr_type(index)
-            indices.append(self._compile_size(i, idx_ty))
+            indices.append(self._compile_size(i))
 
         # compile expression
         e = self._visit_expr(stmt.expr, ctx)
@@ -929,8 +931,9 @@ class MPFXCompiler(Backend):
             # print(ast.format())
 
             # reanalyze
-            format_info = FormatInfer.infer(ast)
-            eval_info = PartialEval.apply(ast, def_use=format_info.def_use)
+            eval_info = PartialEval.apply(ast)
+            ctx_info = ContextInfer.infer(ast, def_use=eval_info.def_use, eval_info=eval_info, unsafe_cast_int=self.unsafe_cast_int)
+            format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
 
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
