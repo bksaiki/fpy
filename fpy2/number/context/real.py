@@ -23,6 +23,9 @@ class RealContext(Context):
     Values are never rounded under this context.
     """
 
+    def __str__(self) -> str:
+        return 'REAL'
+
     def __eq__(self, other):
         return isinstance(other, RealContext)
 

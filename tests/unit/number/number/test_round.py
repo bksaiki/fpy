@@ -276,7 +276,7 @@ def _all_contexts():
         fp.MPFixedContext(-8, fp.RM.RNE),
         fp.MPBFixedContext(-8, fp.RealFloat.from_int(2 ** 30), fp.RM.RNE, fp.OV.SATURATE),
         fp.ExpContext(8),
-        fp.RealContext()
+        fp.REAL
     ]
 
     return common + inst
@@ -295,7 +295,7 @@ class ContextRoundTestCase(unittest.TestCase):
     @given(st.fractions())
     def test_round_fraction(self, x: Fraction):
         for ctx in _all_contexts():
-            if not isinstance(ctx, fp.RealContext):
+            if ctx is not fp.REAL:
                 y = ctx.round(x)
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
@@ -328,7 +328,7 @@ class ContextRoundAtTestCase(unittest.TestCase):
     @given(st.integers(), st.integers())
     def test_round_int(self, x: int, n: int):
         for ctx in _all_contexts():
-            if not isinstance(ctx, fp.RealContext):
+            if ctx is not fp.REAL:
                 y = ctx.round_at(x, n)
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
@@ -336,7 +336,7 @@ class ContextRoundAtTestCase(unittest.TestCase):
     @given(st.fractions(), st.integers())
     def test_round_fraction(self, x: Fraction,n: int):
         for ctx in _all_contexts():
-            if not isinstance(ctx, fp.RealContext):
+            if ctx is not fp.REAL:
                 y = ctx.round_at(x, n)
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
@@ -344,7 +344,7 @@ class ContextRoundAtTestCase(unittest.TestCase):
     @given(st.floats(allow_nan=True, allow_infinity=True, allow_subnormal=True), st.integers())
     def test_round_python_float(self, x: float, n: int):
         for ctx in _all_contexts():
-            if not isinstance(ctx, fp.MPFixedContext | fp.MPBFixedContext | fp.FixedContext | fp.RealContext):
+            if ctx is not fp.REAL and not isinstance(ctx, fp.MPFixedContext | fp.MPBFixedContext | fp.FixedContext):
                 y = ctx.round_at(x, n)
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
@@ -352,7 +352,7 @@ class ContextRoundAtTestCase(unittest.TestCase):
     @given(real_floats(prec_max=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT), st.integers())
     def test_round_real_float(self, x: fp.RealFloat, n: int):
         for ctx in _all_contexts():
-            if not isinstance(ctx, fp.RealContext):
+            if ctx is not fp.REAL:
                 y = ctx.round_at(x, n)
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)
@@ -360,7 +360,7 @@ class ContextRoundAtTestCase(unittest.TestCase):
     @given(floats(53, allow_nan=False, allow_infinity=False, ctx=fp.FP64), st.integers())
     def test_round_float(self, x: fp.Float, n: int):
         for ctx in _all_contexts():
-            if not isinstance(ctx, fp.RealContext):
+            if ctx is not fp.REAL:
                 y = ctx.round_at(x, n)
                 self.assertIsInstance(y, fp.Float)
                 self.assertIs(y.ctx, ctx)

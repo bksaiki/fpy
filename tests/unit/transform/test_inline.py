@@ -68,7 +68,7 @@ class TestFuncInline(unittest.TestCase):
         def expect(xs: list[fp.Real], p: fp.Real):
             xs4 = xs
             p5 = p
-            with fp.RealContext():
+            with fp.REAL:
                 e, _ = fp.libraries.core.max_e(xs4)
                 n = (e - p5)
                 t = fp.MPFixedContext(n, fp.RM.RTZ)
