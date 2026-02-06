@@ -2,7 +2,7 @@
 MPFX backend: target-specific instructions.
 """
 
-from ...number import RM, RealContext, Context, INTEGER, FP64
+from ...number import RM, Context, REAL, INTEGER, FP64
 from .format import AbstractFormat, SupportedContext
 
 __all__ = [
@@ -87,7 +87,7 @@ class AddInstr:
         if _fits_in_double(lhs_ty) and _fits_in_double(rhs_ty) and _rto_is_valid(ctx):
             # use the FP-RTO backed implementation
             return lambda lhs, rhs, ctx: f'mpfx::add({lhs}, {rhs}, {ctx})'
-        elif _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty) and isinstance(ctx, RealContext):
+        elif _fits_in_integer(lhs_ty) and _fits_in_integer(rhs_ty) and ctx is REAL:
             # use integer addition for real addition under INTEGER context
             return lambda lhs, rhs, ctx: f'({lhs} + {rhs})'
 

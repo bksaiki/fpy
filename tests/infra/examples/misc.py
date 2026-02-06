@@ -8,7 +8,7 @@ import fpy2 as fp
 
 @fp.fpy
 def fma_ctx(x: fp.Real, y: fp.Real, z: fp.Real) -> fp.Real:
-    with fp.RealContext():
+    with fp.REAL:
         prod = x * y
     return prod + z
 

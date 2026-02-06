@@ -29,7 +29,6 @@ from ..number import (
     MPBFloatContext,
     MPSFloatContext,
     IEEEContext,
-    RealContext,
     SMFixedContext,
     # rounding utilities
     RoundingMode,

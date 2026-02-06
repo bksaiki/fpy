@@ -15,7 +15,7 @@ from .mp_float import MPFloatContext
 from .mpb_fixed import MPBFixedContext
 from .mpb_float import MPBFloatContext
 from .mps_float import MPSFloatContext
-from .real import RealContext
+from .real import REAL
 from .sm_fixed import SMFixedContext
 
 # Rounding
@@ -302,10 +302,4 @@ Alias for an unsigned 64-bit integer context with
 round towards zero rounding mode and wrapping overflow behavior.
 
 Rounding infinity or NaN under this context produces an OverflowError.
-"""
-
-REAL = RealContext()
-"""
-Alias for exact computation.
-Operations are never rounded under this context.
 """
