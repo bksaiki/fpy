@@ -87,13 +87,6 @@ Fixed-Point Contexts
    :members:
    :show-inheritance:
 
-Real Context
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. autoclass:: fpy2.RealContext
-   :members:
-   :show-inheritance:
-
 Common Rounding Contexts
 --------------------------
 .. manually documented: keep in sync with `fpy2/number/__init__.py`
