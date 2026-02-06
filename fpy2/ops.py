@@ -3,9 +3,10 @@ Mathematical functions under rounding contexts.
 """
 
 from fractions import Fraction
+from unittest import case
 
 from .number.engine import ENGINES
-from .number import Context, Float, RealContext, Real, REAL
+from .number import Context, Float, Real, REAL
 
 from .utils import (
     UNINIT,
@@ -130,7 +131,7 @@ def _cvt_to_float(x: Real) -> Float:
             raise TypeError(f'Expected \'Float\' or \'Fraction\', got \'{type(t)}\' for x={x}')
 
 def _normalize(x: Float | Fraction, ctx: Context):
-    if isinstance(ctx, RealContext) and isinstance(x, Fraction):
+    if ctx is REAL and isinstance(x, Fraction):
         return x
     else:
         return ctx.round(x)
@@ -738,15 +739,14 @@ def tgamma(x: Real, ctx: Context = REAL):
 def _round(x: Real, ctx: Context | None, exact: bool):
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    match ctx:
-        case None | RealContext():
-            # real computation; no rounding
-            if isinstance(x, Fraction):
-                return x  # exact rational number
-            else:
-                return REAL.round(x)
-        case _:
-            return ctx.round(x, exact=exact)
+    if ctx is None or ctx is REAL:
+        # real computation; no rounding
+        if isinstance(x, Fraction):
+            return x  # exact rational number
+        else:
+            return REAL.round(x)
+    else:
+        return ctx.round(x, exact=exact)
 
 def round(x: Real, ctx: Context = REAL):
     """
@@ -774,11 +774,10 @@ def round_at(x: Real, n: Real, ctx: Context = REAL) -> Float:
     n = _cvt_to_float(n)
     if not n.is_integer():
         raise ValueError(f'n={n} must be an integer')
-    match ctx:
-        case None | RealContext():
-            raise ValueError(f'round_at() not supported for ctx={ctx}')
-        case _:
-            return ctx.round_at(x, int(n))
+    if ctx is None or ctx is REAL:
+        raise ValueError(f'round_at() not supported for ctx={ctx}')
+    else:
+        return ctx.round_at(x, int(n))
 
 def cast(x: Real, ctx: Context = REAL):
     """
@@ -787,14 +786,13 @@ def cast(x: Real, ctx: Context = REAL):
     Returns `x` if it can be represented in `ctx`, otherwise raises an error.
     This is useful for asserting that a value fits within a specific rounding context.
     """
-    match ctx:
-        case None | RealContext():
-            # real computation; always representable
-            return x
-        case _:
-            # Check if x can be exactly represented in ctx
-            rounded = ctx.round(x, exact=True)
-            return rounded
+    if ctx is None or ctx is REAL:
+        # real computation; always representable
+        return x
+    else:
+        # Check if x can be exactly represented in ctx
+        rounded = ctx.round(x, exact=True)
+        return rounded
 
 #############################################################################
 # Round-to-integer operations
@@ -863,11 +861,10 @@ def nearbyint(x: Real, ctx: Context = REAL):
     """
     if ctx is not None and not isinstance(ctx, Context):
         raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for x={ctx}')
-    match ctx:
-        case None | RealContext():
-            raise RuntimeError('nearbyint() not supported in RealContext')
-        case _:
-            return ctx.round_integer(x)
+    if ctx is None or ctx is REAL:
+        raise RuntimeError('nearbyint() not supported in RealContext')
+    else:
+        return ctx.round_integer(x)
 
 def roundint(x: Real, ctx: Context = REAL):
     """
@@ -987,40 +984,35 @@ def digits(m: int, e: int, b: int, ctx: Context = REAL) -> Float:
 
     The result is rounded under the given context.
     """
-    match ctx:
-        case None | RealContext():
-            # real computation; no rounding
-            x = digits_to_fraction(m, e, b)
-            if not is_dyadic(x):
-                raise ValueError(f'cannot evaluate exactly: digits(m={m}, e={e}, b={b})')
-            m = x.numerator
-            exp = 1 - x.denominator.bit_length()
-            return Float(m=m, exp=exp)
-        case Context():
-            x = digits_to_fraction(m, e, b)
-            return ctx.round(x)
-        case _:
-            raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
+    if ctx is None or ctx is REAL:
+        # real computation; no rounding
+        x = digits_to_fraction(m, e, b)
+        if not is_dyadic(x):
+            raise ValueError(f'cannot evaluate exactly: digits(m={m}, e={e}, b={b})')
+        m = x.numerator
+        exp = 1 - x.denominator.bit_length()
+        return Float(m=m, exp=exp)
+    else:
+        x = digits_to_fraction(m, e, b)
+        return ctx.round(x)
+    
 
 def hexfloat(s: str, ctx: Context = REAL) -> Float:
     """
     Creates a `Float` from a hexadecimal floating-point string `s`.
     The result is rounded under the given context.
     """
-    match ctx:
-        case None | RealContext():
-            # real computation; no rounding
-            x = hexnum_to_fraction(s)
-            if not is_dyadic(x):
-                raise ValueError(f'cannot evaluate exactly: hexfloat(s={s})')
-            m = x.numerator
-            exp = 1 - x.denominator.bit_length()
-            return Float(m=m, exp=exp)
-        case Context():
-            x = hexnum_to_fraction(s)
-            return ctx.round(x)
-        case _:
-            raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
+    if ctx is None or ctx is REAL:
+        # real computation; no rounding
+        x = hexnum_to_fraction(s)
+        if not is_dyadic(x):
+            raise ValueError(f'cannot evaluate exactly: hexfloat(s={s})')
+        m = x.numerator
+        exp = 1 - x.denominator.bit_length()
+        return Float(m=m, exp=exp)
+    else:
+        x = hexnum_to_fraction(s)
+        return ctx.round(x)
 
 def rational(n: int, d: int, ctx: Context = REAL) -> Float:
     """
@@ -1030,20 +1022,17 @@ def rational(n: int, d: int, ctx: Context = REAL) -> Float:
     if d == 0:
         return Float(isnan=True, ctx=ctx)
 
-    match ctx:
-        case None | RealContext():
-            # real computation; no rounding
-            x = Fraction(n, d)
-            if not is_dyadic(x):
-                raise ValueError(f'cannot evaluate exactly: fraction(n={n}, d={d})')
-            m = x.numerator
-            exp = 1 - x.denominator.bit_length()
-            return Float(m=m, exp=exp)
-        case Context():
-            x = Fraction(n, d)
-            return ctx.round(x)
-        case _:
-            raise TypeError(f'Expected \'Context\' or \'None\', got \'{type(ctx)}\' for ctx={ctx}')
+    if ctx is None or ctx is REAL:
+        # real computation; no rounding
+        x = Fraction(n, d)
+        if not is_dyadic(x):
+            raise ValueError(f'cannot evaluate exactly: rational(n={n}, d={d})')
+        m = x.numerator
+        exp = 1 - x.denominator.bit_length()
+        return Float(m=m, exp=exp)
+    else:
+        x = Fraction(n, d)
+        return ctx.round(x)
 
 def nan(ctx: Context = REAL) -> Float:
     """

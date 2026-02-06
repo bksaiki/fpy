@@ -9,10 +9,9 @@ from .number import (
     FixedContext,
     IEEEContext,
     MPFixedContext,
-    RealContext,
     RM, OV,
     FP128, FP64, FP32, FP16,
-    INTEGER
+    REAL, INTEGER
 )
 
 __all__ = [
@@ -169,7 +168,7 @@ class FPCoreContext:
                 rm = _round_mode_from_fpc(ctx.rm)
                 of = _overflow_mode_from_fpc(ctx.overflow)
                 return FPCoreContext(precision=['fixed', ctx.nbits, ctx.scale], round=rm, overflow=of)
-            case RealContext():
+            case _ if ctx is REAL:
                 return FPCoreContext(precision='real')
             case _:
                 raise RuntimeError(f'Cannot convert to an FPCore context {type(ctx)}')
@@ -206,7 +205,7 @@ class FPCoreContext:
                     return INTEGER.with_params(rm=_round_mode_to_fpy(rnd))
                 # real context
                 case 'real':
-                    return RealContext()
+                    return REAL
                 case _:
                     raise NoSuchContextError(self)
         except ValueError:

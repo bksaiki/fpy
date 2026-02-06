@@ -7,6 +7,10 @@ from ...utils import default_repr
 
 from .context import Context
 
+__all__ = [
+    'REAL'
+]
+
 #####################################################################
 # Real rounding context
 
@@ -66,3 +70,9 @@ class RealContext(Context):
     def round_at(self, x, n: int, *, exact: bool = False):
         raise RuntimeError('cannot round at a specific position in real context')
 
+
+REAL = RealContext()
+"""
+Alias for exact computation.
+Operations are never rounded under this context.
+"""

@@ -17,7 +17,6 @@ from .context import (
     MPBFixedContext,
     MPBFloatContext,
     MPSFloatContext,
-    RealContext,
     SMFixedContext,
     # context instances
     FP256, FP128, FP64, FP32, FP16,
@@ -27,7 +26,7 @@ from .context import (
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
     SINT8, SINT16, SINT32, SINT64,
     UINT8, UINT16, UINT32, UINT64,
-    INTEGER, REAL,
+    INTEGER, REAL
 )
 
 # Rounding
