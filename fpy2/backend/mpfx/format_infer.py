@@ -499,9 +499,10 @@ class _FormatInfernce(Visitor):
         # visit the body
         self._visit_block(stmt.body, ctx)
 
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+        # TODO: handle loops
+        # for phi in self.def_use.phis[stmt]:
+        #     lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+        #     rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
 
         return ctx
 
@@ -539,7 +540,7 @@ class _FormatInfernce(Visitor):
 
     def _visit_expr(self, expr: Expr, ctx: Context) -> FormatType:
         ty = super()._visit_expr(expr, ctx)
-        print(expr.format(), '::', ty)
+        # print(expr.format(), '::', ty)
         self.by_expr[expr] = ty
         return ty
 

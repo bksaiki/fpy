@@ -94,7 +94,7 @@ def _compile_context(ctx: Context, func: FuncDef | None = None) -> str:
                 _emit_error(f'IEEE 754: overflow mode {ctx.overflow} cannot be compiled', func)
             # no random
             if ctx.num_randbits != 0:
-                _emit_error(f'IEEE 754: random bits cannot be compiled', func)
+                _emit_error('IEEE 754: stochastic rounding is unsupported', func)
 
             # compile rounding
             rm = _compile_rm(ctx.rm, func)

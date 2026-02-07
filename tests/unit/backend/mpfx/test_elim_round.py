@@ -14,7 +14,7 @@ def _example_round_1(x: fp.Real) -> fp.Real:
 @fp.fpy(ctx=fp.REAL)
 def _example_round_1_expect(x: fp.Real) -> fp.Real:
     with fp.MX_E5M2:
-        return x
+        return fp.cast(x)
 
 @fp.fpy(ctx=fp.REAL)
 def _example_add_1(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -26,7 +26,7 @@ def _example_add_1_expect(x: fp.Real, y: fp.Real) -> fp.Real:
     with fp.FP32:
         with fp.REAL:
             t = x + y
-        return t
+        return fp.cast(t)
 
 @fp.fpy(ctx=fp.REAL)
 def _example_mul_1(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -38,7 +38,7 @@ def _example_mul_1_expect(x: fp.Real, y: fp.Real) -> fp.Real:
     with fp.FP32:
         with fp.REAL:
             t = x * y
-        return t
+        return fp.cast(t)
 
 
 class TestElimRound(unittest.TestCase):
@@ -60,7 +60,7 @@ class TestElimRound(unittest.TestCase):
         ast = _example_add_1.ast
         expect_ast = _example_add_1_expect.ast
 
-        arg_types = [fp.types.RealType(fp.MX_E5M2), fp.types.RealType(fp.MX_E5M2)]
+        arg_types = [fp.types.RealType(fp.MX_E4M3), fp.types.RealType(fp.MX_E4M3)]
         ast = fp.transform.Monomorphize.apply_by_arg(ast, None, arg_types)
         expect_ast = fp.transform.Monomorphize.apply_by_arg(expect_ast, None, arg_types)
 
@@ -73,7 +73,7 @@ class TestElimRound(unittest.TestCase):
         ast = _example_mul_1.ast
         expect_ast = _example_mul_1_expect.ast
 
-        arg_types = [fp.types.RealType(fp.FP32), fp.types.RealType(fp.FP32)]
+        arg_types = [fp.types.RealType(fp.FP16), fp.types.RealType(fp.FP16)]
         ast = fp.transform.Monomorphize.apply_by_arg(ast, None, arg_types)
         expect_ast = fp.transform.Monomorphize.apply_by_arg(expect_ast, None, arg_types)
 
