@@ -819,6 +819,9 @@ class _MPFXBackendInstance(Visitor):
         if isinstance(stmt.ctx, Var):
             # context variable: must be bound already
             ctx_name: str | None = str(stmt.ctx.name)
+        elif isinstance(stmt.ctx, DeclContext):
+            # don't bind it and hope it compiles
+            ctx_name = None
         else:
             # context must be statically known
             ctx_val = self.eval_info.by_expr[stmt.ctx]

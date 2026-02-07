@@ -77,6 +77,7 @@ __all__ = [
     # Numerical data
     'signbit',
     'logb',
+    'declcontext',
     # Tensor
     'empty',
     'dim',
@@ -137,6 +138,16 @@ def _normalize(x: Float | Fraction, ctx: Context):
         return x
     else:
         return ctx.round(x)
+
+def _flatten(x: list) -> list:
+    """Flattens a nested list of scalars into a flat list."""
+    result = []
+    for item in x:
+        if isinstance(item, list):
+            result.extend(_flatten(item))
+        else:
+            result.append(item)
+    return result
 
 ################################################################################
 # General operations
@@ -943,6 +954,18 @@ def logb(x: Real, ctx: Context = REAL) -> Float:
         return ctx.round(float('nan'))
     else:
         return ctx.round(x.e)
+
+def declcontext(x: Real, ctx: Context = REAL) -> Context:
+    """
+    Returns the context that `x` was rounded under.
+    """
+    if isinstance(x, Fraction):
+        return REAL
+    elif isinstance(x, Float):
+        x = _cvt_to_float(x)
+        return REAL if x.ctx is None else x.ctx
+    else:
+        raise TypeError(f'Expected a list, Float, or Fraction, got {type(x)} for x={x}')
 
 #############################################################################
 # Tensor

@@ -136,6 +136,8 @@ _test_ignore = [
     'test_assert3',
     # not monomorphic
     'test_meta_inner',
+    # unsupported operations
+    'test_declcontext',
 ]
 
 _example_ignore = [

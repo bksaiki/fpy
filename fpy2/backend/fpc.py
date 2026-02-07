@@ -976,6 +976,7 @@ class _FPCoreCompileInstance(Visitor):
         # extract a context value
         match stmt.ctx:
             case ForeignVal():
+                # foreign values are pre-computed, so we can extract the value directly
                 val = stmt.ctx.val
             case _:
                 raise FPCoreCompileError('Context expressions must be pre-computed', stmt.ctx)

@@ -14,6 +14,7 @@ _ignore = [
 
     # unsupported operation
     'test_logb',
+    'test_declcontext',
 
     # unsupported type
     'dpN',
