@@ -158,6 +158,7 @@ __all__ = [
     # Numerical data
     'Signbit',
     'Logb',
+    'DeclContext',
 
     # Logical operators
     'Not',
@@ -1062,6 +1063,10 @@ class Signbit(NamedUnaryOp):
 
 class Logb(NamedUnaryOp):
     """FPy node: extracts the (normalized) exponent of a number."""
+    __slots__ = ()
+
+class DeclContext(NamedUnaryOp):
+    """FPy node: extracts the rounding context of a number."""
     __slots__ = ()
 
 # Logical operators

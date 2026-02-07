@@ -95,7 +95,8 @@ _UNARY_TABLE: dict[type[UnaryOp], Callable[..., Any]] = {
     Signbit: ops.signbit,
     RoundExact: ops.round_exact,
     Cast: ops.cast,
-    Logb: ops.logb
+    Logb: ops.logb,
+    DeclContext: ops.declcontext
 }
 
 _BINARY_TABLE: dict[type[BinaryOp], Callable[..., Any]] = {

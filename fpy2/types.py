@@ -170,7 +170,7 @@ class RealType(Type):
 
     ctx: ContextParam | None
 
-    def __init__(self, ctx: ContextParam | None):
+    def __init__(self, ctx: ContextParam | None = None):
         self.ctx = ctx
 
     def __eq__(self, other):
