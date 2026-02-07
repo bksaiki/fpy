@@ -75,7 +75,8 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     empty: Empty,
     dim: Dim,
     enumerate: Enumerate,
-    sum: Sum
+    sum: Sum,
+    logb: Logb,
 }
 
 _binary_table: dict[Callable, type[BinaryOp] | type[NamedBinaryOp]] = {

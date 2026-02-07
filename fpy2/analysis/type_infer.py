@@ -81,6 +81,7 @@ _unary_table: dict[type[UnaryOp], FunctionType] = {
     Round: _Real1ary,
     RoundExact: _Real1ary,
     Cast: _Real1ary,
+    Logb: _Real1ary
 }
 
 _binary_table: dict[type[BinaryOp], FunctionType] = {

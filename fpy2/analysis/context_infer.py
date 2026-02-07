@@ -358,6 +358,7 @@ class ContextTypeInferInstance(Visitor):
                 #   Γ |- real : T         Γ |- bool : T
                 # ----------------      ------------------
                 #  C, Γ |- e : real C    C, Γ |- e : bool
+                print(e.format(), self._lookup_ty(e))
                 return self._from_scalar(self._lookup_ty(e), ctx)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: ContextParam):
@@ -719,6 +720,7 @@ class ContextTypeInferInstance(Visitor):
 
     def _visit_expr(self, expr: Expr, ctx: ContextParam) -> Type:
         ty = super()._visit_expr(expr, ctx)
+        print(expr.format(), ':', ty)
         self.by_expr[expr] = ty
         self.at_expr[expr] = ctx
         return ty
