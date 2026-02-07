@@ -11,7 +11,8 @@ from ...analysis import (
     PartialEval, PartialEvalInfo, TypeInferError
 )
 from ...function import Function
-from ...number import EFloatContext, IEEEContext, OV, RM, FP64, INTEGER
+from ...libraries.core import ldexp
+from ...number import EFloatContext, IEEEContext, ExpContext, OV, RM, FP64, INTEGER
 from ...transform import DeadCodeEliminate, Monomorphize
 from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListType, Type
 from ...utils import Gensym
@@ -102,6 +103,14 @@ def _compile_context(ctx: Context, func: FuncDef | None = None) -> str:
             # TODO: saturation, special values
             p = ctx.pmax
             n = ctx.nmin
+            b = float(ctx.maxval())
+            # compile rounding mode
+            rm = _compile_rm(ctx.rm, func)
+            return f'mpfx::Context({p}, {n}, {b}, {rm})'
+        case ExpContext():
+            # we include 0 within the representation
+            p = 1
+            n = ctx.minval().n
             b = float(ctx.maxval())
             # compile rounding mode
             rm = _compile_rm(ctx.rm, func)
@@ -303,6 +312,18 @@ class _MPFXBackendInstance(Visitor):
                 return self._visit_len(e, ctx)
             case Empty():
                 return self._visit_empty(e, ctx)
+            case Not():
+                arg_str = self._visit_expr(e.arg, ctx)
+                return f'!({arg_str})'
+            case IsNan():
+                arg_str = self._visit_expr(e.arg, ctx)
+                return f'std::isnan({arg_str})'
+            case IsInf():
+                arg_str = self._visit_expr(e.arg, ctx)
+                return f'std::isinf({arg_str})'
+            case Logb():
+                arg_str = self._visit_expr(e.arg, ctx)
+                return f'std::logb({arg_str})'
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported unary operation to compile: {e}')
 
@@ -380,7 +401,7 @@ class _MPFXBackendInstance(Visitor):
         ctx.add_line('}')
 
         return t
-    
+
     def _visit_minmax(self, e: Min | Max, ctx: CompileCtx):
         op_str = 'std::min' if isinstance(e, Min) else 'std::max'
         arg_str = self._visit_expr(e.args[0], ctx)
@@ -389,12 +410,22 @@ class _MPFXBackendInstance(Visitor):
             arg_str = f'{op_str}({arg_str}, {next_arg_str})'
         return arg_str
 
+    def _visit_or_and(self, e: Or | And, ctx: CompileCtx):
+        op_str = '||' if isinstance(e, Or) else '&&'
+        arg_str = self._visit_expr(e.args[0], ctx)
+        for next_arg in e.args[1:]:
+            next_arg_str = self._visit_expr(next_arg, ctx)
+            arg_str = f'({arg_str} {op_str} {next_arg_str})'
+        return arg_str
+
     def _visit_naryop(self, e, ctx: CompileCtx):
         match e:
             case Zip():
                 return self._visit_zip(e, ctx)
             case Min() | Max():
                 return self._visit_minmax(e, ctx)
+            case Or() | And():
+                return self._visit_or_and(e, ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported nary operation to compile: {e}')
 
@@ -427,14 +458,21 @@ class _MPFXBackendInstance(Visitor):
         cpp_ty = self._compile_type(e_ty).to_cpp()
         return f'{cpp_ty}({size_str})'
 
-    def _visit_call(self, e, ctx):
-        if e not in self.eval_info.by_expr:
-            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
-        val = self.eval_info.by_expr[e]
-        if isinstance(val, Context):
-            return self._compile_context(val)
-        else:
-            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
+    def _visit_call(self, e: Call, ctx: CompileCtx):
+        if e in self.eval_info.by_expr:
+            val = self.eval_info.by_expr[e]
+            if isinstance(val, Context):
+                # special case: context construction
+                return self._compile_context(val)
+
+        if e.fn is ldexp:
+            assert len(e.args) == 2
+            lhs_str = self._visit_expr(e.args[0], ctx)
+            rhs_str = self._visit_expr(e.args[1], ctx)
+            return f'std::ldexp({lhs_str}, {rhs_str})'
+
+        raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
+
 
     def _visit_compare2(self, op: CompareOp, lhs: str, rhs: str) -> str:
         return f'{lhs} {op.symbol()} {rhs}'
@@ -780,14 +818,14 @@ class _MPFXBackendInstance(Visitor):
     def _visit_context(self, stmt: ContextStmt, ctx: CompileCtx):
         if isinstance(stmt.ctx, Var):
             # context variable: must be bound already
-            ctx_name = str(stmt.ctx.name)
+            ctx_name: str | None = str(stmt.ctx.name)
         else:
             # context must be statically known
             ctx_val = self.eval_info.by_expr[stmt.ctx]
 
             # bind it if we can compile it
-            if isinstance(ctx_val, SupportedContext):
-                ctx_name: str | None = self._fresh_var()
+            if isinstance(ctx_val, SupportedContext) and ctx is not INTEGER:
+                ctx_name = self._fresh_var()
                 ctx_str = self._compile_context(ctx_val)
                 ctx.add_line(f'auto {ctx_name} = {ctx_str};')
             else:

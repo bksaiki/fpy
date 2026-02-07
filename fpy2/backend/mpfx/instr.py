@@ -345,5 +345,4 @@ class InstrGenerator:
             # sum with a loop
             raise NotImplementedError()
 
-        self.raise_error(f'cannot compile `sum({arr_str})`: sum(list[{elt_ty}]) under context {rctx}'
-    )
+        self.raise_error(f'cannot compile `sum({arr_str})`: list[{elt_ty}] -> {e_ty} under context {rctx}')

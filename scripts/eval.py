@@ -16,6 +16,7 @@ EXAMPLES: list[ExampleType] = [
     (pre_round_mul, (fp.FP32, fp.FP32)),
     (dot_prod_1, (fp.FP32, fp.FP32, fp.FP32)),
     (dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32)),
+    (dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32)),
     (mx_dot_prod, (fp.MX_E8M0, fp.MX_E8M0, fp.MX_E5M2, fp.MX_E5M2))
 ]
 

@@ -296,7 +296,7 @@ class _FormatInfernce(Visitor):
                 # enumerate => list[tuple(INTEGER, A)]
                 return ListFormatType(TupleFormatType((AbstractFormat.from_context(INTEGER), a_ty)))
 
-            case Round() | Cast() | Neg():
+            case Round() | Cast() | Neg() | Logb():
                 if isinstance(a_ty, AbstractFormat):
                     # possible optimization: if A is an abstract format,
                     # then the "minimal" format can be computed directly
@@ -305,6 +305,8 @@ class _FormatInfernce(Visitor):
                             m_ty = a_ty
                         case Neg():
                             m_ty = -a_ty
+                        case Logb():
+                            m_ty = AbstractFormat.from_context(INTEGER) # logb => INTEGER
 
                     assert isinstance(e_ty, AbstractFormat | RealType)
                     e_ty = self._record_preround(e, m_ty, e_ty)
@@ -382,11 +384,7 @@ class _FormatInfernce(Visitor):
         for _, kwarg in e.kwargs:
             self._visit_expr(kwarg, ctx)
 
-        val = self.eval_info.by_expr[e]
-        if isinstance(val, Context):
-            return ContextType()
-        else:
-            raise NotImplementedError(e)
+        return self._expr_type(e) # get the expected type
 
     def _visit_compare(self, e: Compare, ctx: Context):
         for arg in e.args:
@@ -543,7 +541,7 @@ class _FormatInfernce(Visitor):
 
     def _visit_expr(self, expr: Expr, ctx: Context) -> FormatType:
         ty = super()._visit_expr(expr, ctx)
-        # print(expr.format(), '::', ty)
+        print(expr.format(), '::', ty)
         self.by_expr[expr] = ty
         return ty
 
