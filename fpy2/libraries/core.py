@@ -149,9 +149,11 @@ def _logb_spec(x: fp.Real):
     """
     return fp.floor(fp.log2(abs(x)))
 
-@fp.fpy_primitive(ctx='R', ret_ctx='R', spec=_logb_spec)
-def logb(x: fp.Float, ctx: fp.Context) -> fp.Float:
+@fp.fpy(spec=_logb_spec)
+def logb(x: fp.Real) -> fp.Real:
     """
+    DEPRECATED: use `fp.logb` instead.
+
     Returns the normalized exponent of `x`.
 
     Special cases:
@@ -159,14 +161,7 @@ def logb(x: fp.Float, ctx: fp.Context) -> fp.Float:
     - If `x` is NaN, the result is NaN.
     - If `x` is infinite, the result is `INFINITY`.
     """
-    if x.isnan:
-        return ctx.round(fp.Float.nan())
-    elif x.isinf:
-        return ctx.round(fp.Float.inf())
-    elif x.is_zero():
-        return ctx.round(fp.Float.inf(True))
-    else:
-        return ctx.round(x.e)
+    return fp.logb(x)
 
 @fp.fpy
 def _ldexp_spec(x: fp.Real, n: fp.Real) -> fp.Real:
@@ -221,15 +216,15 @@ def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
     Returns the largest exponent and whether any such element exists.
     If all elements are zero, infinite, or NaN, the exponent is `0`.
     """
-    largest_e = 0
-    any_non_zero = False
+    largest_e = fp.round(0)
+    any_non_zero: bool = False
     for x in xs:
         if fp.isfinite(x) and x != 0:
             if any_non_zero:
-                largest_e = max(largest_e, logb(x))
+                largest_e = max(largest_e, fp.logb(x))
             else:
                 # First non-zero finite element found
-                largest_e = logb(x)
+                largest_e = fp.logb(x)
                 any_non_zero = True
 
     return (largest_e, any_non_zero)

@@ -1,8 +1,10 @@
 import fpy2 as fp
 
+from . import unit
+from . import ops
+
 from . import lod
 from . import misc
-from . import unit
 
 __all__ = [
     'all_unit_tests',
@@ -21,6 +23,9 @@ _example_tests: list[fp.Function] = []
 def _load_tests():
     global _unit_tests
     for v in unit.__dict__.values():
+        if isinstance(v, fp.Function):
+            _unit_tests.append(v)
+    for v in ops.__dict__.values():
         if isinstance(v, fp.Function):
             _unit_tests.append(v)
 

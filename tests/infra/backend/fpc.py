@@ -12,6 +12,9 @@ _ignore = [
     'test_mod1',
     'test_augassign5',
 
+    # unsupported operation
+    'test_logb',
+
     # unsupported type
     'dpN',
 

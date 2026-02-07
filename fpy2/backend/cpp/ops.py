@@ -26,6 +26,16 @@ class UnaryCppOp:
         return f'{self.name}({arg})'
 
 
+class CastS64Op(UnaryCppOp):
+    """`std::ilogb` returns `int`, so we need to cast it to `int64_t`."""
+
+    def __init__(self, name: str, arg_ty: CppType, ret_ty: CppType):
+        super().__init__(name, arg_ty, ret_ty)
+
+    def format(self, arg: str) -> str:
+        return f'static_cast<int64_t>({self.name}({arg}))'
+
+
 @dataclasses.dataclass
 class BinaryCppOp:
     name: str
@@ -233,9 +243,17 @@ def _make_unary_table() -> UnaryOpTable:
             UnaryCppOp('std::isnormal', CppScalar.F64, CppScalar.BOOL),
             UnaryCppOp('std::isnormal', CppScalar.F32, CppScalar.BOOL),
         ],
+
+        # Numerical data
         Signbit: [
             UnaryCppOp('std::signbit', CppScalar.F64, CppScalar.BOOL),
             UnaryCppOp('std::signbit', CppScalar.F32, CppScalar.BOOL),
+        ],
+        Logb: [
+            UnaryCppOp('std::logb', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::logb', CppScalar.F32, CppScalar.F32),
+            CastS64Op('std::ilogb', CppScalar.F64, CppScalar.S64), # technically returns `int`
+            CastS64Op('std::ilogb', CppScalar.F32, CppScalar.S64), # technically returns `int`
         ],
 
         # Rounding operations
@@ -337,25 +355,8 @@ def _make_ternary_table() -> TernaryOpTable:
         ],
     }
 
-
-class IlogbOp(UnaryCppOp):
-    """`std::ilogb` returns `int`, so we need to cast it to `int64_t`."""
-
-    def __init__(self, arg_ty: CppType, ret_ty: CppType):
-        super().__init__('std::ilogb', arg_ty, ret_ty)
-
-    def format(self, arg: str) -> str:
-        return f'static_cast<int64_t>(std::ilogb({arg}))'
-
 def _make_primitive_table() -> PrimitiveTable:
-    return {
-        logb: [
-            UnaryCppOp('std::logb', CppScalar.F64, CppScalar.F64),
-            UnaryCppOp('std::logb', CppScalar.F32, CppScalar.F32),
-            IlogbOp(CppScalar.F64, CppScalar.S64), # technically returns `int`
-            IlogbOp(CppScalar.F32, CppScalar.S64),
-        ]
-    }
+    return {}
 
 def make_op_table() -> ScalarOpTable:
     return ScalarOpTable(

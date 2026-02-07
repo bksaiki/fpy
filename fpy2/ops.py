@@ -74,7 +74,9 @@ __all__ = [
     'isinf',
     'isfinite',
     'isnormal',
+    # Numerical data
     'signbit',
+    'logb',
     # Tensor
     'empty',
     'dim',
@@ -908,14 +910,39 @@ def isnormal(x: Real, ctx: Context = REAL) -> bool:
     x = _cvt_to_real(x)
     return isinstance(x, Fraction) or x.is_normal()
 
+#############################################################################
+# Numerical data
+
 def signbit(x: Real, ctx: Context = REAL) -> bool:
     """Checks if the sign bit of `x` is set (i.e., `x` is negative)."""
     # TODO: should all Floats have this property?
-    x = _cvt_to_float(x)
     if isinstance(x, Fraction):
         return x < 0
     else:
-        return x.s
+        return _cvt_to_float(x).s
+
+def logb(x: Real, ctx: Context = REAL) -> Float:
+    """
+    Extracts the (normalized) exponent of `x`, rounded under `ctx`.
+
+    - If the argument is 0, returns -∞.
+    - If the argument is +/-∞, returns +∞.
+    - If the argument is NaN, returns NaN.
+    - If the argument is `(-1) * (1 + f) * b^e`, returns `e`.
+
+    For non-zero arguments, `logb(x) = floor(log_{b}(abs(x)))`, where
+    `b` is the base of the floating-point representation
+    """
+    # TODO: compute `logb` for a non-dyadic fraction
+    x = _cvt_to_float(x)
+    if x.is_zero():
+        return ctx.round(float('-inf'))
+    elif x.isinf:
+        return ctx.round(float('+inf'))
+    elif x.isnan:
+        return ctx.round(float('nan'))
+    else:
+        return ctx.round(x.e)
 
 #############################################################################
 # Tensor

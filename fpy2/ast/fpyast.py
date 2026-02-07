@@ -154,7 +154,10 @@ __all__ = [
     'IsInf',
     'IsNan',
     'IsNormal',
+
+    # Numerical data
     'Signbit',
+    'Logb',
 
     # Logical operators
     'Not',
@@ -1051,8 +1054,14 @@ class IsNormal(NamedUnaryOp):
     """FPy node: is the value normal?"""
     __slots__ = ()
 
+# Numerical data
+
 class Signbit(NamedUnaryOp):
     """FPy node: is the signbit 1?"""
+    __slots__ = ()
+
+class Logb(NamedUnaryOp):
+    """FPy node: extracts the (normalized) exponent of a number."""
     __slots__ = ()
 
 # Logical operators
