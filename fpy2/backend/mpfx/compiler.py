@@ -323,7 +323,7 @@ class _MPFXBackendInstance(Visitor):
                 return f'std::isinf({arg_str})'
             case Logb():
                 arg_str = self._visit_expr(e.arg, ctx)
-                return f'std::logb({arg_str})'
+                return f'static_cast<int64_t>(std::logb({arg_str}))'
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported unary operation to compile: {e}')
 
@@ -859,6 +859,7 @@ class _MPFXBackendInstance(Visitor):
         # compile arguments
         arg_strs: list[str] = []
         for arg, arg_ty in zip(func.args, self.fmt_info.arg_types):
+            print(arg.name, arg_ty)
             self._check_type(arg_ty)
             ty_str = self._compile_type(arg_ty).to_cpp(is_arg=True)
             arg_strs.append(f'{ty_str} {arg.name}')

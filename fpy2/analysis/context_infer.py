@@ -151,10 +151,10 @@ class ContextTypeInferInstance(Visitor):
 
     def _unify_rvars(self, a: ContextParam, b: ContextParam) -> ContextParam:
         r = self.rvars.union(a, b)
-        for k in self.rvars:
-            v = self.rvars.find(k)
-            if isinstance(k, Context) and isinstance(v, Context) and not k.is_equiv(v):
-                raise ContextInferError(f'incompatible contexts: {k} != {v}')
+        for k in self.rvars.representatives():
+            for v in self.rvars.component(k):
+                if isinstance(k, Context) and isinstance(v, Context) and not k.is_equiv(v):
+                    raise ContextInferError(f'incompatible contexts: {k} != {v}')
         return r
 
     def _unify_contexts(self, a: ContextParam, b: ContextParam) -> ContextParam:

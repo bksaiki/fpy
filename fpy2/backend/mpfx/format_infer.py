@@ -369,12 +369,14 @@ class _FormatInfernce(Visitor):
         return self._expr_type(e) # get the expected type
 
     def _visit_naryop(self, e: NaryOp, ctx: Context):
-        e_tys = [e_ty for e_ty in (self._visit_expr(arg, ctx) for arg in e.args)]
+        arg_tys = [self._visit_expr(arg, ctx) for arg in e.args]
 
         match e:
             case Min() | Max():
-                # min/max: TODO: unify
-                return e_tys[0]
+                arg_ty = arg_tys[0]
+                for ty in arg_tys[1:]:
+                    arg_ty = self._unify(arg_ty, ty)
+                return arg_ty
 
         return self._expr_type(e) # get the expected type
 
@@ -396,16 +398,17 @@ class _FormatInfernce(Visitor):
         return TupleFormatType(elts)
 
     def _visit_list_expr(self, e: ListExpr, ctx: Context):
-        elts = [self._visit_expr(elt, ctx) for elt in e.elts]
-        # TODO: unify element types?
-        return ListFormatType(elts[0])
+        elt_tys = [self._visit_expr(elt, ctx) for elt in e.elts]
+        elt_ty = elt_tys[0]
+        for ty in elt_tys[1:]:
+            elt_ty = self._unify(elt_ty, ty)
+        return ListFormatType(elt_ty)
 
     def _visit_list_comp(self, e: ListComp, ctx: Context):
         for target, iterable in zip(e.targets, e.iterables, strict=True):
             iter_ty = self._visit_expr(iterable, ctx)
             assert isinstance(iter_ty, ListFormatType)
             self._visit_binding(e, target, iter_ty.elt)
-
         return ListFormatType(self._visit_expr(e.elt, ctx))
 
     def _visit_list_ref(self, e: ListRef, ctx: Context):
@@ -432,9 +435,8 @@ class _FormatInfernce(Visitor):
     def _visit_if_expr(self, e: IfExpr, ctx: Context):
         self._visit_expr(e.cond, ctx)
         ift_ty = self._visit_expr(e.ift, ctx)
-        _ = self._visit_expr(e.iff, ctx)
-        # TODO: unify ift_ty and iff_ty?
-        return ift_ty
+        iff_ty = self._visit_expr(e.iff, ctx)
+        return self._unify(ift_ty, iff_ty)
 
     def _visit_attribute(self, e: Attribute, ctx: Context):
         if e not in self.eval_info.by_expr:
@@ -461,9 +463,9 @@ class _FormatInfernce(Visitor):
 
         # add types to phi variables
         for phi in self.def_use.phis[stmt]:
-            # TODO: unify?
             lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            self.by_def[phi] = lhs_ty
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
 
         return ctx
 
@@ -475,10 +477,9 @@ class _FormatInfernce(Visitor):
         # unify any merged variable
         # add types to phi variables
         for phi in self.def_use.phis[stmt]:
-            # TODO: unify?
             lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            _ = self.by_def[self.def_use.defs[phi.rhs]]
-            self.by_def[phi] = lhs_ty
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
 
         return ctx
 
@@ -493,17 +494,14 @@ class _FormatInfernce(Visitor):
 
         # add types to phi variables
         for phi in self.def_use.phis[stmt]:
-            # TODO: unify?
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            self.by_def[phi] = lhs_ty
+            self.by_def[phi] = self.by_def[self.def_use.defs[phi.lhs]]
 
         # visit the body
         self._visit_block(stmt.body, ctx)
 
-        # TODO: unify?
         for phi in self.def_use.phis[stmt]:
-            _ = self.by_def[self.def_use.defs[phi.lhs]]
-            _ = self.by_def[self.def_use.defs[phi.rhs]]
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
 
         return ctx
 

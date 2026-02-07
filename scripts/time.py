@@ -12,6 +12,7 @@ from .options import CompileConfig, EvalConfig
 NAME = 'kernel'
 
 HEADER = """\
+#include <cassert>
 #include <chrono>
 #include <random>
 #include <vector>

@@ -111,15 +111,6 @@ class TestUnionfindBasic(unittest.TestCase):
         self.assertIn(uf.find(1), reps)
         self.assertIn(uf.find(3), reps)
 
-    def test_items(self):
-        """Test items method."""
-        uf = Unionfind([1, 2, 3])
-        items = dict(uf.items())
-        self.assertEqual(len(items), 3)
-        self.assertIn(1, items)
-        self.assertIn(2, items)
-        self.assertIn(3, items)
-
     def test_repr(self):
         """Test string representation."""
         uf = Unionfind([1, 2])

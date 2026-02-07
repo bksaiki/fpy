@@ -174,6 +174,39 @@ def dot_prod_arm(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     return acc
 
 @fp.fpy(ctx=fp.REAL)
+def mx_block_round(xs: list[fp.Real]):
+    SCALE_CTX = fp.MX_E8M0
+    ELT_CTX = fp.MX_E4M3
+
+    # compute the maximum exponent
+    max_e: fp.Real = 0
+    max_e_valid = False
+    for x in xs:
+        if not fp.isnan(x) and not fp.isinf(x) and x != 0:
+            if max_e_valid:
+                max_e = max(max_e, fp.logb(x))
+            else:
+                max_e = fp.logb(x)
+                max_e_valid = True
+
+    if max_e_valid:
+        # we found at least one valid exponent
+        scale_e = max_e - 8
+        with SCALE_CTX:
+            scale = fp.libraries.core.ldexp(1, scale_e)
+        with ELT_CTX:
+            elts = [elt / scale for elt in xs]
+    else:
+        # all inputs were invalid, return dummy values
+        with SCALE_CTX:
+            scale = fp.round(1)
+        with ELT_CTX:
+            elts = [fp.round(x) for x in xs]
+
+    return scale, elts
+
+
+@fp.fpy(ctx=fp.REAL)
 def mx_dot_prod(
     a_scale: fp.Real,
     b_scale: fp.Real,
