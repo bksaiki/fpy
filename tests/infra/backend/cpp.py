@@ -135,7 +135,7 @@ _test_ignore = [
     'test_assert2',
     'test_assert3',
     # not monomorphic
-    'test_meta_inner'
+    'test_meta_inner',
 ]
 
 _example_ignore = [
@@ -186,6 +186,7 @@ _modules = [
 
 _library_ignore = [
     # core
+    'logb', # deprecated
     '_modf_spec',
     'isinteger',
     '_ldexp_spec',

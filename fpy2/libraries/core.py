@@ -207,7 +207,7 @@ def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
         scale = fp.RealFloat.power_of_2(int(n))
         return ctx.round(xr * scale)
 
-@fp.fpy(ctx=fp.REAL)
+@fp.fpy(ctx=fp.INTEGER)
 def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
     """
     Computes the largest (normalized) exponent of the
@@ -216,7 +216,7 @@ def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
     Returns the largest exponent and whether any such element exists.
     If all elements are zero, infinite, or NaN, the exponent is `0`.
     """
-    largest_e: fp.Real = 0
+    largest_e = fp.round(0)
     any_non_zero: bool = False
     for x in xs:
         if fp.isfinite(x) and x != 0:
