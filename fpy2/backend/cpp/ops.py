@@ -233,9 +233,17 @@ def _make_unary_table() -> UnaryOpTable:
             UnaryCppOp('std::isnormal', CppScalar.F64, CppScalar.BOOL),
             UnaryCppOp('std::isnormal', CppScalar.F32, CppScalar.BOOL),
         ],
+
+        # Numerical data
         Signbit: [
             UnaryCppOp('std::signbit', CppScalar.F64, CppScalar.BOOL),
             UnaryCppOp('std::signbit', CppScalar.F32, CppScalar.BOOL),
+        ],
+        Logb: [
+            UnaryCppOp('std::logb', CppScalar.F64, CppScalar.F64),
+            UnaryCppOp('std::logb', CppScalar.F32, CppScalar.F32),
+            UnaryCppOp('std::ilogb', CppScalar.F64, CppScalar.S64), # technically returns `int`
+            UnaryCppOp('std::ilogb', CppScalar.F32, CppScalar.S64), # technically returns `int`
         ],
 
         # Rounding operations
@@ -348,14 +356,7 @@ class IlogbOp(UnaryCppOp):
         return f'static_cast<int64_t>(std::ilogb({arg}))'
 
 def _make_primitive_table() -> PrimitiveTable:
-    return {
-        logb: [
-            UnaryCppOp('std::logb', CppScalar.F64, CppScalar.F64),
-            UnaryCppOp('std::logb', CppScalar.F32, CppScalar.F32),
-            IlogbOp(CppScalar.F64, CppScalar.S64), # technically returns `int`
-            IlogbOp(CppScalar.F32, CppScalar.S64),
-        ]
-    }
+    return {}
 
 def make_op_table() -> ScalarOpTable:
     return ScalarOpTable(
