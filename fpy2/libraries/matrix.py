@@ -37,7 +37,7 @@ def identity(n: int) -> list[list[fp.Real]]:
     """
     result = zeros(n, n)
     for i in range(n):
-        result[i][i] = 1.0
+        result[i][i] = fp.round(1)
     return result
 
 @fp.fpy

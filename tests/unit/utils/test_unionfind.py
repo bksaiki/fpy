@@ -103,22 +103,14 @@ class TestUnionfindBasic(unittest.TestCase):
         self.assertNotIn(4, uf)
 
     def test_iter(self):
-        """Test iteration over representatives."""
+        """Test iteration over elements."""
         uf = Unionfind([1, 2, 3])
         uf.union(1, 2)
         reps = list(uf)
-        self.assertEqual(len(reps), 2)
+        self.assertEqual(len(reps), 3)
         self.assertIn(uf.find(1), reps)
+        self.assertIn(uf.find(2), reps)
         self.assertIn(uf.find(3), reps)
-
-    def test_items(self):
-        """Test items method."""
-        uf = Unionfind([1, 2, 3])
-        items = dict(uf.items())
-        self.assertEqual(len(items), 3)
-        self.assertIn(1, items)
-        self.assertIn(2, items)
-        self.assertIn(3, items)
 
     def test_repr(self):
         """Test string representation."""

@@ -3,13 +3,14 @@ Dead code elimination.
 
 TODO:
 - rewrite `if True: ... else: ...` to just the `if` body
+- eliminate unused context statement
 """
 
 from typing import cast
 
 from ..ast import *
 from ..analysis import (
-    DefineUse, DefineUseAnalysis, AssignDef, PhiDef,
+    DefineUse, DefineUseAnalysis, AssignDef, PhiDef, DefSite,
     Purity, SyntaxCheck
 )
 
@@ -41,9 +42,16 @@ class _Eliminator(DefaultTransformVisitor):
         return len(block.stmts) == 1 and isinstance(block.stmts[0], PassStmt)
 
     def _visit_assign(self, assign: Assign, ctx: None):
-        # remove any assignment marked for deletion
         if assign in self.unused_assign:
-            # eliminate unused assignment
+            # remove any assignment marked for deletion
+            self.eliminated = True
+            return None, ctx
+        if (
+            isinstance(assign.target, NamedId)
+            and isinstance(assign.expr, Var)
+            and assign.target == assign.expr.name
+        ):
+            # remove self-assignment
             self.eliminated = True
             return None, ctx
         else:
@@ -108,6 +116,27 @@ class _Eliminator(DefaultTransformVisitor):
             return None, ctx
         else:
             return super()._visit_while(stmt, ctx)
+
+    def _visit_context(self, stmt: ContextStmt, ctx: None):
+        # eliminate if the body is empty
+        body, _ = self._visit_block(stmt.body, ctx)
+
+        # check if the name is bound
+        if isinstance(stmt.target, NamedId):
+            d = self.def_use.find_def_from_site(stmt.target, stmt)
+            if len(self.def_use.uses[d]) == 0:
+                # context variable is never used -> so the context can be eliminated
+                if len(body.stmts) == 1 and isinstance(body.stmts[0], PassStmt):
+                    # empty body -> eliminate context statement
+                    self.eliminated = True
+                    return None, ctx
+                elif len(body.stmts) == 1 and isinstance(body.stmts[0], ContextStmt):
+                    # nested context statements -> eliminate this level
+                    self.eliminated = True
+                    return body.stmts[0], ctx
+
+        s = ContextStmt(stmt.target, stmt.ctx, body, stmt.loc)
+        return s, ctx
 
     def _visit_pass(self, stmt: PassStmt, ctx: None):
         # unnecessary pass statement
@@ -184,6 +213,7 @@ class _DeadCodeEliminate:
                             unused_fv.add(d.name)
                         elif (
                             isinstance(d.site, Assign)
+                            and isinstance(d.site.target, Id)
                             and Purity.analyze_expr(d.site.expr, self.def_use)
                         ):
                             # assignment
@@ -198,9 +228,9 @@ class _DeadCodeEliminate:
             for phi in unused_phi:
                 lhs = self.def_use.defs[phi.lhs]
                 rhs = self.def_use.defs[phi.rhs]
-                if isinstance(lhs, AssignDef) and isinstance(lhs.site, Assign):
+                if isinstance(lhs, AssignDef) and isinstance(lhs.site, Assign) and isinstance(lhs.site.target, Id):
                     unused_assign.add(lhs.site)
-                if isinstance(rhs, AssignDef) and isinstance(rhs.site, Assign):
+                if isinstance(rhs, AssignDef) and isinstance(rhs.site, Assign) and isinstance(rhs.site.target, Id):
                     unused_assign.add(rhs.site)
 
             # run code eliminator

@@ -2,7 +2,7 @@
 MPFX backend: compiler to MPFX number library.
 """
 
-from typing import Collection
+from typing import Collection, NoReturn
 
 from ...ast import *
 from ...analysis import (
@@ -11,23 +11,112 @@ from ...analysis import (
     PartialEval, PartialEvalInfo, TypeInferError
 )
 from ...function import Function
-from ...number import IEEEContext, OV, RM, FP64, INTEGER
-from ...transform import Monomorphize
-from ...types import BoolType, ContextType, RealType, VarType, Type
+from ...libraries.core import ldexp
+from ...number import EFloatContext, IEEEContext, ExpContext, OV, RM, FP64, INTEGER
+from ...transform import DeadCodeEliminate, Monomorphize
+from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListType, Type
 from ...utils import Gensym
 from ..backend import Backend
 
-from .format import AbstractFormat
+from .elim_round import ElimRound
+from .format import AbstractFormat, SupportedContext
 from .format_infer import (
     FormatAnalysis, FormatInfer, FormatInferError,
     FormatType, ListFormatType, TupleFormatType
 )
-from .instr import (
-    NegInstr, AbsInstr, SqrtInstr,
-    AddInstr, SubInstr, MulInstr, DivInstr, FMAInstr
-)
+from .instr import InstrGenerator
 from .types import *
 from .utils import MPFXCompileError, CompileCtx, CppOptions
+
+
+def _emit_error(msg, func: FuncDef | None = None) -> NoReturn:
+    if func:
+        raise MPFXCompileError(func, msg)
+    else:
+        raise RuntimeError(msg)
+
+def _compile_type(ty: FormatType, func: FuncDef | None = None) -> CppType:
+    match ty:
+        case BoolType():
+            return CppBoolType()
+        case AbstractFormat():
+            if ty <= AbstractFormat.from_context(FP64):
+                # fits within a double 
+                return CppDoubleType()
+            elif ty <= AbstractFormat.from_context(INTEGER):
+                # fits with an int64_t
+                return CppInt64Type()
+            else:
+                _emit_error(f'no container type for: {ty}', func)
+        case TupleFormatType():
+            # compile recursively
+            return CppTupleType(_compile_type(elem_ty) for elem_ty in ty.elts)
+        case ListFormatType():
+            # compile recursively
+            return CppListType(_compile_type(ty.elt))
+        case ContextType():
+            return CppContextType()
+        case _:
+            raise RuntimeError(f'Unhandled type: {ty}')
+
+def _compile_rm(rm:RM, func: FuncDef | None) -> str:
+    match rm:
+        case RM.RNE:
+            return 'mpfx::RoundingMode::RNE'
+        case RM.RNA:
+            return 'mpfx::RoundingMode::RNA'
+        case RM.RTP:
+            return 'mpfx::RoundingMode::RTP'
+        case RM.RTN:
+            return 'mpfx::RoundingMode::RTN'
+        case RM.RTZ:
+            return 'mpfx::RoundingMode::RTZ'
+        case RM.RAZ:
+            return 'mpfx::RoundingMode::RAZ'
+        case RM.RTO:
+            return 'mpfx::RoundingMode::RTO'
+        case RM.RTE:
+            return 'mpfx::RoundingMode::RTE'
+        case _:
+            _emit_error(f'Unsupported rounding mode to compile: {rm}', func)
+
+def _compile_context(ctx: Context, func: FuncDef | None = None) -> str:
+    match ctx:
+        case IEEEContext():
+            # ES <= 9
+            if ctx.es > 9:
+                _emit_error(f'IEEE 754: exponent too large to compile: {ctx.es}', func)
+            # P <= 51
+            if ctx.pmax > 51:
+                _emit_error(f'IEEE 754: precision too large to compile: {ctx.pmax}', func)
+            # overflow
+            if ctx.overflow != OV.OVERFLOW:
+                _emit_error(f'IEEE 754: overflow mode {ctx.overflow} cannot be compiled', func)
+            # no random
+            if ctx.num_randbits != 0:
+                _emit_error('IEEE 754: stochastic rounding is unsupported', func)
+
+            # compile rounding
+            rm = _compile_rm(ctx.rm, func)
+            return f'mpfx::IEEE754Context({ctx.es}, {ctx.nbits}, {rm})'
+        case EFloatContext():
+            # TODO: saturation, special values
+            p = ctx.pmax
+            n = ctx.nmin
+            b = float(ctx.maxval())
+            # compile rounding mode
+            rm = _compile_rm(ctx.rm, func)
+            return f'mpfx::Context({p}, {n}, {b}, {rm})'
+        case ExpContext():
+            # we include 0 within the representation
+            p = 1
+            n = ctx.minval().n
+            b = float(ctx.maxval())
+            # compile rounding mode
+            rm = _compile_rm(ctx.rm, func)
+            return f'mpfx::Context({p}, {n}, {b}, {rm})'
+        case _:
+            _emit_error(f'Unhandled context: {ctx}', func)
 
 
 class _MPFXBackendInstance(Visitor):
@@ -38,11 +127,12 @@ class _MPFXBackendInstance(Visitor):
     """
 
     func: FuncDef
-    name: NamedId
+    name: str
     options: CppOptions
     fmt_info: FormatAnalysis
     eval_info: PartialEvalInfo
 
+    instr_gen: InstrGenerator
     decl_phis: set[PhiDef]
     decl_assigns: set[AssignDef]
     gensym: Gensym
@@ -50,10 +140,11 @@ class _MPFXBackendInstance(Visitor):
     def __init__(
         self,
         func: FuncDef,
-        name: NamedId,
+        name: str,
         options: CppOptions,
         fmt_info: FormatAnalysis,
         eval_info: PartialEvalInfo,
+        allow_exact: bool = True,
     ):
         self.func = func
         self.name = name
@@ -61,6 +152,7 @@ class _MPFXBackendInstance(Visitor):
         self.fmt_info = fmt_info
         self.eval_info = eval_info
 
+        self.instr_gen = InstrGenerator(func, allow_exact=allow_exact)
         self.decl_phis = set()
         self.decl_assigns = set()
         self.gensym = Gensym(self.def_use.names())
@@ -94,48 +186,8 @@ class _MPFXBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'Unhandled type: {ty}')
 
-    def _compile_rm(self, rm: RM) -> str:
-        match rm:
-            case RM.RNE:
-                return 'mpfx::RoundingMode::RNE'
-            case RM.RNA:
-                return 'mpfx::RoundingMode::RNA'
-            case RM.RTP:
-                return 'mpfx::RoundingMode::RTP'
-            case RM.RTN:
-                return 'mpfx::RoundingMode::RTN'
-            case RM.RTZ:
-                return 'mpfx::RoundingMode::RTZ'
-            case RM.RAZ:
-                return 'mpfx::RoundingMode::RAZ'
-            case RM.RTO:
-                return 'mpfx::RoundingMode::RTO'
-            case RM.RTE:
-                return 'mpfx::RoundingMode::RTE'
-            case _:
-                raise MPFXCompileError(self.func, f'Unsupported rounding mode to compile: {rm}')
-
     def _compile_context(self, ctx: Context) -> str:
-        match ctx:
-            case IEEEContext():
-                # ES <= 9
-                if ctx.es > 9:
-                    raise MPFXCompileError(self.func, f'IEEE 754: exponent too large to compile: {ctx.es}')
-                # P <= 51
-                if ctx.pmax > 51:
-                    raise MPFXCompileError(self.func, f'IEEE 754: precision too large to compile: {ctx.pmax}')
-                # overflow
-                if ctx.overflow != OV.OVERFLOW:
-                    raise MPFXCompileError(self.func, 'IEEE 754: overflow mode RAISE cannot be compiled')
-                # no random
-                if ctx.num_randbits != 0:
-                    raise MPFXCompileError(self.func, 'IEEE 754: stochastic rounding cannot be compiled')
-
-                # compile rounding
-                rm = self._compile_rm(ctx.rm)
-                return f'mpfx::IEEE754Context({ctx.es}, {ctx.nbits}, {rm})'
-            case _:
-                raise RuntimeError(f'Unhandled context: {ctx}')
+        return _compile_context(ctx, self.func)
 
     def _compile_literal(self, s: str, ty: FormatType) -> str:
         """Compile a numerical literal given as a string."""
@@ -188,36 +240,13 @@ class _MPFXBackendInstance(Visitor):
         return ty.ctx
 
     def _compile_type(self, ty: FormatType) -> CppType:
-        match ty:
-            case BoolType():
-                return CppBoolType()
-            case AbstractFormat():
-                if ty.contained_in(AbstractFormat.from_context(FP64)):
-                    # fits within a double 
-                    return CppDoubleType()
-                elif ty.contained_in(AbstractFormat.from_context(INTEGER)):
-                    # fits with an int64_t
-                    return CppInt64Type()
-                else:
-                    raise MPFXCompileError(self.func, f'no container type for: {ty}')
-            case TupleFormatType():
-                # compile recursively
-                return CppTupleType(self._compile_type(elem_ty) for elem_ty in ty.elts)
-            case ListFormatType():
-                # compile recursively
-                return CppListType(self._compile_type(ty.elt))
-            case ContextType():
-                return CppContextType()
-            case _:
-                raise RuntimeError(f'Unhandled type: {ty}')
+        return _compile_type(ty, self.func)
 
     def _compile_number(self, s: str, ty: FormatType):
         # TODO: check context for rounding
         raise NotImplementedError
 
-    def _compile_size(self, e: str, ty: FormatType):
-        if not isinstance(ty, RealType | AbstractFormat):
-            raise RuntimeError(f'size type must be RealType, got {ty}')
+    def _compile_size(self, e: str):
         return f'static_cast<size_t>({e})'
 
     def _visit_var(self, e: Var, ctx: CompileCtx):
@@ -250,31 +279,51 @@ class _MPFXBackendInstance(Visitor):
                 raise MPFXCompileError(self.func, f'Unsupported nullary operation to compile: {e}')
 
     def _visit_unaryop(self, e, ctx: CompileCtx):
-        arg_str = self._visit_expr(e.arg, ctx)
         match e:
+            case Cast():
+                arg_str = self._visit_expr(e.arg, ctx)
+                arg_ty = self._expr_type(e.arg)
+                e_ctx = self._expr_ctx(e)
+                return self.instr_gen.cast(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Neg():
+                arg_str = self._visit_expr(e.arg, ctx)
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
-                gen = NegInstr.generator(arg_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for negation: {e}')
-                return gen(arg_str, ctx.ctx_name)
+                return self.instr_gen.neg(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Abs():
+                arg_str = self._visit_expr(e.arg, ctx)
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
-                gen = AbsInstr.generator(arg_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for absolute value: {e}')
-                return gen(arg_str, ctx.ctx_name)
+                return self.instr_gen.abs(arg_str, ctx.ctx_name, arg_ty, e_ctx)
             case Sqrt():
+                arg_str = self._visit_expr(e.arg, ctx)
                 arg_ty = self._expr_type(e.arg)
                 e_ctx = self._expr_ctx(e)
-                gen = SqrtInstr.generator(arg_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for square root: {e}')
-                return gen(arg_str, ctx.ctx_name)
+                return self.instr_gen.sqrt(arg_str, ctx.ctx_name, arg_ty, e_ctx)
+            case Sum():
+                tid = self._fresh_var()
+                arg_str = self._visit_expr(e.arg, ctx)
+                arg_ty = self._expr_type(e.arg)
+                e_ty = self._expr_type(e)
+                e_ctx = self._expr_ctx(e)
+                self.instr_gen.sum(tid, arg_str, ctx, arg_ty.elt, e_ty, e_ctx)
+                return tid
             case Len():
                 return self._visit_len(e, ctx)
+            case Empty():
+                return self._visit_empty(e, ctx)
+            case Not():
+                arg_str = self._visit_expr(e.arg, ctx)
+                return f'!({arg_str})'
+            case IsNan():
+                arg_str = self._visit_expr(e.arg, ctx)
+                return f'std::isnan({arg_str})'
+            case IsInf():
+                arg_str = self._visit_expr(e.arg, ctx)
+                return f'std::isinf({arg_str})'
+            case Logb():
+                arg_str = self._visit_expr(e.arg, ctx)
+                return f'static_cast<int64_t>(std::logb({arg_str}))'
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported unary operation to compile: {e}')
 
@@ -286,34 +335,22 @@ class _MPFXBackendInstance(Visitor):
                 lhs_ty = self._expr_type(e.first)
                 rhs_ty = self._expr_type(e.second)
                 e_ctx = self._expr_ctx(e)
-                gen = AddInstr.generator(lhs_ty, rhs_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for addition: {e}')
-                return gen(lhs_str, rhs_str, ctx.ctx_name)
+                return self.instr_gen.add(lhs_str, rhs_str, ctx.ctx_name, lhs_ty, rhs_ty, e_ctx)
             case Sub():
                 lhs_ty = self._expr_type(e.first)
                 rhs_ty = self._expr_type(e.second)
                 e_ctx = self._expr_ctx(e)
-                gen = SubInstr.generator(lhs_ty, rhs_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for subtraction: {e}')
-                return gen(lhs_str, rhs_str, ctx.ctx_name)
+                return self.instr_gen.sub(lhs_str, rhs_str, ctx.ctx_name, lhs_ty, rhs_ty, e_ctx)
             case Mul():
                 lhs_ty = self._expr_type(e.first)
                 rhs_ty = self._expr_type(e.second)
                 e_ctx = self._expr_ctx(e)
-                gen = MulInstr.generator(lhs_ty, rhs_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for multiplication: {e}')
-                return gen(lhs_str, rhs_str, ctx.ctx_name)
+                return self.instr_gen.mul(lhs_str, rhs_str, ctx.ctx_name, lhs_ty, rhs_ty, e_ctx)
             case Div():
                 lhs_ty = self._expr_type(e.first)
                 rhs_ty = self._expr_type(e.second)
                 e_ctx = self._expr_ctx(e)
-                gen = DivInstr.generator(lhs_ty, rhs_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for division: {e}')
-                return gen(lhs_str, rhs_str, ctx.ctx_name)
+                return self.instr_gen.div(lhs_str, rhs_str, ctx.ctx_name, lhs_ty, rhs_ty, e_ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported binary operation to compile: {e}')
 
@@ -327,10 +364,7 @@ class _MPFXBackendInstance(Visitor):
                 snd_ty = self._expr_type(e.second)
                 trd_ty = self._expr_type(e.third)
                 e_ctx = self._expr_ctx(e)
-                gen = FMAInstr.generator(fst_ty, snd_ty, trd_ty, e_ctx)
-                if gen is None:
-                    raise MPFXCompileError(self.func, f'No suitable implementation found for fused multiply-add: {e}')
-                return gen(fst_str, snd_str, trd_str, ctx.ctx_name)
+                return self.instr_gen.fma(fst_str, snd_str, trd_str, ctx.ctx_name, fst_ty, snd_ty, trd_ty, e_ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported ternary operation to compile: {e}')
 
@@ -368,10 +402,30 @@ class _MPFXBackendInstance(Visitor):
 
         return t
 
+    def _visit_minmax(self, e: Min | Max, ctx: CompileCtx):
+        op_str = 'std::min' if isinstance(e, Min) else 'std::max'
+        arg_str = self._visit_expr(e.args[0], ctx)
+        for next_arg in e.args[1:]:
+            next_arg_str = self._visit_expr(next_arg, ctx)
+            arg_str = f'{op_str}({arg_str}, {next_arg_str})'
+        return arg_str
+
+    def _visit_or_and(self, e: Or | And, ctx: CompileCtx):
+        op_str = '||' if isinstance(e, Or) else '&&'
+        arg_str = self._visit_expr(e.args[0], ctx)
+        for next_arg in e.args[1:]:
+            next_arg_str = self._visit_expr(next_arg, ctx)
+            arg_str = f'({arg_str} {op_str} {next_arg_str})'
+        return arg_str
+
     def _visit_naryop(self, e, ctx: CompileCtx):
         match e:
             case Zip():
                 return self._visit_zip(e, ctx)
+            case Min() | Max():
+                return self._visit_minmax(e, ctx)
+            case Or() | And():
+                return self._visit_or_and(e, ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported nary operation to compile: {e}')
 
@@ -393,39 +447,194 @@ class _MPFXBackendInstance(Visitor):
     def _visit_len(self, e: Len, ctx: CompileCtx):
         # len(x)
         arg_cpp = self._visit_expr(e.arg, ctx)
-        ty = self._expr_type(e)
-        return self._compile_size(f'{arg_cpp}.size()', ty)
+        return self._compile_size(f'{arg_cpp}.size()')
 
-    def _visit_call(self, e, ctx):
-        if e not in self.eval_info.by_expr:
-            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
-        val = self.eval_info.by_expr[e]
-        if isinstance(val, Context):
-            return self._compile_context(val)
-        else:
-            raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
+    def _visit_empty(self, e: Empty, ctx: CompileCtx):
+        # size(x) => std::vector<T>(static_cast<size_t>(size))
+        size_cpp = self._visit_expr(e.arg, ctx)
+        size_str = self._compile_size(size_cpp)
+
+        e_ty = self._expr_type(e)
+        cpp_ty = self._compile_type(e_ty).to_cpp()
+        return f'{cpp_ty}({size_str})'
+
+    def _visit_call(self, e: Call, ctx: CompileCtx):
+        if e in self.eval_info.by_expr:
+            val = self.eval_info.by_expr[e]
+            if isinstance(val, Context):
+                # special case: context construction
+                return self._compile_context(val)
+
+        if e.fn is ldexp:
+            assert len(e.args) == 2
+            lhs_str = self._visit_expr(e.args[0], ctx)
+            rhs_str = self._visit_expr(e.args[1], ctx)
+            return f'std::ldexp({lhs_str}, {rhs_str})'
+
+        raise MPFXCompileError(self.func, f'cannot compile `{e.format()}`')
+
+
+    def _visit_compare2(self, op: CompareOp, lhs: str, rhs: str) -> str:
+        return f'{lhs} {op.symbol()} {rhs}'
 
     def _visit_compare(self, e, ctx):
-        raise NotImplementedError
+        if len(e.args) == 2:
+            # easy case: 2-argument comparison
+            lhs = self._visit_expr(e.args[0], ctx)
+            rhs = self._visit_expr(e.args[1], ctx)
+            return self._visit_compare2(e.ops[0], lhs, rhs)
+        else:
+            # harder case:
+            # - emit temporaries to bind expressions
+            # - form (t1 op t2) && (t2 op t3) && ...
+            args: list[str] = []
+            for arg in e.args:
+                t = self._fresh_var()
+                cpp_arg = self._visit_expr(arg, ctx)
+                ctx.add_line(f'auto {t} = {cpp_arg};')
+                args.append(t)
+
+            return ' && '.join(
+                self._visit_compare2(e.ops[i], args[i], args[i + 1])
+                for i in range(len(args) - 1)
+            )
 
     def _visit_tuple_expr(self, e, ctx):
-        raise NotImplementedError
+        args = [self._visit_expr(arg, ctx) for arg in e.elts]
+        return f'std::make_tuple({", ".join(args)})'
 
-    def _visit_list_expr(self, e, ctx):
-        raise NotImplementedError
+    def _visit_list_expr(self, e: ListExpr, ctx: CompileCtx):
+        cpp_ty = self._compile_type(self._expr_type(e))
+        args = ', '.join(self._visit_expr(arg, ctx) for arg in e.elts)
+        return f'{cpp_ty.to_cpp()}({{{args}}})'
 
-    def _visit_list_comp(self, e, ctx):
-        raise NotImplementedError
+    def _visit_list_comp(self, e: ListComp, ctx: CompileCtx):
+        if len(e.targets) == 1:
+            # simple case: single for-loop
+            # [<e> for <x> in <iterable>] =>
+            # auto <t> = <iterable>;
+            # std::vector<T> v(t.size());
+            # for (size_t i = 0; i < t.size(); ++i) {
+            #   v[i] = <e>;
+            # }
+
+            target = e.targets[0]
+            iterable = e.iterables[0]
+
+            # evaluate iterable
+            t = self._fresh_var()
+            iterable_cpp = self._visit_expr(iterable, ctx)
+            ctx.add_line(f'auto {t} = {iterable_cpp};')
+
+            # create output vector
+            v = self._fresh_var()
+            e_ty = self._expr_type(e)
+            cpp_ty = self._compile_type(e_ty)
+            ctx.add_line(f'{cpp_ty.to_cpp()} {v}({t}.size());')
+
+            # build the for loop
+            i = self._fresh_var()
+            ctx.add_line(f'for (size_t {i} = 0; {i} < {t}.size(); ++{i}) {{')
+            match target:
+                case Id():
+                    ctx.indent().add_line(f'auto {target} = {t}[{i}];')
+                case TupleBinding():
+                    temp = self._fresh_var()
+                    ctx.indent().add_line(f'auto {temp} = {t}[{i}];')
+                    self._visit_tuple_binding(temp, target, e, ctx.indent())
+                case _:
+                    raise RuntimeError(f'unreachable {target}')
+
+            # compute the element and add to result
+            elt = self._visit_expr(e.elt, ctx.indent())
+            ctx.indent().add_line(f'{v}[{i}] = {elt};')
+            ctx.add_line('}')  # closing brace
+        else:
+            # [<e> for <x1> in <iterable1> ... for <xN> in <iterableN>] =>
+            # std::vector<T> v;
+            # for (auto <x1> : <iterable1>) {
+            #   auto <t2> = <iterable2>;  // evaluated in context of x1
+            #   for (auto <x2> : <t2>) {
+            #     ...
+            #       auto <tN> = <iterableN>;  // evaluated in context of x1, x2, ...
+            #       for (auto <xN> : <tN>) {
+            #         v.push_back(<e>);
+            #       }
+            #   }
+            # }
+
+            # create output vector
+            v = self._fresh_var()
+            cpp_ty = self._compile_type(self._expr_type(e))
+            ctx.add_line(f'{cpp_ty.to_cpp()} {v};')
+
+            # build nested loops - each iterable is evaluated in its proper context
+            body_ctx = ctx
+            for target, iterable in zip(e.targets, e.iterables):
+                # evaluate iterable in current loop context
+                t = self._fresh_var()
+                iterable_cpp = self._visit_expr(iterable, body_ctx)
+                body_ctx.add_line(f'auto {t} = {iterable_cpp};')
+
+                # open the for loop
+                match target:
+                    case Id():
+                        body_ctx.add_line(f'for (auto {target} : {t}) {{')
+                    case TupleBinding():
+                        t2 = self._fresh_var()
+                        body_ctx.add_line(f'for (auto {t2} : {t}) {{')
+                        self._visit_tuple_binding(t2, target, e, body_ctx.indent())
+                    case _:
+                        raise RuntimeError(f'unreachable {target}')
+                body_ctx = body_ctx.indent()
+
+            # compute the element and add to result
+            elt = self._visit_expr(e.elt, body_ctx)
+            body_ctx.add_line(f'{v}.push_back({elt});')
+
+            # closing braces
+            while body_ctx.indent_level > ctx.indent_level:
+                body_ctx = body_ctx.dedent()
+                body_ctx.add_line('}')
+
+        return v
 
     def _visit_list_ref(self, e: ListRef, ctx: CompileCtx):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
-        index_ty = self._expr_type(e.index)
-        size = self._compile_size(index, index_ty)
+        size = self._compile_size(index)
         return f'{value}[{size}]'
 
-    def _visit_list_slice(self, e, ctx):
-        raise NotImplementedError
+    def _visit_list_slice(self, e: ListSlice, ctx: CompileCtx):
+        # x[<start>:<stop>] =>
+        # auto v = <x>
+        # auto start = static_cast<size_t>(<start>) OR 0;
+        # auto stop = static_cast<size_t>(<stop>) OR x.size();
+        # <result> = std::vector<T>(v.begin() + start, v.end() + end);
+
+        # temporarily bind array
+        t = self._fresh_var()
+        arr = self._visit_expr(e.value, ctx)
+        e_ty = self._expr_type(e)
+        ctx.add_line(f'auto {t} = {arr};')
+
+        # compile start
+        if e.start is None:
+            start = '0'
+        else:
+            start = self._visit_expr(e.start, ctx)
+            start = self._compile_size(start)
+
+        # compile stop
+        if e.stop is None:
+            stop = f'{t}.size()'
+        else:
+            stop = self._visit_expr(e.stop, ctx)
+            stop = self._compile_size(stop)
+
+        # result
+        ty_str = self._compile_type(e_ty).to_cpp()
+        return f'{ty_str}({t}.begin() + {start}, {t}.begin() + {stop})'
 
     def _visit_list_set(self, e, ctx):
         raise NotImplementedError
@@ -490,8 +699,7 @@ class _MPFXBackendInstance(Visitor):
         indices: list[str] = []
         for index in stmt.indices:
             i = self._visit_expr(index, ctx)
-            idx_ty = self._expr_type(index)
-            indices.append(self._compile_size(i, idx_ty))
+            indices.append(self._compile_size(i))
 
         # compile expression
         e = self._visit_expr(stmt.expr, ctx)
@@ -608,15 +816,20 @@ class _MPFXBackendInstance(Visitor):
         ctx.add_line('}')  # close if
 
     def _visit_context(self, stmt: ContextStmt, ctx: CompileCtx):
-        # name to bind context
-        if isinstance(stmt.target, NamedId):
-            ctx_name = str(stmt.target)
+        if isinstance(stmt.ctx, Var):
+            # context variable: must be bound already
+            ctx_name: str | None = str(stmt.ctx.name)
         else:
-            ctx_name = self._fresh_var()
+            # context must be statically known
+            ctx_val = self.eval_info.by_expr[stmt.ctx]
 
-        # compile context
-        ctx_str = self._visit_expr(stmt.ctx, ctx)
-        ctx.add_line(f'auto {ctx_name} = {ctx_str};')
+            # bind it if we can compile it
+            if isinstance(ctx_val, SupportedContext) and ctx is not INTEGER:
+                ctx_name = self._fresh_var()
+                ctx_str = self._compile_context(ctx_val)
+                ctx.add_line(f'auto {ctx_name} = {ctx_str};')
+            else:
+                ctx_name = None
 
         # compile body
         self._visit_block(stmt.body, ctx.with_ctx(ctx_name))
@@ -626,8 +839,7 @@ class _MPFXBackendInstance(Visitor):
         if stmt.msg is None:
             ctx.add_line(f'assert({e});')
         else:
-            msg = self._visit_expr(stmt.msg, ctx)
-            ctx.add_line(f'assert(({e}) && ({msg}));')
+            ctx.add_line(f'assert({e}); // {stmt.msg.format()}')
 
     def _visit_effect(self, stmt: EffectStmt, ctx: CompileCtx):
         raise MPFXCompileError(self.func, 'FPy effects are not supported')
@@ -647,8 +859,9 @@ class _MPFXBackendInstance(Visitor):
         # compile arguments
         arg_strs: list[str] = []
         for arg, arg_ty in zip(func.args, self.fmt_info.arg_types):
+            print(arg.name, arg_ty)
             self._check_type(arg_ty)
-            ty_str = self._compile_type(arg_ty).to_cpp()
+            ty_str = self._compile_type(arg_ty).to_cpp(is_arg=True)
             arg_strs.append(f'{ty_str} {arg.name}')
 
         ret_ty = self.fmt_info.return_type
@@ -672,14 +885,44 @@ class MPFXCompiler(Backend):
     unsafe_cast_int: bool
     unsafe_finitize_int: bool
 
-    def __init__(self, *, unsafe_cast_int: bool = False, unsafe_finitize_int: bool = False):
+    # compilation options
+    elim_round: bool
+    allow_exact: bool
+
+    def __init__(self, *, unsafe_cast_int: bool = False, unsafe_finitize_int: bool = False, elim_round: bool = True, allow_exact: bool = True):
         self.unsafe_cast_int = unsafe_cast_int
         self.unsafe_finitize_int = unsafe_finitize_int
+        self.elim_round = elim_round
+        self.allow_exact = allow_exact
+
+    def compile_context(self, ctx: Context):
+        return _compile_context(ctx)
+
+    def compile_type(self, ty: Type):
+        match ty:
+            case BoolType() | ContextType():
+                return _compile_type(ty)
+            case VarType():
+                raise TypeError(f'Type is not monomorphic: {ty}')
+            case RealType():
+                if isinstance(ty.ctx, SupportedContext):
+                    return _compile_type(AbstractFormat.from_context(ty.ctx))
+                else:
+                    raise TypeError(f'Cannot compile an unbounded real number: {ty.ctx}')
+            case TupleType():
+                # compile recursively
+                return CppTupleType([self.compile_type(elem_ty) for elem_ty in ty.elts])
+            case ListType():
+                # compile recursively
+                return CppListType(self.compile_type(ty.elt))
+            case _:
+                raise RuntimeError(f'Unhandled type: {ty}')
 
     def compile(
         self,
         func: Function,
         *,
+        name: str | None = None,
         ctx: Context | None = None,
         arg_types: Collection[Type | None] | None = None,
     ) -> str:
@@ -693,6 +936,10 @@ class MPFXCompiler(Backend):
             raise TypeError(f'Expected `Context` or `None`, got {type(ctx)} for {ctx}')
         if arg_types is not None and not isinstance(arg_types, Collection):
             raise TypeError(f'Expected `Collection` or `None`, got {type(arg_types)} for {arg_types}')
+
+        # compiled name
+        if name is None:
+            name = func.name
 
         # monomorphizing
         ast = func.ast
@@ -708,14 +955,28 @@ class MPFXCompiler(Backend):
 
         # run type checking with static context inference
         try:
-            ctx_info = ContextInfer.infer(ast, def_use=def_use, unsafe_cast_int=self.unsafe_cast_int)
+            ctx_info = ContextInfer.infer(ast, def_use=def_use, eval_info=eval_info, unsafe_cast_int=self.unsafe_cast_int)
             format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
         except (ContextInferError, TypeInferError, FormatInferError) as e:
             raise ValueError(f'{func.name}: context inference failed') from e
 
+        if self.elim_round:
+            # perform rounding elimination
+            ast = ElimRound.apply(ast, eval_info=eval_info)
+            # print(ast.format())
+
+            # dead-code elimination could be done here
+            ast = DeadCodeEliminate.apply(ast)
+            # print(ast.format())
+
+            # reanalyze
+            eval_info = PartialEval.apply(ast)
+            ctx_info = ContextInfer.infer(ast, def_use=eval_info.def_use, eval_info=eval_info, unsafe_cast_int=self.unsafe_cast_int)
+            format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
+
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
-        inst = _MPFXBackendInstance(ast, func.name, options, format_info, eval_info)
+        inst = _MPFXBackendInstance(ast, name, options, format_info, eval_info, allow_exact=self.allow_exact)
         body_str = inst.compile()
 
         return body_str

@@ -246,7 +246,7 @@ def tree_sum(xs: list[fp.Real]):
     """
 
     with fp.INTEGER:
-        n: fp.Real = len(xs)
+        n = fp.round(len(xs))
         assert n > 0, "Length of xs must be positive"
 
         depth = fp.log2(n)

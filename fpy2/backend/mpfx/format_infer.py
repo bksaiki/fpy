@@ -7,10 +7,11 @@ from typing import NoReturn, TypeAlias, Iterable
 
 from ...ast import *
 from ...analysis import (
+    ArraySizeInfer, ArraySizeAnalysis, ArraySizeType,
     ContextAnalysis, ContextInfer, PartialEval, PartialEvalInfo,
     Definition, DefSite
 )
-from ...number import Context, INTEGER
+from ...number import Context, INTEGER, REAL
 from ...types import *
 from ...utils import default_repr
 
@@ -82,6 +83,40 @@ FormatType: TypeAlias = (
 )
 """The normal type system extended with abstract formats."""
 
+def _cvt_context(ctx: Context):
+    if isinstance(ctx, SupportedContext):
+        return AbstractFormat.from_context(ctx)
+    else:
+        return None
+
+def convert_type(ty: Type) -> FormatType:
+    """
+    Converts a normal type to a format type by replacing real types
+    with abstract formats.
+
+    Args:
+        ty: The type to convert.
+    Returns:
+        The converted format type.
+    """
+    match ty:
+        case BoolType() | ContextType():
+            return ty
+        case RealType():
+            if isinstance(ty.ctx, Context):
+                fmt = _cvt_context(ty.ctx)
+                return ty if fmt is None else fmt
+            else:
+                return ty
+        case ListType():
+            elt = convert_type(ty.elt)
+            return ListFormatType(elt)
+        case TupleType():
+            elts = [convert_type(t) for t in ty.elts]
+            return TupleFormatType(elts)
+        case _:
+            raise RuntimeError(f'Unsupported type: {ty}')
+
 
 class FormatInferError(Exception):
     """
@@ -100,6 +135,7 @@ class FormatAnalysis:
     fn_type: FunctionFormatType
     by_def: dict[Definition, FormatType]
     by_expr: dict[Expr, FormatType]
+    preround: dict[Expr, FormatType]
     ctx_info: ContextAnalysis
 
     @property
@@ -123,17 +159,27 @@ class _FormatInfernce(Visitor):
     func: FuncDef
     ctx_info: ContextAnalysis
     eval_info: PartialEvalInfo
+    array_size: ArraySizeAnalysis
 
     by_def: dict[Definition, FormatType]
     by_expr: dict[Expr, FormatType]
+    preround: dict[Expr, FormatType]
     ret_ty: FormatType | None
 
-    def __init__(self, func: FuncDef, ctx_info: ContextAnalysis, eval_info: PartialEvalInfo):
+    def __init__(
+        self,
+        func: FuncDef,
+        ctx_info: ContextAnalysis,
+        eval_info: PartialEvalInfo,
+        array_size: ArraySizeAnalysis
+    ):
         self.func = func
         self.ctx_info = ctx_info
         self.eval_info = eval_info
+        self.array_size = array_size
         self.by_def = {}
         self.by_expr = {}
+        self.preround = {}
         self.ret_ty = None
 
     @property
@@ -142,39 +188,37 @@ class _FormatInfernce(Visitor):
 
     def infer(self):
         fn_ty = self._visit_function(self.func, None)
-        return FormatAnalysis(fn_ty, self.by_def, self.by_expr, self.ctx_info)
+        return FormatAnalysis(fn_ty, self.by_def, self.by_expr, self.preround, self.ctx_info)
 
     def raise_error(self, msg: str) -> NoReturn:
         raise FormatInferError(f'In function {self.func.name}: {msg}')
 
-    def _expr_type(self, e: Expr) -> FormatType:
-        ty = self.ctx_info.by_expr[e]
-        return self._cvt_type(ty)
-
-    def _cvt_context(self, ctx: Context):
-        if isinstance(ctx, SupportedContext):
-            return AbstractFormat.from_context(ctx)
-        else:
-            return None
-
-    def _cvt_type(self, ty: Type) -> FormatType:
-        match ty:
-            case BoolType() | ContextType():
-                return ty
-            case RealType():
-                if isinstance(ty.ctx, Context):
-                    fmt = self._cvt_context(ty.ctx)
-                    return ty if fmt is None else fmt
-                else:
-                    return ty
-            case ListType():
-                elt = self._cvt_type(ty.elt)
-                return ListFormatType(elt)
-            case TupleType():
-                elts = [self._cvt_type(t) for t in ty.elts]
-                return TupleFormatType(elts)
+    def _unify(self, a: FormatType, b: FormatType) -> FormatType:
+        match a, b:
+            case AbstractFormat(), AbstractFormat():
+                return a | b
+            case AbstractFormat(), RealType():
+                return b
+            case RealType(), AbstractFormat():
+                return a
+            case RealType(), RealType():
+                return a
+            case BoolType(), BoolType():
+                return a
+            case ContextType(), ContextType():
+                return a
+            case ListFormatType(), ListFormatType():
+                elt_ty = self._unify(a.elt, b.elt)
+                return ListFormatType(elt_ty)
+            case TupleFormatType(), TupleFormatType():
+                elt_tys = [self._unify(a_elt, b_elt) for a_elt, b_elt in zip(a.elts, b.elts, strict=True)]
+                return TupleFormatType(elt_tys)
             case _:
-                raise RuntimeError(f'Unsupported type: {ty}')
+                self.raise_error(f'cannot unify types: {a} and {b}')
+
+    def _expr_type(self, e: Expr):
+        ty = self.ctx_info.by_expr[e]
+        return convert_type(ty)
 
     def _visit_binding(self, site: DefSite, target: Id | TupleBinding, ty: FormatType):
         match target:
@@ -192,7 +236,8 @@ class _FormatInfernce(Visitor):
                 raise RuntimeError(f'unreachable: {target}')
 
     def _visit_var(self, e: Var, ctx: Context):
-        return self._expr_type(e)
+        d = self.def_use.find_def_from_use(e)
+        return self.by_def[d]
 
     def _visit_bool(self, e: BoolVal, ctx: Context):
         return self._expr_type(e)
@@ -218,24 +263,121 @@ class _FormatInfernce(Visitor):
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         raise NotImplementedError
 
+    def _record_preround(self, e: Expr, m_ty: AbstractFormat, e_ty: AbstractFormat | RealType):
+        """
+        Records that an expression `e` has inferred context `m_ty`
+        but has expected context `e_ty`.
+        """
+        if isinstance(e_ty, AbstractFormat):
+            if m_ty <= e_ty:
+                self.preround[e] = m_ty
+            # intersect with expected type to get the most precise type needed
+            return e_ty & m_ty
+        elif isinstance(e_ty, RealType) and e_ty.ctx == REAL:
+            # intersecting with REAL
+            self.preround[e] = m_ty
+            return m_ty
+        else:
+            return m_ty
+
+
     def _visit_unaryop(self, e: UnaryOp, ctx: Context):
-        self._visit_expr(e.arg, ctx)
-        return self._expr_type(e) # get the expected type
+        a_ty = self._visit_expr(e.arg, ctx)
+        e_ty = self._expr_type(e) # get the expected type
+
+        match e:
+            case Len():
+                # len => INTEGER
+                return AbstractFormat.from_context(INTEGER)
+            case Range1():
+                # range1 => list[INTEGER]
+                return ListFormatType(AbstractFormat.from_context(INTEGER))
+            case Enumerate():
+                # enumerate => list[tuple(INTEGER, A)]
+                return ListFormatType(TupleFormatType((AbstractFormat.from_context(INTEGER), a_ty)))
+
+            case Round() | Cast() | Neg() | Logb():
+                if isinstance(a_ty, AbstractFormat):
+                    # possible optimization: if A is an abstract format,
+                    # then the "minimal" format can be computed directly
+                    match e:
+                        case Round() | Cast():
+                            m_ty = a_ty
+                        case Neg():
+                            m_ty = -a_ty
+                        case Logb():
+                            m_ty = AbstractFormat.from_context(INTEGER) # logb => INTEGER
+
+                    assert isinstance(e_ty, AbstractFormat | RealType)
+                    e_ty = self._record_preround(e, m_ty, e_ty)
+
+            case Sum():
+                assert isinstance(a_ty, ListFormatType)
+                if isinstance(a_ty.elt, AbstractFormat):
+                    size_ty = self.array_size.by_expr.get(e.arg, None)
+                    if isinstance(size_ty, ArraySizeType) and size_ty.size is not None:
+                        m_ty = a_ty.elt
+                        for _ in range(size_ty.size - 1):
+                            m_ty += a_ty.elt
+
+                        assert isinstance(e_ty, AbstractFormat | RealType)
+                        e_ty = self._record_preround(e, m_ty, e_ty)
+
+        return e_ty
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context):
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        return self._expr_type(e) # get the expected type
+        a_ty = self._visit_expr(e.first, ctx)
+        b_ty = self._visit_expr(e.second, ctx)
+        e_ty = self._expr_type(e)
+
+        match e:
+            case Size():
+                # size => INTEGER
+                return AbstractFormat.from_context(INTEGER)
+            case Range2():
+                # range2 => list[INTEGER]
+                return ListFormatType(AbstractFormat.from_context(INTEGER))
+            case Add() | Sub() | Mul():
+                # add/sub/mul => A (if A and B are both abstract formats)
+                if isinstance(a_ty, AbstractFormat) and isinstance(b_ty, AbstractFormat):
+                    # possible optimization: if A and B are both abstract formats,
+                    # then the "minimal" format can be computed directly
+                    match e:
+                        case Add():
+                            m_ty = a_ty + b_ty
+                        case Sub():
+                            m_ty = a_ty - b_ty
+                        case Mul():
+                            m_ty = a_ty * b_ty
+
+                    assert isinstance(e_ty, AbstractFormat | RealType)
+                    e_ty = self._record_preround(e, m_ty, e_ty)
+
+        # return the most conservative type
+        return e_ty
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context):
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
+
+        match e:
+            case Range3():
+                # range3 => list[INTEGER]
+                return ListFormatType(AbstractFormat.from_context(INTEGER))
+
         return self._expr_type(e) # get the expected type
 
     def _visit_naryop(self, e: NaryOp, ctx: Context):
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
+        arg_tys = [self._visit_expr(arg, ctx) for arg in e.args]
+
+        match e:
+            case Min() | Max():
+                arg_ty = arg_tys[0]
+                for ty in arg_tys[1:]:
+                    arg_ty = self._unify(arg_ty, ty)
+                return arg_ty
+
         return self._expr_type(e) # get the expected type
 
     def _visit_call(self, e: Call, ctx: Context):
@@ -244,11 +386,7 @@ class _FormatInfernce(Visitor):
         for _, kwarg in e.kwargs:
             self._visit_expr(kwarg, ctx)
 
-        val = self.eval_info.by_expr[e]
-        if isinstance(val, Context):
-            return ContextType()
-        else:
-            raise NotImplementedError(e)
+        return self._expr_type(e) # get the expected type
 
     def _visit_compare(self, e: Compare, ctx: Context):
         for arg in e.args:
@@ -260,12 +398,18 @@ class _FormatInfernce(Visitor):
         return TupleFormatType(elts)
 
     def _visit_list_expr(self, e: ListExpr, ctx: Context):
-        elts = [self._visit_expr(elt, ctx) for elt in e.elts]
-        # TODO: unify element types?
-        return ListFormatType(elts[0])
+        elt_tys = [self._visit_expr(elt, ctx) for elt in e.elts]
+        elt_ty = elt_tys[0]
+        for ty in elt_tys[1:]:
+            elt_ty = self._unify(elt_ty, ty)
+        return ListFormatType(elt_ty)
 
     def _visit_list_comp(self, e: ListComp, ctx: Context):
-        raise NotImplementedError
+        for target, iterable in zip(e.targets, e.iterables, strict=True):
+            iter_ty = self._visit_expr(iterable, ctx)
+            assert isinstance(iter_ty, ListFormatType)
+            self._visit_binding(e, target, iter_ty.elt)
+        return ListFormatType(self._visit_expr(e.elt, ctx))
 
     def _visit_list_ref(self, e: ListRef, ctx: Context):
         # Γ |- e: list T   Γ |- i: real A
@@ -277,7 +421,13 @@ class _FormatInfernce(Visitor):
         return ty.elt
 
     def _visit_list_slice(self, e: ListSlice, ctx: Context):
-        raise NotImplementedError
+        if e.start is not None:
+            self._visit_expr(e.start, ctx)
+        if e.stop is not None:
+            self._visit_expr(e.stop, ctx)
+        ty = self._visit_expr(e.value, ctx)
+        assert isinstance(ty, ListFormatType)
+        return ty
 
     def _visit_list_set(self, e: ListSet, ctx: Context):
         raise NotImplementedError
@@ -285,9 +435,8 @@ class _FormatInfernce(Visitor):
     def _visit_if_expr(self, e: IfExpr, ctx: Context):
         self._visit_expr(e.cond, ctx)
         ift_ty = self._visit_expr(e.ift, ctx)
-        _ = self._visit_expr(e.iff, ctx)
-        # TODO: unify ift_ty and iff_ty?
-        return ift_ty
+        iff_ty = self._visit_expr(e.iff, ctx)
+        return self._unify(ift_ty, iff_ty)
 
     def _visit_attribute(self, e: Attribute, ctx: Context):
         if e not in self.eval_info.by_expr:
@@ -304,17 +453,34 @@ class _FormatInfernce(Visitor):
         return ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Context):
-        raise NotImplementedError
+        for idx in stmt.indices:
+            self._visit_expr(idx, ctx)
+        self._visit_expr(stmt.expr, ctx)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: Context):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.body, ctx)
+
+        # add types to phi variables
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+
         return ctx
 
     def _visit_if(self, stmt: IfStmt, ctx: Context):
         self._visit_expr(stmt.cond, ctx)
         self._visit_block(stmt.ift, ctx)
         self._visit_block(stmt.iff, ctx)
+
+        # unify any merged variable
+        # add types to phi variables
+        for phi in self.def_use.phis[stmt]:
+            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
+            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+
         return ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: Context):
@@ -328,16 +494,15 @@ class _FormatInfernce(Visitor):
 
         # add types to phi variables
         for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            self.by_def[phi] = lhs_ty
+            self.by_def[phi] = self.by_def[self.def_use.defs[phi.lhs]]
 
         # visit the body
         self._visit_block(stmt.body, ctx)
 
-        # TODO: unify?
-        for phi in self.def_use.phis[stmt]:
-            _ = self.by_def[self.def_use.defs[phi.lhs]]
-            _ = self.by_def[self.def_use.defs[phi.rhs]]
+        # TODO: handle loops
+        # for phi in self.def_use.phis[stmt]:
+        #     lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
+        #     rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
 
         return ctx
 
@@ -375,6 +540,7 @@ class _FormatInfernce(Visitor):
 
     def _visit_expr(self, expr: Expr, ctx: Context) -> FormatType:
         ty = super()._visit_expr(expr, ctx)
+        # print(expr.format(), '::', ty)
         self.by_expr[expr] = ty
         return ty
 
@@ -386,7 +552,7 @@ class _FormatInfernce(Visitor):
         # function arguments
         arg_types: list[FormatType] = []
         for arg, ty in zip(func.args, self.ctx_info.arg_types, strict=True):
-            fmt_ty = self._cvt_type(ty)
+            fmt_ty = convert_type(ty)
             arg_types.append(fmt_ty)
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
@@ -429,14 +595,18 @@ class FormatInfer:
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
 
-        # run context inference if need be
+        # context inference
         if ctx_info is None:
             ctx_info = ContextInfer.infer(func)
 
+        # partial evaluation
         if eval_info is None:
             eval_info = PartialEval.apply(func, def_use=ctx_info.def_use)
 
+        # array size inference
+        array_size = ArraySizeInfer.infer(func, partial_eval=eval_info, type_info=ctx_info.type_info)
+
         # perform format inference
-        format_info = _FormatInfernce(func, ctx_info, eval_info).infer()
+        format_info = _FormatInfernce(func, ctx_info, eval_info, array_size).infer()
 
         return format_info

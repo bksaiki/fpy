@@ -388,14 +388,7 @@ class Stmt(Ast):
         """
         ...
 
-class ValueExpr(Expr):
-    """FPy Ast: terminal expression"""
-    __slots__ = ()
-
-    def __init__(self, loc: Location | None):
-        super().__init__(loc)
-
-class Var(ValueExpr):
+class Var(Expr):
     """FPy AST: variable"""
     __slots__ = ('name',)
     name: NamedId
@@ -406,6 +399,13 @@ class Var(ValueExpr):
 
     def is_equiv(self, other) -> bool:
         return isinstance(other, Var) and self.name == other.name
+
+class ValueExpr(Expr):
+    """FPy Ast: terminal expression"""
+    __slots__ = ()
+
+    def __init__(self, loc: Location | None):
+        super().__init__(loc)
 
 class BoolVal(ValueExpr):
     """FPy AST: boolean value"""

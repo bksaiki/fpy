@@ -390,7 +390,7 @@ class _TypeInferInstance(Visitor):
                     ty = self._fresh_type_var()
                     arg_ty = self._visit_expr(arg, None)
                     self._unify(arg_ty, ListType(ty))
-                    arg_tys.append(ty)
+                    arg_tys.append(self._resolve_type(ty))
                 return ListType(TupleType(*arg_tys))
             case _:
                 raise ValueError(f'unknown n-ary operator: {type(e)}')

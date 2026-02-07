@@ -2,9 +2,9 @@
 
 from typing import Generic, TypeVar, Iterable
 
-T = TypeVar("T")
+_T = TypeVar("_T")
 
-class Unionfind(Generic[T]):
+class Unionfind(Generic[_T]):
     """
     The classic union-find data structure.
     A union-find extends the usual set data structure by
@@ -14,10 +14,10 @@ class Unionfind(Generic[T]):
     - `union`: join two sets together.
     """
 
-    _parent: dict[T, T]
-    _sets: dict[T, set[T]]
+    _parent: dict[_T, _T]
+    _sets: dict[_T, set[_T]]
 
-    def __init__(self, xs: Iterable[T] | None = None):
+    def __init__(self, xs: Iterable[_T] | None = None):
         if xs is None:
             self._parent = {}
             self._sets = {}
@@ -31,13 +31,19 @@ class Unionfind(Generic[T]):
     def __len__(self) -> int:
         return len(self._parent)
 
-    def __contains__(self, x: T) -> bool:
+    def __contains__(self, x: _T) -> bool:
+        """
+        Does the unionfind contain the element `x`?
+        """
         return x in self._parent
 
     def __iter__(self):
-        return iter(self._sets)
+        """
+        Returns an iterator over the elements in the union-find.
+        """
+        return iter(self._parent)
 
-    def add(self, x: T) -> T:
+    def add(self, x: _T) -> _T:
         """
         Add an element `x` to the union-find.
         Returns the representative of the set containing `x`.
@@ -49,7 +55,7 @@ class Unionfind(Generic[T]):
         else:
             return self._find(x)
 
-    def find(self, x: T) -> T:
+    def find(self, x: _T) -> _T:
         """
         Finds the representative of the set containing `x`.
         Uses path compression for efficiency.
@@ -58,7 +64,7 @@ class Unionfind(Generic[T]):
             raise KeyError(x)
         return self._find(x)
 
-    def get(self, x: T, default=None):
+    def get(self, x: _T, default=None):
         """
         Finds the representative of the set containing `x`,
         or `default` if a representative is not found.
@@ -68,7 +74,7 @@ class Unionfind(Generic[T]):
         else:
             return default
 
-    def union(self, x: T, y: T) -> T:
+    def union(self, x: _T, y: _T) -> _T:
         """
         Union the sets containing `x` and `y`.
         The leader of `x` is the representative of the union.
@@ -80,20 +86,32 @@ class Unionfind(Generic[T]):
             raise KeyError(y, self._parent)
         return self._union(x, y)
 
+    def component(self, x: _T) -> set[_T]:
+        """
+        Returns the set of all elements in the same component as `x`.
+        """
+        return self._sets[self.find(x)]
+
     def items(self):
         """
-        Returns an iterator over the items in the union-find.
+        Returns an iterator over the (element, representative) pairs in the union-find.
         """
         return iter(self._parent.items())
 
-    def representatives(self) -> set[T]:
+    def representatives(self) -> set[_T]:
         """
         Returns the set of all representatives (root elements) in the union-find.
         Each representative corresponds to a distinct disjoint set.
         """
-        return {self._find(x) for x in self._parent}
+        return set(self._sets.keys())
 
-    def _find(self, x: T) -> T:
+    def components(self) -> set[set[_T]]:
+        """
+        Returns the set of all components in the union-find.
+        """
+        return set(self._sets.values())
+
+    def _find(self, x: _T) -> _T:
         """
         Finds the representative of the set containing `x`.
         """
@@ -108,7 +126,7 @@ class Unionfind(Generic[T]):
             parent = self._parent[x]
         return x
 
-    def _union(self, x: T, y: T) -> T:
+    def _union(self, x: _T, y: _T) -> _T:
         """
         Unifies the sets containing `x` and `y`.
         The representative of the union is the representative of

@@ -30,6 +30,8 @@ class _FormatterInstance(Visitor):
             case Argument():
                 # TODO: type signature
                 return str(self.ast.name)
+            case TupleBinding():
+                self.fmt = self._visit_tuple_binding(self.ast)
             case FuncDef():
                 self._visit_function(self.ast, 0)
             case _:
