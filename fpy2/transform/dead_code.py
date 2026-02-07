@@ -120,16 +120,23 @@ class _Eliminator(DefaultTransformVisitor):
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # eliminate if the body is empty
         body, _ = self._visit_block(stmt.body, ctx)
-        if len(body.stmts) == 1 and isinstance(body.stmts[0], PassStmt):
-            # empty body -> eliminate context statement
-            self.eliminated = True
-            return None, ctx
-        elif len(body.stmts) == 1 and isinstance(body.stmts[0], ContextStmt):
-            # nested context statements -> eliminate this level
-            self.eliminated = True
-            return body.stmts[0], ctx
-        else:
-            return super()._visit_context(stmt, ctx)
+
+        # check if the name is bound
+        if isinstance(stmt.target, NamedId):
+            d = self.def_use.find_def_from_site(stmt.target, stmt)
+            if len(self.def_use.uses[d]) == 0:
+                # context variable is never used -> so the context can be eliminated
+                if len(body.stmts) == 1 and isinstance(body.stmts[0], PassStmt):
+                    # empty body -> eliminate context statement
+                    self.eliminated = True
+                    return None, ctx
+                elif len(body.stmts) == 1 and isinstance(body.stmts[0], ContextStmt):
+                    # nested context statements -> eliminate this level
+                    self.eliminated = True
+                    return body.stmts[0], ctx
+
+        s = ContextStmt(stmt.target, stmt.ctx, body, stmt.loc)
+        return s, ctx
 
     def _visit_pass(self, stmt: PassStmt, ctx: None):
         # unnecessary pass statement

@@ -42,6 +42,7 @@ def _test_tcheck_library():
             match obj:
                 case fp.Function():
                     ast = ConstFold.apply(obj.ast, enable_op=True)
+                    print(ast.name)
                     info = ContextInfer.infer(ast)
                     print(ast.name, info.fn_type)
                 case fp.Primitive():
