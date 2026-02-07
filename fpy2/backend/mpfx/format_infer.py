@@ -510,6 +510,14 @@ class _FormatInfernce(Visitor):
         if isinstance(stmt.ctx, ForeignVal) and isinstance(stmt.ctx.val, Context):
             # check if the context is a concrete context
             body_ctx = stmt.ctx.val
+        elif isinstance(stmt.ctx, DeclContext):
+            # get context of the argument
+            ty = self.ctx_info.by_expr[stmt.ctx.arg]
+            if not isinstance(ty, RealType):
+                raise self.raise_error(f'expected real type for context argument, got {ty} at `{stmt.ctx.arg.format()}`')
+            if not isinstance(ty.ctx, Context):
+                raise self.raise_error(f'expected concrete context for context argument, got {ty.ctx} at `{stmt.ctx.arg.format()}`')
+            body_ctx = ty.ctx
         elif stmt.ctx in self.eval_info.by_expr:
             # backup is to lookup partial eval info
             val = self.eval_info.by_expr[stmt.ctx]
