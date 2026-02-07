@@ -13,7 +13,7 @@ from ...analysis import (
 from ...function import Function
 from ...libraries.core import ldexp
 from ...number import EFloatContext, IEEEContext, ExpContext, OV, RM, FP64, INTEGER
-from ...transform import DeadCodeEliminate, Monomorphize
+from ...transform import DeadCodeEliminate, Monomorphize, FuncInline
 from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListType, Type
 from ...utils import Gensym
 from ..backend import Backend
@@ -458,6 +458,7 @@ class _MPFXBackendInstance(Visitor):
         return f'{cpp_ty}({size_str})'
 
     def _visit_call(self, e: Call, ctx: CompileCtx):
+        # possibly can determine result of the call statically
         if e in self.eval_info.by_expr:
             val = self.eval_info.by_expr[e]
             if isinstance(val, Context):
@@ -861,7 +862,6 @@ class _MPFXBackendInstance(Visitor):
         # compile arguments
         arg_strs: list[str] = []
         for arg, arg_ty in zip(func.args, self.fmt_info.arg_types):
-            print(arg.name, arg_ty)
             self._check_type(arg_ty)
             ty_str = self._compile_type(arg_ty).to_cpp(is_arg=True)
             arg_strs.append(f'{ty_str} {arg.name}')
@@ -879,8 +879,6 @@ class _MPFXBackendInstance(Visitor):
 class MPFXCompiler(Backend):
     """
     MPFX backend: compiler to MPFX number library.
-
-    TODO: need a name for the library.
     """
 
     # unsafe options
@@ -888,12 +886,21 @@ class MPFXCompiler(Backend):
     unsafe_finitize_int: bool
 
     # compilation options
+    inline: bool
     elim_round: bool
     allow_exact: bool
 
-    def __init__(self, *, unsafe_cast_int: bool = False, unsafe_finitize_int: bool = False, elim_round: bool = True, allow_exact: bool = True):
+    def __init__(
+        self, *,
+        unsafe_cast_int: bool = False,
+        unsafe_finitize_int: bool = False,
+        inline: bool = True,
+        elim_round: bool = True,
+        allow_exact: bool = True
+    ):
         self.unsafe_cast_int = unsafe_cast_int
         self.unsafe_finitize_int = unsafe_finitize_int
+        self.inline = inline
         self.elim_round = elim_round
         self.allow_exact = allow_exact
 
@@ -943,8 +950,12 @@ class MPFXCompiler(Backend):
         if name is None:
             name = func.name
 
-        # monomorphizing
+        # inlining
         ast = func.ast
+        if self.inline:
+            ast = FuncInline.apply(ast)
+
+        # monomorphizing
         if arg_types is None:
             arg_types = [None for _ in func.args]
         if ast.ctx is not None:

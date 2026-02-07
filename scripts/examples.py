@@ -40,22 +40,20 @@ def dot_prod_1(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Real:
         return z + c
 
 @fp.fpy(ctx=fp.REAL)
-def foo(
-    a_scale: fp.Real,
-    b_scale: fp.Real,
-    a_elts: list[fp.Real],
-    b_elts: list[fp.Real]
-):
-    scale = a_scale * b_scale
-    with fp.FP32:
-        dot_prod = fp.round(0)
-        for a_elt, b_elt in zip(a_elts, b_elts):
-            with fp.REAL:
-                prod = a_elt * b_elt
-            dot_prod += prod
+def extract_block(xs: list[fp.Real], n: int, start: int, K: int) -> list[fp.Real]:
+    # end index for a full block
+    end = start + K
 
-    with fp.FP32:
-        return dot_prod * scale
+    # extract block of size K and pad with zeros if needed
+    block = fp.empty(K)
+    for i in range(start, min(end, n)):
+        block[i - start] = xs[i]
+    for i in range(min(end, n), end):
+        with fp.declcontext(block[0]):
+            x = fp.round(0)
+        block[i - start] = x
+
+    return block
 
 @fp.fpy(ctx=fp.REAL)
 def dot_prod_blocked(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Real:
@@ -80,31 +78,21 @@ def dot_prod_blocked(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Rea
     # perform the dot product
     n = len(xs)
     for start in range(0, n, K):
-        # end index for the block
-        end = start + K
+        # extract blocks of size K, padding with zeros if necessary
+        xblock = extract_block(xs, n, start, K)
+        yblock = extract_block(ys, n, start, K)
 
-        # extract block of size K
-        x_block = fp.empty(K)
-        y_block = fp.empty(K)
-        for i in range(start, min(end, n)):
-            with QUANT_CTX:
-                x = fp.round(xs[i])
-                y = fp.round(ys[i])
-            x_block[i - start] = x
-            y_block[i - start] = y
-        for i in range(min(end, n), end):
-            with QUANT_CTX:
-                x = fp.round(0)
-                y = fp.round(0)
-            x_block[i - start] = x
-            y_block[i - start] = y
+        # quantize the elements of the blocks
+        with QUANT_CTX:
+            xblock_q = [fp.round(x) for x in xblock]
+            yblock_q = [fp.round(y) for y in yblock]
 
         # initialize internal accumulator
         with ACCUM_CTX:
             z = fp.round(0)
 
         # process dot product
-        for x, y in zip(x_block, y_block):
+        for x, y in zip(xblock_q, yblock_q):
             # multiply
             with MUL_CTX:
                 t = x * y
@@ -143,29 +131,18 @@ def dot_prod_arm(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     # perform the dot product over blocks of size K
     n = len(xs)
     for start in range(0, n, K):
-        # clamped end index for the block
-        end = min(start + K, n)
+        # extract blocks of size K, padding with zeros if necessary
+        xblock = extract_block(xs, n, start, K)
+        yblock = extract_block(ys, n, start, K)
 
-        # extract block of size K, padding with zeros if necessary
-        x_block = fp.empty(K)
-        y_block = fp.empty(K)
-        for i in range(start, end):
-            with QUANT_X_CTX:
-                x = fp.round(xs[i])
-            with QUANT_Y_CTX:
-                y = fp.round(ys[i])
-            x_block[i-start] = x
-            y_block[i-start] = y
-        for i in range(end, start + K):
-            with QUANT_X_CTX:
-                x = fp.round(0)
-            with QUANT_Y_CTX:
-                y = fp.round(0)
-            x_block[i-start] = x
-            y_block[i-start] = y
+        # quantize the elements of the blocks
+        with QUANT_X_CTX:
+            xblock_q = [fp.round(x) for x in xblock]
+        with QUANT_Y_CTX:
+            yblock_q = [fp.round(y) for y in yblock]
 
         # process dot product
-        z = sum([x * y for x, y in zip(x_block, y_block)])
+        z = sum([x * y for x, y in zip(xblock_q, yblock_q)])
 
         # add to final accumulator
         with fp.FP32:
@@ -207,19 +184,60 @@ def mx_block_round(xs: list[fp.Real]):
 
 
 @fp.fpy(ctx=fp.REAL)
-def mx_dot_prod(
-    a_scale: fp.Real,
-    b_scale: fp.Real,
-    a_elts: list[fp.Real],
-    b_elts: list[fp.Real]
-):
-    scale = a_scale * b_scale
-    with fp.FP32:
-        dot_prod = fp.round(0)
-        for a_elt, b_elt in zip(a_elts, b_elts):
-            with fp.REAL:
-                prod = a_elt * b_elt
-            dot_prod += prod
+def mx_dot_prod(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Real:
+    """
+    Dot product with blocking with size K.
 
-    with fp.FP32:
-        return dot_prod * scale
+    Args:
+        xs: list of Real values
+        ys: list of Real values
+        c: Real constant to add to the final result
+    """
+    FINAL_CTX = fp.FP32
+    K = 32
+
+    # initialize accumulator
+    with FINAL_CTX:
+        acc = fp.round(c)
+
+    # perform the dot product
+    n = len(xs)
+    for start in range(0, n, K):
+        # extract block of size K
+        x_block = extract_block(xs, n, start, K)
+        y_block = extract_block(ys, n, start, K)
+
+        # apply quantization to the blocks
+        xscale, x_elts = mx_block_round(x_block)
+        yscale, y_elts = mx_block_round(y_block)
+
+        # process dot product
+        z = sum([x * y for x, y in zip(x_elts, y_elts)])
+
+        # apply the scales
+        z *= xscale * yscale
+
+        # add to final accumulator
+        with FINAL_CTX:
+            acc += z
+
+    return acc
+
+
+@fp.fpy(ctx=fp.REAL)
+def mx_gemm(
+    A: list[list[fp.Real]],  # matrix: MxK
+    Bt: list[list[fp.Real]], # matrix transpose: NxK
+) -> list[list[fp.Real]]:
+    """Matrix multiplication using MX-style dot products."""
+
+    Am, Ak = len(A), len(A[0])
+    Bn, Bk = len(Bt), len(Bt[0])
+    assert Ak == Bk, "Inner dimensions of A and Bt must match"
+
+    C: list[list[fp.Real]] = [fp.empty(Bn) for _ in range(Am)]
+    for i in range(Am):
+        for j in range(Bn):
+            C[i][j] = mx_dot_prod(A[i], Bt[j], 0.0)
+
+    return C

@@ -13,12 +13,13 @@ ExampleType: TypeAlias = tuple[fp.Function, tuple[fp.Context | None, ...]]
 DEFAULT_NUM_INPUTS = 1_000_000
 
 EXAMPLES: list[ExampleType] = [
-    (pre_round_mul, (fp.FP32, fp.FP32)),
-    (dot_prod_1, (fp.FP32, fp.FP32, fp.FP32)),
-    (dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32)),
-    (dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32)),
-    (mx_block_round, (fp.FP32,)),
-    (mx_dot_prod, (fp.MX_E8M0, fp.MX_E8M0, fp.MX_E5M2, fp.MX_E5M2))
+    # (pre_round_mul, (fp.FP32, fp.FP32)),
+    # (dot_prod_1, (fp.FP32, fp.FP32, fp.FP32)),
+    # (dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32)),
+    # (dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32)),
+    # (mx_block_round, (fp.FP32,)),
+    # (mx_dot_prod, (fp.FP32, fp.FP32, fp.FP32)),
+    (mx_gemm, (fp.FP32, fp.FP32)),
 ]
 
 def run_eval(config: EvalConfig, examples: list[ExampleType]) -> None:
