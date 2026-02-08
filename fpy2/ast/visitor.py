@@ -500,7 +500,7 @@ class DefaultTransformVisitor(Visitor):
 
     def _visit_attribute(self, e: Attribute, ctx: Any):
         value = self._visit_expr(e.value, ctx)
-        return Attribute(value, e.attr, ctx)
+        return Attribute(value, e.attr, e.loc)
 
     def _visit_binding(self, binding: Id | TupleBinding, ctx: Any):
         match binding:

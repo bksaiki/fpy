@@ -14,7 +14,7 @@ from ...function import Function
 from ...libraries.core import ldexp
 from ...number import EFloatContext, IEEEContext, ExpContext, OV, RM, FP64, INTEGER
 from ...strategies import simplify
-from ...transform import DeadCodeEliminate, Monomorphize, FuncInline
+from ...transform import Monomorphize, FuncInline, LiftContext
 from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListType, Type
 from ...utils import Gensym
 from ..backend import Backend
@@ -908,6 +908,7 @@ class MPFXCompiler(Backend):
     inline: bool
     elim_round: bool
     allow_exact: bool
+    optimize: bool
 
     def __init__(
         self, *,
@@ -915,13 +916,15 @@ class MPFXCompiler(Backend):
         unsafe_finitize_int: bool = False,
         inline: bool = True,
         elim_round: bool = True,
-        allow_exact: bool = True
+        allow_exact: bool = True,
+        optimize: bool = True
     ):
         self.unsafe_cast_int = unsafe_cast_int
         self.unsafe_finitize_int = unsafe_finitize_int
         self.inline = inline
         self.elim_round = elim_round
         self.allow_exact = allow_exact
+        self.optimize = optimize
 
     def compile_context(self, ctx: Context):
         return _compile_context(ctx)
@@ -974,8 +977,14 @@ class MPFXCompiler(Backend):
             ast = FuncInline.apply(func.ast)
             func = func.with_ast(ast)
 
-        # optimize
-        # func = simplify(func, enable_const_fold=False, enable_const_prop=False)
+        if self.optimize:
+            # lift contexts so they are constructed at the top level
+            ast = func.ast
+            ast = LiftContext.apply(ast)
+            func = func.with_ast(ast)
+
+            # apply copy propagation and dead code elimination to clean up after inlining
+            func = simplify(func, enable_const_fold=False, enable_const_prop=False)
 
         # monomorphizing
         ast = func.ast
@@ -1001,9 +1010,8 @@ class MPFXCompiler(Backend):
             ast = ElimRound.apply(ast, eval_info=eval_info)
             # print(ast.format())
 
-            # dead-code elimination could be done here
-            ast = DeadCodeEliminate.apply(ast)
-            # print(ast.format())
+            # apply copy propagation and dead code elimination to clean up after inlining
+            func = simplify(func, enable_const_fold=False, enable_const_prop=False)
 
             # reanalyze
             eval_info = PartialEval.apply(ast)

@@ -15,24 +15,31 @@ class _ContextFinder(DefaultVisitor):
     """
     func: FuncDef
     eval_info: PartialEvalInfo
-    ctx_exprs: set[Expr]
+    ctx_exprs: list[Expr]
 
     def __init__(self, func: FuncDef, eval_info: PartialEvalInfo):
         self.func = func
         self.eval_info = eval_info
-        self.ctx_exprs = set()
+        self.ctx_exprs = []
 
     def visit(self):
-        self._visit_function(self.func, None)
+        self._visit_function(self.func, False)
         return self.ctx_exprs
 
-    def _visit_expr(self, e: Expr, ctx: None):
+    def _visit_context(self, stmt: ContextStmt, ctx: bool):
+        return super()._visit_context(stmt, False)
+
+    def _visit_expr(self, e: Expr, ctx: bool) -> Expr:
         # check if we know an expression evaluates
         # statically to a context; if so, we can lift it
-        if e in self.eval_info.by_expr:
+        if e in self.eval_info.by_expr and not ctx:
             v = self.eval_info.by_expr[e]
-            if isinstance(v, Context):
-                self.ctx_exprs.add(e)
+            if (
+                isinstance(v, Context)
+                and not isinstance(e, Var)
+                and not isinstance(e, ForeignVal)
+            ):
+                self.ctx_exprs.append(e)
 
         return super()._visit_expr(e, ctx)
 
@@ -45,7 +52,7 @@ class _ContextLifter(DefaultTransformVisitor):
     expr_to_name: dict[Expr, NamedId]
     name_to_expr: dict[NamedId, Expr]
 
-    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo, ctx_exprs: set[Expr]):
+    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo, ctx_exprs: list[Expr]):
         self.func = func
         self.expr_to_name = {}
         self.name_to_expr = {}

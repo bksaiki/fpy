@@ -91,8 +91,9 @@ class _FuncInline(DefaultTransformVisitor):
         # bind arguments to parameters
         for arg, param in zip(e.args, ast.args):
             arg = self._visit_expr(arg, ctx)
-            name = subst.get(param.name, param.name)
-            ctx.stmts.append(Assign(name, param.type, arg, e.loc))
+            if isinstance(param.name, NamedId):
+                name = subst.get(param.name, param.name)
+                ctx.stmts.append(Assign(name, param.type, arg, e.loc))
 
         # bind the return value to a fresh variable and splice into the current block
         t = self.gensym.fresh('t')
@@ -160,5 +161,7 @@ class FuncInline:
             funcs = set(funcs)
 
         inst = _FuncInline(func, def_use, funcs)
+        func = inst.apply()
+
         SyntaxCheck.check(func, ignore_unknown=True)
-        return inst.apply()
+        return func
