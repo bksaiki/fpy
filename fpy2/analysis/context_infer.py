@@ -358,10 +358,6 @@ class ContextTypeInferInstance(Visitor):
                 else:
                     # C, Γ |- range e : list (real REAL)
                     return ListType(RealType(REAL))
-            case Empty():
-                # empty operator
-                # C, Γ |- empty e : list T
-                return self._cvt_type(self._lookup_ty(e))
             case Enumerate():
                 # enumerate operator
                 assert isinstance(arg_ty, ListType)
@@ -453,6 +449,10 @@ class ContextTypeInferInstance(Visitor):
                     assert isinstance(arg_ty, ListType)
                     elt_tys.append(arg_ty.elt)
                 return ListType(TupleType(*elt_tys))
+            case Empty():
+                # empty operator
+                # C, Γ |- empty e : list T
+                return self._cvt_type(self._lookup_ty(e))
             case _:
                 raise ValueError(f'unknown n-ary operator: {type(e)}')
 

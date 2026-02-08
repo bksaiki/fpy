@@ -72,7 +72,6 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     round_exact: RoundExact,
     cast: Cast,
     len: Len,
-    empty: Empty,
     dim: Dim,
     enumerate: Enumerate,
     sum: Sum,
@@ -106,6 +105,7 @@ _nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
     min: Min,
     fmin: Min,
     fmax: Max,
+    empty: Empty,
 }
 
 
@@ -507,6 +507,8 @@ class Parser:
             cls = _nary_table[fn]
             if (cls is Min or cls is Max) and len(args) < 2:
                 raise self._parse_error(f'FPy expects at least 2 arguments for `{fn}`', e)
+            elif cls is Empty and len(args) < 1:
+                raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
             if kwargs:
                 raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             if issubclass(cls, NamedNaryOp):

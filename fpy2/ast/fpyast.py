@@ -177,8 +177,8 @@ __all__ = [
     'Range1',
     'Range2',
     'Range3',
-    'Empty',
     'Dim',
+    'Empty',
     'Zip',
     'Enumerate',
 
@@ -1122,12 +1122,12 @@ class Range3(NamedTernaryOp):
     """FPy node: range(start, stop, step)"""
     __slots__ = ()
 
-class Empty(NamedUnaryOp):
-    """FPy node: empty operator"""
-    __slots__ = ()
-
 class Dim(NamedUnaryOp):
     """FPy node: dimension operator"""
+    __slots__ = ()
+
+class Empty(NamedNaryOp):
+    """FPy node: empty operator"""
     __slots__ = ()
 
 class Zip(NamedNaryOp):

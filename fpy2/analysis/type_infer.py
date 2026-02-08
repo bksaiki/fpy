@@ -304,12 +304,6 @@ class _TypeInferInstance(Visitor):
                     # range operator
                     self._unify(arg_ty, RealType(None))
                     return ListType(RealType(None))
-                case Empty():
-                    # arg : real
-                    self._unify(arg_ty, RealType(None))
-                    # result is list[A]
-                    ty = self._fresh_type_var()
-                    return ListType(ty)
                 case Dim():
                     # dimension operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
@@ -398,6 +392,18 @@ class _TypeInferInstance(Visitor):
                     self._unify(arg_ty, ListType(ty))
                     arg_tys.append(self._resolve_type(ty))
                 return ListType(TupleType(*arg_tys))
+            case Empty():
+                #    Γ |- e1 : real  ...  Γ |- eN : real
+                # ---------------------------------------
+                #   Γ |- empty(e1, ..., en) : list[list[... [A]]
+                for arg in e.args:
+                    arg_ty = self._visit_expr(arg, None)
+                    self._unify(arg_ty, RealType())
+
+                ty = self._fresh_type_var()
+                for _ in e.args:
+                    ty = ListType(ty)
+                return ty
             case _:
                 raise ValueError(f'unknown n-ary operator: {type(e)}')
 
