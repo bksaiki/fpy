@@ -119,6 +119,21 @@ def test_harness(func: fp.Function, arg_types: tuple[fp.types.Type, ...]) -> str
                 lines.append('        }')
                 lines.append('    }')
                 lines.append('')
+            case fp.types.ListType() if isinstance(ty.elt, fp.types.ListType) and isinstance(ty.elt.elt, fp.types.RealType):
+                # create a random uniform distribution
+                sampler = emit_distribution(lines, compiler, ty.elt.elt, i)
+                ty_elt_str = compiler.compile_type(ty.elt).to_cpp()
+
+                lines.append(f'    for (size_t i = 0; i < num_inputs; ++i) {{')
+                lines.append(f'        arg{i}[i] = {ty_str}(vector_size);')
+                lines.append(f'        for (size_t j = 0; j < vector_size; ++j) {{')
+                lines.append(f'            arg{i}[i][j] = {ty_elt_str}(vector_size);')
+                lines.append(f'            for (size_t k = 0; k < vector_size; ++k) {{')
+                lines.append(f'                arg{i}[i][j][k] = {sampler};')
+                lines.append('            }')
+                lines.append('        }')
+                lines.append('    }')
+                lines.append('')
             case _:
                 raise NotImplementedError(f'input generation not implemented for type `{ty}`')
 
