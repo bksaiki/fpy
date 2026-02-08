@@ -35,7 +35,7 @@ def identity(n: int) -> list[list[fp.Real]]:
     :param n: Matrix size.
     :return: Identity matrix.
     """
-    result = zeros(n, n)
+    result = fp.empty(n, n)
     for i in range(n):
         result[i][i] = fp.round(1)
     return result
@@ -144,7 +144,7 @@ def diagonal(values: list[fp.Real]) -> list[list[fp.Real]]:
     :return: Diagonal matrix.
     """
     n = len(values)
-    result = zeros(n, n)
+    result = fp.empty(n, n)
     for i in range(n):
         result[i][i] = values[i]
     return result
@@ -162,7 +162,7 @@ def add(A: list[list[fp.Real]], B: list[list[fp.Real]]) -> list[list[fp.Real]]:
     # assert message: "Matrix dimensions must match for addition"
     assert len(B) == rows and len(B[0]) == cols
 
-    result = zeros(rows, cols)
+    result = fp.empty(rows, cols)
     for i in range(rows):
         for j in range(cols):
             result[i][j] = A[i][j] + B[i][j]
@@ -181,7 +181,7 @@ def sub(A: list[list[fp.Real]], B: list[list[fp.Real]]) -> list[list[fp.Real]]:
     # assert message: "Matrix dimensions must match for subtraction"
     assert len(B) == rows and len(B[0]) == cols
 
-    result = zeros(rows, cols)
+    result = fp.empty(rows, cols)
     for i in range(rows):
         for j in range(cols):
             result[i][j] = A[i][j] - B[i][j]
@@ -200,7 +200,7 @@ def hadamard(A: list[list[fp.Real]], B: list[list[fp.Real]]) -> list[list[fp.Rea
     # assert message: "Matrix dimensions must match for Hadamard product"
     assert len(B) == rows and len(B[0]) == cols
     
-    result = zeros(rows, cols)
+    result = fp.empty(rows, cols)
     for i in range(rows):
         for j in range(cols):
             result[i][j] = A[i][j] * B[i][j]
@@ -216,7 +216,7 @@ def scale(scalar: fp.Real, A: list[list[fp.Real]]) -> list[list[fp.Real]]:
     :return: Result matrix scalar * A.
     """
     rows, cols = len(A), len(A[0])
-    result = zeros(rows, cols)
+    result = fp.empty(rows, cols)
     for i in range(rows):
         for j in range(cols):
             result[i][j] = scalar * A[i][j]
@@ -236,7 +236,7 @@ def matmul(A: list[list[fp.Real]], B: list[list[fp.Real]]) -> list[list[fp.Real]
     # assert message: "Matrix dimensions incompatible for multiplication"
     assert n == n_b
     
-    result = zeros(m, p)
+    result = fp.empty(m, p)
     for i in range(m):
         for j in range(p):
             for k in range(n):
@@ -252,7 +252,7 @@ def transpose(A: list[list[fp.Real]]) -> list[list[fp.Real]]:
     :return: Transposed matrix A^T.
     """
     rows, cols = len(A), len(A[0])
-    result = zeros(cols, rows)
+    result = fp.empty(cols, rows)
     for i in range(rows):
         for j in range(cols):
             result[j][i] = A[i][j]
@@ -330,8 +330,9 @@ def matvec(A: list[list[fp.Real]], x: list[fp.Real]):
     # assert message: "Vector length must match matrix columns"
     assert len(x) == n
 
-    result = [fp.round(0) for _ in range(m)]
+    result = fp.empty(m)
     for i in range(m):
+        result[i] = fp.round(0)
         for j in range(n):
             result[i] = result[i] + A[i][j] * x[j]
     return result
@@ -346,7 +347,7 @@ def outer_product(x: list[fp.Real], y: list[fp.Real]):
     :return: Result matrix (m x n).
     """
     m, n = len(x), len(y)
-    result = zeros(m, n)
+    result = fp.empty(m, n)
     for i in range(m):
         for j in range(n):
             result[i][j] = x[i] * y[j]
@@ -516,8 +517,7 @@ def vander(x: list[fp.Real], n: int) -> list[list[fp.Real]]:
     :return: Vandermonde matrix.
     """
     m = len(x)
-    result = zeros(m, n)
-
+    result = fp.empty(m, n)
     for i in range(m):
         for j in range(n):
             result[i][j] = fp.pow(x[i], fp.round(j))
