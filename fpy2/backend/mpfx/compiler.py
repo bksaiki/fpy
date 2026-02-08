@@ -310,8 +310,6 @@ class _MPFXBackendInstance(Visitor):
                 return tid
             case Len():
                 return self._visit_len(e, ctx)
-            case Empty():
-                return self._visit_empty(e, ctx)
             case Not():
                 arg_str = self._visit_expr(e.arg, ctx)
                 return f'!({arg_str})'
@@ -426,6 +424,8 @@ class _MPFXBackendInstance(Visitor):
                 return self._visit_minmax(e, ctx)
             case Or() | And():
                 return self._visit_or_and(e, ctx)
+            case Empty():
+                return self._visit_empty(e, ctx)
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported nary operation to compile: {e}')
 
