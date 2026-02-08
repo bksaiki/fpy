@@ -450,12 +450,11 @@ class _MPFXBackendInstance(Visitor):
         return self._compile_size(f'{arg_cpp}.size()')
 
     def _visit_empty(self, e: Empty, ctx: CompileCtx):
-        # size(x) => std::vector<T>(static_cast<size_t>(size))
-        size_cpp = self._visit_expr(e.arg, ctx)
-        size_str = self._compile_size(size_cpp)
-
+        # size(x1, ..., xn) => std::vector<T>(static_cast<size_t>(x1) * ... * static_cast<size_t>(xn))
         e_ty = self._expr_type(e)
         cpp_ty = self._compile_type(e_ty).to_cpp()
+        sizes = [self._compile_size(self._visit_expr(arg, ctx)) for arg in e.args]
+        size_str = ' * '.join(sizes)
         return f'{cpp_ty}({size_str})'
 
     def _visit_call(self, e: Call, ctx: CompileCtx):

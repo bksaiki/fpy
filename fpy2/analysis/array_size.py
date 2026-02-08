@@ -119,13 +119,6 @@ class _ArraySizeVisitor(DefaultVisitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: None):
         ty = self._visit_expr(e.arg, ctx)
         match e:
-            case Empty():
-                size_v = self._get_eval(e.arg)
-                if isinstance(size_v, Float | Fraction):
-                    size = int(INTEGER.round(size_v))
-                    return _Array(None, size)
-                else:
-                    return _Array(None, None)
             case Range1():
                 stop = self._get_eval(e.arg)
                 if isinstance(stop, Float | Fraction):
@@ -180,6 +173,30 @@ class _ArraySizeVisitor(DefaultVisitor):
 
                     return _Array(_Tuple(tuple(elt_tys)), size)
 
+            case Empty():
+                # iterate from the inner dimension outwards to compute size
+                arg_rev = list(reversed(e.args))
+
+                # innermost dimension
+                size_v = self._get_eval(arg_rev[0])
+                if isinstance(size_v, Float | Fraction):
+                    size = int(INTEGER.round(size_v))
+                else:
+                    size = None
+
+                # type of the innermost dimension
+                ty = _Array(None, size)
+
+                # outer dimensions
+                for arg in arg_rev[1:]:
+                    size_v = self._get_eval(arg)
+                    if isinstance(size_v, Float | Fraction):
+                        size = int(INTEGER.round(size_v))
+                    else:
+                        size = None
+                    ty = _Array(ty, size)
+
+                return ty
 
     def _visit_list_expr(self, e: ListExpr, ctx: None):
         elt_sizes = [self._visit_expr(elt, ctx) for elt in e.elts]

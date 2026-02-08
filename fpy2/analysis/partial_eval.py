@@ -92,7 +92,7 @@ class _PartialEvalInstance(DefaultVisitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
         self._visit_expr(e.arg, ctx)
-        if not isinstance(e, Empty) and self._is_value(e.arg) and ctx is not None:
+        if self._is_value(e.arg) and ctx is not None:
             e_arg = ForeignVal(self.by_expr[e.arg], None)
             if isinstance(e, NamedUnaryOp):
                 e_eval: UnaryOp = type(e)(e.func, e_arg, e.loc)
@@ -126,6 +126,9 @@ class _PartialEvalInstance(DefaultVisitor):
             else:
                 e_eval = type(e)(e_fst, e_snd, e_trd, e.loc)
             self.by_expr[e] = self.rt.eval_expr(e_eval, {}, ctx)
+
+    # TODO: implement _visit_naryop
+    # do not partially evaluate `empty()` since it creates uninitialized values
 
     def _visit_call(self, e: Call, ctx: Context | None):
         for arg in e.args:

@@ -122,13 +122,7 @@ def _func_symbol(name: str):
     return Var(NamedId(name), None)
 
 def _empty(ns: list[Expr]) -> Expr:
-    if len(ns) == 1:
-        return Empty(_func_symbol('empty'), ns[0], None)
-    elif len(ns) > 1:
-        elt = _empty(ns[1:])
-        return ListComp([UnderscoreId()], [Range1(_func_symbol('range'), ns[0], None)], elt, None)
-    else:
-        raise ValueError(f'ns={ns} cannot be empty')
+    return Empty(_func_symbol('empty'), ns, None)
 
 def _round(x: Expr) -> Expr:
     return Round(_func_symbol('round'), x, None)
