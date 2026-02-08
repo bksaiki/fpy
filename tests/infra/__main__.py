@@ -30,6 +30,7 @@ def _run_tests():
     test_copy_prop()
     test_const_fold()
     test_dead_code()
+    test_lift_context()
     test_while_unroll()
     test_split_loop()
     # strategies
