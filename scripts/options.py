@@ -4,7 +4,6 @@ from pathlib import Path
 @dataclass(frozen=True)
 class EvalConfig:
     output_dir: Path
-    num_inputs: int
     seed: int
 
 @dataclass(frozen=True)

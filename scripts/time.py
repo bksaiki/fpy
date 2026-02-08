@@ -5,6 +5,7 @@ from pathlib import Path
 import fpy2 as fp
 
 from .options import CompileConfig, EvalConfig
+from .utils import Benchmark
 
 ###########################################################
 # Compilation
@@ -96,61 +97,65 @@ def test_harness(func: fp.Function, arg_types: tuple[fp.types.Type, ...]) -> str
     lines.append('    std::mt19937 rng(seed);')
     lines.append('')
 
-    # for each argument, seed a vector of inputs
+    # set up distributions for each argument type
+    samplers: list[tuple[fp.types.Type, str]] = []
     for i, ty in enumerate(arg_types):
-        ty_str = compiler.compile_type(ty).to_cpp()
-        lines.append(f'    std::vector<{ty_str}> arg{i}(num_inputs);')
-
         match ty:
             case fp.types.RealType():
-                # create a random uniform distribution
                 sampler = emit_distribution(lines, compiler, ty, i)
-                lines.append(f'    for (size_t i = 0; i < num_inputs; ++i) {{')
-                lines.append(f'        arg{i}[i] = {sampler};')
-                lines.append('    }')
+                samplers.append((ty, sampler))
                 lines.append('')
             case fp.types.ListType() if isinstance(ty.elt, fp.types.RealType):
-                # create a random uniform distribution
                 sampler = emit_distribution(lines, compiler, ty.elt, i)
-                lines.append(f'    for (size_t i = 0; i < num_inputs; ++i) {{')
-                lines.append(f'        arg{i}[i] = {ty_str}(vector_size);')
-                lines.append(f'        for (size_t j = 0; j < vector_size; ++j) {{')
-                lines.append(f'            arg{i}[i][j] = {sampler};')
-                lines.append('        }')
-                lines.append('    }')
+                samplers.append((ty, sampler))
                 lines.append('')
             case fp.types.ListType() if isinstance(ty.elt, fp.types.ListType) and isinstance(ty.elt.elt, fp.types.RealType):
-                # create a random uniform distribution
                 sampler = emit_distribution(lines, compiler, ty.elt.elt, i)
-                ty_elt_str = compiler.compile_type(ty.elt).to_cpp()
-
-                lines.append(f'    for (size_t i = 0; i < num_inputs; ++i) {{')
-                lines.append(f'        arg{i}[i] = {ty_str}(vector_size);')
-                lines.append(f'        for (size_t j = 0; j < vector_size; ++j) {{')
-                lines.append(f'            arg{i}[i][j] = {ty_elt_str}(vector_size);')
-                lines.append(f'            for (size_t k = 0; k < vector_size; ++k) {{')
-                lines.append(f'                arg{i}[i][j][k] = {sampler};')
-                lines.append('            }')
-                lines.append('        }')
-                lines.append('    }')
+                samplers.append((ty, sampler))
                 lines.append('')
             case _:
                 raise NotImplementedError(f'input generation not implemented for type `{ty}`')
 
-    ty_str = compiler.compile_type(ty).to_cpp()
-    arg_list = ', '.join(f'arg{j}[i]' for j in range(len(arg_types)))
+    # main loop: generate input, execute, and time each call
+    lines.append('    long long total_duration = 0;')
+    lines.append('    for (size_t iter = 0; iter < num_inputs; ++iter) {')
+    
+    # generate inputs for this iteration
+    for i, (ty, sampler) in enumerate(samplers):
+        ty_str = compiler.compile_type(ty).to_cpp()
+        match ty:
+            case fp.types.RealType():
+                lines.append(f'        {ty_str} arg{i} = {sampler};')
+            case fp.types.ListType() if isinstance(ty.elt, fp.types.RealType):
+                lines.append(f'        {ty_str} arg{i}(vector_size);')
+                lines.append(f'        for (size_t j = 0; j < vector_size; ++j) {{')
+                lines.append(f'            arg{i}[j] = {sampler};')
+                lines.append('        }')
+            case fp.types.ListType() if isinstance(ty.elt, fp.types.ListType) and isinstance(ty.elt.elt, fp.types.RealType):
+                ty_elt_str = compiler.compile_type(ty.elt).to_cpp()
+                lines.append(f'        {ty_str} arg{i}(vector_size);')
+                lines.append(f'        for (size_t j = 0; j < vector_size; ++j) {{')
+                lines.append(f'            arg{i}[j] = {ty_elt_str}(vector_size);')
+                lines.append(f'            for (size_t k = 0; k < vector_size; ++k) {{')
+                lines.append(f'                arg{i}[j][k] = {sampler};')
+                lines.append('            }')
+                lines.append('        }')
 
-    # execute kernel in a loop with timing
-    lines.append('    auto start = std::chrono::steady_clock::now();')
-    lines.append('    for (size_t i = 0; i < num_inputs; ++i) {')
+    arg_list = ', '.join(f'arg{j}' for j in range(len(arg_types)))
+    lines.append('')
+    
+    # time this single execution
+    lines.append('        auto start = std::chrono::steady_clock::now();')
     lines.append(f'        auto result = {NAME}({arg_list});')
     lines.append('        DoNotOptimizeAway(result);')
+    lines.append('        auto end = std::chrono::steady_clock::now();')
+    lines.append('')
+    lines.append('        total_duration += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();')
     lines.append('    }')
-    lines.append('    auto end = std::chrono::steady_clock::now();')
+    lines.append('')
 
-    # measure time in nanoseconds
-    lines.append('    auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();')
-    lines.append('    std::cout << duration << "\\n";')
+    # output total accumulated time in nanoseconds
+    lines.append('    std::cout << total_duration << "\\n";')
     lines.append('')
 
     lines.append('    return 0;')
@@ -180,23 +185,25 @@ def compile_benchmark(path: Path) -> Path:
 # Code
 
 def time_benchmark(
-    func: fp.Function,
-    ctxs: tuple[fp.Context | None, ...],
+    benchmark: Benchmark,
     key: int,
     config: EvalConfig,
     compile_config: CompileConfig
 ) -> float:
     """Times the execution of an FPy function over a number of iterations."""
-    print(f' Benchmarking function `{func.name}` with config={compile_config}...')
+    print(f' Benchmarking function `{benchmark.func.name}` with config={compile_config}...')
 
     # apply monomorphization
-    arg_types = tuple(monomorphize(arg.type, ctx) for arg, ctx in zip(func.args, ctxs))
+    arg_types = tuple(
+        monomorphize(arg.type, ctx)
+        for arg, ctx in zip(benchmark.func.args, benchmark.ctxs)
+    )
 
     # compile the function
-    code = compile(func, arg_types, compile_config)
+    code = compile(benchmark.func, arg_types, compile_config)
 
     # generate the harness
-    harness = test_harness(func, arg_types)
+    harness = test_harness(benchmark.func, arg_types)
 
     # output directory for this benchmark
     output_dir = config.output_dir / f'benchmark_{key}'
@@ -208,12 +215,12 @@ def time_benchmark(
     with open(output_file, 'w') as f:
         # emit metadata for bookkeeping
         print('// Auto-generated benchmark code ', file=f)
-        print(f'// function: {func.name}', file=f)
+        print(f'// function: {benchmark.func.name}', file=f)
         print(f'// contexts:', file=f)
-        for ctx in ctxs:
+        for ctx in benchmark.ctxs:
             print(f'//   {ctx}', file=f)
         print('// definition:', file=f)
-        for line in func.format().splitlines():
+        for line in benchmark.func.format().splitlines():
             print(f'//   {line}', file=f)
         print('', file=f)
 
@@ -235,7 +242,7 @@ def time_benchmark(
     print(f'  compiled binary to `{binary_path}`.')
 
     # run harness with parameters and capture output
-    cmd = [str(binary_path), str(config.num_inputs), '32', str(config.seed)]
+    cmd = [str(binary_path), str(benchmark.num_inputs), str(benchmark.vector_size), str(config.seed)]
     print(f'  executing benchmark [cmd: {" ".join(cmd)}]...')
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 

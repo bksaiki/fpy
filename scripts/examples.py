@@ -1,13 +1,20 @@
 import fpy2 as fp
 
 @fp.fpy(ctx=fp.REAL)
-def pre_round_mul(x: fp.Real, y: fp.Real) -> fp.Real:
-    with fp.MX_E5M2:
-        xq = fp.round(x)
-        yq = fp.round(y)
-    with fp.FP32:
-        t = xq * yq
-    return t
+def vec_mul(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+    xN = len(xs)
+    yN = len(ys)
+    assert xN == yN, "Input lists must have the same length"
+
+    res = fp.empty(xN)
+    for i in range(xN):
+        with fp.MX_E5M2:
+            xq = fp.round(xs[i])
+            yq = fp.round(ys[i])
+        with fp.FP32:
+            res[i] = xq * yq
+
+    return res
 
 @fp.fpy(ctx=fp.REAL)
 def dot_prod_1(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Real:
