@@ -1010,8 +1010,6 @@ class MPFXCompiler(Backend):
             ctx_info = ContextInfer.infer(ast, def_use=eval_info.def_use, eval_info=eval_info, unsafe_cast_int=self.unsafe_cast_int)
             format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
 
-        print(ast.format())
-
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)
         inst = _MPFXBackendInstance(ast, name, options, format_info, eval_info, allow_exact=self.allow_exact)

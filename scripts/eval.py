@@ -1,48 +1,41 @@
 import fpy2 as fp
 from pathlib import Path
 from argparse import ArgumentParser
-from typing import TypeAlias
+from typing import NamedTuple, TypeAlias
 
 from .examples import *
 from .options import CompileConfig, EvalConfig
 from .time import time_benchmark
+from .utils import Benchmark
 
-ExampleType: TypeAlias = tuple[fp.Function, tuple[fp.Context | None, ...]]
-
-
-DEFAULT_NUM_INPUTS = 1024
-
-EXAMPLES: list[ExampleType] = [
-    # (pre_round_mul, (fp.FP32, fp.FP32)),
-    # (dot_prod_1, (fp.FP32, fp.FP32, fp.FP32)),
-    # (dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32)),
-    # (dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32)),
-    # (mx_block_round, (fp.FP32,)),
-    # (mx_dot_prod, (fp.FP32, fp.FP32, fp.FP32)),
-    (mx_matmul, (fp.FP32, fp.FP32)),
+EXAMPLES: list[Benchmark] = [
+    Benchmark(vec_mul, (fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(dot_prod_1, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 12)),
+    Benchmark(dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 12)),
+    Benchmark(mx_block_round, (fp.FP32,), 1000, (1 << 12)),
+    Benchmark(mx_dot_prod, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 12)),
+    Benchmark(mx_matmul, (fp.FP32, fp.FP32), 10, 256)
 ]
 
-def run_eval(config: EvalConfig, examples: list[ExampleType]) -> None:
+def run_eval(config: EvalConfig, examples: list[Benchmark]) -> None:
     # build list of benchmarks to run
-    benchmarks: list[tuple[ExampleType, CompileConfig]] = []
-    for func, ctxs in examples:
+    benchmarks: list[tuple[Benchmark, CompileConfig]] = []
+    for example in examples:
         for elim_round in (False, True):
             for allow_exact in (False, True):
                 compile_config = CompileConfig(elim_round=elim_round, allow_exact=allow_exact)
-                benchmarks.append(((func, ctxs), compile_config))
+                benchmarks.append((example, compile_config))
 
-    for i, benchmark in enumerate(benchmarks):
-        (func, ctxs), compile_config = benchmark
-        time_benchmark(func, ctxs, i, config, compile_config)
+    for i, (benchmark, compile_config) in enumerate(benchmarks):
+        time_benchmark(benchmark, i, config, compile_config)
 
 if __name__ == '__main__':
     parser = ArgumentParser(description='FPy/MPFX evaluation')
-    parser.add_argument('--num-inputs', type=int, default=DEFAULT_NUM_INPUTS, help='Number of inputs to generate per benchmark (default: 100000)')
     parser.add_argument('--seed', type=int, default=1, help='Random seed for input generation (default: 1)')
     parser.add_argument('output_dir', type=Path, help='Output directory for results')
     args = parser.parse_args()
 
-    num_inputs: int = args.num_inputs
     seed: int = args.seed
     output_dir: Path = args.output_dir.resolve()
 
@@ -53,7 +46,6 @@ if __name__ == '__main__':
     # Eval configuration
     config = EvalConfig(
         output_dir=output_dir,
-        num_inputs=num_inputs,
         seed=seed
     )
 
