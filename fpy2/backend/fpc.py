@@ -334,11 +334,18 @@ class _FPCoreCompileInstance(Visitor):
                 fpc.Add(fpc.Mul(fpc.Var(tuple_id), step_expr), start_expr))
         )
 
-    def _visit_empty(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # tensor with uninitialized values
-        tuple_id = str(self.gensym.fresh('i'))
-        size = self._visit_expr(arg, ctx)
-        return fpc.Tensor([(tuple_id, size)], fpc.Integer(0))
+    def _visit_empty(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
+        if len(args) == 1:
+            # tensor with uninitialized values
+            tuple_id = str(self.gensym.fresh('i'))
+            size = self._visit_expr(args[0], ctx)
+            return fpc.Tensor([(tuple_id, size)], fpc.Integer(0))
+        else:
+            # tensor with empty(args[1], ..., args[n]) as uninitialized values
+            tuple_id = str(self.gensym.fresh('i'))
+            size = self._visit_expr(args[0], ctx)
+            elt = self._visit_empty(args[1:], ctx)
+            return fpc.Tensor([(tuple_id, size)], elt)
 
     def _visit_size(self, arr: Expr, dim: Expr, ctx) -> fpc.Expr:
         tup = self._visit_expr(arr, ctx)
@@ -452,9 +459,6 @@ class _FPCoreCompileInstance(Visitor):
                 case Range1():
                     # range expression
                     return self._visit_range1(e.arg, ctx)
-                case Empty():
-                    # empty expression
-                    return self._visit_empty(e.arg, ctx)
                 case Dim():
                     # dim expression
                     return self._visit_dim(e.arg, ctx)
@@ -522,6 +526,9 @@ class _FPCoreCompileInstance(Visitor):
                 case Max():
                     # max expression
                     return self._visit_max(e.args, ctx)
+                case Empty():
+                    # empty expression
+                    return self._visit_empty(e.args, ctx)
                 case _:
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)

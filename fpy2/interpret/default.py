@@ -300,13 +300,14 @@ class _Interpreter(Visitor):
             for i in range(start_idx, stop_idx, step_idx)
         ]
 
-    def _apply_empty(self, arg: Expr, ctx: Context):
-        size = self._visit_expr(arg, ctx)
-        if not isinstance(size, RealValue):
-            raise TypeError(f'expected a real number argument, got {size}')
-        if not self._is_integer(size) or size < 0:
-            raise ValueError(f'expected a non-negative integer argument, got {size}')
-        return ops.empty(size)
+    def _apply_empty(self, args: tuple[Expr, ...], ctx: Context):
+        sizes: list[Fraction | Float] = []
+        for arg in args:
+            size = self._visit_expr(arg, ctx)
+            if not isinstance(size, RealValue):
+                raise TypeError(f'expected a real number argument, got {size}')
+            sizes.append(size)
+        return ops.empty(*sizes)
 
     def _apply_dim(self, arg: Expr, ctx: Context):
         v = self._visit_expr(arg, ctx)
@@ -429,8 +430,6 @@ class _Interpreter(Visitor):
                     return self._apply_len(e.arg, ctx)
                 case Range1():
                     return self._apply_range(None, e.arg, None, ctx)
-                case Empty():
-                    return self._apply_empty(e.arg, ctx)
                 case Dim():
                     return self._apply_dim(e.arg, ctx)
                 case Enumerate():
@@ -491,6 +490,8 @@ class _Interpreter(Visitor):
                 return self._apply_min(e.args, ctx)
             case Max():
                 return self._apply_max(e.args, ctx)
+            case Empty():
+                return self._apply_empty(e.args, ctx)
             case _:
                 raise RuntimeError('unknown operator', e)
 

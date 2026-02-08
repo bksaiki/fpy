@@ -139,6 +139,12 @@ def _normalize(x: Float | Fraction, ctx: Context):
     else:
         return ctx.round(x)
 
+def _empty(dims_list: list[int]) -> list:
+    if len(dims_list) == 1:
+        return [UNINIT for _ in range(dims_list[0])]
+    else:
+        return [_empty(dims_list[1:]) for _ in range(dims_list[0])]
+
 def _flatten(x: list) -> list:
     """Flattens a nested list of scalars into a flat list."""
     result = []
@@ -970,14 +976,28 @@ def declcontext(x: Real, ctx: Context = REAL) -> Context:
 #############################################################################
 # Tensor
 
-def empty(n: Real, ctx: Context = REAL) -> list:
+def empty(*dims: Real, ctx: Context = REAL) -> list:
     """
-    Initializes an empty list of length `n`.
+    Initializes an empty nested list with dimensions specified by `dims`.
+
+    Each argument specifies the size of a dimension from outer to inner.
+    For example:
+    - empty(5) creates a 1D list of size 5
+    - empty(3, 4) creates a 3x4 2D list (3 outer lists, each with 4 elements)
+    - empty(2, 3, 4) creates a 2x3x4 3D list
     """
-    n = _cvt_to_float(n)
-    if not n.is_integer() or n.is_negative():
-        raise ValueError(f'Invalid list size: {n}')
-    return [UNINIT for _ in range(int(n))]
+    if not dims:
+        raise ValueError('At least one dimension must be specified')
+
+    # Convert all dimensions to integers and validate
+    int_dims = []
+    for d in dims:
+        d_float = _cvt_to_float(d)
+        if not d_float.is_integer() or d_float.is_negative():
+            raise ValueError(f'Invalid list size: {d_float}')
+        int_dims.append(int(d_float))
+
+    return _empty(int_dims)
 
 def dim(x: list, ctx: Context = REAL):
     """

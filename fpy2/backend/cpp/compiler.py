@@ -689,6 +689,10 @@ class _CppBackendInstance(Visitor):
                 assert len(e.args) >= 2
                 args = [self._visit_expr(arg, ctx) for arg in e.args]
                 return '(' + ' || '.join(args) + ')'
+            case Empty():
+                # empty(d1, ... dN) =>
+                _, cpp_ty = self._expr_type(e)
+                return f'{cpp_ty.format()}()'
             case _:
                 raise CppCompileError(self.func, f'unsupported n-ary operation: `{e.format()}`')
 
