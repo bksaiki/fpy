@@ -527,95 +527,127 @@ class _MPFXBackendInstance(Visitor):
         args = ', '.join(self._visit_expr(arg, ctx) for arg in e.elts)
         return f'{cpp_ty.to_cpp()}({{{args}}})'
 
-    def _visit_list_comp(self, e: ListComp, ctx: CompileCtx):
-        if len(e.targets) == 1:
-            # simple case: single for-loop
-            # [<e> for <x> in <iterable>] =>
-            # auto <t> = <iterable>;
-            # std::vector<T> v(t.size());
-            # for (size_t i = 0; i < t.size(); ++i) {
-            #   v[i] = <e>;
-            # }
+    def _visit_list_comp_zip(self, e: ListComp, ctx: CompileCtx):
+        # optimized list comprehension for zip:
+        # [<e> for <x1>, ..., <xN> in zip(<iterable1>, ..., <iterableN>)] =>
+        # auto <t1> = <iterable1>;
+        # ...
+        # auto <tN> = <iterableN>;
+        # std::vector<T> v(t1.size());
+        # for (size_t i = 0; i < t1.size(); ++i) {
+        #   auto <x1> = t1[i];
+        #   ...
+        #   auto <xN> = tN[i];
+        #   v[i] = <e>;
+        # }
+        assert len(e.targets) == 1 and isinstance(e.iterables[0], Zip)
 
-            target = e.targets[0]
-            iterable = e.iterables[0]
+        # result
+        v = self._fresh_var()
+        cpp_ty = self._compile_type(self._expr_type(e))
 
-            # evaluate iterable
+        # emit loop 
+        i = self._visit_for_zip(e, e.targets[0], e.iterables[0], ctx, result=(v, cpp_ty))
+
+        # assignment
+        elt = self._visit_expr(e.elt, ctx)
+        ctx.indent().add_line(f'{v}[{i}] = {elt};')
+
+        # closing brace
+        ctx.add_line('}')
+        return v
+
+    def _visit_list_comp_product(self, e: ListComp, ctx: CompileCtx):
+        # general list comprehension with at least 2 iterables:
+        # [<e> for <x1> in <iterable1> ... for <xN> in <iterableN>] =>
+        # std::vector<T> v;
+        # for (auto <x1> : <iterable1>) {
+        #   auto <t2> = <iterable2>;  // evaluated in context of x1
+        #   for (auto <x2> : <t2>) {
+        #     ...
+        #       auto <tN> = <iterableN>;  // evaluated in context of x1, x2, ...
+        #       for (auto <xN> : <tN>) {
+        #         v.push_back(<e>);
+        #       }
+        #   }
+        # }
+
+        # create output vector
+        v = self._fresh_var()
+        cpp_ty = self._compile_type(self._expr_type(e))
+        ctx.add_line(f'{cpp_ty.to_cpp()} {v};')
+
+        # build nested loops - each iterable is evaluated in its proper context
+        body_ctx = ctx
+        for target, iterable in zip(e.targets, e.iterables):
+            # evaluate iterable in current loop context
             t = self._fresh_var()
-            iterable_cpp = self._visit_expr(iterable, ctx)
-            ctx.add_line(f'auto {t} = {iterable_cpp};')
+            iterable_cpp = self._visit_expr(iterable, body_ctx)
+            body_ctx.add_line(f'auto {t} = {iterable_cpp};')
 
-            # create output vector
-            v = self._fresh_var()
-            e_ty = self._expr_type(e)
-            cpp_ty = self._compile_type(e_ty)
-            ctx.add_line(f'{cpp_ty.to_cpp()} {v}({t}.size());')
-
-            # build the for loop
-            i = self._fresh_var()
-            ctx.add_line(f'for (size_t {i} = 0; {i} < {t}.size(); ++{i}) {{')
+            # open the for loop
             match target:
                 case Id():
-                    ctx.indent().add_line(f'auto {target} = {t}[{i}];')
+                    body_ctx.add_line(f'for (auto {target} : {t}) {{')
                 case TupleBinding():
-                    temp = self._fresh_var()
-                    ctx.indent().add_line(f'auto {temp} = {t}[{i}];')
-                    self._visit_tuple_binding(temp, target, e, ctx.indent())
+                    t2 = self._fresh_var()
+                    body_ctx.add_line(f'for (auto {t2} : {t}) {{')
+                    self._visit_binding(e, target, t2, body_ctx.indent())
                 case _:
                     raise RuntimeError(f'unreachable {target}')
+            body_ctx = body_ctx.indent()
 
-            # compute the element and add to result
-            elt = self._visit_expr(e.elt, ctx.indent())
-            ctx.indent().add_line(f'{v}[{i}] = {elt};')
-            ctx.add_line('}')  # closing brace
-        else:
-            # [<e> for <x1> in <iterable1> ... for <xN> in <iterableN>] =>
-            # std::vector<T> v;
-            # for (auto <x1> : <iterable1>) {
-            #   auto <t2> = <iterable2>;  // evaluated in context of x1
-            #   for (auto <x2> : <t2>) {
-            #     ...
-            #       auto <tN> = <iterableN>;  // evaluated in context of x1, x2, ...
-            #       for (auto <xN> : <tN>) {
-            #         v.push_back(<e>);
-            #       }
-            #   }
-            # }
+        # compute the element and add to result
+        elt = self._visit_expr(e.elt, body_ctx)
+        body_ctx.add_line(f'{v}.push_back({elt});')
 
-            # create output vector
-            v = self._fresh_var()
-            cpp_ty = self._compile_type(self._expr_type(e))
-            ctx.add_line(f'{cpp_ty.to_cpp()} {v};')
+        # closing braces
+        while body_ctx.indent_level > ctx.indent_level:
+            body_ctx = body_ctx.dedent()
+            body_ctx.add_line('}')
 
-            # build nested loops - each iterable is evaluated in its proper context
-            body_ctx = ctx
-            for target, iterable in zip(e.targets, e.iterables):
-                # evaluate iterable in current loop context
-                t = self._fresh_var()
-                iterable_cpp = self._visit_expr(iterable, body_ctx)
-                body_ctx.add_line(f'auto {t} = {iterable_cpp};')
+        return v
 
-                # open the for loop
-                match target:
-                    case Id():
-                        body_ctx.add_line(f'for (auto {target} : {t}) {{')
-                    case TupleBinding():
-                        t2 = self._fresh_var()
-                        body_ctx.add_line(f'for (auto {t2} : {t}) {{')
-                        self._visit_tuple_binding(t2, target, e, body_ctx.indent())
-                    case _:
-                        raise RuntimeError(f'unreachable {target}')
-                body_ctx = body_ctx.indent()
+    def _visit_list_comp(self, e: ListComp, ctx: CompileCtx):
+        if len(e.targets) >= 2:
+            # general case: multiple for-loops with dynamic allocation
+            return self._visit_list_comp_product(e, ctx)
 
-            # compute the element and add to result
-            elt = self._visit_expr(e.elt, body_ctx)
-            body_ctx.add_line(f'{v}.push_back({elt});')
+        # single for-loop
+        target = e.targets[0]
+        iterable = e.iterables[0]
 
-            # closing braces
-            while body_ctx.indent_level > ctx.indent_level:
-                body_ctx = body_ctx.dedent()
-                body_ctx.add_line('}')
+        if isinstance(iterable, Zip):
+            # optimized case: zip with single target
+            return self._visit_list_comp_zip(e, ctx)
 
+        # [<e> for <x> in <iterable>] =>
+        # auto <t> = <iterable>;
+        # std::vector<T> v(t.size());
+        # for (size_t i = 0; i < t.size(); ++i) {
+        #   v[i] = <e>;
+        # }
+
+        # evaluate iterable
+        t = self._fresh_var()
+        iterable_cpp = self._visit_expr(iterable, ctx)
+        ctx.add_line(f'auto {t} = {iterable_cpp};')
+
+        # create output vector
+        v = self._fresh_var()
+        e_ty = self._expr_type(e)
+        cpp_ty = self._compile_type(e_ty)
+        ctx.add_line(f'{cpp_ty.to_cpp()} {v}({t}.size());')
+
+        # build the for loop
+        i = self._fresh_var()
+        ctx.add_line(f'for (size_t {i} = 0; {i} < {t}.size(); ++{i}) {{')
+        self._visit_binding(e, target, f'{t}[{i}]', ctx.indent())
+
+        # compute the element and add to result
+        elt = self._visit_expr(e.elt, ctx.indent())
+        ctx.indent().add_line(f'{v}[{i}] = {elt};')
+        ctx.add_line('}')  # closing brace
         return v
 
     def _visit_list_ref(self, e: ListRef, ctx: CompileCtx):
@@ -674,8 +706,12 @@ class _MPFXBackendInstance(Visitor):
         match name:
             case NamedId():
                 if self._var_is_decl(name, site):
-                    ty_str = self._compile_type(self._var_type(name, site)).to_cpp()
-                    ctx.add_line(f'{ty_str} {name} = {e};')
+                    ty = self._var_type(name, site)
+                    cpp_ty = self._compile_type(ty)
+                    if not isinstance(cpp_ty, TupleType | ListType):
+                        ctx.add_line(f'{cpp_ty.to_cpp()} {name} = {e};')
+                    else:
+                        ctx.add_line(f'auto {name} = {e};')
                 else:
                     ctx.add_line(f'{name} = {e};')
             case UnderscoreId():
@@ -683,35 +719,22 @@ class _MPFXBackendInstance(Visitor):
             case _:
                 raise RuntimeError(f'unreachable: {name}')
 
-    def _visit_tuple_binding(self, t_id: str, binding: TupleBinding, site: DefSite, ctx: CompileCtx):
-        for i, elt in enumerate(binding.elts):
-            match elt:
-                case NamedId():
-                    # bind the ith element to the name
-                    self._visit_decl(elt, f'std::get<{i}>({t_id})', site, ctx)
-                case UnderscoreId():
-                    # do nothing
-                    pass
-                case TupleBinding():
-                    # emit temporary variable for the tuple
-                    t = self._fresh_var()
-                    ctx.add_line(f'auto {t} = std::get<{i}>({t_id});')
-                    self._visit_tuple_binding(t, elt, site, ctx)
-                case _:
-                    raise RuntimeError(f'unreachable: {elt}')
-
-    def _visit_assign(self, stmt: Assign, ctx: CompileCtx):
-        e = self._visit_expr(stmt.expr, ctx)
-        match stmt.target:
+    def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, e: str, ctx: CompileCtx):
+        match binding:
             case Id():
-                self._visit_decl(stmt.target, e, stmt, ctx)
+                self._visit_decl(binding, e, site, ctx)
             case TupleBinding():
                 # emit temporary variable for the tuple
                 t = self._fresh_var()
                 ctx.add_line(f'auto {t} = {e};')
-                self._visit_tuple_binding(t, stmt.target, stmt, ctx)
+                for i, elt in enumerate(binding.elts):
+                    self._visit_binding(site, elt, f'std::get<{i}>({t})', ctx)
             case _:
-                raise NotImplementedError(stmt.binding)
+                raise RuntimeError(f'unreachable: {binding}')
+
+    def _visit_assign(self, stmt: Assign, ctx: CompileCtx):
+        e = self._visit_expr(stmt.expr, ctx)
+        self._visit_binding(stmt, stmt.target, e, ctx)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: CompileCtx):
         # compile indices
@@ -780,7 +803,7 @@ class _MPFXBackendInstance(Visitor):
             raise RuntimeError(f'unreachable: {iterable}')
 
 
-    def _visit_for_zip(self, stmt: ForStmt, target: TupleBinding, iterable: Zip, ctx: CompileCtx):
+    def _visit_for_zip(self, site: DefSite, target: Id | TupleBinding, iterable: Zip, ctx: CompileCtx, result: tuple[str, CppType] | None = None):
         # special case: for (a, b, ...) in zip(x1, x2, ...)
         # auto t1 = x1;
         # ...
@@ -789,6 +812,8 @@ class _MPFXBackendInstance(Visitor):
         #     auto a = t1[i];
         #     auto b = t2[i];
         #     ...
+
+        # bind zip arguments to temporaries
         ts: list[str] = []
         for arg in iterable.args:
             t = self._fresh_var()
@@ -796,26 +821,43 @@ class _MPFXBackendInstance(Visitor):
             ctx.add_line(f'auto {t} = {arg_cpp};')
             ts.append(t)
 
+        # optionally allocate result vector if this is a list comprehension
+        if result is not None:
+            res_name, res_ty = result
+            ctx.add_line(f'{res_ty.to_cpp()} {res_name}({ts[0]}.size());')
+
+        # generate loop
         i = self._fresh_var()
         ctx.add_line(f'for (size_t {i} = 0; {i} < {ts[0]}.size(); ++{i}) {{')
         ctx = ctx.indent()
-        for elt, t in zip(target.elts, ts):
-            match elt:
-                case Id():
-                    self._visit_decl(elt, f'{t}[{i}]', stmt, ctx)
-                case TupleBinding():
-                    # emit temporary variable for the tuple
-                    t2 = self._fresh_var()
-                    ctx.add_line(f'auto {t2} = {t}[{i}];')
-                    self._visit_tuple_binding(t2, elt, stmt, ctx)
-                case _:
-                    raise RuntimeError(f'unreachable: {elt}')
+        match target:
+            case Id():
+                # single variable: bind to `make_tuple(t1[i], ..., tn[i])`
+                match target:
+                    case NamedId():
+                        tid = target
+                    case UnderscoreId():
+                        tid = self._fresh_var()
+                    case _:
+                        raise RuntimeError(f'unreachable: {target}')
+
+                e = ', '.join(f'{t}[{i}]' for t in ts)
+                self._visit_decl(tid, f'make_tuple({e})', site, ctx)
+            case TupleBinding():
+                for elt, t in zip(target.elts, ts):
+                    self._visit_binding(site, elt, f'{t}[{i}]', ctx)
+            case _:
+                raise RuntimeError(f'unreachable: {target}')
+
+        # return the index variable
+        return i
+
 
     def _visit_for(self, stmt: ForStmt, ctx: CompileCtx):
         if isinstance(stmt.target, Id) and isinstance(stmt.iterable, Range1 | Range2 | Range3):
             # optimized: iterating over [0, n)
             self._visit_for_range(stmt.target, stmt.iterable, ctx)
-        elif isinstance(stmt.target, TupleBinding) and isinstance(stmt.iterable, Zip):
+        elif isinstance(stmt.iterable, Zip):
             # optimized: iterating over zip(...)
             self._visit_for_zip(stmt, stmt.target, stmt.iterable, ctx)
         else:
@@ -827,7 +869,7 @@ class _MPFXBackendInstance(Visitor):
                 case TupleBinding():
                     t = self._fresh_var()
                     ctx.add_line(f'for (auto {t} : {iterable}) {{')
-                    self._visit_tuple_binding(t, stmt.target, stmt, ctx.indent())
+                    self._visit_binding(stmt, stmt.target, t, ctx.indent())
                 case _:
                     raise RuntimeError(f'unreachable {ctx}')
 
