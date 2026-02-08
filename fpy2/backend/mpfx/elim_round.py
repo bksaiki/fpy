@@ -136,7 +136,4 @@ class ElimRound:
 
         # apply eliminator
         eliminator = _ElimRoundVisitor(func, format_info)
-        func = eliminator.apply()
-
-        # perform copy propagation to eliminate introduced variables
-        return CopyPropagate.apply(func)
+        return eliminator.apply()

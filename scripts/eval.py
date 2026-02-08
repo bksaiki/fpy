@@ -1,7 +1,6 @@
 import fpy2 as fp
 from pathlib import Path
 from argparse import ArgumentParser
-from typing import NamedTuple, TypeAlias
 
 from .examples import *
 from .options import CompileConfig, EvalConfig
@@ -11,10 +10,10 @@ from .utils import Benchmark
 EXAMPLES: list[Benchmark] = [
     Benchmark(vec_mul, (fp.FP32, fp.FP32), 1000, (1 << 16)),
     Benchmark(dot_prod_1, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
-    Benchmark(dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 12)),
-    Benchmark(dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 12)),
-    Benchmark(mx_block_round, (fp.FP32,), 1000, (1 << 12)),
-    Benchmark(mx_dot_prod, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 12)),
+    Benchmark(dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(mx_block_round, (fp.FP32,), 1000, (1 << 16)),
+    Benchmark(mx_dot_prod, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
     Benchmark(mx_matmul, (fp.FP32, fp.FP32), 10, 256)
 ]
 
