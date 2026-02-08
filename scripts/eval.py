@@ -10,7 +10,7 @@ from .time import time_benchmark
 ExampleType: TypeAlias = tuple[fp.Function, tuple[fp.Context | None, ...]]
 
 
-DEFAULT_NUM_INPUTS = 1_000_000
+DEFAULT_NUM_INPUTS = 1024
 
 EXAMPLES: list[ExampleType] = [
     # (pre_round_mul, (fp.FP32, fp.FP32)),
@@ -19,7 +19,7 @@ EXAMPLES: list[ExampleType] = [
     # (dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32)),
     # (mx_block_round, (fp.FP32,)),
     # (mx_dot_prod, (fp.FP32, fp.FP32, fp.FP32)),
-    (mx_gemm, (fp.FP32, fp.FP32)),
+    (mx_matmul, (fp.FP32, fp.FP32)),
 ]
 
 def run_eval(config: EvalConfig, examples: list[ExampleType]) -> None:

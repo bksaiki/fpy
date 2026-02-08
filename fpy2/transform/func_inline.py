@@ -64,15 +64,19 @@ class _FuncInline(DefaultTransformVisitor):
             # not a candidate for inlining
             return super()._visit_call(e, ctx)
 
+        # recursively inline the callee function body
+        # ASSUME: no recursive calls, i.e. the callee function does not call itself directly or indirectly
+        ast = FuncInline.apply(e.fn.ast)
+
         # ASSUME: single return statement at the end of the function body
 
         # first, rename all variables in the function body
-        reachability = ReachingDefs.analyze(e.fn.ast)
+        reachability = ReachingDefs.analyze(ast)
         subst: dict[NamedId, NamedId] = {}
         for d in reachability.defs:
             if isinstance(d, AssignDef) and not d.is_free:
                 subst[d.name] = self.gensym.refresh(d.name)
-        ast = RenameTarget.apply(e.fn.ast, subst)
+        ast = RenameTarget.apply(ast, subst)
 
         # merge free variables
         for name in ast.free_vars:

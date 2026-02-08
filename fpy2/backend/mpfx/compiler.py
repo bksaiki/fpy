@@ -13,6 +13,7 @@ from ...analysis import (
 from ...function import Function
 from ...libraries.core import ldexp
 from ...number import EFloatContext, IEEEContext, ExpContext, OV, RM, FP64, INTEGER
+from ...strategies import simplify
 from ...transform import DeadCodeEliminate, Monomorphize, FuncInline
 from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListType, Type
 from ...utils import Gensym
@@ -450,12 +451,30 @@ class _MPFXBackendInstance(Visitor):
         return self._compile_size(f'{arg_cpp}.size()')
 
     def _visit_empty(self, e: Empty, ctx: CompileCtx):
-        # size(x1, ..., xn) => std::vector<T>(static_cast<size_t>(x1) * ... * static_cast<size_t>(xn))
+        # empty(x1, ..., xn) => std::vector<...std::vector<T>(xn)...>(x1)
+        # Creates nested vectors with proper space reservation at each level
         e_ty = self._expr_type(e)
-        cpp_ty = self._compile_type(e_ty).to_cpp()
-        sizes = [self._compile_size(self._visit_expr(arg, ctx)) for arg in e.args]
-        size_str = ' * '.join(sizes)
-        return f'{cpp_ty}({size_str})'
+
+        # Extract base element type by unwrapping all ListFormatType layers
+        ty = e_ty
+        while isinstance(ty, ListFormatType):
+            ty = ty.elt
+        base_cpp_ty = self._compile_type(ty).to_cpp()
+
+        # Compile dimension expressions to size strings
+        dims = [self._compile_size(self._visit_expr(arg, ctx)) for arg in e.args]
+
+        # Build nested constructor from innermost to outermost
+        # Start with the innermost 1D vector
+        res_str = f'std::vector<{base_cpp_ty}>({dims[-1]})'
+        curr_type = f'std::vector<{base_cpp_ty}>'
+
+        # Iterate backwards through dimensions (outer to inner)
+        for i in range(len(dims) - 2, -1, -1):
+            next_type = f'std::vector<{curr_type}>'
+            res_str = f'{next_type}({dims[i]}, {res_str})'
+            curr_type = next_type
+        return res_str
 
     def _visit_call(self, e: Call, ctx: CompileCtx):
         # possibly can determine result of the call statically
@@ -951,11 +970,15 @@ class MPFXCompiler(Backend):
             name = func.name
 
         # inlining
-        ast = func.ast
         if self.inline:
-            ast = FuncInline.apply(ast)
+            ast = FuncInline.apply(func.ast)
+            func = func.with_ast(ast)
+
+        # optimize
+        # func = simplify(func, enable_const_fold=False, enable_const_prop=False)
 
         # monomorphizing
+        ast = func.ast
         if arg_types is None:
             arg_types = [None for _ in func.args]
         if ast.ctx is not None:
@@ -986,6 +1009,8 @@ class MPFXCompiler(Backend):
             eval_info = PartialEval.apply(ast)
             ctx_info = ContextInfer.infer(ast, def_use=eval_info.def_use, eval_info=eval_info, unsafe_cast_int=self.unsafe_cast_int)
             format_info = FormatInfer.infer(ast, ctx_info=ctx_info)
+
+        print(ast.format())
 
         # compile
         options = CppOptions(self.unsafe_finitize_int, self.unsafe_cast_int)

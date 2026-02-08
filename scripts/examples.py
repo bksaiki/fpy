@@ -225,17 +225,20 @@ def mx_dot_prod(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Real:
 
 
 @fp.fpy(ctx=fp.REAL)
-def mx_gemm(
+def mx_matmul(
     A: list[list[fp.Real]],  # matrix: MxK
     Bt: list[list[fp.Real]], # matrix transpose: NxK
 ) -> list[list[fp.Real]]:
     """Matrix multiplication using MX-style dot products."""
 
-    Am, Ak = len(A), len(A[0])
-    Bn, Bk = len(Bt), len(Bt[0])
+    # extract dimensions
+    Am = len(A)
+    Ak = len(A[0])
+    Bn = len(Bt)
+    Bk = len(Bt[0])
     assert Ak == Bk, "Inner dimensions of A and Bt must match"
 
-    C: list[list[fp.Real]] = [fp.empty(Bn) for _ in range(Am)]
+    C: list[list[fp.Real]] = fp.empty(Am, Bn)
     for i in range(Am):
         for j in range(Bn):
             C[i][j] = mx_dot_prod(A[i], Bt[j], 0.0)
