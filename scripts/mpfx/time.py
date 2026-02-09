@@ -4,8 +4,7 @@ from pathlib import Path
 
 import fpy2 as fp
 
-from .options import CompileConfig, EvalConfig
-from .utils import Benchmark
+from .options import CompileConfig, OptOptions
 
 ###########################################################
 # Compilation
@@ -40,10 +39,10 @@ def monomorphize(ann: fp.ast.TypeAnn, ctx: fp.Context | None):
 def compile(
     func: fp.Function,
     arg_types: tuple[fp.types.Type, ...],
-    compile_config: CompileConfig
+    opt_options: OptOptions
 ) -> str:
     """Compiles an FPy function for given contexts."""
-    compiler = fp.MPFXCompiler(elim_round=compile_config.elim_round, allow_exact=compile_config.allow_exact)
+    compiler = fp.MPFXCompiler(elim_round=opt_options.elim_round, allow_exact=opt_options.allow_exact)
     code = compiler.compile(func, name=NAME, arg_types=arg_types)
     return code
 
@@ -184,14 +183,13 @@ def compile_benchmark(path: Path) -> Path:
 ###########################################################
 # Code
 
-def time_benchmark(
-    benchmark: Benchmark,
-    key: int,
-    config: EvalConfig,
-    compile_config: CompileConfig
-) -> float:
+def time_benchmark(config: CompileConfig, key: int) -> list[float]:
     """Times the execution of an FPy function over a number of iterations."""
-    print(f' Benchmarking function `{benchmark.func.name}` with config={compile_config}...')
+    benchmark = config.benchmark
+    eval_config = config.eval_config
+
+    print(f' Benchmarking function `{benchmark.func.name}`...')
+    print(f'   options: {config.opt_options}')
 
     # apply monomorphization
     arg_types = tuple(
@@ -200,13 +198,13 @@ def time_benchmark(
     )
 
     # compile the function
-    code = compile(benchmark.func, arg_types, compile_config)
+    code = compile(benchmark.func, arg_types, config.opt_options)
 
     # generate the harness
     harness = test_harness(benchmark.func, arg_types)
 
     # output directory for this benchmark
-    output_dir = config.output_dir / f'benchmark_{key}'
+    output_dir = eval_config.output_dir / f'benchmark_{key}'
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f'  working files under `{output_dir}`')
 
@@ -240,20 +238,19 @@ def time_benchmark(
     # compile the benchmark
     binary_path = compile_benchmark(output_file)
     print(f'  compiled binary to `{binary_path}`.')
+    cmd = [str(binary_path), str(benchmark.num_inputs), str(benchmark.vector_size), str(eval_config.seed)]
+    
+    # run the benchmark and capture output
+    times: list[float] = []
+    for _ in range(eval_config.num_iterations): 
+        print(f'  executing benchmark [cmd: {" ".join(cmd)}]...')
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-    # run harness with parameters and capture output
-    cmd = [str(binary_path), str(benchmark.num_inputs), str(benchmark.vector_size), str(config.seed)]
-    print(f'  executing benchmark [cmd: {" ".join(cmd)}]...')
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-
-    # parse elapsed time from output
-    for line in result.stdout.splitlines():
-        try:
+        # parse elapsed time from output
+        for line in result.stdout.splitlines():
             duration_ns = int(line.strip())
             duration_s = duration_ns / 1_000_000_000.0
             print(f'  benchmark completed in {duration_s:.6f}s.')
-            return duration_s
-        except ValueError:
-            continue
+            times.append(duration_s)
 
-    return 0.0
+    return times
