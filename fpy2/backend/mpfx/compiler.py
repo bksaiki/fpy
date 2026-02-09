@@ -208,6 +208,9 @@ class _MPFXBackendInstance(Visitor):
             case Integer():
                 return self._compile_literal(str(e.val), ty)
             case Rational():
+                if e in self.eval_info.by_expr:
+                    v = self.eval_info.by_expr[e]
+                    return self._compile_literal(str(v), ty)
                 raise MPFXCompileError(self.func, 'rational values are unsupported')
             case Digits():
                 raise MPFXCompileError(self.func, '`digits(m, e, b)` is unsupported')

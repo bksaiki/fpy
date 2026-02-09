@@ -144,9 +144,9 @@ class AbstractFormat:
         exp = min(self.exp, other.exp)
         pos_bound = self.pos_bound - other.neg_bound
         neg_bound = self.neg_bound - other.pos_bound
-        if math.isnan(pos_bound):
+        if isinstance(pos_bound, float) and math.isnan(pos_bound):
             pos_bound = float('inf')
-        if math.isnan(neg_bound):
+        if isinstance(neg_bound, float) and math.isnan(neg_bound):
             neg_bound = float('-inf')
 
         # compute precision based on bounds and exponent

@@ -333,6 +333,9 @@ class InstrGenerator:
                 return
         else:
             # sum with a loop
+            if _fits_in_double(elt_ty):
+                raise NotImplementedError(e_ty)
+
             raise NotImplementedError()
 
         self.raise_error(f'cannot compile `sum({arr_str})`: list[{elt_ty}] -> {e_ty} under context {rctx}')
