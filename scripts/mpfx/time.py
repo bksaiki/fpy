@@ -32,7 +32,7 @@ def monomorphize(ann: fp.ast.TypeAnn, ctx: fp.Context | None):
         case fp.ast.ListTypeAnn():
             return fp.types.ListType(monomorphize(ann.elt, ctx))
         case fp.ast.TupleTypeAnn():
-            raise RuntimeError('tuple type annotations are not supported for monomorphization')
+            return fp.types.TupleType(*(monomorphize(elt, ctx) for elt in ann.elts))
         case _:
             raise NotImplementedError(f'cannot monomorphize `{ann}` for context `{ctx}`')
 
@@ -97,20 +97,36 @@ def test_harness(func: fp.Function, arg_types: tuple[fp.types.Type, ...]) -> str
     lines.append('')
 
     # set up distributions for each argument type
-    samplers: list[tuple[fp.types.Type, str]] = []
+    samplers: list[tuple[fp.types.Type, object]] = []
+    sampler_idx = 0
     for i, ty in enumerate(arg_types):
         match ty:
             case fp.types.RealType():
-                sampler = emit_distribution(lines, compiler, ty, i)
+                sampler = emit_distribution(lines, compiler, ty, sampler_idx)
+                sampler_idx += 1
                 samplers.append((ty, sampler))
                 lines.append('')
             case fp.types.ListType() if isinstance(ty.elt, fp.types.RealType):
-                sampler = emit_distribution(lines, compiler, ty.elt, i)
+                sampler = emit_distribution(lines, compiler, ty.elt, sampler_idx)
+                sampler_idx += 1
                 samplers.append((ty, sampler))
                 lines.append('')
             case fp.types.ListType() if isinstance(ty.elt, fp.types.ListType) and isinstance(ty.elt.elt, fp.types.RealType):
-                sampler = emit_distribution(lines, compiler, ty.elt.elt, i)
+                sampler = emit_distribution(lines, compiler, ty.elt.elt, sampler_idx)
+                sampler_idx += 1
                 samplers.append((ty, sampler))
+                lines.append('')
+            case fp.types.TupleType():
+                tuple_samplers: list[str] = []
+                for elt in ty.elts:
+                    if not isinstance(elt, fp.types.RealType):
+                        raise NotImplementedError(
+                            f'input generation not implemented for tuple element type `{elt}`'
+                        )
+                    sampler = emit_distribution(lines, compiler, elt, sampler_idx)
+                    sampler_idx += 1
+                    tuple_samplers.append(sampler)
+                samplers.append((ty, tuple_samplers))
                 lines.append('')
             case _:
                 raise NotImplementedError(f'input generation not implemented for type `{ty}`')
@@ -139,6 +155,10 @@ def test_harness(func: fp.Function, arg_types: tuple[fp.types.Type, ...]) -> str
                 lines.append(f'                arg{i}[j][k] = {sampler};')
                 lines.append('            }')
                 lines.append('        }')
+            case fp.types.TupleType():
+                tuple_samplers = sampler
+                tuple_expr = ', '.join(tuple_samplers)
+                lines.append(f'        {ty_str} arg{i} = std::make_tuple({tuple_expr});')
 
     arg_list = ', '.join(f'arg{j}' for j in range(len(arg_types)))
     lines.append('')
@@ -238,7 +258,10 @@ def time_benchmark(config: CompileConfig, key: int) -> list[float]:
     # compile the benchmark
     binary_path = compile_benchmark(output_file)
     print(f'  compiled binary to `{binary_path}`.')
-    cmd = [str(binary_path), str(benchmark.num_inputs), str(benchmark.vector_size), str(eval_config.seed)]
+
+    # command
+    vector_size = 1 if benchmark.vector_size is None else benchmark.vector_size
+    cmd = [str(binary_path), str(benchmark.num_inputs), str(vector_size), str(eval_config.seed)]
     
     # run the benchmark and capture output
     times: list[float] = []

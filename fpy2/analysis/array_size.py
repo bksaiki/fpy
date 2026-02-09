@@ -203,7 +203,6 @@ class _ArraySizeVisitor(DefaultVisitor):
         ty = self.type_info.by_expr[e]
         assert isinstance(ty, ListType)
         if isinstance(ty.elt, ListType):
-            print(e.format(), elt_sizes[0])
             assert isinstance(elt_sizes[0], _Array)
             elt_size = elt_sizes[0]
         else:

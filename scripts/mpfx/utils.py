@@ -9,4 +9,4 @@ class Benchmark:
     func: fp.Function
     ctxs: tuple[fp.Context | None, ...]
     num_inputs: int
-    vector_size: int
+    vector_size: int | None
