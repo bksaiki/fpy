@@ -116,11 +116,22 @@ class InstrGenerator:
         arg_ty: AbstractFormat,
         ctx: Context
     ):
-        if _fits_in_double(arg_ty) and _rto_is_valid(ctx):
-            # use the FP-RTO backed implementation
-            if ctx_str is None:
-                self.raise_error(f'unsupported context `-{arg_str}`: {ctx}')
-            return f'mpfx::neg({arg_str}, {ctx_str})'
+        if ctx is REAL:
+            # exact negation
+            if _fits_in_integer(arg_ty):
+                # use integer negation for real negation
+                return f'static_cast<int64_t>(-{arg_str})'
+            if _fits_in_double(arg_ty):
+                exact_ty = -arg_ty
+                if exact_ty <= AbstractFormat.from_context(FP64):
+                    # negation is exact
+                    return f'(-{arg_str})'
+        else:
+            if _fits_in_double(arg_ty) and _rto_is_valid(ctx):
+                # use the FP-RTO backed implementation
+                if ctx_str is None:
+                    self.raise_error(f'unsupported context `-{arg_str}`: {ctx}')
+                return f'mpfx::neg({arg_str}, {ctx_str})'
 
         self.raise_error(f'cannot compile `-{arg_str}`: {arg_ty} under context {ctx}')
 

@@ -65,6 +65,7 @@ def plot_times(
     color_map = {i: color_list[i % len(color_list)] for i in range(len(options))}
     
     pos = 1
+    group_spacing = 0.4
     for bench_name in benchmarks:
         for option_idx, option in enumerate(options):
             if option in normalized_data[bench_name]:
@@ -72,7 +73,7 @@ def plot_times(
                 positions.append(pos)
                 colors.append(color_map[option_idx])
                 pos += 1
-        pos += 1  # Add spacing between benchmark groups
+        pos += group_spacing  # Add spacing between benchmark groups
     
     # Create box plot
     bp = ax.boxplot(all_data, positions=positions, widths=0.6, patch_artist=True,
@@ -93,11 +94,12 @@ def plot_times(
     tick_positions = []
     tick_labels = []
     pos = 1
+    group_spacing = 0.4
     for bench_name in benchmarks:
         num_options = sum(1 for opt in options if opt in normalized_data[bench_name])
         tick_positions.append(pos + (num_options - 1) / 2)
         tick_labels.append(bench_name)
-        pos += num_options + 1
+        pos += num_options + group_spacing
     
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, rotation=45, ha='right')
@@ -173,6 +175,7 @@ def plot_speedup(
     color_map = {i: color_list[i % len(color_list)] for i in range(len(options))}
     
     pos = 1
+    group_spacing = 0.4
     for bench_name in benchmarks:
         for option_idx, option in enumerate(options):
             if option in speedup_data[bench_name]:
@@ -180,7 +183,7 @@ def plot_speedup(
                 positions.append(pos)
                 colors.append(color_map[option_idx])
                 pos += 1
-        pos += 1  # Add spacing between benchmark groups
+        pos += group_spacing  # Add spacing between benchmark groups
     
     # Create box plot
     bp = ax.boxplot(all_data, positions=positions, widths=0.6, patch_artist=True,
@@ -201,11 +204,12 @@ def plot_speedup(
     tick_positions = []
     tick_labels = []
     pos = 1
+    group_spacing = 0.4
     for bench_name in benchmarks:
         num_options = sum(1 for opt in options if opt in speedup_data[bench_name])
         tick_positions.append(pos + (num_options - 1) / 2)
         tick_labels.append(bench_name)
-        pos += num_options + 1
+        pos += num_options + group_spacing
     
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, rotation=45, ha='right')

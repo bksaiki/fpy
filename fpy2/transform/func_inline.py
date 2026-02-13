@@ -67,6 +67,8 @@ class _FuncInline(DefaultTransformVisitor):
         # recursively inline the callee function body
         # ASSUME: no recursive calls, i.e. the callee function does not call itself directly or indirectly
         ast = FuncInline.apply(e.fn.ast)
+        def_use = DefineUse.analyze(ast)
+        self.gensym.reserve(*def_use.names())
 
         # ASSUME: single return statement at the end of the function body
 

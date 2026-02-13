@@ -665,6 +665,7 @@ class _TypeInferInstance(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         ty = self._visit_expr(stmt.ctx, None)
+        self._unify(ty, ContextType())
         if isinstance(stmt.target, NamedId):
             d = self.def_use.find_def_from_site(stmt.target, stmt)
             self._set_type(d, ty)
