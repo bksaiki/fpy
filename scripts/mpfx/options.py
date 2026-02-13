@@ -24,9 +24,21 @@ class CompileConfig:
     opt_options: OptOptions
 
 @dataclass(frozen=True)
-class WorkerTask:
-    """Picklable task data for multiprocessing workers."""
+class CompileTask:
+    """Picklable task data for compilation workers."""
     job_idx: int
     benchmark_idx: int
     opt_options: OptOptions
     eval_config: EvalConfig
+
+@dataclass(frozen=True)
+class ExecutionTask:
+    """Picklable task data for execution workers."""
+    job_idx: int
+    benchmark_name: str
+    opt_options: OptOptions
+    binary_path: Path
+    num_inputs: int
+    vector_size: int
+    seed: int
+    iteration_num: int

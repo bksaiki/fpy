@@ -181,9 +181,9 @@ def plot_speedup_bar(
                color=color_map[option_idx])
     
     # Customize plot
-    ax.set_xlabel('Benchmark', fontsize=12)
-    ax.set_ylabel('Speedup over Baseline', fontsize=12)
-    ax.set_title('Speedup over Baseline per Benchmark', fontsize=14)
+    ax.set_xlabel('Benchmark', fontsize=14)
+    ax.set_ylabel('Relative Speedup', fontsize=14)
+    ax.set_title('Relative Speedup per Benchmark', fontsize=16)
     ax.set_xticks(x)
     ax.set_xticklabels(benchmarks, rotation=45, ha='right')
     ax.legend(loc='upper right')
@@ -196,6 +196,6 @@ def plot_speedup_bar(
     
     # Save plot
     plot_path = output_dir / 'speedup_bar.png'
-    plt.savefig(plot_path, dpi=150)
+    plt.savefig(plot_path, dpi=250)
     print(f'Speedup bar chart saved to `{plot_path}`.')
     plt.close()

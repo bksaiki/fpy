@@ -63,6 +63,7 @@ def vec_mul_fp8(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
 @fp.fpy(ctx=fp.REAL)
 def dot_prod_mp(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Real:
     QUANT_CTX = fp.MX_E5M2
+    MUL_CTX = fp.BF16
     ACCUM_CTX = fp.TF32
     FINAL_CTX = fp.FP32
 
@@ -78,7 +79,7 @@ def dot_prod_mp(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Real:
             yq = fp.round(y)
 
         # multiply
-        with fp.REAL:
+        with MUL_CTX:
             t = xq * yq
 
         # accumulate

@@ -217,12 +217,12 @@ def compile_benchmark(path: Path, mpfx_root: Path | None = None) -> Path:
 ###########################################################
 # Code
 
-def time_benchmark(config: CompileConfig, key: int) -> list[float]:
-    """Times the execution of an FPy function over a number of iterations."""
+def compile_benchmark_task(config: CompileConfig, key: int) -> Path:
+    """Compiles an FPy function benchmark and returns the binary path."""
     benchmark = config.benchmark
     eval_config = config.eval_config
 
-    print(f' Benchmarking function `{benchmark.func.name}`...')
+    print(f' Compiling function `{benchmark.func.name}`...')
     print(f'   options: {config.opt_options}')
 
     # apply monomorphization
@@ -273,21 +273,59 @@ def time_benchmark(config: CompileConfig, key: int) -> list[float]:
     binary_path = compile_benchmark(output_file, eval_config.mpfx_root)
     print(f'  compiled binary to `{binary_path}`.')
 
+    return binary_path
+
+
+def run_compiled_benchmark(
+    binary_path: Path,
+    num_inputs: int,
+    vector_size: int,
+    seed: int,
+    benchmark_name: str,
+    iteration_num: int
+) -> float:
+    """Runs a compiled benchmark binary once and returns execution time."""
     # command
-    vector_size = 1 if benchmark.vector_size is None else benchmark.vector_size
-    cmd = [str(binary_path), str(benchmark.num_inputs), str(vector_size), str(eval_config.seed)]
+    cmd = [str(binary_path), str(num_inputs), str(vector_size), str(seed)]
 
     # run the benchmark and capture output
-    times: list[float] = []
-    for _ in range(eval_config.num_iterations):
-        print(f'  executing benchmark [cmd: {" ".join(cmd)}]...')
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    if iteration_num > 0:
+        print(f'  executing benchmark `{benchmark_name}` (iteration {iteration_num}) [cmd: {" ".join(cmd)}]...')
+    else:
+        print(f'  executing benchmark `{benchmark_name}` [cmd: {" ".join(cmd)}]...')
+    
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 
-        # parse elapsed time from output
-        for line in result.stdout.splitlines():
-            duration_ns = int(line.strip())
-            duration_s = duration_ns / 1_000_000_000.0
-            print(f'  benchmark completed in {duration_s:.6f}s.')
-            times.append(duration_s)
+    # parse elapsed time from output
+    for line in result.stdout.splitlines():
+        duration_ns = int(line.strip())
+        duration_s = duration_ns / 1_000_000_000.0
+        print(f'  benchmark completed in {duration_s:.6f}s.')
+        return duration_s
+    
+    raise RuntimeError(f'No output from benchmark {benchmark_name}')
+
+
+def time_benchmark(config: CompileConfig, key: int) -> list[float]:
+    """Times the execution of an FPy function over a number of iterations."""
+    benchmark = config.benchmark
+    eval_config = config.eval_config
+
+    # compile the benchmark
+    binary_path = compile_benchmark_task(config, key)
+
+    # run the compiled benchmark multiple times
+    vector_size = 1 if benchmark.vector_size is None else benchmark.vector_size
+    times = []
+    for iteration in range(eval_config.num_iterations):
+        time = run_compiled_benchmark(
+            binary_path=binary_path,
+            num_inputs=benchmark.num_inputs,
+            vector_size=vector_size,
+            seed=eval_config.seed,
+            benchmark_name=benchmark.func.name,
+            iteration_num=iteration + 1
+        )
+        times.append(time)
 
     return times
