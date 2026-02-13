@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from .examples import *
 from .options import CompileConfig, EvalConfig, OptOptions, WorkerTask
-from .plot import plot_times, plot_speedup
+from .plot import plot_speedup, plot_speedup_bar
 from .time import time_benchmark
 from .utils import Benchmark
 
@@ -15,14 +15,14 @@ EXAMPLES: list[Benchmark] = [
     Benchmark(talk_example, (fp.FP32, fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
     # Benchmark(vec_add_fp8, (fp.FP32, fp.FP32), 1000, (1 << 16)),
     # Benchmark(vec_mul_fp8, (fp.FP32, fp.FP32), 1000, (1 << 16)),
-    # Benchmark(dot_prod_mp, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
-    # Benchmark(dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
-    # Benchmark(dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(dot_prod_mp, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(dot_prod_blocked, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(dot_prod_arm, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
     # Benchmark(mx_quantize_blocks, (fp.FP32,), 1000, (1 << 16)),
-    # Benchmark(mx_quantize_dot_prod, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
-    # Benchmark(mx_matmul, (fp.FP32, fp.FP32), 10, 256),
-    # Benchmark(run_rk4_lorenz_3d, (fp.FP32, fp.FP32), 1000, (1 << 16)),
-    # Benchmark(fastblur_example, (fp.FP16, fp.FP16, fp.FP16, fp.FP16), 30, 256)
+    Benchmark(mx_quantize_dot_prod, (fp.FP32, fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(mx_matmul, (fp.FP32, fp.FP32), 10, 256),
+    Benchmark(run_rk4_lorenz_3d, (fp.FP32, fp.FP32), 1000, (1 << 16)),
+    Benchmark(fastblur_example, (fp.FP16, fp.FP16, fp.FP16, fp.FP16), 30, 256)
 ]
 
 # Global option combinations: (elim_round, allow_exact)
@@ -111,8 +111,8 @@ def run_eval(config: EvalConfig, examples: list[Benchmark]) -> None:
         print(f'Saved benchmark times to `{times_file}` for potential replotting.')
 
     # Generate plots
-    plot_times(results, OPTIONS, config.output_dir)
     plot_speedup(results, OPTIONS, config.output_dir)
+    plot_speedup_bar(results, OPTIONS, config.output_dir)
 
 
 if __name__ == '__main__':
