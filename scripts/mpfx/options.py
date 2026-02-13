@@ -10,6 +10,7 @@ class EvalConfig:
     num_threads: int
     seed: int
     replot: bool
+    mpfx_root: Path | None
 
 @dataclass(frozen=True)
 class OptOptions:

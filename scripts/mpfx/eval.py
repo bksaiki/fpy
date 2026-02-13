@@ -42,7 +42,7 @@ def _run_benchmark_worker(task: WorkerTask) -> tuple[str, OptOptions, list[float
         eval_config=task.eval_config,
         opt_options=task.opt_options
     )
-    
+
     # Run the benchmark
     times = time_benchmark(bench_config, task.job_idx)
     return (example.func.name, task.opt_options, times)
@@ -121,6 +121,7 @@ if __name__ == '__main__':
     parser.add_argument('--iterations', type=int, default=1, help='Number of iterations for each benchmark (default: 1)')
     parser.add_argument('--threads', type=int, default=1, help='Number of parallel threads for benchmarking (default: 1)')
     parser.add_argument('--replot', action='store_true', help='Whether to regenerate plots from existing benchmark data')
+    parser.add_argument('--mpfx-root', type=Path, help='Root directory of MPFX library')
     parser.add_argument('output_dir', type=Path, help='Output directory for results')
     args = parser.parse_args()
 
@@ -129,6 +130,7 @@ if __name__ == '__main__':
     num_iterations: int = args.iterations
     num_threads: int = args.threads
     replot: bool = args.replot
+    mpfx_root: Path | None = args.mpfx_root.resolve() if args.mpfx_root else None
 
     # Eval configuration
     config = EvalConfig(
@@ -136,9 +138,9 @@ if __name__ == '__main__':
         num_iterations=num_iterations,
         num_threads=num_threads,
         seed=seed,
-        replot=replot
+        replot=replot,
+        mpfx_root=mpfx_root
     )
 
     # Run evaluation harness
     run_eval(config, EXAMPLES)
-    

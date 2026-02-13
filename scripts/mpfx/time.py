@@ -134,7 +134,7 @@ def test_harness(func: fp.Function, arg_types: tuple[fp.types.Type, ...]) -> str
     # main loop: generate input, execute, and time each call
     lines.append('    long long total_duration = 0;')
     lines.append('    for (size_t iter = 0; iter < num_inputs; ++iter) {')
-    
+
     # generate inputs for this iteration
     for i, (ty, sampler) in enumerate(samplers):
         ty_str = compiler.compile_type(ty).to_cpp()
@@ -162,7 +162,7 @@ def test_harness(func: fp.Function, arg_types: tuple[fp.types.Type, ...]) -> str
 
     arg_list = ', '.join(f'arg{j}' for j in range(len(arg_types)))
     lines.append('')
-    
+
     # time this single execution
     lines.append('        auto start = std::chrono::steady_clock::now();')
     lines.append(f'        auto result = {NAME}({arg_list});')
@@ -187,13 +187,27 @@ def test_harness(func: fp.Function, arg_types: tuple[fp.types.Type, ...]) -> str
 
 CPP_OPTS = ['-O3', '-march=native', '-mtune=native', '-std=c++20']
 
-def compile_benchmark(path: Path) -> Path:
+def compile_benchmark(path: Path, mpfx_root: Path | None = None) -> Path:
     """Compiles the benchmark at the given path."""
+    # build compiler options
+    if mpfx_root is None:
+        # no MPFX root provided, assume library is available in standard include/library paths
+        cpp_opts = list(CPP_OPTS)
+    else:
+        # MPFX root provided, add include and library paths for compilation and runtime linking
+        lib_path = mpfx_root / "build"
+        cpp_opts = [
+            *CPP_OPTS,
+            f'-I{mpfx_root / "include"}',
+            f'-L{lib_path}',
+            f'-Wl,-rpath,{lib_path}'  # Embed library path for runtime
+        ]
+
     # replace .cpp with executable name
     binary_path = path.with_suffix('')
 
     # compile command
-    cmd = ['c++', *CPP_OPTS, str(path), '-o', str(binary_path), '-lmpfx']
+    cmd = ['c++', *cpp_opts, str(path), '-o', str(binary_path), '-lmpfx']
     print(f'  compiling benchmark [cmd: {" ".join(cmd)}]')
     subprocess.run(cmd, check=True)
 
@@ -256,16 +270,16 @@ def time_benchmark(config: CompileConfig, key: int) -> list[float]:
     print(f'  benchmark written to `{output_file}`.')
 
     # compile the benchmark
-    binary_path = compile_benchmark(output_file)
+    binary_path = compile_benchmark(output_file, eval_config.mpfx_root)
     print(f'  compiled binary to `{binary_path}`.')
 
     # command
     vector_size = 1 if benchmark.vector_size is None else benchmark.vector_size
     cmd = [str(binary_path), str(benchmark.num_inputs), str(vector_size), str(eval_config.seed)]
-    
+
     # run the benchmark and capture output
     times: list[float] = []
-    for _ in range(eval_config.num_iterations): 
+    for _ in range(eval_config.num_iterations):
         print(f'  executing benchmark [cmd: {" ".join(cmd)}]...')
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
 

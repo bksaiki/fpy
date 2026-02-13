@@ -4,14 +4,14 @@ import numpy as np
 from matplotlib.patches import Patch
 from pathlib import Path
 
-from .options import CompileConfig, OptOptions
+from .options import OptOptions
 
 
 _OPTION_LABELS: dict[OptOptions, str] = {
     OptOptions(elim_round=False, allow_exact=False): 'none',
-    OptOptions(elim_round=True, allow_exact=False): 'elim',
-    OptOptions(elim_round=False, allow_exact=True): 'exact',
-    OptOptions(elim_round=True, allow_exact=True): 'elim + exact'
+    OptOptions(elim_round=True, allow_exact=False): 'pre',
+    OptOptions(elim_round=False, allow_exact=True): 'post',
+    OptOptions(elim_round=True, allow_exact=True): 'pre + post'
 }
 
 
