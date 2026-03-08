@@ -151,6 +151,7 @@ class ContextTypeInferInstance(Visitor):
 
     def _unify_rvars(self, a: ContextParam, b: ContextParam) -> ContextParam:
         r = self.rvars.union(a, b)
+        # TODO: is this check even necessary
         for k in self.rvars.representatives():
             for v in self.rvars.component(k):
                 if isinstance(k, Context) and isinstance(v, Context) and not k.is_equiv(v):
@@ -158,6 +159,8 @@ class ContextTypeInferInstance(Visitor):
         return r
 
     def _unify_contexts(self, a: ContextParam, b: ContextParam) -> ContextParam:
+        a = self.rvars.find(self.rvars.add(a))
+        b = self.rvars.find(self.rvars.add(b))
         match a, b:
             case _, NamedId():
                 a = self.rvars.add(a)
@@ -263,7 +266,8 @@ class ContextTypeInferInstance(Visitor):
         # ---------------
         #  C, Γ |- x : T
         d = self.def_use.find_def_from_use(e)
-        return self.by_def[d]
+        ty = self.by_def[d]
+        return ty
 
     def _visit_bool(self, e: BoolVal, ctx: ContextParam):
         # C, Γ |- e : bool
@@ -465,6 +469,10 @@ class ContextTypeInferInstance(Visitor):
     def _visit_call(self, e: Call, ctx: ContextParam):
         # get around circular imports
         from ..function import Function
+
+        # visit arguments and kwargs
+        arg_tys = [self._visit_expr(arg, ctx) for arg in e.args]
+        kwarg_tys = [ (k, self._visit_expr(v, ctx)) for k, v in e.kwargs ]
 
         match e.fn:
             case None:
@@ -782,7 +790,7 @@ class ContextTypeInferInstance(Visitor):
         fn_ctx = cast(FunctionType, fn_ctx)
 
         # rename unbound context variables
-        for t in self.rvars:
+        for t in self.rvars.representatives():
             if isinstance(t, NamedId) and t not in subst:
                 subst[t] = NamedId(f'r{len(subst) + 1}')
 

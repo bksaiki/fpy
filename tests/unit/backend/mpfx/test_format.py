@@ -4,9 +4,38 @@ Test for the abstract number format `A(p, exp, bound)`.
 
 import fpy2 as fp
 import itertools
+import math
 import unittest
 
+from hypothesis import given, settings, strategies as st
+from fractions import Fraction
+from typing import Generator
+
 from fpy2.backend.mpfx import AbstractFormat
+
+def is_power_of_two(v: Fraction) -> bool:
+    assert v > 0
+    n, d = v.numerator, v.denominator
+    return (n & (n - 1) == 0) and (d & (d - 1) == 0)
+
+def is_dyadic(b: Fraction) -> bool:
+    d = b.denominator
+    return d & (d - 1) == 0
+
+def generate(p: int | float, q: Fraction, b: Fraction) -> Generator[Fraction, None, None]:
+    assert (isinstance(p, int) and p >= 1) or p == math.inf
+    assert is_power_of_two(q)
+    assert is_dyadic(b)
+    v_cut = q * Fraction(2) ** p if p != math.inf else math.inf
+    v = Fraction(0)
+    yield v
+    while v + q <= b:
+        v = v + q
+        yield +v
+        yield -v
+        if is_power_of_two(v) and v >= v_cut:
+            q = 2 * q
+
 
 class TestAbstractFormat(unittest.TestCase):
 
@@ -53,7 +82,18 @@ class TestAbstractFormat(unittest.TestCase):
         self.assertEqual(fmt.exp, 0)
         self.assertEqual(fmt.bound, fp.RealFloat.from_int(128))
 
-    def test_contains(self):
+    def test_contains_sandbox(self):
+        A1 = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        A2 = AbstractFormat(5, -4, fp.RealFloat.from_int(1))
+
+        # A1 = AbstractFormat(1, 0, fp.RealFloat.from_int(2))
+        # A2 = AbstractFormat(1, 0, fp.RealFloat.from_int(4))
+
+        print(A1 <= A2)
+        print(list(generate(A1.prec, Fraction(2) ** A1.exp, A1.bound)))
+        print(list(generate(A2.prec, Fraction(2) ** A2.exp, A2.bound)))
+
+    def test_contains_examples(self):
         """Testing containment check."""
         # FP32 \subseteq FP64
         CTX1 = AbstractFormat.from_context(fp.FP32)
@@ -99,6 +139,46 @@ class TestAbstractFormat(unittest.TestCase):
         CTX1 = AbstractFormat.from_context(fp.FixedContext(True, 0, 4))
         CTX2 = AbstractFormat(4, 0, fp.RealFloat.from_int(12))
         self.assertTrue(CTX1 <= CTX2, "Expected INT4 to be contained in A(4, 0, 12).")
+
+
+    @given(
+        st.one_of(st.integers(1, 4), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
+        st.integers(-8, 0),      # e1: minimum exponent of fmt1
+        st.integers(1, 32),      # k1: bound of fmt1 is k1 * 2^e1
+        st.one_of(st.integers(1, 4), st.just(float('inf'))),  # p2: precision (inf = fixed-point)
+        st.integers(-8, 0),      # e2: minimum exponent of fmt2
+        st.integers(1, 32),      # k2: bound of fmt2 is k2 * 2^e2
+    )
+    @settings(max_examples=500)
+    def test_contains_exhaustive(self, p1, e1, k1, p2, e2, k2):
+        """Check <= against exhaustive enumeration of representable values."""
+        q1 = Fraction(2) ** e1
+        q2 = Fraction(2) ** e2
+
+        b1_raw = fp.RealFloat(exp=e1, c=k1)
+        if p1 == float('inf'):
+            b1 = b1_raw.round(min_n=e1 - 1, rm=fp.RM.RTZ)
+        else:
+            b1 = b1_raw.round(p1, e1 - 1, rm=fp.RM.RTZ)
+        
+        b2_raw = fp.RealFloat(exp=e2, c=k2)
+        if p2 == float('inf'):
+            b2 = b2_raw.round(min_n=e2 - 1, rm=fp.RM.RTZ)
+        else:
+            b2 = b2_raw.round(p2, e2 - 1, rm=fp.RM.RTZ)
+
+        fmt1 = AbstractFormat(p1, e1, b1)
+        fmt2 = AbstractFormat(p2, e2, b2)
+
+        # Exhaustive oracle: check if every value in fmt1 is also in fmt2
+        vals2 = set(generate(p2, q2, b2.as_rational()))
+        all_contained = all(v in vals2 for v in generate(p1, q1, b1.as_rational()))
+
+        self.assertEqual(
+            fmt1 <= fmt2, all_contained,
+            f"format containment mismatch: {fmt1} <= {fmt2} should be {all_contained}",
+        )
+
 
     def test_effective_prec(self):
         """Testing effective precision calculation."""

@@ -208,27 +208,11 @@ class AbstractFormat:
         neg_bound = min(self.neg_bound, other.neg_bound)
         return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
-    def __lt__(self, other) -> bool:
-        if not isinstance(other, AbstractFormat):
-            return NotImplemented
-        return self.compare(other) == Ordering.LESS
-
     def __le__(self, other) -> bool:
-        if not isinstance(other, AbstractFormat):
-            return NotImplemented
-        result = self.compare(other)
-        return result == Ordering.LESS or result == Ordering.EQUAL
-
-    def __gt__(self, other) -> bool:
-        if not isinstance(other, AbstractFormat):
-            return NotImplemented
-        return self.compare(other) == Ordering.GREATER
+        return self._is_contained_in(other)
 
     def __ge__(self, other) -> bool:
-        if not isinstance(other, AbstractFormat):
-            return NotImplemented
-        result = self.compare(other)
-        return result == Ordering.GREATER or result == Ordering.EQUAL
+        return other._is_contained_in(self)
 
     @property
     def bound(self) -> RealFloat | float:
@@ -279,61 +263,51 @@ class AbstractFormat:
             # bounded floating-point format
             # check against the cutoff value
             cutoff = RealFloat(False, self.exp, 1 << self.prec)
-            if self.bound <= cutoff:
+            if self.bound < cutoff:
                 # format acts like a fixed-point format
                 return _maxval_precision(self.bound, self.exp)
 
         # everything else
         return self.prec
 
-    def compare(self, other: 'AbstractFormat') -> Ordering | None:
-        """Compare this format with another using the containment partial order.
+    def _is_contained_in(self, other: 'AbstractFormat') -> bool:
+        """Return True iff every value representable by `self` is also representable by `other`.
 
-        Returns:
-            Ordering.LESS if this format is contained in other,
-            Ordering.EQUAL if both formats contain each other,
-            Ordering.GREATER if other is contained in this format,
-            None if formats are incomparable.
+        The three necessary and sufficient conditions are:
+          1. Quantum: other.exp <= self.exp  (other is at least as fine-grained)
+          2. Bounds:  other.pos_bound >= self.pos_bound  and  other.neg_bound <= self.neg_bound
+          3. Precision: either other.prec >= self.prec, *or* self's entire range lies within
+             other's subnormal region (pos_bound <= 2^(other.exp + other.prec)), in which case
+             the floating-point precision of other is irrelevant — all values fit exactly.
         """
-        if not isinstance(other, AbstractFormat):
-            raise TypeError(f'Expected \'AbstractFormat\', got {other}')
 
-        prec = self.effective_prec()
-        other_prec = other.effective_prec()
-
-        polarity: bool | None = None # True if larger, False if smaller
-        if prec != other_prec:
-            polarity = prec > other_prec
-        if self.exp != other.exp:
-            exp_polarity = self.exp < other.exp
-            if polarity is None:
-                polarity = exp_polarity
-            elif polarity != exp_polarity:
-                return None
-        if self.pos_bound != other.pos_bound:
-            bound_polarity = self.pos_bound > other.pos_bound
-            if polarity is None:
-                polarity = bound_polarity
-            elif polarity != bound_polarity:
-                return None
-        if self.neg_bound != other.neg_bound:
-            bound_polarity = self.neg_bound < other.neg_bound
-            if polarity is None:
-                polarity = bound_polarity
-            elif polarity != bound_polarity:
-                return None
-
-        if polarity is None:
-            return Ordering.EQUAL
-        elif polarity:
-            return Ordering.GREATER
-        else:
-            return Ordering.LESS
+        # 1. quantum
+        if other.exp > self.exp:
+            return False
+        # 2. bounds
+        if other.pos_bound < self.pos_bound:
+            return False
+        if other.neg_bound > self.neg_bound:
+            return False
+        # 3. precision — only constraining when other has a finite normal region
+        if not isinstance(other.prec, float) and not isinstance(other.exp, float):
+            if self.prec > other.prec:
+                # easy check failed: other's spacing in its normal region widens faster.
+                # Containment still holds if self's bound stays within the region where
+                # other's effective quantum is <= self's quantum 2^self.exp, i.e.,
+                # pos_bound1 <= 2^(self.exp + other.prec).
+                if not isinstance(self.exp, int):
+                    return False
+                cutoff = RealFloat(False, self.exp, 1 << other.prec)
+                if isinstance(self.pos_bound, float) or self.pos_bound > cutoff:
+                    return False
+                if isinstance(self.neg_bound, float) or abs(self.neg_bound) > cutoff:
+                    return False
+        return True
 
     def contained_in(self, other: 'AbstractFormat') -> bool:
         """Check if this format is contained in another format."""
-        result = self.compare(other)
-        return result == Ordering.LESS or result == Ordering.EQUAL
+        return self._is_contained_in(other)
 
     def with_prec_offset(self, delta: int) -> 'AbstractFormat':
         """

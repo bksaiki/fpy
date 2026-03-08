@@ -1,8 +1,8 @@
 """
 Array size inference.
-"""
 
-import math
+TODO: inference algorithm likely broken for list assignment
+"""
 
 from dataclasses import dataclass
 from fractions import Fraction
@@ -12,14 +12,38 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..number import Float, INTEGER
 from ..types import ListType, TupleType, Type
+from ..utils import default_repr
 
 from .define_use import Definition, DefSite, DefineUseAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo, Value
 from .type_infer import TypeInfer, TypeAnalysis
 
 
-ArraySize: TypeAlias = int | None
-"""array size: either symbolic or concrete"""
+@default_repr
+class ArraySize:
+    """array size: a set of possible sizes"""
+    sizes: set[int]
+
+    def __init__(self, sizes: set[int] | None = None):
+        self.sizes = set(sizes) if sizes is not None else set()
+
+    def __eq__(self, other):
+        if not isinstance(other, ArraySize):
+            return NotImplemented
+        return self.sizes == other.sizes
+
+    def __hash__(self):
+        return hash(frozenset(self.sizes))
+
+    def union(self, other: 'ArraySize') -> 'ArraySize':
+        return ArraySize(self.sizes.union(other.sizes))
+
+    def resolve(self) -> int | None:
+        """resolve array size to a single concrete size if possible"""
+        if len(self.sizes) == 1:
+            return next(iter(self.sizes))
+        else:
+            return None
 
 _Type: TypeAlias = Union['_Array', '_Tuple', None]
 """types for array size analysis: list, tuple, or scalar"""
@@ -57,8 +81,8 @@ class _ArraySizeVisitor(DefaultVisitor):
         self.func = func
         self.partial_eval = partial_eval
         self.type_info = type_info
-        self.by_def = {}
         self.by_expr = {}
+        self.by_def = {}
         self.ret_size = None
 
     @property
@@ -73,7 +97,7 @@ class _ArraySizeVisitor(DefaultVisitor):
         match ty:
             case ListType():
                 elt = self._cvt_type(ty.elt)
-                return _Array(elt, None)
+                return _Array(elt, ArraySize())
             case TupleType():
                 elts = tuple(self._cvt_type(e) for e in ty.elts)
                 return _Tuple(elts)
@@ -90,7 +114,7 @@ class _ArraySizeVisitor(DefaultVisitor):
         match t1, t2:
             case _Array(), _Array():
                 elt = self._unify(t1.elt, t2.elt)
-                size = t1.size if t1.size == t2.size else None
+                size = t1.size.union(t2.size)
                 return _Array(elt, size)
             case _Tuple(), _Tuple():
                 elts = tuple(self._unify(e1, e2) for e1, e2 in zip(t1.elts, t2.elts, strict=True))
@@ -106,7 +130,7 @@ class _ArraySizeVisitor(DefaultVisitor):
                 d = self.def_use.find_def_from_site(target, site)
                 self.by_def[d] = ty
             case TupleBinding():
-                assert isinstance(ty, _Tuple)
+                assert isinstance(ty, _Tuple), f'Expected tuple type for tuple binding, got {ty} for {target}'
                 for elt, s in zip(target.elts, ty.elts, strict=True):
                     self._visit_binding(site, elt, s)
             case _:
@@ -123,9 +147,9 @@ class _ArraySizeVisitor(DefaultVisitor):
                 stop = self._get_eval(e.arg)
                 if isinstance(stop, Float | Fraction):
                     size = int(INTEGER.round(stop))
-                    return _Array(None, size)
+                    return _Array(None, ArraySize({size}))
                 else:
-                    return _Array(None, None)
+                    return _Array(None, ArraySize())
             case Enumerate():
                 assert isinstance(ty, _Array)
                 return _Array(_Tuple((None, ty.elt)), ty.size)
@@ -141,9 +165,9 @@ class _ArraySizeVisitor(DefaultVisitor):
                     start_i = int(INTEGER.round(start))
                     stop_i = int(INTEGER.round(stop))
                     size = max(0, stop_i - start_i)
+                    return _Array(None, ArraySize({size}))
                 else:
-                    size = None
-                return _Array(None, size)
+                    return _Array(None, ArraySize())
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None):
         self._visit_expr(e.first, ctx)
@@ -153,14 +177,14 @@ class _ArraySizeVisitor(DefaultVisitor):
             case Range3():
                 # TODO: implement
                 # for now just return a symbolic list
-                return _Array(None, None)
+                return _Array(None, ArraySize())
 
     def _visit_naryop(self, e: NaryOp, ctx: None):
         tys = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case Zip():
                 if len(e.args) == 0:
-                    return _Array(None, 0)
+                    return _Array(None, ArraySize({0}))
                 else:
                     assert isinstance(tys[0], _Array)
                     elt_tys: list[_Type] = [tys[0].elt]
@@ -168,8 +192,7 @@ class _ArraySizeVisitor(DefaultVisitor):
                     for ty in tys[1:]:
                         assert isinstance(ty, _Array)
                         elt_tys.append(ty.elt)
-                        if size is None or ty.size is None or ty.size != size:
-                            size = None
+                        size = size.union(ty.size)
 
                     return _Array(_Tuple(tuple(elt_tys)), size)
 
@@ -177,23 +200,30 @@ class _ArraySizeVisitor(DefaultVisitor):
                 # iterate from the inner dimension outwards to compute size
                 arg_rev = list(reversed(e.args))
 
+                # extract the type of the innermost dimension
+                elt_ty = self._cvt_type(self.type_info.by_expr[e])
+                for _ in arg_rev:
+                    assert isinstance(elt_ty, _Array)
+                    elt_ty = elt_ty.elt
+
                 # innermost dimension
                 size_v = self._get_eval(arg_rev[0])
                 if isinstance(size_v, Float | Fraction):
-                    size = int(INTEGER.round(size_v))
+                    size = ArraySize({int(INTEGER.round(size_v))})
                 else:
-                    size = None
+                    size = ArraySize()
 
                 # type of the innermost dimension
-                ty = _Array(None, size)
+                ty = _Array(elt_ty, size)
 
                 # outer dimensions
                 for arg in arg_rev[1:]:
                     size_v = self._get_eval(arg)
                     if isinstance(size_v, Float | Fraction):
-                        size = int(INTEGER.round(size_v))
+                        size = ArraySize({int(INTEGER.round(size_v))})
                     else:
-                        size = None
+                        size = ArraySize()
+
                     ty = _Array(ty, size)
 
                 return ty
@@ -207,7 +237,7 @@ class _ArraySizeVisitor(DefaultVisitor):
             elt_size = elt_sizes[0]
         else:
             elt_size = None
-        return _Array(elt_size, len(e.elts))
+        return _Array(elt_size, ArraySize({len(e.elts)}))
 
     def _visit_list_comp(self, e: ListComp, ctx: None):
         # process iterables and bindings
@@ -222,13 +252,14 @@ class _ArraySizeVisitor(DefaultVisitor):
         elt_ty = self._visit_expr(e.elt, ctx)
 
         # try to compute size
-        size: int = 1
+        size = 1
         for ty in iter_tys:
-            if not isinstance(ty.size, int):
-                return _Array(elt_ty, None)
-            size *= ty.size
+            iter_size = ty.size.resolve()
+            if iter_size is None:
+                return _Array(elt_ty, ArraySize())
+            size *= iter_size
 
-        return _Array(elt_ty, size)
+        return _Array(elt_ty, ArraySize({size}))
 
     def _visit_list_ref(self, e: ListRef, ctx: None):
         ty = self._visit_expr(e.value, ctx)
@@ -260,14 +291,12 @@ class _ArraySizeVisitor(DefaultVisitor):
             else:
                 stop = None
 
-        if ty.size is None or start is None or stop is None:
-            # list size or slice indices are unknown
-            size = None
-        else:
+        size = ty.size.resolve()
+        if size is not None and start is not None and stop is not None:
             # can compute size of the slice
-            size = max(0, (stop % ty.size) - (start % ty.size))
+            size = max(0, min(stop, size) - min(start, size))
 
-        return _Array(ty.elt, size)
+        return _Array(ty.elt, ArraySize({size} if size is not None else set()))
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         return _Tuple(tuple(self._visit_expr(elt, ctx) for elt in e.elts))
@@ -288,6 +317,23 @@ class _ArraySizeVisitor(DefaultVisitor):
     def _visit_assign(self, stmt: Assign, ctx: None):
         ty = self._visit_expr(stmt.expr, ctx)
         self._visit_binding(stmt, stmt.target, ty)
+
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+        d = self.def_use.find_def_from_use(stmt)
+
+        def recur(indices: tuple[Expr, ...], target_ty: _Type) -> _Type:
+            if len(indices) == 0:
+                ty = self._visit_expr(stmt.expr, ctx)
+                return self._unify(target_ty, ty)
+            else:
+                self._visit_expr(indices[0], ctx)
+                assert isinstance(target_ty, _Array), f'Expected array type for indexed assignment, got {target_ty} for {stmt}'
+                elt_ty = recur(indices[1:], target_ty.elt)
+                return _Array(elt_ty, target_ty.size)
+
+        ty = recur(stmt.indices, self.by_def[d])
+        self.by_def[d] = ty
+
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)

@@ -12,7 +12,7 @@ from ...analysis import (
 )
 from ...function import Function
 from ...libraries.core import ldexp
-from ...number import EFloatContext, IEEEContext, ExpContext, OV, RM, FP64, INTEGER
+from ...number import EFloatContext, IEEEContext, ExpContext, FixedContext, OV, RM, FP64, INTEGER
 from ...strategies import simplify
 from ...transform import Monomorphize, FuncInline, LiftContext
 from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListType, Type
@@ -113,6 +113,20 @@ def _compile_context(ctx: Context, func: FuncDef | None = None) -> str:
             p = 1
             n = ctx.minval().n
             b = float(ctx.maxval())
+            # compile rounding mode
+            rm = _compile_rm(ctx.rm, func)
+            return f'mpfx::Context({p}, {n}, {b}, {rm})'
+        case FixedContext():
+            # we include 0 within the representation
+            if ctx.signed:
+                p = ctx.nbits - 1
+                n = ctx.scale - 1
+                b = -float(ctx.maxval(True))
+            else:
+                p = ctx.nbits
+                n = ctx.scale - 1
+                b = float(ctx.maxval())
+
             # compile rounding mode
             rm = _compile_rm(ctx.rm, func)
             return f'mpfx::Context({p}, {n}, {b}, {rm})'
@@ -460,8 +474,10 @@ class _MPFXBackendInstance(Visitor):
 
         # Extract base element type by unwrapping all ListFormatType layers
         ty = e_ty
-        while isinstance(ty, ListFormatType):
+        for _ in e.args:
+            assert isinstance(ty, ListFormatType), f'expected list type for `{e.format()}`'
             ty = ty.elt
+
         base_cpp_ty = self._compile_type(ty).to_cpp()
 
         # Compile dimension expressions to size strings
@@ -473,9 +489,9 @@ class _MPFXBackendInstance(Visitor):
         curr_type = f'std::vector<{base_cpp_ty}>'
 
         # Iterate backwards through dimensions (outer to inner)
-        for i in range(len(dims) - 2, -1, -1):
+        for dim_ty in reversed(dims[:-1]):
             next_type = f'std::vector<{curr_type}>'
-            res_str = f'{next_type}({dims[i]}, {res_str})'
+            res_str = f'{next_type}({dim_ty}, {res_str})'
             curr_type = next_type
         return res_str
 
@@ -1042,6 +1058,8 @@ class MPFXCompiler(Backend):
         # partial evaluation
         def_use = DefineUse.analyze(ast)
         eval_info = PartialEval.apply(ast, def_use=def_use)
+
+        # print(ast.format())
 
         # run type checking with static context inference
         try:
