@@ -91,8 +91,6 @@ class MPBFloatContext(SizedContext):
 
         if maxval.s:
             raise ValueError(f'Expected positive maxval={maxval}, got {maxval}')
-        elif maxval.p > pmax:
-            raise ValueError(f'Expected maxval={maxval} to be representable in pmax={pmax} (p={maxval.p})')
 
         if neg_maxval is None:
             neg_maxval = RealFloat(s=True, x=maxval)
@@ -100,22 +98,20 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'RealFloat\' for neg_maxval={neg_maxval}, got {type(neg_maxval)}')
         elif not neg_maxval.s:
             raise ValueError(f'Expected negative neg_maxval={neg_maxval}, got {neg_maxval}')
-        elif neg_maxval.p > pmax:
-            raise ValueError(f'Expected neg_maxval={neg_maxval} to be representable in pmax={pmax}')
 
         self.pmax = pmax
         self.emin = emin
-        self.pos_maxval = maxval
-        self.neg_maxval = neg_maxval
         self.rm = rm
         self.overflow = overflow
         self.num_randbits = num_randbits
 
         self._mps_ctx = MPSFloatContext(pmax, emin, rm, num_randbits)
-        pos_maxval_mps = Float(x=self.pos_maxval, ctx=self._mps_ctx)
-        neg_maxval_mps = Float(x=self.neg_maxval, ctx=self._mps_ctx)
-        self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_mps)
-        self._neg_maxval_ord = self._mps_ctx.to_ordinal(neg_maxval_mps)
+        pos_maxval_fl = self._mps_ctx.round(maxval).normalize(p=self.pmax, n=self.nmin)
+        neg_maxval_fl = self._mps_ctx.round(neg_maxval).normalize(p=self.pmax, n=self.nmin)
+        self.pos_maxval = pos_maxval_fl.as_real()
+        self.neg_maxval = neg_maxval_fl.as_real()
+        self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_fl)
+        self._neg_maxval_ord = self._mps_ctx.to_ordinal(neg_maxval_fl)
 
     def __eq__(self, other):
         return (
@@ -261,11 +257,19 @@ class MPBFloatContext(SizedContext):
                 # always round towards infinity
                 return True
             case RoundingDirection.RTE:
-                # infinity is considered even for rounding
-                return True
+                # infinity is the opposite parity of the maximum value
+                # overflow to infinity if the maximum value is odd
+                maxval = self.neg_maxval if s else self.pos_maxval
+                return maxval.c % 2 != 0
+                # maxval_ord = self._neg_maxval_ord if s else self._pos_maxval_ord
+                # return maxval_ord % 2 != 0
             case RoundingDirection.RTO:
-                # infinity is considered even for rounding
-                return False
+                # infinity is the opposite parity of the maximum value
+                # overflow to infinity if the maximum value is even
+                maxval = self.neg_maxval if s else self.pos_maxval
+                return maxval.c % 2 == 0
+                # maxval_ord = self._neg_maxval_ord if s else self._pos_maxval_ord
+                # return maxval_ord % 2 == 0
             case _:
                 raise RuntimeError(f'unrechable {direction}')
 
