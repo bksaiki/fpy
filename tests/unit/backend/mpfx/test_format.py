@@ -142,12 +142,12 @@ class TestAbstractFormat(unittest.TestCase):
 
 
     @given(
-        st.one_of(st.integers(1, 4), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
-        st.integers(-8, 0),      # e1: minimum exponent of fmt1
-        st.integers(1, 32),      # k1: bound of fmt1 is k1 * 2^e1
-        st.one_of(st.integers(1, 4), st.just(float('inf'))),  # p2: precision (inf = fixed-point)
-        st.integers(-8, 0),      # e2: minimum exponent of fmt2
-        st.integers(1, 32),      # k2: bound of fmt2 is k2 * 2^e2
+        st.one_of(st.integers(1, 6), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
+        st.integers(-8, 0),       # e1: minimum exponent of fmt1
+        st.integers(1, 128),      # k1: bound of fmt1 is k1 * 2^e1
+        st.one_of(st.integers(1, 6), st.just(float('inf'))),  # p2: precision (inf = fixed-point)
+        st.integers(-8, 0),       # e2: minimum exponent of fmt2
+        st.integers(1, 128),      # k2: bound of fmt2 is k2 * 2^e2
     )
     @settings(max_examples=500)
     def test_contains_exhaustive(self, p1, e1, k1, p2, e2, k2):

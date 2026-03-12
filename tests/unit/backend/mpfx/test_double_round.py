@@ -135,7 +135,7 @@ class TestDoubleRound(unittest.TestCase):
     def test_rto_raz(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RAZ](ctx2[RTO](x)) == ctx1[RAZ](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RAZ, fp.RM.RTO, ensure_odd=True)
-        assume(_next_float(ctx1, ctx1.pos_maxval) <= ctx2.pos_maxval)
+        assume(ctx1.pos_maxval < ctx2.pos_maxval)
         A1 = AbstractFormat.from_context(ctx1)
         A2 = AbstractFormat.from_context(ctx2)
         y1 = ctx1.round(x)
@@ -156,7 +156,7 @@ class TestDoubleRound(unittest.TestCase):
     def test_rto_rne(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RNE](ctx2[RTO](x)) == ctx1[RNE](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RNE, fp.RM.RTO, ensure_odd=True)
-        assume(_next_float(ctx1, ctx1.pos_maxval) <= ctx2.pos_maxval)
+        assume(_next_halfway_float(ctx1, ctx1.pos_maxval) <= ctx2.pos_maxval)
         A1 = AbstractFormat.from_context(ctx1)
         A2 = AbstractFormat.from_context(ctx2)
         y1 = ctx1.round(x)

@@ -201,7 +201,7 @@ class AbstractFormat:
     def __or__(self, other: 'AbstractFormat') -> 'AbstractFormat':
         """Union of two formats."""
         if not isinstance(other, AbstractFormat):
-            raise TypeError(f'Expected \'AbstractFormat\', got {other}')
+            return NotImplemented
         prec = max(self.prec, other.prec)
         exp = min(self.exp, other.exp)
         pos_bound = max(self.pos_bound, other.pos_bound)
@@ -209,9 +209,13 @@ class AbstractFormat:
         return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
     def __le__(self, other) -> bool:
+        if not isinstance(other, AbstractFormat):
+            return NotImplemented
         return self._is_contained_in(other)
 
     def __ge__(self, other) -> bool:
+        if not isinstance(other, AbstractFormat):
+            return NotImplemented
         return other._is_contained_in(self)
 
     @property
