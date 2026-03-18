@@ -200,8 +200,8 @@ def _save_results(results: dict[tuple[str, OptOptions], list[float]], times_file
 def _generate_plots(results: dict[tuple[str, OptOptions], list[float]], output_dir: Path) -> None:
     """Generate all plots from benchmark results."""
     print('\n=== Generating Plots ===')
-    plot_speedup(results, OPTIONS, output_dir)
-    plot_speedup_bar(results, OPTIONS, output_dir)
+    plot_speedup(results, EXAMPLES, OPTIONS, output_dir)
+    plot_speedup_bar(results, EXAMPLES, OPTIONS, output_dir)
 
 
 def run_eval(config: EvalConfig, examples: list[Benchmark]) -> None:

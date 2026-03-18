@@ -5,7 +5,7 @@ from matplotlib.patches import Patch
 from pathlib import Path
 
 from .options import OptOptions
-
+from .utils import Benchmark
 
 _OPTION_LABELS: dict[OptOptions, str] = {
     OptOptions(elim_round=False, allow_exact=False): 'none',
@@ -16,6 +16,7 @@ _OPTION_LABELS: dict[OptOptions, str] = {
 
 def plot_speedup(
     times_by_config: dict[tuple[str, OptOptions], list[float]],
+    examples: list[Benchmark],
     options: list[OptOptions],
     output_dir: Path
 ) -> None:
@@ -46,13 +47,13 @@ def plot_speedup(
             mean_speedup = np.mean(times)
             std_speedup = np.std(times)
             print(f"  Option: {_OPTION_LABELS[option]:<20} Mean: {mean_speedup:.3f}x  Std Dev: {std_speedup:.3f}")
-    
+
     # Prepare data for plotting
-    benchmarks = sorted(speedup_data.keys())
-    
+    benchmarks = [example.func.name for example in examples if example.func.name in speedup_data]
+
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(14, 6))
-    
+
     # Prepare box plot data
     all_data = []
     positions = []
@@ -105,7 +106,7 @@ def plot_speedup(
     # Add legend
     legend_elements = [Patch(facecolor=color_map[i], label=_OPTION_LABELS[options[i]])
                       for i in range(len(options))]
-    ax.legend(handles=legend_elements, loc='upper right')
+    ax.legend(handles=legend_elements, loc='upper left')
     
     # Add baseline reference line (speedup = 1.0 means no improvement)
     ax.axhline(y=1.0, color='red', linestyle='--', linewidth=1, alpha=0.5)
@@ -119,13 +120,14 @@ def plot_speedup(
     
     # Save plot
     plot_path = output_dir / 'speedup.png'
-    plt.savefig(plot_path, dpi=150)
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
     print(f'Speedup plot saved to `{plot_path}`.')
     plt.close()
 
 
 def plot_speedup_bar(
     times_by_config: dict[tuple[str, OptOptions], list[float]],
+    examples: list[Benchmark],
     options: list[OptOptions],
     output_dir: Path
 ) -> None:
@@ -159,7 +161,7 @@ def plot_speedup_bar(
             print(f"  Option: {_OPTION_LABELS[option]:<20} Mean: {mean_speedup:.3f}x  Std Dev: {std_speedup:.3f}")
     
     # Prepare data for plotting
-    benchmarks = sorted(speedup_data.keys())
+    benchmarks = [example.func.name for example in examples if example.func.name in speedup_data]
     
     # Define colors dynamically based on number of options
     color_list = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow', 'lightgray', 'lightpink']
@@ -171,7 +173,7 @@ def plot_speedup_bar(
     # Set width of bars and positions
     bar_width = 0.15
     x = np.arange(len(benchmarks))
-    
+
     # Create bars for each option
     for option_idx, option in enumerate(options):
         means = [speedup_data[bench][option][0] if option in speedup_data[bench] else 0 
@@ -186,7 +188,7 @@ def plot_speedup_bar(
     ax.set_title('Relative Speedup per Benchmark', fontsize=16)
     ax.set_xticks(x)
     ax.set_xticklabels(benchmarks, rotation=45, ha='right')
-    ax.legend(loc='upper right')
+    ax.legend(loc='upper left')
     
     # Add baseline reference line (speedup = 1.0 means no improvement)
     ax.axhline(y=1.0, color='red', linestyle='--', linewidth=1, alpha=0.5)
@@ -196,6 +198,6 @@ def plot_speedup_bar(
     
     # Save plot
     plot_path = output_dir / 'speedup_bar.png'
-    plt.savefig(plot_path, dpi=250)
+    plt.savefig(plot_path, dpi=250, bbox_inches='tight')
     print(f'Speedup bar chart saved to `{plot_path}`.')
     plt.close()
