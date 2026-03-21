@@ -78,9 +78,8 @@ class Float:
         m: int | None = None,
         isinf: bool | None = None,
         isnan: bool | None = None,
-        interval_size: int | None = None,
-        interval_down: bool | None = None,
-        interval_closed: bool | None = None,
+        inexact: bool | None = None,
+        carry: bool | None = None,
         ctx: DefaultOr[Optional[Context]] = DEFAULT
     ):
         match x:
@@ -123,9 +122,9 @@ class Float:
             and c is None
             and e is None
             and m is None
-            and interval_size is None
-            and interval_down is None
-            and interval_closed is None):
+            and inexact is None
+            and carry is None
+        ):
             # no fields are overriden
             if real is None:
                 # use the default `RealFloat`
@@ -141,9 +140,8 @@ class Float:
                 x=real,
                 e=e,
                 m=m,
-                interval_size=interval_size,
-                interval_down=interval_down,
-                interval_closed=interval_closed
+                inexact=inexact,
+                carry=carry
             )
 
     def __repr__(self):
@@ -153,9 +151,7 @@ class Float:
             + ', c=' + repr(self._real._c)
             + ', isinf=' + repr(self._isinf)
             + ', isnan=' + repr(self._isnan)
-            + ', interval_size=' + repr(self._real._interval_size)
-            + ', interval_down=' + repr(self._real._interval_size)
-            + ', interval_closed=' + repr(self._real._interval_closed)
+            + ', flags=' + repr(self._real._flags)
             + ', ctx=' + repr(self._ctx)
             + ')'
         )
@@ -496,19 +492,14 @@ class Float:
         return self._real.m
 
     @property
-    def interval_size(self) -> int | None:
-        """Rounding envelope: size relative to `2**exp`."""
-        return self._real._interval_size
-
-    @property
-    def interval_down(self) -> bool | None:
-        """Rounding envelope: extends below the value."""
-        return self._real._interval_down
-
-    @property
     def inexact(self) -> bool:
-        """Return whether this number is inexact."""
+        """Inexact flag: the rounded result is not the same as the exact result."""
         return self._real.inexact
+
+    @property
+    def carry(self) -> bool:
+        """Carry flag: the rounded result has a different exponent than the exact result."""
+        return self._real.carry
 
     @property
     def numerator(self):
