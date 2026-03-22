@@ -963,14 +963,15 @@ class RealFloat(numbers.Rational):
 
     def _round_increment(
         self,
-        half_bit: bool,
-        lower_bits: bool,
+        lost: 'RealFloat',
+        n: int,
         rm: RoundingMode,
     ):
         """
         Determines whether we need to increment this value based on
         the rounding mode `rm` and the rounding bits `half_bit` and `lower_bits`.
         """
+        assert not lost.is_zero(), 'rounding increment should only be computed when there are lost digits'
 
         # convert the rounding mode to a direction
         nearest, direction = rm.to_direction(self._s)
@@ -981,6 +982,16 @@ class RealFloat(numbers.Rational):
         # case split on nearest mode
         if nearest:
             # nearest rounding mode
+            # extract halfway bit and lower bits
+            if lost.e == n:
+                # the MSB of lo is at position n
+                half_bit = (lost._c >> (lost.p - 1)) != 0
+                lower_bits = (lost._c & bitmask(lost.p - 1)) != 0
+            else:
+                # the MSB of lo is below position n
+                half_bit = False
+                lower_bits = True
+
             # case split on halfway bit
             if half_bit:
                 # at least halfway
@@ -1002,27 +1013,25 @@ class RealFloat(numbers.Rational):
                             increment = is_even
         else:
             # non-nearest rounding mode
-            if half_bit or lower_bits:
-                # inexact
-                match direction:
-                    case RoundingDirection.RTZ:
-                        increment = False
-                    case RoundingDirection.RAZ:
-                        increment = True
-                    case RoundingDirection.RTE:
-                        is_even = (self._c & 1) == 0
-                        increment = not is_even
-                    case RoundingDirection.RTO:
-                        is_even = (self._c & 1) == 0
-                        increment = is_even
+            match direction:
+                case RoundingDirection.RTZ:
+                    increment = False
+                case RoundingDirection.RAZ:
+                    increment = True
+                case RoundingDirection.RTE:
+                    is_even = (self._c & 1) == 0
+                    increment = not is_even
+                case RoundingDirection.RTO:
+                    is_even = (self._c & 1) == 0
+                    increment = is_even
 
         return increment
 
     def _round_finalize(
         self,
-        half_bit: bool,
-        lower_bits: bool,
+        lost: 'RealFloat',
         p: int | None,
+        n: int,
         rm: RoundingMode
     ):
         """
@@ -1031,7 +1040,7 @@ class RealFloat(numbers.Rational):
         """
 
         # prepare the rounding operation
-        increment = self._round_increment(half_bit, lower_bits, rm)
+        increment = self._round_increment(lost, n, rm)
 
         # increment if necessary
         carry = False
@@ -1072,18 +1081,8 @@ class RealFloat(numbers.Rational):
         if exact:
             raise ValueError(f'rounding off digits: self={self}, n={n}')
 
-        # step 3. recover the rounding bits
-        if lost.e == n:
-            # the MSB of lo is at position n
-            half_bit = (lost._c >> (lost.p - 1)) != 0
-            lower_bits = (lost._c & bitmask(lost.p - 1)) != 0
-        else:
-            # the MSB of lo is below position n
-            half_bit = False
-            lower_bits = True
-
-        # step 4. finalize rounding (mutates `kept`)
-        kept._round_finalize(half_bit, lower_bits, p, rm)
+        # step 3. finalize rounding based on lost digits
+        kept._round_finalize(lost, p, n, rm)
 
         # return the rounded value
         return kept
