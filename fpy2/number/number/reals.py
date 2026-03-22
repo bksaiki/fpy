@@ -477,8 +477,8 @@ class RealFloat(numbers.Rational):
             return Fraction(0)
         elif self._exp >= 0: # case: definitely integer
             return Fraction(self.m * (2 ** self._exp))
-        else: # case: may be fractional
-            return self.m * (Fraction(2) ** self._exp)
+        else: # case: likely fractional
+            return Fraction(self.m, 2 ** (-self._exp))
 
     @staticmethod
     def from_int(x: int):
