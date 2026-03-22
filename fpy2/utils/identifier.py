@@ -78,10 +78,11 @@ class NamedId(Id):
     A named identifier consists of a base name and an optional
     count to indicate its version.
     """
-    __slots__ = ('base', 'count')
+    __slots__ = ('base', 'count', '_hash')
 
     base: str
     count: int | None
+    _hash: int | None
 
     def __init__(self, base: str, count: int | None = None):
         if not isinstance(base, str):
@@ -93,8 +94,10 @@ class NamedId(Id):
             base, suffix = _split_id(base)
             if suffix is not None:
                 raise ValueError(f'base name cannot have a digit suffix: {base}')
+
         self.base = base
         self.count = count
+        self._hash = None
 
     def __repr__(self):
         return f'NamedId(\'{str(self)}\')'
@@ -113,7 +116,9 @@ class NamedId(Id):
         )
 
     def __hash__(self):
-        return hash((self.base, self.count))
+        if self._hash is None:
+            self._hash = hash((self.base, self.count))
+        return self._hash
 
     def names(self) -> set['NamedId']:
         return { self }

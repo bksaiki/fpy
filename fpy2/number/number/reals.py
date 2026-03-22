@@ -473,10 +473,12 @@ class RealFloat(numbers.Rational):
         return self._flags.carry
 
     def as_rational(self) -> Fraction:
-        if self.is_zero():
+        if self._c == 0: # case: zero
             return Fraction(0)
-        else:
-            return self.m * (Fraction(2) ** self._exp)
+        elif self._exp >= 0: # case: definitely integer
+            return Fraction(self.m * (2 ** self._exp))
+        else: # case: likely fractional
+            return Fraction(self.m, 2 ** (-self._exp))
 
     @staticmethod
     def from_int(x: int):
