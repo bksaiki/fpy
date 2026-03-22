@@ -26,6 +26,8 @@ from ...utils import (
     FP64_IMPLICIT1,
 )
 
+from .flags import Flags, NO_FLAGS
+
 
 class RealFloat(numbers.Rational):
     """
@@ -42,17 +44,11 @@ class RealFloat(numbers.Rational):
     There are no constraints on the values of `exp` and `c`.
     Unlike IEEE 754, this number cannot encode infinity or NaN.
 
-    This type can also encode uncertainty introduced by rounding.
-    The uncertaintly is represented by an interval, also called
-    a rounding envelope. The interval includes this value and
-    extends either below or above it (`interval_down`).
-    The interval always contains this value and may contain
-    the other endpoint as well (`interval_closed`).
-    The size of the interval is `2**(exp + interval_size)`.
-    It must be the case that `interval_size <= 0`.
+    This type also contains status flags (`Flags`) to indicate
+    exceptional events that occured during rounding.
     """
 
-    __slots__ = ('_s', '_exp', '_c', '_interval_size', '_interval_down', '_interval_closed')
+    __slots__ = ('_s', '_exp', '_c', '_flags')
 
     _s: bool
     """is the sign negative?"""
@@ -60,13 +56,8 @@ class RealFloat(numbers.Rational):
     """absolute position of the LSB"""
     _c: int
     """integer significand"""
-
-    _interval_size: int | None
-    """rounding envelope: size relative to `2**exp`"""
-    _interval_down: bool
-    """rounding envelope: does the interval extend towards zero?"""
-    _interval_closed: bool
-    """rounding envelope: is the interval closed at the other endpoint?"""
+    _flags: Flags
+    """status flags for exceptional events during rounding"""
 
     def __init__(
         self,
@@ -77,9 +68,8 @@ class RealFloat(numbers.Rational):
         x: Self | None = None,
         e: int | None = None,
         m: int | None = None,
-        interval_size: int | None = None,
-        interval_down: bool | None = None,
-        interval_closed: bool | None = None,
+        inexact: bool | None = None,
+        carry: bool | None = None
     ):
         """
         Creates a new `RealFloat` value.
@@ -135,40 +125,30 @@ class RealFloat(numbers.Rational):
         else:
             self._exp = 0
 
-        # rounding envelope size
-        if interval_size is not None:
-            if interval_size > 0:
-                raise ValueError(f'cannot specify interval_size={interval_size}, must be <= 0')
-            self._interval_size = interval_size
-        elif x is not None:
-            self._interval_size = x._interval_size
-        else:
-            self._interval_size = None
+        # inexact
+        if inexact is None:
+            inexact = False
+        # carry
+        if carry is None:
+            carry = False
 
-        # rounding envelope direction
-        if interval_down is not None:
-            self._interval_down = interval_down
-        elif x is not None:
-            self._interval_down = x._interval_down
+        # flags
+        if inexact or carry:
+            # need to construct a new Flags object
+            self._flags = Flags(
+                inexact=inexact,
+                carry=carry
+            )
         else:
-            self._interval_down = False
-
-        # rounding envelope endpoint
-        if interval_closed is not None:
-            self._interval_closed = interval_closed
-        elif x is not None:
-            self._interval_closed = x._interval_closed
-        else:
-            self._interval_closed = False
+            # can reuse the singleton with all flags unset
+            self._flags = NO_FLAGS
 
     def __repr__(self):
         return (f'{self.__class__.__name__}('
             + 's=' + repr(self._s)
             + ', exp=' + repr(self._exp)
             + ', c=' + repr(self._c)
-            + ', interval_size=' + repr(self._interval_size)
-            + ', interval_down=' + repr(self._interval_down)
-            + ', interval_closed=' + repr(self._interval_closed)
+            + ', flags=' + repr(self._flags)
             + ')'
         )
 
@@ -483,19 +463,14 @@ class RealFloat(numbers.Rational):
         return self._c
 
     @property
-    def interval_size(self) -> int | None:
-        """property: rounding envelope size relative to `2**exp`"""
-        return self._interval_size
+    def inexact(self) -> bool:
+        """Inexact flag: the rounded result is not the same as the exact result."""
+        return self._flags.inexact
 
     @property
-    def interval_down(self) -> bool:
-        """property: rounding envelope extends towards zero"""
-        return self._interval_down
-
-    @property
-    def interval_closed(self) -> bool:
-        """property: rounding envelope is closed at the other endpoint"""
-        return self._interval_closed
+    def carry(self) -> bool:
+        """Carry flag: the rounded result has a different exponent than the exact result."""
+        return self._flags.carry
 
     def as_rational(self) -> Fraction:
         if self.is_zero():
@@ -643,11 +618,6 @@ class RealFloat(numbers.Rational):
         This is exactly `(-1)^self.s * self.c`.
         """
         return -self._c if self._s else self._c
-
-    @property
-    def inexact(self) -> bool:
-        """Is this value inexact?"""
-        return self._interval_size is not None
 
     @property
     def numerator(self):
@@ -909,16 +879,11 @@ class RealFloat(numbers.Rational):
         """Is the value encoded identically to another `RealFloat` value?"""
         if not isinstance(other, RealFloat):
             return TypeError(f'expected RealFloat, got {type(other)}')
-
         return (
             self._s == other._s
             and self._exp == other._exp
             and self._c == other._c
-            and self._interval_size == other._interval_size
-            and self._interval_down == other._interval_down
-            and self._interval_closed == other._interval_closed
         )
-
 
     def next_away(self):
         """
@@ -996,7 +961,7 @@ class RealFloat(numbers.Rational):
 
         return p, n
 
-    def _round_direction(
+    def _round_increment(
         self,
         kept: Self,
         half_bit: bool,
@@ -1004,17 +969,16 @@ class RealFloat(numbers.Rational):
         rm: RoundingMode,
     ):
         """
-        Determines the direction to round based on the rounding mode.
-        Also computes the rounding envelope.
+        Determines whether we need to increment the truncated value `kept`
+        based on the rounding mode `rm` and the rounding bits `half_bit`
+        and `lower_bits`.
         """
 
         # convert the rounding mode to a direction
         nearest, direction = rm.to_direction(kept._s)
 
-        # rounding envelope
-        interval_size: int | None = None
-        interval_closed: bool = False
-        increment: bool = False
+        # rounding direction
+        increment = False
 
         # case split on nearest mode
         if nearest:
@@ -1022,13 +986,11 @@ class RealFloat(numbers.Rational):
             # case split on halfway bit
             if half_bit:
                 # at least halfway
-                interval_size = -1
                 if lower_bits:
                     # above halfway
                     increment = True
                 else:
                     # exact halfway
-                    interval_closed = True
                     match direction:
                         case RoundingDirection.RTZ:
                             increment = False
@@ -1040,22 +1002,10 @@ class RealFloat(numbers.Rational):
                         case RoundingDirection.RTO:
                             is_even = (kept._c & 1) == 0
                             increment = is_even
-            else:
-                # below halfway
-                increment = False
-                interval_closed = False
-                if lower_bits:
-                    # inexact
-                    interval_size = -1
-                else:
-                    # exact
-                    interval_size = None
         else:
             # non-nearest rounding mode
-            interval_closed = False
             if half_bit or lower_bits:
                 # inexact
-                interval_size = 0
                 match direction:
                     case RoundingDirection.RTZ:
                         increment = False
@@ -1067,12 +1017,8 @@ class RealFloat(numbers.Rational):
                     case RoundingDirection.RTO:
                         is_even = (kept._c & 1) == 0
                         increment = is_even
-            else:
-                # exact
-                interval_size = None
-                increment = False
 
-        return interval_size, interval_closed, increment
+        return increment
 
     def _round_finalize(
         self,
@@ -1088,9 +1034,10 @@ class RealFloat(numbers.Rational):
         """
 
         # prepare the rounding operation
-        interval_size, interval_closed, increment = self._round_direction(kept, half_bit, lower_bits, rm)
+        increment = self._round_increment(kept, half_bit, lower_bits, rm)
 
         # increment if necessary
+        carry = False
         if increment:
             kept._c += 1
             if p is not None and kept._c.bit_length() > p:
@@ -1098,20 +1045,10 @@ class RealFloat(numbers.Rational):
                 # the value is guaranteed to be a power of two
                 kept._c >>= 1
                 kept._exp += 1
-
-                assert interval_size is not None, 'interval_size is None when rounding is exact'
-                interval_size -= 1
-
-        # interval direction is opposite of if we incremented
-        interval_down = not increment
+                carry = True
 
         # return the rounded value
-        return RealFloat(
-            x=kept,
-            interval_size=interval_size,
-            interval_down=interval_down,
-            interval_closed=interval_closed
-        )
+        return RealFloat(x=kept, inexact=increment, carry=carry)
 
     def _round_at(
         self,

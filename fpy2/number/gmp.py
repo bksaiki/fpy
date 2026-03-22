@@ -68,15 +68,10 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
         # check for inexactness => only occurs when MPFR overflows
         # TODO: awkward to use interval information for an infinity
         if inexact:
-            interval_size = 0
-            interval_down = not s
-            interval_closed = False
             return Float(
                 s=s,
                 isinf=True,
-                interval_size=interval_size,
-                interval_down=interval_down,
-                interval_closed=interval_closed
+                inexact=inexact
             )
         else:
              return Float(s=s, isinf=True)
@@ -142,7 +137,7 @@ def mpfr_call(
 
         # extract the normalized exponent of `y`
         # gmp has a messed up definition of exponent
-        e = gmp.get_exp(result) - 1
+        e: int = gmp.get_exp(result) - 1
 
         # all digits are at or below the `n`th digit, so we can round safely
         # we at least have two digits of precision, so we can round safely
