@@ -200,13 +200,13 @@ class RealFloat(numbers.Rational):
         return RealFloat(x=self)
 
     @overload
-    def __add__(self, other: Self) -> Self: ...
+    def __add__(self, other: 'RealFloat') -> 'RealFloat': ...
     @overload
-    def __add__(self, other: int) -> Self: ...
+    def __add__(self, other: int) -> 'RealFloat': ...
     @overload
     def __add__(self, other: float) -> Self | float: ...
     @overload
-    def __add__(self, other: Fraction) -> Self: ...
+    def __add__(self, other: Fraction) -> 'RealFloat': ...
 
     def __add__(self, other):
         """
@@ -261,49 +261,49 @@ class RealFloat(numbers.Rational):
             return RealFloat(s=s, exp=exp, c=c)
 
     @overload
-    def __radd__(self, other: Self) -> Self: ...
+    def __radd__(self, other: 'RealFloat') -> 'RealFloat': ...
     @overload
-    def __radd__(self, other: int) -> Self: ...
+    def __radd__(self, other: int) -> 'RealFloat': ...
     @overload
     def __radd__(self, other: float) -> Self | float: ...
     @overload
-    def __radd__(self, other: Fraction) -> Self: ...
+    def __radd__(self, other: Fraction) -> 'RealFloat': ...
 
     def __radd__(self, other):
         return self + other
 
     @overload
-    def __sub__(self, other: Self) -> Self: ...
+    def __sub__(self, other: 'RealFloat') -> 'RealFloat': ...
     @overload
-    def __sub__(self, other: int) -> Self: ...
+    def __sub__(self, other: int) -> 'RealFloat': ...
     @overload
     def __sub__(self, other: float) -> Self | float: ...
     @overload
-    def __sub__(self, other: Fraction) -> Self: ...
+    def __sub__(self, other: Fraction) -> 'RealFloat': ...
 
     def __sub__(self, other):
         return self + (-other)
     
     @overload
-    def __rsub__(self, other: Self) -> Self: ...
+    def __rsub__(self, other: 'RealFloat') -> 'RealFloat': ...
     @overload
-    def __rsub__(self, other: int) -> Self: ...
+    def __rsub__(self, other: int) -> 'RealFloat': ...
     @overload
     def __rsub__(self, other: float) -> Self | float: ...
     @overload
-    def __rsub__(self, other: Fraction) -> Self: ...
+    def __rsub__(self, other: Fraction) -> 'RealFloat': ...
 
     def __rsub__(self, other):
         return (-self) + other
 
     @overload
-    def __mul__(self, other: Self) -> Self: ...
+    def __mul__(self, other: 'RealFloat') -> 'RealFloat': ...
     @overload
-    def __mul__(self, other: int) -> Self: ...
+    def __mul__(self, other: int) -> 'RealFloat': ...
     @overload
     def __mul__(self, other: float) -> Self | float: ...
     @overload
-    def __mul__(self, other: Fraction) -> Self: ...
+    def __mul__(self, other: Fraction) -> 'RealFloat': ...
 
     def __mul__(self, other):
         """
@@ -342,13 +342,13 @@ class RealFloat(numbers.Rational):
             return RealFloat(s=s, exp=exp, c=c)
 
     @overload
-    def __rmul__(self, other: Self) -> Self: ...
+    def __rmul__(self, other: 'RealFloat') -> 'RealFloat': ...
     @overload
-    def __rmul__(self, other: int) -> Self: ...
+    def __rmul__(self, other: int) -> 'RealFloat': ...
     @overload
     def __rmul__(self, other: float) -> Self | float: ...
     @overload
-    def __rmul__(self, other: Fraction) -> Self: ...
+    def __rmul__(self, other: Fraction) -> 'RealFloat': ...
 
     def __rmul__(self, other):
         return self * other
@@ -875,7 +875,7 @@ class RealFloat(numbers.Rational):
             case _:
                 raise TypeError(f'comparison not supported between \'RealFloat\' and \'{type(other)}\'')
 
-    def is_identical_to(self, other: Self) -> bool:
+    def is_identical_to(self, other: 'RealFloat') -> bool:
         """Is the value encoded identically to another `RealFloat` value?"""
         if not isinstance(other, RealFloat):
             return TypeError(f'expected RealFloat, got {type(other)}')
@@ -963,19 +963,19 @@ class RealFloat(numbers.Rational):
 
     def _round_increment(
         self,
-        kept: Self,
-        half_bit: bool,
-        lower_bits: bool,
+        lost: 'RealFloat',
+        n: int,
         rm: RoundingMode,
     ):
         """
-        Determines whether we need to increment the truncated value `kept`
-        based on the rounding mode `rm` and the rounding bits `half_bit`
-        and `lower_bits`.
-        """
+        Determines whether we need to increment this value based on
+        the rounding mode `rm` and the lost digits `lost` below
+        at or below the rounding position `n`.
 
+        Must be the case that `lost` is non-zero.
+        """
         # convert the rounding mode to a direction
-        nearest, direction = rm.to_direction(kept._s)
+        nearest, direction = rm.to_direction(self._s)
 
         # rounding direction
         increment = False
@@ -983,6 +983,16 @@ class RealFloat(numbers.Rational):
         # case split on nearest mode
         if nearest:
             # nearest rounding mode
+            # extract halfway bit and lower bits
+            if lost.e == n:
+                # the MSB of lo is at position n
+                half_bit = (lost._c >> (lost.p - 1)) != 0
+                lower_bits = (lost._c & bitmask(lost.p - 1)) != 0
+            else:
+                # the MSB of lo is below position n
+                half_bit = False
+                lower_bits = True
+
             # case split on halfway bit
             if half_bit:
                 # at least halfway
@@ -992,40 +1002,37 @@ class RealFloat(numbers.Rational):
                 else:
                     # exact halfway
                     match direction:
-                        case RoundingDirection.RTZ:
-                            increment = False
+                        # case RoundingDirection.RTZ:
+                        #     increment = False
                         case RoundingDirection.RAZ:
                             increment = True
                         case RoundingDirection.RTE:
-                            is_even = (kept._c & 1) == 0
+                            is_even = (self._c & 1) == 0
                             increment = not is_even
                         case RoundingDirection.RTO:
-                            is_even = (kept._c & 1) == 0
+                            is_even = (self._c & 1) == 0
                             increment = is_even
         else:
             # non-nearest rounding mode
-            if half_bit or lower_bits:
-                # inexact
-                match direction:
-                    case RoundingDirection.RTZ:
-                        increment = False
-                    case RoundingDirection.RAZ:
-                        increment = True
-                    case RoundingDirection.RTE:
-                        is_even = (kept._c & 1) == 0
-                        increment = not is_even
-                    case RoundingDirection.RTO:
-                        is_even = (kept._c & 1) == 0
-                        increment = is_even
+            match direction:
+                # case RoundingDirection.RTZ:
+                #     increment = False
+                case RoundingDirection.RAZ:
+                    increment = True
+                case RoundingDirection.RTE:
+                    is_even = (self._c & 1) == 0
+                    increment = not is_even
+                case RoundingDirection.RTO:
+                    is_even = (self._c & 1) == 0
+                    increment = is_even
 
         return increment
 
     def _round_finalize(
         self,
-        kept: Self,
-        half_bit: bool,
-        lower_bits: bool,
+        lost: 'RealFloat',
         p: int | None,
+        n: int,
         rm: RoundingMode
     ):
         """
@@ -1034,21 +1041,22 @@ class RealFloat(numbers.Rational):
         """
 
         # prepare the rounding operation
-        increment = self._round_increment(kept, half_bit, lower_bits, rm)
+        increment = self._round_increment(lost, n, rm)
 
         # increment if necessary
         carry = False
         if increment:
-            kept._c += 1
-            if p is not None and kept._c.bit_length() > p:
+            self._c += 1
+            if p is not None and self._c.bit_length() > p:
                 # adjust the exponent since we exceeded precision bounds
                 # the value is guaranteed to be a power of two
-                kept._c >>= 1
-                kept._exp += 1
+                self._c >>= 1
+                self._exp += 1
                 carry = True
 
-        # return the rounded value
-        return RealFloat(x=kept, inexact=increment, carry=carry)
+        # set flags (if needed)
+        if increment or carry:
+            self._flags = Flags(inexact=increment, carry=carry)
 
     def _round_at(
         self,
@@ -1074,17 +1082,11 @@ class RealFloat(numbers.Rational):
         if exact:
             raise ValueError(f'rounding off digits: self={self}, n={n}')
 
-        # step 3. recover the rounding bits
-        if lost.e == n:
-            # the MSB of lo is at position n
-            half_bit = (lost._c >> (lost.p - 1)) != 0
-            lower_bits = (lost._c & bitmask(lost.p - 1)) != 0
-        else:
-            # the MSB of lo is below position n
-            half_bit = False
-            lower_bits = True
+        # step 3. finalize rounding based on lost digits
+        kept._round_finalize(lost, p, n, rm)
 
-        return self._round_finalize(kept, half_bit, lower_bits, p, rm)
+        # return the rounded value
+        return kept
 
     def _round_at_stochastic(
         self,
@@ -1173,6 +1175,11 @@ class RealFloat(numbers.Rational):
             and (randbits < 0 or randbits >= (1 << num_randbits))):
             raise ValueError(f'randbits must be in [0, {1 << num_randbits}), got {randbits}')
 
+        # step 1. fast path for definitely representable values
+        if (p is None or self.p <= p) and self._exp > n:
+            return RealFloat(x=self)
+
+        # step 2. round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
             return self._round_at(p, n, rm, exact)
@@ -1240,7 +1247,11 @@ class RealFloat(numbers.Rational):
         # step 1. compute rounding parameters
         p, n = self._round_params(max_p, min_n)
 
-        # step 2. round at the specified position
+        # step 2. fast path for definitely representable values
+        if (p is None or self.p <= p) and self._exp > n:
+            return RealFloat(x=self)
+
+        # step 3. round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
             return self._round_at(p, n, rm, exact)

@@ -6,41 +6,16 @@ Hardware for Machine Learning Accelerators" (Kaul et al., 2019).
 """
 
 import fpy2 as fp
-import gzip
 import matplotlib.pyplot as plt
 import math
-import pickle
 import random
 
 from argparse import ArgumentParser
-from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import TypeAlias
 
 from .model import dot_prod_impl
-
-Input: TypeAlias = tuple[list[fp.Float], list[fp.Float]]
-
-
-@dataclass(frozen=True)
-class Sample:
-    inputs: list[Input]
-    ref_vals: list[fp.Float]
-
-@dataclass(frozen=True)
-class SampleKey:
-    seed: int
-    n: int
-
-@dataclass(frozen=True)
-class Config:
-    n: int
-    prec: int
-
-@dataclass(frozen=True)
-class Result:
-    log_rel_errs: list[float]
+from .sweep_utils import Config, Input, Result, Sample, SampleKey
 
 
 class Explorer(fp.Runner[Config, SampleKey, Result]):
