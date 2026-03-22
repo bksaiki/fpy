@@ -1175,6 +1175,11 @@ class RealFloat(numbers.Rational):
             and (randbits < 0 or randbits >= (1 << num_randbits))):
             raise ValueError(f'randbits must be in [0, {1 << num_randbits}), got {randbits}')
 
+        # step 1. fast path for definitely representable values
+        if (p is None or self.p <= p) and self._exp > n:
+            return RealFloat(x=self)
+
+        # step 2. round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
             return self._round_at(p, n, rm, exact)
