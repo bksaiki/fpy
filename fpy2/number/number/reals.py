@@ -969,10 +969,11 @@ class RealFloat(numbers.Rational):
     ):
         """
         Determines whether we need to increment this value based on
-        the rounding mode `rm` and the rounding bits `half_bit` and `lower_bits`.
-        """
-        assert not lost.is_zero(), 'rounding increment should only be computed when there are lost digits'
+        the rounding mode `rm` and the lost digits `lost` below
+        at or below the rounding position `n`.
 
+        Must be the case that `lost` is non-zero.
+        """
         # convert the rounding mode to a direction
         nearest, direction = rm.to_direction(self._s)
 
@@ -1001,8 +1002,8 @@ class RealFloat(numbers.Rational):
                 else:
                     # exact halfway
                     match direction:
-                        case RoundingDirection.RTZ:
-                            increment = False
+                        # case RoundingDirection.RTZ:
+                        #     increment = False
                         case RoundingDirection.RAZ:
                             increment = True
                         case RoundingDirection.RTE:
@@ -1014,8 +1015,8 @@ class RealFloat(numbers.Rational):
         else:
             # non-nearest rounding mode
             match direction:
-                case RoundingDirection.RTZ:
-                    increment = False
+                # case RoundingDirection.RTZ:
+                #     increment = False
                 case RoundingDirection.RAZ:
                     increment = True
                 case RoundingDirection.RTE:
@@ -1241,7 +1242,11 @@ class RealFloat(numbers.Rational):
         # step 1. compute rounding parameters
         p, n = self._round_params(max_p, min_n)
 
-        # step 2. round at the specified position
+        # step 2. fast path for definitely representable values
+        if (p is None or self.p <= p) and self._exp > n:
+            return RealFloat(x=self)
+
+        # step 3. round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
             return self._round_at(p, n, rm, exact)
