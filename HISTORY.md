@@ -1,7 +1,25 @@
 # Version History
 
+## [0.1.2] - 2026-03-23
+### Features:
+ - Language:
+   - add `cast` builtin for format conversion without rounding
+   - add `logb` to builtins
+   - add `declcontext` to builtins
+ - Analyses
+   - array size inference
+   - partial evaluation
+ - Numbers:
+   - added `Engine` interface to encapsulate arithmetic engines
+ - Backend:
+   - added compiler to the MPFX library (experimental)
+
+### Changes:
+ - Language:
+   - make `empty` a variary operator
+
 ## [0.1.1] - 2025-11-07
-#### Features:
+### Features:
  - Runtime
    - add `Runner` instance to manage design-space exploration tasks
 
