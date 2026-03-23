@@ -6,7 +6,6 @@ import concurrent.futures
 import gzip
 import hashlib
 import pickle
-import random
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -173,7 +172,10 @@ class Runner(ABC, Generic[C, K, R]):
         if replot:
             # reload configurations and results from cache
             self.log('run', f'reloading results from cache `{cache_file}`')
-            cached = self._read_cache(cache_file)
+            cached: tuple[list[C], dict[C, R]] | None = self._read_cache(cache_file)
+            if cached is None:
+                raise RuntimeError(f'failed to read cache from `{cache_file}`')
+
             configs: list[C] = cached[0]
             results: dict[C, R] = cached[1]
         else:
