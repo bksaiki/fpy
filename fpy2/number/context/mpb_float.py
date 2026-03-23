@@ -101,17 +101,17 @@ class MPBFloatContext(SizedContext):
 
         self.pmax = pmax
         self.emin = emin
+        self.pos_maxval = maxval
+        self.neg_maxval = neg_maxval
         self.rm = rm
         self.overflow = overflow
         self.num_randbits = num_randbits
 
         self._mps_ctx = MPSFloatContext(pmax, emin, rm, num_randbits)
-        pos_maxval_fl = self._mps_ctx.round(maxval).normalize(p=self.pmax, n=self.nmin)
-        neg_maxval_fl = self._mps_ctx.round(neg_maxval).normalize(p=self.pmax, n=self.nmin)
-        self.pos_maxval = pos_maxval_fl.as_real()
-        self.neg_maxval = neg_maxval_fl.as_real()
-        self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_fl)
-        self._neg_maxval_ord = self._mps_ctx.to_ordinal(neg_maxval_fl)
+        pos_maxval_mps = Float(x=self.pos_maxval, ctx=self._mps_ctx)
+        neg_maxval_mps = Float(x=self.neg_maxval, ctx=self._mps_ctx)
+        self._pos_maxval_ord = self._mps_ctx.to_ordinal(pos_maxval_mps)
+        self._neg_maxval_ord = self._mps_ctx.to_ordinal(neg_maxval_mps)
 
     def __eq__(self, other):
         return (
