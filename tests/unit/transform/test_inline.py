@@ -28,7 +28,7 @@ class TestFuncInline(unittest.TestCase):
             return (fp.round(2) * t)
 
 
-        h = fp.transform.FuncInline.apply(g.ast)
+        h = fp.transform.FuncInline.apply(g.ast, recursive=False)
         h.name = expect.name
         self.assertASTEquiv(h, expect.ast, 'inlining failed')
 
@@ -47,7 +47,7 @@ class TestFuncInline(unittest.TestCase):
             t = (x2 + fp.rational(1, 3))
             return (fp.round(2) * t)
 
-        h = fp.transform.FuncInline.apply(g.ast)
+        h = fp.transform.FuncInline.apply(g.ast, recursive=False)
         h.name = expect.name
         self.assertASTEquiv(h, expect.ast, 'inlining failed')
 
@@ -76,7 +76,7 @@ class TestFuncInline(unittest.TestCase):
                 return [fp.round(x) for x in xs]
 
 
-        h = fp.transform.FuncInline.apply(bna.ast)
+        h = fp.transform.FuncInline.apply(bna.ast, recursive=False)
         h.name = expect.name
 
         h = fp.transform.ConstFold.apply(h, enable_op=False)

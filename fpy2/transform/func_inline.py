@@ -43,15 +43,23 @@ class _FuncInline(DefaultTransformVisitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     funcs: set[FuncDef] | None
+    recursive: bool
 
     gensym: Gensym
     free_vars: set[NamedId]
     env: ForeignEnv
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, funcs: set[FuncDef] | None):
+    def __init__(
+        self,
+        func: FuncDef,
+        def_use: DefineUseAnalysis,
+        funcs: set[FuncDef] | None,
+        recursive: bool = True
+    ):
         self.func = func
         self.def_use = def_use
         self.funcs = funcs
+        self.recursive = recursive
         self.gensym = Gensym(self.def_use.names())
         self.free_vars = set(func.free_vars)
         self.env = func.env.copy()
@@ -66,9 +74,12 @@ class _FuncInline(DefaultTransformVisitor):
 
         # recursively inline the callee function body
         # ASSUME: no recursive calls, i.e. the callee function does not call itself directly or indirectly
-        ast = FuncInline.apply(e.fn.ast)
-        def_use = DefineUse.analyze(ast)
-        self.gensym.reserve(*def_use.names())
+        if self.recursive:
+            ast = FuncInline.apply(e.fn.ast, recursive=True)
+            def_use = DefineUse.analyze(ast)
+            self.gensym.reserve(*def_use.names())
+        else:
+            ast = e.fn.ast
 
         # ASSUME: single return statement at the end of the function body
 
@@ -149,7 +160,8 @@ class FuncInline:
     def apply(
         func: FuncDef, *,
         def_use: DefineUseAnalysis | None = None,
-        funcs: Iterable[FuncDef] | None = None
+        funcs: Iterable[FuncDef] | None = None,
+        recursive: bool = True
     ) -> FuncDef:
         """
         Applies function inlining to `func` returning the transformed function.
@@ -162,7 +174,7 @@ class FuncInline:
         if funcs is not None:
             funcs = set(funcs)
 
-        inst = _FuncInline(func, def_use, funcs)
+        inst = _FuncInline(func, def_use, funcs, recursive=recursive)
         func = inst.apply()
 
         SyntaxCheck.check(func, ignore_unknown=True)
