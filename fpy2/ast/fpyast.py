@@ -231,6 +231,8 @@ class Ast(ABC):
     _loc: Location | None
 
     def __init__(self, loc: Location | None):
+        if loc is not None and not isinstance(loc, Location):
+            raise TypeError(f'Expected a `Location` or `None`, got loc={loc}')
         self._loc = loc
 
     @property

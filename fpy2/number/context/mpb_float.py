@@ -91,8 +91,6 @@ class MPBFloatContext(SizedContext):
 
         if maxval.s:
             raise ValueError(f'Expected positive maxval={maxval}, got {maxval}')
-        elif maxval.p > pmax:
-            raise ValueError(f'Expected maxval={maxval} to be representable in pmax={pmax} (p={maxval.p})')
 
         if neg_maxval is None:
             neg_maxval = RealFloat(s=True, x=maxval)
@@ -100,8 +98,6 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'RealFloat\' for neg_maxval={neg_maxval}, got {type(neg_maxval)}')
         elif not neg_maxval.s:
             raise ValueError(f'Expected negative neg_maxval={neg_maxval}, got {neg_maxval}')
-        elif neg_maxval.p > pmax:
-            raise ValueError(f'Expected neg_maxval={neg_maxval} to be representable in pmax={pmax}')
 
         self.pmax = pmax
         self.emin = emin
@@ -261,11 +257,11 @@ class MPBFloatContext(SizedContext):
                 # always round towards infinity
                 return True
             case RoundingDirection.RTE:
-                # infinity is considered even for rounding
+                # always round towards infinity
                 return True
             case RoundingDirection.RTO:
-                # infinity is considered even for rounding
-                return False
+                # always round towards infinity
+                return True
             case _:
                 raise RuntimeError(f'unrechable {direction}')
 

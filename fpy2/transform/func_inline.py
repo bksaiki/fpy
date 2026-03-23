@@ -43,15 +43,23 @@ class _FuncInline(DefaultTransformVisitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     funcs: set[FuncDef] | None
+    recursive: bool
 
     gensym: Gensym
     free_vars: set[NamedId]
     env: ForeignEnv
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, funcs: set[FuncDef] | None):
+    def __init__(
+        self,
+        func: FuncDef,
+        def_use: DefineUseAnalysis,
+        funcs: set[FuncDef] | None,
+        recursive: bool = True
+    ):
         self.func = func
         self.def_use = def_use
         self.funcs = funcs
+        self.recursive = recursive
         self.gensym = Gensym(self.def_use.names())
         self.free_vars = set(func.free_vars)
         self.env = func.env.copy()
@@ -64,15 +72,24 @@ class _FuncInline(DefaultTransformVisitor):
             # not a candidate for inlining
             return super()._visit_call(e, ctx)
 
+        # recursively inline the callee function body
+        # ASSUME: no recursive calls, i.e. the callee function does not call itself directly or indirectly
+        if self.recursive:
+            ast = FuncInline.apply(e.fn.ast, recursive=True)
+            def_use = DefineUse.analyze(ast)
+            self.gensym.reserve(*def_use.names())
+        else:
+            ast = e.fn.ast
+
         # ASSUME: single return statement at the end of the function body
 
         # first, rename all variables in the function body
-        reachability = ReachingDefs.analyze(e.fn.ast)
+        reachability = ReachingDefs.analyze(ast)
         subst: dict[NamedId, NamedId] = {}
         for d in reachability.defs:
             if isinstance(d, AssignDef) and not d.is_free:
                 subst[d.name] = self.gensym.refresh(d.name)
-        ast = RenameTarget.apply(e.fn.ast, subst)
+        ast = RenameTarget.apply(ast, subst)
 
         # merge free variables
         for name in ast.free_vars:
@@ -87,8 +104,9 @@ class _FuncInline(DefaultTransformVisitor):
         # bind arguments to parameters
         for arg, param in zip(e.args, ast.args):
             arg = self._visit_expr(arg, ctx)
-            name = subst.get(param.name, param.name)
-            ctx.stmts.append(Assign(name, param.type, arg, e.loc))
+            if isinstance(param.name, NamedId):
+                name = subst.get(param.name, param.name)
+                ctx.stmts.append(Assign(name, param.type, arg, e.loc))
 
         # bind the return value to a fresh variable and splice into the current block
         t = self.gensym.fresh('t')
@@ -142,7 +160,8 @@ class FuncInline:
     def apply(
         func: FuncDef, *,
         def_use: DefineUseAnalysis | None = None,
-        funcs: Iterable[FuncDef] | None = None
+        funcs: Iterable[FuncDef] | None = None,
+        recursive: bool = True
     ) -> FuncDef:
         """
         Applies function inlining to `func` returning the transformed function.
@@ -155,6 +174,8 @@ class FuncInline:
         if funcs is not None:
             funcs = set(funcs)
 
-        inst = _FuncInline(func, def_use, funcs)
+        inst = _FuncInline(func, def_use, funcs, recursive=recursive)
+        func = inst.apply()
+
         SyntaxCheck.check(func, ignore_unknown=True)
-        return inst.apply()
+        return func

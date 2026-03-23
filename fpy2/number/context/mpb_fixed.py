@@ -4,7 +4,7 @@ that is, multiprecision and bounded. Hence "MP-B".
 """
 
 from ..number import RealFloat, Float
-from ..round import RoundingMode, OverflowMode
+from ..round import RoundingMode, RoundingDirection, OverflowMode
 from ...utils import default_repr, DefaultOr, DEFAULT
 
 from .context import Context, SizedContext
@@ -149,8 +149,6 @@ class MPBFixedContext(SizedContext):
                         raise ValueError('Rounding Inf to unrepresentable value')
 
         self.nmin = nmin
-        self.pos_maxval = maxval
-        self.neg_maxval = neg_maxval
         self.rm = rm
         self.overflow = overflow
         self.num_randbits = num_randbits
@@ -160,10 +158,12 @@ class MPBFixedContext(SizedContext):
         self.inf_value = inf_value
 
         self._mp_ctx = MPFixedContext(nmin, rm, num_randbits, enable_nan=enable_nan, enable_inf=enable_inf)
-        pos_maxval_mp = Float(x=self.pos_maxval, ctx=self._mp_ctx)
-        neg_maxval_mp = Float(x=self.neg_maxval, ctx=self._mp_ctx)
-        self._pos_maxval_ord = self._mp_ctx.to_ordinal(pos_maxval_mp)
-        self._neg_maxval_ord = self._mp_ctx.to_ordinal(neg_maxval_mp)
+        pos_maxval_fl = self._mp_ctx.round(maxval)
+        neg_maxval_fl = self._mp_ctx.round(neg_maxval)
+        self.pos_maxval = pos_maxval_fl.as_real()
+        self.neg_maxval = neg_maxval_fl.as_real()
+        self._pos_maxval_ord = self._mp_ctx.to_ordinal(pos_maxval_fl)
+        self._neg_maxval_ord = self._mp_ctx.to_ordinal(neg_maxval_fl)
 
     def __eq__(self, other):
         return (
@@ -317,6 +317,25 @@ class MPBFixedContext(SizedContext):
         else:
             return x > self.pos_maxval
 
+    def _overflow_to_infinity(self, s: bool):
+        """Should overflows round to infinity (rather than MAX_VAL)?"""
+        _, direction = self.rm.to_direction(s)
+        match direction:
+            case RoundingDirection.RTZ:
+                # always round towards zero
+                return False
+            case RoundingDirection.RAZ:
+                # always round towards infinity
+                return True
+            case RoundingDirection.RTE:
+                # always round towards infinity
+                return True
+            case RoundingDirection.RTO:
+                # always round towards infinity
+                return True
+            case _:
+                raise RuntimeError(f'unrechable {direction}')
+
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round_at()` but only for `RealFloat` or `Float` instances.
@@ -370,7 +389,16 @@ class MPBFixedContext(SizedContext):
             # overflow
             match self.overflow:
                 case OverflowMode.OVERFLOW:
-                    raise OverflowError(f'Overflow when rounding {x} under context {self}')
+                    # overflowing => check which way to round
+                    if self._overflow_to_infinity(xr.s):
+                        # overflow to infinity
+                        if not self.enable_inf:
+                            raise ValueError('Cannot round to infinity under this context')
+                        return Float(x=x, isinf=True, ctx=self)
+                    else:
+                        # overflow to MAX_VAL
+                        max_val = self.maxval(xr.s)
+                        return Float(x=max_val, ctx=self)
                 case OverflowMode.SATURATE:
                     return self.maxval(s=xr.s)
                 case OverflowMode.WRAP:

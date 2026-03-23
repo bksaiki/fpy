@@ -255,10 +255,10 @@ class _FormatInfernce(Visitor):
         return AbstractFormat.from_context(INTEGER)
 
     def _visit_rational(self, e: Rational, ctx: Context):
-        raise NotImplementedError
+        return self._expr_type(e)
 
     def _visit_digits(self, e: Digits, ctx: Context):
-        raise NotImplementedError
+        return self._expr_type(e)
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context):
         raise NotImplementedError
@@ -317,11 +317,13 @@ class _FormatInfernce(Visitor):
                     size_ty = self.array_size.by_expr.get(e.arg, None)
                     if isinstance(size_ty, ArraySizeType) and size_ty.size is not None:
                         m_ty = a_ty.elt
-                        for _ in range(size_ty.size - 1):
-                            m_ty += a_ty.elt
+                        size = size_ty.size.resolve()
+                        if size is not None:
+                            for _ in range(1, size):
+                                m_ty += a_ty.elt
 
-                        assert isinstance(e_ty, AbstractFormat | RealType)
-                        e_ty = self._record_preround(e, m_ty, e_ty)
+                            assert isinstance(e_ty, AbstractFormat | RealType)
+                            e_ty = self._record_preround(e, m_ty, e_ty)
 
         return e_ty
 
@@ -548,7 +550,6 @@ class _FormatInfernce(Visitor):
 
     def _visit_expr(self, expr: Expr, ctx: Context) -> FormatType:
         ty = super()._visit_expr(expr, ctx)
-        # print(expr.format(), '::', ty)
         self.by_expr[expr] = ty
         return ty
 

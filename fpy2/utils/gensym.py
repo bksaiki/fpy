@@ -45,8 +45,6 @@ class Gensym(object):
         for ident in idents:
             if not isinstance(ident, NamedId):
                 raise TypeError('must be a list of identifiers', idents)
-            if ident in self._idents:
-                raise RuntimeError(f'identifier `{ident}` already reserved')
             self._idents.add(ident)
 
     def refresh(self, ident: NamedId):

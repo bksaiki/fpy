@@ -9,7 +9,13 @@ from ..transform import (
     DeadCodeEliminate,
 )
 
-def simplify(func: Function) -> Function:
+def simplify(
+    func: Function, *,
+    enable_const_fold: bool = True,
+    enable_const_prop: bool = True,
+    enable_copy_prop: bool = True,
+    enable_dead_code_elim: bool = True
+) -> Function:
     """
     Applies simplifying transformations to the function:
 
@@ -25,9 +31,15 @@ def simplify(func: Function) -> Function:
     # continually simplify until no more can be done
     eliminated = True
     while eliminated:
-        ast = ConstFold.apply(ast)
-        ast = ConstPropagate.apply(ast)
-        ast = CopyPropagate.apply(ast)
-        ast, eliminated = DeadCodeEliminate.apply_with_status(ast)
+        if enable_const_fold:
+            ast = ConstFold.apply(ast)
+        if enable_const_prop:
+            ast = ConstPropagate.apply(ast)
+        if enable_copy_prop:
+            ast = CopyPropagate.apply(ast)
+        if enable_dead_code_elim:
+            ast, eliminated = DeadCodeEliminate.apply_with_status(ast)
+        else:
+            eliminated = False
 
     return func.with_ast(ast)

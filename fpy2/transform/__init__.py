@@ -12,6 +12,7 @@ from .for_unroll import ForUnroll, ForUnrollStrategy
 from .func_inline import FuncInline
 from .func_update import FuncUpdate
 from .if_bundling import IfBundling
+from .lift_context import LiftContext
 from .monomorphize import Monomorphize
 from .rename_target import RenameTarget
 from .simplify_if import SimplifyIf
