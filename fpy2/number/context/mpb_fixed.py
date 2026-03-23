@@ -328,15 +328,11 @@ class MPBFixedContext(SizedContext):
                 # always round towards infinity
                 return True
             case RoundingDirection.RTE:
-                # infinity is the opposite parity of the maximum value
-                # overflow to infinity if the maximum value is odd
-                maxval = self.neg_maxval if s else self.pos_maxval
-                return maxval.c % 2 != 0
+                # always round towards infinity
+                return True
             case RoundingDirection.RTO:
-                # infinity is the opposite parity of the maximum value
-                # overflow to infinity if the maximum value is even
-                maxval = self.neg_maxval if s else self.pos_maxval
-                return maxval.c % 2 == 0
+                # always round towards infinity
+                return True
             case _:
                 raise RuntimeError(f'unrechable {direction}')
 
