@@ -470,10 +470,6 @@ class ContextTypeInferInstance(Visitor):
         # get around circular imports
         from ..function import Function
 
-        # visit arguments and kwargs
-        arg_tys = [self._visit_expr(arg, ctx) for arg in e.args]
-        kwarg_tys = [ (k, self._visit_expr(v, ctx)) for k, v in e.kwargs ]
-
         match e.fn:
             case None:
                 # calling None => can't conclude anything
