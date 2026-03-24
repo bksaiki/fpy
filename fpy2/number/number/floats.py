@@ -14,10 +14,11 @@ from .reals import RealFloat
 
 
 if TYPE_CHECKING:
-    from ..context import Context
+    from ..context import Context, OrdinalContext
     from . import Real
 else:
     Context = None  # type: ignore
+    OrdinalContext = None  # type: ignore
     Real = None  # type: ignore
 
 
@@ -784,37 +785,6 @@ class Float:
 
         return hi, lo
 
-
-    def round(self, ctx: Context):
-        """
-        Rounds this number under the given context.
-
-        This method is equivalent to `ctx.round(self)`.
-        """
-        if not isinstance(ctx, Context):
-            raise TypeError(f'expected Context, got {type(ctx)}')
-        return ctx.round(self)
-
-    def round_at(self, ctx: Context, n: int):
-        """
-        Rounds this number at the given position.
-
-        This method is equivalent to `self.ctx.round_at(self, n)`.
-        """
-        if not isinstance(ctx, Context):
-            raise TypeError(f'expected Context, got {type(ctx)}')
-        return ctx.round_at(self, n)
-
-    def round_integer(self, ctx: Context):
-        """
-        Rounds this number to the nearest integer.
-
-        This method is equivalent to `self.ctx.round_integer(self)`.
-        """
-        if not isinstance(ctx, Context):
-            raise TypeError(f'expected Context, got {type(ctx)}')
-        return ctx.round_integer(self)
-
     def compare(self, other: Self | RealFloat | int | float | Fraction) -> Ordering | None:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
@@ -862,3 +832,83 @@ class Float:
                         return self._real.compare(other)
                 case _:
                     return False
+
+    def round(self, ctx: Context):
+        """
+        Rounds this number under the given context.
+
+        This method is equivalent to `ctx.round(self)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round(self)
+
+    def round_at(self, ctx: Context, n: int):
+        """
+        Rounds this number at the given position.
+
+        This method is equivalent to `self.ctx.round_at(self, n)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round_at(self, n)
+
+    def round_integer(self, ctx: Context):
+        """
+        Rounds this number to the nearest integer.
+
+        This method is equivalent to `self.ctx.round_integer(self)`.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'expected Context, got {type(ctx)}')
+        return ctx.round_integer(self)
+
+    def next_towards(self, other: 'Float', allow_inf: bool = False) -> 'Float':
+        """
+        Returns the next representable `Float` value after `self` towards `other`.
+        """
+        if self._ctx is None:
+            raise ValueError(f'cannot compute next_towards without a context: self={self}')
+        elif not isinstance(self._ctx, OrdinalContext):
+            raise ValueError(f'context must be an OrdinalContext to compute next_towards: self={self}, ctx={self._ctx}')
+        return self._ctx.next_towards(self, other, allow_inf=allow_inf)
+
+    def next_towards_zero(self, allow_inf: bool = False) -> 'Float':
+        """
+        Returns the next representable `Float` value after `self` towards zero.
+        """
+        if self._ctx is None:
+            raise ValueError(f'cannot compute next_towards_zero without a context: self={self}')
+        elif not isinstance(self._ctx, OrdinalContext):
+            raise ValueError(f'context must be an OrdinalContext to compute next_towards_zero: self={self}, ctx={self._ctx}')
+        return self._ctx.next_towards_zero(self, allow_inf=allow_inf)
+
+    def next_away_zero(self, allow_inf: bool = False) -> 'Float':
+        """
+        Returns the next representable `Float` value after `self` away from zero.
+        """
+        if self._ctx is None:
+            raise ValueError(f'cannot compute next_away_zero without a context: self={self}')
+        elif not isinstance(self._ctx, OrdinalContext):
+            raise ValueError(f'context must be an OrdinalContext to compute next_away_zero: self={self}, ctx={self._ctx}')
+        return self._ctx.next_away_zero(self, allow_inf=allow_inf)
+
+    def next_up(self, allow_inf: bool = False) -> 'Float':
+        """
+        Returns the next representable `Float` value after `self` towards positive infinity.
+        """
+        if self._ctx is None:
+            raise ValueError(f'cannot compute next_up without a context: self={self}')
+        elif not isinstance(self._ctx, OrdinalContext):
+            raise ValueError(f'context must be an OrdinalContext to compute next_up: self={self}, ctx={self._ctx}')
+        return self._ctx.next_up(self, allow_inf=allow_inf)
+
+    def next_down(self, allow_inf: bool = False) -> 'Float':
+        """
+        Returns the next representable `Float` value after `self` towards negative infinity.
+        """
+        if self._ctx is None:
+            raise ValueError(f'cannot compute next_down without a context: self={self}')
+        elif not isinstance(self._ctx, OrdinalContext):
+            raise ValueError(f'context must be an OrdinalContext to compute next_down: self={self}, ctx={self._ctx}')
+        return self._ctx.next_down(self, allow_inf=allow_inf)
