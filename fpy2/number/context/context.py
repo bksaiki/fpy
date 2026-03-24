@@ -257,10 +257,9 @@ class OrdinalContext(Context):
         """
         ...
 
-
     def _next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
         """
-        Unchecked version of `self.next_towards()`.
+        Returns the next representable value after `x` towards `y`.
         """
         if y.isinf:
             # special case: we want to return the next value towards an infinity
@@ -295,9 +294,8 @@ class OrdinalContext(Context):
             raise ValueError('x is NaN', x)
         if y.isnan:
             raise ValueError('y is NaN', y)
-        if not allow_inf:
-            if x.isinf:
-                raise ValueError('x is infinite', x)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
         if x == y:
             raise ValueError('x and y are equal so there is no next value towards y', x, y)
         return self._next_towards(x, y, allow_inf)
@@ -310,14 +308,16 @@ class OrdinalContext(Context):
         - `x` is not representable under this context, or
         - `x` is `NaN`, or
         - `x` is infinite and `allow_inf` is `False`
+        - `x == 0`
         """
         if not self.representable_under(x):
             raise ValueError('x is not representable under this context', x)
         if x.isnan:
             raise ValueError('x is NaN', x)
-        if not allow_inf:
-            if x.isinf:
-                raise ValueError('x is infinite', x)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x == 0:
+            raise ValueError('x is zero so there is no next value towards zero', x)
         return self._next_towards(x, self.from_ordinal(0), allow_inf)
 
     def next_away_zero(self, x: Float, allow_inf: bool = False) -> Float:
@@ -328,15 +328,23 @@ class OrdinalContext(Context):
         - `x` is not representable under this context, or
         - `x` is `NaN`, or
         - `x` is infinite and `allow_inf` is `False`
+        - `x == 0`
         """
         if not self.representable_under(x):
             raise ValueError('x is not representable under this context', x)
         if x.isnan:
             raise ValueError('x is NaN', x)
-        if not allow_inf:
-            if x.isinf:
-                raise ValueError('x is infinite', x)
-        return self._next_towards(x, self.from_ordinal(0), allow_inf)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x == 0:
+            raise ValueError('x is zero so there is no next value away from zero', x)
+
+        if x.s:
+            # x is negative so we want to return the next value towards negative infinity
+            return self._next_towards(x, Float(isinf=True, s=True), allow_inf)
+        else:
+            # x is positive so we want to return the next value towards positive infinity
+            return self._next_towards(x, Float(isinf=True), allow_inf)
 
     def next_up(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -346,14 +354,16 @@ class OrdinalContext(Context):
         - `x` is not representable under this context, or
         - `x` is `NaN`, or
         - `x` is infinite and `allow_inf` is `False`
+        - `x == +inf`
         """
         if not self.representable_under(x):
             raise ValueError('x is not representable under this context', x)
         if x.isnan:
             raise ValueError('x is NaN', x)
-        if not allow_inf:
-            if x.isinf:
-                raise ValueError('x is infinite', x)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x.isinf and not x.s:
+            raise ValueError('x cannot be positive infinity', x)
         return self._next_towards(x, Float(isinf=True), allow_inf)
 
     def next_down(self, x: Float, allow_inf: bool = False) -> Float:
@@ -364,14 +374,16 @@ class OrdinalContext(Context):
         - `x` is not representable under this context, or
         - `x` is `NaN`, or
         - `x` is infinite and `allow_inf` is `False`
+        - `x == -inf`
         """
         if not self.representable_under(x):
             raise ValueError('x is not representable under this context', x)
         if x.isnan:
             raise ValueError('x is NaN', x)
-        if not allow_inf:
-            if x.isinf:
-                raise ValueError('x is infinite', x)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x.isinf and x.s:
+            raise ValueError('x cannot be negative infinity', x)
         return self._next_towards(x, Float(isinf=True, s=True), allow_inf)
 
 
