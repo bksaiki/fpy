@@ -494,7 +494,8 @@ class EFloatContext(EncodableContext):
         return self.maxval(s=False)
 
     def smallest(self) -> Float:
-        return self.maxval(s=True)
+        x = self._mpb_ctx.maxval(True)
+        return self.zero() if x.is_zero() else Float(x=x, ctx=self)
 
     def infval(self, s: bool = False):
         """

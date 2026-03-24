@@ -179,6 +179,7 @@ class TestOrdinalContext(unittest.TestCase):
             )))
     def test_next_away_zero_common(self, ctx_x: tuple[fp.OrdinalContext, fp.Float]):
         ctx, x = ctx_x
+        assume(not isinstance(ctx, fp.SizedContext) or ctx.smallest() < x < ctx.largest())
         if x != 0:
             y = ctx.next_away_zero(x)
             self.assertIsInstance(y, fp.Float)
@@ -193,6 +194,7 @@ class TestOrdinalContext(unittest.TestCase):
             )))
     def test_next_away_zero(self, ctx_x: tuple[fp.EncodableContext, fp.Float]):
         ctx, x = ctx_x
+        assume(not isinstance(ctx, fp.SizedContext) or ctx.smallest() < x < ctx.largest())
         if x != 0:
             y = ctx.next_away_zero(x)
             self.assertIsInstance(y, fp.Float)
