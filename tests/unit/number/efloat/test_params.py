@@ -145,6 +145,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX.expmin, -2)
         self.assertEqual(CTX.expmax, -1)
         self.assertEqual(CTX.maxval(), 3.5)
+        self.assertEqual(CTX.largest(), 3.5)
+        self.assertEqual(CTX.smallest(), -3.5)
 
     def test_region2(self):
         CTX = fp.IEEEContext(2, 4)
@@ -153,6 +155,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX.expmin, -1)
         self.assertEqual(CTX.expmax, 0)
         self.assertEqual(CTX.maxval(), 3)
+        self.assertEqual(CTX.largest(), 3)
+        self.assertEqual(CTX.smallest(), -3)
 
     def test_region3(self):
         CTX = fp.EFloatContext(2, 3, False, fp.EFloatNanKind.NONE, 0)
@@ -161,6 +165,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX.expmin, 0)
         self.assertEqual(CTX.expmax, 2)
         self.assertEqual(CTX.maxval(), 4)
+        self.assertEqual(CTX.largest(), 4)
+        self.assertEqual(CTX.smallest(), -4)
 
     def test_region4(self):
         CTX1 = fp.EFloatContext(1, 4, True, fp.EFloatNanKind.IEEE_754, 0)
@@ -169,6 +175,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX1.expmin, -1)
         self.assertEqual(CTX1.expmax, -2)
         self.assertEqual(CTX1.maxval(), 1.5)
+        self.assertEqual(CTX1.largest(), 1.5)
+        self.assertEqual(CTX1.smallest(), -1.5)
 
         CTX2 = fp.EFloatContext(1, 4, False, fp.EFloatNanKind.NONE, 0)
         self.assertEqual(CTX2.emin, 1)
@@ -176,6 +184,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX2.expmin, -1)
         self.assertEqual(CTX2.expmax, -1)
         self.assertEqual(CTX2.maxval(), 3.5)
+        self.assertEqual(CTX2.largest(), 3.5)
+        self.assertEqual(CTX2.smallest(), -3.5)
 
     def test_region5(self):
         CTX = fp.EFloatContext(0, 3, False, fp.EFloatNanKind.NONE, 0)
@@ -184,6 +194,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX.expmin, -1)
         self.assertEqual(CTX.expmax, -2)
         self.assertEqual(CTX.maxval(), 1.5)
+        self.assertEqual(CTX.largest(), 1.5)
+        self.assertEqual(CTX.smallest(), -1.5)
 
     def test_region6(self):
         CTX = fp.EFloatContext(1, 3, True, fp.EFloatNanKind.MAX_VAL, 0)
@@ -192,6 +204,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX.expmin, 0)
         self.assertEqual(CTX.expmax, -1)
         self.assertEqual(CTX.maxval(), 1)
+        self.assertEqual(CTX.largest(), 1)
+        self.assertEqual(CTX.smallest(), -1)
 
     def test_region7(self):
         CTX1 = fp.EFloatContext(1, 2, False, fp.EFloatNanKind.NONE, 0)
@@ -200,6 +214,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX1.expmin, 1)
         self.assertEqual(CTX1.expmax, 1)
         self.assertEqual(CTX1.maxval(), 2)
+        self.assertEqual(CTX1.largest(), 2)
+        self.assertEqual(CTX1.smallest(), -2)
 
         CTX2 = fp.EFloatContext(1, 2, True, fp.EFloatNanKind.NONE, 0)
         self.assertEqual(CTX2.emin, 1)
@@ -207,6 +223,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX2.expmin, 1)
         self.assertEqual(CTX2.expmax, 0)
         self.assertEqual(CTX2.maxval(), 0)
+        self.assertEqual(CTX2.largest(), 0)
+        self.assertEqual(CTX2.smallest(), 0)
 
         CTX3 = fp.EFloatContext(1, 2, False, fp.EFloatNanKind.MAX_VAL, 0)
         self.assertEqual(CTX3.emin, 1)
@@ -214,6 +232,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX3.expmin, 1)
         self.assertEqual(CTX3.expmax, 0)
         self.assertEqual(CTX3.maxval(), 0)
+        self.assertEqual(CTX3.largest(), 0)
+        self.assertEqual(CTX3.smallest(), 0)
 
     def test_region8(self):
         CTX1 = fp.EFloatContext(0, 2, False, fp.EFloatNanKind.NONE, 0)
@@ -222,6 +242,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX1.expmin, 0)
         self.assertEqual(CTX1.expmax, -1)
         self.assertEqual(CTX1.maxval(), 1)
+        self.assertEqual(CTX1.largest(), 1)
+        self.assertEqual(CTX1.smallest(), -1)
 
         CTX2 = fp.EFloatContext(0, 2, True, fp.EFloatNanKind.NONE, 0)
         self.assertEqual(CTX2.emin, 1)
@@ -229,6 +251,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX2.expmin, 0)
         self.assertEqual(CTX2.expmax, -1)
         self.assertEqual(CTX2.maxval(), 0)
+        self.assertEqual(CTX2.largest(), 0)
+        self.assertEqual(CTX2.smallest(), 0)
 
         CTX3 = fp.EFloatContext(0, 2, False, fp.EFloatNanKind.MAX_VAL, 0)
         self.assertEqual(CTX3.emin, 1)
@@ -236,6 +260,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX3.expmin, 0)
         self.assertEqual(CTX3.expmax, -1)
         self.assertEqual(CTX3.maxval(), 0)
+        self.assertEqual(CTX3.largest(), 0)
+        self.assertEqual(CTX3.smallest(), 0)
 
     def test_region9(self):
         CTX1 = fp.EFloatContext(0, 1, False, fp.EFloatNanKind.NONE, 0)
@@ -244,6 +270,8 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX1.expmin, 1)
         self.assertEqual(CTX1.expmax, 0)
         self.assertEqual(CTX1.maxval(), 0)
+        self.assertEqual(CTX1.largest(), 0)
+        self.assertEqual(CTX1.smallest(), 0)
 
         CTX2 = fp.EFloatContext(0, 1, False, fp.EFloatNanKind.NEG_ZERO, 0)
         self.assertEqual(CTX2.emin, 1)
@@ -251,3 +279,5 @@ class TestSmallFloatParams(unittest.TestCase):
         self.assertEqual(CTX2.expmin, 1)
         self.assertEqual(CTX2.expmax, 0)
         self.assertEqual(CTX2.maxval(), 0)
+        self.assertEqual(CTX2.largest(), 0)
+        self.assertEqual(CTX2.smallest(), 0)

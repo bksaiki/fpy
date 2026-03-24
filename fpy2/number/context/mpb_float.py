@@ -427,6 +427,12 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         return self.max_normal(s=s)
 
+    def largest(self) -> Float:
+        return self.maxval(s=False)
+
+    def smallest(self) -> Float:
+        return self.maxval(s=True)
+
     def infval(self, s: bool = False) -> RealFloat:
         """
         Returns the first non-representable value larger

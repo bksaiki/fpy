@@ -490,6 +490,13 @@ class EFloatContext(EncodableContext):
             raise ValueError(f'Not representable in this context: x={x}')
         return Float(x=x, ctx=self)
 
+    def largest(self) -> Float:
+        return self.maxval(s=False)
+
+    def smallest(self) -> Float:
+        x = self._mpb_ctx.maxval(True)
+        return self.zero() if x.is_zero() else Float(x=x, ctx=self)
+
     def infval(self, s: bool = False):
         """
         Returns the first non-representable value larger

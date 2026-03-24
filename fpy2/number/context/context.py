@@ -257,6 +257,140 @@ class OrdinalContext(Context):
         """
         ...
 
+    def _next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
+        """
+        Returns the next representable value after `x` towards `y`.
+        """
+        if y.isinf:
+            # special case: we want to return the next value towards an infinity
+            step = -1 if y.s else 1
+            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
+        else:
+            # general case: we can just use the ordinal values to determine the next value
+            xord = self.to_ordinal(x)
+            yord = self.to_ordinal(y)
+            step = 1 if xord < yord else -1
+            return self.from_ordinal(xord + step, infval=allow_inf)
+
+    def _next_away(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
+        """
+        Returns the next representable value after `x` away from `y`.
+        """
+        if y.isinf:
+            # special case: we want to return the next value away from an infinity
+            step = 1 if y.s else -1
+            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
+        else:
+            # general case: we can just use the ordinal values to determine the next value
+            xord = self.to_ordinal(x)
+            yord = self.to_ordinal(y)
+            step = -1 if xord < yord else 1
+            return self.from_ordinal(xord + step, infval=allow_inf)
+
+    def next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
+        """
+        Returns the next representable value after `x` towards `y`.
+
+        Raises a `ValueError` if
+        - `x` or `y` is not representable under this context, or
+        - `x` or `y` is `NaN`, or
+        - `x` is infinite and `allow_inf` is `False`
+        - `x == y`
+        """
+        if not self.representable_under(x):
+            raise ValueError('x is not representable under this context', x)
+        if not self.representable_under(y):
+            raise ValueError('y is not representable under this context', y)
+        if x.isnan:
+            raise ValueError('x is NaN', x)
+        if y.isnan:
+            raise ValueError('y is NaN', y)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x == y:
+            raise ValueError('x and y are equal so there is no next value towards y', x, y)
+        return self._next_towards(x, y, allow_inf)
+
+    def next_towards_zero(self, x: Float, allow_inf: bool = False) -> Float:
+        """
+        Returns the next representable value after `x` towards zero.
+
+        Raises a `ValueError` if
+        - `x` is not representable under this context, or
+        - `x` is `NaN`, or
+        - `x` is infinite and `allow_inf` is `False`
+        - `x == 0`
+        """
+        if not self.representable_under(x):
+            raise ValueError('x is not representable under this context', x)
+        if x.isnan:
+            raise ValueError('x is NaN', x)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x == 0:
+            raise ValueError('x is zero so there is no next value towards zero', x)
+        return self._next_towards(x, self.from_ordinal(0), allow_inf)
+
+    def next_away_zero(self, x: Float, allow_inf: bool = False) -> Float:
+        """
+        Returns the next representable value after `x` away from zero.
+
+        Raises a `ValueError` if
+        - `x` is not representable under this context, or
+        - `x` is `NaN`, or
+        - `x` is infinite and `allow_inf` is `False`
+        - `x == 0`
+        """
+        if not self.representable_under(x):
+            raise ValueError('x is not representable under this context', x)
+        if x.isnan:
+            raise ValueError('x is NaN', x)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x == 0:
+            raise ValueError('x is zero so there is no next value away from zero', x)
+        return self._next_away(x, self.from_ordinal(0), allow_inf)
+
+    def next_up(self, x: Float, allow_inf: bool = False) -> Float:
+        """
+        Returns the next representable value after `x` towards positive infinity.
+
+        Raises a `ValueError` if
+        - `x` is not representable under this context, or
+        - `x` is `NaN`, or
+        - `x` is infinite and `allow_inf` is `False`
+        - `x == +inf`
+        """
+        if not self.representable_under(x):
+            raise ValueError('x is not representable under this context', x)
+        if x.isnan:
+            raise ValueError('x is NaN', x)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x.isinf and not x.s:
+            raise ValueError('x cannot be positive infinity', x)
+        return self._next_towards(x, Float(isinf=True), allow_inf)
+
+    def next_down(self, x: Float, allow_inf: bool = False) -> Float:
+        """
+        Returns the next representable value after `x` towards negative infinity.
+
+        Raises a `ValueError` if
+        - `x` is not representable under this context, or
+        - `x` is `NaN`, or
+        - `x` is infinite and `allow_inf` is `False`
+        - `x == -inf`
+        """
+        if not self.representable_under(x):
+            raise ValueError('x is not representable under this context', x)
+        if x.isnan:
+            raise ValueError('x is NaN', x)
+        if not allow_inf and x.isinf:
+            raise ValueError('x is infinite', x)
+        if x.isinf and x.s:
+            raise ValueError('x cannot be negative infinity', x)
+        return self._next_towards(x, Float(isinf=True, s=True), allow_inf)
+
 
 class SizedContext(OrdinalContext):
     """
@@ -274,6 +408,22 @@ class SizedContext(OrdinalContext):
 
         If `self.maxval() == 0`, then this context cannot represent
         any finite, non-zero values.
+        """
+        ...
+
+    @abstractmethod
+    def largest(self) -> Float:
+        """
+        Returns the largest representable value (towards positive infinity)
+        under this context.
+        """
+        ...
+
+    @abstractmethod
+    def smallest(self) -> Float:
+        """
+        Returns the smallest representable value (towards negative infinity)
+        under this context.
         """
         ...
 
