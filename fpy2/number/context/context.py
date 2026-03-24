@@ -400,6 +400,16 @@ class SizedContext(OrdinalContext):
     have a (positive) minimum and (positive) maximum value.
     """
 
+    @property
+    def emax(self) -> int:
+        """
+        The normalized exponent of the maximum representable value
+        under this context.
+        """
+        pos_e = self.largest().e
+        neg_e = self.smallest().e
+        return max(pos_e, neg_e)
+
     @abstractmethod
     def maxval(self, s: bool = False) -> Float:
         """
