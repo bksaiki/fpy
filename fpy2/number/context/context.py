@@ -263,18 +263,29 @@ class OrdinalContext(Context):
         """
         if y.isinf:
             # special case: we want to return the next value towards an infinity
-            if y.s:
-                return self.from_ordinal(self.to_ordinal(x) - 1, infval=allow_inf)
-            else:
-                return self.from_ordinal(self.to_ordinal(x) + 1, infval=allow_inf)
+            step = -1 if y.s else 1
+            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
         else:
             # general case: we can just use the ordinal values to determine the next value
             xord = self.to_ordinal(x)
             yord = self.to_ordinal(y)
-            if xord < yord:
-                return self.from_ordinal(xord + 1, infval=allow_inf)
-            else:
-                return self.from_ordinal(xord - 1, infval=allow_inf)
+            step = 1 if xord < yord else -1
+            return self.from_ordinal(xord + step, infval=allow_inf)
+
+    def _next_away(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
+        """
+        Returns the next representable value after `x` away from `y`.
+        """
+        if y.isinf:
+            # special case: we want to return the next value away from an infinity
+            step = 1 if y.s else -1
+            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
+        else:
+            # general case: we can just use the ordinal values to determine the next value
+            xord = self.to_ordinal(x)
+            yord = self.to_ordinal(y)
+            step = -1 if xord < yord else 1
+            return self.from_ordinal(xord + step, infval=allow_inf)
 
     def next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
         """
@@ -338,13 +349,7 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == 0:
             raise ValueError('x is zero so there is no next value away from zero', x)
-
-        if x.s:
-            # x is negative so we want to return the next value towards negative infinity
-            return self._next_towards(x, Float(isinf=True, s=True), allow_inf)
-        else:
-            # x is positive so we want to return the next value towards positive infinity
-            return self._next_towards(x, Float(isinf=True), allow_inf)
+        return self._next_away(x, self.from_ordinal(0), allow_inf)
 
     def next_up(self, x: Float, allow_inf: bool = False) -> Float:
         """
