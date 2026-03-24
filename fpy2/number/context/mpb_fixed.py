@@ -491,3 +491,12 @@ class MPBFixedContext(SizedContext):
             return Float(x=self.neg_maxval, ctx=self)
         else:
             return Float(x=self.pos_maxval, ctx=self)
+
+    def largest(self) -> Float:
+        return self.maxval(s=False)
+
+    def smallest(self) -> Float:
+        if self.neg_maxval.is_negative():
+            return self.maxval(s=True)
+        else:
+            return Float.from_int(0, ctx=self)

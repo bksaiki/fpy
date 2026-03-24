@@ -406,6 +406,22 @@ class SizedContext(OrdinalContext):
         """
         ...
 
+    @abstractmethod
+    def largest(self) -> Float:
+        """
+        Returns the largest representable value (towards positive infinity)
+        under this context.
+        """
+        ...
+
+    @abstractmethod
+    def smallest(self) -> Float:
+        """
+        Returns the smallest representable value (towards negative infinity)
+        under this context.
+        """
+        ...
+
 
 class EncodableContext(SizedContext):
     """

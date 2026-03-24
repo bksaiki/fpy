@@ -14,11 +14,10 @@ from .reals import RealFloat
 
 
 if TYPE_CHECKING:
-    from ..context import Context, OrdinalContext
+    from ..context import Context
     from . import Real
 else:
     Context = None  # type: ignore
-    OrdinalContext = None  # type: ignore
     Real = None  # type: ignore
 
 
@@ -869,7 +868,8 @@ class Float:
         """
         if self._ctx is None:
             raise ValueError(f'cannot compute next_towards without a context: self={self}')
-        elif not isinstance(self._ctx, OrdinalContext):
+        from ..context import OrdinalContext
+        if not isinstance(self._ctx, OrdinalContext):
             raise ValueError(f'context must be an OrdinalContext to compute next_towards: self={self}, ctx={self._ctx}')
         return self._ctx.next_towards(self, other, allow_inf=allow_inf)
 
@@ -879,7 +879,8 @@ class Float:
         """
         if self._ctx is None:
             raise ValueError(f'cannot compute next_towards_zero without a context: self={self}')
-        elif not isinstance(self._ctx, OrdinalContext):
+        from ..context import OrdinalContext
+        if not isinstance(self._ctx, OrdinalContext):
             raise ValueError(f'context must be an OrdinalContext to compute next_towards_zero: self={self}, ctx={self._ctx}')
         return self._ctx.next_towards_zero(self, allow_inf=allow_inf)
 
@@ -889,7 +890,8 @@ class Float:
         """
         if self._ctx is None:
             raise ValueError(f'cannot compute next_away_zero without a context: self={self}')
-        elif not isinstance(self._ctx, OrdinalContext):
+        from ..context import OrdinalContext
+        if not isinstance(self._ctx, OrdinalContext):
             raise ValueError(f'context must be an OrdinalContext to compute next_away_zero: self={self}, ctx={self._ctx}')
         return self._ctx.next_away_zero(self, allow_inf=allow_inf)
 
@@ -899,7 +901,8 @@ class Float:
         """
         if self._ctx is None:
             raise ValueError(f'cannot compute next_up without a context: self={self}')
-        elif not isinstance(self._ctx, OrdinalContext):
+        from ..context import OrdinalContext
+        if not isinstance(self._ctx, OrdinalContext):
             raise ValueError(f'context must be an OrdinalContext to compute next_up: self={self}, ctx={self._ctx}')
         return self._ctx.next_up(self, allow_inf=allow_inf)
 
@@ -909,6 +912,7 @@ class Float:
         """
         if self._ctx is None:
             raise ValueError(f'cannot compute next_down without a context: self={self}')
-        elif not isinstance(self._ctx, OrdinalContext):
+        from ..context import OrdinalContext
+        if not isinstance(self._ctx, OrdinalContext):
             raise ValueError(f'context must be an OrdinalContext to compute next_down: self={self}, ctx={self._ctx}')
         return self._ctx.next_down(self, allow_inf=allow_inf)

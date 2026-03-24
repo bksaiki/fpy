@@ -208,6 +208,7 @@ class TestOrdinalContext(unittest.TestCase):
             )))
     def test_next_up_common(self, ctx_x: tuple[fp.OrdinalContext, fp.Float]):
         ctx, x = ctx_x
+        assume(not isinstance(ctx, fp.SizedContext) or x < ctx.largest())
         y = ctx.next_up(x)
         self.assertIsInstance(y, fp.Float)
         self.assertTrue(y >= x)
@@ -221,40 +222,40 @@ class TestOrdinalContext(unittest.TestCase):
             )))
     def test_next_up(self, ctx_x: tuple[fp.EncodableContext, fp.Float]):
         ctx, x = ctx_x
-        assume(not isinstance(ctx, fp.SizedContext) or x < ctx.maxval())
+        assume(not isinstance(ctx, fp.SizedContext) or x < ctx.largest())
         y = ctx.next_up(x) 
         self.assertIsInstance(y, fp.Float)
         self.assertTrue(y >= x)
         self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
 
-    # @given(
-    #     common_contexts().filter(
-    #         lambda ctx: isinstance(ctx, fp.OrdinalContext)).flatmap(
-    #         lambda ctx: st.tuples(
-    #             st.just(ctx),
-    #             floats(prec_max=16, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=ctx)
-    #         )))
-    # def test_next_down_common(self, ctx_x: tuple[fp.OrdinalContext, fp.Float]):
-    #     ctx, x = ctx_x
-    #     assume(not isinstance(ctx, fp.SizedContext) or x > ctx.maxval(s=True))
-    #     y = ctx.next_down(x)
-    #     self.assertIsInstance(y, fp.Float)
-    #     self.assertTrue(y <= x)
-    #     self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+    @given(
+        common_contexts().filter(
+            lambda ctx: isinstance(ctx, fp.OrdinalContext)).flatmap(
+            lambda ctx: st.tuples(
+                st.just(ctx),
+                floats(prec_max=16, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=ctx)
+            )))
+    def test_next_down_common(self, ctx_x: tuple[fp.OrdinalContext, fp.Float]):
+        ctx, x = ctx_x
+        assume(not isinstance(ctx, fp.SizedContext) or x > ctx.smallest())
+        y = ctx.next_down(x)
+        self.assertIsInstance(y, fp.Float)
+        self.assertTrue(y <= x)
+        self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
 
-    # @given(
-    #     _ordinal_contexts().flatmap(
-    #         lambda ctx: st.tuples(
-    #             st.just(ctx),
-    #             floats(prec_max=16, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=ctx)
-    #         )))
-    # def test_next_down(self, ctx_x: tuple[fp.EncodableContext, fp.Float]):
-    #     ctx, x = ctx_x
-    #     assume(not isinstance(ctx, fp.SizedContext) or x > ctx.maxval(s=True))
-    #     y = ctx.next_down(x)
-    #     self.assertIsInstance(y, fp.Float)
-    #     self.assertTrue(y <= x)
-    #     self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+    @given(
+        _ordinal_contexts().flatmap(
+            lambda ctx: st.tuples(
+                st.just(ctx),
+                floats(prec_max=16, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=ctx)
+            )))
+    def test_next_down(self, ctx_x: tuple[fp.EncodableContext, fp.Float]):
+        ctx, x = ctx_x
+        assume(not isinstance(ctx, fp.SizedContext) or x > ctx.smallest())
+        y = ctx.next_down(x)
+        self.assertIsInstance(y, fp.Float)
+        self.assertTrue(y <= x)
+        self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
 
 
 class TestSizedContext(unittest.TestCase):
