@@ -471,6 +471,9 @@ class ExpContext(EncodableContext):
     def smallest(self) -> Float:
         return self.minval()
 
+    def total_bits(self) -> int:
+        return self.nbits
+
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')

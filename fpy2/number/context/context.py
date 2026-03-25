@@ -447,6 +447,11 @@ class EncodableContext(SizedContext):
     """
 
     @abstractmethod
+    def total_bits(self) -> int:
+        """Returns the total number of bits used to encode a number under this context."""
+        ...
+
+    @abstractmethod
     def encode(self, x: Float) -> int:
         """
         Encodes a number constructed under this context as a bitstring.
