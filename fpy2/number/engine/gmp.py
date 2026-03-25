@@ -15,7 +15,7 @@ from typing import Callable
 from ...utils import enum_repr
 from ..context import Context
 from ..number import Float
-from ..gmp import float_to_mpfr, mpfr_call
+from ..gmputils import float_to_mpfr, mpfr_call
 
 from .engine import Engine, EngineArg, EngineRes
 
