@@ -2,11 +2,12 @@ import gmpy2 as gmp
 import random
 import unittest
 
+from dataclasses import dataclass
 from typing import Callable
 
 from fpy2 import IEEEContext, Float, RM
 from fpy2.ops import *
-from fpy2.number.gmp import float_to_mpfr, mpfr_to_float
+from fpy2.number.gmputils import float_to_mpfr, mpfr_to_float
 
 def _gmp_neg(x):
     return -x
@@ -31,7 +32,6 @@ def _gmp_fdim(x, y):
     else:
         # otherwise, returns +0
         return gmp.zero()
-
 
 _unary_ops = {
     acos : gmp.acos,
@@ -104,6 +104,15 @@ _ctxs = [
     IEEEContext(5, 8, RM.RNE)
 ]
 
+@dataclass(frozen=True)
+class MPFRFlags:
+    """The IEEE 754 flags as returned by MPFR."""
+    invalid: bool
+    divzero: bool
+    overflow: bool
+    underflow: bool
+    inexact: bool
+
 
 def _mpfr_rm(rm: RM):
     match rm:
@@ -124,7 +133,7 @@ def _mpfr_apply(
     op: Callable,
     xs: tuple[Float, ...],
     ctx: IEEEContext
-):
+) -> tuple[Float, MPFRFlags]:
     with gmp.context(
         precision=ctx.pmax,
         emin=ctx.expmin + 1,
@@ -135,9 +144,28 @@ def _mpfr_apply(
         trap_overflow=False,
         trap_inexact=False,
         trap_divzero=False,
-    ):
+    ) as gmp_ctx:
+        # compute the numerical result
         y = op(*map(float_to_mpfr, xs))
-        return mpfr_to_float(y)
+
+        # fetch the flags
+        invalid: bool = gmp_ctx.invalid
+        divzero: bool = gmp_ctx.divzero
+        overflow: bool = gmp_ctx.overflow
+        underflow: bool = gmp_ctx.underflow
+        inexact: bool = gmp_ctx.inexact
+
+        # fixup flags to match IEEE 754 semantics
+        if underflow and not inexact:
+            # MPFR may set underflow without inexact if the result is subnormal,
+            # but IEEE 754 requires that underflow implies inexact.
+            underflow = False
+
+        # store the flags
+        flags = MPFRFlags(invalid, divzero, overflow, underflow, inexact)
+
+        # return the result with the flags
+        return mpfr_to_float(y), flags
 
 
 class MPFREquivTestCase(unittest.TestCase):
@@ -159,15 +187,19 @@ class MPFREquivTestCase(unittest.TestCase):
                         # evaluate operation
                         fl = op(x, ctx=ctx)
                         # evaluate equivalent operation
-                        r = _mpfr_apply(mpfr, (x,), ctx)
+                        r, flags = _mpfr_apply(mpfr, (x,), ctx)
                         ref = ctx.round(r)
-                        # sanity check: ref should be exact
-                        assert not ref.inexact
-                        # check that they are the same
+                        # sanity checks
+                        assert not ref.inexact, f'r={r}, ref={ref}'
+                        assert isinstance(fl, Float)
+                        # check that they are the numerical values are the same
                         if fl.isnan:
                             self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}')
                         else:
                             self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}')
+                        # check that the flags are the same
+                        self.assertEqual(fl.overflow, flags.overflow, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}, flags={flags}')
+                        self.assertEqual(fl.inexact, flags.inexact, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}, flags={flags}')
 
     def test_fuzz_binary(self, num_inputs: int = 256):
         for op, mpfr in _binary_ops.items():
@@ -183,15 +215,19 @@ class MPFREquivTestCase(unittest.TestCase):
                         # evaluate operation
                         fl = op(x, y, ctx=ctx)
                         # evaluate equivalent operation
-                        r = _mpfr_apply(mpfr, (x, y), ctx)
+                        r, flags = _mpfr_apply(mpfr, (x, y), ctx)
                         ref = ctx.round(r)
                         # sanity check: ref should be exact
                         assert not ref.inexact
+                        assert isinstance(fl, Float)
                         # check that they are the same
                         if fl.isnan:
                             self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}')
                         else:
                             self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}')
+                        # check that the flags are the same
+                        self.assertEqual(fl.overflow, flags.overflow, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}, flags={flags}')
+                        self.assertEqual(fl.inexact, flags.inexact, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}, flags={flags}')
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
         for op, mpfr in _ternary_ops.items():
@@ -209,12 +245,16 @@ class MPFREquivTestCase(unittest.TestCase):
                         # evaluate operation
                         fl = op(x, y, z, ctx=ctx)
                         # evaluate equivalent operation
-                        r = _mpfr_apply(mpfr, (x, y, z), ctx)
+                        r, flags = _mpfr_apply(mpfr, (x, y, z), ctx)
                         ref = ctx.round(r)
                         # sanity check: ref should be exact
                         assert not ref.inexact
+                        assert isinstance(fl, Float)
                         # check that they are the same
                         if fl.isnan:
                             self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}')
                         else:
                             self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}')
+                        # check that the flags are the same
+                        self.assertEqual(fl.overflow, flags.overflow, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}, flags={flags}')
+                        self.assertEqual(fl.inexact, flags.inexact, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}, flags={flags}')

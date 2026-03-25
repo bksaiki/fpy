@@ -7,7 +7,7 @@ from typing import Self
 from fractions import Fraction
 
 from ...utils import is_dyadic
-from ..gmp import mpfr_value
+from ..gmputils import mpfr_value
 from ..number import Float, RealFloat
 
 __all__ = [

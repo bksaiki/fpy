@@ -353,15 +353,24 @@ class ExpContext(EncodableContext):
                     # check which way to round
                     if self._underflow_to_zero(rounded.s):
                         # round to zero => not representable, so return +NaN
-                        return Float.nan(ctx=self)
+                        result = Float.nan(ctx=self)
                     else:
                         # round to +MIN_VAL
-                        return self.minval()
+                        result = self.minval()
                 case OverflowMode.SATURATE:
                     # clamp to +MIN_VAL
-                    return self.minval()
+                    result = self.minval()
+                case OverflowMode.ASSERT:
+                    # raise an error
+                    raise ValueError(f'Rounding {rounded} under self={self} with n={n} would underflow')
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
+
+            # set overflow and inexact flag
+            result._real._flags._set_overflow(True)
+            result._real._flags._set_inexact(True)
+            return result
+
         elif rounded.e > self.emax:
             # check if underflow is allowed
             if exact:
@@ -380,6 +389,9 @@ class ExpContext(EncodableContext):
                 case OverflowMode.SATURATE:
                     # clamp to +MAX_VAL
                     return self.maxval()
+                case OverflowMode.ASSERT:
+                    # raise an error
+                    raise ValueError(f'Rounding {rounded} under self={self} with n={n} would overflow')
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
 

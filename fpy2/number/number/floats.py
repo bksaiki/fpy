@@ -78,6 +78,7 @@ class Float:
         m: int | None = None,
         isinf: bool | None = None,
         isnan: bool | None = None,
+        overflow: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None,
         ctx: DefaultOr[Optional[Context]] = DEFAULT
@@ -116,33 +117,18 @@ class Float:
         else:
             self._ctx = ctx
 
-        # create a new RealFloat instance if any field is overriden
-        if (s is None
-            and exp is None
-            and c is None
-            and e is None
-            and m is None
-            and inexact is None
-            and carry is None
-        ):
-            # no fields are overriden
-            if real is None:
-                # use the default `RealFloat`
-                self._real = RealFloat()
-            else:
-                # use the `real` value exactly
-                self._real = real
-        else:
-            self._real = RealFloat(
-                s=s,
-                exp=exp,
-                c=c,
-                x=real,
-                e=e,
-                m=m,
-                inexact=inexact,
-                carry=carry
-            )
+        # create a new RealFloat instance
+        self._real = RealFloat(
+            s=s,
+            exp=exp,
+            c=c,
+            x=real,
+            e=e,
+            m=m,
+            overflow=overflow,
+            inexact=inexact,
+            carry=carry
+        )
 
     def __repr__(self):
         return (f'{self.__class__.__name__}('
@@ -492,6 +478,11 @@ class Float:
         return self._real.m
 
     @property
+    def overflow(self) -> bool:
+        """Overflow flag: the result exceeded the representable range."""
+        return self._real.overflow
+
+    @property
     def inexact(self) -> bool:
         """Inexact flag: the rounded result is not the same as the exact result."""
         return self._real.inexact
@@ -613,6 +604,18 @@ class Float:
         if self.is_nar():
             raise ValueError(f'{self} is not representable as a rational number')
         return self._real.as_rational()
+
+    def _with_flags(self, other: 'Float'):
+        """
+        Unsafe constructor: constructs a `Float` with the same value as `self`
+        but with flags from `other`.
+        """
+        return Float(
+            x=self,
+            overflow=other.overflow,
+            inexact=other.inexact,
+            carry=other.carry
+        )
 
     @staticmethod
     def nan(s: bool = False, ctx: Optional[Context] = None):

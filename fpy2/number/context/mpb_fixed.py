@@ -394,11 +394,10 @@ class MPBFixedContext(SizedContext):
                         # overflow to infinity
                         if not self.enable_inf:
                             raise ValueError('Cannot round to infinity under this context')
-                        return Float(x=x, isinf=True, ctx=self)
+                        result = Float(x=x, isinf=True, ctx=self)
                     else:
                         # overflow to MAX_VAL
-                        max_val = self.maxval(xr.s)
-                        return Float(x=max_val, ctx=self)
+                        result = self.maxval(xr.s)
                 case OverflowMode.SATURATE:
                     return self.maxval(s=xr.s)
                 case OverflowMode.WRAP:
@@ -406,9 +405,17 @@ class MPBFixedContext(SizedContext):
                     ord_abs = self._mp_ctx.to_ordinal(Float(x=xr, ctx=self)) - self._neg_maxval_ord
                     total_ord = self._pos_maxval_ord - self._neg_maxval_ord + 1
                     ord_mod = (ord_abs % total_ord) + self._neg_maxval_ord
-                    return self.from_ordinal(ord_mod, infval=False)
+                    result = self.from_ordinal(ord_mod, infval=False)
+                case OverflowMode.ASSERT:
+                    # raise an error
+                    raise OverflowError(f'Rounding {x} under self={self} with n={n} would overflow')
                 case _:
                     raise RuntimeError(f'unreachable overflow kind {self.overflow}')
+
+            # set overflow and inexact flag
+            result._real._flags._set_overflow(True)
+            result._real._flags._set_inexact(True)
+            return result
 
         # step 5. return the rounded value
         return Float(x=xr, ctx=self)

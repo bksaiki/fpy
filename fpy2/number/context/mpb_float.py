@@ -263,7 +263,7 @@ class MPBFloatContext(SizedContext):
                 # always round towards infinity
                 return True
             case _:
-                raise RuntimeError(f'unrechable {direction}')
+                raise RuntimeError(f'unreachable {direction}')
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
@@ -306,17 +306,23 @@ class MPBFloatContext(SizedContext):
                     # overflowing => check which way to round
                     if self._overflow_to_infinity(rounded.s):
                         # overflow to infinity
-                        return Float(x=x, isinf=True, ctx=self)
+                        result = Float(x=x, isinf=True, ctx=self)
                     else:
                         # overflow to MAX_VAL
-                        max_val = self.maxval(rounded.s)
-                        return Float(x=max_val, ctx=self)
+                        result = self.maxval(rounded.s)
                 case OverflowMode.SATURATE:
                     # always produce the maximum value
-                    max_val = self.maxval(rounded.s)
-                    return Float(x=max_val, ctx=self)
+                    result = self.maxval(rounded.s)
+                case OverflowMode.ASSERT:
+                    # raise an error
+                    raise OverflowError(f'Rounding {x} under self={self} with n={n} would overflow')
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
+
+            # set overflow and inexact flag
+            result._real._flags._set_overflow(True)
+            result._real._flags._set_inexact(True)
+            return result
 
         # step 6. return rounded result
         return Float(x=rounded, ctx=self)

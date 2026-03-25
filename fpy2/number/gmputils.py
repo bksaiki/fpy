@@ -67,14 +67,7 @@ def _round_odd(x: gmp.mpfr, inexact: bool):
     elif x.is_infinite():
         # check for inexactness => only occurs when MPFR overflows
         # TODO: awkward to use interval information for an infinity
-        if inexact:
-            return Float(
-                s=s,
-                isinf=True,
-                inexact=inexact
-            )
-        else:
-             return Float(s=s, isinf=True)
+        return Float(s=s, isinf=True, inexact=inexact)
     elif x.is_zero():
         # check for inexactness => only occurs when MPFR overflows
         # TODO: generate a reasonable inexact value

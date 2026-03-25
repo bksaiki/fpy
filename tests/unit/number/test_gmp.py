@@ -1,7 +1,7 @@
 import fpy2 as fp
 import unittest
 
-from fpy2.number.gmp import float_to_mpfr, mpfr_to_float
+from fpy2.number.gmputils import float_to_mpfr, mpfr_to_float
 from hypothesis import given
 
 from ..generators import floats

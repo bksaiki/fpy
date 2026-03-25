@@ -26,7 +26,7 @@ from ...utils import (
     FP64_IMPLICIT1,
 )
 
-from .flags import Flags, NO_FLAGS
+from .flags import Flags
 
 
 class RealFloat(numbers.Rational):
@@ -68,6 +68,7 @@ class RealFloat(numbers.Rational):
         x: Self | None = None,
         e: int | None = None,
         m: int | None = None,
+        overflow: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None
     ):
@@ -125,23 +126,33 @@ class RealFloat(numbers.Rational):
         else:
             self._exp = 0
 
+        # overflow
+        if overflow is None:
+            if x is not None:
+                overflow = x.overflow
+            else:
+                overflow = False
+
         # inexact
         if inexact is None:
-            inexact = False
+            if x is not None:
+                inexact = x.inexact
+            else:
+                inexact = False
+
         # carry
         if carry is None:
-            carry = False
+            if x is not None:
+                carry = x.carry
+            else:
+                carry = False
 
         # flags
-        if inexact or carry:
-            # need to construct a new Flags object
-            self._flags = Flags(
-                inexact=inexact,
-                carry=carry
-            )
-        else:
-            # can reuse the singleton with all flags unset
-            self._flags = NO_FLAGS
+        self._flags = Flags(
+            overflow=overflow,
+            inexact=inexact,
+            carry=carry
+        )
 
     def __repr__(self):
         return (f'{self.__class__.__name__}('
@@ -461,6 +472,11 @@ class RealFloat(numbers.Rational):
     def c(self) -> int:
         """property: integer significand"""
         return self._c
+
+    @property
+    def overflow(self) -> bool:
+        """Overflow flag: the result exceeded the representable range."""
+        return self._flags.overflow
 
     @property
     def inexact(self) -> bool:
@@ -1056,9 +1072,8 @@ class RealFloat(numbers.Rational):
                 self._exp += 1
                 carry = True
 
-        # set flags (if needed)
-        if increment or carry:
-            self._flags = Flags(inexact=increment, carry=carry)
+        # set flags
+        self._flags = Flags(inexact=True, carry=carry)
 
     def _round_at(
         self,
@@ -1179,7 +1194,7 @@ class RealFloat(numbers.Rational):
 
         # step 1. fast path for definitely representable values
         if (p is None or self.p <= p) and self._exp > n:
-            return RealFloat(x=self)
+            return RealFloat(s=self.s, exp=self._exp, c=self._c)
 
         # step 2. round at the specified position
         if num_randbits == 0:
@@ -1251,7 +1266,7 @@ class RealFloat(numbers.Rational):
 
         # step 2. fast path for definitely representable values
         if (p is None or self.p <= p) and self._exp > n:
-            return RealFloat(x=self)
+            return RealFloat(s=self.s, exp=self._exp, c=self._c)
 
         # step 3. round at the specified position
         if num_randbits == 0:
