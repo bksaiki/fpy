@@ -68,6 +68,7 @@ class RealFloat(numbers.Rational):
         x: Self | None = None,
         e: int | None = None,
         m: int | None = None,
+        overflow: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None
     ):
@@ -125,6 +126,9 @@ class RealFloat(numbers.Rational):
         else:
             self._exp = 0
 
+        # overflow
+        if overflow is None:
+            overflow = False
         # inexact
         if inexact is None:
             inexact = False
@@ -133,9 +137,10 @@ class RealFloat(numbers.Rational):
             carry = False
 
         # flags
-        if inexact or carry:
+        if overflow or inexact or carry:
             # need to construct a new Flags object
             self._flags = Flags(
+                overflow=overflow,
                 inexact=inexact,
                 carry=carry
             )
