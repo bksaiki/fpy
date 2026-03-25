@@ -412,8 +412,9 @@ class MPBFixedContext(SizedContext):
                 case _:
                     raise RuntimeError(f'unreachable overflow kind {self.overflow}')
 
-            # set overflow flag
+            # set overflow and inexact flag
             result._real._flags._set_overflow(True)
+            result._real._flags._set_inexact(True)
             return result
 
         # step 5. return the rounded value

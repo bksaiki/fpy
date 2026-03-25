@@ -356,7 +356,8 @@ class EFloatContext(EncodableContext):
                 else:
                     # NaN rounds to MAX_VAL
                     return self.maxval(s=x.s)._with_flags(x)
-            return Float(s=x.s, x=self.nan_value, ctx=self)
+            else:
+                return Float(s=x.s, x=self.nan_value, ctx=self)._with_flags(x)
         elif x.isinf and not self.enable_inf:
             # Inf is not representable in this context
             if self.inf_value is None:
@@ -367,17 +368,18 @@ class EFloatContext(EncodableContext):
                 else:
                     # Inf rounds to MAX_VAL
                     return self.maxval(s=x.s)._with_flags(x)
-            return Float(s=x.s, x=self.inf_value, ctx=self)
+            else:
+                return Float(s=x.s, x=self.inf_value, ctx=self)._with_flags(x)
         elif x.is_zero() and x.s and self.nan_kind == EFloatNanKind.NEG_ZERO:
             # -0 is not representable in this context
-            return Float(x=x, s=False, ctx=self)
+            return Float(x=x, s=False, ctx=self)._with_flags(x)
         else:
             return x
 
     def round(self, x, *, exact: bool = False) -> Float:
-        x = self._mpb_ctx.round(x, exact=exact)
-        x._ctx = self
-        return self._fixup(x)
+        y = self._mpb_ctx.round(x, exact=exact)
+        y._ctx = self
+        return self._fixup(y)
 
     def round_at(self, x, n, *, exact: bool = False) -> Float:
         x = self._mpb_ctx.round_at(x, n, exact=exact)

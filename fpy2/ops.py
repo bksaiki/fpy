@@ -830,7 +830,11 @@ def ceil(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.ceil(xr, ctx)
         if r is not None:
-            return _normalize(r, ctx)
+            y = _normalize(r, ctx)
+            # set the inexact flag if the result does not equal the original value
+            if isinstance(y, Float) and y.is_finite() and y != x:
+                y._real._flags._set_inexact(True)
+            return y
 
     raise NotImplementedError(f'ceil() not implemented for ctx={ctx}')
 
@@ -848,7 +852,11 @@ def floor(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.floor(xr, ctx)
         if r is not None:
-            return _normalize(r, ctx)
+            y = _normalize(r, ctx)
+            # set the inexact flag if the result does not equal the original value
+            if isinstance(y, Float) and y.is_finite() and y != x:
+                y._real._flags._set_inexact(True)
+            return y
 
     raise NotImplementedError(f'floor() not implemented for ctx={ctx}')
 
@@ -867,7 +875,11 @@ def trunc(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.trunc(xr, ctx)
         if r is not None:
-            return _normalize(r, ctx)
+            y = _normalize(r, ctx)
+            # set the inexact flag if the result does not equal the original value
+            if isinstance(y, Float) and y.is_finite() and y != x:
+                y._real._flags._set_inexact(True)
+            return y
 
     raise NotImplementedError(f'trunc() not implemented for ctx={ctx}')
 
@@ -899,7 +911,11 @@ def roundint(x: Real, ctx: Context = REAL):
     for engine in ENGINES:
         r = engine.roundint(xr, ctx)
         if r is not None:
-            return _normalize(r, ctx)
+            y = _normalize(r, ctx)
+            # set the inexact flag if the result does not equal the original value
+            if isinstance(y, Float) and y.is_finite() and y != x:
+                y._real._flags._set_inexact(True)
+            return y
 
     raise NotImplementedError(f'roundint() not implemented for ctx={ctx}')
 
@@ -1065,7 +1081,6 @@ def digits(m: int, e: int, b: int, ctx: Context = REAL) -> Float:
     else:
         x = digits_to_fraction(m, e, b)
         return ctx.round(x)
-    
 
 def hexfloat(s: str, ctx: Context = REAL) -> Float:
     """

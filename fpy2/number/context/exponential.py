@@ -366,8 +366,9 @@ class ExpContext(EncodableContext):
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
 
-            # set overflow flag
+            # set overflow and inexact flag
             result._real._flags._set_overflow(True)
+            result._real._flags._set_inexact(True)
             return result
 
         elif rounded.e > self.emax:

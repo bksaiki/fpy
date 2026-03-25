@@ -5,7 +5,6 @@ exceptional events when rounding.
 
 __all__ = [
     'Flags',
-    'NO_FLAGS',
 ]
 
 class Flags:
@@ -90,6 +89,3 @@ class Flags:
             self._flags |= self._CARRY
         else:
             self._flags &= ~self._CARRY
-
-NO_FLAGS = Flags()
-"""singleton instance representing no flags set"""
