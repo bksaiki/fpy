@@ -352,10 +352,10 @@ class EFloatContext(EncodableContext):
                 # resolve by default rules
                 if self.enable_inf:
                     # NaN rounds to Inf
-                    return Float.inf(s=x.s, ctx=self)
+                    return Float.inf(s=x.s, ctx=self)._with_flags(x)
                 else:
                     # NaN rounds to MAX_VAL
-                    return self.maxval(s=x.s)
+                    return self.maxval(s=x.s)._with_flags(x)
             return Float(s=x.s, x=self.nan_value, ctx=self)
         elif x.isinf and not self.enable_inf:
             # Inf is not representable in this context
@@ -363,10 +363,10 @@ class EFloatContext(EncodableContext):
                 # resolve by default rules
                 if self.nan_kind != EFloatNanKind.NONE:
                     # Inf rounds to NaN
-                    return Float.nan(s=x.s, ctx=self)
+                    return Float.nan(s=x.s, ctx=self)._with_flags(x)
                 else:
                     # Inf rounds to MAX_VAL
-                    return self.maxval(s=x.s)
+                    return self.maxval(s=x.s)._with_flags(x)
             return Float(s=x.s, x=self.inf_value, ctx=self)
         elif x.is_zero() and x.s and self.nan_kind == EFloatNanKind.NEG_ZERO:
             # -0 is not representable in this context

@@ -478,6 +478,11 @@ class Float:
         return self._real.m
 
     @property
+    def overflow(self) -> bool:
+        """Overflow flag: the result exceeded the representable range."""
+        return self._real.overflow
+
+    @property
     def inexact(self) -> bool:
         """Inexact flag: the rounded result is not the same as the exact result."""
         return self._real.inexact
@@ -599,6 +604,18 @@ class Float:
         if self.is_nar():
             raise ValueError(f'{self} is not representable as a rational number')
         return self._real.as_rational()
+
+    def _with_flags(self, other: 'Float'):
+        """
+        Unsafe constructor: constructs a `Float` with the same value as `self`
+        but with flags from `other`.
+        """
+        return Float(
+            x=self,
+            overflow=other.overflow,
+            inexact=other.inexact,
+            carry=other.carry
+        )
 
     @staticmethod
     def nan(s: bool = False, ctx: Optional[Context] = None):
