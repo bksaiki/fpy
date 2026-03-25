@@ -1194,7 +1194,7 @@ class RealFloat(numbers.Rational):
 
         # step 1. fast path for definitely representable values
         if (p is None or self.p <= p) and self._exp > n:
-            return RealFloat(x=self)
+            return RealFloat(s=self.s, exp=self._exp, c=self._c)
 
         # step 2. round at the specified position
         if num_randbits == 0:
@@ -1266,7 +1266,7 @@ class RealFloat(numbers.Rational):
 
         # step 2. fast path for definitely representable values
         if (p is None or self.p <= p) and self._exp > n:
-            return RealFloat(x=self)
+            return RealFloat(s=self.s, exp=self._exp, c=self._c)
 
         # step 3. round at the specified position
         if num_randbits == 0:
