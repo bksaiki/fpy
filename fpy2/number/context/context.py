@@ -400,6 +400,16 @@ class SizedContext(OrdinalContext):
     have a (positive) minimum and (positive) maximum value.
     """
 
+    @property
+    def emax(self) -> int:
+        """
+        The normalized exponent of the maximum representable value
+        under this context.
+        """
+        pos_e = self.largest().e
+        neg_e = self.smallest().e
+        return max(pos_e, neg_e)
+
     @abstractmethod
     def maxval(self, s: bool = False) -> Float:
         """
@@ -435,6 +445,11 @@ class EncodableContext(SizedContext):
     Most common number formats fall under this category.
     These formats define a way to encode a number in memory.
     """
+
+    @abstractmethod
+    def total_bits(self) -> int:
+        """Returns the total number of bits used to encode a number under this context."""
+        ...
 
     @abstractmethod
     def encode(self, x: Float) -> int:

@@ -153,6 +153,9 @@ class FixedContext(MPBFixedContext, EncodableContext):
             raise TypeError(f'Expected \'int\', got x={x}')
         return Float(x=super().from_ordinal(x, infval), ctx=self)
 
+    def total_bits(self) -> int:
+        return self.nbits
+
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got x={x}')
