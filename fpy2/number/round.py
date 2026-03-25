@@ -84,10 +84,12 @@ class OverflowMode(Enum):
     - `OVERFLOW`: produces infinity or raise an OverflowError
     - `SATURATE`: produce the (correctly signed) maximum value
     - `WRAP`: produce the modulus over the ordinals
+    - `ASSERT`: raise an OverflowError
     """
     OVERFLOW = 0
     SATURATE = 1
     WRAP = 2
+    ASSERT = 3
 
 ###########################################################
 # Type aliases

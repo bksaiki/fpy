@@ -360,6 +360,9 @@ class ExpContext(EncodableContext):
                 case OverflowMode.SATURATE:
                     # clamp to +MIN_VAL
                     return self.minval()
+                case OverflowMode.ASSERT:
+                    # raise an error
+                    raise ValueError(f'Rounding {rounded} under self={self} with n={n} would underflow')
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
         elif rounded.e > self.emax:
@@ -380,6 +383,9 @@ class ExpContext(EncodableContext):
                 case OverflowMode.SATURATE:
                     # clamp to +MAX_VAL
                     return self.maxval()
+                case OverflowMode.ASSERT:
+                    # raise an error
+                    raise ValueError(f'Rounding {rounded} under self={self} with n={n} would overflow')
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
 

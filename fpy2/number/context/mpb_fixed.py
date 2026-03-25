@@ -407,6 +407,9 @@ class MPBFixedContext(SizedContext):
                     total_ord = self._pos_maxval_ord - self._neg_maxval_ord + 1
                     ord_mod = (ord_abs % total_ord) + self._neg_maxval_ord
                     return self.from_ordinal(ord_mod, infval=False)
+                case OverflowMode.ASSERT:
+                    # raise an error
+                    raise OverflowError(f'Rounding {x} under self={self} with n={n} would overflow')
                 case _:
                     raise RuntimeError(f'unreachable overflow kind {self.overflow}')
 

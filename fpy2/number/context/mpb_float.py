@@ -315,6 +315,9 @@ class MPBFloatContext(SizedContext):
                     # always produce the maximum value
                     max_val = self.maxval(rounded.s)
                     return Float(x=max_val, ctx=self)
+                case OverflowMode.ASSERT:
+                    # raise an error
+                    raise OverflowError(f'Rounding {x} under self={self} with n={n} would overflow')
                 case _:
                     raise RuntimeError(f'unreachable: {self.overflow}')
 
