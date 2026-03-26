@@ -3,7 +3,7 @@ import math
 import unittest
 
 from fractions import Fraction
-from hypothesis import given, strategies as st
+from hypothesis import assume, given, strategies as st
 
 from ...generators import real_floats, rounding_modes
 
@@ -89,6 +89,72 @@ class TestRealFloatReprMethods(unittest.TestCase):
 
             _, lo = x.split(n)
             self.assertNotEqual(lo, 0, f'x={x}, p={p}, n={n}')
+
+    @given(
+        real_floats(prec_max=128, exp_min=-512, exp_max=512),
+        st.one_of(st.integers(1, 64), st.none()),
+        st.one_of(st.integers(-512, 512), st.none())
+    )
+    def test_next_away_zero(self, x: fp.RealFloat, p: int | None, n: int | None):
+        assume(n is None or x.exp > n)
+        assume(p is None or x.p <= p)
+        y = x.next_away_zero(p=p, n=n)
+        self.assertIsInstance(y, fp.RealFloat)
+        self.assertNotEqual(y, 0, f'x={x}, p={p}, n={n}, y={y}')
+        self.assertGreater(abs(y), abs(x), f'x={x}, p={p}, n={n}, y={y}')
+        if p is not None:
+            self.assertLessEqual(y.p, p, f'x={x}, p={p}, n={n}, y={y}')
+        if n is not None:
+            self.assertGreater(y.exp, n, f'x={x}, p={p}, n={n}, y={y}')
+
+    @given(
+        real_floats(prec_max=128, exp_min=-512, exp_max=512),
+        st.one_of(st.integers(1, 64), st.none()),
+        st.one_of(st.integers(-512, 512), st.none())
+    )
+    def test_next_towards_zero(self, x: fp.RealFloat, p: int | None, n: int | None):
+        assume(n is None or x.exp > n)
+        assume(p is None or x.p <= p)
+        assume(x != 0)
+        y = x.next_towards_zero(p=p, n=n)
+        self.assertIsInstance(y, fp.RealFloat)
+        self.assertLess(abs(y), abs(x), f'x={x}, p={p}, n={n}, y={y}')
+        if p is not None:
+            self.assertLessEqual(y.p, p, f'x={x}, p={p}, n={n}, y={y}')
+        if n is not None:
+            self.assertGreater(y.exp, n, f'x={x}, p={p}, n={n}, y={y}')
+
+    @given(
+        real_floats(prec_max=128, exp_min=-512, exp_max=512),
+        st.one_of(st.integers(1, 64), st.none()),
+        st.one_of(st.integers(-512, 512), st.none())
+    )
+    def test_next_up(self, x: fp.RealFloat, p: int | None, n: int | None):
+        assume(n is None or x.exp > n)
+        assume(p is None or x.p <= p)
+        y = x.next_up(p=p, n=n)
+        self.assertIsInstance(y, fp.RealFloat)
+        self.assertGreater(y, x, f'x={x}, p={p}, n={n}, y={y}')
+        if p is not None:
+            self.assertLessEqual(y.p, p, f'x={x}, p={p}, n={n}, y={y}')
+        if n is not None:
+            self.assertGreater(y.exp, n, f'x={x}, p={p}, n={n}, y={y}')
+
+    @given(
+        real_floats(prec_max=128, exp_min=-512, exp_max=512),
+        st.one_of(st.integers(1, 64), st.none()),
+        st.one_of(st.integers(-512, 512), st.none())
+    )
+    def test_next_down(self, x: fp.RealFloat, p: int | None, n: int | None):
+        assume(n is None or x.exp > n)
+        assume(p is None or x.p <= p)
+        y = x.next_down(p=p, n=n)
+        self.assertIsInstance(y, fp.RealFloat)
+        self.assertLess(y, x, f'x={x}, p={p}, n={n}, y={y}')
+        if p is not None:
+            self.assertLessEqual(y.p, p, f'x={x}, p={p}, n={n}, y={y}')
+        if n is not None:
+            self.assertGreater(y.exp, n, f'x={x}, p={p}, n={n}, y={y}')
 
 
 class TestRealFloatArithmetic(unittest.TestCase):

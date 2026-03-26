@@ -422,6 +422,14 @@ class SizedContext(OrdinalContext):
         ...
 
     @abstractmethod
+    def infval(self, s: bool = False) -> Float:
+        """
+        Returns the (signed) value that is the "next" value after
+        the maximum representable value under this context.
+        """
+        ...
+
+    @abstractmethod
     def largest(self) -> Float:
         """
         Returns the largest representable value (towards positive infinity)

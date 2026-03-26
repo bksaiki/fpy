@@ -126,33 +126,21 @@ class RealFloat(numbers.Rational):
         else:
             self._exp = 0
 
-        # overflow
-        if overflow is None:
-            if x is not None:
-                overflow = x.overflow
-            else:
-                overflow = False
-
-        # inexact
-        if inexact is None:
-            if x is not None:
-                inexact = x.inexact
-            else:
-                inexact = False
-
-        # carry
-        if carry is None:
-            if x is not None:
-                carry = x.carry
-            else:
-                carry = False
-
         # flags
+        if x is not None:
+            if overflow is None:
+                overflow = x.overflow
+            if inexact is None:
+                inexact = x.inexact
+            if carry is None:
+                carry = x.carry
+
         self._flags = Flags(
             overflow=overflow,
             inexact=inexact,
             carry=carry
         )
+
 
     def __repr__(self):
         return (f'{self.__class__.__name__}('
@@ -760,11 +748,7 @@ class RealFloat(numbers.Rational):
                     shift -= adjust
                     exp += adjust
             case _:
-                if p is not None and not isinstance(p, int):
-                    raise TypeError(f'expected \'int\' or \'None\' for p, got {type(p)}')
-                if n is not None and not isinstance(n, int):
-                    raise TypeError(f'expected \'int\' or \'None\' for n, got {type(n)}')
-                raise RuntimeError('unreachable')
+                raise ValueError(f'invalid parameters: p={p}, n={n}')
 
         # compute new significand `c`
         if shift == 0:
@@ -903,56 +887,124 @@ class RealFloat(numbers.Rational):
             and self._c == other._c
         )
 
-    def next_away(self):
+    def _extract_and_normalize(self, n: int, p: int | None):
+        # extract the relevant parameters
+        if self.exp != n + 1 or (p is not None and self.p > p):
+            # need to normalize first
+            x = self.normalize(p, n)
+            c = x._c
+            exp = x._exp
+        else:
+            c = self._c
+            exp = self._exp
+
+        return c, exp
+
+    def _next_away(self, n: int, p: int | None = None):
         """
-        Computes the next number (with the same precision),
-        away from zero.
+        Computes the next number with exponent above `n` and precision
+        up to `p` bits, away from zero.
         """
-        c = self._c + 1
-        exp = self._exp
-        if c.bit_length() > self.p:
-            # adjust the exponent since we exceeded precision bounds
+        # extract the relevant parameters for the next value
+        c, exp = self._extract_and_normalize(n, p)
+
+        # increment the significand
+        c += 1
+
+        # adjust the exponent if we exceeded precision bounds
+        if p is not None and c.bit_length() > p:
             # the value is guaranteed to be a power of two
             c >>= 1
-            exp  += 1
+            exp += 1
 
         return RealFloat(s=self._s, c=c, exp=exp)
 
-    def next_towards(self):
+    def _next_towards(self, n: int, p: int | None = None):
         """
-        Computes the previous number (with the same precision),
-        towards zero.
+        Computes the next number with exponent above `n` and precision
+        up to `p` bits, towards zero.
         """
-        c = self._c - 1
-        exp = self._exp
-        if c.bit_length() < self.p:
-            # previously at a power of two
-            # need to add a lower bit
+        # extract the relevant parameters for the next value
+        c, exp = self._extract_and_normalize(n, p)
+
+        # decrement the significand
+        c -= 1
+
+        # adjust the exponent if we lost a significant bit
+        if p is not None and exp > n + 1 and c.bit_length() < p:
+            # previously at a power of two, need to add a lower bit
             c = (c << 1) | 1
             exp -= 1
 
         return RealFloat(s=self._s, c=c, exp=exp)
 
-    def next_up(self):
+    def next_away_zero(self, p: int | None = None, n: int | None = None):
         """
-        Computes the next number (with the same precison),
-        towards positive infinity.
-        """
-        if self._s:
-            return self.next_towards()
-        else:   
-            return self.next_away()
+        Computes the next number away from zero.
 
-    def next_down(self):
+        If `p` or `n` is specified, then `self` is normalized
+        accordingly before computing the next value.
+        Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
+
+        If `self == 0`, then a ValueError is raised.
         """
-        Computes the previous number (with the same precision),
-        towards negative infinity.
+        if n is None:
+            n = self.n
+        return self._next_away(n, p)
+
+    def next_towards_zero(self, p: int | None = None, n: int | None = None):
         """
-        if self._s:
-            return self.next_away()
+        Computes the next number towards zero.
+
+        If `p` or `n` is specified, then `self` is normalized
+        accordingly before computing the next value.
+        Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
+
+        If `self == 0`, then a ValueError is raised.
+        """
+        if self._c == 0:
+            raise ValueError('zero does not have a next value')
+        if n is None:
+            n = self.n
+        return self._next_towards(n, p)
+
+    def next_up(self, p: int | None = None, n: int | None = None):
+        """
+        Computes the next number towards positive infinity.
+
+        If `p` or `n` is specified, then `self` is normalized
+        accordingly before computing the next value.
+        Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
+        """
+        if self._c == 0:
+            # step away from zero towards positive infinity
+            x = RealFloat(exp=self._exp) if self._s else self
+            return x.next_away_zero(p, n)
+        elif self._s:
+            # x < 0, so need to step towards zero
+            return self.next_towards_zero(p, n)
         else:
-            return self.next_towards()
+            # x >= 0, so need to step away from zero
+            return self.next_away_zero(p, n)
 
+    def next_down(self, p: int | None = None, n: int | None = None):
+        """
+        Computes the next number towards negative infinity.
+
+        If `p` or `n` is specified, then `self` is normalized
+        accordingly before computing the next value.
+        Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
+        """
+        if self._c == 0:
+            # step away from zero towards positive infinity
+            x = self if self._s else RealFloat(s=True, exp=self._exp)
+            return x.next_away_zero(p, n)
+        elif self._s:
+            # x < 0, so need to step away from zero
+            return self.next_away_zero(p, n)
+        else:
+            # x >= 0, so need to step towards zero
+            return self.next_towards_zero(p, n)
 
     def _round_params(self, max_p: int | None = None, min_n: int | None = None):
         """
@@ -995,9 +1047,6 @@ class RealFloat(numbers.Rational):
         # convert the rounding mode to a direction
         nearest, direction = rm.to_direction(self._s)
 
-        # rounding direction
-        increment = False
-
         # case split on nearest mode
         if nearest:
             # nearest rounding mode
@@ -1020,8 +1069,8 @@ class RealFloat(numbers.Rational):
                 else:
                     # exact halfway
                     match direction:
-                        # case RoundingDirection.RTZ:
-                        #     increment = False
+                        case RoundingDirection.RTZ:
+                            increment = False
                         case RoundingDirection.RAZ:
                             increment = True
                         case RoundingDirection.RTE:
@@ -1030,11 +1079,16 @@ class RealFloat(numbers.Rational):
                         case RoundingDirection.RTO:
                             is_even = (self._c & 1) == 0
                             increment = is_even
+                        case _:
+                            raise ValueError(f'invalid rounding direction: {direction}')
+            else:
+                # below halfway
+                increment = False
         else:
             # non-nearest rounding mode
             match direction:
-                # case RoundingDirection.RTZ:
-                #     increment = False
+                case RoundingDirection.RTZ:
+                    increment = False
                 case RoundingDirection.RAZ:
                     increment = True
                 case RoundingDirection.RTE:
@@ -1043,37 +1097,10 @@ class RealFloat(numbers.Rational):
                 case RoundingDirection.RTO:
                     is_even = (self._c & 1) == 0
                     increment = is_even
+                case _:
+                    raise ValueError(f'invalid rounding direction: {direction}')
 
         return increment
-
-    def _round_finalize(
-        self,
-        lost: 'RealFloat',
-        p: int | None,
-        n: int,
-        rm: RoundingMode
-    ):
-        """
-        Completes the rounding operation using truncated digits
-        and additional rounding information.
-        """
-
-        # prepare the rounding operation
-        increment = self._round_increment(lost, n, rm)
-
-        # increment if necessary
-        carry = False
-        if increment:
-            self._c += 1
-            if p is not None and self._c.bit_length() > p:
-                # adjust the exponent since we exceeded precision bounds
-                # the value is guaranteed to be a power of two
-                self._c >>= 1
-                self._exp += 1
-                carry = True
-
-        # set flags
-        self._flags = Flags(inexact=True, carry=carry)
 
     def _round_at(
         self,
@@ -1099,10 +1126,24 @@ class RealFloat(numbers.Rational):
         if exact:
             raise ValueError(f'rounding off digits: self={self}, n={n}')
 
-        # step 3. finalize rounding based on lost digits
-        kept._round_finalize(lost, p, n, rm)
+        # step 3. check if we need to increment
+        increment = kept._round_increment(lost, n, rm)
 
-        # return the rounded value
+        # step 4. increment if necessary
+        carry = False
+        if increment:
+            kept._c += 1
+            if p is not None and kept._c.bit_length() > p:
+                # adjust the exponent since we exceeded precision bounds
+                # the value is guaranteed to be a power of two
+                kept._c >>= 1
+                kept._exp += 1
+                carry = True
+
+        # step 5. set flags
+        kept._flags = Flags(inexact=True, carry=carry)
+
+        # step 6. return the rounded value
         return kept
 
     def _round_at_stochastic(

@@ -477,6 +477,15 @@ class ExpContext(EncodableContext):
             raise ValueError('negative values are not representable')
         return Float(c=1, exp=self.emax, ctx=self)
 
+    def infval(self, s: bool = False) -> Float:
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        if s:
+            raise ValueError('negative values are not representable')
+        maxval = self.maxval()._real
+        infval = maxval.next_away_zero(p=self.pmax)
+        return Float.from_real(infval)
+
     def largest(self) -> Float:
         return self.maxval()
 

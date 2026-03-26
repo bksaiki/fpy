@@ -3,6 +3,8 @@ This module defines the `Flags` class which encapsulates
 exceptional events when rounding.
 """
 
+from typing import Self
+
 __all__ = [
     'Flags',
 ]
@@ -24,25 +26,43 @@ class Flags:
     _INEXACT = 1 << 1
     _CARRY = 1 << 2
 
-    def __init__(self, *, x=None, overflow=False, inexact=False, carry=False):
+    def __init__(
+        self, *,
+        x: Self | None = None,
+        overflow: bool | None = None,
+        inexact: bool | None = None,
+        carry: bool | None = None
+    ):
         if x is not None and not isinstance(x, Flags):
             raise TypeError("x must be a Flags instance")
-        self._flags = 0
 
-        if overflow:
-            self._flags |= self._OVERFLOW
-        elif x is not None:
-            self._flags = x._flags & self._OVERFLOW
+        # copy flags if `x` is provided, otherwise initialize to 0
+        if x is None:
+            self._flags = 0
+        else:
+            self._flags = x._flags
 
-        if inexact:
-            self._flags |= self._INEXACT
-        elif x is not None:
-            self._flags |= x._flags & self._INEXACT
+        # overflow
+        if overflow is not None:
+            if overflow:
+                self._flags |= self._OVERFLOW
+            else:
+                self._flags &= ~self._OVERFLOW
 
-        if carry:
-            self._flags |= self._CARRY
-        elif x is not None:
-            self._flags |= x._flags & self._CARRY
+        # inexact
+        if inexact is not None:
+            if inexact:
+                self._flags |= self._INEXACT
+            else:
+                self._flags &= ~self._INEXACT
+
+        # carry
+        if carry is not None:
+            if carry:
+                self._flags |= self._CARRY
+            else:
+                self._flags &= ~self._CARRY
+
 
     def __repr__(self) -> str:
         flag_strs: list[str] = []

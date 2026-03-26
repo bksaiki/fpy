@@ -968,12 +968,13 @@ def logb(x: Real, ctx: Context = REAL) -> Float:
     """
     # TODO: compute `logb` for a non-dyadic fraction
     x = _cvt_to_float(x)
-    if x.is_zero():
-        return ctx.round(float('-inf'))
-    elif x.isinf:
-        return ctx.round(float('+inf'))
-    elif x.isnan:
-        return ctx.round(float('nan'))
+    if not x.is_nonzero():
+        if x.isinf:
+            return ctx.round(float('+inf'))
+        elif x.isnan:
+            return ctx.round(float('nan'))
+        else:
+            return ctx.round(float('-inf'))
     else:
         return ctx.round(x.e)
 
