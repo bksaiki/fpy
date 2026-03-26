@@ -821,7 +821,7 @@ def _next_below(p: int, emin: int, x: RealFloat):
     assuming certain constraints.
     """
     expmin = emin - p + 1
-    below = x.next_towards()
+    below = x.next_towards_zero()
     if below.exp < expmin:
         # we are below the minimum representable value
         return RealFloat.from_int(0)

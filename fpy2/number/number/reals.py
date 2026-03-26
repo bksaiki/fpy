@@ -760,11 +760,7 @@ class RealFloat(numbers.Rational):
                     shift -= adjust
                     exp += adjust
             case _:
-                if p is not None and not isinstance(p, int):
-                    raise TypeError(f'expected \'int\' or \'None\' for p, got {type(p)}')
-                if n is not None and not isinstance(n, int):
-                    raise TypeError(f'expected \'int\' or \'None\' for n, got {type(n)}')
-                raise RuntimeError('unreachable')
+                raise ValueError(f'invalid parameters: p={p}, n={n}')
 
         # compute new significand `c`
         if shift == 0:
@@ -903,56 +899,115 @@ class RealFloat(numbers.Rational):
             and self._c == other._c
         )
 
-    def next_away(self):
+    def _extract_and_normalize(self, n: int, p: int | None):
+        # extract the relevant parameters
+        if self.exp != n + 1 or (p is not None and self.p > p):
+            # need to normalize first
+            x = self.normalize(p, n)
+            c = x._c
+            exp = x._exp
+        else:
+            c = self._c
+            exp = self._exp
+
+        return c, exp
+
+    def _next_away(self, n: int, p: int | None = None):
         """
-        Computes the next number (with the same precision),
-        away from zero.
+        Computes the next number with exponent above `n` and precision
+        up to `p` bits, away from zero.
         """
-        c = self._c + 1
-        exp = self._exp
-        if c.bit_length() > self.p:
-            # adjust the exponent since we exceeded precision bounds
+        # extract the relevant parameters for the next value
+        c, exp = self._extract_and_normalize(n, p)
+
+        # increment the significand
+        c += 1
+
+        # adjust the exponent if we exceeded precision bounds
+        if p is not None and c.bit_length() > p:
             # the value is guaranteed to be a power of two
             c >>= 1
-            exp  += 1
+            exp += 1
 
         return RealFloat(s=self._s, c=c, exp=exp)
 
-    def next_towards(self):
+    def _next_towards(self, n: int, p: int | None = None):
         """
-        Computes the previous number (with the same precision),
-        towards zero.
+        Computes the next number with exponent above `n` and precision
+        up to `p` bits, towards zero.
         """
-        c = self._c - 1
-        exp = self._exp
-        if c.bit_length() < self.p:
-            # previously at a power of two
-            # need to add a lower bit
+        # extract the relevant parameters for the next value
+        c, exp = self._extract_and_normalize(n, p)
+
+        # decrement the significand
+        c -= 1
+
+        # adjust the exponent if we exceeded precision bounds
+        if p is not None and c.bit_length() < p:
+            # previously at a power of two, need to add a lower bit
             c = (c << 1) | 1
             exp -= 1
 
         return RealFloat(s=self._s, c=c, exp=exp)
 
-    def next_up(self):
-        """
-        Computes the next number (with the same precison),
-        towards positive infinity.
-        """
-        if self._s:
-            return self.next_towards()
-        else:   
-            return self.next_away()
 
-    def next_down(self):
+    def next_away_zero(self, p: int | None = None, n: int | None = None):
         """
-        Computes the previous number (with the same precision),
-        towards negative infinity.
+        Computes the next number away from zero.
+
+        If `p` or `n` is specified, then `self` is normalized
+        accordingly before computing the next value.
+        Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
         """
-        if self._s:
-            return self.next_away()
+        if n is None:
+            n = self.n
+        return self._next_away(n, p)
+
+    def next_towards_zero(self, p: int | None = None, n: int | None = None):
+        """
+        Computes the next number towards zero.
+
+        If `p` or `n` is specified, then `self` is normalized
+        accordingly before computing the next value.
+        Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
+
+        If `self` is zero, then a ValueError is raised.
+        """
+        if self.is_zero():
+            raise ValueError('zero does not have a next value')
+        if n is None:
+            n = self.n
+        return self._next_towards(n, p)
+
+    def next_up(self, p: int | None = None, n: int | None = None):
+        """
+        Computes the next number towards positive infinity.
+
+        If `p` or `n` is specified, then `self` is normalized
+        accordingly before computing the next value.
+        Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
+        """
+        if self._c != 0 and self._s:
+            # x < 0, so need to step towards zero
+            return self.next_towards_zero(p, n)
         else:
-            return self.next_towards()
+            # x >= 0, so need to step away from zero
+            return self.next_away_zero(p, n)
 
+    def next_down(self, p: int | None = None, n: int | None = None):
+        """
+        Computes the next number towards negative infinity.
+
+        If `p` or `n` is specified, then `self` is normalized
+        accordingly before computing the next value.
+        Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
+        """
+        if self._c != 0 and self._s:
+            # x < 0, so need to step away from zero
+            return self.next_away_zero(p, n)
+        else:
+            # x >= 0, so need to step towards zero
+            return self.next_towards_zero(p, n)
 
     def _round_params(self, max_p: int | None = None, min_n: int | None = None):
         """

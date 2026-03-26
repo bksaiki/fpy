@@ -447,6 +447,6 @@ class MPBFloatContext(SizedContext):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         if s:
-            return self.neg_maxval.next_away()
+            return self.neg_maxval.next_away_zero(p=self.pmax, n=self.nmin)
         else:
-            return self.pos_maxval.next_away()
+            return self.pos_maxval.next_away_zero(p=self.pmax, n=self.nmin)
