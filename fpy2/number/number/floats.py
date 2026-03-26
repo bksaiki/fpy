@@ -480,17 +480,17 @@ class Float:
     @property
     def overflow(self) -> bool:
         """Overflow flag: the result exceeded the representable range."""
-        return self._real.overflow
+        return self._real._flags.overflow
 
     @property
     def inexact(self) -> bool:
         """Inexact flag: the rounded result is not the same as the exact result."""
-        return self._real.inexact
+        return self._real._flags.inexact
 
     @property
     def carry(self) -> bool:
         """Carry flag: the rounded result has a different exponent than the exact result."""
-        return self._real.carry
+        return self._real._flags.carry
 
     @property
     def numerator(self):
