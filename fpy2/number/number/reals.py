@@ -942,14 +942,13 @@ class RealFloat(numbers.Rational):
         # decrement the significand
         c -= 1
 
-        # adjust the exponent if we exceeded precision bounds
-        if p is not None and c.bit_length() < p:
+        # adjust the exponent if we lost a significant bit
+        if p is not None and exp > n + 1 and c.bit_length() < p:
             # previously at a power of two, need to add a lower bit
             c = (c << 1) | 1
             exp -= 1
 
         return RealFloat(s=self._s, c=c, exp=exp)
-
 
     def next_away_zero(self, p: int | None = None, n: int | None = None):
         """
@@ -958,6 +957,8 @@ class RealFloat(numbers.Rational):
         If `p` or `n` is specified, then `self` is normalized
         accordingly before computing the next value.
         Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
+
+        If `self == 0`, then a ValueError is raised.
         """
         if n is None:
             n = self.n
@@ -971,9 +972,9 @@ class RealFloat(numbers.Rational):
         accordingly before computing the next value.
         Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
 
-        If `self` is zero, then a ValueError is raised.
+        If `self == 0`, then a ValueError is raised.
         """
-        if self.is_zero():
+        if self._c == 0:
             raise ValueError('zero does not have a next value')
         if n is None:
             n = self.n
@@ -987,7 +988,11 @@ class RealFloat(numbers.Rational):
         accordingly before computing the next value.
         Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
         """
-        if self._c != 0 and self._s:
+        if self._c == 0:
+            # step away from zero towards positive infinity
+            x = RealFloat(exp=self._exp) if self._s else self
+            return x.next_away_zero(p, n)
+        elif self._s:
             # x < 0, so need to step towards zero
             return self.next_towards_zero(p, n)
         else:
@@ -1002,7 +1007,11 @@ class RealFloat(numbers.Rational):
         accordingly before computing the next value.
         Otherwise, the step size if `2 ** self.exp` even when `self.c == 0`.
         """
-        if self._c != 0 and self._s:
+        if self._c == 0:
+            # step away from zero towards positive infinity
+            x = self if self._s else RealFloat(s=True, exp=self._exp)
+            return x.next_away_zero(p, n)
+        elif self._s:
             # x < 0, so need to step away from zero
             return self.next_away_zero(p, n)
         else:
