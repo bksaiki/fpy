@@ -810,25 +810,6 @@ def _binade_max(p: int, emin: int, e: int):
         exp = emin - p + 1
         return RealFloat(c=c, exp=exp)
 
-def _next_below(p: int, emin: int, x: RealFloat):
-    """
-    Returns the next representable value below `x`
-    assuming we are constrained by precision `p` and
-    minimum exponent `emin`.
-
-    TODO: this suggests we are missing valuable
-    methods for `RealFloat` to generate the "next" value
-    assuming certain constraints.
-    """
-    expmin = emin - p + 1
-    below = x.next_towards_zero()
-    if below.exp < expmin:
-        # we are below the minimum representable value
-        return RealFloat.from_int(0)
-    else:
-        return below
-
-
 def _ext_to_mpb(
     es: int,
     nbits: int,
@@ -849,6 +830,9 @@ def _ext_to_mpb(
     # apply exponent offset to compute final exponent parameters
     emax = emax_0 + eoffset
     emin = emin_0 + eoffset
+
+    # first unrepresentable digit
+    nmin = emin - p
 
     # compute the maximum value
     # the maximum value is encoding-dependent since depending
@@ -881,12 +865,12 @@ def _ext_to_mpb(
                 if enable_inf:
                     # MAX_VAL is two encodings before the maximum
                     maxval = _binade_max(p, emin, emax + 1)
-                    maxval = _next_below(p, emin, maxval)
-                    maxval = _next_below(p, emin, maxval)
+                    maxval = maxval.next_towards_zero(p=p, n=nmin)
+                    maxval = maxval.next_towards_zero(p=p, n=nmin)
                 else:
                     # MAX_VAL is one encoding before the maximum
                     maxval = _binade_max(p, emin, emax + 1)
-                    maxval = _next_below(p, emin, maxval)
+                    maxval = maxval.next_towards_zero(p=p, n=nmin)
 
         case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
             # NaN replaces -0 (or no NaN), there may be a possible infinity
@@ -904,7 +888,7 @@ def _ext_to_mpb(
                 if enable_inf:
                     # MAX_VAL is one encoding before the maximum
                     maxval = _binade_max(p, emin, emax + 1)
-                    maxval = _next_below(p, emin, maxval)
+                    maxval = maxval.next_towards_zero(p=p, n=nmin)
                 else:
                     # maximum value is the maximum encoding
                     maxval = _binade_max(p, emin, emax + 1)
