@@ -433,20 +433,15 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         return self.max_normal(s=s)
 
+    def infval(self, s: bool = False) -> Float:
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        maxval = self.neg_maxval if s else self.pos_maxval
+        infval = maxval.next_away_zero(p=self.pmax, n=self.nmin)
+        return Float.from_real(infval)
+
     def largest(self) -> Float:
         return self.maxval(s=False)
 
     def smallest(self) -> Float:
         return self.maxval(s=True)
-
-    def infval(self, s: bool = False) -> RealFloat:
-        """
-        Returns the first non-representable value larger
-        than `maxval` with sign `s`.
-        """
-        if not isinstance(s, bool):
-            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        if s:
-            return self.neg_maxval.next_away_zero(p=self.pmax, n=self.nmin)
-        else:
-            return self.pos_maxval.next_away_zero(p=self.pmax, n=self.nmin)

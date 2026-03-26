@@ -499,6 +499,13 @@ class MPBFixedContext(SizedContext):
         else:
             return Float(x=self.pos_maxval, ctx=self)
 
+    def infval(self, s: bool = False) -> Float:
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        maxval = self.neg_maxval if s else self.pos_maxval
+        infval = maxval.next_away_zero(n=self.nmin)
+        return Float.from_real(infval)
+
     def largest(self) -> Float:
         return self.maxval(s=False)
 
