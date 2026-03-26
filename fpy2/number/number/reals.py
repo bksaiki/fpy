@@ -126,33 +126,21 @@ class RealFloat(numbers.Rational):
         else:
             self._exp = 0
 
-        # overflow
-        if overflow is None:
-            if x is not None:
-                overflow = x.overflow
-            else:
-                overflow = False
-
-        # inexact
-        if inexact is None:
-            if x is not None:
-                inexact = x.inexact
-            else:
-                inexact = False
-
-        # carry
-        if carry is None:
-            if x is not None:
-                carry = x.carry
-            else:
-                carry = False
-
         # flags
+        if x is not None:
+            if overflow is None:
+                overflow = x.overflow
+            if inexact is None:
+                inexact = x.inexact
+            if carry is None:
+                carry = x.carry
+
         self._flags = Flags(
             overflow=overflow,
             inexact=inexact,
             carry=carry
         )
+
 
     def __repr__(self):
         return (f'{self.__class__.__name__}('
