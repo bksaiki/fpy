@@ -1059,9 +1059,6 @@ class RealFloat(numbers.Rational):
         # convert the rounding mode to a direction
         nearest, direction = rm.to_direction(self._s)
 
-        # rounding direction
-        increment = False
-
         # case split on nearest mode
         if nearest:
             # nearest rounding mode
@@ -1084,8 +1081,8 @@ class RealFloat(numbers.Rational):
                 else:
                     # exact halfway
                     match direction:
-                        # case RoundingDirection.RTZ:
-                        #     increment = False
+                        case RoundingDirection.RTZ:
+                            increment = False
                         case RoundingDirection.RAZ:
                             increment = True
                         case RoundingDirection.RTE:
@@ -1094,11 +1091,16 @@ class RealFloat(numbers.Rational):
                         case RoundingDirection.RTO:
                             is_even = (self._c & 1) == 0
                             increment = is_even
+                        case _:
+                            raise ValueError(f'invalid rounding direction: {direction}')
+            else:
+                # below halfway
+                increment = False
         else:
             # non-nearest rounding mode
             match direction:
-                # case RoundingDirection.RTZ:
-                #     increment = False
+                case RoundingDirection.RTZ:
+                    increment = False
                 case RoundingDirection.RAZ:
                     increment = True
                 case RoundingDirection.RTE:
@@ -1107,37 +1109,10 @@ class RealFloat(numbers.Rational):
                 case RoundingDirection.RTO:
                     is_even = (self._c & 1) == 0
                     increment = is_even
+                case _:
+                    raise ValueError(f'invalid rounding direction: {direction}')
 
         return increment
-
-    def _round_finalize(
-        self,
-        lost: 'RealFloat',
-        p: int | None,
-        n: int,
-        rm: RoundingMode
-    ):
-        """
-        Completes the rounding operation using truncated digits
-        and additional rounding information.
-        """
-
-        # prepare the rounding operation
-        increment = self._round_increment(lost, n, rm)
-
-        # increment if necessary
-        carry = False
-        if increment:
-            self._c += 1
-            if p is not None and self._c.bit_length() > p:
-                # adjust the exponent since we exceeded precision bounds
-                # the value is guaranteed to be a power of two
-                self._c >>= 1
-                self._exp += 1
-                carry = True
-
-        # set flags
-        self._flags = Flags(inexact=True, carry=carry)
 
     def _round_at(
         self,
@@ -1163,10 +1138,24 @@ class RealFloat(numbers.Rational):
         if exact:
             raise ValueError(f'rounding off digits: self={self}, n={n}')
 
-        # step 3. finalize rounding based on lost digits
-        kept._round_finalize(lost, p, n, rm)
+        # step 3. check if we need to increment
+        increment = kept._round_increment(lost, n, rm)
 
-        # return the rounded value
+        # step 4. increment if necessary
+        carry = False
+        if increment:
+            kept._c += 1
+            if p is not None and kept._c.bit_length() > p:
+                # adjust the exponent since we exceeded precision bounds
+                # the value is guaranteed to be a power of two
+                kept._c >>= 1
+                kept._exp += 1
+                carry = True
+
+        # step 5. set flags
+        kept._flags = Flags(inexact=True, carry=carry)
+
+        # step 6. return the rounded value
         return kept
 
     def _round_at_stochastic(
