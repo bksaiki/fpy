@@ -64,13 +64,6 @@ class Interpreter(ABC):
                 case _:
                     raise RuntimeError('unreachable', override_ctx)
 
-
-class FunctionReturnError(Exception):
-    """Raised when a function returns a value."""
-
-    def __init__(self, value):
-        self.value = value
-
 ###########################################################
 # Default interpreter
 

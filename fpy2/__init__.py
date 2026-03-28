@@ -34,7 +34,7 @@ from . import utils
 from .fpc_context import FPCoreContext, NoSuchContextError
 from .interpret import (
     Interpreter,
-    DefaultInterpreter,
+    BytecodeInterpreter,
     set_default_interpreter,
     get_default_interpreter,
 )

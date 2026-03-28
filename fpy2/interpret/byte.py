@@ -3,6 +3,7 @@ Interpreter backed by Python bytecode.
 """
 
 import ast as pyast
+import copy
 import inspect
 import sys
 
@@ -179,6 +180,28 @@ def _eval_enumerate(val: list[Value], ctx: Context):
         for i, v in enumerate(val)
     ]
 
+def _eval_list_set(lst: list[Value], idxs: list[RealValue], val: Value):
+    if not isinstance(lst, list):
+        raise TypeError(f'expected a list, got {lst}')
+    array: list = copy.deepcopy(lst) # make a copy
+
+    slices: list[int] = []
+    for idx in idxs:
+        if not isinstance(idx, RealValue):
+            raise TypeError(f'expected a real number slice, got {idx}')
+        if not _is_integer(idx):
+            raise TypeError(f'expected an integer slice, got {idx}')
+        slices.append(int(idx))
+
+    for s in slices[:-1]:
+        array = array[s]
+        if not isinstance(array, list):
+            raise TypeError(f'expected a list, got {array}')
+
+    array[slices[-1]] = val
+    return array
+
+
 def _eval_range(start: Value | None, stop: Value, step: Value | None):
     # start index
     if start is None:
@@ -212,42 +235,6 @@ def _eval_range(start: Value | None, stop: Value, step: Value | None):
         for i in range(start_idx, stop_idx, step_val)
     ]
 
-def _eval_ref(arr: list[Value], idx: RealValue):
-    if not isinstance(arr, list):
-        raise TypeError(f'expected a list, got {arr}')
-    if not isinstance(idx, RealValue):
-        raise TypeError(f'expected a real number index, got {idx}')
-    if not _is_integer(idx):
-        raise ValueError(f'expected an integer index, got {idx}')
-    return arr[int(idx)]
-
-def _eval_slice(arr: list[Value], start: RealValue | None, stop: RealValue | None):
-    if not isinstance(arr, list):
-        raise TypeError(f'expected a list, got {arr}')
-
-    # start index
-    if start is None:
-        start_val = 0
-    else:
-        if not isinstance(start, RealValue):
-            raise TypeError(f'expected a real number start index, got {start}')
-        if not _is_integer(start):
-            raise TypeError(f'expected an integer start index, got {start}')
-        start_val = int(start)
-
-    # stop index
-    if stop is None:
-        stop_val = len(arr)
-    else:
-        if not isinstance(stop, RealValue):
-            raise TypeError(f'expected a real number stop index, got {stop}')
-        if not _is_integer(stop):
-            raise TypeError(f'expected an integer stop index, got {stop}')
-        stop_val = int(stop)
-
-    # slice the array
-    return arr[start_val:stop_val]
-
 def _eval_sum(val: list[RealValue], ctx: Context):
     if not isinstance(val, list):
         raise TypeError(f'expected a list, got {val}')
@@ -263,15 +250,6 @@ def _eval_sum(val: list[RealValue], ctx: Context):
                 raise TypeError(f'expected a real number argument, got {x}')
             accum = ops.add(accum, x, ctx=ctx)
         return accum
-
-def _eval_zip(*vals, ctx: Context):
-    if len(vals) == 0:
-        return []
-    else:
-        for val in vals:
-            if not isinstance(val, list):
-                raise TypeError(f'expected a list argument, got {val}')
-        return list(zip(*vals))
 
 ###########################################################
 # Operator tables
@@ -369,7 +347,6 @@ _TERNARY_TABLE: dict[type[TernaryOp], object] = {
 
 _NARY_TABLE: dict[type[NaryOp], object] = {
     Empty: ops.empty,
-    Zip: _eval_zip,
 }
 
 ###########################################################
@@ -383,9 +360,8 @@ def make_namespace() -> dict[str, object]:
         '__fpy_cvt': _arg_to_value,
         '__fpy_fraction': Fraction,
         '__fpy_int': _cvt_int,
+        '__fpy_list_set': _eval_list_set,
         '__fpy_range': _eval_range,
-        '__fpy_ref': _eval_ref,
-        '__fpy_slice': _eval_slice,
     }
 
     # add operations to the namespace
@@ -601,6 +577,15 @@ class BytecodeCompiler(Visitor):
             case Min():
                 func = pyast.Name(id='min', ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=args, keywords=[], **attrs)
+            case Zip():
+                # first zip the arguments with `strict=True` to ensure they have the same length
+                func = pyast.Name(id='zip', ctx=pyast.Load(), **attrs)
+                kwarg = pyast.keyword(arg='strict', value=pyast.Constant(value=True, kind=None, **attrs), **attrs)
+                call = pyast.Call(func=func, args=args, keywords=[kwarg], **attrs)
+
+                # then, greedily force the zip object into a list
+                func = pyast.Name(id='list', ctx=pyast.Load(), **attrs)
+                return pyast.Call(func=func, args=[call], keywords=[], **attrs)
             case _:
                 raise NotImplementedError(f'unsupported n-ary operation: {type(e).__name__}')
 
@@ -688,12 +673,13 @@ class BytecodeCompiler(Visitor):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
         attrs = self._location_to_attributes(e.loc)
-        return pyast.Call(
-            func=pyast.Name(id='__fpy_ref', ctx=pyast.Load(), **attrs),
-            args=[value, index],
-            keywords=[],
-            **attrs
-        )
+
+        # convert the index to an integer using `__fpy_int` to ensure it's a valid list index
+        cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
+        idx = pyast.Call(func=cvt_name, args=[index], keywords=[], **attrs)
+
+        # do a normal list reference
+        return pyast.Subscript(value=value, slice=idx, ctx=pyast.Load(), **attrs)
 
     def _visit_list_slice(self, e: ListSlice, ctx: None):
         arr = self._visit_expr(e.value, ctx)
@@ -701,28 +687,38 @@ class BytecodeCompiler(Visitor):
 
         # start index
         if e.start is None:
-            start = pyast.Constant(value=None, kind=None, **attrs)
+            start: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
+            # convert index to an integer using `__fpy_int` to ensure it's a valid list index
             start = self._visit_expr(e.start, ctx)
+            cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
+            start = pyast.Call(func=cvt_name, args=[start], keywords=[], **attrs)
 
         # stop index
         if e.stop is None:
-            stop = pyast.Constant(value=None, kind=None, **attrs)
+            stop: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
+            # convert index to an integer using `__fpy_int` to ensure it's a valid list index
             stop = self._visit_expr(e.stop, ctx)
+            cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
+            stop = pyast.Call(func=cvt_name, args=[stop], keywords=[], **attrs)
 
-        # slice the array
-        return pyast.Call(
-            func=pyast.Name(id='__fpy_slice', ctx=pyast.Load(), **attrs),
-            args=[arr, start, stop],
-            keywords=[],
+        # generate a slice of the form `arr[start:stop]`
+        return pyast.Subscript(
+            value=arr,
+            slice=pyast.Slice(lower=start, upper=stop, step=None, **attrs),
+            ctx=pyast.Load(),
             **attrs
         )
 
-        raise NotImplementedError
-
     def _visit_list_set(self, e: ListSet, ctx: None):
-        raise NotImplementedError
+        value = self._visit_expr(e.value, ctx)
+        idxs = [self._visit_expr(idx, ctx) for idx in e.indices]
+        expr = self._visit_expr(e.expr, ctx)
+        attrs = self._location_to_attributes(e.loc)
+
+        func = pyast.Name(id='__fpy_list_set', ctx=pyast.Load(), **attrs)
+        return pyast.Call(func=func, args=[value] + idxs + [expr], keywords=[], **attrs)
 
     def _visit_if_expr(self, e: IfExpr, ctx: None):
         cond = self._visit_expr(e.cond, ctx)

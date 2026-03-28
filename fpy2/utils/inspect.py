@@ -30,6 +30,12 @@ def getfunclines(func: Callable):
         start_line = func.__code__.co_firstlineno - 1
         lines = inspect.getblock(lines[start_line:])
 
+    # find the first line that starts with a `def` with possibly some whitespace before it
+    for line in lines:
+        if line.lstrip().startswith('def '):
+            break
+        start_line -= 1
+
     col_offset = source_indent(lines)
     return lines, src_name, start_line, col_offset
 
