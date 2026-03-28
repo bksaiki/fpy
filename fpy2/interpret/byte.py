@@ -965,9 +965,12 @@ class BytecodeInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got `{func}`')
         # compile the function to bytecode
-        compiler = BytecodeCompiler(func.ast, func.env)
-        fn = compiler.compile()
-        self.func_cache[func.ast] = fn
+        if func.ast in self.func_cache:
+            fn = self.func_cache[func.ast]
+        else:
+            compiler = BytecodeCompiler(func.ast, func.env)
+            fn = compiler.compile()
+            self.func_cache[func.ast] = fn
         # compute the context to use during evaluation
         ctx = self._func_ctx(func.ast, ctx)
         # call the function with the given arguments

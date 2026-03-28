@@ -36,6 +36,10 @@ class ForeignEnv:
             # default to globals if the key is not found in any environment
             self.globals[key] = value
 
+    def __iter__(self):
+        # iterate over all keys in the environment
+        return iter(self.nonlocals.keys() | self.globals.keys() | self.builtins.keys())
+
     def copy(self) -> 'ForeignEnv':
         return ForeignEnv(
             self.globals.copy(),

@@ -4,6 +4,7 @@ Partial evaluation.
 
 from dataclasses import dataclass
 from fractions import Fraction
+from types import ModuleType
 from typing import TypeAlias
 
 from ..ast.fpyast import *
@@ -53,8 +54,12 @@ class _PartialEvalInstance(DefaultVisitor):
         self._visit_function(self.func, None)
         return PartialEvalInfo(self.by_def, self.by_expr, self.def_use)
 
-    def _eval_env(self):
-        return { d.name: v for d, v in self.by_def.items() }
+    def _base_env(self) -> dict[NamedId, object]:
+        return { 
+            NamedId(d): self.func.env[d]
+            for d in self.func.env
+            if isinstance(self.func.env[d], ModuleType)
+        }
 
     def _is_value(self, e: Expr) -> bool:
         return e in self.by_expr
@@ -98,7 +103,9 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: UnaryOp = type(e)(e.func, e_arg, e.loc)
             else:
                 e_eval = type(e)(e_arg, e.loc)
-            self.by_expr[e] = self.rt.eval_expr(e_eval, {}, ctx)
+
+            env = self._base_env()
+            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context | None):
         self._visit_expr(e.first, ctx)
@@ -110,9 +117,10 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: BinaryOp = type(e)(e.func, e_fst, e_snd, e.loc)
             else:
                 e_eval = type(e)(e_fst, e_snd, e.loc)
-            
-            self.by_expr[e] = self.rt.eval_expr(e_eval, {}, ctx)
-    
+
+            env = self._base_env()
+            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context | None):
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
@@ -125,7 +133,9 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: TernaryOp = type(e)(e.func, e_fst, e_snd, e_trd, e.loc)
             else:
                 e_eval = type(e)(e_fst, e_snd, e_trd, e.loc)
-            self.by_expr[e] = self.rt.eval_expr(e_eval, {}, ctx)
+
+            env = self._base_env()
+            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
 
     # TODO: implement _visit_naryop
     # do not partially evaluate `empty()` since it creates uninitialized values
@@ -143,7 +153,9 @@ class _PartialEvalInstance(DefaultVisitor):
             arg_vals = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
             kwarg_vals = [ (k, ForeignVal(self.by_expr[v], None)) for k, v in e.kwargs ]
             e_eval = Call(e.func, e.fn, arg_vals, kwarg_vals, e.loc)
-            self.by_expr[e] = self.rt.eval_expr(e_eval, {}, ctx)
+
+            env = self._base_env()
+            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context | None):
         for elt in e.elts:
