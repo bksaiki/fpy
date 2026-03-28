@@ -212,42 +212,6 @@ def _eval_range(start: Value | None, stop: Value, step: Value | None):
         for i in range(start_idx, stop_idx, step_val)
     ]
 
-def _eval_ref(arr: list[Value], idx: RealValue):
-    if not isinstance(arr, list):
-        raise TypeError(f'expected a list, got {arr}')
-    if not isinstance(idx, RealValue):
-        raise TypeError(f'expected a real number index, got {idx}')
-    if not _is_integer(idx):
-        raise ValueError(f'expected an integer index, got {idx}')
-    return arr[int(idx)]
-
-def _eval_slice(arr: list[Value], start: RealValue | None, stop: RealValue | None):
-    if not isinstance(arr, list):
-        raise TypeError(f'expected a list, got {arr}')
-
-    # start index
-    if start is None:
-        start_val = 0
-    else:
-        if not isinstance(start, RealValue):
-            raise TypeError(f'expected a real number start index, got {start}')
-        if not _is_integer(start):
-            raise TypeError(f'expected an integer start index, got {start}')
-        start_val = int(start)
-
-    # stop index
-    if stop is None:
-        stop_val = len(arr)
-    else:
-        if not isinstance(stop, RealValue):
-            raise TypeError(f'expected a real number stop index, got {stop}')
-        if not _is_integer(stop):
-            raise TypeError(f'expected an integer stop index, got {stop}')
-        stop_val = int(stop)
-
-    # slice the array
-    return arr[start_val:stop_val]
-
 def _eval_sum(val: list[RealValue], ctx: Context):
     if not isinstance(val, list):
         raise TypeError(f'expected a list, got {val}')
@@ -374,8 +338,6 @@ def make_namespace() -> dict[str, object]:
         '__fpy_fraction': Fraction,
         '__fpy_int': _cvt_int,
         '__fpy_range': _eval_range,
-        '__fpy_ref': _eval_ref,
-        '__fpy_slice': _eval_slice,
     }
 
     # add operations to the namespace
@@ -687,12 +649,13 @@ class BytecodeCompiler(Visitor):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
         attrs = self._location_to_attributes(e.loc)
-        return pyast.Call(
-            func=pyast.Name(id='__fpy_ref', ctx=pyast.Load(), **attrs),
-            args=[value, index],
-            keywords=[],
-            **attrs
-        )
+
+        # convert the index to an integer using `__fpy_int` to ensure it's a valid list index
+        cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
+        idx = pyast.Call(func=cvt_name, args=[index], keywords=[], **attrs)
+
+        # do a normal list reference
+        return pyast.Subscript(value=value, slice=idx, ctx=pyast.Load(), **attrs)
 
     def _visit_list_slice(self, e: ListSlice, ctx: None):
         arr = self._visit_expr(e.value, ctx)
@@ -702,23 +665,27 @@ class BytecodeCompiler(Visitor):
         if e.start is None:
             start = pyast.Constant(value=None, kind=None, **attrs)
         else:
+            # convert index to an integer using `__fpy_int` to ensure it's a valid list index
             start = self._visit_expr(e.start, ctx)
+            cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
+            start = pyast.Call(func=cvt_name, args=[start], keywords=[], **attrs)
 
         # stop index
         if e.stop is None:
             stop = pyast.Constant(value=None, kind=None, **attrs)
         else:
+            # convert index to an integer using `__fpy_int` to ensure it's a valid list index
             stop = self._visit_expr(e.stop, ctx)
+            cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
+            stop = pyast.Call(func=cvt_name, args=[stop], keywords=[], **attrs)
 
-        # slice the array
-        return pyast.Call(
-            func=pyast.Name(id='__fpy_slice', ctx=pyast.Load(), **attrs),
-            args=[arr, start, stop],
-            keywords=[],
+        # generate a slice of the form `arr[start:stop]`
+        return pyast.Subscript(
+            value=arr,
+            slice=pyast.Slice(lower=start, upper=stop, step=None, **attrs),
+            ctx=pyast.Load(),
             **attrs
         )
-
-        raise NotImplementedError
 
     def _visit_list_set(self, e: ListSet, ctx: None):
         raise NotImplementedError
