@@ -39,7 +39,7 @@ FPy programs are interpreted by any implementation of the :py:class:`fpy2.Interp
 
 FPy provides a single interpreter:
 
-.. autoclass:: fpy2.DefaultInterpreter
+.. autoclass:: fpy2.BytecodeInterpreter
    :members:
    :show-inheritance:
 
