@@ -264,15 +264,6 @@ def _eval_sum(val: list[RealValue], ctx: Context):
             accum = ops.add(accum, x, ctx=ctx)
         return accum
 
-def _eval_zip(*vals, ctx: Context):
-    if len(vals) == 0:
-        return []
-    else:
-        for val in vals:
-            if not isinstance(val, list):
-                raise TypeError(f'expected a list argument, got {val}')
-        return list(zip(*vals))
-
 ###########################################################
 # Operator tables
 
@@ -369,7 +360,6 @@ _TERNARY_TABLE: dict[type[TernaryOp], object] = {
 
 _NARY_TABLE: dict[type[NaryOp], object] = {
     Empty: ops.empty,
-    Zip: _eval_zip,
 }
 
 ###########################################################
@@ -424,7 +414,7 @@ class BytecodeCompiler(Visitor):
     def compile(self):
         # compile the function to a Python AST
         ast = self._visit_function(self.func, None)
-        # print(pyast.unparse(ast))
+        print(pyast.unparse(ast))
         # wrap the function AST in a module so we can compile it
         mod = pyast.Module(body=[ast], type_ignores=[])
         # compile the Python AST to bytecode
@@ -601,6 +591,15 @@ class BytecodeCompiler(Visitor):
             case Min():
                 func = pyast.Name(id='min', ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=args, keywords=[], **attrs)
+            case Zip():
+                # first zip the arguments with `strict=True` to ensure they have the same length
+                func = pyast.Name(id='zip', ctx=pyast.Load(), **attrs)
+                kwarg = pyast.keyword(arg='strict', value=pyast.Constant(value=True, kind=None, **attrs), **attrs)
+                call = pyast.Call(func=func, args=args, keywords=[kwarg], **attrs)
+
+                # then, greedily force the zip object into a list
+                func = pyast.Name(id='list', ctx=pyast.Load(), **attrs)
+                return pyast.Call(func=func, args=[call], keywords=[], **attrs)
             case _:
                 raise NotImplementedError(f'unsupported n-ary operation: {type(e).__name__}')
 
