@@ -3,14 +3,122 @@ Interpreter backed by Python bytecode.
 """
 
 import ast as pyast
+import inspect
 
 from fractions import Fraction
+from typing import Any, TypeAlias
 
 from .. import ops
 from ..ast.fpyast import *
 from ..ast.visitor import Visitor
+from ..env import ForeignEnv
 from ..function import Function
+from ..number import Float, RealFloat, FP64, REAL
+from ..primitive import Primitive
+from ..utils import is_dyadic
 from .interpreter import Interpreter
+
+###########################################################
+# Runtime
+
+RealValue: TypeAlias = Float | Fraction
+"""Type of real values in FPy programs."""
+ScalarValue: TypeAlias = bool | Context | RealValue
+"""Type of scalar values in FPy programs."""
+TensorValue: TypeAlias = list['Value'] | tuple['Value', ...]
+"""Type of list values in FPy programs."""
+Value: TypeAlias = ScalarValue | TensorValue
+"""Type of values in FPy programs."""
+
+
+def _cvt_float(x: Value):
+    match x:
+        case Float():
+            return x
+        case Fraction():
+            if not is_dyadic(x):
+                raise TypeError(f'expected a dyadic rational, got `{x}`')
+            return Float.from_rational(x, ctx=REAL)
+        case _:
+            raise TypeError(f'expected a real number, got `{x}`')
+
+def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
+    if ty is int:
+        # convert to int
+        val = _cvt_float(arg)
+        if not val.is_integer():
+            raise ValueError(f'expected an integer argument for `{name}={arg}`')
+        return int(val)
+    elif ty is float:
+        # convert to float
+        val = _cvt_float(arg)
+        if not FP64.representable_under(val):
+            raise ValueError(f'argument for `{name}={arg}` is not representable as a float')
+        return float(val)
+    elif ty is RealFloat:
+        # convert to RealFloat
+        val = _cvt_float(arg)
+        if val.is_nar():
+            raise ValueError(f'argument for `{name}={arg}` cannot be Inf/NaN')
+        return val.as_real()
+    else:
+        # don't apply a conversion
+        return arg
+
+def _construct_context(cls: type[Context], args: list, kwargs: dict[str, object]):
+    sig = inspect.signature(cls.__init__)
+    _, *params = list(sig.parameters)
+
+    ctor_args = []
+    for arg, name in zip(args, params):
+        param = sig.parameters[name]
+        ctor_arg = _cvt_context_arg(cls, name, arg, param.annotation)
+        ctor_args.append(ctor_arg)
+
+    ctor_kwargs = {}
+    for name, val in kwargs.items():
+        if name not in sig.parameters:
+            raise TypeError(f'unknown parameter {name} for constructor {cls}')
+        param = sig.parameters[name]
+        ctor_kwargs[name] = _cvt_context_arg(cls, name, val, param.annotation)
+
+    return cls(*ctor_args, **ctor_kwargs)
+
+
+def _eval_sum(*args, ctx: Context | None = None):
+    raise NotImplementedError
+
+def _eval_empty(*args, ctx: Context | None = None):
+    raise NotImplementedError
+
+def _eval_zip(*args, ctx: Context | None = None):
+    raise NotImplementedError
+
+def _eval_call(fn, ctx, *args, **kwargs):
+    match fn:
+        case Function():
+            # calling FPy function
+            if kwargs:
+                raise RuntimeError('FPy functions do not support keyword arguments')
+            return fn(*args, ctx=ctx)
+        case Primitive():
+            # calling FPy primitive
+            if kwargs:
+                raise RuntimeError('FPy primitives do not support keyword arguments')
+            return fn(*args, ctx=ctx)
+        case type() if issubclass(fn, Context):
+            # calling context constructor
+            return _construct_context(fn, args, kwargs)
+        case _:
+            # calling foreign function: only `print` is allowed
+            if kwargs:
+                raise RuntimeError('foreign functions do not support keyword arguments')
+            if fn == print:
+                print(*args)
+                # TODO: should we allow `None` to return
+                return None
+            else:
+                raise RuntimeError(f'attempting to call a Python function: `{fn}`')
 
 ###########################################################
 # Operator tables
@@ -70,6 +178,7 @@ _UNARY_TABLE: dict[type[UnaryOp], object] = {
     IsNan: ops.isnan,
     IsNormal: ops.isnormal,
     Signbit: ops.signbit,
+    Round: ops.round,
     RoundExact: ops.round_exact,
     Cast: ops.cast,
     Logb: ops.logb,
@@ -96,14 +205,19 @@ _TERNARY_TABLE: dict[type[TernaryOp], object] = {
     Fma: ops.fma,
 }
 
+_NARY_TABLE: dict[type[NaryOp], object] = {
+    Sum: _eval_sum,
+    Empty: _eval_empty,
+    Zip: _eval_zip,
+}
+
 ###########################################################
 # Eval namespace
 
-def get_default_namespace() -> dict[str, object]:
-    # namespace object with constructors
-    namespace = {
-        '__fpy_Fraction': Fraction,
-    }
+def inject_namespace(namespace: ForeignEnv) -> dict[str, object]:
+    # add special symbols to namespace
+    namespace['__fpy_Fraction'] = Fraction
+    namespace['__fpy_call'] = _eval_call
 
     # add operations to the namespace
     for op_type, fn in _NULLARY_TABLE.items():
@@ -114,11 +228,13 @@ def get_default_namespace() -> dict[str, object]:
         namespace[f'__fpy_{op_type.__name__}'] = fn
     for op_type, fn in _TERNARY_TABLE.items():
         namespace[f'__fpy_{op_type.__name__}'] = fn
-
-    return namespace
+    for op_type, fn in _NARY_TABLE.items():
+        namespace[f'__fpy_{op_type.__name__}'] = fn
 
 ###########################################################
 # Bytecode compiler
+
+CTX_NAME = '__ctx__'
 
 class BytecodeCompiler(Visitor):
     """
@@ -126,9 +242,11 @@ class BytecodeCompiler(Visitor):
     """
 
     func: FuncDef
+    env: ForeignEnv
 
-    def __init__(self, func: FuncDef):
+    def __init__(self, func: FuncDef, env: ForeignEnv):
         self.func = func
+        self.env = env
 
     def compile(self):
         # compile the function to a Python AST
@@ -137,8 +255,14 @@ class BytecodeCompiler(Visitor):
         # compile the Python AST to bytecode
         source_name = self._location_to_name(self.func.loc)
         code = compile(pyast.Module(body=[ast], type_ignores=[]), filename=source_name, mode='exec')
+        # inject runtime symbols
+        namespace = {}
+        inject_namespace(namespace)
+        # add free variables to the namespace
+        for var in self.func.free_vars:
+            name = str(var)
+            namespace[name] = self.env[name]
         # return the function object
-        namespace = get_default_namespace()
         exec(code, namespace)
         return namespace[self.func.name]
 
@@ -164,24 +288,24 @@ class BytecodeCompiler(Visitor):
 
     def _rational_to_ast(self, e: Rational) -> pyast.Call:
         val = e.as_rational()
-        kwargs = self._location_to_attributes(e.loc)
+        attrs = self._location_to_attributes(e.loc)
         return pyast.Call(
-            func=pyast.Name(id='__fpy_Fraction', ctx=pyast.Load(), **kwargs),
+            func=pyast.Name(id='__fpy_Fraction', ctx=pyast.Load(), **attrs),
             args=[
-                pyast.Constant(value=val.numerator, **kwargs),
-                pyast.Constant(value=val.denominator, **kwargs)
+                pyast.Constant(value=val.numerator, **attrs),
+                pyast.Constant(value=val.denominator, **attrs)
             ],
             keywords=[],
-            **kwargs
+            **attrs
         )
 
     def _visit_var(self, e: Var, ctx: None):
-        kwargs = self._location_to_attributes(e.loc)
-        return pyast.Name(id=str(e.name), ctx=pyast.Load(), **kwargs)
+        attrs = self._location_to_attributes(e.loc)
+        return pyast.Name(id=str(e.name), ctx=pyast.Load(), **attrs)
 
     def _visit_bool(self, e: BoolVal, ctx: None):
-        kwargs = self._location_to_attributes(e.loc)
-        return pyast.Constant(value=e.val, **kwargs)
+        attrs = self._location_to_attributes(e.loc)
+        return pyast.Constant(value=e.val, **attrs)
 
     def _visit_foreign(self, e: ForeignVal, ctx: None):
         raise NotImplementedError
@@ -204,10 +328,10 @@ class BytecodeCompiler(Visitor):
     def _visit_nullaryop(self, e: NullaryOp, ctx: None):
         if type(e) in _NULLARY_TABLE:
             name = f'__fpy_{type(e).__name__}'
-            kwargs = self._location_to_attributes(e.loc)
-            func = pyast.Name(id=name, ctx=pyast.Load(), **kwargs)
-            ctx_arg = pyast.Name(id='__ctx__', ctx=pyast.Load(), **kwargs)
-            return pyast.Call(func=func, args=[ctx_arg], keywords=[], **kwargs)
+            attrs = self._location_to_attributes(e.loc)
+            func = pyast.Name(id=name, ctx=pyast.Load(), **attrs)
+            ctx_arg = pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs)
+            return pyast.Call(func=func, args=[ctx_arg], keywords=[], **attrs)
         else:
             raise NotImplementedError(f'unsupported nullary operation: {type(e).__name__}')
 
@@ -215,10 +339,10 @@ class BytecodeCompiler(Visitor):
         if type(e) in _UNARY_TABLE:
             name = f'__fpy_{type(e).__name__}'
             arg = self._visit_expr(e.arg, ctx)
-            kwargs = self._location_to_attributes(e.loc)
-            func = pyast.Name(id=name, ctx=pyast.Load(), **kwargs)
-            ctx_arg = pyast.Name(id='__ctx__', ctx=pyast.Load(), **kwargs)
-            return pyast.Call(func=func, args=[arg, ctx_arg], keywords=[], **kwargs)
+            attrs = self._location_to_attributes(e.loc)
+            func = pyast.Name(id=name, ctx=pyast.Load(), **attrs)
+            ctx_arg = pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs)
+            return pyast.Call(func=func, args=[arg, ctx_arg], keywords=[], **attrs)
         else:
             raise NotImplementedError(f'unsupported unary operation: {type(e).__name__}')
 
@@ -227,10 +351,10 @@ class BytecodeCompiler(Visitor):
             name = f'__fpy_{type(e).__name__}'
             arg1 = self._visit_expr(e.first, ctx)
             arg2 = self._visit_expr(e.second, ctx)
-            kwargs = self._location_to_attributes(e.loc)
-            func = pyast.Name(id=name, ctx=pyast.Load(), **kwargs)
-            ctx_arg = pyast.Name(id='__ctx__', ctx=pyast.Load(), **kwargs)
-            return pyast.Call(func=func, args=[arg1, arg2, ctx_arg], keywords=[], **kwargs)
+            attrs = self._location_to_attributes(e.loc)
+            func = pyast.Name(id=name, ctx=pyast.Load(), **attrs)
+            ctx_arg = pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs)
+            return pyast.Call(func=func, args=[arg1, arg2, ctx_arg], keywords=[], **attrs)
         else:
             raise NotImplementedError(f'unsupported binary operation: {type(e).__name__}')
 
@@ -240,27 +364,97 @@ class BytecodeCompiler(Visitor):
             arg1 = self._visit_expr(e.first, ctx)
             arg2 = self._visit_expr(e.second, ctx)
             arg3 = self._visit_expr(e.third, ctx)
-            kwargs = self._location_to_attributes(e.loc)
-            func = pyast.Name(id=name, ctx=pyast.Load(), **kwargs)
-            ctx_arg = pyast.Name(id='__ctx__', ctx=pyast.Load(), **kwargs)
-            return pyast.Call(func=func, args=[arg1, arg2, arg3, ctx_arg], keywords=[], **kwargs)
+            attrs = self._location_to_attributes(e.loc)
+            func = pyast.Name(id=name, ctx=pyast.Load(), **attrs)
+            ctx_arg = pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs)
+            return pyast.Call(func=func, args=[arg1, arg2, arg3, ctx_arg], keywords=[], **attrs)
         else:
             raise NotImplementedError(f'unsupported ternary operation: {type(e).__name__}')
 
     def _visit_naryop(self, e: NaryOp, ctx: None):
-        raise NotImplementedError
+        attrs = self._location_to_attributes(e.loc)
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        if type(e) in _NARY_TABLE:
+            name = f'__fpy_{type(e).__name__}'
+            func = pyast.Name(id=name, ctx=pyast.Load(), **attrs)
+            ctx_arg = pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs)
+            return pyast.Call(func=func, args=args + [ctx_arg], keywords=[], **attrs)
+
+        match e:
+            case Min():
+                func = pyast.Name(id='min', ctx=pyast.Load(), **attrs)
+                return pyast.Call(func=func, args=args, keywords=[], **attrs)
+            case Max():
+                func = pyast.Name(id='max', ctx=pyast.Load(), **attrs)
+                return pyast.Call(func=func, args=args, keywords=[], **attrs)
+            case _:
+                raise NotImplementedError(f'unsupported n-ary operation: {type(e).__name__}')
 
     def _visit_call(self, e: Call, ctx: None):
-        raise NotImplementedError
+        func = self._visit_expr(e.func, ctx)
+        attrs = self._location_to_attributes(e.loc)
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        ctx_arg = pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs)
+
+        kwargs: list[pyast.keyword] = []
+        for kw, val in e.kwargs:
+            value = self._visit_expr(val, ctx)
+            kwarg = pyast.keyword(arg=kw, value=value, **attrs)
+            kwargs.append(kwarg)
+
+        name = pyast.Name(id='__fpy_call', ctx=pyast.Load(), **attrs)
+        return pyast.Call(func=name, args=[func, ctx_arg] + args, keywords=kwargs, **attrs)
+
+    def _visit_compare_op(self, op: CompareOp) -> pyast.cmpop:
+        match op:
+            case CompareOp.EQ:
+                return pyast.Eq()
+            case CompareOp.NE:
+                return pyast.NotEq()
+            case CompareOp.LT:
+                return pyast.Lt()
+            case CompareOp.LE:
+                return pyast.LtE()
+            case CompareOp.GT:
+                return pyast.Gt()
+            case CompareOp.GE:
+                return pyast.GtE()
+            case _:
+                raise NotImplementedError(f'unsupported comparison operator: {type(op).__name__}')
 
     def _visit_compare(self, e: Compare, ctx: None):
-        raise NotImplementedError
+        ops = [self._visit_compare_op(op) for op in e.ops]
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        attrs = self._location_to_attributes(e.loc)
+        return pyast.Compare(args[0], ops, args[1:], **attrs)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
-        raise NotImplementedError
+        args = [self._visit_expr(elt, ctx) for elt in e.elts]
+        attrs = self._location_to_attributes(e.loc)
+        return pyast.Tuple(elts=args, ctx=pyast.Load(), **attrs)
 
     def _visit_list_expr(self, e: ListExpr, ctx: None):
-        raise NotImplementedError
+        args = [self._visit_expr(elt, ctx) for elt in e.elts]
+        attrs = self._location_to_attributes(e.loc)
+        return pyast.List(elts=args, ctx=pyast.Load(), **attrs)
+
+    def _visit_target_unshaped(self, target: Id | TupleBinding) -> pyast.expr | list[pyast.expr]:
+        match target:
+            case SourceId():
+                attrs = self._location_to_attributes(target.loc)
+                return pyast.Name(id=str(target), ctx=pyast.Store(), **attrs)
+            case NamedId():
+                attrs = self._location_to_attributes(None)
+                return pyast.Name(id=str(target), ctx=pyast.Store(), **attrs)
+            case UnderscoreId():
+                attrs = self._location_to_attributes(None)
+                return pyast.Name(id='_', ctx=pyast.Store(), **attrs)
+            case TupleBinding():
+                elts = [self._visit_target(elt) for elt in target.elts]
+                attrs = self._location_to_attributes(target.loc)
+                return pyast.Tuple(elts=elts, ctx=pyast.Store(), **attrs)
+            case _:
+                raise NotImplementedError(f'unsupported target type: {type(target).__name__}')
 
     def _visit_list_comp(self, e: ListComp, ctx: None):
         raise NotImplementedError
@@ -275,21 +469,16 @@ class BytecodeCompiler(Visitor):
         raise NotImplementedError
 
     def _visit_if_expr(self, e: IfExpr, ctx: None):
-        raise NotImplementedError
+        cond = self._visit_expr(e.cond, ctx)
+        ift = self._visit_expr(e.ift, ctx)
+        iff = self._visit_expr(e.iff, ctx)
+        attrs = self._location_to_attributes(e.loc)
+        return pyast.IfExp(test=cond, body=ift, orelse=iff, **attrs)
 
     def _visit_attribute(self, e: Attribute, ctx: None):
-        raise NotImplementedError
-
-    def _visit_target_unshaped(self, target: Id | TupleBinding) -> pyast.expr | list[pyast.expr]:
-        match target:
-            case SourceId():
-                kwargs = self._location_to_attributes(target.loc)
-                return pyast.Name(id=str(target), ctx=pyast.Store(), **kwargs)
-            case UnderscoreId():
-                kwargs = self._location_to_attributes(target.loc)
-                return pyast.Name(id='_', ctx=pyast.Store(), **kwargs)
-            case TupleBinding(elements):
-                return [self._visit_target(elt, False) for elt in elements]
+        value = self._visit_expr(e.value, ctx)
+        attrs = self._location_to_attributes(e.loc)
+        return pyast.Attribute(value=value, attr=e.attr, ctx=pyast.Load(), **attrs)
 
     def _visit_target(self, target: Id | TupleBinding) -> list[pyast.expr]:
         res = self._visit_target_unshaped(target)
@@ -298,8 +487,8 @@ class BytecodeCompiler(Visitor):
     def _visit_assign(self, stmt: Assign, ctx: None):
         expr = self._visit_expr(stmt.expr, ctx)
         targets = self._visit_target(stmt.target)
-        kwargs = self._location_to_attributes(stmt.loc)
-        return pyast.Assign(targets=targets, value=expr, **kwargs)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.Assign(targets=targets, value=expr, **attrs)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         raise NotImplementedError
@@ -323,35 +512,34 @@ class BytecodeCompiler(Visitor):
         raise NotImplementedError
 
     def _visit_effect(self, stmt: EffectStmt, ctx: None):
-        raise NotImplementedError
+        expr = self._visit_expr(stmt.expr, ctx)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.Expr(value=expr, **attrs)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None) -> pyast.Return:
         expr = self._visit_expr(stmt.expr, ctx)
-        kwargs = self._location_to_attributes(stmt.loc)
-        return pyast.Return(value=expr, **kwargs)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.Return(value=expr, **attrs)
 
     def _visit_pass(self, stmt: PassStmt, ctx: None):
-        kwargs = self._location_to_attributes(stmt.loc)
-        return pyast.Pass(**kwargs)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.Pass(**attrs)
 
     def _visit_block(self, block: StmtBlock, ctx: None) -> list[pyast.stmt]:
         return [self._visit_statement(stmt, ctx) for stmt in block.stmts]
 
     def _visit_arguments(self, arg: Argument) -> pyast.arg:
-        kwargs = self._location_to_attributes(arg.loc)
-        return pyast.arg(arg=arg.name, **kwargs)
+        attrs = self._location_to_attributes(arg.loc)
+        return pyast.arg(arg=str(arg.name), **attrs)
 
     def _visit_function(self, func: FuncDef, ctx: None):
+        # TODO: convert value to FPy value
         args = [self._visit_arguments(arg) for arg in func.args]
         body = self._visit_block(func.body, None)
-        kwargs = self._location_to_attributes(func.loc)
-        ctx_arg = pyast.arg(arg='__ctx__', **kwargs)
-        return pyast.FunctionDef(
-            name=func.name,
-            args=pyast.arguments(posonlyargs=args, args=[ctx_arg]),
-            body=body,
-            **kwargs
-        )
+        attrs = self._location_to_attributes(func.loc)
+        ctx_arg = pyast.arg(arg=CTX_NAME, **attrs)
+        args = pyast.arguments(posonlyargs=args, args=[ctx_arg])
+        return pyast.FunctionDef(name=func.name, args=args, body=body, **attrs)
 
 ###########################################################
 # Interpreter
@@ -365,7 +553,7 @@ class BytecodeInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got `{func}`')
         # compile the function to bytecode
-        compiler = BytecodeCompiler(func.ast)
+        compiler = BytecodeCompiler(func.ast, func.env)
         fn = compiler.compile()
         # compute the context to use during evaluation
         ctx = self._func_ctx(func, ctx)
