@@ -12,7 +12,7 @@ from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..utils import (
     CompareOp,
-    Id, NamedId, UnderscoreId,
+    Id, NamedId, SourceId, UnderscoreId,
     Location,
     default_repr,
     decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
@@ -22,6 +22,7 @@ __all__ = [
     # Re-exports
     'Id',
     'NamedId',
+    'SourceId',
     'UnderscoreId',
     'CompareOp',
     'Location',

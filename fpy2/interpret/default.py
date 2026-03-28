@@ -1,5 +1,5 @@
 """
-FPy runtime backed by the Titanic library.
+Interpreter backed by FPy runtime.
 """
 
 import copy
@@ -920,12 +920,6 @@ class DefaultInterpreter(Interpreter):
     All operations are correctly-rounded.
     """
 
-    ctx: Context | None = None
-    """optionaly overriding context"""
-
-    def __init__(self, ctx: Context | None = None):
-        self.ctx = ctx
-
     def eval(
         self,
         func: Function,
@@ -935,7 +929,7 @@ class DefaultInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got `{func}`')
         rt = _Interpreter(func.env, override_ctx=self.ctx)
-        ctx = self._func_ctx(func, ctx)
+        ctx = self._func_ctx(func.ast, ctx)
         return rt.eval(func.ast, args, ctx)
 
     def eval_expr(
