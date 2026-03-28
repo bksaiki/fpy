@@ -3,6 +3,7 @@ Interpreter backed by Python bytecode.
 """
 
 import ast as pyast
+import copy
 import inspect
 import sys
 
@@ -179,6 +180,28 @@ def _eval_enumerate(val: list[Value], ctx: Context):
         for i, v in enumerate(val)
     ]
 
+def _eval_list_set(lst: list[Value], idxs: list[RealValue], val: Value):
+    if not isinstance(lst, list):
+        raise TypeError(f'expected a list, got {lst}')
+    array: list = copy.deepcopy(lst) # make a copy
+
+    slices: list[int] = []
+    for idx in idxs:
+        if not isinstance(idx, RealValue):
+            raise TypeError(f'expected a real number slice, got {idx}')
+        if not _is_integer(idx):
+            raise TypeError(f'expected an integer slice, got {idx}')
+        slices.append(int(idx))
+
+    for s in slices[:-1]:
+        array = array[s]
+        if not isinstance(array, list):
+            raise TypeError(f'expected a list, got {array}')
+
+    array[slices[-1]] = val
+    return array
+
+
 def _eval_range(start: Value | None, stop: Value, step: Value | None):
     # start index
     if start is None:
@@ -337,6 +360,7 @@ def make_namespace() -> dict[str, object]:
         '__fpy_cvt': _arg_to_value,
         '__fpy_fraction': Fraction,
         '__fpy_int': _cvt_int,
+        '__fpy_list_set': _eval_list_set,
         '__fpy_range': _eval_range,
     }
 
@@ -663,7 +687,7 @@ class BytecodeCompiler(Visitor):
 
         # start index
         if e.start is None:
-            start = pyast.Constant(value=None, kind=None, **attrs)
+            start: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
             # convert index to an integer using `__fpy_int` to ensure it's a valid list index
             start = self._visit_expr(e.start, ctx)
@@ -672,7 +696,7 @@ class BytecodeCompiler(Visitor):
 
         # stop index
         if e.stop is None:
-            stop = pyast.Constant(value=None, kind=None, **attrs)
+            stop: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
             # convert index to an integer using `__fpy_int` to ensure it's a valid list index
             stop = self._visit_expr(e.stop, ctx)
@@ -688,7 +712,13 @@ class BytecodeCompiler(Visitor):
         )
 
     def _visit_list_set(self, e: ListSet, ctx: None):
-        raise NotImplementedError
+        value = self._visit_expr(e.value, ctx)
+        idxs = [self._visit_expr(idx, ctx) for idx in e.indices]
+        expr = self._visit_expr(e.expr, ctx)
+        attrs = self._location_to_attributes(e.loc)
+
+        func = pyast.Name(id='__fpy_list_set', ctx=pyast.Load(), **attrs)
+        return pyast.Call(func=func, args=[value] + idxs + [expr], keywords=[], **attrs)
 
     def _visit_if_expr(self, e: IfExpr, ctx: None):
         cond = self._visit_expr(e.cond, ctx)
