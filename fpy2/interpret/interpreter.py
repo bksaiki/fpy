@@ -5,7 +5,7 @@ Defines the abstract base class for FPy interpreters.
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..ast.fpyast import Expr, NamedId
+from ..ast.fpyast import FuncDef, Expr, NamedId
 from ..fpc_context import FPCoreContext
 from ..function import Function, set_default_function_call
 from ..number import Context, IEEEContext, RM
@@ -42,14 +42,14 @@ class Interpreter(ABC):
         """
         ...
 
-    def _func_ctx(self, func: Function, ctx: Context | None = None) -> Context:
+    def _func_ctx(self, func: FuncDef, ctx: Context | None = None) -> Context:
         """
         Computes the context to use during evaluation.
 
         If `func` specifies a context, it will be used.
         Otherwise, the provided context `ctx` will be used.
         """
-        override_ctx = func.ast.ctx
+        override_ctx = func.ctx
         if override_ctx is None:
             if ctx is None:
                 return _PY_CTX

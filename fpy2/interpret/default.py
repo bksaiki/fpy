@@ -929,7 +929,7 @@ class DefaultInterpreter(Interpreter):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got `{func}`')
         rt = _Interpreter(func.env, override_ctx=self.ctx)
-        ctx = self._func_ctx(func, ctx)
+        ctx = self._func_ctx(func.ast, ctx)
         return rt.eval(func.ast, args, ctx)
 
     def eval_expr(
