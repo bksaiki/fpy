@@ -412,25 +412,31 @@ class BytecodeCompiler(Visitor):
     func: FuncDef
     env: ForeignEnv
     gensym: Gensym
+    foreign_vals: dict[str, object]
 
     def __init__(self, func: FuncDef, env: ForeignEnv):
         self.func = func
         self.env = env
         self.gensym = Gensym()
+        self.foreign_vals = {}
 
     def compile(self):
         # compile the function to a Python AST
         ast = self._visit_function(self.func, None)
-        print(pyast.unparse(ast))
+        # print(pyast.unparse(ast))
+        # wrap the function AST in a module so we can compile it
+        mod = pyast.Module(body=[ast], type_ignores=[])
         # compile the Python AST to bytecode
         source_name = self._location_to_name(self.func.loc)
-        code = compile(pyast.Module(body=[ast], type_ignores=[]), filename=source_name, mode='exec')
+        code = compile(mod, filename=source_name, mode='exec')
         # inject runtime symbols
         namespace = make_namespace()
         # add free variables to the namespace
         for var in self.func.free_vars:
             name = str(var)
             namespace[name] = self.env[name]
+        # add foreign values to the namespace
+        namespace.update(self.foreign_vals)
         # return the function object
         exec(code, namespace)
         return namespace[self.func.name]
@@ -477,8 +483,13 @@ class BytecodeCompiler(Visitor):
         return pyast.Constant(value=e.val, **attrs)
 
     def _visit_foreign(self, e: ForeignVal, ctx: None):
+        # create a fresh name for the foreign value and add it to the namespace
+        name = str(self.gensym.fresh('__fpy_foreign'))
+        self.foreign_vals[name] = e.val
+
+        # lookup the identifier
         attrs = self._location_to_attributes(e.loc)
-        return pyast.Constant(value=e.val, **attrs)
+        return pyast.Name(id=name, ctx=pyast.Load(), **attrs)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
         return self._rational_to_ast(e)
@@ -880,6 +891,18 @@ class BytecodeInterpreter(Interpreter):
     Interpreter that compiles to Python bytecode and executes it.
     """
 
+    def _expr_to_func(self, expr: Expr, env: dict[NamedId, Any]) -> FuncDef:
+        """
+        Converts an expression to a function definition whose arguments
+        are the free variables of the expression and whose body is a single
+        return statement returning the expression.
+        """
+        loc = expr.loc
+        args = [Argument(name, None, loc) for name in env]
+        body = StmtBlock([ReturnStmt(expr, loc)])
+        meta = FuncMeta(set(), None, None, {}, ForeignEnv.default())
+        return FuncDef(name='<expr>', args=args, body=body, meta=meta, loc=loc)
+
     def eval(self, func: Function, args, ctx: Context | None = None):
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got `{func}`')
@@ -891,6 +914,13 @@ class BytecodeInterpreter(Interpreter):
         # call the function with the given arguments
         return fn(*args, __ctx__=ctx)
 
-    def eval_expr(self, expr, env, ctx):
-        raise NotImplementedError
+    def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
+        if not isinstance(expr, Expr):
+            raise TypeError(f'Expected Expr, got `{expr}`')
+        # convert the expression to a function definition
+        ast = self._expr_to_func(expr, env)
+        func = Function(ast, None)
+        # evaluate the function and return the result
+        args = tuple(env[arg.name] for arg in func.args)
+        return self.eval(func, args, ctx=ctx)
 
