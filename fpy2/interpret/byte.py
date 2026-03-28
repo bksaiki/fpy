@@ -9,7 +9,7 @@ import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any, TypeAlias
+from typing import Any, Callable, TypeAlias
 
 from .. import ops
 from ..ast.fpyast import *
@@ -246,7 +246,7 @@ def _eval_slice(arr: list[Value], start: RealValue | None, stop: RealValue | Non
         stop_val = int(stop)
 
     # slice the array
-    return [arr[i] for i in range(start_val, stop_val)]
+    return arr[start_val:stop_val]
 
 def _eval_sum(val: list[RealValue], ctx: Context):
     if not isinstance(val, list):
@@ -934,7 +934,7 @@ class BytecodeInterpreter(Interpreter):
     Interpreter that compiles to Python bytecode and executes it.
     """
 
-    func_cache: dict[FuncDef, object]
+    func_cache: dict[FuncDef, Callable]
 
     def __init__(self, ctx: Context | None = None):
         super().__init__(ctx=ctx)
