@@ -4,6 +4,7 @@ Interpreter backed by Python bytecode.
 
 import ast as pyast
 import inspect
+import sys
 
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -861,14 +862,14 @@ class BytecodeCompiler(Visitor):
 
     def _visit_function(self, func: FuncDef, ctx: None):
         # convert arguments to FPy values
-        args: list[pyast.arg] = []
+        posonlyargs: list[pyast.arg] = []
         body: list[pyast.stmt] = []
         for arg in func.args:
             # add argument
             name = f'__{str(arg.name)}__'
             attrs = self._location_to_attributes(arg.loc)
-            py_arg = pyast.arg(arg=name, annotation=None, type_comment=None, **attrs)
-            args.append(py_arg)
+            posarg = pyast.arg(arg=name, annotation=None, type_comment=None, **attrs)
+            posonlyargs.append(posarg)
 
             # convert argument to FPy value
             cvt_expr = pyast.Call(
@@ -890,18 +891,40 @@ class BytecodeCompiler(Visitor):
 
         body += self._visit_block(func.body, None)
         attrs = self._location_to_attributes(func.loc)
+
         ctx_arg = pyast.arg(arg=CTX_NAME, annotation=None, type_comment=None, **attrs)
-        py_args = pyast.arguments(posonlyargs=args, args=[ctx_arg])
-        return pyast.FunctionDef(
-            name=func.name,
-            args=py_args,
-            body=body,
-            decorator_list=[],
-            returns=None,
-            type_comment=None,
-            type_params=[],
-            **attrs
+        py_args = pyast.arguments(
+            posonlyargs=posonlyargs,
+            args=[ctx_arg],
+            vararg=None,
+            kwonlyargs=[],
+            kw_defaults=[],
+            kwarg=None,
+            defaults=[]
         )
+
+        if sys.version_info >= (3, 12):
+            return pyast.FunctionDef(
+                name=func.name,
+                args=py_args,
+                body=body,
+                decorator_list=[],
+                returns=None,
+                type_comment=None,
+                type_params=[],
+                **attrs
+            )
+        else:
+            return pyast.FunctionDef(
+                name=func.name,
+                args=py_args,
+                body=body,
+                decorator_list=[],
+                returns=None,
+                type_comment=None,
+                # type_params=[],
+                **attrs
+            )   
 
 ###########################################################
 # Interpreter
