@@ -31,8 +31,8 @@ def getfunclines(func: Callable):
         lines = inspect.getblock(lines[start_line:])
 
     # find the first line that starts with a `def` with possibly some whitespace before it
-    for line in enumerate(lines):
-        if line[1].strip().startswith('def '):
+    for line in lines:
+        if line.lstrip().startswith('def '):
             break
         start_line -= 1
 
