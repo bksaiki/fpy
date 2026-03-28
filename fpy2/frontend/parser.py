@@ -145,10 +145,11 @@ class Parser:
         """Extracts the parse location of a Python AST node."""
         assert e.end_lineno is not None, "missing end line number"
         assert e.end_col_offset is not None, "missing end column offset"
+
         return Location(
             self.name,
             e.lineno + self.start_line,
-            e.col_offset + self.col_offset + 1,
+            e.col_offset + self.col_offset,
             e.end_lineno + self.start_line,
             e.end_col_offset + self.col_offset + 1
         )

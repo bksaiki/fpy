@@ -376,7 +376,7 @@ class BytecodeCompiler(Visitor):
     def compile(self):
         # compile the function to a Python AST
         ast = self._visit_function(self.func, None)
-        print(pyast.unparse(ast))
+        # print(pyast.unparse(ast))
         # wrap the function AST in a module so we can compile it
         mod = pyast.Module(body=[ast], type_ignores=[])
         # compile the Python AST to bytecode
