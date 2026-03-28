@@ -5,6 +5,8 @@ Interpreter backed by Python bytecode.
 import ast as pyast
 import inspect
 
+from contextlib import contextmanager
+from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, TypeAlias
 
@@ -15,7 +17,7 @@ from ..env import ForeignEnv
 from ..function import Function
 from ..number import Float, RealFloat, FP64, INTEGER, REAL
 from ..primitive import Primitive
-from ..utils import is_dyadic
+from ..utils import Gensym, is_dyadic
 from .interpreter import Interpreter
 
 ###########################################################
@@ -27,6 +29,20 @@ ScalarValue: TypeAlias = bool | Context | RealValue
 """Type of scalar values in FPy programs."""
 Value: TypeAlias = ScalarValue | list['Value'] | tuple['Value', ...]
 """Type of values in FPy programs."""
+
+
+CTX_NAME = '__ctx__'
+
+
+@dataclass(frozen=True)
+class _ContextRecord:
+    new_ctx: Context
+    old_ctx: Context
+
+@contextmanager
+def _install_context(new_ctx: Context, old_ctx: Context):
+    """Dummy context for rounding contexts"""
+    yield _ContextRecord(new_ctx, old_ctx)
 
 
 def _is_integer(x: Float | Fraction) -> bool:
@@ -77,6 +93,13 @@ def _cvt_float(x: Value):
             return Float.from_rational(x, ctx=REAL)
         case _:
             raise TypeError(f'expected a real number, got `{x}`')
+
+def _cvt_int(val: Value):
+    if not isinstance(val, RealValue):
+        raise TypeError(f'expected a real number slice, got {val}')
+    if not _is_integer(val):
+        raise TypeError(f'expected an integer slice, got {val}')
+    return int(val)
 
 def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
     if ty is int:
@@ -146,9 +169,6 @@ def _eval_call(fn, ctx, *args, **kwargs):
                 return None
             else:
                 raise RuntimeError(f'attempting to call a Python function: `{fn}`')
-
-def _eval_empty(*args, ctx: Context | None = None):
-    raise NotImplementedError
 
 def _eval_enumerate(val: list[Value], ctx: Context | None = None):
     if not isinstance(val, list):
@@ -347,7 +367,7 @@ _TERNARY_TABLE: dict[type[TernaryOp], object] = {
 }
 
 _NARY_TABLE: dict[type[NaryOp], object] = {
-    Empty: _eval_empty,
+    Empty: ops.empty,
     Zip: _eval_zip,
 }
 
@@ -358,8 +378,10 @@ def make_namespace() -> dict[str, object]:
     # add special symbols to namespace
     namespace = {
         '__fpy_call': _eval_call,
+        '__fpy_context': _install_context,
         '__fpy_cvt': _arg_to_value,
         '__fpy_fraction': Fraction,
+        '__fpy_int': _cvt_int,
         '__fpy_range': _eval_range,
         '__fpy_ref': _eval_ref,
         '__fpy_slice': _eval_slice,
@@ -382,8 +404,6 @@ def make_namespace() -> dict[str, object]:
 ###########################################################
 # Bytecode compiler
 
-CTX_NAME = '__ctx__'
-
 class BytecodeCompiler(Visitor):
     """
     Compiler that compiles FPy AST to Python bytecode.
@@ -391,15 +411,17 @@ class BytecodeCompiler(Visitor):
 
     func: FuncDef
     env: ForeignEnv
+    gensym: Gensym
 
     def __init__(self, func: FuncDef, env: ForeignEnv):
         self.func = func
         self.env = env
+        self.gensym = Gensym()
 
     def compile(self):
         # compile the function to a Python AST
         ast = self._visit_function(self.func, None)
-        # print(pyast.unparse(ast))
+        print(pyast.unparse(ast))
         # compile the Python AST to bytecode
         source_name = self._location_to_name(self.func.loc)
         code = compile(pyast.Module(body=[ast], type_ignores=[]), filename=source_name, mode='exec')
@@ -455,7 +477,8 @@ class BytecodeCompiler(Visitor):
         return pyast.Constant(value=e.val, **attrs)
 
     def _visit_foreign(self, e: ForeignVal, ctx: None):
-        raise NotImplementedError
+        attrs = self._location_to_attributes(e.loc)
+        return pyast.Constant(value=e.val, **attrs)
 
     def _visit_decnum(self, e: Decnum, ctx: None):
         return self._rational_to_ast(e)
@@ -708,25 +731,96 @@ class BytecodeCompiler(Visitor):
         return pyast.Assign(targets=[targets], value=expr, **attrs)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-        raise NotImplementedError
+        attrs = self._location_to_attributes(stmt.loc)
+        arr = pyast.Name(id=str(stmt.var), ctx=pyast.Load(), **attrs)
+        idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
+        expr = self._visit_expr(stmt.expr, ctx)
+
+        for i, idx in enumerate(idxs):
+            func = pyast.Name(id=f'__fpy_int', ctx=pyast.Load(), **attrs)
+            idx = pyast.Call(func=func, args=[idx], keywords=[], **attrs)
+            e_ctx = pyast.Load() if i < len(idxs) - 1 else pyast.Store()
+            arr = pyast.Subscript(value=arr, slice=idx, ctx=e_ctx, **attrs)
+
+        return pyast.Assign(targets=[arr], value=expr, **attrs)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, ctx)
+        body = self._visit_block(stmt.body, ctx)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.If(test=cond, body=body, orelse=[], **attrs)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, ctx)
+        ift = self._visit_block(stmt.ift, ctx)
+        iff = self._visit_block(stmt.iff, ctx)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.If(test=cond, body=ift, orelse=iff, **attrs)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        raise NotImplementedError
+        cond = self._visit_expr(stmt.cond, ctx)
+        body = self._visit_block(stmt.body, ctx)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.While(test=cond, body=body, orelse=[], **attrs)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        raise NotImplementedError
+        target = self._visit_target(stmt.target)
+        iterable = self._visit_expr(stmt.iterable, ctx)
+        body = self._visit_block(stmt.body, ctx)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.For(target=target, iter=iterable, body=body, orelse=[], **attrs)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        raise NotImplementedError
+        attrs = self._location_to_attributes(stmt.loc)
+        ctx_expr = self._visit_expr(stmt.ctx, ctx)
+        ctx_val = pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs)
+        body = self._visit_block(stmt.body, ctx)
+
+        # Generate a unique name for the context record
+        rec_name = str(self.gensym.fresh('__fpy_ctx_rec'))
+
+        # Unpack the new context and target from the context record
+        unpack_stmt = pyast.Assign(
+            targets=[
+                pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs),
+                pyast.Name(id=str(stmt.target), ctx=pyast.Store(), **attrs)
+            ],
+            value=pyast.Attribute(
+                value=pyast.Name(id=rec_name, ctx=pyast.Load(), **attrs),
+                attr='new_ctx',
+                ctx=pyast.Load(),
+                **attrs
+            ),
+            **attrs
+        )
+
+        # Restore the old context after the block
+        pack_stmt = pyast.Assign(
+            targets=[pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs)],
+            value=pyast.Attribute(
+                value=pyast.Name(id=rec_name, ctx=pyast.Load(), **attrs),
+                attr='old_ctx',
+                ctx=pyast.Load(),
+                **attrs
+            ),
+            **attrs
+        )
+
+        # Build the with-statement for the context manager
+        with_func = pyast.Name(id='__fpy_context', ctx=pyast.Load(), **attrs)
+        with_vars = pyast.Name(id=rec_name, ctx=pyast.Store(), **attrs)
+        with_call = pyast.Call(func=with_func, args=[ctx_expr, ctx_val], keywords=[], **attrs)
+        with_item = pyast.withitem(context_expr=with_call, optional_vars=with_vars, **attrs)
+
+        # Assemble the final body: unpack, user body, repack
+        full_body = [unpack_stmt] + body + [pack_stmt]
+        return pyast.With(items=[with_item], body=full_body, **attrs)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
-        raise NotImplementedError
+        test = self._visit_expr(stmt.test, ctx)
+        msg = None if stmt.msg is None else self._visit_expr(stmt.msg, ctx)
+        attrs = self._location_to_attributes(stmt.loc)
+        return pyast.Assert(test=test, msg=msg, **attrs)
 
     def _visit_effect(self, stmt: EffectStmt, ctx: None):
         expr = self._visit_expr(stmt.expr, ctx)
