@@ -18,6 +18,12 @@ _PY_CTX = IEEEContext(11, 64, RM.RNE)
 class Interpreter(ABC):
     """Abstract base class for FPy interpreters."""
 
+    ctx: Context | None = None
+    """optionaly overriding context"""
+
+    def __init__(self, ctx: Context | None = None):
+        self.ctx = ctx
+
     @abstractmethod
     def eval(self, func: Function, args, ctx: Context | None = None):
         """

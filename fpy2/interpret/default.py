@@ -1,5 +1,5 @@
 """
-FPy runtime backed by the Titanic library.
+Interpreter backed by FPy runtime.
 """
 
 import copy
@@ -919,12 +919,6 @@ class DefaultInterpreter(Interpreter):
 
     All operations are correctly-rounded.
     """
-
-    ctx: Context | None = None
-    """optionaly overriding context"""
-
-    def __init__(self, ctx: Context | None = None):
-        self.ctx = ctx
 
     def eval(
         self,
