@@ -79,11 +79,11 @@ class Flags:
         return bool(self._flags & _CARRY)
 
     def _set_overflow(self, value: bool) -> None:
-            """Unsafe setter for overflow flag."""
-            if value:
-                self._flags |= _OVERFLOW
-            else:
-                self._flags &= ~_OVERFLOW
+        """Unsafe setter for overflow flag."""
+        if value:
+            self._flags |= _OVERFLOW
+        else:
+            self._flags &= ~_OVERFLOW
 
     def _set_inexact(self, value: bool) -> None:
         """Unsafe setter for inexact flag."""
