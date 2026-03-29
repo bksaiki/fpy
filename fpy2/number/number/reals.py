@@ -80,8 +80,8 @@ class RealFloat(numbers.Rational):
         The significand may be specified with `c` or `m` (unless `x` is given).
         If `x` is given, any field not specified is copied from `x`.
         """
-        if x is not None and not isinstance(x, RealFloat):
-            raise TypeError(f'expected RealFloat, got {type(x)}')
+        # if x is not None and not isinstance(x, RealFloat):
+        #     raise TypeError(f'expected RealFloat, got {type(x)}')
 
         # c and negative
         if c is not None:
@@ -127,19 +127,19 @@ class RealFloat(numbers.Rational):
             self._exp = 0
 
         # flags
-        if x is not None:
-            if overflow is None:
-                overflow = x.overflow
-            if inexact is None:
-                inexact = x.inexact
-            if carry is None:
-                carry = x.carry
-
-        self._flags = Flags(
-            overflow=overflow,
-            inexact=inexact,
-            carry=carry
-        )
+        if x is None:
+            self._flags = Flags(
+                overflow=overflow,
+                inexact=inexact,
+                carry=carry
+            )
+        else:
+            self._flags = Flags(
+                x=x._flags,
+                overflow=overflow,
+                inexact=inexact,
+                carry=carry
+            )
 
 
     def __repr__(self):

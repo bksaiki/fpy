@@ -9,6 +9,13 @@ __all__ = [
     'Flags',
 ]
 
+
+# bit positions for each flag
+_OVERFLOW = 1 << 0
+_INEXACT = 1 << 1
+_CARRY = 1 << 2
+
+
 class Flags:
     """
     The `Flags` class represents the status flags for arithmetic operations.
@@ -21,11 +28,6 @@ class Flags:
 
     _flags: int
 
-    # bit positions for each flag
-    _OVERFLOW = 1 << 0
-    _INEXACT = 1 << 1
-    _CARRY = 1 << 2
-
     def __init__(
         self, *,
         x: Self | None = None,
@@ -33,36 +35,23 @@ class Flags:
         inexact: bool | None = None,
         carry: bool | None = None
     ):
-        if x is not None and not isinstance(x, Flags):
-            raise TypeError("x must be a Flags instance")
+        # if `x` is provided, copy flags from `x`
+        if x is not None:
+            if overflow is None:
+                overflow = bool(x._flags & _OVERFLOW)
+            if inexact is None:
+                inexact = bool(x._flags & _INEXACT)
+            if carry is None:
+                carry = bool(x._flags & _CARRY)
 
-        # copy flags if `x` is provided, otherwise initialize to 0
-        if x is None:
-            self._flags = 0
-        else:
-            self._flags = x._flags
-
-        # overflow
-        if overflow is not None:
-            if overflow:
-                self._flags |= self._OVERFLOW
-            else:
-                self._flags &= ~self._OVERFLOW
-
-        # inexact
-        if inexact is not None:
-            if inexact:
-                self._flags |= self._INEXACT
-            else:
-                self._flags &= ~self._INEXACT
-
-        # carry
-        if carry is not None:
-            if carry:
-                self._flags |= self._CARRY
-            else:
-                self._flags &= ~self._CARRY
-
+        # set flags
+        self._flags = 0
+        if overflow:
+            self._flags |= _OVERFLOW
+        if inexact:
+            self._flags |= _INEXACT
+        if carry:
+            self._flags |= _CARRY
 
     def __repr__(self) -> str:
         flag_strs: list[str] = []
@@ -77,35 +66,35 @@ class Flags:
     @property
     def overflow(self) -> bool:
         """Overflow flag: the result exceeded the representable range."""
-        return bool(self._flags & self._OVERFLOW)
+        return bool(self._flags & _OVERFLOW)
 
     @property
     def inexact(self) -> bool:
         """Inexact flag: the rounded result is not the same as the exact result."""
-        return bool(self._flags & self._INEXACT)
+        return bool(self._flags & _INEXACT)
 
     @property
     def carry(self) -> bool:
         """Carry flag: the rounded result has a different exponent than the exact result."""
-        return bool(self._flags & self._CARRY)
+        return bool(self._flags & _CARRY)
 
     def _set_overflow(self, value: bool) -> None:
             """Unsafe setter for overflow flag."""
             if value:
-                self._flags |= self._OVERFLOW
+                self._flags |= _OVERFLOW
             else:
-                self._flags &= ~self._OVERFLOW
+                self._flags &= ~_OVERFLOW
 
     def _set_inexact(self, value: bool) -> None:
         """Unsafe setter for inexact flag."""
         if value:
-            self._flags |= self._INEXACT
+            self._flags |= _INEXACT
         else:
-            self._flags &= ~self._INEXACT
+            self._flags &= ~_INEXACT
 
     def _set_carry(self, value: bool) -> None:
         """Unsafe setter for carry flag."""
         if value:
-            self._flags |= self._CARRY
+            self._flags |= _CARRY
         else:
-            self._flags &= ~self._CARRY
+            self._flags &= ~_CARRY
