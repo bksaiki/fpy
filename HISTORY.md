@@ -1,5 +1,13 @@
 # Version History
 
+## [0.1.3] - 2026-03-30
+### Features:
+ - Numbers:
+   - add next float methods to `Float` and `RealFloat`
+   - add overflow flag to `RealFloat`
+- Runtime:
+   - interpreter compiles to Python bytecode for improved performance
+
 ## [0.1.2] - 2026-03-23
 ### Features:
  - Language:
