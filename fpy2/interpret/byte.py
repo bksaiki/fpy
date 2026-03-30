@@ -4,11 +4,10 @@ Interpreter backed by Python bytecode.
 
 import ast as pyast
 import copy
+import functools
 import inspect
 import sys
 
-from contextlib import contextmanager
-from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Callable, TypeAlias
 
@@ -32,19 +31,7 @@ ScalarValue: TypeAlias = bool | Context | RealValue
 Value: TypeAlias = ScalarValue | list['Value'] | tuple['Value', ...]
 """Type of values in FPy programs."""
 
-
 CTX_NAME = '__ctx__'
-
-
-@dataclass(frozen=True)
-class _ContextRecord:
-    new_ctx: Context
-    old_ctx: Context
-
-@contextmanager
-def _install_context(new_ctx: Context, old_ctx: Context):
-    """Dummy context for rounding contexts"""
-    yield _ContextRecord(new_ctx, old_ctx)
 
 
 def _is_integer(x: Float | Fraction) -> bool:
@@ -84,6 +71,21 @@ def _cvt_arg(arg):
 
 def _arg_to_value(arg: Any):
     return arg if _is_value(arg) else _cvt_arg(arg)
+
+def _cvt_return(x: Value):
+    match x:
+        case bool() | Float() | Context():
+            return x
+        case Fraction():
+            return Float.from_rational(x) if is_dyadic(x) else x
+        case tuple():
+            return tuple(_cvt_return(v) for v in x)
+        case list():
+            for i, xi in enumerate(x):
+                x[i] = _cvt_return(xi)
+            return x
+        case _:
+            return x
 
 def _cvt_float(x: Value):
     match x:
@@ -126,8 +128,13 @@ def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
         # don't apply a conversion
         return arg
 
+@functools.lru_cache(maxsize=128)
+def _get_context_signature(cls: type[Context]):
+    return inspect.signature(cls.__init__)
+
 def _construct_context(cls: type[Context], args: tuple, kwargs: dict[str, object]):
-    sig = inspect.signature(cls.__init__)
+    # get the constructor signature
+    sig = _get_context_signature(cls)
     _, *params = list(sig.parameters)
 
     ctor_args = []
@@ -356,7 +363,6 @@ def make_namespace() -> dict[str, object]:
     # add special symbols to namespace
     namespace = {
         '__fpy_call': _eval_call,
-        '__fpy_context': _install_context,
         '__fpy_cvt': _arg_to_value,
         '__fpy_fraction': Fraction,
         '__fpy_int': _cvt_int,
@@ -507,8 +513,12 @@ class BytecodeCompiler(Visitor):
 
         match e:
             case Len():
+                # call the native `len` function
                 func = pyast.Name(id='len', ctx=pyast.Load(), **attrs)
-                return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
+                len_expr = pyast.Call(func=func, args=[arg], keywords=[], **attrs)
+                # convert to a Fraction using `__fpy_fraction`
+                func = pyast.Name(id='__fpy_fraction', ctx=pyast.Load(), **attrs)
+                return pyast.Call(func=func, args=[len_expr], keywords=[], **attrs)
             case Range1():
                 func = pyast.Name(id='__fpy_range', ctx=pyast.Load(), **attrs)
                 arg_none = pyast.Constant(value=None, kind=None, **attrs)
@@ -786,52 +796,49 @@ class BytecodeCompiler(Visitor):
         )
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        attrs = self._location_to_attributes(stmt.loc)
+        # try:
+        #     <tmp> = <target> __ctx__
+        #     __ctx__ = <new context>
+        #     <body>
+        # finally:
+        #     __ctx__ = <tmp>
+
+        target = self._visit_target(stmt.target)
         ctx_expr = self._visit_expr(stmt.ctx, ctx)
-        ctx_val = pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs)
         body = self._visit_block(stmt.body, ctx)
+        attrs = self._location_to_attributes(stmt.loc)
 
-        # Generate a unique name for the context record
-        rec_name = str(self.gensym.fresh('__fpy_ctx_rec'))
+        # generate a unique name for the temporary variable
+        tmp_name = str(self.gensym.fresh('__fpy_ctx_tmp'))
 
-        # Unpack the new context and target from the context record
-        unpack_stmt = pyast.Assign(
-            targets=[
-                pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs),
-                pyast.Name(id=str(stmt.target), ctx=pyast.Store(), **attrs)
-            ],
-            value=pyast.Attribute(
-                value=pyast.Name(id=rec_name, ctx=pyast.Load(), **attrs),
-                attr='new_ctx',
-                ctx=pyast.Load(),
-                **attrs
-            ),
+        # assign the old context to the temporary variable
+        stash_stmt = pyast.Assign(
+            targets=[pyast.Name(id=tmp_name, ctx=pyast.Store(), **attrs), target],
+            value=pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs),
             type_comment=None,
             **attrs
         )
 
-        # Restore the old context after the block
-        pack_stmt = pyast.Assign(
+        # assign the new context to `__ctx__`
+        set_stmt = pyast.Assign(
             targets=[pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs)],
-            value=pyast.Attribute(
-                value=pyast.Name(id=rec_name, ctx=pyast.Load(), **attrs),
-                attr='old_ctx',
-                ctx=pyast.Load(),
-                **attrs
-            ),
+            value=ctx_expr,
             type_comment=None,
             **attrs
         )
 
-        # Build the with-statement for the context manager
-        with_func = pyast.Name(id='__fpy_context', ctx=pyast.Load(), **attrs)
-        with_vars = pyast.Name(id=rec_name, ctx=pyast.Store(), **attrs)
-        with_call = pyast.Call(func=with_func, args=[ctx_expr, ctx_val], keywords=[], **attrs)
-        with_item = pyast.withitem(context_expr=with_call, optional_vars=with_vars, **attrs)
+        # assign the old context back to `__ctx__` in the finally block
+        restore_stmt = pyast.Assign(
+            targets=[pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs)],
+            value=pyast.Name(id=tmp_name, ctx=pyast.Load(), **attrs),
+            type_comment=None,
+            **attrs
+        )
 
-        # Assemble the final body: unpack, user body, repack
-        full_body = [unpack_stmt] + body + [pack_stmt]
-        return pyast.With(items=[with_item], body=full_body, type_comment=None, **attrs)
+        # build the try-finally block
+        try_body = [stash_stmt, set_stmt] + body
+        finally_body: list[pyast.stmt] = [restore_stmt]
+        return pyast.Try(body=try_body, handlers=[], orelse=[], finalbody=finally_body, **attrs)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
         test = self._visit_expr(stmt.test, ctx)
@@ -970,7 +977,8 @@ class BytecodeInterpreter(Interpreter):
         # compute the context to use during evaluation
         ctx = self._func_ctx(func.ast, ctx)
         # call the function with the given arguments
-        return fn(*args, __ctx__=ctx)
+        res = fn(*args, __ctx__=ctx)
+        return _cvt_return(res)
 
     def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
         if not isinstance(expr, Expr):
@@ -984,5 +992,5 @@ class BytecodeInterpreter(Interpreter):
         ctx = self._func_ctx(ast, ctx)
         # call the function with the given arguments
         args = tuple(env[name] for name in names)
-        return fn(*args, __ctx__=ctx)
-
+        res = fn(*args, __ctx__=ctx)
+        return _cvt_return(res)

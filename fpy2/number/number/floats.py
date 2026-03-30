@@ -99,18 +99,17 @@ class Float:
             case _:
                 raise TypeError(f'expected \'RealFloat\' or \'Float\', got {type(x)} for x={x}')
 
-        if isinf is not None:
-            self._isinf = isinf
+        if isinf:
+            if isnan:
+                raise ValueError('cannot be both infinite and NaN')
+            self._isinf = True
+            self._isnan = False
+        elif isnan:
+            self._isinf = False
+            self._isnan = True
         else:
             self._isinf = False
-
-        if isnan is not None:
-            self._isnan = isnan
-        else:
             self._isnan = False
-
-        if self._isinf and self._isnan:
-            raise ValueError('cannot be both infinite and NaN')
 
         if ctx is DEFAULT:
             self._ctx = None

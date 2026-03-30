@@ -80,8 +80,8 @@ class RealFloat(numbers.Rational):
         The significand may be specified with `c` or `m` (unless `x` is given).
         If `x` is given, any field not specified is copied from `x`.
         """
-        if x is not None and not isinstance(x, RealFloat):
-            raise TypeError(f'expected RealFloat, got {type(x)}')
+        # if x is not None and not isinstance(x, RealFloat):
+        #     raise TypeError(f'expected RealFloat, got {type(x)}')
 
         # c and negative
         if c is not None:
@@ -127,19 +127,19 @@ class RealFloat(numbers.Rational):
             self._exp = 0
 
         # flags
-        if x is not None:
-            if overflow is None:
-                overflow = x.overflow
-            if inexact is None:
-                inexact = x.inexact
-            if carry is None:
-                carry = x.carry
-
-        self._flags = Flags(
-            overflow=overflow,
-            inexact=inexact,
-            carry=carry
-        )
+        if x is None:
+            self._flags = Flags(
+                overflow=overflow,
+                inexact=inexact,
+                carry=carry
+            )
+        else:
+            self._flags = Flags(
+                x=x._flags,
+                overflow=overflow,
+                inexact=inexact,
+                carry=carry
+            )
 
 
     def __repr__(self):
@@ -889,7 +889,7 @@ class RealFloat(numbers.Rational):
 
     def _extract_and_normalize(self, n: int, p: int | None):
         # extract the relevant parameters
-        if self.exp != n + 1 or (p is not None and self.p > p):
+        if self._exp != n + 1 or (p is not None and self.p > p):
             # need to normalize first
             x = self.normalize(p, n)
             c = x._c
@@ -1031,6 +1031,26 @@ class RealFloat(numbers.Rational):
 
         return p, n
 
+    def _round_increment_direction(self, direction: RoundingDirection):
+        """
+        When in the halfway case for nearest rounding modes,
+        or not representable in non-nearest rounding modes,
+        determines whether to round up based on the rounding direction
+        `direction` and the parity of the least significant bit of
+        the significand.
+        """
+        match direction:
+            case RoundingDirection.RTZ:
+                return False
+            case RoundingDirection.RAZ:
+                return True
+            case RoundingDirection.RTE:
+                return (self._c & 1) != 0
+            case RoundingDirection.RTO:
+                return (self._c & 1) == 0
+            case _:
+                raise ValueError(f'invalid rounding direction: {direction}')
+
     def _round_increment(
         self,
         lost: 'RealFloat',
@@ -1068,37 +1088,13 @@ class RealFloat(numbers.Rational):
                     increment = True
                 else:
                     # exact halfway
-                    match direction:
-                        case RoundingDirection.RTZ:
-                            increment = False
-                        case RoundingDirection.RAZ:
-                            increment = True
-                        case RoundingDirection.RTE:
-                            is_even = (self._c & 1) == 0
-                            increment = not is_even
-                        case RoundingDirection.RTO:
-                            is_even = (self._c & 1) == 0
-                            increment = is_even
-                        case _:
-                            raise ValueError(f'invalid rounding direction: {direction}')
+                    increment = self._round_increment_direction(direction)
             else:
                 # below halfway
                 increment = False
         else:
             # non-nearest rounding mode
-            match direction:
-                case RoundingDirection.RTZ:
-                    increment = False
-                case RoundingDirection.RAZ:
-                    increment = True
-                case RoundingDirection.RTE:
-                    is_even = (self._c & 1) == 0
-                    increment = not is_even
-                case RoundingDirection.RTO:
-                    is_even = (self._c & 1) == 0
-                    increment = is_even
-                case _:
-                    raise ValueError(f'invalid rounding direction: {direction}')
+            increment = self._round_increment_direction(direction)
 
         return increment
 
@@ -1235,7 +1231,7 @@ class RealFloat(numbers.Rational):
 
         # step 1. fast path for definitely representable values
         if (p is None or self.p <= p) and self._exp > n:
-            return RealFloat(s=self.s, exp=self._exp, c=self._c)
+            return RealFloat(s=self._s, exp=self._exp, c=self._c)
 
         # step 2. round at the specified position
         if num_randbits == 0:
@@ -1307,7 +1303,7 @@ class RealFloat(numbers.Rational):
 
         # step 2. fast path for definitely representable values
         if (p is None or self.p <= p) and self._exp > n:
-            return RealFloat(s=self.s, exp=self._exp, c=self._c)
+            return RealFloat(s=self._s, exp=self._exp, c=self._c)
 
         # step 3. round at the specified position
         if num_randbits == 0:
