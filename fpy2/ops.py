@@ -6,7 +6,7 @@ from fractions import Fraction
 from unittest import case
 
 from .number.engine import ENGINES
-from .number import Context, Float, Real, REAL
+from .number import Context, Float, RealFloat, Real, REAL
 
 from .utils import (
     UNINIT,
@@ -968,15 +968,19 @@ def logb(x: Real, ctx: Context = REAL) -> Float:
     """
     # TODO: compute `logb` for a non-dyadic fraction
     x = _cvt_to_float(x)
-    if not x.is_nonzero():
-        if x.isinf:
-            return ctx.round(float('+inf'))
-        elif x.isnan:
-            return ctx.round(float('nan'))
-        else:
-            return ctx.round(float('-inf'))
+    if x.is_nonzero():
+        # finite, non-zero => floor(log2(abs(x)))
+        return ctx.round(RealFloat.from_int(x.e))
+    elif x.isinf:
+        # infinite => +inf
+        return ctx.round(Float(isinf=True))
+    elif x.isnan:
+        # NaN => NaN
+        return ctx.round(Float(isnan=True))
     else:
-        return ctx.round(x.e)
+        # 0 => -inf
+        return ctx.round(Float(s=True, isinf=True))
+
 
 def declcontext(x: Real, ctx: Context = REAL) -> Context:
     """
