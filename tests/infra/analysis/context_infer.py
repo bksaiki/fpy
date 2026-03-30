@@ -32,6 +32,7 @@ def _test_tcheck_unit():
         if core.name in _unit_ignore:
             continue
 
+        print(core.name)
         ast = ConstFold.apply(core.ast, enable_op=True)
         info = ContextInfer.infer(ast)
         print(ast.name, info.fn_type)

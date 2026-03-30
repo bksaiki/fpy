@@ -85,7 +85,7 @@ def _cvt_return(x: Value):
                 x[i] = _cvt_return(xi)
             return x
         case _:
-            raise RuntimeError('unreachable')
+            return x
 
 def _cvt_float(x: Value):
     match x:
@@ -513,8 +513,12 @@ class BytecodeCompiler(Visitor):
 
         match e:
             case Len():
+                # call the native `len` function
                 func = pyast.Name(id='len', ctx=pyast.Load(), **attrs)
-                return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
+                len_expr = pyast.Call(func=func, args=[arg], keywords=[], **attrs)
+                # convert to a Fraction using `__fpy_fraction`
+                func = pyast.Name(id='__fpy_fraction', ctx=pyast.Load(), **attrs)
+                return pyast.Call(func=func, args=[len_expr], keywords=[], **attrs)
             case Range1():
                 func = pyast.Name(id='__fpy_range', ctx=pyast.Load(), **attrs)
                 arg_none = pyast.Constant(value=None, kind=None, **attrs)
