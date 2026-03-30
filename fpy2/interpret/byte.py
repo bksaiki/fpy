@@ -417,7 +417,7 @@ class BytecodeCompiler(Visitor):
         # add free variables to the namespace
         for var in self.func.free_vars:
             name = str(var)
-            namespace[name] = self.env[name]
+            namespace[name] = _arg_to_value(self.env[name])
         # add foreign values to the namespace
         namespace.update(self.foreign_vals)
         # return the function object
