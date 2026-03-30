@@ -8,8 +8,6 @@ import functools
 import inspect
 import sys
 
-from contextlib import contextmanager
-from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Callable, TypeAlias
 
@@ -73,6 +71,21 @@ def _cvt_arg(arg):
 
 def _arg_to_value(arg: Any):
     return arg if _is_value(arg) else _cvt_arg(arg)
+
+def _cvt_return(x: Value):
+    match x:
+        case bool() | Float() | Context():
+            return x
+        case Fraction():
+            return Float.from_rational(x) if is_dyadic(x) else x
+        case tuple():
+            return tuple(_cvt_return(v) for v in x)
+        case list():
+            for i, xi in enumerate(x):
+                x[i] = _cvt_return(xi)
+            return x
+        case _:
+            raise RuntimeError('unreachable')
 
 def _cvt_float(x: Value):
     match x:
@@ -960,7 +973,8 @@ class BytecodeInterpreter(Interpreter):
         # compute the context to use during evaluation
         ctx = self._func_ctx(func.ast, ctx)
         # call the function with the given arguments
-        return fn(*args, __ctx__=ctx)
+        res = fn(*args, __ctx__=ctx)
+        return _cvt_return(res)
 
     def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
         if not isinstance(expr, Expr):
@@ -974,5 +988,5 @@ class BytecodeInterpreter(Interpreter):
         ctx = self._func_ctx(ast, ctx)
         # call the function with the given arguments
         args = tuple(env[name] for name in names)
-        return fn(*args, __ctx__=ctx)
-
+        res = fn(*args, __ctx__=ctx)
+        return _cvt_return(res)
