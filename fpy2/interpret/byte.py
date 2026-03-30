@@ -512,6 +512,8 @@ class BytecodeCompiler(Visitor):
             return pyast.Call(func=func, args=[arg], keywords=[ctx_kw], **attrs)
 
         match e:
+            case Not():
+                return pyast.UnaryOp(op=pyast.Not(), operand=arg, **attrs)
             case Len():
                 # call the native `len` function
                 func = pyast.Name(id='len', ctx=pyast.Load(), **attrs)
