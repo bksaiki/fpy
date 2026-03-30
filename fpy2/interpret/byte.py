@@ -4,6 +4,7 @@ Interpreter backed by Python bytecode.
 
 import ast as pyast
 import copy
+import functools
 import inspect
 import sys
 
@@ -126,8 +127,13 @@ def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
         # don't apply a conversion
         return arg
 
+@functools.lru_cache(maxsize=128)
+def _get_context_signature(cls: type[Context]):
+    return inspect.signature(cls.__init__)
+
 def _construct_context(cls: type[Context], args: tuple, kwargs: dict[str, object]):
-    sig = inspect.signature(cls.__init__)
+    # get the constructor signature
+    sig = _get_context_signature(cls)
     _, *params = list(sig.parameters)
 
     ctor_args = []
