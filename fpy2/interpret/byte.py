@@ -833,7 +833,7 @@ class BytecodeCompiler(Visitor):
 
         # build the try-finally block
         try_body = [stash_stmt, set_stmt] + body
-        finally_body = [restore_stmt]
+        finally_body: list[pyast.stmt] = [restore_stmt]
         return pyast.Try(body=try_body, handlers=[], orelse=[], finalbody=finally_body, **attrs)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
