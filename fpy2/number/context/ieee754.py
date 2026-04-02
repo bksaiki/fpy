@@ -5,6 +5,7 @@ by the IEEE 754 standard.
 
 from ..round import RoundingMode, OverflowMode
 from ...utils import DEFAULT, DefaultOr
+from ..number import RNG
 from .efloat import EFloatContext, EFloatNanKind
 
 
@@ -27,9 +28,11 @@ class IEEEContext(EFloatContext):
         nbits: int,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode = OverflowMode.OVERFLOW,
-        num_randbits: int | None = 0
+        num_randbits: int | None = 0,
+        *,
+        rng: RNG | None = None
     ):
-        super().__init__(es, nbits, True, EFloatNanKind.IEEE_754, 0, rm, overflow, num_randbits)
+        super().__init__(es, nbits, True, EFloatNanKind.IEEE_754, 0, rm, overflow, num_randbits, rng=rng)
 
     def __repr__(self):
         return self.__class__.__name__ + f'(es={self.es}, nbits={self.nbits}, rm={self.rm!r}, overflow={self.overflow!r}, num_randbits={self.num_randbits!r})'
@@ -41,6 +44,7 @@ class IEEEContext(EFloatContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
+        rng: DefaultOr[RNG | None] = DEFAULT,
         **kwargs
     ) -> 'IEEEContext':
         if es is DEFAULT:
@@ -53,6 +57,8 @@ class IEEEContext(EFloatContext):
             overflow = self.overflow
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if rng is DEFAULT:
+            rng = self.rng
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for IEEEContext')
-        return IEEEContext(es, nbits, rm, overflow, num_randbits)
+        return IEEEContext(es, nbits, rm, overflow, num_randbits, rng=rng)

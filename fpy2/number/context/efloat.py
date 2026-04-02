@@ -1,6 +1,6 @@
 from enum import IntEnum
 
-from ..number import RealFloat, Float
+from ..number import RealFloat, Float, RNG
 from ..round import RoundingMode, OverflowMode
 from ...utils import default_repr, enum_repr, bitmask, DefaultOr, DEFAULT
 
@@ -61,6 +61,9 @@ class EFloatContext(EncodableContext):
     num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
+    rng: RNG | None
+    """random number generator for stochastic rounding, if applicable"""
+
     nan_value: Float | None
     """
     if NaN is not representable, what value should NaN round to?
@@ -92,6 +95,7 @@ class EFloatContext(EncodableContext):
         overflow: OverflowMode = OverflowMode.OVERFLOW,
         num_randbits: int | None = 0,
         *,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ):
@@ -121,7 +125,7 @@ class EFloatContext(EncodableContext):
 
         if overflow == OverflowMode.WRAP:
             raise ValueError('OverflowMode.WRAP is not supported for ExtFloatContext')
-        mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits)
+        mpb_ctx = _ext_to_mpb(es, nbits, enable_inf, nan_kind, eoffset, rm, overflow, num_randbits, rng=rng)
 
         if nan_value is not None:
             if not isinstance(nan_value, Float):
@@ -151,6 +155,7 @@ class EFloatContext(EncodableContext):
         self.rm = rm
         self.overflow = overflow
         self.num_randbits = num_randbits
+        self.rng = rng
         self.nan_value = nan_value
         self.inf_value = inf_value
         self._mpb_ctx = mpb_ctx
@@ -237,6 +242,7 @@ class EFloatContext(EncodableContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
+        rng: DefaultOr[RNG | None] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
@@ -257,6 +263,8 @@ class EFloatContext(EncodableContext):
             overflow = self.overflow
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if rng is DEFAULT:
+            rng = self.rng
         if nan_value is DEFAULT:
             nan_value = self.nan_value
         if inf_value is DEFAULT:
@@ -272,6 +280,7 @@ class EFloatContext(EncodableContext):
             rm,
             overflow,
             num_randbits,
+            rng=rng,
             nan_value=nan_value,
             inf_value=inf_value
         )
@@ -819,6 +828,8 @@ def _ext_to_mpb(
     rm: RoundingMode,
     overflow: OverflowMode,
     num_randbits: int | None = 0,
+    *,
+    rng: RNG | None = None,
 ) -> MPBFloatContext:
     """Converts between `ExtFloatContext` and `MPBFloatContext` parameters."""
     # IEEE 754 derived parameters
@@ -902,4 +913,4 @@ def _ext_to_mpb(
         maxval = RealFloat(c=0, exp=emin)
 
     # create the related MPB context
-    return MPBFloatContext(p, emin, maxval, rm, overflow, num_randbits)
+    return MPBFloatContext(p, emin, maxval, rm, overflow, num_randbits, rng=rng)
