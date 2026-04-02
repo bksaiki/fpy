@@ -1,10 +1,18 @@
 import fpy2 as fp
+import random
 import unittest
 
 from fractions import Fraction
 from hypothesis import assume, given, strategies as st
 
 from ...generators import real_floats, floats, rounding_modes
+
+class FixedRandom(random.Random):
+    def __init__(self, v: int):
+        self._v = v
+
+    def getrandbits(self, k: int) -> int:
+        return self._v & ((1 << k) - 1)
 
 
 class TestRealFloatRoundMethods(unittest.TestCase):
@@ -124,8 +132,9 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         ]
 
         for exp, c, exp_rounded, c_rounded, randbits in inputs:
+            rng = FixedRandom(randbits)
             x = fp.RealFloat(exp=exp, c=c)
-            x_rounded = x.round(max_p=2, num_randbits=2, randbits=randbits)
+            x_rounded = x.round(max_p=2, num_randbits=2, rng=rng)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
             self.assertLessEqual(x_rounded.p, 2, f'x={x}, randbits={randbits}, x_rounded.p={x_rounded.p}')
@@ -239,8 +248,9 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         ]
 
         for exp, c, exp_rounded, c_rounded, randbits in inputs:
+            rng = FixedRandom(randbits)
             x = fp.RealFloat(exp=exp, c=c)
-            x_rounded = x.round_at(n=-2, num_randbits=2, randbits=randbits)
+            x_rounded = x.round_at(n=-2, num_randbits=2, rng=rng)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
             self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
             self.assertGreater(x_rounded.exp, -2, f'x={x}, randbits={randbits}, x_rounded.exp={x_rounded.exp}')
