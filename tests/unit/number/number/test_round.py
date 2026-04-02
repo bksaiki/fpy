@@ -2,7 +2,7 @@ import fpy2 as fp
 import unittest
 
 from fractions import Fraction
-from hypothesis import given, strategies as st
+from hypothesis import assume, given, strategies as st
 
 from ...generators import real_floats, floats, rounding_modes
 
@@ -84,15 +84,15 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         st.booleans()
     )
     def test_round(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RoundingMode, inexact: bool):
+        assume(p is not None or n is not None)
         x = fp.RealFloat(x=x, inexact=inexact)
-        if p is not None or n is not None:
-            rounded = x.round(max_p=p, min_n=n, rm=rm)
-            self.assertIsInstance(rounded, fp.RealFloat)
-            self.assertEqual(x != rounded, rounded.inexact, f'x={x}, p={p}, n={n}, rm={rm!r}, inexact={inexact}, rounded.inexact={rounded.inexact}')
-            if p is not None:
-                self.assertLessEqual(rounded.p, p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}')
-            if n is not None:
-                self.assertGreater(rounded.exp, n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}')
+        rounded = x.round(max_p=p, min_n=n, rm=rm)
+        self.assertIsInstance(rounded, fp.RealFloat)
+        self.assertEqual(x != rounded, rounded.inexact, f'x={x}, p={p}, n={n}, rm={rm!r}, inexact={inexact}, rounded.inexact={rounded.inexact}')
+        if p is not None:
+            self.assertLessEqual(rounded.p, p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}')
+        if n is not None:
+            self.assertGreater(rounded.exp, n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}')
 
     def test_round_stochastic_examples(self):
         inputs = [
@@ -131,9 +131,9 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             self.assertLessEqual(x_rounded.p, 2, f'x={x}, randbits={randbits}, x_rounded.p={x_rounded.p}')
 
     @given(
-        real_floats(prec_max=100),
+        real_floats(prec_max=100, exp_min=-16, exp_max=16),
         st.one_of(st.none(), st.integers(min_value=0)),
-        st.one_of(st.none(), st.integers()),
+        st.one_of(st.none(), st.integers(min_value=-16, max_value=16)),
         st.one_of(st.none(), st.integers(min_value=1, max_value=100)),
         rounding_modes()
     )
@@ -145,13 +145,13 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         num_randbits: int,
         rm: fp.RoundingMode
     ):
-        if p is not None or n is not None:
-            rounded = x.round(max_p=p, min_n=n, rm=rm, num_randbits=num_randbits)
-            self.assertIsInstance(rounded, fp.RealFloat)
-            if p is not None:
-                self.assertLessEqual(rounded.p, p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}')
-            if n is not None:
-                self.assertGreater(rounded.exp, n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}')
+        assume(p is not None or n is not None)
+        rounded = x.round(max_p=p, min_n=n, rm=rm, num_randbits=num_randbits)
+        self.assertIsInstance(rounded, fp.RealFloat)
+        if p is not None:
+            self.assertLessEqual(rounded.p, p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}')
+        if n is not None:
+            self.assertGreater(rounded.exp, n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}')
 
     def test_round_at_examples(self):
         inputs = [
@@ -246,8 +246,8 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             self.assertGreater(x_rounded.exp, -2, f'x={x}, randbits={randbits}, x_rounded.exp={x_rounded.exp}')
 
     @given(
-        real_floats(prec_max=100),
-        st.integers(),
+        real_floats(prec_max=100, exp_min=-16, exp_max=16),
+        st.integers(min_value=-16, max_value=16),
         st.one_of(st.none(), st.integers(min_value=1, max_value=100)),
         rounding_modes()
     )

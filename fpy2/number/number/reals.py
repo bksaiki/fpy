@@ -1158,30 +1158,28 @@ class RealFloat(numbers.Rational):
         Optionally, specify `p` to limit the precision of the result to
         at most `p` bits. If `exact` is `True`, the result must be exact.
         """
-    
+
         # step 1. compute the actual number of rounding bits to use
         if num_randbits is None:
             # use all the bits (in theory, `num_randbits == float('inf')`)
-            # but the actual number of bits is limited by the precision of `self`
-            num_randbits = self.p
+            # the actual number of bits is limited by `(n + 1) - self.exp`
+            num_randbits = max(0, (n + 1) - self._exp)
 
         # step 2. compute rounding parameters for extended-precision value
         n_rand = n - num_randbits
-        if p is None:
-            p_rand = None
-        else:
-            p_rand = p - num_randbits
 
-        if randbits is None:
-            randbits = random.getrandbits(num_randbits)
+        # step 3. round the number to obtain the extended-precision value
+        xr = self._round_at(None, n_rand, rm, exact)
 
-        # step 1. round the number to obtain the extended-precision value
-        xr = self._round_at(p_rand, n_rand, rm, exact)
-
-        # step 2. split the number at the rounding position to get the rounding bits
+        # step 4. split the number at the rounding position to get the rounding bits
         _, lost = xr.split(n)
 
-        # step 3. normalize `lost` so that `lost.n == n_rand`
+        # step 5. check if rounding was exact (if so, we're done)
+        if lost.is_zero():
+            # rounding will do nothing but the representation may change
+            return self._round_at(p, n, RoundingMode.RNE, exact)
+
+        # step 6. normalize `lost` so that `lost.n == n_rand`
         offset = lost._exp - (n_rand + 1)
         if offset > 0:
             lost_c = lost._c << offset
@@ -1190,13 +1188,12 @@ class RealFloat(numbers.Rational):
         else:
             lost_c = lost._c
 
-        # step 4. round down if the random bits are larger than the rounding bits
-        if randbits >= lost_c:
-            # round down
-            return self._round_at(p, n, RoundingMode.RTZ, exact)
-        else:
-            # round up
-            return self._round_at(p, n, RoundingMode.RAZ, exact)
+        if randbits is None:
+            randbits = random.getrandbits(num_randbits)
+
+        # step 7. round down if the random bits are larger than the rounding bits
+        rm = RoundingMode.RTZ if randbits >= lost_c else RoundingMode.RAZ
+        return self._round_at(p, n, rm, exact)
 
 
     def round_at(
