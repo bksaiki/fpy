@@ -1,3 +1,10 @@
+"""
+sweep.py: Performs a parameter sweep of stochastic rounding bias.
+
+The model stochasicically rounds values sampled from U(0, 1) to either 0 or 1
+where the probability of rounding `x` up to 1 is `x`.
+"""
+
 import argparse
 import fpy2 as fp
 import matplotlib.pyplot as plt
@@ -25,10 +32,11 @@ class PointResult:
 @dataclass(frozen=True)
 class Result:
     pts: list[PointResult]
-    mean_bias: float       # mean(P(round up) - dist); 0 = unbiased
-    variance: float        # variance of (P(round up) - dist)
-    mean_err: float        # mean of |stochastic round - x| across all points and trials
-    mean_signed_err: float # mean of (stochastic round - x); != 0 implies value bias
+    mean_abs_bias: float # mean(|P(round up) - dist|); 0 = unbiased, higher means more bias
+    mean_bias: float    # mean(P(round up) - dist); 0 = unbiased
+    variance: float     # variance of (P(round up) - dist)
+    mean_abs_err: float # mean of |stochastic round - x| across all points and trials
+    mean_err: float     # mean of (stochastic round - x); != 0 implies value bias
 
 
 def run_trial(task: Task):
@@ -60,17 +68,19 @@ def run_trial(task: Task):
         pts.append(pt_result)
 
     biases = [pt.prob_round_up - pt.dist for pt in pts]
+    mean_abs_bias = float(np.mean([abs(bias) for bias in biases]))
     mean_bias = float(np.mean(biases))
     variance = float(np.var(biases))
-    mean_err = float(np.mean([abs(err) for pt in pts for err in pt.errs]))
-    mean_signed_err = float(np.mean([err for pt in pts for err in pt.errs]))
+    mean_abs_err = float(np.mean([abs(err) for pt in pts for err in pt.errs]))
+    mean_err = float(np.mean([err for pt in pts for err in pt.errs]))
 
     return Result(
         pts=pts,
+        mean_abs_bias=mean_abs_bias,
         mean_bias=mean_bias,
         variance=variance,
+        mean_abs_err=mean_abs_err,
         mean_err=mean_err,
-        mean_signed_err=mean_signed_err,
     )
 
 
@@ -109,7 +119,7 @@ def print_comparison_table(
 if __name__ == '__main__':
     DEFAULT_NUM_INPUTS = 1000
     DEFAULT_NUM_TRIALS = 100
-    R = [1, 2, 4, 8, 16, None]
+    R = [1, 2, 3, 4, 5, 6, None]
     RMS = [fp.RM.RNE, fp.RM.RTZ, fp.RM.RTO]
 
     parser = argparse.ArgumentParser(description='Sweep stochastic rounding bias')
@@ -172,7 +182,7 @@ if __name__ == '__main__':
         print(f"  {'num_randbits':>14}  {'mean bias':>12}  {'variance':>12}  {'mean |err|':>12}  {'mean err':>12}")
         for num_randbits, result in zip(R, results_by_rm[rm]):
             label = str(num_randbits) if num_randbits is not None else 'None'
-            print(f"  {label:>14}  {result.mean_bias:>+12.6f}  {result.variance:>12.6f}  {result.mean_err:>12.6f}  {result.mean_signed_err:>+12.6f}")
+            print(f"  {label:>14}  {result.mean_bias:>+12.6f}  {result.variance:>12.6f}  {result.mean_abs_err:>12.6f}  {result.mean_err:>+12.6f}")
 
     # pairwise comparison tables
     for i, rm1 in enumerate(RMS):
@@ -189,7 +199,7 @@ if __name__ == '__main__':
             xs, ys = zip(*[(pt.dist, pt.prob_round_up) for pt in result.pts])
             axs[i].scatter(xs, ys, s=4)
             axs[i].plot([0, 1], [0, 1], color='red', linewidth=0.8, linestyle='--', label='ideal')
-            axs[i].set_title(f'num_randbits={num_randbits}\nbias={result.mean_bias:+.4f}, |err|={result.mean_err:+.4f}, err={result.mean_signed_err:+.4f}')
+            axs[i].set_title(f'num_randbits={num_randbits}\n|bias|={result.mean_abs_bias:.3f}, |err|={result.mean_abs_err:.3f}, bias/err={result.mean_bias:+.3f}')
             axs[i].set_xlabel('normalized distance (ULP)')
             axs[i].set_ylabel('P(round up)')
 
