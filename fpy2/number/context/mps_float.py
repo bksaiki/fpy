@@ -6,7 +6,7 @@ numbers with subnormals. Hence, "MP-S."
 
 from fractions import Fraction
 
-from ..number import Float, RealFloat
+from ..number import Float, RealFloat, RNG
 from ..round import RoundingMode
 from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
 
@@ -40,6 +40,9 @@ class MPSFloatContext(OrdinalContext):
     num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
+    rng: RNG | None
+    """random number generator for stochastic rounding, if applicable"""
+
     _mp_ctx: MPFloatContext
     """this context without subnormalization"""
 
@@ -54,7 +57,9 @@ class MPSFloatContext(OrdinalContext):
         pmax: int,
         emin: int,
         rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: int | None = 0
+        num_randbits: int | None = 0,
+        *,
+        rng: RNG | None = None
     ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
@@ -71,6 +76,7 @@ class MPSFloatContext(OrdinalContext):
         self.emin = emin
         self.rm = rm
         self.num_randbits = num_randbits
+        self.rng = rng
         self._mp_ctx = MPFloatContext(pmax, rm, num_randbits)
         self._pos_minval = Float(s=False, c=1, exp=self.expmin, ctx=self)
         self._neg_minval = Float(s=True, c=1, exp=self.expmin, ctx=self)
@@ -105,6 +111,7 @@ class MPSFloatContext(OrdinalContext):
         emin: DefaultOr[int] = DEFAULT,
         rm: DefaultOr[RoundingMode] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
+        rng: DefaultOr[RNG | None] = DEFAULT,
         **kwargs
     ) -> 'MPSFloatContext':
         if pmax is DEFAULT:
@@ -115,9 +122,11 @@ class MPSFloatContext(OrdinalContext):
             rm = self.rm
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if rng is DEFAULT:
+            rng = self.rng
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
-        return MPSFloatContext(pmax, emin, rm, num_randbits)
+        return MPSFloatContext(pmax, emin, rm, num_randbits, rng=rng)
 
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
@@ -234,7 +243,7 @@ class MPSFloatContext(OrdinalContext):
             n = self.nmin
 
         # step 3. round value based on rounding parameters
-        xr = x.round(self.pmax, n, self.rm, self.num_randbits, exact=exact)
+        xr = x.round(self.pmax, n, self.rm, self.num_randbits, rng=self.rng, exact=exact)
 
         # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)

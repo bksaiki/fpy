@@ -4,7 +4,7 @@ but with subnormalization and a maximum value, that is multi-precision
 and bounded. Hence, "MP-B."
 """
 
-from ..number import RealFloat, Float
+from ..number import RealFloat, Float, RNG
 from ..round import RoundingMode, RoundingDirection, OverflowMode
 from ...utils import default_repr, DefaultOr, DEFAULT
 
@@ -51,6 +51,9 @@ class MPBFloatContext(SizedContext):
     num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
+    rng: RNG | None
+    """random number generator for stochastic rounding, if applicable"""
+
     _mps_ctx: MPSFloatContext
     """this context without maximum values"""
 
@@ -69,7 +72,8 @@ class MPBFloatContext(SizedContext):
         overflow: OverflowMode = OverflowMode.OVERFLOW,
         num_randbits: int | None = 0,
         *,
-        neg_maxval: RealFloat | None = None
+        neg_maxval: RealFloat | None = None,
+        rng: RNG | None = None
     ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
@@ -106,6 +110,7 @@ class MPBFloatContext(SizedContext):
         self.rm = rm
         self.overflow = overflow
         self.num_randbits = num_randbits
+        self.rng = rng
 
         self._mps_ctx = MPSFloatContext(pmax, emin, rm, num_randbits)
         pos_maxval_mps = Float(x=self.pos_maxval, ctx=self._mps_ctx)
@@ -161,6 +166,7 @@ class MPBFloatContext(SizedContext):
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         neg_maxval: DefaultOr[RealFloat] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
+        rng: DefaultOr[RNG | None] = DEFAULT,
         **kwargs
     ) -> 'MPBFloatContext':
         if pmax is DEFAULT:
@@ -177,9 +183,11 @@ class MPBFloatContext(SizedContext):
             neg_maxval = self.neg_maxval
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if rng is DEFAULT:
+            rng = self.rng
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
-        return MPBFloatContext(pmax, emin, maxval, rm, overflow, neg_maxval=neg_maxval)
+        return MPBFloatContext(pmax, emin, maxval, rm, overflow, num_randbits, neg_maxval=neg_maxval, rng=rng)
 
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
@@ -292,7 +300,7 @@ class MPBFloatContext(SizedContext):
             n = self.nmin
 
         # step 4. round value based on rounding parameters
-        rounded = x.round(self.pmax, n, self.rm, self.num_randbits, exact=exact)
+        rounded = x.round(self.pmax, n, self.rm, self.num_randbits, rng=self.rng, exact=exact)
 
         # step 5. check for overflow
         if self._is_overflowing(rounded):

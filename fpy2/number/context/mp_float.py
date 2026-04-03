@@ -3,7 +3,7 @@ This module defines floating-point numbers as implemented by MPFR,
 that is, multi-precision floating-point numbers. Hence, "MP."
 """
 
-from ..number import RealFloat, Float
+from ..number import RealFloat, Float, RNG
 from ..round import RoundingMode
 from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
 
@@ -28,11 +28,16 @@ class MPFloatContext(Context):
     num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
+    rng: RNG | None
+    """random number generator for stochastic rounding, if applicable"""
+
     def __init__(
         self,
         pmax: int,
         rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: int | None = 0
+        num_randbits: int | None = 0,
+        *,
+        rng: RNG | None = None
     ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
@@ -46,6 +51,7 @@ class MPFloatContext(Context):
         self.pmax = pmax
         self.rm = rm
         self.num_randbits = num_randbits
+        self.rng = rng
 
     def __eq__(self, other):
         return (
@@ -63,6 +69,7 @@ class MPFloatContext(Context):
         pmax: DefaultOr[int] = DEFAULT,
         rm: DefaultOr[RoundingMode] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
+        rng: DefaultOr[RNG | None] = DEFAULT,
         **kwargs
     ) -> 'MPFloatContext':
         if pmax is DEFAULT:
@@ -71,9 +78,11 @@ class MPFloatContext(Context):
             rm = self.rm
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if rng is DEFAULT:
+            rng = self.rng
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
-        return MPFloatContext(pmax, rm, num_randbits)
+        return MPFloatContext(pmax, rm, num_randbits, rng=rng)
 
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
@@ -171,7 +180,7 @@ class MPFloatContext(Context):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        xr = x.round(self.pmax, n, self.rm, self.num_randbits, exact=exact)
+        xr = x.round(self.pmax, n, self.rm, self.num_randbits, rng=self.rng, exact=exact)
 
         # step 4. wrap the result in a Float
         return Float(x=xr, ctx=self)

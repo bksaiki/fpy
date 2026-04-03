@@ -2,7 +2,7 @@
 This module defines fixed-width, sign-magnitude, fixed-point numbers.
 """
 
-from ..number import RealFloat, Float
+from ..number import RealFloat, Float, RNG
 from ..round import RoundingMode, OverflowMode
 from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
 
@@ -41,6 +41,7 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         overflow: OverflowMode = OverflowMode.WRAP,
         num_randbits: int | None = 0,
         *,
+        rng: RNG | None = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ):
@@ -58,6 +59,7 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
             rm=rm,
             overflow=overflow,
             num_randbits=num_randbits,
+            rng=rng,
             enable_nan=False,
             enable_inf=False,
             nan_value=nan_value,
@@ -74,6 +76,7 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         overflow: DefaultOr[OverflowMode] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
+        rng: DefaultOr[RNG | None] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
@@ -88,6 +91,8 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
             overflow = self.overflow
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if rng is DEFAULT:
+            rng = self.rng
         if nan_value is DEFAULT:
             nan_value = self.nan_value
         if inf_value is DEFAULT:
@@ -100,6 +105,7 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
             rm,
             overflow,
             num_randbits,
+            rng=rng,
             nan_value=nan_value,
             inf_value=inf_value
         )

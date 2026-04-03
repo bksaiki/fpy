@@ -7,7 +7,7 @@ Hence, "MP-F".
 from fractions import Fraction
 
 from ..round import RoundingMode
-from ..number import Float, RealFloat
+from ..number import Float, RealFloat, RNG
 from ...utils import default_repr, DEFAULT, DefaultOr
 
 from .context import Context, OrdinalContext
@@ -44,6 +44,9 @@ class MPFixedContext(OrdinalContext):
     num_randbits: int | None
     """number of random bits for stochastic rounding, if applicable"""
 
+    rng: RNG | None
+    """random number generator for stochastic rounding, if applicable"""
+
     enable_nan: bool
     """is NaN representable?"""
 
@@ -68,6 +71,7 @@ class MPFixedContext(OrdinalContext):
         rm: RoundingMode = RoundingMode.RNE,
         num_randbits: int | None = 0,
         *,
+        rng: RNG | None = None,
         enable_nan: bool = False,
         enable_inf: bool = False,
         nan_value: Float | None = None,
@@ -111,6 +115,7 @@ class MPFixedContext(OrdinalContext):
         self.nmin = nmin
         self.rm = rm
         self.num_randbits = num_randbits
+        self.rng = rng
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
         self.nan_value = nan_value
@@ -157,6 +162,7 @@ class MPFixedContext(OrdinalContext):
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
+        rng: DefaultOr[RNG | None] = DEFAULT,
         **kwargs
     ) -> 'MPFixedContext':
         if nmin is DEFAULT:
@@ -173,12 +179,15 @@ class MPFixedContext(OrdinalContext):
             inf_value = self.inf_value
         if num_randbits is DEFAULT:
             num_randbits = self.num_randbits
+        if rng is DEFAULT:
+            rng = self.rng
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for MPFixedContext')
         return MPFixedContext(
             nmin,
             rm,
             num_randbits,
+            rng=rng,
             enable_nan=enable_nan,
             enable_inf=enable_inf,
             nan_value=nan_value,
@@ -302,7 +311,7 @@ class MPFixedContext(OrdinalContext):
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
-        xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, exact=exact)
+        xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, rng=self.rng, exact=exact)
 
         # step 4. wrap the value in a Float
         return Float(x=xr, ctx=self)
