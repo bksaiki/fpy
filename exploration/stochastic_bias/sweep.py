@@ -17,43 +17,60 @@ class Task:
     rm: fp.RM
 
 @dataclass(frozen=True)
+class PointResult:
+    dist: float  # normalized distance to round up (0 = at RTZ, 1 = at RAZ)
+    prob_round_up: float  # empirical probability of rounding up (0 to 1)
+    errs: list[float]  # list of stochastic round - x errors for this point
+
+@dataclass(frozen=True)
 class Result:
-    pts: list[tuple[float, float]]
-    mean_bias: float     # mean(P(round up) - dist); 0 = unbiased
-    mean_avg_err: float  # mean |P(round up) - dist|
-    variance: float      # variance of (P(round up) - dist)
+    pts: list[PointResult]
+    mean_bias: float       # mean(P(round up) - dist); 0 = unbiased
+    variance: float        # variance of (P(round up) - dist)
+    mean_err: float        # mean of |stochastic round - x| across all points and trials
+    mean_signed_err: float # mean of (stochastic round - x); != 0 implies value bias
 
 
 def run_trial(task: Task):
     rng = np.random.default_rng(task.seed)
-    pts: list[tuple[float, float]] = []
+    pts: list[PointResult] = []
     for x in task.inputs:
         x = fp.RealFloat.from_float(x)
         rtz = x.round(min_n=-1, rm=fp.RM.RTZ)
         raz = x.round(min_n=-1, rm=fp.RM.RAZ)
 
+        # compute normalized distance of `x` to `rtz` and `raz`
         dist = (float(x) - float(rtz)) / (float(raz) - float(rtz))
 
+        # perform `k` stochastic rounds and count how many times it rounds up to `raz`
         num_round_up = 0
+        errs: list[float] = []
         for _ in range(task.k):
             # round `x` stochastically to `num_randbits` bits
             y = x.round(min_n=-1, rm=task.rm, num_randbits=task.num_randbits, rng=rng)
+            errs.append(float(y) - float(x))
             if y == raz:
                 num_round_up += 1
 
-        # record the (distance, emperical probability of rounding up) pair
-        pts.append((float(dist), num_round_up / task.k))
+        # compute the empirical probability of rounding up to `raz`
+        prob_round_up = num_round_up / task.k
 
-    biases = [p - d for d, p in pts]
+        # record the (distance, emperical probability of rounding up) pair
+        pt_result = PointResult(dist=dist, prob_round_up=prob_round_up, errs=errs)
+        pts.append(pt_result)
+
+    biases = [pt.prob_round_up - pt.dist for pt in pts]
     mean_bias = float(np.mean(biases))
-    mean_avg_err = float(np.mean(np.abs(biases)))
     variance = float(np.var(biases))
+    mean_err = float(np.mean([abs(err) for pt in pts for err in pt.errs]))
+    mean_signed_err = float(np.mean([err for pt in pts for err in pt.errs]))
 
     return Result(
         pts=pts,
         mean_bias=mean_bias,
-        mean_avg_err=mean_avg_err,
         variance=variance,
+        mean_err=mean_err,
+        mean_signed_err=mean_signed_err,
     )
 
 
@@ -152,10 +169,10 @@ if __name__ == '__main__':
     # per-RM bias summary
     for rm in RMS:
         print(f"\n--- {rm.name} ---")
-        print(f"  {'num_randbits':>14}  {'mean bias':>12}  {'MAE':>12}  {'variance':>12}")
+        print(f"  {'num_randbits':>14}  {'mean bias':>12}  {'variance':>12}  {'mean |err|':>12}  {'mean err':>12}")
         for num_randbits, result in zip(R, results_by_rm[rm]):
             label = str(num_randbits) if num_randbits is not None else 'None'
-            print(f"  {label:>14}  {result.mean_bias:>+12.6f}  {result.mean_avg_err:>12.6f}  {result.variance:>12.6f}")
+            print(f"  {label:>14}  {result.mean_bias:>+12.6f}  {result.variance:>12.6f}  {result.mean_err:>12.6f}  {result.mean_signed_err:>+12.6f}")
 
     # pairwise comparison tables
     for i, rm1 in enumerate(RMS):
@@ -169,9 +186,10 @@ if __name__ == '__main__':
         fig, axs = plt.subplots(1, len(R), figsize=(5 * len(R), 5))
         fig.suptitle(f'Stochastic Rounding Bias (RM={rm.name}, N={num_inputs}, k={num_trials})')
         for i, (num_randbits, result) in enumerate(zip(R, results_by_rm[rm])):
-            axs[i].scatter(*zip(*result.pts), s=4)
+            xs, ys = zip(*[(pt.dist, pt.prob_round_up) for pt in result.pts])
+            axs[i].scatter(xs, ys, s=4)
             axs[i].plot([0, 1], [0, 1], color='red', linewidth=0.8, linestyle='--', label='ideal')
-            axs[i].set_title(f'num_randbits={num_randbits}\nbias={result.mean_bias:+.4f}, MAE={result.mean_avg_err:.4f}')
+            axs[i].set_title(f'num_randbits={num_randbits}\nbias={result.mean_bias:+.4f}, |err|={result.mean_err:+.4f}, err={result.mean_signed_err:+.4f}')
             axs[i].set_xlabel('normalized distance (ULP)')
             axs[i].set_ylabel('P(round up)')
 
