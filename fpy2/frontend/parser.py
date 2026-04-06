@@ -429,7 +429,7 @@ class Parser:
                 # evaluating `x.y.z` where `x.y` is `a`
                 base = self._eval_attribute(a.value, e)
             case _:
-                raise self._parse_error('FPy only supports attribute access on variables', a.value, e)
+                raise self._parse_error('FPy only supports attribute access on variables', e)
 
         # lookup the attribute
         if not hasattr(base, a.attr):
