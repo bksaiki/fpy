@@ -1,5 +1,14 @@
 # Version History
 
+## [0.1.4] - 2026-04-06
+### Features:
+ - Numbers:
+   - rounding contexts take an optional RNG for stochastic rounding
+
+### Fixes:
+  - Numbers:
+    - fix stochastic rounding: number of random bits was incorrect for small values
+
 ## [0.1.3] - 2026-03-30
 ### Features:
  - Numbers:
