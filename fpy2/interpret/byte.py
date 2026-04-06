@@ -72,20 +72,28 @@ def _cvt_arg(arg):
 def _arg_to_value(arg: Any):
     return arg if _is_value(arg) else _cvt_arg(arg)
 
-def _cvt_return(x: Value):
+def _is_return_value(x) -> bool:
     match x:
-        case bool() | Float() | Context():
-            return x
+        case Fraction():
+            return not is_dyadic(x)
+        case tuple() | list():
+            return all(_is_return_value(v) for v in x)
+        case _:
+            return True
+
+def _cvt_return_value(x: Value):
+    match x:
         case Fraction():
             return Float.from_rational(x) if is_dyadic(x) else x
         case tuple():
             return tuple(_cvt_return(v) for v in x)
         case list():
-            for i, xi in enumerate(x):
-                x[i] = _cvt_return(xi)
-            return x
+            return [_cvt_return(v) for v in x]
         case _:
             return x
+
+def _cvt_return(x: Value):
+    return x if _is_return_value(x) else _cvt_return_value(x)
 
 def _cvt_float(x: Value):
     match x:
