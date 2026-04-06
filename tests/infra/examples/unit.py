@@ -124,6 +124,10 @@ def test_mod1():
     return 5.0 % 2.0
 
 @fp.fpy
+def test_not1():
+    return not True
+
+@fp.fpy
 def test_augassign1():
     x = 1.0
     x += 1.0
