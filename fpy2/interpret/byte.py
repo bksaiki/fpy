@@ -72,20 +72,28 @@ def _cvt_arg(arg):
 def _arg_to_value(arg: Any):
     return arg if _is_value(arg) else _cvt_arg(arg)
 
-def _cvt_return(x: Value):
+def _is_return_value(x) -> bool:
     match x:
-        case bool() | Float() | Context():
-            return x
+        case Fraction():
+            return not is_dyadic(x)
+        case tuple() | list():
+            return all(_is_return_value(v) for v in x)
+        case _:
+            return True
+
+def _cvt_return_value(x: Value):
+    match x:
         case Fraction():
             return Float.from_rational(x) if is_dyadic(x) else x
         case tuple():
             return tuple(_cvt_return(v) for v in x)
         case list():
-            for i, xi in enumerate(x):
-                x[i] = _cvt_return(xi)
-            return x
+            return [_cvt_return(v) for v in x]
         case _:
             return x
+
+def _cvt_return(x: Value):
+    return x if _is_return_value(x) else _cvt_return_value(x)
 
 def _cvt_float(x: Value):
     match x:
@@ -363,7 +371,6 @@ def make_namespace() -> dict[str, object]:
     # add special symbols to namespace
     namespace = {
         '__fpy_call': _eval_call,
-        '__fpy_cvt': _arg_to_value,
         '__fpy_fraction': Fraction,
         '__fpy_int': _cvt_int,
         '__fpy_list_set': _eval_list_set,
@@ -866,35 +873,14 @@ class BytecodeCompiler(Visitor):
         return [self._visit_statement(stmt, ctx) for stmt in block.stmts]
 
     def _visit_function(self, func: FuncDef, ctx: None):
-        # convert arguments to FPy values
         posonlyargs: list[pyast.arg] = []
-        body: list[pyast.stmt] = []
         for arg in func.args:
-            # add argument
-            name = f'__{str(arg.name)}__'
+            name = str(arg.name)
             attrs = self._location_to_attributes(arg.loc)
             posarg = pyast.arg(arg=name, annotation=None, type_comment=None, **attrs)
             posonlyargs.append(posarg)
 
-            # convert argument to FPy value
-            cvt_expr = pyast.Call(
-                func=pyast.Name(id='__fpy_cvt', ctx=pyast.Load(), **attrs),
-                args=[pyast.Name(id=name, ctx=pyast.Load(), **attrs)],
-                keywords=[],
-                **attrs
-            )
-
-            # assign converted argument to original name
-            stmt = pyast.Assign(
-                targets=[pyast.Name(id=str(arg.name), ctx=pyast.Store(), **attrs)],
-                value=cvt_expr,
-                type_comment=None,
-                **attrs
-            )
-
-            body.append(stmt)
-
-        body += self._visit_block(func.body, None)
+        body = self._visit_block(func.body, None)
         attrs = self._location_to_attributes(func.loc)
 
         ctx_arg = pyast.arg(arg=CTX_NAME, annotation=None, type_comment=None, **attrs)
@@ -978,6 +964,8 @@ class BytecodeInterpreter(Interpreter):
             self.func_cache[func.ast] = fn
         # compute the context to use during evaluation
         ctx = self._func_ctx(func.ast, ctx)
+        # convert arguments to FPy values
+        args = tuple(_arg_to_value(arg) for arg in args)
         # call the function with the given arguments
         res = fn(*args, __ctx__=ctx)
         return _cvt_return(res)
@@ -993,6 +981,6 @@ class BytecodeInterpreter(Interpreter):
         # compute the context to use during evaluation
         ctx = self._func_ctx(ast, ctx)
         # call the function with the given arguments
-        args = tuple(env[name] for name in names)
+        args = tuple(_arg_to_value(env[name]) for name in names)
         res = fn(*args, __ctx__=ctx)
         return _cvt_return(res)

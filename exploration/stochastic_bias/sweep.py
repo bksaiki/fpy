@@ -191,17 +191,61 @@ if __name__ == '__main__':
                 continue
             print_comparison_table(rm1, rm2, R, results_by_rm[rm1], results_by_rm[rm2])
 
+    # pre-compute shared y-axis limits across all RMs for the error rows
+    all_mean_errs_global = [
+        float(np.mean(pt.errs))
+        for rm in RMS
+        for result in results_by_rm[rm]
+        for pt in result.pts
+    ]
+    err_abs_max_global = max(abs(min(all_mean_errs_global)), abs(max(all_mean_errs_global)))
+    err_ylim = (-err_abs_max_global * 1.1, err_abs_max_global * 1.1)
+
+    all_mean_abs_errs_global = [
+        float(np.mean([abs(e) for e in pt.errs]))
+        for rm in RMS
+        for result in results_by_rm[rm]
+        for pt in result.pts
+    ]
+    abs_err_ylim = (0, max(all_mean_abs_errs_global) * 1.1)
+
+    # ideal mean |err| curve: E[|err|] = 2*d*(1-d) for ULP=0.5
+    ideal_ds = np.linspace(0, 1, 200)
+    ideal_abs_errs = 2 * ideal_ds * (1 - ideal_ds)
+
     # plots for each RM (one figure per RM)
     for rm in RMS:
-        fig, axs = plt.subplots(1, len(R), figsize=(5 * len(R), 5))
+        fig, axs = plt.subplots(3, len(R), figsize=(5 * len(R), 15))
         fig.suptitle(f'Stochastic Rounding Bias (RM={rm.name}, N={num_inputs}, k={num_trials})')
         for i, (num_randbits, result) in enumerate(zip(R, results_by_rm[rm])):
+            # distance vs probability of rounding up
             xs, ys = zip(*[(pt.dist, pt.prob_round_up) for pt in result.pts])
-            axs[i].scatter(xs, ys, s=4)
-            axs[i].plot([0, 1], [0, 1], color='red', linewidth=0.8, linestyle='--', label='ideal')
-            axs[i].set_title(f'num_randbits={num_randbits}\n|bias|={result.mean_abs_bias:.3f}, |err|={result.mean_abs_err:.3f}, bias/err={result.mean_bias:+.3f}')
-            axs[i].set_xlabel('normalized distance (ULP)')
-            axs[i].set_ylabel('P(round up)')
+            axs[0][i].scatter(xs, ys, s=4)
+            axs[0][i].plot([0, 1], [0, 1], color='red', linewidth=0.8, linestyle='--', label='ideal')
+            axs[0][i].set_title(f'num_randbits={num_randbits}\n|bias|={result.mean_abs_bias:.3f}, bias={result.mean_bias:+.3f}')
+            axs[0][i].set_xlabel('normalized distance (ULP)')
+            axs[0][i].set_xlim(0, 1)
+            axs[0][i].set_ylabel('P(round up)')
+
+            # distance vs mean error
+            xs2, ys2 = zip(*[(pt.dist, float(np.mean(pt.errs))) for pt in result.pts])
+            axs[1][i].scatter(xs2, ys2, s=4)
+            axs[1][i].axhline(0, color='red', linewidth=0.8, linestyle='--', label='ideal')
+            axs[1][i].set_title(f'num_randbits={num_randbits}\nerr={result.mean_err:+.3f}')
+            axs[1][i].set_xlabel('normalized distance (ULP)')
+            axs[1][i].set_ylabel('mean error')
+            axs[1][i].set_xlim(0, 1)
+            axs[1][i].set_ylim(err_ylim)
+
+            # distance vs mean |err|
+            xs3, ys3 = zip(*[(pt.dist, float(np.mean([abs(e) for e in pt.errs]))) for pt in result.pts])
+            axs[2][i].scatter(xs3, ys3, s=4)
+            axs[2][i].plot(ideal_ds, ideal_abs_errs, color='red', linewidth=0.8, linestyle='--', label='ideal')
+            axs[2][i].set_title(f'num_randbits={num_randbits}\n|err|={result.mean_abs_err:.3f}')
+            axs[2][i].set_xlabel('normalized distance (ULP)')
+            axs[2][i].set_ylabel('mean |error|')
+            axs[2][i].set_xlim(0, 1)
+            axs[2][i].set_ylim(abs_err_ylim)
 
         plt.tight_layout()
         plt.savefig(f'sweep_{rm.name}_N{num_inputs}_k{num_trials}.png', dpi=150)
