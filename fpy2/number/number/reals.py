@@ -1147,6 +1147,18 @@ class RealFloat(numbers.Rational):
         # step 6. return the rounded value
         return kept
 
+    def _generate_randbits(self, rng: RNG | None, k: int) -> int:
+        """
+        Generates a random k-bit integer. If `rng` is `None`,
+        then the default `Random` instance is used.
+        """
+        if rng is None:
+            return random.getrandbits(k)
+        elif isinstance(rng, random.Random):
+            return rng.getrandbits(k)
+        else:
+            return int(rng.integers(0, 1 << k))
+
     def _round_at_stochastic(
         self,
         p: int | None,
@@ -1170,39 +1182,40 @@ class RealFloat(numbers.Rational):
             # the actual number of bits is limited by `(n + 1) - self.exp`
             num_randbits = max(0, (n + 1) - self._exp)
 
-        # step 2. compute rounding parameters for extended-precision value
+        # step 2. generate the randomness
+        # NOTE: we always sample random bits even if `self` is representable
+        # since the `rng` state should be mutated with every rounding
+        randbits = self._generate_randbits(rng, num_randbits)
+
+        # step 3. compute rounding parameters for extended-precision value
         n_rand = n - num_randbits
 
-        # step 3. round the number to obtain the extended-precision value
+        # step 4. round the number to obtain the extended-precision value
         xr = self._round_at(None, n_rand, rm, exact)
 
-        # step 4. split the number at the rounding position to get the rounding bits
+        # step 5. split the number at the rounding position to get the rounding bits
         _, lost = xr.split(n)
 
-        # step 5. check if rounding was exact (if so, we're done)
+        # step 6. check if rounding was exact (if so, we're done)
         if lost.is_zero():
-            # rounding will do nothing but the representation may change
-            return self._round_at(p, n, RoundingMode.RNE, exact)
-
-        # step 6. normalize `lost` so that `lost.n == n_rand`
-        offset = lost._exp - (n_rand + 1)
-        if offset > 0:
-            lost_c = lost._c << offset
-        elif offset < 0:
-            lost_c = lost._c >> -offset
+            # just choose one of the rounding modes (RTZ)
+            rand_rm = RoundingMode.RTZ
         else:
-            lost_c = lost._c
+            # step 7. normalize `lost` so that `lost.n == n_rand`
+            offset = lost._exp - (n_rand + 1)
+            if offset > 0:
+                lost_c = lost._c << offset
+            elif offset < 0:
+                lost_c = lost._c >> -offset
+            else:
+                lost_c = lost._c
 
-        if rng is None:
-            randbits = random.getrandbits(num_randbits)
-        elif isinstance(rng, random.Random):
-            randbits = rng.getrandbits(num_randbits)
-        else:
-            randbits = int(rng.integers(0, 1 << num_randbits))
+            # step 8. stochastically choose a rounding mode
+            round_up = randbits + lost_c >= (1 << num_randbits)
+            rand_rm = RoundingMode.RAZ if round_up else RoundingMode.RTZ
 
-        # step 7. round down if the random bits are larger than the rounding bits
-        rm = RoundingMode.RTZ if randbits >= lost_c else RoundingMode.RAZ
-        return self._round_at(p, n, rm, exact)
+        # step 9. apply rounding as normal
+        return self._round_at(p, n, rand_rm, exact)
 
 
     def round_at(
