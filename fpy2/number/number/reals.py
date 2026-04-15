@@ -1117,20 +1117,24 @@ class RealFloat(numbers.Rational):
         must be exact.
         """
 
-        # step 1. split the number at the rounding position
+        # step 1. fast path for definitely representable values
+        if self._exp > n and (p is None or self.p <= p):
+            return RealFloat(s=self._s, exp=self._exp, c=self._c)
+
+        # step 2. split the number at the rounding position
         kept, lost = self.split(n)
 
-        # step 2. check if rounding was exact (if so, we're done)
+        # step 3. check if rounding was exact (if so, we're done)
         if lost.is_zero():
             return kept
 
         if exact:
             raise ValueError(f'rounding off digits: self={self}, n={n}')
 
-        # step 3. check if we need to increment
+        # step 4. check if we need to increment
         increment = kept._round_increment(lost, n, rm)
 
-        # step 4. increment if necessary
+        # step 5. increment if necessary
         carry = False
         if increment:
             kept._c += 1
@@ -1141,10 +1145,8 @@ class RealFloat(numbers.Rational):
                 kept._exp += 1
                 carry = True
 
-        # step 5. set flags
+        # step 6. set flags
         kept._flags = Flags(inexact=True, carry=carry)
-
-        # step 6. return the rounded value
         return kept
 
     def _generate_randbits(self, rng: RNG | None, k: int) -> int:
@@ -1241,11 +1243,7 @@ class RealFloat(numbers.Rational):
         if num_randbits is not None and not isinstance(num_randbits, int):
             raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
 
-        # step 1. fast path for definitely representable values
-        if (p is None or self.p <= p) and self._exp > n:
-            return RealFloat(s=self._s, exp=self._exp, c=self._c)
-
-        # step 2. round at the specified position
+        # round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
             return self._round_at(p, n, rm, exact)
@@ -1306,11 +1304,7 @@ class RealFloat(numbers.Rational):
         # step 1. compute rounding parameters
         p, n = self._round_params(max_p, min_n)
 
-        # step 2. fast path for definitely representable values
-        if (p is None or self.p <= p) and self._exp > n:
-            return RealFloat(s=self._s, exp=self._exp, c=self._c)
-
-        # step 3. round at the specified position
+        # step 2. round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
             return self._round_at(p, n, rm, exact)
