@@ -17,6 +17,7 @@ from ...utils import (
     bitmask,
     float_to_bits,
     is_dyadic,
+    is_power_of_two,
     Ordering,
     FP64_M,
     FP64_EXPMIN,
@@ -74,6 +75,8 @@ class RealFloat(numbers.Rational):
         e: int | None = None,
         m: int | None = None,
         overflow: bool | None = None,
+        tiny_pre: bool | None = None,
+        tiny_post: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None
     ):
@@ -135,6 +138,8 @@ class RealFloat(numbers.Rational):
         if x is None:
             self._flags = Flags(
                 overflow=overflow,
+                tiny_pre=tiny_pre,
+                tiny_post=tiny_post,
                 inexact=inexact,
                 carry=carry
             )
@@ -142,6 +147,8 @@ class RealFloat(numbers.Rational):
             self._flags = Flags(
                 x=x._flags,
                 overflow=overflow,
+                tiny_pre=tiny_pre,
+                tiny_post=tiny_post,
                 inexact=inexact,
                 carry=carry
             )
@@ -654,6 +661,10 @@ class RealFloat(numbers.Rational):
         """Returns whether this value is negative."""
         return self._c != 0 and self._s
 
+    def is_power_of_two(self) -> bool:
+        """Returns whether this value is a power of two, i.e., `(-1)^s * 2^e`."""
+        return self._c != 0 and is_power_of_two(self._c)
+
     def is_more_significant(self, n: int) -> bool:
         """
         Returns `True` iff this value only has significant digits above `n`,
@@ -1103,6 +1114,45 @@ class RealFloat(numbers.Rational):
 
         return increment
 
+    def _tiny_pre(self, p: int, n: int) -> bool:
+        """
+        Computes tininess before rounding.
+
+        This is a property of floating-point rounding.
+        A value `x` is tiny before rounding if `|x| < 2^emin` where `emin = p + n`.
+        """
+        # edge case: self == 0
+        if self.is_zero():
+            return True
+
+        emin = p + n
+        return self.e < emin
+
+    def _tiny_post(self, kept: Self, p: int, n: int, rm: RoundingMode):
+        """
+        Computes tininess after rounding.
+
+        This is a property of floating-point rounding.
+        A value `x` is tiny after rounding if the result of rounding
+        (without subnormalization) satisfies `|x| < 2^emin` where `emin = p + n`.
+
+        Assumes that
+        - `tiny_pre` is `True`: `|self| < 2^emin
+        - `kept` was the non-zero result after incrementing
+        """
+        emin = p + n
+        if kept.e < emin:
+            # |kept| < 2^emin: we are definitely tiny
+            return True
+
+        # this is the only interesting case: |kept| = 2^emin
+        # re-round by splitting one digit lower, so we do subnormalize
+        # we are tiny post rounding if we do not increment
+        kept, lost = self.split(n - 1)
+        increment = kept._round_increment(lost, n - 1, rm)
+        return not increment
+
+
     def _round_at(
         self,
         p: int | None,
@@ -1117,37 +1167,51 @@ class RealFloat(numbers.Rational):
         must be exact.
         """
 
-        # step 1. fast path for definitely representable values
-        if self._exp > n and (p is None or self.p <= p):
-            return RealFloat(s=self._s, exp=self._exp, c=self._c)
+        # compute tininess before rounding
+        tiny_pre = p is not None and self._tiny_pre(p, n)
 
-        # step 2. split the number at the rounding position
-        kept, lost = self.split(n)
-
-        # step 3. check if rounding was exact (if so, we're done)
-        if lost.is_zero():
-            return kept
-
-        if exact:
-            raise ValueError(f'rounding off digits: self={self}, n={n}')
-
-        # step 4. check if we need to increment
-        increment = kept._round_increment(lost, n, rm)
-
-        # step 5. increment if necessary
+        # other flags set to their default values
+        tiny_post = tiny_pre
+        inexact = False
         carry = False
-        if increment:
-            kept._c += 1
-            if p is not None and kept._c.bit_length() > p:
-                # adjust the exponent since we exceeded precision bounds
-                # the value is guaranteed to be a power of two
-                kept._c >>= 1
-                kept._exp += 1
-                carry = True
 
-        # step 6. set flags
-        kept._flags = Flags(inexact=True, carry=carry)
+        if self._exp > n and (p is None or self.p <= p):
+            # fast path: definitely representable values
+            kept = RealFloat(s=self._s, exp=self._exp, c=self._c, tiny_pre=tiny_pre)
+        else:
+            # normal path: need to split the value
+            # step 1. split the number at the rounding position
+            kept, lost = self.split(n)
+
+            # step 2. check if rounding was exact (if so, we're done)
+            if not lost.is_zero():
+                # check that we're allowed to round
+                inexact = True
+                if exact:
+                    raise ValueError(f'rounding off digits: self={self}, n={n}')
+
+                # step 3. check if we need to increment
+                increment = kept._round_increment(lost, n, rm)
+
+                # step 4. increment if necessary
+                if increment:
+                    kept._c += 1
+                    if p is not None:
+                        if kept._c.bit_length() > p:
+                            # adjust the exponent since we exceeded precision bounds
+                            # the value is guaranteed to be a power of two
+                            kept._c >>= 1
+                            kept._exp += 1
+                            carry = True
+
+                        # possibly need to recompute tiny_post
+                        if tiny_pre:
+                            tiny_post = self._tiny_post(kept, p, n, rm)
+
+        # set flags
+        kept._flags = Flags(tiny_pre=tiny_pre, tiny_post=tiny_post, inexact=inexact, carry=carry)
         return kept
+
 
     def _generate_randbits(self, rng: RNG | None, k: int) -> int:
         """

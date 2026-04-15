@@ -12,14 +12,18 @@ __all__ = [
 
 # bit positions for each flag
 _OVERFLOW = 1 << 0
-_INEXACT = 1 << 1
-_CARRY = 1 << 2
+_TINY_PRE = 1 << 1
+_TINY_POST = 1 << 2
+_INEXACT = 1 << 3
+_CARRY = 1 << 4
 
 
 class Flags:
     """
     The `Flags` class represents the status flags for arithmetic operations.
     - `overflow`: the result exceeded the representable range
+    - `tiny_pre`: the result before rounding satisfies `|x| < 2^emin`
+    - `tiny_post`: the result after rounding (without subnormalization) satisfies `|x| < 2^emin`
     - `inexact`: the rounded result is not the same as the exact result
     - `carry`: the rounded result has a different exponent than the exact result
     """
@@ -32,6 +36,8 @@ class Flags:
         self, *,
         x: Self | None = None,
         overflow: bool | None = None,
+        tiny_pre: bool | None = None,
+        tiny_post: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None
     ):
@@ -39,6 +45,10 @@ class Flags:
         if x is not None:
             if overflow is None:
                 overflow = bool(x._flags & _OVERFLOW)
+            if tiny_pre is None:
+                tiny_pre = bool(x._flags & _TINY_PRE)
+            if tiny_post is None:
+                tiny_post = bool(x._flags & _TINY_POST)
             if inexact is None:
                 inexact = bool(x._flags & _INEXACT)
             if carry is None:
@@ -48,6 +58,10 @@ class Flags:
         self._flags = 0
         if overflow:
             self._flags |= _OVERFLOW
+        if tiny_pre:
+            self._flags |= _TINY_PRE
+        if tiny_post:
+            self._flags |= _TINY_POST
         if inexact:
             self._flags |= _INEXACT
         if carry:
@@ -57,6 +71,10 @@ class Flags:
         flag_strs: list[str] = []
         if self.overflow:
             flag_strs.append("overflow=True")
+        if self.tiny_pre:
+            flag_strs.append("tiny_pre=True")
+        if self.tiny_post:
+            flag_strs.append("tiny_post=True")
         if self.inexact:
             flag_strs.append("inexact=True")
         if self.carry:
@@ -69,6 +87,19 @@ class Flags:
         return bool(self._flags & _OVERFLOW)
 
     @property
+    def tiny_pre(self) -> bool:
+        """Tiny before rounding flag: the result before rounding satisfies `|x| < 2^emin`."""
+        return bool(self._flags & _TINY_PRE)
+
+    @property
+    def tiny_post(self) -> bool:
+        """
+        Tiny after rounding flag: the result after rounding
+        (without subnormalization) satisfies `|x| < 2^emin`.
+        """
+        return bool(self._flags & _TINY_POST)
+
+    @property
     def inexact(self) -> bool:
         """Inexact flag: the rounded result is not the same as the exact result."""
         return bool(self._flags & _INEXACT)
@@ -78,12 +109,37 @@ class Flags:
         """Carry flag: the rounded result has a different exponent than the exact result."""
         return bool(self._flags & _CARRY)
 
+    @property
+    def underflow_pre(self) -> bool:
+        """Underflow before rounding flag: `self.tiny_pre and self.inexact`."""
+        return self.tiny_pre and self.inexact
+
+    @property
+    def underflow_post(self) -> bool:
+        """Underflow after rounding flag: `self.tiny_post and self.inexact`."""
+        return self.tiny_post and self.inexact
+
+
     def _set_overflow(self, value: bool) -> None:
         """Unsafe setter for overflow flag."""
         if value:
             self._flags |= _OVERFLOW
         else:
             self._flags &= ~_OVERFLOW
+
+    def _set_tiny_pre(self, value: bool) -> None:
+        """Unsafe setter for the tiny before rounding flag."""
+        if value:
+            self._flags |= _TINY_PRE
+        else:
+            self._flags &= ~_TINY_PRE
+
+    def _set_tiny_post(self, value: bool) -> None:
+        """Unsafe setter for the tiny after rounding flag."""
+        if value:
+            self._flags |= _TINY_POST
+        else:
+            self._flags &= ~_TINY_POST
 
     def _set_inexact(self, value: bool) -> None:
         """Unsafe setter for inexact flag."""
