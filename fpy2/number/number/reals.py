@@ -479,6 +479,19 @@ class RealFloat(numbers.Rational):
         return self._flags.overflow
 
     @property
+    def tiny_pre(self) -> bool:
+        """Tiny before rounding flag: the result before rounding satisfies `|x| < 2^emin`."""
+        return self._flags.tiny_pre
+
+    @property
+    def tiny_post(self) -> bool:
+        """
+        Tiny after rounding flag: the result after rounding
+        (without subnormalization) satisfies `|x| < 2^emin`.
+        """
+        return self._flags.tiny_post
+
+    @property
     def inexact(self) -> bool:
         """Inexact flag: the rounded result is not the same as the exact result."""
         return self._flags.inexact
@@ -487,6 +500,16 @@ class RealFloat(numbers.Rational):
     def carry(self) -> bool:
         """Carry flag: the rounded result has a different exponent than the exact result."""
         return self._flags.carry
+
+    @property
+    def underflow_pre(self) -> bool:
+        """Underflow before rounding flag: `self.tiny_pre and self.inexact`."""
+        return self._flags.underflow_pre
+
+    @property
+    def underflow_post(self) -> bool:
+        """Underflow after rounding flag: `self.tiny_post and self.inexact`."""
+        return self._flags.underflow_post
 
     def as_rational(self) -> Fraction:
         if self._c == 0: # case: zero
@@ -1114,35 +1137,38 @@ class RealFloat(numbers.Rational):
 
         return increment
 
-    def _tiny_pre(self, p: int, n: int) -> bool:
+    def _tiny_pre(self, emin: int) -> bool:
         """
         Computes tininess before rounding.
 
         This is a property of floating-point rounding.
-        A value `x` is tiny before rounding if `|x| < 2^emin` where `emin = p + n`.
+        A value `x` is tiny before rounding if `|x| < 2^emin`.
         """
-        # edge case: self == 0
-        if self.is_zero():
-            return True
+        return self.is_zero() or self.e < emin
 
-        emin = p + n
-        return self.e < emin
-
-    def _tiny_post(self, kept: Self, p: int, n: int, rm: RoundingMode):
+    def _tiny_post(self, kept: Self, emin: int, n: int, rm: RoundingMode):
         """
         Computes tininess after rounding.
 
         This is a property of floating-point rounding.
         A value `x` is tiny after rounding if the result of rounding
-        (without subnormalization) satisfies `|x| < 2^emin` where `emin = p + n`.
+        (without subnormalization) satisfies `|x| < 2^emin`.
 
         Assumes that
-        - `tiny_pre` is `True`: `|self| < 2^emin
+        - `tiny_pre` is `True`: `|self| < 2^emin`
         - `kept` was the non-zero result after incrementing
         """
-        emin = p + n
-        if kept.e < emin:
-            # |kept| < 2^emin: we are definitely tiny
+        # fast check for tininess
+        if kept.e < emin - 1:
+            # definitely tiny: |kept| < 2^(emin - 1)
+            return True
+
+        # harder check for tininess
+        # are we at or below the "next" representable value below 2^emin
+        p = emin - n
+        cutoff = RealFloat(s=self._s, c=bitmask(p), exp=n)
+        if (self >= cutoff if self._s else self <= cutoff):
+            # definitely tiny: |kept| < 2^(emin - 1) * (2 - 2^{emin - p + 1})
             return True
 
         # this is the only interesting case: |kept| = 2^emin
@@ -1157,6 +1183,7 @@ class RealFloat(numbers.Rational):
         self,
         p: int | None,
         n: int,
+        emin: int | None,
         rm: RoundingMode,
         exact: bool
     ):
@@ -1168,7 +1195,7 @@ class RealFloat(numbers.Rational):
         """
 
         # compute tininess before rounding
-        tiny_pre = p is not None and self._tiny_pre(p, n)
+        tiny_pre = emin is not None and self._tiny_pre(emin)
 
         # other flags set to their default values
         tiny_post = tiny_pre
@@ -1177,7 +1204,7 @@ class RealFloat(numbers.Rational):
 
         if self._exp > n and (p is None or self.p <= p):
             # fast path: definitely representable values
-            kept = RealFloat(s=self._s, exp=self._exp, c=self._c, tiny_pre=tiny_pre)
+            kept = RealFloat(s=self._s, exp=self._exp, c=self._c)
         else:
             # normal path: need to split the value
             # step 1. split the number at the rounding position
@@ -1206,7 +1233,8 @@ class RealFloat(numbers.Rational):
 
                         # possibly need to recompute tiny_post
                         if tiny_pre:
-                            tiny_post = self._tiny_post(kept, p, n, rm)
+                            assert emin is not None
+                            tiny_post = self._tiny_post(kept, emin, n, rm)
 
         # set flags
         kept._flags = Flags(tiny_pre=tiny_pre, tiny_post=tiny_post, inexact=inexact, carry=carry)
@@ -1229,6 +1257,7 @@ class RealFloat(numbers.Rational):
         self,
         p: int | None,
         n: int,
+        emin: int | None,
         rm: RoundingMode,
         num_randbits: int | None,
         rng: RNG | None,
@@ -1257,7 +1286,7 @@ class RealFloat(numbers.Rational):
         n_rand = n - num_randbits
 
         # step 4. round the number to obtain the extended-precision value
-        xr = self._round_at(None, n_rand, rm, exact)
+        xr = self._round_at(None, n_rand, None, rm, exact)
 
         # step 5. split the number at the rounding position to get the rounding bits
         _, lost = xr.split(n)
@@ -1281,7 +1310,7 @@ class RealFloat(numbers.Rational):
             rand_rm = RoundingMode.RAZ if round_up else RoundingMode.RTZ
 
         # step 9. apply rounding as normal
-        return self._round_at(p, n, rand_rm, exact)
+        return self._round_at(p, n, emin, rand_rm, exact)
 
 
     def round_at(
@@ -1307,13 +1336,19 @@ class RealFloat(numbers.Rational):
         if num_randbits is not None and not isinstance(num_randbits, int):
             raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
 
-        # round at the specified position
+        # step 1. compute `emin` for floating-point w/ subnormalization
+        if p is not None and n is not None:
+            emin = p + n
+        else:
+            emin = None
+
+        # step 2. round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
-            return self._round_at(p, n, rm, exact)
+            return self._round_at(p, n, emin, rm, exact)
         else:
             # stochastic rounding
-            return self._round_at_stochastic(p, n, rm, num_randbits, rng, exact)
+            return self._round_at_stochastic(p, n, emin, rm, num_randbits, rng, exact)
 
     def round(self,
         max_p: int | None = None,
@@ -1368,10 +1403,16 @@ class RealFloat(numbers.Rational):
         # step 1. compute rounding parameters
         p, n = self._round_params(max_p, min_n)
 
+        # step 2. compute `emin` for floating-point w/ subnormalization
+        if max_p is not None and min_n is not None:
+            emin = max_p + min_n
+        else:
+            emin = None
+
         # step 2. round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
-            return self._round_at(p, n, rm, exact)
+            return self._round_at(p, n, emin, rm, exact)
         else:
             # stochastic rounding
-            return self._round_at_stochastic(p, n, rm, num_randbits, rng, exact)
+            return self._round_at_stochastic(p, n, emin, rm, num_randbits, rng, exact)
