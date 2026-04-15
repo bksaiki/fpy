@@ -74,6 +74,8 @@ class RealFloat(numbers.Rational):
         x: Self | None = None,
         e: int | None = None,
         m: int | None = None,
+        invalid: bool | None = None,
+        divzero: bool | None = None,
         overflow: bool | None = None,
         tiny_pre: bool | None = None,
         tiny_post: bool | None = None,
@@ -137,6 +139,8 @@ class RealFloat(numbers.Rational):
         # flags
         if x is None:
             self._flags = Flags(
+                invalid=invalid,
+                divzero=divzero,
                 overflow=overflow,
                 tiny_pre=tiny_pre,
                 tiny_post=tiny_post,
@@ -146,6 +150,8 @@ class RealFloat(numbers.Rational):
         else:
             self._flags = Flags(
                 x=x._flags,
+                invalid=invalid,
+                divzero=divzero,
                 overflow=overflow,
                 tiny_pre=tiny_pre,
                 tiny_post=tiny_post,
@@ -472,6 +478,16 @@ class RealFloat(numbers.Rational):
     def c(self) -> int:
         """property: integer significand"""
         return self._c
+
+    @property
+    def invalid(self) -> bool:
+        """Invalid operation flag: the operation produced an invalid result."""
+        return self._flags.invalid
+
+    @property
+    def divzero(self) -> bool:
+        """Division by zero flag: the operation divided by zero."""
+        return self._flags.divzero
 
     @property
     def overflow(self) -> bool:

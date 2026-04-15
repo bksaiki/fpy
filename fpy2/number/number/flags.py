@@ -11,16 +11,20 @@ __all__ = [
 
 
 # bit positions for each flag
-_OVERFLOW = 1 << 0
-_TINY_PRE = 1 << 1
-_TINY_POST = 1 << 2
-_INEXACT = 1 << 3
-_CARRY = 1 << 4
+_INVALID = 1 << 0
+_DIVZERO = 1 << 1
+_OVERFLOW = 1 << 2
+_TINY_PRE = 1 << 3
+_TINY_POST = 1 << 4
+_INEXACT = 1 << 5
+_CARRY = 1 << 6
 
 
 class Flags:
     """
     The `Flags` class represents the status flags for arithmetic operations.
+    - `invalid`: the operation produced an invalid result
+    - `divzero`: the operation divided by zero
     - `overflow`: the result exceeded the representable range
     - `tiny_pre`: the result before rounding satisfies `|x| < 2^emin`
     - `tiny_post`: the result after rounding (without subnormalization) satisfies `|x| < 2^emin`
@@ -35,6 +39,8 @@ class Flags:
     def __init__(
         self, *,
         x: Self | None = None,
+        invalid: bool | None = None,
+        divzero: bool | None = None,
         overflow: bool | None = None,
         tiny_pre: bool | None = None,
         tiny_post: bool | None = None,
@@ -43,6 +49,10 @@ class Flags:
     ):
         # if `x` is provided, copy flags from `x`
         if x is not None:
+            if invalid is None:
+                invalid = bool(x._flags & _INVALID)
+            if divzero is None:
+                divzero = bool(x._flags & _DIVZERO)
             if overflow is None:
                 overflow = bool(x._flags & _OVERFLOW)
             if tiny_pre is None:
@@ -56,6 +66,10 @@ class Flags:
 
         # set flags
         self._flags = 0
+        if invalid:
+            self._flags |= _INVALID
+        if divzero:
+            self._flags |= _DIVZERO
         if overflow:
             self._flags |= _OVERFLOW
         if tiny_pre:
@@ -69,6 +83,10 @@ class Flags:
 
     def __repr__(self) -> str:
         flag_strs: list[str] = []
+        if self.invalid:
+            flag_strs.append("invalid=True")
+        if self.divzero:
+            flag_strs.append("divzero=True")
         if self.overflow:
             flag_strs.append("overflow=True")
         if self.tiny_pre:
@@ -80,6 +98,16 @@ class Flags:
         if self.carry:
             flag_strs.append("carry=True")
         return f"{self.__class__.__name__}({', '.join(flag_strs)})"
+
+    @property
+    def invalid(self) -> bool:
+        """Invalid operation flag: the operation produced an invalid result."""
+        return bool(self._flags & _INVALID)
+
+    @property
+    def divzero(self) -> bool:
+        """Division by zero flag: the operation divided by zero."""
+        return bool(self._flags & _DIVZERO)
 
     @property
     def overflow(self) -> bool:
@@ -119,6 +147,20 @@ class Flags:
         """Underflow after rounding flag: `self.tiny_post and self.inexact`."""
         return self.tiny_post and self.inexact
 
+
+    def _set_invalid(self, value: bool) -> None:
+        """Unsafe setter for invalid operation flag."""
+        if value:
+            self._flags |= _INVALID
+        else:
+            self._flags &= ~_INVALID
+
+    def _set_divzero(self, value: bool) -> None:
+        """Unsafe setter for division by zero flag."""
+        if value:
+            self._flags |= _DIVZERO
+        else:
+            self._flags &= ~_DIVZERO
 
     def _set_overflow(self, value: bool) -> None:
         """Unsafe setter for overflow flag."""
