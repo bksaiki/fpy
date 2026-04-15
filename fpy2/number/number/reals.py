@@ -1337,7 +1337,7 @@ class RealFloat(numbers.Rational):
             raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
 
         # step 1. compute `emin` for floating-point w/ subnormalization
-        if p is not None and n is not None:
+        if p is not None:
             emin = p + n
         else:
             emin = None
