@@ -17,7 +17,7 @@ EXT_EXPMIN = 2 * EXPMIN
 CTX = fp.MPSFloatContext(PREC, EXPMIN - 1)
 
 
-class OrdinalTestCast():
+class TestOrdinal():
     """Testing ordinal methods of `MPSFloatContext`."""
 
     @given(floats(prec_max=CTX.pmax, exp_min=CTX.expmin, exp_max=EXPMAX, allow_nan=False, allow_infinity=False))

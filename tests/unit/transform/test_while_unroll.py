@@ -4,7 +4,7 @@ Unit tests for loop unrolling.
 
 import fpy2 as fp
 
-class TestForUnroll():
+class TestWhileUnroll():
 
     def test_example1(self):
         @fp.fpy

@@ -235,26 +235,26 @@ def _example_while_1_expect():
     return x
 
 @fp.fpy
-def test_simple_3():
+def example_simple_3():
     x = 1
     y = 2
     x = 3
     return x
 
 @fp.fpy
-def test_simple_3_expect():
+def example_simple_3_expect():
     x = 3
     return x
 
 @fp.fpy
-def test_simple_4():
+def example_simple_4():
     x = 1
     x = 2
     x = 3
     return x
 
 @fp.fpy
-def test_simple_4_expect():
+def example_simple_4_expect():
     x = 3
     return x
 
@@ -278,8 +278,8 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_dead_while_1, _example_dead_while_1_expect),
     (_example_dead_while_2, _example_dead_while_2_expect),
     (_example_while_1, _example_while_1_expect),
-    (test_simple_3, test_simple_3_expect),
-    (test_simple_4, test_simple_4_expect)
+    (example_simple_3, example_simple_3_expect),
+    (example_simple_4, example_simple_4_expect)
 ]
 
 
