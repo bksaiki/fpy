@@ -78,7 +78,11 @@ class Float:
         m: int | None = None,
         isinf: bool | None = None,
         isnan: bool | None = None,
+        invalid: bool | None = None,
+        divzero: bool | None = None,
         overflow: bool | None = None,
+        tiny_pre: bool | None = None,
+        tiny_post: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None,
         ctx: DefaultOr[Optional[Context]] = DEFAULT
@@ -124,7 +128,11 @@ class Float:
             x=real,
             e=e,
             m=m,
+            invalid=invalid,
+            divzero=divzero,
             overflow=overflow,
+            tiny_pre=tiny_pre,
+            tiny_post=tiny_post,
             inexact=inexact,
             carry=carry
         )
@@ -477,9 +485,32 @@ class Float:
         return self._real.m
 
     @property
+    def invalid(self) -> bool:
+        """Invalid operation flag: the operation produced an invalid result."""
+        return self._real._flags.invalid
+
+    @property
+    def divzero(self) -> bool:
+        """Division by zero flag: the operation divided by zero."""
+        return self._real._flags.divzero
+
+    @property
     def overflow(self) -> bool:
         """Overflow flag: the result exceeded the representable range."""
         return self._real._flags.overflow
+
+    @property
+    def tiny_pre(self) -> bool:
+        """Tiny before rounding flag: the result before rounding satisfies `|x| < 2^emin`."""
+        return self._real._flags.tiny_pre
+
+    @property
+    def tiny_post(self) -> bool:
+        """
+        Tiny after rounding flag: the result after rounding
+        (without subnormalization) satisfies `|x| < 2^emin`.
+        """
+        return self._real._flags.tiny_post
 
     @property
     def inexact(self) -> bool:
@@ -490,6 +521,16 @@ class Float:
     def carry(self) -> bool:
         """Carry flag: the rounded result has a different exponent than the exact result."""
         return self._real._flags.carry
+
+    @property
+    def underflow_pre(self) -> bool:
+        """Underflow before rounding flag: `self.tiny_pre and self.inexact`."""
+        return self._real._flags.underflow_pre
+
+    @property
+    def underflow_post(self) -> bool:
+        """Underflow after rounding flag: `self.tiny_post and self.inexact`."""
+        return self._real._flags.underflow_post
 
     @property
     def numerator(self):
@@ -611,7 +652,11 @@ class Float:
         """
         return Float(
             x=self,
+            invalid=other.invalid,
+            divzero=other.divzero,
             overflow=other.overflow,
+            tiny_pre=other.tiny_pre,
+            tiny_post=other.tiny_post,
             inexact=other.inexact,
             carry=other.carry
         )
