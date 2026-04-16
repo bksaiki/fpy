@@ -1,11 +1,11 @@
 """Unit tests for Unionfind data structure."""
+import pytest
 from hypothesis import given, strategies as st
 from fpy2.utils.unionfind import Unionfind
 
 
 class TestUnionfindBasic():
     """Basic unit tests for Unionfind."""
-import pytest
 
     def test_empty_initialization(self):
         """Test creating an empty unionfind."""
@@ -297,5 +297,4 @@ class TestUnionfindProperties():
             x, y = string_elements[0], string_elements[1]
             uf.union(x, y)
             assert uf.find(x) == uf.find(y)
-
 

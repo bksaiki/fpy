@@ -24,7 +24,7 @@ class RoundTestCase():
         raz = ctx_raz.round(x)
         assert isinstance(rounded, fp.Float)
         assert rounded == rtz or rounded == raz
-        assert rtz == raz == not rounded.inexact
+        assert (rtz == raz) == (not rounded.inexact)
 
     @given(
         floats(prec_max=16, exp_min=-32, exp_max=32, allow_nan=False, allow_infinity=False),
@@ -41,4 +41,4 @@ class RoundTestCase():
         raz = ctx_raz.round(x)
         assert isinstance(rounded, fp.Float)
         assert rounded == rtz or rounded == raz
-        assert rtz == raz == not rounded.inexact
+        assert (rtz == raz) == (not rounded.inexact)

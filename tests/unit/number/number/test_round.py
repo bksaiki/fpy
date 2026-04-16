@@ -104,7 +104,7 @@ class TestRealFloatRoundMethods():
         x = fp.RealFloat(x=x, inexact=inexact)
         rounded = x.round(max_p=p, min_n=n, rm=rm)
         assert isinstance(rounded, fp.RealFloat)
-        assert x != rounded == rounded.inexact, f'x={x}, p={p}, n={n}, rm={rm!r}, inexact={inexact}, rounded.inexact={rounded.inexact}'
+        assert (x != rounded) == rounded.inexact, f'x={x}, p={p}, n={n}, rm={rm!r}, inexact={inexact}, rounded.inexact={rounded.inexact}'
         if p is not None:
             assert rounded.p <= p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}'
         if n is not None:

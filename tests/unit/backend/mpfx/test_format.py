@@ -173,7 +173,7 @@ class TestAbstractFormat():
         vals2 = set(generate(p2, q2, b2.as_rational()))
         all_contained = all(v in vals2 for v in generate(p1, q1, b1.as_rational()))
 
-        assert fmt1 <= fmt2 == all_contained, f"format containment mismatch: {fmt1} <= {fmt2} should be {all_contained}"
+        assert (fmt1 <= fmt2) == all_contained, f"format containment mismatch: {fmt1} <= {fmt2} should be {all_contained}"
 
 
     def test_effective_prec(self):

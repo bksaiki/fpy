@@ -64,34 +64,34 @@ class TestCompareMethods():
     def test_compare_eq(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        assert a == b == af == bf, f'Failed comparison: {a} == {b} ({af} == {bf})'
+        assert (a == b) == (af == bf), f'Failed comparison: {a} == {b} ({af} == {bf})'
 
     @given(number(), number())
     def test_compare_ne(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        assert a != b == af != bf, f'Failed comparison: {a} != {b} ({af} != {bf})'
+        assert (a != b) == (af != bf), f'Failed comparison: {a} != {b} ({af} != {bf})'
 
     @given(number(), number())
     def test_compare_lt(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        assert a < b == af < bf, f'Failed comparison: {a} < {b} ({af} < {bf})'
+        assert (a < b) == (af < bf), f'Failed comparison: {a} < {b} ({af} < {bf})'
 
     @given(number(), number())
     def test_compare_le(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        assert a <= b == af <= bf, f'Failed comparison: {a} <= {b} ({af} <= {bf})'
+        assert (a <= b) == (af <= bf), f'Failed comparison: {a} <= {b} ({af} <= {bf})'
 
     @given(number(), number())
     def test_compare_gt(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        assert a > b == af > bf, f'Failed comparison: {a} > {b} ({af} > {bf})'
+        assert (a > b) == (af > bf), f'Failed comparison: {a} > {b} ({af} > {bf})'
 
     @given(number(), number())
     def test_compare_ge(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        assert a >= b == af >= bf, f'Failed comparison: {a} >= {b}  ({af} >= {bf})'
+        assert (a >= b) == (af >= bf), f'Failed comparison: {a} >= {b}  ({af} >= {bf})'
