@@ -142,7 +142,7 @@ def _normalize(x: Float | Fraction, ctx: Context, args: tuple[Float | Fraction, 
             if result.isnan:
                 if not any(isinstance(a, Float) and a.isnan for a in args):
                     result._real._flags._set_invalid(True)
-            elif result.isinf:
+            elif result.isinf and not result.inexact:
                 if all(isinstance(a, Fraction) or not a.is_nar() for a in args):
                     result._real._flags._set_divzero(True)
         return result

@@ -652,7 +652,11 @@ class Float:
         """
         return Float(
             x=self,
+            invalid=other.invalid,
+            divzero=other.divzero,
             overflow=other.overflow,
+            tiny_pre=other.tiny_pre,
+            tiny_post=other.tiny_post,
             inexact=other.inexact,
             carry=other.carry
         )

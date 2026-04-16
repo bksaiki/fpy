@@ -1425,7 +1425,7 @@ class RealFloat(numbers.Rational):
         else:
             emin = None
 
-        # step 2. round at the specified position
+        # step 3. round at the specified position
         if num_randbits == 0:
             # non-stochastic rounding
             return self._round_at(p, n, emin, rm, exact)
