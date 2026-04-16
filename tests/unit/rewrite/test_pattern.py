@@ -1,25 +1,24 @@
-import unittest
 
 from fpy2 import *
 from fpy2.rewrite.pattern import Pattern
 
-class ParseSimpleTestCase(unittest.TestCase):
+class ParseSimpleTestCase():
     """Testing `Pattern` parsing"""
 
     def test_const_pat(self):
         @pattern
         def const_pat():
             1
-        self.assertIsInstance(const_pat, Pattern)
+        assert isinstance(const_pat, Pattern)
 
     def test_identity_pat(self):
         @pattern
         def identity_pat(x):
             x
-        self.assertIsInstance(identity_pat, Pattern)
+        assert isinstance(identity_pat, Pattern)
 
 
-class ParseExampleTestCase(unittest.TestCase):
+class ParseExampleTestCase():
     """Testing `Pattern` parsing for examples"""
 
     def test_fma_example(self):
@@ -30,8 +29,8 @@ class ParseExampleTestCase(unittest.TestCase):
         def insert_fma_pat(a, b, c):
             fma(a, b, c)
 
-        self.assertIsInstance(insert_mad_pat, Pattern)
-        self.assertIsInstance(insert_fma_pat, Pattern)
+        assert isinstance(insert_mad_pat, Pattern)
+        assert isinstance(insert_fma_pat, Pattern)
 
     def test_sum_example(self):
         @pattern
@@ -43,8 +42,8 @@ class ParseExampleTestCase(unittest.TestCase):
         def insert_sum_op_pat(xs):
             y = sum(xs)
 
-        self.assertIsInstance(insert_sum_pat, Pattern)
-        self.assertIsInstance(insert_sum_op_pat, Pattern)
+        assert isinstance(insert_sum_pat, Pattern)
+        assert isinstance(insert_sum_op_pat, Pattern)
 
     def test_sum_bad_example(self):
         @pattern
@@ -57,7 +56,7 @@ class ParseExampleTestCase(unittest.TestCase):
             for x in xs:
                 y += x
 
-        self.assertIsInstance(expand_sum_bad, Pattern)
+        assert isinstance(expand_sum_bad, Pattern)
 
 
     def test_while_unroll(self):
@@ -72,5 +71,5 @@ class ParseExampleTestCase(unittest.TestCase):
             while t > 0:
                 t = e
 
-        self.assertIsInstance(unroll_while_l, Pattern)
-        self.assertIsInstance(unroll_while_r, Pattern)
+        assert isinstance(unroll_while_l, Pattern)
+        assert isinstance(unroll_while_r, Pattern)

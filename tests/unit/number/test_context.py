@@ -3,7 +3,6 @@ Testing `Context` methods.
 """
 
 import fpy2 as fp
-import unittest
 
 from fractions import Fraction
 from hypothesis import assume, given, strategies as st
@@ -30,32 +29,32 @@ def _encodable_contexts():
     return _sized_contexts()
 
 
-class TestOrdinalContext(unittest.TestCase):
+class TestOrdinalContext():
     """Testing `OrdinalContext` methods."""
 
     @given(common_contexts().filter(lambda ctx: isinstance(ctx, fp.OrdinalContext)))
     def test_minval_common(self, ctx: fp.OrdinalContext):
         pos_min = ctx.minval()
-        self.assertIsInstance(pos_min, fp.Float)
-        self.assertTrue(pos_min.is_positive())
+        assert isinstance(pos_min, fp.Float)
+        assert pos_min.is_positive()
 
         try:
             neg_min = ctx.minval(s=True)
-            self.assertIsInstance(neg_min, fp.Float)
-            self.assertTrue(neg_min.is_negative())
+            assert isinstance(neg_min, fp.Float)
+            assert neg_min.is_negative()
         except ValueError:
             pass
 
     @given(_ordinal_contexts().filter(lambda ctx: not isinstance(ctx, fp.EFloatContext) or ctx.has_nonzero()))
     def test_minval(self, ctx: fp.EncodableContext):
         pos_min = ctx.minval()
-        self.assertIsInstance(pos_min, fp.Float)
-        self.assertTrue(pos_min.is_positive())
+        assert isinstance(pos_min, fp.Float)
+        assert pos_min.is_positive()
 
         try:
             neg_min = ctx.minval(s=True)
-            self.assertIsInstance(neg_min, fp.Float)
-            self.assertTrue(neg_min.is_negative())
+            assert isinstance(neg_min, fp.Float)
+            assert neg_min.is_negative()
         except ValueError:
             pass
 
@@ -69,7 +68,7 @@ class TestOrdinalContext(unittest.TestCase):
     def test_to_ordinal_common(self, ctx_x: tuple[fp.OrdinalContext, fp.Float]):
         ctx, x = ctx_x
         ord = ctx.to_ordinal(x)
-        self.assertIsInstance(ord, int)
+        assert isinstance(ord, int)
 
     @given(
         _ordinal_contexts().flatmap(
@@ -80,7 +79,7 @@ class TestOrdinalContext(unittest.TestCase):
     def test_to_ordinal(self, ctx_x: tuple[fp.EncodableContext, fp.Float]):
         ctx, x = ctx_x
         ord = ctx.to_ordinal(x)
-        self.assertIsInstance(ord, int)
+        assert isinstance(ord, int)
 
 
     @given(
@@ -93,7 +92,7 @@ class TestOrdinalContext(unittest.TestCase):
     )
     def test_from_ordinal_common(self, ctx: fp.OrdinalContext, ord: int):
         x = ctx.from_ordinal(ord)
-        self.assertIsInstance(x, fp.Float)
+        assert isinstance(x, fp.Float)
 
     @given(
         _ordinal_contexts().filter(lambda ctx: not isinstance(ctx, fp.SizedContext)),
@@ -101,7 +100,7 @@ class TestOrdinalContext(unittest.TestCase):
     )
     def test_from_ordinal(self, ctx: fp.EncodableContext, ord: int):
         x = ctx.from_ordinal(ord)
-        self.assertIsInstance(x, fp.Float)
+        assert isinstance(x, fp.Float)
 
     @given(
         common_contexts().filter(
@@ -110,7 +109,7 @@ class TestOrdinalContext(unittest.TestCase):
     )
     def test_to_fractional_ordinal_common(self, ctx: fp.OrdinalContext, x: fp.Float):
         frac_ord = ctx.to_fractional_ordinal(x)
-        self.assertIsInstance(frac_ord, Fraction)
+        assert isinstance(frac_ord, Fraction)
 
     @given(
         common_contexts().filter(
@@ -124,8 +123,8 @@ class TestOrdinalContext(unittest.TestCase):
         ctx, x, y = ctx_x_y
         if x != y:
             next_towards = ctx.next_towards(x, y)
-            self.assertIsInstance(next_towards, fp.Float)
-            self.assertTrue(abs(ctx.to_ordinal(next_towards) - ctx.to_ordinal(x)) == 1)
+            assert isinstance(next_towards, fp.Float)
+            assert abs(ctx.to_ordinal(next_towards) - ctx.to_ordinal(x)) == 1
 
     @given(
         _ordinal_contexts().flatmap(
@@ -138,8 +137,8 @@ class TestOrdinalContext(unittest.TestCase):
         ctx, x, y = ctx_x_y
         if x != y:
             next_towards = ctx.next_towards(x, y)
-            self.assertIsInstance(next_towards, fp.Float)
-            self.assertTrue(abs(ctx.to_ordinal(next_towards) - ctx.to_ordinal(x)) == 1)
+            assert isinstance(next_towards, fp.Float)
+            assert abs(ctx.to_ordinal(next_towards) - ctx.to_ordinal(x)) == 1
 
     @given(
         common_contexts().filter(
@@ -152,9 +151,9 @@ class TestOrdinalContext(unittest.TestCase):
         ctx, x = ctx_x
         if x != 0:
             y = ctx.next_towards_zero(x)
-            self.assertIsInstance(y, fp.Float)
-            self.assertTrue(abs(y) < abs(x))
-            self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+            assert isinstance(y, fp.Float)
+            assert abs(y) < abs(x)
+            assert abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1
 
     @given(
         _ordinal_contexts().flatmap(
@@ -166,9 +165,9 @@ class TestOrdinalContext(unittest.TestCase):
         ctx, x = ctx_x
         if x != 0:
             y = ctx.next_towards_zero(x)
-            self.assertIsInstance(y, fp.Float)
-            self.assertTrue(abs(y) < abs(x))
-            self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+            assert isinstance(y, fp.Float)
+            assert abs(y) < abs(x)
+            assert abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1
 
     @given(
         common_contexts().filter(
@@ -182,9 +181,9 @@ class TestOrdinalContext(unittest.TestCase):
         assume(not isinstance(ctx, fp.SizedContext) or ctx.smallest() < x < ctx.largest())
         if x != 0:
             y = ctx.next_away_zero(x)
-            self.assertIsInstance(y, fp.Float)
-            self.assertTrue(abs(y) > abs(x))
-            self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+            assert isinstance(y, fp.Float)
+            assert abs(y) > abs(x)
+            assert abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1
 
     @given(
         _ordinal_contexts().flatmap(
@@ -197,9 +196,9 @@ class TestOrdinalContext(unittest.TestCase):
         assume(not isinstance(ctx, fp.SizedContext) or ctx.smallest() < x < ctx.largest())
         if x != 0:
             y = ctx.next_away_zero(x)
-            self.assertIsInstance(y, fp.Float)
-            self.assertTrue(abs(y) > abs(x))
-            self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+            assert isinstance(y, fp.Float)
+            assert abs(y) > abs(x)
+            assert abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1
 
     @given(
         common_contexts().filter(
@@ -212,9 +211,9 @@ class TestOrdinalContext(unittest.TestCase):
         ctx, x = ctx_x
         assume(not isinstance(ctx, fp.SizedContext) or x < ctx.largest())
         y = ctx.next_up(x)
-        self.assertIsInstance(y, fp.Float)
-        self.assertTrue(y >= x)
-        self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+        assert isinstance(y, fp.Float)
+        assert y >= x
+        assert abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1
 
     @given(
         _ordinal_contexts().flatmap(
@@ -226,9 +225,9 @@ class TestOrdinalContext(unittest.TestCase):
         ctx, x = ctx_x
         assume(not isinstance(ctx, fp.SizedContext) or x < ctx.largest())
         y = ctx.next_up(x) 
-        self.assertIsInstance(y, fp.Float)
-        self.assertTrue(y >= x)
-        self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+        assert isinstance(y, fp.Float)
+        assert y >= x
+        assert abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1
 
     @given(
         common_contexts().filter(
@@ -241,9 +240,9 @@ class TestOrdinalContext(unittest.TestCase):
         ctx, x = ctx_x
         assume(not isinstance(ctx, fp.SizedContext) or x > ctx.smallest())
         y = ctx.next_down(x)
-        self.assertIsInstance(y, fp.Float)
-        self.assertTrue(y <= x)
-        self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+        assert isinstance(y, fp.Float)
+        assert y <= x
+        assert abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1
 
     @given(
         _ordinal_contexts().flatmap(
@@ -255,12 +254,12 @@ class TestOrdinalContext(unittest.TestCase):
         ctx, x = ctx_x
         assume(not isinstance(ctx, fp.SizedContext) or x > ctx.smallest())
         y = ctx.next_down(x)
-        self.assertIsInstance(y, fp.Float)
-        self.assertTrue(y <= x)
-        self.assertTrue(abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1)
+        assert isinstance(y, fp.Float)
+        assert y <= x
+        assert abs(ctx.to_ordinal(y) - ctx.to_ordinal(x)) == 1
 
 
-class TestSizedContext(unittest.TestCase):
+class TestSizedContext():
     """Testing `SizedContext` methods."""
 
     @given(
@@ -269,31 +268,31 @@ class TestSizedContext(unittest.TestCase):
     )
     def test_maxval_common(self, ctx: fp.SizedContext):
         pos_max = ctx.maxval()
-        self.assertIsInstance(pos_max, fp.Float)
-        self.assertFalse(pos_max.is_negative())
+        assert isinstance(pos_max, fp.Float)
+        assert not pos_max.is_negative()
 
         try:
             neg_max = ctx.maxval(s=True)
-            self.assertIsInstance(neg_max, fp.Float)
-            self.assertFalse(neg_max.is_positive())
+            assert isinstance(neg_max, fp.Float)
+            assert not neg_max.is_positive()
         except ValueError: 
             pass
 
     @given(_sized_contexts())
     def test_maxval(self, ctx: fp.SizedContext):
         pos_max = ctx.maxval()
-        self.assertIsInstance(pos_max, fp.Float)
-        self.assertFalse(pos_max.is_negative())
+        assert isinstance(pos_max, fp.Float)
+        assert not pos_max.is_negative()
 
         try:
             neg_max = ctx.maxval(s=True)
-            self.assertIsInstance(neg_max, fp.Float)
-            self.assertFalse(neg_max.is_positive())
+            assert isinstance(neg_max, fp.Float)
+            assert not neg_max.is_positive()
         except ValueError: 
             pass
 
 
-class TestEncodableContext(unittest.TestCase):
+class TestEncodableContext():
     """Testing `EncodableContext` methods."""
 
     @given(
@@ -306,8 +305,8 @@ class TestEncodableContext(unittest.TestCase):
     def test_encode_common(self, ctx_x: tuple[fp.EncodableContext, fp.Float]):
         ctx, x = ctx_x
         encoded = ctx.encode(x)
-        self.assertIsInstance(encoded, int)
-        self.assertTrue(0 <= encoded)
+        assert isinstance(encoded, int)
+        assert 0 <= encoded
 
     @given(
         _encodable_contexts().flatmap(
@@ -318,8 +317,8 @@ class TestEncodableContext(unittest.TestCase):
     def test_encode(self, ctx_x: tuple[fp.EncodableContext, fp.Float]):
         ctx, x = ctx_x
         encoded = ctx.encode(x)
-        self.assertIsInstance(encoded, int)
-        self.assertTrue(0 <= encoded)
+        assert isinstance(encoded, int)
+        assert 0 <= encoded
 
 
     @given(
@@ -333,8 +332,8 @@ class TestEncodableContext(unittest.TestCase):
         ctx, x = ctx_x
         encoded = ctx.encode(x)
         decoded = ctx.decode(encoded)
-        self.assertIsInstance(decoded, fp.Float)
-        self.assertEqual(x, decoded)
+        assert isinstance(decoded, fp.Float)
+        assert x == decoded
 
     @given(
         _encodable_contexts().flatmap(
@@ -346,5 +345,5 @@ class TestEncodableContext(unittest.TestCase):
         ctx, x = ctx_x
         encoded = ctx.encode(x)
         decoded = ctx.decode(encoded)
-        self.assertIsInstance(decoded, fp.Float)
-        self.assertEqual(x, decoded)
+        assert isinstance(decoded, fp.Float)
+        assert x == decoded

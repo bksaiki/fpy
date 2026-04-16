@@ -51,7 +51,7 @@ infratest:
 
 unittest:
 	@echo "Running unit tests..."
-	python3 -m unittest -v -k $(UNITTEST_PATTERN)
+	python3 -m pytest -v tests/unit -k $(UNITTEST_PATTERN)
 
 clean: clean-docs
 	@echo "Cleaning build artifacts..."

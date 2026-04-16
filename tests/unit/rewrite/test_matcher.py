@@ -1,4 +1,3 @@
-import unittest
 
 from fpy2 import fpy, pattern, Function
 from fpy2.ast import Add, Var, NamedId, Integer, Expr, Stmt, StmtBlock, FuncDef
@@ -25,14 +24,14 @@ def h(x, y, z):
     return t
 
 
-class _MatcherTestCase(unittest.TestCase):
+class _MatcherTestCase():
 
     def assertAstEqual(
         self,
         a: Expr | Stmt | StmtBlock | FuncDef,
         b: Expr | Stmt | StmtBlock | FuncDef
     ):
-        self.assertTrue(a.is_equiv(b), f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n')
+        assert a.is_equiv(b), f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n'
 
 class MatchExprTestCase(_MatcherTestCase):
     """Testing `Matcher.match()` for expressions"""
@@ -49,7 +48,7 @@ class MatchExprTestCase(_MatcherTestCase):
         assert isinstance(f1, Function)
         m = Matcher(compare_pattern1)
         matches = m.match(f1)
-        self.assertEqual(len(matches), 1)
+        assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['a'], Var(NamedId('x'), None))
         self.assertAstEqual(matches[0].subst['b'], Var(NamedId('y'), None))
 
@@ -58,7 +57,7 @@ class MatchExprTestCase(_MatcherTestCase):
         assert isinstance(f, Function)
         m = Matcher(insert_fma_l)
         matches = m.match(f)
-        self.assertEqual(len(matches), 1)
+        assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['a'], Var(NamedId('x'), None))
         self.assertAstEqual(matches[0].subst['b'], Var(NamedId('y'), None))
         self.assertAstEqual(matches[0].subst['c'], Var(NamedId('z'), None))
@@ -67,7 +66,7 @@ class MatchExprTestCase(_MatcherTestCase):
         assert isinstance(g, Function)
         m = Matcher(insert_fma_l)
         matches = m.match(g)
-        self.assertEqual(len(matches), 1)
+        assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['a'], Var(NamedId('y'), None))
         self.assertAstEqual(matches[0].subst['b'], Var(NamedId('z'), None))
         self.assertAstEqual(matches[0].subst['c'], Var(NamedId('x'), None))
@@ -76,7 +75,7 @@ class MatchExprTestCase(_MatcherTestCase):
         assert isinstance(h, Function)
         m = Matcher(insert_fma_l)
         matches = m.match(h)
-        self.assertEqual(len(matches), 2)
+        assert len(matches) == 2
 
         m0 = matches[0]
         self.assertAstEqual(m0.subst['a'], Var(NamedId('x'), None))
@@ -123,13 +122,13 @@ class MatchStmtTestCase(_MatcherTestCase):
         assert isinstance(f1, Function)
         m = Matcher(unpack_pattern1)
         matches = m.match(f1)
-        self.assertEqual(len(matches), 1)
+        assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['a'], Var(NamedId('x'), None))
         self.assertAstEqual(matches[0].subst['b'], Var(NamedId('y'), None))
 
         m = Matcher(unpack_pattern2)
         matches = m.match(f1)
-        self.assertEqual(len(matches), 1)
+        assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['a'], Var(NamedId('x'), None))
 
     def test_if(self):
@@ -151,7 +150,7 @@ class MatchStmtTestCase(_MatcherTestCase):
         assert isinstance(f, Function)
         m = Matcher(if_pattern1)
         matches = m.match(f)
-        self.assertEqual(len(matches), 1)
+        assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['t'], Var(NamedId('x'), None))
         self.assertAstEqual(matches[0].subst['c1'], Integer(1, None))
         self.assertAstEqual(matches[0].subst['c2'], Integer(2, None))
@@ -173,7 +172,7 @@ class MatchStmtTestCase(_MatcherTestCase):
         assert isinstance(f, Function)
         m = Matcher(while_pattern1)
         matches = m.match(f)
-        self.assertEqual(len(matches), 1)
+        assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['t'], Var(NamedId('x'), None))
         self.assertAstEqual(matches[0].subst['N'], Integer(100, None))
         self.assertAstEqual(matches[0].subst['e'], Add(Var(NamedId('x'), None), Integer(1, None), None))
@@ -184,7 +183,7 @@ class MatchStmtTestCase(_MatcherTestCase):
         m = Matcher(insert_sum_l)
         matches = m.match(f2)
 
-        self.assertEqual(len(matches), 1)
+        assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['y'], Var(NamedId('sum'), None))
         self.assertAstEqual(matches[0].subst['x'], Var(NamedId('n'), None))
         self.assertAstEqual(matches[0].subst['xs'], Var(NamedId('lst'), None))

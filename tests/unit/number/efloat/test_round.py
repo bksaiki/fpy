@@ -1,4 +1,3 @@
-import unittest
 
 import fpy2 as fp
 from hypothesis import given
@@ -11,7 +10,7 @@ _common: list[fp.EFloatContext] = [
     fp.FP8P1, fp.FP8P2, fp.FP8P3, fp.FP8P4, fp.FP8P5, fp.FP8P6, fp.FP8P7
 ]
 
-class TestRound(unittest.TestCase):
+class TestRound():
     """Test rounding behavior."""
 
     @given(floats(prec_max=fp.FP16.pmax, exp_min=fp.FP16.expmin, exp_max=fp.FP16.expmax))
@@ -20,10 +19,10 @@ class TestRound(unittest.TestCase):
         for ctx in _common:
             y = ctx.round(x)
             y = fp.Float(x=y, ctx=None) # strip context for testing
-            self.assertIsInstance(y, fp.Float, f'ctx={ctx}, x={x}, y={y}')
-            self.assertTrue(ctx.representable_under(y), f'ctx={ctx}, x={x}, y={y}')
+            assert isinstance(y, fp.Float), f'ctx={ctx}, x={x}, y={y}'
+            assert ctx.representable_under(y), f'ctx={ctx}, x={x}, y={y}'
 
-class TestRoundSaturate(unittest.TestCase):
+class TestRoundSaturate():
     """Test saturation behavior."""
 
     def test_saturate(self):
@@ -31,5 +30,5 @@ class TestRoundSaturate(unittest.TestCase):
         maxval = ctx.maxval()
         eps = fp.Float(c=1, exp=maxval.exp)
 
-        self.assertEqual(ctx.round(maxval), maxval)
-        self.assertEqual(ctx.round(fp.add(maxval, eps)), maxval)
+        assert ctx.round(maxval) == maxval
+        assert ctx.round(fp.add(maxval, eps)) == maxval

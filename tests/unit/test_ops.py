@@ -3,20 +3,19 @@ Tests for `fpy2/ops.py`.
 """
 
 import fpy2 as fp
-import unittest
 
 from hypothesis import given, strategies as st
 
 from .generators import floats, common_contexts
 
 
-class TestRoundedOps(unittest.TestCase):
+class TestRoundedOps():
 
     def assertEqualOrNan(self, a: fp.Float, b: fp.Float, msg = None):
         if a.isnan or b.isnan:
-            self.assertTrue(a.isnan and b.isnan, msg)
+            assert a.isnan and b.isnan, msg
         else:
-            self.assertEqual(a, b, msg)
+            assert a == b, msg
 
     @given(
         common_contexts(),

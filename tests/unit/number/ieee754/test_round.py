@@ -1,7 +1,6 @@
 import math
 import random
 import re
-import unittest
 
 from fpy2 import Float, IEEEContext, RM
 
@@ -27,7 +26,7 @@ def _float_as_real(x: float):
         exp = int(e_str) - 4 * len(c_str)
         return Float(s=s, exp=exp, c=c)
 
-class RoundTestCase(unittest.TestCase):
+class RoundTestCase():
     """Testing `IEEEContext.round()`"""
 
     def test_native(self, num_values: int = 10_000, mantissa_len=128):
@@ -46,4 +45,4 @@ class RoundTestCase(unittest.TestCase):
         for x in xs:
             f1 = _float_as_real(float(x))
             f2 = fp64.round(x)
-            self.assertEqual(f1, f2, f'x={x}, f1={f1}, f2={f2}')
+            assert f1 == f2, f'x={x}, f1={f1}, f2={f2}'

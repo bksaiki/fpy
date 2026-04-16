@@ -1,9 +1,8 @@
 import random
-import unittest
 
 from fpy2 import Float, MPFloatContext, RM
 
-class NormalizeTestCase(unittest.TestCase):
+class NormalizeTestCase():
     """Testing `IEEEContext.normalize()`"""
 
     def test_normalize(self, num_values: int = 10_000, p_max: int = 128):
@@ -24,7 +23,7 @@ class NormalizeTestCase(unittest.TestCase):
 
             # check expected
             if x.is_zero():
-                self.assertTrue(y.is_zero(), f'x={x}, y={y}')
+                assert y.is_zero(), f'x={x}, y={y}'
             else:
-                self.assertEqual(x, y, f'x={x}, y={y}')
-                self.assertEqual(y.p, p_max, f'x={x}, y={y} (p={y.p})')
+                assert x == y, f'x={x}, y={y}'
+                assert y.p == p_max, f'x={x}, y={y} (p={y.p})'

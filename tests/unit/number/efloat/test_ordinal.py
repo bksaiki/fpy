@@ -1,4 +1,3 @@
-import unittest
 
 from fpy2 import (
     EFloatContext,
@@ -14,7 +13,7 @@ _common: list[EFloatContext] = [
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7
 ]
 
-class ToOrdinalTestCase(unittest.TestCase):
+class ToOrdinalTestCase():
     """Testing `IEEEContext.to_ordinal()`"""
 
     def test_common(self):
@@ -28,12 +27,12 @@ class ToOrdinalTestCase(unittest.TestCase):
                         if ctx.representable_under(xr):
                             x = Float(x=xr, ctx=ctx)
                             i = ctx.to_ordinal(x)
-                            self.assertIsInstance(i, int, f'x={x}, i={i}')
-                            self.assertGreaterEqual(i, -(1 << ctx.nbits - 1), f'x={x}, i={i}')
-                            self.assertLess(i, 1 << ctx.nbits - 1, f'x={x}, i={i}')
+                            assert isinstance(i, int), f'x={x}, i={i}'
+                            assert i >= -(1 << ctx.nbits - 1), f'x={x}, i={i}'
+                            assert i < 1 << ctx.nbits - 1, f'x={x}, i={i}'
 
 
-class OrdinalRoundTripTestCase(unittest.TestCase):
+class OrdinalRoundTripTestCase():
     """Testing `ExtFloatContext.to_ordinal()` and `ExtFloatContext.from_ordinal()`"""
 
     def test_common(self):
@@ -49,5 +48,5 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
                             x = Float(x=xr, ctx=ctx)
                             i = ctx.to_ordinal(x)
                             y = ctx.from_ordinal(i)
-                            self.assertIsInstance(y, Float, f'x={x}, i={i}, y={y}')
-                            self.assertEqual(x, y, f'x={x}, i={i}, y={y}')
+                            assert isinstance(y, Float), f'x={x}, i={i}, y={y}'
+                            assert x == y, f'x={x}, i={i}, y={y}'

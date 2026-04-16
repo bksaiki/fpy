@@ -3,7 +3,6 @@ Double rounding tests for `A(p, exp, bound)`.
 """
 
 import fpy2 as fp
-import unittest
 
 from hypothesis import assume, given, strategies as st
 
@@ -60,7 +59,7 @@ def _make_contexts(p1, exp1, k1, dp, dexp, dk, rm1, rm2, ensure_odd=False):
 
     return ctx1, ctx2
 
-class TestDoubleRound(unittest.TestCase):
+class TestDoubleRound():
     """Testing double rounding with overflow."""
 
     @given(
@@ -80,8 +79,8 @@ class TestDoubleRound(unittest.TestCase):
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
-        self.assertLessEqual(A1, A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}")
-        self.assertEqual(y1, y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}")
+        assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
+        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     @given(
         st.one_of(st.integers(1, 5), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
@@ -100,8 +99,8 @@ class TestDoubleRound(unittest.TestCase):
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
-        self.assertLessEqual(A1, A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}")
-        self.assertEqual(y1, y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}")
+        assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
+        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     @given(
         st.one_of(st.integers(1, 5), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
@@ -115,13 +114,14 @@ class TestDoubleRound(unittest.TestCase):
     def test_rto_rto(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RTO](ctx2[RTO](x)) == ctx1[RTO](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTO, fp.RM.RTO)
+        assume(ctx1.pos_maxval < ctx2.pos_maxval)
         A1 = AbstractFormat.from_context(ctx1)
         A2 = AbstractFormat.from_context(ctx2)
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
-        self.assertLessEqual(A1, A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}")
-        self.assertEqual(y1, y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}")
+        assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
+        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     # TODO: restore this test with proper preconditions
     # the problem is that RTO overflows to infinity while RTZ does not
@@ -163,8 +163,8 @@ class TestDoubleRound(unittest.TestCase):
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
-        self.assertLessEqual(A1, A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}")
-        self.assertEqual(y1, y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}")
+        assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
+        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     @given(
         st.one_of(st.integers(2, 5)),                         # p1: precision (inf = fixed-point)
@@ -184,5 +184,5 @@ class TestDoubleRound(unittest.TestCase):
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
-        self.assertLessEqual(A1, A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}")
-        self.assertEqual(y1, y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}")
+        assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
+        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"

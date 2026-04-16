@@ -1,14 +1,13 @@
 import fpy2 as fp
 import numpy as np
 import random
-import unittest
 
 from hypothesis import given, strategies as st
 
 from ...generators import floats
 
 
-class RoundTestCase(unittest.TestCase):
+class RoundTestCase():
     """Testing rounding methods of `MPFixedContext`."""
 
     @given(
@@ -23,9 +22,9 @@ class RoundTestCase(unittest.TestCase):
         rounded = ctx.round(x)
         rtz = ctx_rtz.round(x)
         raz = ctx_raz.round(x)
-        self.assertIsInstance(rounded, fp.Float)
-        self.assertTrue(rounded == rtz or rounded == raz)
-        self.assertEqual(rtz == raz, not rounded.inexact)
+        assert isinstance(rounded, fp.Float)
+        assert rounded == rtz or rounded == raz
+        assert (rtz == raz) == (not rounded.inexact)
 
     @given(
         floats(prec_max=16, exp_min=-32, exp_max=32, allow_nan=False, allow_infinity=False),
@@ -40,6 +39,6 @@ class RoundTestCase(unittest.TestCase):
         rounded = ctx.round(x)
         rtz = ctx_rtz.round(x)
         raz = ctx_raz.round(x)
-        self.assertIsInstance(rounded, fp.Float)
-        self.assertTrue(rounded == rtz or rounded == raz)
-        self.assertEqual(rtz == raz, not rounded.inexact)
+        assert isinstance(rounded, fp.Float)
+        assert rounded == rtz or rounded == raz
+        assert (rtz == raz) == (not rounded.inexact)

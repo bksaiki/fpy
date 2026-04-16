@@ -1,4 +1,3 @@
-import unittest
 
 from fpy2 import (
     EFloatContext,
@@ -14,7 +13,7 @@ _common: list[EFloatContext] = [
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7
 ]
 
-class DecodeTestCase(unittest.TestCase):
+class DecodeTestCase():
     """Testing `ExtFloatContext.decode()`"""
 
     def test_common(self):
@@ -23,10 +22,10 @@ class DecodeTestCase(unittest.TestCase):
             # for ctx, decode all possible encodings
             for i in range(1 << ctx.nbits):
                 x = ctx.decode(i)
-                self.assertIsInstance(x, Float, f'i={i}, x={x}')
-                self.assertTrue(x.is_representable(), f'i={i}, x={x}')
+                assert isinstance(x, Float), f'i={i}, x={x}'
+                assert x.is_representable(), f'i={i}, x={x}'
 
-class EncodeTestCase(unittest.TestCase):
+class EncodeTestCase():
     """Testing `ExtFloatContext.encode()`"""
 
     def test_common(self):
@@ -45,12 +44,12 @@ class EncodeTestCase(unittest.TestCase):
             # run encoding
             for x in xs:
                 i = ctx.encode(x)
-                self.assertIsInstance(i, int, f'x={x}, i={i}')
-                self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
-                self.assertLess(i, 1 << ctx.nbits, f'x={x}, i={i}')
+                assert isinstance(i, int), f'x={x}, i={i}'
+                assert i >= 0, f'x={x}, i={i}'
+                assert i < 1 << ctx.nbits, f'x={x}, i={i}'
 
 
-class EncodeRoundTripTestCase(unittest.TestCase):
+class EncodeRoundTripTestCase():
     """Testing `ExtFloatContext.encode()` and `ExtFloatContext.decode()`"""
 
     def test_common(self):
@@ -62,6 +61,6 @@ class EncodeRoundTripTestCase(unittest.TestCase):
                 j = ctx.encode(x)
                 if x.isnan:
                     y = ctx.decode(j)
-                    self.assertTrue(y.isnan, f'i={i}, j={j}, y={y}')
+                    assert y.isnan, f'i={i}, j={j}, y={y}'
                 else:
-                    self.assertEqual(i, j, f'i={i}, j={j}')
+                    assert i == j, f'i={i}, j={j}'

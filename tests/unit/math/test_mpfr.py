@@ -1,6 +1,5 @@
 import gmpy2 as gmp
 import random
-import unittest
 
 from dataclasses import dataclass
 from typing import Callable
@@ -168,7 +167,7 @@ def _mpfr_apply(
         return mpfr_to_float(y), flags
 
 
-class MPFREquivTestCase(unittest.TestCase):
+class MPFREquivTestCase():
     """
     Fuzz testing under `fpy2.math`.
 
@@ -194,12 +193,12 @@ class MPFREquivTestCase(unittest.TestCase):
                         assert isinstance(fl, Float)
                         # check that they are the numerical values are the same
                         if fl.isnan:
-                            self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}')
+                            assert fl.isnan, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}'
                         else:
-                            self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}')
+                            assert fl == ref, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}'
                         # check that the flags are the same
-                        self.assertEqual(fl.overflow, flags.overflow, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}, flags={flags}')
-                        self.assertEqual(fl.inexact, flags.inexact, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}, flags={flags}')
+                        assert fl.overflow == flags.overflow, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}, flags={flags}'
+                        assert fl.inexact == flags.inexact, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}, flags={flags}'
 
     def test_fuzz_binary(self, num_inputs: int = 256):
         for op, mpfr in _binary_ops.items():
@@ -222,12 +221,12 @@ class MPFREquivTestCase(unittest.TestCase):
                         assert isinstance(fl, Float)
                         # check that they are the same
                         if fl.isnan:
-                            self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}')
+                            assert fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}'
                         else:
-                            self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}')
+                            assert fl == ref, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}'
                         # check that the flags are the same
-                        self.assertEqual(fl.overflow, flags.overflow, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}, flags={flags}')
-                        self.assertEqual(fl.inexact, flags.inexact, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}, flags={flags}')
+                        assert fl.overflow == flags.overflow, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}, flags={flags}'
+                        assert fl.inexact == flags.inexact, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}, flags={flags}'
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
         for op, mpfr in _ternary_ops.items():
@@ -252,9 +251,9 @@ class MPFREquivTestCase(unittest.TestCase):
                         assert isinstance(fl, Float)
                         # check that they are the same
                         if fl.isnan:
-                            self.assertTrue(fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}')
+                            assert fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}'
                         else:
-                            self.assertEqual(fl, ref, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}')
+                            assert fl == ref, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}'
                         # check that the flags are the same
-                        self.assertEqual(fl.overflow, flags.overflow, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}, flags={flags}')
-                        self.assertEqual(fl.inexact, flags.inexact, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}, flags={flags}')
+                        assert fl.overflow == flags.overflow, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}, flags={flags}'
+                        assert fl.inexact == flags.inexact, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}, flags={flags}'

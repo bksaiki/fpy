@@ -3,7 +3,6 @@ Testing `Float` and `REalFloat` comparison methods.
 """
 
 import fpy2 as fp
-import unittest
 
 from fractions import Fraction
 from hypothesis import given, strategies as st
@@ -59,40 +58,40 @@ def _cvt_to_frac(x: int | float | Fraction | fp.RealFloat | fp.Float) -> float |
             raise TypeError(f'cannot convert {type(x)} to Fraction or float')
 
 
-class TestCompareMethods(unittest.TestCase):
+class TestCompareMethods():
 
     @given(number(), number())
     def test_compare_eq(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        self.assertEqual(a == b, af == bf, f'Failed comparison: {a} == {b} ({af} == {bf})')
+        assert (a == b) == (af == bf), f'Failed comparison: {a} == {b} ({af} == {bf})'
 
     @given(number(), number())
     def test_compare_ne(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        self.assertEqual(a != b, af != bf, f'Failed comparison: {a} != {b} ({af} != {bf})')
+        assert (a != b) == (af != bf), f'Failed comparison: {a} != {b} ({af} != {bf})'
 
     @given(number(), number())
     def test_compare_lt(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        self.assertEqual(a < b, af < bf, f'Failed comparison: {a} < {b} ({af} < {bf})')
+        assert (a < b) == (af < bf), f'Failed comparison: {a} < {b} ({af} < {bf})'
 
     @given(number(), number())
     def test_compare_le(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        self.assertEqual(a <= b, af <= bf, f'Failed comparison: {a} <= {b} ({af} <= {bf})')
+        assert (a <= b) == (af <= bf), f'Failed comparison: {a} <= {b} ({af} <= {bf})'
 
     @given(number(), number())
     def test_compare_gt(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        self.assertEqual(a > b, af > bf, f'Failed comparison: {a} > {b} ({af} > {bf})')
+        assert (a > b) == (af > bf), f'Failed comparison: {a} > {b} ({af} > {bf})'
 
     @given(number(), number())
     def test_compare_ge(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        self.assertEqual(a >= b, af >= bf, f'Failed comparison: {a} >= {b}  ({af} >= {bf})')
+        assert (a >= b) == (af >= bf), f'Failed comparison: {a} >= {b}  ({af} >= {bf})'

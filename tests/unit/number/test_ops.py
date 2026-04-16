@@ -4,7 +4,6 @@ Tests for `fpy2/ops.py` with `RealContext`.
 
 import fpy2 as fp
 import math
-import unittest
 
 from fractions import Fraction
 from hypothesis import given, strategies as st
@@ -78,13 +77,13 @@ def number(
         return draw(floats(prec_max=prec, exp_min=exp_min, exp_max=exp_max, allow_nan=True, allow_infinity=True))
 
 
-class TestOps(unittest.TestCase):
+class TestOps():
 
     def assertEqualOrNan(self, a: Fraction | float, b: Fraction | float, msg: str = ''):
         if math.isnan(a) or math.isnan(b):
-            self.assertTrue(math.isnan(a) and math.isnan(b), msg)
+            assert math.isnan(a) and math.isnan(b), msg
         else:
-            self.assertEqual(a, b, msg)
+            assert a == b, msg
 
     @given(number())
     def test_neg(self, a):
@@ -146,14 +145,14 @@ class TestOps(unittest.TestCase):
         self.assertEqualOrNan(op, _trunc(af), f'Failed truncation: {a} ({af})')
 
 
-class TestModOp(unittest.TestCase):
+class TestModOp():
     """Tests FPy's modulus operator."""
 
     def assertEqualOrNan(self, a: Fraction | float, b: Fraction | float, msg: str = ''):
         if math.isnan(a) or math.isnan(b):
-            self.assertTrue(math.isnan(a) and math.isnan(b), msg)
+            assert math.isnan(a) and math.isnan(b), msg
         else:
-            self.assertEqual(a, b, msg)
+            assert a == b, msg
 
     def test_mod_fixed(self):
         CTX = fp.MPFixedContext(nmin=-1, enable_inf=True, enable_nan=True)

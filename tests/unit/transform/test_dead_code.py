@@ -3,7 +3,6 @@ Unit tests for dead code elimination.
 """
 
 import fpy2 as fp
-import unittest
 
 @fp.fpy
 def _example_simple_1():
@@ -236,26 +235,26 @@ def _example_while_1_expect():
     return x
 
 @fp.fpy
-def test_simple_3():
+def example_simple_3():
     x = 1
     y = 2
     x = 3
     return x
 
 @fp.fpy
-def test_simple_3_expect():
+def example_simple_3_expect():
     x = 3
     return x
 
 @fp.fpy
-def test_simple_4():
+def example_simple_4():
     x = 1
     x = 2
     x = 3
     return x
 
 @fp.fpy
-def test_simple_4_expect():
+def example_simple_4_expect():
     x = 3
     return x
 
@@ -279,15 +278,15 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_dead_while_1, _example_dead_while_1_expect),
     (_example_dead_while_2, _example_dead_while_2_expect),
     (_example_while_1, _example_while_1_expect),
-    (test_simple_3, test_simple_3_expect),
-    (test_simple_4, test_simple_4_expect)
+    (example_simple_3, example_simple_3_expect),
+    (example_simple_4, example_simple_4_expect)
 ]
 
 
-class TestDeadCode(unittest.TestCase):
+class TestDeadCode():
 
     def test_examples(self):
         for f, f_expect in _examples:
             f_opt = fp.transform.DeadCodeEliminate.apply(f.ast)
             f_opt.name = f_expect.name
-            self.assertTrue(f_opt.is_equiv(f_expect.ast), f'expect:\n{f_expect.format()}\nactual:\n{f_opt.format()}')
+            assert f_opt.is_equiv(f_expect.ast), f'expect:\n{f_expect.format()}\nactual:\n{f_opt.format()}'
