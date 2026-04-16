@@ -1,4 +1,3 @@
-import unittest
 
 from typing import TypeAlias
 
@@ -224,7 +223,7 @@ def if_not_test1(c):
     return x
 
 
-class RewriteTestCase(unittest.TestCase):
+class RewriteTestCase():
     """Testing `Pattern` parsing for examples"""
 
     def assertAstEqual(
@@ -232,14 +231,14 @@ class RewriteTestCase(unittest.TestCase):
         a: Expr | Stmt | StmtBlock | FuncDef,
         b: Expr | Stmt | StmtBlock | FuncDef
     ):
-        self.assertTrue(a.is_equiv(b), f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n')
+        assert a.is_equiv(b), f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n'
 
     def test_fma_example1(self):
         assert isinstance(f, Function)
         assert isinstance(f1, Function)
 
         f_rw = rw_fma.apply(f)
-        self.assertIsInstance(f_rw, Function)
+        assert isinstance(f_rw, Function)
         self.assertAstEqual(f_rw.ast.body, f1.ast.body)
 
     def test_fma_example2(self):
@@ -248,7 +247,7 @@ class RewriteTestCase(unittest.TestCase):
 
         f_rw = rw_fma.apply(f)
         f_rw = rw_fma.apply(f_rw)
-        self.assertIsInstance(f_rw, Function)
+        assert isinstance(f_rw, Function)
         self.assertAstEqual(f_rw.ast.body, f2.ast.body)
 
     def test_fma_example3(self):
@@ -256,7 +255,7 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(f2, Function)
 
         f_rw = rw_fma.apply_all(f)
-        self.assertIsInstance(f_rw, Function)
+        assert isinstance(f_rw, Function)
         self.assertAstEqual(f_rw.ast.body, f2.ast.body)
 
     def test_sum_example1(self):
@@ -264,7 +263,7 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(g1, Function)
 
         g_rw = rw_sum.apply(g)
-        self.assertIsInstance(g_rw, Function)
+        assert isinstance(g_rw, Function)
         self.assertAstEqual(g_rw.ast.body, g1.ast.body)
 
     def test_sum_example2(self):
@@ -272,7 +271,7 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(g2, Function)
 
         g_rw = rw_sum_bad.apply(g)
-        self.assertIsInstance(g_rw, Function)
+        assert isinstance(g_rw, Function)
         self.assertAstEqual(g_rw.ast.body, g2.ast.body)
 
     def test_unroll_for_example1(self):
@@ -280,7 +279,7 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(h1, Function)
 
         h_rw = rw_unroll_for.apply(h)
-        self.assertIsInstance(h_rw, Function)
+        assert isinstance(h_rw, Function)
         self.assertAstEqual(h_rw.ast.body, h1.ast.body)
 
     def test_unroll_while_example1(self):
@@ -288,7 +287,7 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(k1, Function)
 
         k_rw = rw_unroll_while.apply(k)
-        self.assertIsInstance(k_rw, Function)
+        assert isinstance(k_rw, Function)
         self.assertAstEqual(k_rw.ast.body, k1.ast.body)
 
     def test_unroll_while_example2(self):
@@ -296,7 +295,7 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(k2, Function)
 
         k_rw = rw_unroll_while.apply(k, repeat=2)
-        self.assertIsInstance(k_rw, Function)
+        assert isinstance(k_rw, Function)
         self.assertAstEqual(k_rw.ast.body, k2.ast.body)
 
     def test_unroll_while_example3(self):
@@ -304,7 +303,7 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(k3, Function)
 
         k_rw = rw_unroll_while.apply(k, repeat=5)
-        self.assertIsInstance(k_rw, Function)
+        assert isinstance(k_rw, Function)
         self.assertAstEqual(k_rw.ast.body, k3.ast.body)
 
     def test_if_test1(self):
@@ -312,7 +311,7 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(ift_test1, Function)
 
         ift_rw = rw_ift.apply(ift_test)
-        self.assertIsInstance(ift_rw, Function)
+        assert isinstance(ift_rw, Function)
         self.assertAstEqual(ift_rw.ast.body, ift_test1.ast.body)
 
     def test_if_test2(self):
@@ -320,5 +319,5 @@ class RewriteTestCase(unittest.TestCase):
         assert isinstance(if_not_test1, Function)
 
         ift_rw = rw_if_not.apply(if_not_test)
-        self.assertIsInstance(ift_rw, Function)
+        assert isinstance(ift_rw, Function)
         self.assertAstEqual(ift_rw.ast.body, if_not_test1.ast.body)

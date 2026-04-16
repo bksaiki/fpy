@@ -1,7 +1,6 @@
 import fpy2 as fp
-import unittest
 
-class TestRepresentable(unittest.TestCase):
+class TestRepresentable():
     """Test `ExpContext` representability."""
 
     def test_e8m0(self):
@@ -18,14 +17,14 @@ class TestRepresentable(unittest.TestCase):
         FOUR = fp.Float.from_int(4)
         NEG_ONE = fp.Float.from_int(-1)
 
-        self.assertTrue(E8M0.representable_under(NAN))
-        self.assertFalse(E8M0.representable_under(POS_INF))
-        self.assertFalse(E8M0.representable_under(NEG_INF))
-        self.assertFalse(E8M0.representable_under(ZERO))
-        self.assertTrue(E8M0.representable_under(MAX_VAL))
-        self.assertTrue(E8M0.representable_under(MIN_VAL))
-        self.assertFalse(E8M0.representable_under(HUGE))
-        self.assertFalse(E8M0.representable_under(TINY))
-        self.assertFalse(E8M0.representable_under(THREE_HALF))
-        self.assertTrue(E8M0.representable_under(FOUR))
-        self.assertFalse(E8M0.representable_under(NEG_ONE))
+        assert E8M0.representable_under(NAN)
+        assert not E8M0.representable_under(POS_INF)
+        assert not E8M0.representable_under(NEG_INF)
+        assert not E8M0.representable_under(ZERO)
+        assert E8M0.representable_under(MAX_VAL)
+        assert E8M0.representable_under(MIN_VAL)
+        assert not E8M0.representable_under(HUGE)
+        assert not E8M0.representable_under(TINY)
+        assert not E8M0.representable_under(THREE_HALF)
+        assert E8M0.representable_under(FOUR)
+        assert not E8M0.representable_under(NEG_ONE)

@@ -1,4 +1,3 @@
-import unittest
 import random
 
 from fpy2 import Float, IEEEContext, RM, FP64
@@ -7,7 +6,7 @@ from hypothesis import given, strategies as st
 from ...generators import floats
 
 
-class DecodeTestCase(unittest.TestCase):
+class DecodeTestCase():
     """Testing `IEEEContext.decode()`"""
 
     def test_native(self, num_encodings: int = 10_000):
@@ -17,7 +16,7 @@ class DecodeTestCase(unittest.TestCase):
         # run decode
         for i in encodings:
             x = FP64.decode(i)
-            self.assertIsInstance(x, Float, f'i={i}, x={x}')
+            assert isinstance(x, Float), f'i={i}, x={x}'
 
     def test_small(self, es_max: int = 6, nbits_max: int = 8):
         # iterate over possible contexts
@@ -27,9 +26,9 @@ class DecodeTestCase(unittest.TestCase):
                 # for ctx, decode all possible encodings
                 for i in range(1 << ctx.nbits):
                     x = ctx.decode(i)
-                    self.assertIsInstance(x, Float, f'i={i}, x={x}')
+                    assert isinstance(x, Float), f'i={i}, x={x}'
 
-class EncodeTestCase(unittest.TestCase):
+class EncodeTestCase():
     """Testing `IEEEContext.encode()`"""
 
     def test_native(self, num_encodings: int = 10_000):
@@ -46,9 +45,9 @@ class EncodeTestCase(unittest.TestCase):
         # run encoding
         for x in xs:
             i = FP64.encode(x)
-            self.assertIsInstance(i, int, f'x={x}, i={i}')
-            self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
-            self.assertLess(i, 1 << FP64.nbits, f'x={x}, i={i}')
+            assert isinstance(i, int), f'x={x}, i={i}'
+            assert i >= 0, f'x={x}, i={i}'
+            assert i < 1 << FP64.nbits, f'x={x}, i={i}'
 
     def test_small_exhaustive(self, es_max: int = 6, nbits_max: int = 8):
         # iterate over possible contexts
@@ -63,21 +62,21 @@ class EncodeTestCase(unittest.TestCase):
                             assert ctx.representable_under(x)
 
                             i = ctx.encode(x)
-                            self.assertIsInstance(i, int, f'x={x}, i={i}')
-                            self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
-                            self.assertLess(i, 1 << ctx.nbits, f'x={x}, i={i}')
+                            assert isinstance(i, int), f'x={x}, i={i}'
+                            assert i >= 0, f'x={x}, i={i}'
+                            assert i < 1 << ctx.nbits, f'x={x}, i={i}'
 
     @given(floats(prec_max=3, exp_min=-10, exp_max=10, ctx=IEEEContext(2, 5)))
     def test_ieee2_5(self, x: Float):
         """Test encoding for IEEEContext(2, 5)"""
         ctx = IEEEContext(2, 5)
         i = ctx.encode(x)
-        self.assertIsInstance(i, int, f'x={x}, i={i}')
-        self.assertGreaterEqual(i, 0, f'x={x}, i={i}')
-        self.assertLess(i, 1 << ctx.nbits, f'x={x}, i={i}')
+        assert isinstance(i, int), f'x={x}, i={i}'
+        assert i >= 0, f'x={x}, i={i}'
+        assert i < 1 << ctx.nbits, f'x={x}, i={i}'
 
 
-class EncodeRoundTripTestCase(unittest.TestCase):
+class EncodeRoundTripTestCase():
     """Ensure `IEEEContext.decode()` and `IEEEContext.encode()` roundtrips."""
 
     def test_native(self, num_encodings: int = 10_000):
@@ -91,9 +90,9 @@ class EncodeRoundTripTestCase(unittest.TestCase):
             if x.isnan:
                 # mapped to +/-qNaN(0)
                 y = FP64.decode(j)
-                self.assertTrue(y.isnan, f'i={i}, j={j}, y={y}')
+                assert y.isnan, f'i={i}, j={j}, y={y}'
             else:
-                self.assertEqual(i, j, f'i={i}, j={j}')
+                assert i == j, f'i={i}, j={j}'
 
     def test_small(self, es_max: int = 6, nbits_max: int = 8):
         # iterate over possible contexts
@@ -107,6 +106,6 @@ class EncodeRoundTripTestCase(unittest.TestCase):
                     if x.isnan:
                         # mapped to +/-qNaN(0)
                         y = ctx.decode(j)
-                        self.assertTrue(y.isnan, f'i={i}, j={j}, y={y}')
+                        assert y.isnan, f'i={i}, j={j}, y={y}'
                     else:
-                        self.assertEqual(i, j, f'i={i}, j={j}')
+                        assert i == j, f'i={i}, j={j}'

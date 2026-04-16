@@ -1,4 +1,3 @@
-import unittest
 
 from fpy2 import *
 from fpy2.ast import Expr, Stmt, StmtBlock, FuncDef, Fma, Var, NamedId, Assign, Call
@@ -26,14 +25,14 @@ def g(x, y, z):
     return t
 
 
-class _ApplierTestCase(unittest.TestCase):
+class _ApplierTestCase():
 
     def assertAstEqual(
         self,
         a: Expr | Stmt | StmtBlock | FuncDef,
         b: Expr | Stmt | StmtBlock | FuncDef
     ):
-        self.assertTrue(a.is_equiv(b), f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n')
+        assert a.is_equiv(b), f'\n### AST 1 ###\n{a.format()}\n### AST 2 ###\n{b.format()}\n'
 
 
 class ApplierExprTestCase(_ApplierTestCase):

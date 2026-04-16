@@ -3,9 +3,8 @@ Unit tests for loop unrolling.
 """
 
 import fpy2 as fp
-import unittest
 
-class TestForUnroll(unittest.TestCase):
+class TestForUnroll():
 
     def test_example1(self):
         @fp.fpy
@@ -27,10 +26,7 @@ class TestForUnroll(unittest.TestCase):
 
         h = fp.transform.ConstFold.apply(h, enable_op=False)
         e = fp.transform.ConstFold.apply(test_expect.ast, enable_op=False)
-        self.assertTrue(
-            h.is_equiv(e),
-            f'expect:\n{e.format()}\nactual:\n{h.format()}'
-        )
+        assert h.is_equiv(e), f'expect:\n{e.format()}\nactual:\n{h.format()}'
 
     def test_example2(self):
         @fp.fpy
@@ -60,10 +56,7 @@ class TestForUnroll(unittest.TestCase):
 
         h = fp.transform.ConstFold.apply(h, enable_op=False)
         e = fp.transform.ConstFold.apply(test_expect.ast, enable_op=False)
-        self.assertTrue(
-            h.is_equiv(e),
-            f'expect:\n{e.format()}\nactual:\n{h.format()}'
-        )
+        assert h.is_equiv(e), f'expect:\n{e.format()}\nactual:\n{h.format()}'
 
     def test_example3(self):
         @fp.fpy
@@ -97,7 +90,4 @@ class TestForUnroll(unittest.TestCase):
 
         h = fp.transform.ConstFold.apply(h, enable_op=False)
         e = fp.transform.ConstFold.apply(test_expect.ast, enable_op=False)
-        self.assertTrue(
-            h.is_equiv(e),
-            f'expect:\n{e.format()}\nactual:\n{h.format()}'
-        )
+        assert h.is_equiv(e), f'expect:\n{e.format()}\nactual:\n{h.format()}'

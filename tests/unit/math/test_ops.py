@@ -1,5 +1,4 @@
 import random
-import unittest
 
 from fpy2 import IEEEContext, MPFixedContext, FixedContext, Float, RM, OV, FP64, FP32, FP16
 from fpy2.ops import *
@@ -75,7 +74,7 @@ _ctxs = [
     IEEEContext(5, 8, RM.RNE)
 ]
 
-class MathIEEENoExceptTestCase(unittest.TestCase):
+class MathIEEENoExceptTestCase():
     """
     Fuzz testing for each operation under `fpy2.math`.
 
@@ -126,7 +125,7 @@ class MathIEEENoExceptTestCase(unittest.TestCase):
                         # evaluate
                         op(x, y, z, ctx=ctx)
 
-class MathIntegerNoExceptTestCase(unittest.TestCase):
+class MathIntegerNoExceptTestCase():
     """
     Fuzz testing for integer operations under `fpy2.math`.
 
@@ -189,7 +188,7 @@ class MathIntegerNoExceptTestCase(unittest.TestCase):
                     # evaluate
                     op(x, y, z, ctx=ctx)
 
-class MathInt64NoExceptTestCase(unittest.TestCase):
+class MathInt64NoExceptTestCase():
     """
     Fuzz testing for integer operations under `fpy2.math`.
 

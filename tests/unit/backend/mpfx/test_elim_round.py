@@ -1,6 +1,5 @@
 import fpy2 as fp
 import itertools
-import unittest
 
 
 from fpy2.backend.mpfx import ElimRound
@@ -41,7 +40,7 @@ def _example_mul_1_expect(x: fp.Real, y: fp.Real) -> fp.Real:
         return fp.cast(t)
 
 
-class TestElimRound(unittest.TestCase):
+class TestElimRound():
 
     def test_elim_round(self):
         ast = _example_round_1.ast
@@ -54,7 +53,7 @@ class TestElimRound(unittest.TestCase):
         opt = ElimRound.apply(ast)
         opt.name = expect_ast.name
 
-        self.assertTrue(opt.is_equiv(expect_ast), f'expect:\n{expect_ast.format()}\nactual:\n{opt.format()}')
+        assert opt.is_equiv(expect_ast), f'expect:\n{expect_ast.format()}\nactual:\n{opt.format()}'
 
     def test_elim_add(self):
         ast = _example_add_1.ast
@@ -67,7 +66,7 @@ class TestElimRound(unittest.TestCase):
         opt = ElimRound.apply(ast)
         opt.name = expect_ast.name
 
-        self.assertTrue(opt.is_equiv(expect_ast), f'expect:\n{expect_ast.format()}\nactual:\n{opt.format()}')
+        assert opt.is_equiv(expect_ast), f'expect:\n{expect_ast.format()}\nactual:\n{opt.format()}'
 
     def test_elim_mul(self):
         ast = _example_mul_1.ast
@@ -80,4 +79,4 @@ class TestElimRound(unittest.TestCase):
         opt = ElimRound.apply(ast)
         opt.name = expect_ast.name
 
-        self.assertTrue(opt.is_equiv(expect_ast), f'expect:\n{expect_ast.format()}\nactual:\n{opt.format()}')
+        assert opt.is_equiv(expect_ast), f'expect:\n{expect_ast.format()}\nactual:\n{opt.format()}'

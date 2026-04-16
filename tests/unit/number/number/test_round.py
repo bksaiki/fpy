@@ -1,6 +1,5 @@
 import fpy2 as fp
 import random
-import unittest
 
 from fractions import Fraction
 from hypothesis import assume, given, strategies as st
@@ -24,7 +23,7 @@ class FixedRandom(random.Random):
         return self._v & ((1 << k) - 1)
 
 
-class TestRealFloatRoundMethods(unittest.TestCase):
+class TestRealFloatRoundMethods():
     """Testing `RealFloat` rounding methods"""
 
     def test_round_params(self):
@@ -44,8 +43,8 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         for exp, c, max_p, min_n, expect_p, expect_n in inputs:
             x = fp.RealFloat(exp=exp, c=c)
             p, n = x._round_params(max_p=max_p, min_n=min_n)
-            self.assertEqual(p, expect_p, f'x={x}, max_p={max_p}, min_n={min_n}, p={p}, expect_p={expect_p}')
-            self.assertEqual(n, expect_n, f'x={x}, max_p={max_p}, min_n={min_n}, n={n}, expect_n={expect_n}')
+            assert p == expect_p, f'x={x}, max_p={max_p}, min_n={min_n}, p={p}, expect_p={expect_p}'
+            assert n == expect_n, f'x={x}, max_p={max_p}, min_n={min_n}, n={n}, expect_n={expect_n}'
 
     def test_round_examples(self):
         inputs = [
@@ -90,8 +89,8 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             x = fp.RealFloat(exp=exp, c=c)
             x_rounded = x.round(max_p=2, rm=rm)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
-            self.assertEqual(x_rounded, expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}')
-            self.assertLessEqual(x_rounded.p, 2, f'x={x}, rm={rm!r}, x_rounded.p={x_rounded.p}')
+            assert x_rounded == expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}'
+            assert x_rounded.p <= 2, f'x={x}, rm={rm!r}, x_rounded.p={x_rounded.p}'
 
     @given(
         real_floats(prec_max=100),
@@ -104,12 +103,12 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         assume(p is not None or n is not None)
         x = fp.RealFloat(x=x, inexact=inexact)
         rounded = x.round(max_p=p, min_n=n, rm=rm)
-        self.assertIsInstance(rounded, fp.RealFloat)
-        self.assertEqual(x != rounded, rounded.inexact, f'x={x}, p={p}, n={n}, rm={rm!r}, inexact={inexact}, rounded.inexact={rounded.inexact}')
+        assert isinstance(rounded, fp.RealFloat)
+        assert x != rounded == rounded.inexact, f'x={x}, p={p}, n={n}, rm={rm!r}, inexact={inexact}, rounded.inexact={rounded.inexact}'
         if p is not None:
-            self.assertLessEqual(rounded.p, p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}')
+            assert rounded.p <= p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}'
         if n is not None:
-            self.assertGreater(rounded.exp, n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}')
+            assert rounded.exp > n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}'
 
     def test_round_stochastic_examples(self):
         inputs = [
@@ -145,9 +144,9 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             x = fp.RealFloat(exp=exp, c=c)
             x_rounded = x.round(max_p=2, num_randbits=2, rng=rng)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
-            self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
-            self.assertLessEqual(x_rounded.p, 2, f'x={x}, randbits={randbits}, x_rounded.p={x_rounded.p}')
-            self.assertEqual(rng.num_calls, 1, f'x={x}, randbits={randbits}, rng.num_calls={rng.num_calls}')
+            assert x_rounded == expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}'
+            assert x_rounded.p <= 2, f'x={x}, randbits={randbits}, x_rounded.p={x_rounded.p}'
+            assert rng.num_calls == 1, f'x={x}, randbits={randbits}, rng.num_calls={rng.num_calls}'
 
     @given(
         real_floats(prec_max=100, exp_min=-16, exp_max=16),
@@ -166,11 +165,11 @@ class TestRealFloatRoundMethods(unittest.TestCase):
     ):
         assume(p is not None or n is not None)
         rounded = x.round(max_p=p, min_n=n, rm=rm, num_randbits=num_randbits)
-        self.assertIsInstance(rounded, fp.RealFloat)
+        assert isinstance(rounded, fp.RealFloat)
         if p is not None:
-            self.assertLessEqual(rounded.p, p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}')
+            assert rounded.p <= p, f'x={x}, p={p}, rm={rm!r}, rounded.p={rounded.p}'
         if n is not None:
-            self.assertGreater(rounded.exp, n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}')
+            assert rounded.exp > n, f'x={x}, n={n}, rm={rm!r}, rounded.n={rounded.n}'
 
     def test_round_at_examples(self):
         inputs = [
@@ -215,8 +214,8 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             x = fp.RealFloat(exp=exp, c=c)
             x_rounded = x.round_at(n=-2, rm=rm)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
-            self.assertEqual(x_rounded, expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}')
-            self.assertGreater(x_rounded.exp, -2, f'x={x}, rm={rm!r}, x_rounded.exp={x_rounded.exp}')
+            assert x_rounded == expect, f'x={x}, rm={rm!r}, x_rounded={x_rounded}, expect={expect}'
+            assert x_rounded.exp > -2, f'x={x}, rm={rm!r}, x_rounded.exp={x_rounded.exp}'
 
     @given(
         real_floats(prec_max=100),
@@ -226,7 +225,7 @@ class TestRealFloatRoundMethods(unittest.TestCase):
     )
     def test_round_at(self, x: fp.RealFloat, n: int, p: int | None, rm: fp.RoundingMode):
         rounded = x.round_at(n=n, rm=rm)
-        self.assertIsInstance(rounded, fp.RealFloat)
+        assert isinstance(rounded, fp.RealFloat)
 
     def test_round_at_stochastic_examples(self):
         inputs = [
@@ -262,9 +261,9 @@ class TestRealFloatRoundMethods(unittest.TestCase):
             x = fp.RealFloat(exp=exp, c=c)
             x_rounded = x.round_at(n=-2, num_randbits=2, rng=rng)
             expect = fp.RealFloat(exp=exp_rounded, c=c_rounded)
-            self.assertEqual(x_rounded, expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}')
-            self.assertGreater(x_rounded.exp, -2, f'x={x}, randbits={randbits}, x_rounded.exp={x_rounded.exp}')
-            self.assertEqual(rng.num_calls, 1, f'x={x}, randbits={randbits}, rng.num_calls={rng.num_calls}')
+            assert x_rounded == expect, f'x={x}, randbits={randbits}, x_rounded={x_rounded}, expect={expect}'
+            assert x_rounded.exp > -2, f'x={x}, randbits={randbits}, x_rounded.exp={x_rounded.exp}'
+            assert rng.num_calls == 1, f'x={x}, randbits={randbits}, rng.num_calls={rng.num_calls}'
 
     @given(
         real_floats(prec_max=100, exp_min=-16, exp_max=16),
@@ -280,8 +279,8 @@ class TestRealFloatRoundMethods(unittest.TestCase):
         rm: fp.RoundingMode
     ):
         rounded = x.round_at(n=n, rm=rm, num_randbits=num_randbits)
-        self.assertIsInstance(rounded, fp.RealFloat)
-        self.assertGreater(rounded.exp, n, f'x={x}, randbits={num_randbits}, rounded.exp={rounded.exp}')
+        assert isinstance(rounded, fp.RealFloat)
+        assert rounded.exp > n, f'x={x}, randbits={num_randbits}, rounded.exp={rounded.exp}'
 
 
 _MAX_PRECISION = 100
@@ -306,47 +305,47 @@ def _all_contexts():
     return common + inst
 
 
-class ContextRoundTestCase(unittest.TestCase):
+class ContextRoundTestCase():
     """Testing `Context.round()`"""
 
     @given(st.integers())
     def test_round_int(self, x: int):
         for ctx in _all_contexts():
             y = ctx.round(x)
-            self.assertIsInstance(y, fp.Float)
-            self.assertIs(y.ctx, ctx)
+            assert isinstance(y, fp.Float)
+            assert y.ctx is ctx
 
     @given(st.fractions())
     def test_round_fraction(self, x: Fraction):
         for ctx in _all_contexts():
             if ctx is not fp.REAL:
                 y = ctx.round(x)
-                self.assertIsInstance(y, fp.Float)
-                self.assertIs(y.ctx, ctx)
+                assert isinstance(y, fp.Float)
+                assert y.ctx is ctx
 
     @given(st.floats(allow_nan=True, allow_infinity=True, allow_subnormal=True))
     def test_round_python_float(self, x: float):
         for ctx in _all_contexts():
             if not isinstance(ctx, fp.MPFixedContext | fp.MPBFixedContext | fp.FixedContext):
                 y = ctx.round(x)
-                self.assertIsInstance(y, fp.Float)
-                self.assertIs(y.ctx, ctx)
+                assert isinstance(y, fp.Float)
+                assert y.ctx is ctx
 
     @given(real_floats(prec_max=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT))
     def test_round_real_float(self, x: fp.RealFloat):
         for ctx in _all_contexts():
             y = ctx.round(x)
-            self.assertIsInstance(y, fp.Float)
-            self.assertIs(y.ctx, ctx)
+            assert isinstance(y, fp.Float)
+            assert y.ctx is ctx
 
     @given(floats(53, allow_nan=False, allow_infinity=False, ctx=fp.FP64))
     def test_round_float(self, x: fp.Float):
         for ctx in _all_contexts():
             y = ctx.round(x)
-            self.assertIsInstance(y, fp.Float)
-            self.assertIs(y.ctx, ctx)
+            assert isinstance(y, fp.Float)
+            assert y.ctx is ctx
 
-class ContextRoundAtTestCase(unittest.TestCase):
+class ContextRoundAtTestCase():
     """Testing `Context.round_at()`"""
 
     @given(st.integers(), st.integers())
@@ -354,37 +353,37 @@ class ContextRoundAtTestCase(unittest.TestCase):
         for ctx in _all_contexts():
             if ctx is not fp.REAL:
                 y = ctx.round_at(x, n)
-                self.assertIsInstance(y, fp.Float)
-                self.assertIs(y.ctx, ctx)
+                assert isinstance(y, fp.Float)
+                assert y.ctx is ctx
 
     @given(st.fractions(), st.integers())
     def test_round_fraction(self, x: Fraction,n: int):
         for ctx in _all_contexts():
             if ctx is not fp.REAL:
                 y = ctx.round_at(x, n)
-                self.assertIsInstance(y, fp.Float)
-                self.assertIs(y.ctx, ctx)
+                assert isinstance(y, fp.Float)
+                assert y.ctx is ctx
 
     @given(st.floats(allow_nan=True, allow_infinity=True, allow_subnormal=True), st.integers())
     def test_round_python_float(self, x: float, n: int):
         for ctx in _all_contexts():
             if ctx is not fp.REAL and not isinstance(ctx, fp.MPFixedContext | fp.MPBFixedContext | fp.FixedContext):
                 y = ctx.round_at(x, n)
-                self.assertIsInstance(y, fp.Float)
-                self.assertIs(y.ctx, ctx)
+                assert isinstance(y, fp.Float)
+                assert y.ctx is ctx
 
     @given(real_floats(prec_max=_MAX_PRECISION, exp_min=-_EXP_LIMIT, exp_max=_EXP_LIMIT), st.integers())
     def test_round_real_float(self, x: fp.RealFloat, n: int):
         for ctx in _all_contexts():
             if ctx is not fp.REAL:
                 y = ctx.round_at(x, n)
-                self.assertIsInstance(y, fp.Float)
-                self.assertIs(y.ctx, ctx)
+                assert isinstance(y, fp.Float)
+                assert y.ctx is ctx
 
     @given(floats(53, allow_nan=False, allow_infinity=False, ctx=fp.FP64), st.integers())
     def test_round_float(self, x: fp.Float, n: int):
         for ctx in _all_contexts():
             if ctx is not fp.REAL:
                 y = ctx.round_at(x, n)
-                self.assertIsInstance(y, fp.Float)
-                self.assertIs(y.ctx, ctx)
+                assert isinstance(y, fp.Float)
+                assert y.ctx is ctx

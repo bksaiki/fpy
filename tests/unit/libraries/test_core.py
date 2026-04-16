@@ -1,17 +1,17 @@
-import unittest
+import pytest
 
 from fpy2 import *
 from fpy2.libraries.core import split, logb, modf, ldexp, isinteger
 
-class TestCore(unittest.TestCase):
+class TestCore():
     """Testing core functionality"""
 
     def assertNumEqual(self, a: Float, b: Float):
         """Assert that two numbers are equal, handling NaN and Inf"""
         if a.isnan or b.isnan:
-            self.assertEqual(a.isnan, b.isnan)
+            assert a.isnan == b.isnan
         else:
-            self.assertEqual(a, b, f"Expected {a} to be equal to {b}")
+            assert a == b, f"Expected {a} to be equal to {b}"
 
     def assertArrayEqual(self, a: list, b: list):
         """Assert that two arrays are equal, handling NaN and Inf"""
@@ -58,7 +58,7 @@ class TestCore(unittest.TestCase):
         self.assertNumEqual(ldexp(Float.from_int(1), Float.from_int(1)), Float.from_int(2))
         self.assertNumEqual(ldexp(Float.from_int(1), Float.from_int(-1)), Float.from_float(0.5))
 
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             ldexp(Float.from_int(1), Float.from_float(0.5))
 
         self.assertNumEqual(ldexp(Float(isnan=True), Float.from_int(0)), Float(isnan=True))
@@ -67,9 +67,9 @@ class TestCore(unittest.TestCase):
 
     def test_isinteger(self):
         """Testing `isinteger` function"""
-        self.assertTrue(isinteger(Float.from_int(0)))
-        self.assertTrue(isinteger(Float.from_int(1)))
-        self.assertFalse(isinteger(Float.from_float(1.5)))
-        self.assertFalse(isinteger(Float(isnan=True)))
-        self.assertFalse(isinteger(Float(isinf=True)))
-        self.assertFalse(isinteger(Float(s=True, isinf=True)))
+        assert isinteger(Float.from_int(0))
+        assert isinteger(Float.from_int(1))
+        assert not isinteger(Float.from_float(1.5))
+        assert not isinteger(Float(isnan=True))
+        assert not isinteger(Float(isinf=True))
+        assert not isinteger(Float(s=True, isinf=True))

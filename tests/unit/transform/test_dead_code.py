@@ -3,7 +3,6 @@ Unit tests for dead code elimination.
 """
 
 import fpy2 as fp
-import unittest
 
 @fp.fpy
 def _example_simple_1():
@@ -284,10 +283,10 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
 ]
 
 
-class TestDeadCode(unittest.TestCase):
+class TestDeadCode():
 
     def test_examples(self):
         for f, f_expect in _examples:
             f_opt = fp.transform.DeadCodeEliminate.apply(f.ast)
             f_opt.name = f_expect.name
-            self.assertTrue(f_opt.is_equiv(f_expect.ast), f'expect:\n{f_expect.format()}\nactual:\n{f_opt.format()}')
+            assert f_opt.is_equiv(f_expect.ast), f'expect:\n{f_expect.format()}\nactual:\n{f_opt.format()}'

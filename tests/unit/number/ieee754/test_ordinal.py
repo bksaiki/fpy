@@ -1,4 +1,3 @@
-import unittest
 import random
 
 from fpy2 import Float, IEEEContext, RM
@@ -9,7 +8,7 @@ def _maxval_ordinal(ctx: IEEEContext):
     return (num_binades << (ctx.pmax - 1)) - 1
 
 
-class ToOrdinalTestCase(unittest.TestCase):
+class ToOrdinalTestCase():
     """Testing `IEEEContext.to_ordinal()`"""
 
     def test_native(self, num_encodings: int = 10_000):
@@ -28,9 +27,9 @@ class ToOrdinalTestCase(unittest.TestCase):
         # run ordinal conversion
         for x in xs:
             i = fp64.to_ordinal(x)
-            self.assertIsInstance(i, int, f'x={x}, i={i}')
-            self.assertGreaterEqual(i, -(1 << fp64.nbits - 1), f'x={x}, i={i}')
-            self.assertLess(i, 1 << fp64.nbits - 1, f'x={x}, i={i}')
+            assert isinstance(i, int), f'x={x}, i={i}'
+            assert i >= -(1 << fp64.nbits - 1), f'x={x}, i={i}'
+            assert i < 1 << fp64.nbits - 1, f'x={x}, i={i}'
 
     def test_small(self, es_max: int = 6, nbits_max: int = 8):
         # iterate over possible contexts
@@ -45,9 +44,9 @@ class ToOrdinalTestCase(unittest.TestCase):
                             assert ctx.representable_under(x)
 
                             i = ctx.to_ordinal(x)
-                            self.assertIsInstance(i, int, f'x={x}, i={i}')
-                            self.assertGreaterEqual(i, -(1 << ctx.nbits - 1), f'x={x}, i={i}')
-                            self.assertLess(i, 1 << ctx.nbits - 1, f'x={x}, i={i}')
+                            assert isinstance(i, int), f'x={x}, i={i}'
+                            assert i >= -(1 << ctx.nbits - 1), f'x={x}, i={i}'
+                            assert i < 1 << ctx.nbits - 1, f'x={x}, i={i}'
 
     def test_values_native(self):
         # rounding context for native Python floats
@@ -64,7 +63,7 @@ class ToOrdinalTestCase(unittest.TestCase):
 
         for x, expect in tests:
             i = fp64.to_ordinal(x)
-            self.assertEqual(i, expect, f'x={x}, i={i}, expect={expect}')
+            assert i == expect, f'x={x}, i={i}, expect={expect}'
 
     def test_values_small(self, es_max: int = 6, nbits_max: int = 8):
         # rounding context for native Python floats
@@ -84,10 +83,10 @@ class ToOrdinalTestCase(unittest.TestCase):
 
                 for x, expect in tests:
                     i = ctx.to_ordinal(x)
-                    self.assertEqual(i, expect, f'x={x}, i={i}, expect={expect}')
+                    assert i == expect, f'x={x}, i={i}, expect={expect}'
 
 
-class OrdinalRoundTripTestCase(unittest.TestCase):
+class OrdinalRoundTripTestCase():
     """Ensure `IEEEContext.to_ordinal()` and `IEEEContext.from_ordinal()` roundtrips."""
     
     def test_native(self, num_encodings: int = 10_000):
@@ -107,8 +106,8 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
         for x in xs:
             i = fp64.to_ordinal(x)
             y = fp64.from_ordinal(i)
-            self.assertIsInstance(y, Float, f'x={x}, i={i}, y={y}')
-            self.assertEqual(x, y, f'x={x}, i={i}, y={y}')
+            assert isinstance(y, Float), f'x={x}, i={i}, y={y}'
+            assert x == y, f'x={x}, i={i}, y={y}'
 
     def test_small(self, es_max: int = 6, nbits_max: int = 8):
         # iterate over possible contexts
@@ -125,7 +124,7 @@ class OrdinalRoundTripTestCase(unittest.TestCase):
                             # run ordinal conversion
                             i = ctx.to_ordinal(x)
                             y = ctx.from_ordinal(i)
-                            self.assertIsInstance(y, Float, f'x={x}, i={i}, y={y}')
-                            self.assertEqual(x, y, f'x={x}, i={i}, y={y}')
+                            assert isinstance(y, Float), f'x={x}, i={i}, y={y}'
+                            assert x == y, f'x={x}, i={i}, y={y}'
 
 

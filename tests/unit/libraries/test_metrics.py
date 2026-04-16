@@ -1,5 +1,4 @@
 import fpy2 as fp
-import unittest
 
 from fractions import Fraction
 from hypothesis import given, strategies as st
@@ -12,7 +11,7 @@ _EXP_MIN=-100
 _EXP_MAX=100
 
 
-class TestMetrics(unittest.TestCase):
+class TestMetrics():
     """Testing `fpy2.libraries.metrics` functionality."""
 
     @given(
@@ -22,8 +21,8 @@ class TestMetrics(unittest.TestCase):
     def test_absolute_error(self, a: fp.Float, b: fp.Float):
         """Testing `absolute_error` function"""
         err = fp.libraries.metrics.absolute_error(a, b)
-        self.assertIsInstance(err, fp.Float)
-        self.assertTrue(err.isnan or err >= 0)
+        assert isinstance(err, fp.Float)
+        assert err.isnan or err >= 0
 
     @given(
         floats(prec_max=_PREC_MAX, exp_min=_EXP_MIN, exp_max=_EXP_MAX),
@@ -33,8 +32,8 @@ class TestMetrics(unittest.TestCase):
     def test_scaled_error(self, a: fp.Float, b: fp.Float, scale: fp.Float):
         """Testing `scaled_error` function"""
         err = fp.libraries.metrics.scaled_error(a, b, scale)
-        self.assertIsInstance(err, fp.Float)
-        self.assertTrue(err.isnan or err >= 0)
+        assert isinstance(err, fp.Float)
+        assert err.isnan or err >= 0
 
     @given(
         floats(prec_max=_PREC_MAX, exp_min=_EXP_MIN, exp_max=_EXP_MAX),
@@ -43,8 +42,8 @@ class TestMetrics(unittest.TestCase):
     def test_relative_error(self, a: fp.Float, b: fp.Float):
         """Testing `relative_error` function"""
         err = fp.libraries.metrics.relative_error(a, b)
-        self.assertIsInstance(err, fp.Float)
-        self.assertTrue(err.isnan or err >= 0)
+        assert isinstance(err, fp.Float)
+        assert err.isnan or err >= 0
 
     @given(
         floats(prec_max=_PREC_MAX, exp_min=_EXP_MIN, exp_max=_EXP_MAX, allow_nan=False, allow_infinity=False),
@@ -53,5 +52,5 @@ class TestMetrics(unittest.TestCase):
     def test_ordinal_error(self, a: fp.Float, b: fp.Float):
         """Testing `ordinal_error` function"""
         err = fp.libraries.metrics.ordinal_error(a, b)
-        self.assertIsInstance(err, fp.Float)
-        self.assertTrue(err >= 0)
+        assert isinstance(err, fp.Float)
+        assert err >= 0

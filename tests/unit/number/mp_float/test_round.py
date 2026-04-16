@@ -1,6 +1,5 @@
 import gmpy2 as gmp
 import random
-import unittest
 
 from fpy2 import RealFloat, MPFloatContext, RM
 
@@ -42,7 +41,7 @@ def _round_mpfr(x: RealFloat, ctx: MPFloatContext) -> RealFloat:
 
     return RealFloat(s=s, exp=exp, c=c)
 
-class RoundTestCase(unittest.TestCase):
+class RoundTestCase():
     """Testing `IEEEContext.round()`"""
 
     def test_mpfr(self, num_values: int = 10_000, p_max: int = 128, e_max=1024):
@@ -66,4 +65,4 @@ class RoundTestCase(unittest.TestCase):
             yf = _round_mpfr(x, ctx)
 
             # check that they are equal
-            self.assertEqual(y, yf, f'x={x}, y={y}, yf={yf}')
+            assert y == yf, f'x={x}, y={y}, yf={yf}'

@@ -3,15 +3,11 @@ Unit tests for function inlining
 """
 
 import fpy2 as fp
-import unittest
 
-class TestFuncInline(unittest.TestCase):
+class TestFuncInline():
 
     def assertASTEquiv(self, f: fp.ast.FuncDef, g: fp.ast.FuncDef, msg: str = ''):
-        self.assertTrue(
-            f.is_equiv(g),
-            f'AST not equivalent:\nexpect:\n{g.format()}\nactual:\n{f.format()}\n{msg}'
-        )
+        assert f.is_equiv(g), f'AST not equivalent:\nexpect:\n{g.format()}\nactual:\n{f.format()}\n{msg}'
 
     def test_example1(self):
         @fp.fpy
