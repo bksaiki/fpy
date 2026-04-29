@@ -97,7 +97,7 @@ class ExpFormat(EncodableFormat):
             and self.eoffset == other.eoffset
         )
 
-    def representable_under(self, x: Float | RealFloat) -> bool:
+    def representable_in(self, x: Float | RealFloat) -> bool:
         match x:
             case Float():
                 if x.isnan:
@@ -109,7 +109,7 @@ class ExpFormat(EncodableFormat):
             case _:
                 raise TypeError(f'Expected \'Float\' or \'RealFloat\', got \'{type(x)}\' for x={x}')
 
-        if not self._mp_fmt.representable_under(x):
+        if not self._mp_fmt.representable_in(x):
             return False
         if not x.is_positive():
             return False
@@ -120,21 +120,21 @@ class ExpFormat(EncodableFormat):
     def canonical_under(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable under this format: x={x}')
         return self._mp_fmt.canonical_under(x)
 
     def normal_under(self, x: Float) -> bool:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable under this format: x={x}')
         return self._mp_fmt.normal_under(x)
 
     def normalize(self, x: Float) -> Float:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable under this format: x={x}')
         return self._mp_fmt.normalize(x)
 
@@ -146,7 +146,7 @@ class ExpFormat(EncodableFormat):
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable under this format: x={x}')
         if infval:
             raise ValueError(f'infval={infval} is not supported for ExpFormat')
@@ -160,7 +160,7 @@ class ExpFormat(EncodableFormat):
         if x.is_nar():
             raise ValueError(f'Expected a finite value for x={x}')
 
-        if self.representable_under(x):
+        if self.representable_in(x):
             return Fraction(self.to_ordinal(x))
 
         xr = x.as_real()
@@ -216,7 +216,7 @@ class ExpFormat(EncodableFormat):
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable under this format: x={x}')
 
         if x.isnan:
@@ -287,7 +287,7 @@ class ExpContext(EncodableContext):
         self._fmt = ExpFormat(nbits, eoffset)
 
         if inf_value is not None:
-            if not self._fmt._mp_fmt.representable_under(inf_value):
+            if not self._fmt._mp_fmt.representable_in(inf_value):
                 raise ValueError(f'inf_value={inf_value} is not representable')
             if not inf_value.is_positive():
                 raise ValueError(f'inf_value={inf_value} must be positive')

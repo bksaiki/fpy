@@ -92,7 +92,7 @@ class Context(ABC):
         Representable is not the same as canonical,
         but every canonical value must be representable.
         """
-        return self.format().representable_under(x)
+        return self.format().representable_in(x)
 
     def canonical_under(self, x: Float) -> bool:
         """
@@ -272,36 +272,6 @@ class OrdinalContext(Context):
         """
         return Float(x=self.format().minval(s), ctx=self)
 
-    def _next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
-        """
-        Returns the next representable value after `x` towards `y`.
-        """
-        if y.isinf:
-            # special case: we want to return the next value towards an infinity
-            step = -1 if y.s else 1
-            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
-        else:
-            # general case: we can just use the ordinal values to determine the next value
-            xord = self.to_ordinal(x)
-            yord = self.to_ordinal(y)
-            step = 1 if xord < yord else -1
-            return self.from_ordinal(xord + step, infval=allow_inf)
-
-    def _next_away(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
-        """
-        Returns the next representable value after `x` away from `y`.
-        """
-        if y.isinf:
-            # special case: we want to return the next value away from an infinity
-            step = 1 if y.s else -1
-            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
-        else:
-            # general case: we can just use the ordinal values to determine the next value
-            xord = self.to_ordinal(x)
-            yord = self.to_ordinal(y)
-            step = -1 if xord < yord else 1
-            return self.from_ordinal(xord + step, infval=allow_inf)
-
     def next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
         """
         Returns the next representable value after `x` towards `y`.
@@ -324,7 +294,7 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == y:
             raise ValueError('x and y are equal so there is no next value towards y', x, y)
-        return self._next_towards(x, y, allow_inf)
+        return Float(x=self.format().next_towards(x, y, allow_inf), ctx=self)
 
     def next_towards_zero(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -344,7 +314,7 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == 0:
             raise ValueError('x is zero so there is no next value towards zero', x)
-        return self._next_towards(x, self.from_ordinal(0), allow_inf)
+        return Float(x=self.format().next_towards_zero(x, allow_inf), ctx=self)
 
     def next_away_zero(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -364,7 +334,7 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == 0:
             raise ValueError('x is zero so there is no next value away from zero', x)
-        return self._next_away(x, self.from_ordinal(0), allow_inf)
+        return Float(x=self.format().next_away_zero(x, allow_inf), ctx=self)
 
     def next_up(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -384,7 +354,7 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x.isinf and not x.s:
             raise ValueError('x cannot be positive infinity', x)
-        return self._next_towards(x, Float(isinf=True), allow_inf)
+        return Float(x=self.format().next_up(x, allow_inf), ctx=self)
 
     def next_down(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -404,7 +374,7 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x.isinf and x.s:
             raise ValueError('x cannot be negative infinity', x)
-        return self._next_towards(x, Float(isinf=True, s=True), allow_inf)
+        return Float(x=self.format().next_down(x, allow_inf), ctx=self)
 
 
 class SizedContext(OrdinalContext):

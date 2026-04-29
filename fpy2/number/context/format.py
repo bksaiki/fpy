@@ -37,7 +37,7 @@ class Format(ABC):
         ...
 
     @abstractmethod
-    def representable_under(self, x: Float | RealFloat) -> bool:
+    def representable_in(self, x: Float | RealFloat) -> bool:
         """
         Returns if `x` is representable under this format.
 
@@ -169,9 +169,9 @@ class OrdinalFormat(Format):
         - `x` is infinite and `allow_inf` is `False`
         - `x == y`
         """
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError('x is not representable under this format', x)
-        if not self.representable_under(y):
+        if not self.representable_in(y):
             raise ValueError('y is not representable under this format', y)
         if x.isnan:
             raise ValueError('x is NaN', x)
@@ -193,7 +193,7 @@ class OrdinalFormat(Format):
         - `x` is infinite and `allow_inf` is `False`
         - `x == 0`
         """
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError('x is not representable under this format', x)
         if x.isnan:
             raise ValueError('x is NaN', x)
@@ -213,7 +213,7 @@ class OrdinalFormat(Format):
         - `x` is infinite and `allow_inf` is `False`
         - `x == 0`
         """
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError('x is not representable under this format', x)
         if x.isnan:
             raise ValueError('x is NaN', x)
@@ -233,7 +233,7 @@ class OrdinalFormat(Format):
         - `x` is infinite and `allow_inf` is `False`
         - `x == +inf`
         """
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError('x is not representable under this format', x)
         if x.isnan:
             raise ValueError('x is NaN', x)
@@ -253,7 +253,7 @@ class OrdinalFormat(Format):
         - `x` is infinite and `allow_inf` is `False`
         - `x == -inf`
         """
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError('x is not representable under this format', x)
         if x.isnan:
             raise ValueError('x is NaN', x)

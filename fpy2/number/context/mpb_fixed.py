@@ -123,8 +123,8 @@ class MPBFixedFormat(SizedFormat):
             and self.enable_inf == other.enable_inf
         )
 
-    def representable_under(self, x: RealFloat | Float) -> bool:
-        if not self._mp_fmt.representable_under(x):
+    def representable_in(self, x: RealFloat | Float) -> bool:
+        if not self._mp_fmt.representable_in(x):
             return False
         if not x.is_nonzero():
             return True
@@ -133,22 +133,22 @@ class MPBFixedFormat(SizedFormat):
         return x <= self.pos_maxval
 
     def canonical_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mp_fmt.canonical_under(x)
 
     def normal_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mp_fmt.normal_under(x)
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mp_fmt.normalize(x)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected \'Float\' for x={x}, got {type(x)}')
 
         if x.isnan:

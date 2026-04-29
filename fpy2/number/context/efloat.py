@@ -151,7 +151,7 @@ class EFloatFormat(EncodableFormat):
             and self.eoffset == other.eoffset
         )
 
-    def representable_under(self, x: RealFloat | Float) -> bool:
+    def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.isinf and not self.enable_inf:
@@ -163,29 +163,29 @@ class EFloatFormat(EncodableFormat):
             case _:
                 raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
 
-        if not self._mpb_fmt.representable_under(x):
+        if not self._mpb_fmt.representable_in(x):
             return False
         elif x.is_zero():
             return not (x.s and self.nan_kind == EFloatNanKind.NEG_ZERO)
         return self.has_nonzero()
 
     def canonical_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_fmt.canonical_under(x)
 
     def normal_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_fmt.normal_under(x)
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_fmt.normalize(x)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mpb_fmt.to_ordinal(x, infval=infval)
 
@@ -202,7 +202,7 @@ class EFloatFormat(EncodableFormat):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_fmt.zero(s)
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable in this format: x={x}')
         return x
 
@@ -210,7 +210,7 @@ class EFloatFormat(EncodableFormat):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_fmt.minval(s)
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable in this format: x={x}')
         return x
 
@@ -218,7 +218,7 @@ class EFloatFormat(EncodableFormat):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_fmt.min_subnormal(s)
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable in this format: x={x}')
         return x
 
@@ -226,7 +226,7 @@ class EFloatFormat(EncodableFormat):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_fmt.max_subnormal(s)
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable in this format: x={x}')
         return x
 
@@ -234,7 +234,7 @@ class EFloatFormat(EncodableFormat):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_fmt.min_normal(s)
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable in this format: x={x}')
         return x
 
@@ -242,7 +242,7 @@ class EFloatFormat(EncodableFormat):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_fmt.max_normal(s)
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable in this format: x={x}')
         return x
 
@@ -250,7 +250,7 @@ class EFloatFormat(EncodableFormat):
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         x = self._mpb_fmt.maxval(s)
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable in this format: x={x}')
         return x
 
@@ -272,7 +272,7 @@ class EFloatFormat(EncodableFormat):
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x!r}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'not representable under this format: x={x!r}')
 
         sbit = 1 if x.s else 0
@@ -488,7 +488,7 @@ class EFloatContext(EncodableContext):
             if nan_kind == EFloatNanKind.NONE:
                 if nan_value.isinf and not enable_inf:
                     raise ValueError(f'Cannot set NaN value to infinity when infinities are disabled: {nan_value}')
-                elif not self._fmt._mpb_fmt.representable_under(nan_value):
+                elif not self._fmt._mpb_fmt.representable_in(nan_value):
                     raise ValueError(f'Cannot set NaN value to {nan_value} when it is not representable in this context')
 
         if inf_value is not None:
@@ -497,7 +497,7 @@ class EFloatContext(EncodableContext):
             if not enable_inf:
                 if nan_kind == EFloatNanKind.NONE:
                     raise ValueError(f'Cannot set Inf value to NaN when NaNs are disabled: {inf_value}')
-                elif not self._fmt._mpb_fmt.representable_under(inf_value):
+                elif not self._fmt._mpb_fmt.representable_in(inf_value):
                     raise ValueError(f'Cannot set Inf value to {inf_value} when it is not representable in this context')
 
         self.es = es

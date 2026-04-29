@@ -68,7 +68,7 @@ class MPFixedFormat(OrdinalFormat):
             and self.enable_inf == other.enable_inf
         )
 
-    def representable_under(self, x: RealFloat | Float) -> bool:
+    def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.isnan:
@@ -85,7 +85,7 @@ class MPFixedFormat(OrdinalFormat):
         return xr.is_more_significant(self.nmin)
 
     def canonical_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) and self.representable_under(x):
+        if not isinstance(x, Float) and self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return x.exp == self.expmin
 
@@ -95,7 +95,7 @@ class MPFixedFormat(OrdinalFormat):
         return x.is_nonzero()
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) and self.representable_under(x):
+        if not isinstance(x, Float) and self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         offset = x.exp - self.expmin
@@ -129,7 +129,7 @@ class MPFixedFormat(OrdinalFormat):
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'Expected representable \'Float\', got x={x}')
         if infval:
             raise ValueError('infvalue=True is invalid for formats without maximum value')
@@ -143,7 +143,7 @@ class MPFixedFormat(OrdinalFormat):
         if x.is_nar():
             raise ValueError(f'Expected a finite value for x={x}')
 
-        if self.representable_under(x):
+        if self.representable_in(x):
             return Fraction(self._to_ordinal(x.as_real()))
 
         xr = x.as_real()

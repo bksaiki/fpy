@@ -67,7 +67,7 @@ class SMFixedFormat(MPBFixedFormat, EncodableFormat):
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'Expected representable value, got x={x} for self={self}')
 
         sbit = 1 if x.s else 0

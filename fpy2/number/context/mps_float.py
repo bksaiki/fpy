@@ -67,7 +67,7 @@ class MPSFloatFormat(OrdinalFormat):
             and self.emin == other.emin
         )
 
-    def representable_under(self, x: RealFloat | Float) -> bool:
+    def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.is_nar():
@@ -91,7 +91,7 @@ class MPSFloatFormat(OrdinalFormat):
         return xr.is_more_significant(self.nmin)
 
     def canonical_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         if x.is_nar():
@@ -104,12 +104,12 @@ class MPSFloatFormat(OrdinalFormat):
             return x.p == self.pmax
 
     def normal_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return x.is_nonzero() and x.e >= self.emin
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         if x.isnan:
@@ -154,7 +154,7 @@ class MPSFloatFormat(OrdinalFormat):
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'x={x} is not representable under this format')
         if infval:
             raise ValueError('infval=True is invalid for formats without a maximum value')
@@ -168,7 +168,7 @@ class MPSFloatFormat(OrdinalFormat):
         if x.is_nar():
             raise ValueError(f'Expected a finite value for x={x}')
 
-        if self.representable_under(x):
+        if self.representable_in(x):
             return Fraction(self._to_ordinal(x.as_real()))
 
         xr = x.as_real()

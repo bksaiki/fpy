@@ -121,8 +121,8 @@ class MPBFloatFormat(SizedFormat):
             and self.neg_maxval == other.neg_maxval
         )
 
-    def representable_under(self, x: RealFloat | Float) -> bool:
-        if not self._mps_fmt.representable_under(x):
+    def representable_in(self, x: RealFloat | Float) -> bool:
+        if not self._mps_fmt.representable_in(x):
             return False
         if not x.is_nonzero():
             return True
@@ -131,24 +131,24 @@ class MPBFloatFormat(SizedFormat):
         return x <= self.pos_maxval
 
     def canonical_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mps_fmt.canonical_under(x)
 
     def normal_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mps_fmt.normal_under(x)
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
         return self._mps_fmt.normalize(x)
 
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
+        if not self.representable_in(x):
             raise ValueError(f'Expected a representable \'Float\', got x={x}')
 
         if x.isnan:

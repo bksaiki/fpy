@@ -39,7 +39,7 @@ class MPFloatFormat(Format):
     def is_equiv(self, other: Format) -> bool:
         return isinstance(other, MPFloatFormat) and self.pmax == other.pmax
 
-    def representable_under(self, x: RealFloat | Float) -> bool:
+    def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
                 if x.is_nar() or x.is_zero():
@@ -61,7 +61,7 @@ class MPFloatFormat(Format):
             return c_lost == 0
 
     def canonical_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         if x.is_nar():
@@ -77,7 +77,7 @@ class MPFloatFormat(Format):
         return x.is_nonzero()
 
     def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.representable_under(x):
+        if not isinstance(x, Float) or not self.representable_in(x):
             raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
 
         if x.isnan:
