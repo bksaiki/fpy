@@ -8,6 +8,88 @@ from ..round import RoundingMode
 from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import Context
+from .format import Format
+
+
+@default_repr
+class MPFloatFormat(Format):
+    """
+    Number format for multi-precision floating-point numbers.
+
+    This format is parameterized by a fixed precision `pmax`.
+    It describes the set of representable values for `MPFloatContext`.
+    """
+
+    pmax: int
+    """maximum precision"""
+
+    def __init__(self, pmax: int):
+        if not isinstance(pmax, int):
+            raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
+        if pmax < 1:
+            raise ValueError(f'Expected positive integer for pmax={pmax}')
+        self.pmax = pmax
+
+    def __eq__(self, other):
+        return isinstance(other, MPFloatFormat) and self.pmax == other.pmax
+
+    def __hash__(self):
+        return hash((self.__class__, self.pmax))
+
+    def is_equiv(self, other: Format) -> bool:
+        return isinstance(other, MPFloatFormat) and self.pmax == other.pmax
+
+    def representable_under(self, x: RealFloat | Float) -> bool:
+        match x:
+            case Float():
+                if x.is_nar() or x.is_zero():
+                    return True
+            case RealFloat():
+                if x.is_zero():
+                    return True
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+
+        # value is finite and non-zero
+        # check if the value can be normalized within pmax digits
+        if x.p <= self.pmax:
+            return True
+        else:
+            # excess bits must all be zero
+            p_over = x.p - self.pmax
+            c_lost = x.c & bitmask(p_over)
+            return c_lost == 0
+
+    def canonical_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+
+        if x.is_nar():
+            return True
+        elif x.is_zero():
+            return x.exp == 0
+        else:
+            return x.p == self.pmax
+
+    def normal_under(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero()
+
+    def normalize(self, x: Float) -> Float:
+        if not isinstance(x, Float) or not self.representable_under(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+
+        if x.isnan:
+            return Float(isnan=True, s=x.s)
+        elif x.isinf:
+            return Float(isinf=True, s=x.s)
+        elif x.c == 0:
+            return Float(c=0, exp=0, s=x.s)
+        else:
+            xr = x._real.normalize(self.pmax, None)
+            return Float(x=x, exp=xr.exp, c=xr.c, ctx=None)
+
 
 @default_repr
 class MPFloatContext(Context):
@@ -65,7 +147,7 @@ class MPFloatContext(Context):
         return hash((self.__class__, self.pmax, self.rm, self.num_randbits))
 
     def with_params(
-        self, *, 
+        self, *,
         pmax: DefaultOr[int] = DEFAULT,
         rm: DefaultOr[RoundingMode] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
@@ -87,77 +169,22 @@ class MPFloatContext(Context):
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
 
-    def is_equiv(self, other):
-        if not isinstance(other, Context):
-            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
-        return isinstance(other, MPFloatContext) and self.pmax == other.pmax
+    def format(self) -> MPFloatFormat:
+        return MPFloatFormat(self.pmax)
 
-    def representable_under(self, x: RealFloat | Float) -> bool:
-        match x:
-            case Float():
-                if x.ctx is not None and self.is_equiv(x.ctx):
-                    # same context, so representable
-                    return True
-                if x.is_nar() or x.is_zero():
-                    # special values or zeros are valid
-                    return True
-            case RealFloat():
-                if x.is_zero():
-                    # zeros are valid
-                    return True
-            case _:
-                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
-
-        # value is finite and non-zero
-        # precision is possibly out of bounds
-        # check if the value can be normalized with fewer digits
-        if x.p <= self.pmax:
-            # precision is within bounds
-            return True
-        else:
-            # precision is out of bounds, so check if the excess bits are all zero
-            p_over = x.p - self.pmax
-            c_lost = x.c & bitmask(p_over) # bits that would be lost via normalization
-            return c_lost == 0
-
-    def canonical_under(self, x: Float) -> bool:
-        if not isinstance(x, Float) or not self.representable_under(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
-        # case split on class
-        if x.is_nar():
-            # NaN or Inf
-            return True
-        elif x.is_zero():
-            # zero
-            return x.exp == 0
-        else:
-            # non-zero value
-            return x.p == self.pmax
-
-    def normalize(self, x: Float) -> Float:
-        if not isinstance(x, Float) or not self.representable_under(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
-        # case split by class
-        if x.isnan:
-            # NaN
-            return Float(isnan=True, s=x.s, ctx=self)
-        elif x.isinf:
-            # Inf
-            return Float(isinf=True, s=x.s, ctx=self)
-        elif x.c == 0:
-            # zero
-            return Float(c=0, exp=0, s=x.s, ctx=self)
-        else:
-            # non-zero
-            xr = x._real.normalize(self.pmax, None)
-            return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
-
-    def normal_under(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-        return x.is_nonzero()
+    @classmethod
+    def from_format(
+        cls,
+        fmt: MPFloatFormat,
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: int | None = 0,
+        rng: 'RNG | None' = None
+    ) -> 'MPFloatContext':
+        """Creates a context from a `MPFloatFormat` and rounding parameters."""
+        if not isinstance(fmt, MPFloatFormat):
+            raise TypeError(f'Expected \'MPFloatFormat\', got {type(fmt)}')
+        return cls(fmt.pmax, rm, num_randbits, rng=rng)
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
@@ -176,7 +203,6 @@ class MPFloatContext(Context):
 
         # step 2. shortcut for exact zero values
         if x.is_zero():
-            # exactly zero
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
@@ -199,23 +225,3 @@ class MPFloatContext(Context):
         else:
             pmax = self.pmax + self.num_randbits
             return pmax, None
-
-    def format(self) -> 'MPFloatFormat':
-        """Returns the number format associated with this context."""
-        from .formats import MPFloatFormat
-        return MPFloatFormat(self.pmax)
-
-    @classmethod
-    def from_format(
-        cls,
-        fmt: 'MPFloatFormat',
-        *,
-        rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: int | None = 0,
-        rng: 'RNG | None' = None
-    ) -> 'MPFloatContext':
-        """Creates a context from a `MPFloatFormat` and rounding parameters."""
-        from .formats import MPFloatFormat as _MPFloatFormat
-        if not isinstance(fmt, _MPFloatFormat):
-            raise TypeError(f'Expected \'MPFloatFormat\', got {type(fmt)}')
-        return cls(fmt.pmax, rm, num_randbits, rng=rng)

@@ -77,7 +77,13 @@ class Context(ABC):
         the same set of representable values. Two contexts are equivalent
         if they produce the same set of representable values.
         """
-        return self.format().is_equiv(other.format())
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        try:
+            other_fmt = other.format()
+        except NotImplementedError:
+            return False
+        return self.format().is_equiv(other_fmt)
 
     def representable_under(self, x: Float | RealFloat) -> bool:
         """
@@ -110,7 +116,7 @@ class Context(ABC):
 
     def normalize(self, x: Float) -> Float:
         """Returns the canonical form of `x` under this context."""
-        return self.format().normalize(x)
+        return Float(x=self.format().normalize(x), ctx=self)
 
     @abstractmethod
     def round_params(self) -> tuple[int | None, int | None]:
@@ -255,7 +261,7 @@ class OrdinalContext(Context):
         logical ordinal value after +/-MAX_VAL. This option is only
         valid when the context has a maximum value.
         """
-        return self.format().from_ordinal(x, infval)
+        return Float(x=self.format().from_ordinal(x, infval), ctx=self)
 
     def minval(self, s: bool = False) -> Float:
         """
@@ -264,7 +270,7 @@ class OrdinalContext(Context):
 
         This value will map to +/-1 through `to_ordinal()`.
         """
-        return self.format().minval(s)
+        return Float(x=self.format().minval(s), ctx=self)
 
     def _next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
         """
@@ -431,28 +437,28 @@ class SizedContext(OrdinalContext):
         If `self.maxval() == 0`, then this context cannot represent
         any finite, non-zero values.
         """
-        return self.format().maxval(s)
+        return Float(x=self.format().maxval(s), ctx=self)
 
     def infval(self, s: bool = False) -> Float:
         """
         Returns the (signed) value that is the "next" value after
         the maximum representable value under this context.
         """
-        return self.format().infval(s)
+        return Float(x=self.format().infval(s), ctx=self)
 
     def largest(self) -> Float:
         """
         Returns the largest representable value (towards positive infinity)
         under this context.
         """
-        return self.format().largest()
+        return Float(x=self.format().largest(), ctx=self)
 
     def smallest(self) -> Float:
         """
         Returns the smallest representable value (towards negative infinity)
         under this context.
         """
-        return self.format().smallest()
+        return Float(x=self.format().smallest(), ctx=self)
 
 
 class EncodableContext(SizedContext):
@@ -483,4 +489,4 @@ class EncodableContext(SizedContext):
         Decodes a bitstring as a a number constructed under this context.
         This operation is context dependent.
         """
-        return self.format().decode(x)
+        return Float(x=self.format().decode(x), ctx=self)

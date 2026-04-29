@@ -7,7 +7,91 @@ from ..round import RoundingMode, OverflowMode
 from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
 
 from .context import EncodableContext
-from .mpb_fixed import MPBFixedContext
+from .format import EncodableFormat
+from .mpb_fixed import MPBFixedFormat, MPBFixedContext
+
+
+class SMFixedFormat(MPBFixedFormat, EncodableFormat):
+    """
+    Number format for sign-magnitude, fixed-width, fixed-point numbers.
+
+    This format is parameterized by the scale factor `scale` and
+    the total number of bits `nbits`.
+    It describes the set of representable values for `SMFixedContext`.
+    """
+
+    scale: int
+    """the implicit scale factor of the representation"""
+
+    nbits: int
+    """the total number of bits in the representation"""
+
+    def __init__(self, scale: int, nbits: int):
+        if not isinstance(scale, int):
+            raise TypeError(f'Expected \'int\' for scale={scale}, got {type(scale)}')
+        if not isinstance(nbits, int):
+            raise TypeError(f'Expected \'int\' for nbits={nbits}, got {type(nbits)}')
+        if nbits < 2:
+            raise ValueError(f'nbits={nbits} must be at least 2 for SMFixedFormat')
+
+        nmin = scale - 1
+        pos_maxval = RealFloat(exp=scale, c=bitmask(nbits - 1))
+
+        MPBFixedFormat.__init__(self, nmin, pos_maxval)
+        self.scale = scale
+        self.nbits = nbits
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, SMFixedFormat)
+            and self.scale == other.scale
+            and self.nbits == other.nbits
+        )
+
+    def __hash__(self):
+        return hash((self.__class__, self.scale, self.nbits))
+
+    def __repr__(self):
+        return self.__class__.__name__ + f'(scale={self.scale!r}, nbits={self.nbits!r})'
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, SMFixedFormat)
+            and self.scale == other.scale
+            and self.nbits == other.nbits
+        )
+
+    def total_bits(self) -> int:
+        return self.nbits
+
+    def encode(self, x: Float) -> int:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got x={x}')
+        if not self.representable_under(x):
+            raise ValueError(f'Expected representable value, got x={x} for self={self}')
+
+        sbit = 1 if x.s else 0
+
+        if x.c == 0:
+            c = 0
+        else:
+            offset = x.exp - self.scale
+            if offset >= 0:
+                c = x.c << offset
+            else:
+                c = x.c >> -offset
+
+        return (sbit << (self.nbits - 1)) | c
+
+    def decode(self, x: int) -> Float:
+        if not isinstance(x, int):
+            raise TypeError(f'Expected \'int\', got x={x}')
+        if x < 0 or x >= (1 << self.nbits):
+            raise ValueError(f'Expected value in range [0, {1 << self.nbits}), got x={x}')
+
+        s = bool((x >> (self.nbits - 1)) & 1)
+        c = x & bitmask(self.nbits - 1)
+        return Float(s, self.scale, c)
 
 
 @default_repr
@@ -100,77 +184,31 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
         return SMFixedContext(
-            scale,
-            nbits,
-            rm,
-            overflow,
-            num_randbits,
-            rng=rng,
-            nan_value=nan_value,
-            inf_value=inf_value
+            scale, nbits, rm, overflow, num_randbits,
+            rng=rng, nan_value=nan_value, inf_value=inf_value
         )
 
-    def total_bits(self) -> int:
-        return self.nbits
-
-    def encode(self, x: Float) -> int:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'Float\', got x={x}')
-        if not self.representable_under(x):
-            raise ValueError(f'Expected representable value, got x={x} for self={self}')
-
-        # sign bit
-        sbit = 1 if x.s else 0
-
-        # magnitude
-        if x.c == 0:
-            c = 0
-        else:
-            offset = x.exp - self.scale
-            if offset >= 0:
-                # padding the value with zeroes
-                c = x.c << offset
-            else:
-                # dropping lower bits
-                # should be safe since the value is representable
-                c = x.c >> -offset
-
-        return (sbit << (self.nbits - 1)) | c
-
-    def decode(self, x: int) -> Float:
-        if not isinstance(x, int):
-            raise TypeError(f'Expected \'int\', got x={x}')
-        if x < 0 or x >= (1 << self.nbits):
-            raise ValueError(f'Expected value in range [0, {1 << self.nbits}), got x={x}')
-
-        s = bool((x >> (self.nbits - 1)) & 1)
-        c = x & bitmask(self.nbits - 1)
-        return Float(s, self.scale, c, ctx=self)
-
-    def format(self) -> 'SMFixedFormat':
-        """Returns the number format associated with this context."""
-        from .formats import SMFixedFormat
+    def format(self) -> SMFixedFormat:
         return SMFixedFormat(self.scale, self.nbits)
 
     @classmethod
     def from_format(
         cls,
-        fmt: 'SMFixedFormat',
+        fmt: SMFixedFormat,
         *,
         rm: RoundingMode = RoundingMode.RNE,
-        overflow: 'OverflowMode' = None,
-        num_randbits: 'int | None' = 0,
+        overflow: OverflowMode | None = None,
+        num_randbits: int | None = 0,
         rng: 'RNG | None' = None,
-        nan_value: 'Float | None' = None,
-        inf_value: 'Float | None' = None
+        nan_value: Float | None = None,
+        inf_value: Float | None = None,
+        **kwargs,
     ) -> 'SMFixedContext':
         """Creates a context from a `SMFixedFormat` and rounding parameters."""
-        from .formats import SMFixedFormat as _SMFixedFormat
-        from ..round import OverflowMode as _OverflowMode
-        if not isinstance(fmt, _SMFixedFormat):
+        if not isinstance(fmt, SMFixedFormat):
             raise TypeError(f'Expected \'SMFixedFormat\', got {type(fmt)}')
         if overflow is None:
-            overflow = _OverflowMode.WRAP
+            overflow = OverflowMode.WRAP
         return cls(
             fmt.scale, fmt.nbits, rm, overflow, num_randbits,
             rng=rng, nan_value=nan_value, inf_value=inf_value,

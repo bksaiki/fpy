@@ -10,8 +10,224 @@ from ..number import Float, RealFloat, RNG
 from ..round import RoundingMode
 from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
 
-from .context import Context, OrdinalContext
-from .mp_float import MPFloatContext
+from .context import OrdinalContext
+from .format import OrdinalFormat
+
+
+@default_repr
+class MPSFloatFormat(OrdinalFormat):
+    """
+    Number format for multi-precision floating-point numbers with subnormalization.
+
+    This format is parameterized by a fixed precision `pmax` and
+    minimum normalized exponent `emin`.
+    It describes the set of representable values for `MPSFloatContext`.
+    """
+
+    pmax: int
+    """maximum precision"""
+
+    emin: int
+    """minimum (normalized) exponent"""
+
+    def __init__(self, pmax: int, emin: int):
+        if not isinstance(pmax, int):
+            raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
+        if pmax < 1:
+            raise ValueError(f'Expected positive integer for pmax={pmax}')
+        if not isinstance(emin, int):
+            raise TypeError(f'Expected \'int\' for emin={emin}, got {type(emin)}')
+        self.pmax = pmax
+        self.emin = emin
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPSFloatFormat)
+            and self.pmax == other.pmax
+            and self.emin == other.emin
+        )
+
+    def __hash__(self):
+        return hash((self.__class__, self.pmax, self.emin))
+
+    @property
+    def expmin(self) -> int:
+        """Minimum unnormalized exponent."""
+        return self.emin - self.pmax + 1
+
+    @property
+    def nmin(self) -> int:
+        """First unrepresentable digit for every value in the format."""
+        return self.expmin - 1
+
+    def is_equiv(self, other) -> bool:
+        return (
+            isinstance(other, MPSFloatFormat)
+            and self.pmax == other.pmax
+            and self.emin == other.emin
+        )
+
+    def representable_under(self, x: RealFloat | Float) -> bool:
+        match x:
+            case Float():
+                if x.is_nar():
+                    return True
+                xr = x._real
+            case RealFloat():
+                xr = x
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+
+        if xr.is_zero():
+            return True
+
+        # precision check (must fit in pmax digits)
+        if xr.p > self.pmax:
+            p_over = xr.p - self.pmax
+            if xr.c & bitmask(p_over) != 0:
+                return False
+
+        # position check (subnormal range)
+        return xr.is_more_significant(self.nmin)
+
+    def canonical_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+
+        if x.is_nar():
+            return True
+        elif x.c == 0:
+            return x.exp == self.expmin
+        elif x.e < self.emin:
+            return x.exp == self.expmin
+        else:
+            return x.p == self.pmax
+
+    def normal_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) or not self.representable_under(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero() and x.e >= self.emin
+
+    def normalize(self, x: Float) -> Float:
+        if not isinstance(x, Float) or not self.representable_under(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+
+        if x.isnan:
+            return Float(isnan=True, s=x.s)
+        elif x.isinf:
+            return Float(isinf=True, s=x.s)
+        elif x.c == 0:
+            return Float(c=0, exp=self.expmin, s=x.s)
+        else:
+            xr = x._real.normalize(self.pmax, self.nmin)
+            return Float(x=x, exp=xr.exp, c=xr.c, ctx=None)
+
+    def _to_ordinal(self, x: RealFloat) -> int:
+        if x.is_zero():
+            return 0
+        elif x.e <= self.emin:
+            # subnormal: sgn(x) * [ 0 | m ]
+            offset = x.exp - self.expmin
+            if offset > 0:
+                c = x.c << offset
+            elif offset < 0:
+                c = x.c >> -offset
+            else:
+                c = x.c
+            eord = 0
+            mord = c
+        else:
+            # normal: sgn(x) * [ eord | m ]
+            offset = x.p - self.pmax
+            if offset > 0:
+                c = x.c >> offset
+            elif offset < 0:
+                c = x.c << -offset
+            else:
+                c = x.c
+            eord = x.e - self.emin + 1
+            mord = c & bitmask(self.pmax - 1)
+
+        uord = (eord << (self.pmax - 1)) + mord
+        return (-1 if x.s else 1) * uord
+
+    def to_ordinal(self, x: Float, infval: bool = False) -> int:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
+        if not self.representable_under(x):
+            raise ValueError(f'x={x} is not representable under this format')
+        if infval:
+            raise ValueError('infval=True is invalid for formats without a maximum value')
+        if x.is_nar():
+            raise ValueError(f'Expected a finite value for x={x}')
+        return self._to_ordinal(x.as_real())
+
+    def to_fractional_ordinal(self, x: Float) -> Fraction:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        if x.is_nar():
+            raise ValueError(f'Expected a finite value for x={x}')
+
+        if self.representable_under(x):
+            return Fraction(self._to_ordinal(x.as_real()))
+
+        xr = x.as_real()
+        above = xr.round(self.pmax, self.nmin, rm=RoundingMode.RTP)
+        below = xr.round(self.pmax, self.nmin, rm=RoundingMode.RTN)
+
+        delta_x: RealFloat = xr - below
+        delta: RealFloat = above - below
+        t = delta_x.as_rational() / delta.as_rational()
+
+        below_ord = self._to_ordinal(below)
+        return Fraction(below_ord) + t
+
+    def from_ordinal(self, x: int, infval: bool = False) -> Float:
+        if not isinstance(x, int):
+            raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
+        if infval:
+            raise ValueError('infval=True is invalid for formats without a maximum value')
+
+        s = x < 0
+        uord = abs(x)
+
+        if x == 0:
+            return Float()
+        eord, mord = divmod(uord, 1 << (self.pmax - 1))
+        if eord == 0:
+            return Float(s=s, c=mord, exp=self.expmin)
+        c = (1 << (self.pmax - 1)) | mord
+        exp = self.expmin + (eord - 1)
+        return Float(s=s, c=c, exp=exp)
+
+    def zero(self, s: bool = False) -> Float:
+        """Returns a signed 0 under this format."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        return Float(s=s, c=0, exp=self.expmin)
+
+    def minval(self, s: bool = False) -> Float:
+        """Returns the smallest non-zero value with sign `s` under this format."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        return Float(s=s, c=1, exp=self.expmin)
+
+    def min_subnormal(self, s: bool = False) -> Float:
+        """Returns the smallest subnormal value with sign `s` under this format."""
+        return self.minval(s)
+
+    def max_subnormal(self, s: bool = False) -> Float:
+        """Returns the largest subnormal value with sign `s` under this format."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        return Float(s=s, c=bitmask(self.pmax - 1), exp=self.expmin)
+
+    def min_normal(self, s: bool = False) -> Float:
+        """Returns the smallest normal value with sign `s` under this format."""
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        return Float(s=s, c=1 << (self.pmax - 1), exp=self.expmin)
+
 
 @default_repr
 class MPSFloatContext(OrdinalContext):
@@ -43,15 +259,6 @@ class MPSFloatContext(OrdinalContext):
     rng: RNG | None
     """random number generator for stochastic rounding, if applicable"""
 
-    _mp_ctx: MPFloatContext
-    """this context without subnormalization"""
-
-    _pos_minval: Float
-    """minimum positive value"""
-
-    _neg_minval: Float
-    """minimum negative value"""
-
     def __init__(
         self,
         pmax: int,
@@ -77,9 +284,6 @@ class MPSFloatContext(OrdinalContext):
         self.rm = rm
         self.num_randbits = num_randbits
         self.rng = rng
-        self._mp_ctx = MPFloatContext(pmax, rm, num_randbits)
-        self._pos_minval = Float(s=False, c=1, exp=self.expmin, ctx=self)
-        self._neg_minval = Float(s=True, c=1, exp=self.expmin, ctx=self)
 
     def __eq__(self, other):
         return (
@@ -100,9 +304,7 @@ class MPSFloatContext(OrdinalContext):
 
     @property
     def nmin(self):
-        """
-        First unrepresentable digit for every value in the representation.
-        """
+        """First unrepresentable digit for every value in the representation."""
         return self.expmin - 1
 
     def with_params(
@@ -131,82 +333,22 @@ class MPSFloatContext(OrdinalContext):
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
 
-    def is_equiv(self, other):
-        if not isinstance(other, Context):
-            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
-        return (
-            isinstance(other, MPSFloatContext)
-            and self.pmax == other.pmax
-            and self.emin == other.emin
-        )
+    def format(self) -> MPSFloatFormat:
+        return MPSFloatFormat(self.pmax, self.emin)
 
-    def representable_under(self, x: RealFloat | Float) -> bool:
-        match x:
-            case Float():
-                if x.ctx is not None and self.is_equiv(x.ctx):
-                    # same context, so representable
-                    return True
-            case RealFloat():
-                pass
-            case _:
-                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
-
-        if not self._mp_ctx.representable_under(x):
-            # not representable even without subnormalization
-            return False
-        elif not x.is_nonzero():
-            # NaN, Inf, 0
-            return True
-        else:
-            # tight check on (significant) digit position
-            if isinstance(x, Float):
-                return x._real.is_more_significant(self.nmin)
-            else:
-                return x.is_more_significant(self.nmin)
-
-    def canonical_under(self, x):
-        if not isinstance(x, Float) or not self.representable_under(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
-        # case split by class
-        if x.is_nar():
-            # NaN or Inf
-            return True
-        elif x.c == 0:
-            # zero
-            return x.exp == self.expmin
-        elif x.e < self.emin:
-            # subnormal
-            return x.exp == self.expmin
-        else:
-            # normal
-            return x.p == self.pmax
-
-    def _normalize(self, x: Float) -> Float:
-        # case split by class
-        if x.isnan:
-            # NaN
-            return Float(isnan=True, s=x.s, ctx=self)
-        elif x.isinf:
-            # Inf
-            return Float(isinf=True, s=x.s, ctx=self)
-        elif x.c == 0:
-            # zero
-            return Float(c=0, exp=self.expmin, s=x.s, ctx=self)
-        else:
-            # non-zero
-            xr = x._real.normalize(self.pmax, self.nmin)
-            return Float(x=x, exp=xr.exp, c=xr.c, ctx=self)
-
-    def normalize(self, x):
-        if not isinstance(x, Float) or not self.representable_under(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return self._normalize(x)
-
-    def normal_under(self, x: Float):
-        if not isinstance(x, Float) or not self.representable_under(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return x.is_nonzero() and x.e >= self.emin
+    @classmethod
+    def from_format(
+        cls,
+        fmt: MPSFloatFormat,
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: int | None = 0,
+        rng: 'RNG | None' = None
+    ) -> 'MPSFloatContext':
+        """Creates a context from a `MPSFloatFormat` and rounding parameters."""
+        if not isinstance(fmt, MPSFloatFormat):
+            raise TypeError(f'Expected \'MPSFloatFormat\', got {type(fmt)}')
+        return cls(fmt.pmax, fmt.emin, rm, num_randbits, rng=rng)
 
     def round_params(self):
         if self.num_randbits is None:
@@ -234,18 +376,16 @@ class MPSFloatContext(OrdinalContext):
 
         # step 2. shortcut for exact zero values
         if x.is_zero():
-            # exactly zero
             return Float(ctx=self)
 
         # step 3. select rounding parameter `n`
         if n is None or n < self.nmin:
-            # no rounding parameter
             n = self.nmin
 
-        # step 3. round value based on rounding parameters
+        # step 4. round value based on rounding parameters
         xr = x.round(self.pmax, n, self.rm, self.num_randbits, rng=self.rng, exact=exact)
 
-        # step 4. wrap the result in a Float
+        # step 5. wrap the result in a Float
         return Float(x=xr, ctx=self)
 
     def round(self, x, *, exact: bool = False) -> Float:
@@ -256,164 +396,18 @@ class MPSFloatContext(OrdinalContext):
         x = self._round_prepare(x)
         return self._round_at(x, n, exact)
 
-    def _to_ordinal(self, x: RealFloat):
-        if x.is_zero():
-            # zero
-            return 0
-        elif x.e <= self.emin:
-            # subnormal: sgn(x) * [ 0 | m ]
-            # need to ensure that exp=self.expmin
-            offset = x.exp - self.expmin
-            if offset > 0:
-                # need to increase precision of `c`
-                c = x.c << offset
-            elif offset < 0:
-                # need to decrease precision of `c`
-                c = x.c >> -offset
-            else:
-                # no change
-                c = x.c
-
-            # ordinal components
-            eord = 0
-            mord = c
-        else:
-            # normal: sgn(x) * [ eord | m ]
-            # normalize so that p=self.pmax
-            offset = x.p - self.pmax
-            if offset > 0:
-                # too much precision
-                c = x.c >> offset
-            elif offset < 0:
-                # too little precision
-                c = x.c << -offset
-            else:
-                # no change
-                c = x.c
-
-            # ordinal components
-            eord = x.e - self.emin + 1
-            mord = c & bitmask(self.pmax - 1)
-
-        uord = (eord << (self.pmax - 1)) + mord
-        return (-1 if x.s else 1) * uord
-
-    def to_ordinal(self, x: Float, infval = False) -> int:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected a \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
-            raise ValueError(f'x={x} is not representable under this context')
-        if infval:
-            raise ValueError('infval=True is invalid for contexts without a maximum value')
-        if x.is_nar():
-            # NaN or Inf
-            raise ValueError(f'Expected a finite value for x={x}')
-        return self._to_ordinal(x.as_real())
-
-    def to_fractional_ordinal(self, x: Float):
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-        if x.is_nar():
-            # NaN or Inf
-            raise ValueError(f'Expected a finite value for x={x}')
-
-        if self.representable_under(x):
-            # representable value
-            return Fraction(self._to_ordinal(x.as_real()))
-        else:
-            # not representable value:
-            # step 1. compute the nearest values, above and below `x`
-            xr = x.as_real()
-            above = xr.round(self.pmax, self.nmin, rm=RoundingMode.RTP)
-            below = xr.round(self.pmax, self.nmin, rm=RoundingMode.RTN)
-
-            # step 2. ordinal space is linear between two adjacent floating-point values;
-            # compute the linear interpolation factor
-            delta_x: RealFloat = xr - below
-            delta: RealFloat = above - below
-            t = delta_x.as_rational() / delta.as_rational()
-
-            # step 3. map one endpoint to the ordinals (they are one apart)
-            below_ord = self._to_ordinal(below)
-
-            # step 4. apply linear interpolation
-            return Fraction(below_ord) + t
-
-    def from_ordinal(self, x: int, infval = False):
-        if not isinstance(x, int):
-            raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
-        if infval:
-            raise ValueError('infval=True is invalid for contexts without a maximum value')
-
-        s = x < 0
-        uord = abs(x)
-
-        if x == 0:
-            # zero
-            return Float(ctx=self)
-        else:
-            # finite values
-            eord, mord = divmod(uord, 1 << (self.pmax - 1))
-            if eord == 0:
-                # subnormal
-                return Float(s=s, c=mord, exp=self.expmin, ctx=self)
-            else:
-                # normal
-                c = (1 << (self.pmax - 1)) | mord
-                exp = self.expmin + (eord - 1)
-                return Float(s=s, c=c, exp=exp, ctx=self)
-
-
     def zero(self, s: bool = False) -> Float:
         """Returns a signed 0 under this context."""
-        if not isinstance(s, bool):
-            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        return Float(s=s, c=0, exp=self.expmin, ctx=self)
-
-    def minval(self, s: bool = False) -> Float:
-        """Returns the smallest non-zero value with sign `s` under this context."""
-        if not isinstance(s, bool):
-            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        return Float(x=self._neg_minval) if s else Float(x=self._pos_minval)
+        return Float(x=self.format().zero(s), ctx=self)
 
     def min_subnormal(self, s: bool = False) -> Float:
         """Returns the smallest subnormal value with sign `s` under this context."""
-        if not isinstance(s, bool):
-            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        return self.minval(s)
+        return Float(x=self.format().min_subnormal(s), ctx=self)
 
     def max_subnormal(self, s: bool = False) -> Float:
         """Returns the largest subnormal value with sign `s` under this context."""
-        if not isinstance(s, bool):
-            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        c = bitmask(self.pmax - 1)
-        exp = self.expmin
-        return Float(s=s, c=c, exp=exp, ctx=self)
+        return Float(x=self.format().max_subnormal(s), ctx=self)
 
     def min_normal(self, s: bool = False) -> Float:
         """Returns the smallest normal value with sign `s` under this context."""
-        if not isinstance(s, bool):
-            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        c = 1 << (self.pmax - 1)
-        exp = self.expmin
-        return Float(s=s, c=c, exp=exp, ctx=self)
-
-    def format(self) -> 'MPSFloatFormat':
-        """Returns the number format associated with this context."""
-        from .formats import MPSFloatFormat
-        return MPSFloatFormat(self.pmax, self.emin)
-
-    @classmethod
-    def from_format(
-        cls,
-        fmt: 'MPSFloatFormat',
-        *,
-        rm: RoundingMode = RoundingMode.RNE,
-        num_randbits: 'int | None' = 0,
-        rng: 'RNG | None' = None
-    ) -> 'MPSFloatContext':
-        """Creates a context from a `MPSFloatFormat` and rounding parameters."""
-        from .formats import MPSFloatFormat as _MPSFloatFormat
-        if not isinstance(fmt, _MPSFloatFormat):
-            raise TypeError(f'Expected \'MPSFloatFormat\', got {type(fmt)}')
-        return cls(fmt.pmax, fmt.emin, rm, num_randbits, rng=rng)
+        return Float(x=self.format().min_normal(s), ctx=self)
