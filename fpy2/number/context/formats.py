@@ -508,7 +508,8 @@ class MPBFloatFormat(SizedFormat):
     def is_equiv(self, other: 'Format') -> bool:
         return (
             isinstance(other, MPBFloatFormat)
-            and self.nmin == other.nmin
+            and self.pmax == other.pmax
+            and self.emin == other.emin
             and self.pos_maxval == other.pos_maxval
             and self.neg_maxval == other.neg_maxval
         )

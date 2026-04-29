@@ -541,14 +541,14 @@ class TestFormatKnownValues:
         ctx = fp.SINT8
         fmt = ctx.format()
         assert isinstance(fmt, fp.FixedFormat)
-        assert fmt.signed == True
+        assert fmt.signed
         assert fmt.nbits == 8
 
     def test_uint8_format(self):
         ctx = fp.UINT8
         fmt = ctx.format()
         assert isinstance(fmt, fp.FixedFormat)
-        assert fmt.signed == False
+        assert not fmt.signed
         assert fmt.nbits == 8
 
     def test_mx_e8m0_format(self):
