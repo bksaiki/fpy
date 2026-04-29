@@ -250,7 +250,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
     @classmethod
     def from_format(
         cls,
-        fmt: FixedFormat,
+        fmt: MPBFixedFormat,
         *,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
@@ -258,7 +258,6 @@ class FixedContext(MPBFixedContext, EncodableContext):
         rng: 'RNG | None' = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None,
-        **kwargs,
     ) -> 'FixedContext':
         """Creates a context from a `FixedFormat` and rounding parameters."""
         if not isinstance(fmt, FixedFormat):

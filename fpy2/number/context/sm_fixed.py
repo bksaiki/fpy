@@ -194,7 +194,7 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
     @classmethod
     def from_format(
         cls,
-        fmt: SMFixedFormat,
+        fmt: MPBFixedFormat,
         *,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
@@ -202,7 +202,6 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         rng: 'RNG | None' = None,
         nan_value: Float | None = None,
         inf_value: Float | None = None,
-        **kwargs,
     ) -> 'SMFixedContext':
         """Creates a context from a `SMFixedFormat` and rounding parameters."""
         if not isinstance(fmt, SMFixedFormat):

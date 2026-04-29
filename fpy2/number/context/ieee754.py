@@ -5,7 +5,7 @@ by the IEEE 754 standard.
 
 from ..round import RoundingMode, OverflowMode
 from ...utils import DEFAULT, DefaultOr
-from ..number import RNG
+from ..number import RNG, Float
 from .efloat import EFloatContext, EFloatFormat, EFloatNanKind
 
 
@@ -93,13 +93,14 @@ class IEEEContext(EFloatContext):
     @classmethod
     def from_format(
         cls,
-        fmt: IEEEFormat,
+        fmt: EFloatFormat,
         *,
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
         rng: 'RNG | None' = None,
-        **kwargs,
+        nan_value: Float | None = None,
+        inf_value: Float | None = None,
     ) -> 'IEEEContext':
         """Creates a context from an `IEEEFormat` and rounding parameters."""
         if not isinstance(fmt, IEEEFormat):
