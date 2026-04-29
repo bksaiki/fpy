@@ -37,6 +37,9 @@ class RealContext(Context):
             raise TypeError(f'Unexpected parameters {kwargs} for RealContext')
         return self
 
+    def format(self):
+        raise NotImplementedError('RealContext has no associated number format')
+
     def is_stochastic(self) -> bool:
         return False
 
