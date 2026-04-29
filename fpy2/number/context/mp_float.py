@@ -199,3 +199,23 @@ class MPFloatContext(Context):
         else:
             pmax = self.pmax + self.num_randbits
             return pmax, None
+
+    def format(self) -> 'MPFloatFormat':
+        """Returns the number format associated with this context."""
+        from .formats import MPFloatFormat
+        return MPFloatFormat(self.pmax)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'MPFloatFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: int | None = 0,
+        rng: 'RNG | None' = None
+    ) -> 'MPFloatContext':
+        """Creates a context from a `MPFloatFormat` and rounding parameters."""
+        from .formats import MPFloatFormat as _MPFloatFormat
+        if not isinstance(fmt, _MPFloatFormat):
+            raise TypeError(f'Expected \'MPFloatFormat\', got {type(fmt)}')
+        return cls(fmt.pmax, rm, num_randbits, rng=rng)

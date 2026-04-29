@@ -521,3 +521,26 @@ class ExpContext(EncodableContext):
             # positive value
             exp = x - self.ebias
             return Float(c=1, exp=exp, ctx=self)
+
+    def format(self) -> 'ExpFormat':
+        """Returns the number format associated with this context."""
+        from .formats import ExpFormat
+        return ExpFormat(self.nbits, self.eoffset)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'ExpFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: 'OverflowMode' = None,
+        inf_value: 'Float | None' = None
+    ) -> 'ExpContext':
+        """Creates a context from an `ExpFormat` and rounding parameters."""
+        from .formats import ExpFormat as _ExpFormat
+        from ..round import OverflowMode as _OverflowMode
+        if not isinstance(fmt, _ExpFormat):
+            raise TypeError(f'Expected \'ExpFormat\', got {type(fmt)}')
+        if overflow is None:
+            overflow = _OverflowMode.OVERFLOW
+        return cls(fmt.nbits, fmt.eoffset, rm, overflow, inf_value=inf_value)

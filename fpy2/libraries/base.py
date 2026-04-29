@@ -19,6 +19,11 @@ from ..number import (
     OrdinalContext,
     SizedContext,
     EncodableContext,
+    # abstract format types
+    Format,
+    OrdinalFormat,
+    SizedFormat,
+    EncodableFormat,
     # concrete context types
     EFloatContext,
     ExpContext,
@@ -30,6 +35,17 @@ from ..number import (
     MPSFloatContext,
     IEEEContext,
     SMFixedContext,
+    # concrete format types
+    MPFloatFormat,
+    MPFixedFormat,
+    MPSFloatFormat,
+    MPBFixedFormat,
+    MPBFloatFormat,
+    EFloatFormat,
+    IEEEFormat,
+    FixedFormat,
+    SMFixedFormat,
+    ExpFormat,
     # rounding utilities
     RoundingMode,
     RoundingDirection, RM,

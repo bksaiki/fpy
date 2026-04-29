@@ -146,3 +146,32 @@ class SMFixedContext(MPBFixedContext, EncodableContext):
         s = bool((x >> (self.nbits - 1)) & 1)
         c = x & bitmask(self.nbits - 1)
         return Float(s, self.scale, c, ctx=self)
+
+    def format(self) -> 'SMFixedFormat':
+        """Returns the number format associated with this context."""
+        from .formats import SMFixedFormat
+        return SMFixedFormat(self.scale, self.nbits)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'SMFixedFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: 'OverflowMode' = None,
+        num_randbits: 'int | None' = 0,
+        rng: 'RNG | None' = None,
+        nan_value: 'Float | None' = None,
+        inf_value: 'Float | None' = None
+    ) -> 'SMFixedContext':
+        """Creates a context from a `SMFixedFormat` and rounding parameters."""
+        from .formats import SMFixedFormat as _SMFixedFormat
+        from ..round import OverflowMode as _OverflowMode
+        if not isinstance(fmt, _SMFixedFormat):
+            raise TypeError(f'Expected \'SMFixedFormat\', got {type(fmt)}')
+        if overflow is None:
+            overflow = _OverflowMode.WRAP
+        return cls(
+            fmt.scale, fmt.nbits, rm, overflow, num_randbits,
+            rng=rng, nan_value=nan_value, inf_value=inf_value,
+        )

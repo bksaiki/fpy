@@ -453,3 +453,30 @@ class MPBFloatContext(SizedContext):
 
     def smallest(self) -> Float:
         return self.maxval(s=True)
+
+    def format(self) -> 'MPBFloatFormat':
+        """Returns the number format associated with this context."""
+        from .formats import MPBFloatFormat
+        return MPBFloatFormat(self.pmax, self.emin, self.pos_maxval, self.neg_maxval)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'MPBFloatFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: 'OverflowMode' = None,
+        num_randbits: 'int | None' = 0,
+        rng: 'RNG | None' = None
+    ) -> 'MPBFloatContext':
+        """Creates a context from a `MPBFloatFormat` and rounding parameters."""
+        from .formats import MPBFloatFormat as _MPBFloatFormat
+        from ..round import OverflowMode as _OverflowMode
+        if not isinstance(fmt, _MPBFloatFormat):
+            raise TypeError(f'Expected \'MPBFloatFormat\', got {type(fmt)}')
+        if overflow is None:
+            overflow = _OverflowMode.OVERFLOW
+        return cls(
+            fmt.pmax, fmt.emin, fmt.pos_maxval, rm, overflow, num_randbits,
+            neg_maxval=fmt.neg_maxval, rng=rng
+        )

@@ -725,6 +725,36 @@ class EFloatContext(EncodableContext):
                 # this should never happen
                 raise RuntimeError(f'unexpected NaN kind {self.nan_kind}')
 
+    def format(self) -> 'EFloatFormat':
+        """Returns the number format associated with this context."""
+        from .formats import EFloatFormat
+        return EFloatFormat(self.es, self.nbits, self.enable_inf, self.nan_kind, self.eoffset)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'EFloatFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: 'OverflowMode' = None,
+        num_randbits: 'int | None' = 0,
+        rng: 'RNG | None' = None,
+        nan_value: 'Float | None' = None,
+        inf_value: 'Float | None' = None
+    ) -> 'EFloatContext':
+        """Creates a context from an `EFloatFormat` and rounding parameters."""
+        from .formats import EFloatFormat as _EFloatFormat
+        from ..round import OverflowMode as _OverflowMode
+        if not isinstance(fmt, _EFloatFormat):
+            raise TypeError(f'Expected \'EFloatFormat\', got {type(fmt)}')
+        if overflow is None:
+            overflow = _OverflowMode.OVERFLOW
+        return cls(
+            fmt.es, fmt.nbits, fmt.enable_inf, fmt.nan_kind, fmt.eoffset,
+            rm, overflow, num_randbits, rng=rng,
+            nan_value=nan_value, inf_value=inf_value,
+        )
+
 
 def _format_is_valid(
     es: int,

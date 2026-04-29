@@ -7,6 +7,8 @@ from .number import Float, RealFloat, Real
 from .context import (
     # abstract contexts
     Context, OrdinalContext, SizedContext, EncodableContext,
+    # abstract formats
+    Format, OrdinalFormat, SizedFormat, EncodableFormat,
     # concrete contexts
     ExpContext,
     EFloatContext, EFloatNanKind,
@@ -18,6 +20,17 @@ from .context import (
     MPBFloatContext,
     MPSFloatContext,
     SMFixedContext,
+    # concrete formats
+    MPFloatFormat,
+    MPFixedFormat,
+    MPSFloatFormat,
+    MPBFixedFormat,
+    MPBFloatFormat,
+    EFloatFormat,
+    IEEEFormat,
+    FixedFormat,
+    SMFixedFormat,
+    ExpFormat,
     # context instances
     FP256, FP128, FP64, FP32, FP16,
     TF32, BF16,

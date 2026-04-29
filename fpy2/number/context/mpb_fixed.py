@@ -523,3 +523,40 @@ class MPBFixedContext(SizedContext):
             return self.maxval(s=True)
         else:
             return Float.from_int(0, ctx=self)
+
+    def format(self) -> 'MPBFixedFormat':
+        """Returns the number format associated with this context."""
+        from .formats import MPBFixedFormat
+        return MPBFixedFormat(
+            self.nmin, self.pos_maxval, self.neg_maxval,
+            self.enable_nan, self.enable_inf,
+        )
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'MPBFixedFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: 'OverflowMode' = None,
+        num_randbits: 'int | None' = 0,
+        rng: 'RNG | None' = None,
+        nan_value: 'Float | None' = None,
+        inf_value: 'Float | None' = None
+    ) -> 'MPBFixedContext':
+        """Creates a context from a `MPBFixedFormat` and rounding parameters."""
+        from .formats import MPBFixedFormat as _MPBFixedFormat
+        from ..round import OverflowMode as _OverflowMode
+        if not isinstance(fmt, _MPBFixedFormat):
+            raise TypeError(f'Expected \'MPBFixedFormat\', got {type(fmt)}')
+        if overflow is None:
+            overflow = _OverflowMode.WRAP
+        return cls(
+            fmt.nmin, fmt.pos_maxval, rm, overflow, num_randbits,
+            neg_maxval=fmt.neg_maxval,
+            rng=rng,
+            enable_nan=fmt.enable_nan,
+            enable_inf=fmt.enable_inf,
+            nan_value=nan_value,
+            inf_value=inf_value,
+        )

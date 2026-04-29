@@ -398,3 +398,22 @@ class MPSFloatContext(OrdinalContext):
         exp = self.expmin
         return Float(s=s, c=c, exp=exp, ctx=self)
 
+    def format(self) -> 'MPSFloatFormat':
+        """Returns the number format associated with this context."""
+        from .formats import MPSFloatFormat
+        return MPSFloatFormat(self.pmax, self.emin)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'MPSFloatFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: 'int | None' = 0,
+        rng: 'RNG | None' = None
+    ) -> 'MPSFloatContext':
+        """Creates a context from a `MPSFloatFormat` and rounding parameters."""
+        from .formats import MPSFloatFormat as _MPSFloatFormat
+        if not isinstance(fmt, _MPSFloatFormat):
+            raise TypeError(f'Expected \'MPSFloatFormat\', got {type(fmt)}')
+        return cls(fmt.pmax, fmt.emin, rm, num_randbits, rng=rng)

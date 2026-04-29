@@ -214,6 +214,35 @@ class FixedContext(MPBFixedContext, EncodableContext):
 
         return Float(s=s, exp=self.scale, c=c, ctx=self)
 
+    def format(self) -> 'FixedFormat':
+        """Returns the number format associated with this context."""
+        from .formats import FixedFormat
+        return FixedFormat(self.signed, self.scale, self.nbits)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'FixedFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: 'OverflowMode' = None,
+        num_randbits: 'int | None' = 0,
+        rng: 'RNG | None' = None,
+        nan_value: 'Float | None' = None,
+        inf_value: 'Float | None' = None
+    ) -> 'FixedContext':
+        """Creates a context from a `FixedFormat` and rounding parameters."""
+        from .formats import FixedFormat as _FixedFormat
+        from ..round import OverflowMode as _OverflowMode
+        if not isinstance(fmt, _FixedFormat):
+            raise TypeError(f'Expected \'FixedFormat\', got {type(fmt)}')
+        if overflow is None:
+            overflow = _OverflowMode.WRAP
+        return cls(
+            fmt.signed, fmt.scale, fmt.nbits, rm, overflow, num_randbits,
+            rng=rng, nan_value=nan_value, inf_value=inf_value,
+        )
+
 
 def _fixed_to_mpb_fixed(
     signed: bool,

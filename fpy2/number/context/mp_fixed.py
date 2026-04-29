@@ -413,3 +413,34 @@ class MPFixedContext(OrdinalContext):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
         return Float(s=s, c=1, exp=self.expmin, ctx=self)
 
+    def format(self) -> 'MPFixedFormat':
+        """Returns the number format associated with this context."""
+        from .formats import MPFixedFormat
+        return MPFixedFormat(self.nmin, self.enable_nan, self.enable_inf)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'MPFixedFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: 'int | None' = 0,
+        rng: 'RNG | None' = None,
+        nan_value: 'Float | None' = None,
+        inf_value: 'Float | None' = None
+    ) -> 'MPFixedContext':
+        """Creates a context from a `MPFixedFormat` and rounding parameters."""
+        from .formats import MPFixedFormat as _MPFixedFormat
+        if not isinstance(fmt, _MPFixedFormat):
+            raise TypeError(f'Expected \'MPFixedFormat\', got {type(fmt)}')
+        return cls(
+            fmt.nmin,
+            rm,
+            num_randbits,
+            rng=rng,
+            enable_nan=fmt.enable_nan,
+            enable_inf=fmt.enable_inf,
+            nan_value=nan_value,
+            inf_value=inf_value,
+        )
+

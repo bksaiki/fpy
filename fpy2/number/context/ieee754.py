@@ -62,3 +62,27 @@ class IEEEContext(EFloatContext):
         if kwargs:
             raise TypeError(f'Unexpected parameters {kwargs} for IEEEContext')
         return IEEEContext(es, nbits, rm, overflow, num_randbits, rng=rng)
+
+    def format(self) -> 'IEEEFormat':
+        """Returns the number format associated with this context."""
+        from .formats import IEEEFormat
+        return IEEEFormat(self.es, self.nbits)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: 'IEEEFormat',
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        overflow: 'OverflowMode' = None,
+        num_randbits: 'int | None' = 0,
+        rng: 'RNG | None' = None
+    ) -> 'IEEEContext':
+        """Creates a context from an `IEEEFormat` and rounding parameters."""
+        from .formats import IEEEFormat as _IEEEFormat
+        from ..round import OverflowMode as _OverflowMode
+        if not isinstance(fmt, _IEEEFormat):
+            raise TypeError(f'Expected \'IEEEFormat\', got {type(fmt)}')
+        if overflow is None:
+            overflow = _OverflowMode.OVERFLOW
+        return cls(fmt.es, fmt.nbits, rm, overflow, num_randbits, rng=rng)
