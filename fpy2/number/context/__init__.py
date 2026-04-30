@@ -18,7 +18,7 @@ from .mp_float import MPFloatFormat, MPFloatContext
 from .mpb_fixed import MPBFixedFormat, MPBFixedContext
 from .mpb_float import MPBFloatFormat, MPBFloatContext
 from .mps_float import MPSFloatFormat, MPSFloatContext
-from .real import RealFormat, REAL
+from .real import REAL, REAL_FORMAT
 from .sm_fixed import SMFixedFormat, SMFixedContext
 
 # Rounding

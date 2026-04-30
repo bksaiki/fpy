@@ -35,17 +35,6 @@ from ..number import (
     MPSFloatContext,
     IEEEContext,
     SMFixedContext,
-    # concrete format types
-    MPFloatFormat,
-    MPFixedFormat,
-    MPSFloatFormat,
-    MPBFixedFormat,
-    MPBFloatFormat,
-    EFloatFormat,
-    IEEEFormat,
-    FixedFormat,
-    SMFixedFormat,
-    ExpFormat,
     # rounding utilities
     RoundingMode,
     RoundingDirection, RM,
