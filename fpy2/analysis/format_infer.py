@@ -85,8 +85,8 @@ def _format_of_ctx_param(ctx) -> Format:
 def _format_of_type(ty: Type | None) -> Format:
     """Extracts the number format from an inferred type."""
     match ty:
-        case RealType(ctx=ctx):
-            return _format_of_ctx_param(ctx)
+        case RealType(ctx=real_ctx):
+            return _format_of_ctx_param(real_ctx)
         case _:
             # Non-real types (bool, context, tuple, list) do not carry
             # a number format; use the top element as a conservative default.

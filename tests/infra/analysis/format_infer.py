@@ -18,6 +18,8 @@ _modules = [
 ]
 
 _unit_ignore = [
+    # These examples use dynamic or external contexts that cannot be
+    # resolved statically by ContextInfer, so FormatInfer cannot run on them.
     'test_context_expr1',
     'test_context_expr2',
     'test_context8',
