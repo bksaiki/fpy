@@ -26,6 +26,7 @@ def _run_tests():
     test_context_use()
     test_array_size_infer()
     test_purity()
+    test_format_infer()
     # transformations
     test_const_prop()
     test_copy_prop()

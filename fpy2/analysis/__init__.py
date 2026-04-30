@@ -15,6 +15,7 @@ from .define_use import (
     DefineUse, DefineUseAnalysis,
     DefCtx, UseSite
 )
+from .format_infer import FormatInfer, FormatAnalysis
 from .live_vars import LiveVars
 from .partial_eval import PartialEval, PartialEvalInfo
 from .purity import Purity
