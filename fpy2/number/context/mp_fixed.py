@@ -10,7 +10,162 @@ from ..round import RoundingMode
 from ..number import Float, RealFloat, RNG
 from ...utils import default_repr, DEFAULT, DefaultOr
 
-from .context import Context, OrdinalContext
+from .context import OrdinalContext
+from .format import OrdinalFormat
+
+
+@default_repr
+class MPFixedFormat(OrdinalFormat):
+    """
+    Number format for multi-precision fixed-point numbers.
+
+    This format is parameterized by the least-significant digit position
+    `nmin` and optional NaN/Inf support flags.
+    It describes the set of representable values for `MPFixedContext`.
+    """
+
+    nmin: int
+    """the first unrepresentable digit"""
+
+    enable_nan: bool
+    """is NaN representable?"""
+
+    enable_inf: bool
+    """is infinity representable?"""
+
+    def __init__(self, nmin: int, enable_nan: bool = False, enable_inf: bool = False):
+        if not isinstance(nmin, int):
+            raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
+        if not isinstance(enable_nan, bool):
+            raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
+        if not isinstance(enable_inf, bool):
+            raise TypeError(f'Expected \'bool\' for enable_inf={enable_inf}, got {type(enable_inf)}')
+        self.nmin = nmin
+        self.enable_nan = enable_nan
+        self.enable_inf = enable_inf
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, MPFixedFormat)
+            and self.nmin == other.nmin
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
+        )
+
+    def __hash__(self):
+        return hash((self.__class__, self.nmin, self.enable_nan, self.enable_inf))
+
+    @property
+    def expmin(self) -> int:
+        """The minimum exponent for this format. Equal to `nmin + 1`."""
+        return self.nmin + 1
+
+    def representable_in(self, x: RealFloat | Float) -> bool:
+        match x:
+            case Float():
+                if x.isnan:
+                    return self.enable_nan
+                elif x.isinf:
+                    return self.enable_inf
+                else:
+                    xr = x.as_real()
+            case RealFloat():
+                xr = x
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+
+        return xr.is_more_significant(self.nmin)
+
+    def canonical_under(self, x: Float) -> bool:
+        if not isinstance(x, Float) and self.representable_in(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return x.exp == self.expmin
+
+    def normal_under(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero()
+
+    def normalize(self, x: Float) -> Float:
+        if not isinstance(x, Float) and self.representable_in(x):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+
+        offset = x.exp - self.expmin
+        if offset > 0:
+            c = x.c >> offset
+            exp = x.exp - offset
+        elif offset < 0:
+            c = x.c << -offset
+            exp = x.exp - offset
+        else:
+            c = x.c
+            exp = x.exp
+
+        return Float(exp=exp, c=c, x=x, ctx=None)
+
+    def _to_ordinal(self, x: RealFloat) -> int:
+        if x.is_zero():
+            return 0
+        offset = x.exp - self.expmin
+        if offset > 0:
+            c = x.c << offset
+        elif offset < 0:
+            c = x.c >> -offset
+        else:
+            c = x.c
+
+        if x.s:
+            c *= -1
+        return c
+
+    def to_ordinal(self, x: Float, infval: bool = False) -> int:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        if not self.representable_in(x):
+            raise ValueError(f'Expected representable \'Float\', got x={x}')
+        if infval:
+            raise ValueError('infvalue=True is invalid for formats without maximum value')
+        if x.is_nar():
+            raise ValueError(f'Expected a finite value for={x}')
+        return self._to_ordinal(x.as_real())
+
+    def to_fractional_ordinal(self, x: Float) -> Fraction:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        if x.is_nar():
+            raise ValueError(f'Expected a finite value for x={x}')
+
+        if self.representable_in(x):
+            return Fraction(self._to_ordinal(x.as_real()))
+
+        xr = x.as_real()
+        above = xr.round(min_n=self.nmin, rm=RoundingMode.RTP)
+        below = xr.round(min_n=self.nmin, rm=RoundingMode.RTN)
+
+        delta_x: RealFloat = xr - below
+        delta: RealFloat = above - below
+        t = delta_x.as_rational() / delta.as_rational()
+
+        below_ord = self._to_ordinal(below)
+        return Fraction(below_ord) + t
+
+    def from_ordinal(self, x: int, infval: bool = False) -> Float:
+        if not isinstance(x, int):
+            raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
+        if infval:
+            raise ValueError('infval=True is invalid for formats without a maximum value')
+
+        s = x < 0
+        uord = abs(x)
+
+        if x == 0:
+            return Float()
+        return Float(s=s, c=uord, exp=self.expmin)
+
+    def minval(self, s: bool = False) -> Float:
+        if not isinstance(s, bool):
+            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
+        return Float(s=s, c=1, exp=self.expmin)
 
 
 @default_repr
@@ -92,7 +247,6 @@ class MPFixedContext(OrdinalContext):
             if not isinstance(nan_value, Float):
                 raise TypeError(f'Expected \'RealFloat\' for nan_value={nan_value}, got {type(nan_value)}')
             if not enable_nan:
-                # this field matters
                 if nan_value.isinf:
                     if not enable_inf:
                         raise ValueError('Rounding NaN to infinity, but infinity not enabled')
@@ -104,7 +258,6 @@ class MPFixedContext(OrdinalContext):
             if not isinstance(inf_value, Float):
                 raise TypeError(f'Expected \'RealFloat\' for inf_value={inf_value}, got {type(inf_value)}')
             if not enable_inf:
-                # this field matters
                 if inf_value.isnan:
                     if not enable_nan:
                         raise ValueError('Rounding Inf to NaN, but NaN not enabled')
@@ -143,7 +296,6 @@ class MPFixedContext(OrdinalContext):
             self.nan_value,
             self.inf_value
         ))
-
 
     @property
     def expmin(self) -> int:
@@ -197,70 +349,33 @@ class MPFixedContext(OrdinalContext):
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
 
-    def is_equiv(self, other):
-        if not isinstance(other, Context):
-            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
-        return (
-            isinstance(other, MPFixedContext)
-            and self.nmin == other.nmin
-            and self.enable_nan == other.enable_nan
-            and self.enable_inf == other.enable_inf
+    def format(self) -> MPFixedFormat:
+        return MPFixedFormat(self.nmin, self.enable_nan, self.enable_inf)
+
+    @classmethod
+    def from_format(
+        cls,
+        fmt: MPFixedFormat,
+        *,
+        rm: RoundingMode = RoundingMode.RNE,
+        num_randbits: int | None = 0,
+        rng: 'RNG | None' = None,
+        nan_value: Float | None = None,
+        inf_value: Float | None = None
+    ) -> 'MPFixedContext':
+        """Creates a context from a `MPFixedFormat` and rounding parameters."""
+        if not isinstance(fmt, MPFixedFormat):
+            raise TypeError(f'Expected \'MPFixedFormat\', got {type(fmt)}')
+        return cls(
+            fmt.nmin,
+            rm,
+            num_randbits,
+            rng=rng,
+            enable_nan=fmt.enable_nan,
+            enable_inf=fmt.enable_inf,
+            nan_value=nan_value,
+            inf_value=inf_value,
         )
-
-    def representable_under(self, x: RealFloat | Float) -> bool:
-        match x:
-            case Float():
-                if x.ctx is not None and self.is_equiv(x.ctx):
-                    # same context, so representable
-                    return True
-            case RealFloat():
-                pass
-            case _:
-                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
-
-        match x:
-            case Float():
-                if x.isnan:
-                    return self.enable_nan
-                elif x.isinf:
-                    return self.enable_inf
-                else:
-                    xr = x.as_real()
-            case RealFloat():
-                xr = x
-            case _:
-                raise RuntimeError(f'unreachable {x}')
-
-        return xr.is_more_significant(self.nmin)
-
-    def canonical_under(self, x: Float):
-        if not isinstance(x, Float) and self.representable_under(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return x.exp == self.expmin
-
-    def normalize(self, x: Float):
-        if not isinstance(x, Float) and self.representable_under(x):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-
-        offset = x.exp - self.expmin
-        if offset > 0:
-            # shift the significand to the right
-            c = x.c >> offset
-            exp = x.exp - offset
-        elif offset < 0:
-            # shift the significand to the left
-            c = x.c << -offset
-            exp = x.exp - offset
-        else:
-            c = x.c
-            exp = x.exp
-
-        return Float(exp=exp, c=c, x=x, ctx=self)
-
-    def normal_under(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-        return x.is_nonzero()
 
     def round_params(self):
         if self.num_randbits is None:
@@ -307,7 +422,6 @@ class MPFixedContext(OrdinalContext):
 
         # step 2. shortcut for exact zero values
         if xr.is_zero():
-            # exactly zero
             return Float(ctx=self)
 
         # step 3. round value based on rounding parameters
@@ -323,93 +437,3 @@ class MPFixedContext(OrdinalContext):
     def round_at(self, x, n: int, *, exact: bool = False) -> Float:
         x = self._round_prepare(x)
         return self._round_at(x, n, exact)
-
-    def _to_ordinal(self, x: RealFloat):
-        """
-        Converts a (representable) `RealFloat` to its ordinal value.
-        """
-        if x.is_zero():
-            # zero -> 0
-            return 0
-        else:
-            # finite, non-zero
-            offset = x.exp - self.expmin
-            if offset > 0:
-                # need to increase precision of `c`
-                c = x.c << offset
-            elif offset < 0:
-                # need to decrease precision of `c`
-                c = x.c >> -offset
-            else:
-                c = x.c
-
-            # apply sign
-            if x.s:
-                c *= -1
-
-            return c
-
-    def to_ordinal(self, x: Float, infval: bool = False) -> int:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-        if not self.representable_under(x):
-            raise ValueError(f'Expected representable \'Float\', got x={x}')
-        if infval:
-            raise ValueError('infvalue=True is invalid for contexts without maximum value')
-        if x.is_nar():
-            # NaN or Inf
-            raise ValueError(f'Expected a finite value for={x}')
-
-        return self._to_ordinal(x.as_real())
-
-    def to_fractional_ordinal(self, x: Float):
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
-        if x.is_nar():
-            # NaN or Inf
-            raise ValueError(f'Expected a finite value for x={x}')
-
-        if self.representable_under(x):
-            # representable value
-            return Fraction(self._to_ordinal(x.as_real()))
-        else:
-            # not representable value:
-            # step 1. compute the nearest values, above and below `x`
-            xr = x.as_real()
-            above = xr.round(min_n=self.nmin, rm=RoundingMode.RTP)
-            below = xr.round(min_n=self.nmin, rm=RoundingMode.RTN)
-
-            # step 2. ordinal space is linear between two adjacent fixed-point values;
-            # compute the linear interpolation factor
-            delta_x: RealFloat = xr - below
-            delta: RealFloat = above - below
-            t = delta_x.as_rational() / delta.as_rational()
-
-            # step 3. map one endpoint to the ordinals (they are one apart)
-            below_ord = self._to_ordinal(below)
-
-            # step 4. apply linear interpolation
-            return Fraction(below_ord) + t
-
-
-    def from_ordinal(self, x: int, infval: bool = False) -> Float:
-        if not isinstance(x, int):
-            raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
-        if infval:
-            raise ValueError('infval=True is invalid for contexts without a maximum value')
-
-        s = x < 0
-        uord = abs(x)
-
-        if x == 0:
-            # 0 -> zero
-            return Float(ctx=self)
-        else:
-            # finite, non-zero
-            return Float(s=s, c=uord, exp=self.expmin, ctx=self)
-
-    def minval(self, s: bool = False) -> Float:
-        if not isinstance(s, bool):
-            raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
-        return Float(s=s, c=1, exp=self.expmin, ctx=self)
-

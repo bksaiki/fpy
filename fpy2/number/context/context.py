@@ -10,6 +10,8 @@ from ...utils import is_dyadic
 from ..gmputils import mpfr_value
 from ..number import Float, RealFloat
 
+from .format import Format, OrdinalFormat, SizedFormat, EncodableFormat
+
 __all__ = [
     'Context',
     'OrdinalContext',
@@ -58,15 +60,35 @@ class Context(ABC):
         ...
 
     @abstractmethod
+    def format(self) -> Format:
+        """
+        Returns the number format associated with this context.
+
+        The format describes the set of representable values without
+        the rounding rule. Format-only methods on `Context`
+        (`representable_under`, etc.) default to delegating
+        to the corresponding method on `self.format()`.
+        """
+        ...
+
     def is_equiv(self, other: 'Context') -> bool:
         """
         Returns if this context and another context round values to
         the same set of representable values. Two contexts are equivalent
         if they produce the same set of representable values.
         """
-        ...
+        if not isinstance(other, Context):
+            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
+        try:
+            self_fmt = self.format()
+        except NotImplementedError:
+            self_fmt = None
+        try:
+            other_fmt = other.format()
+        except NotImplementedError:
+            other_fmt = None
+        return self_fmt == other_fmt
 
-    @abstractmethod
     def representable_under(self, x: Float | RealFloat) -> bool:
         """
         Returns if `x` is representable under this context.
@@ -74,9 +96,17 @@ class Context(ABC):
         Representable is not the same as canonical,
         but every canonical value must be representable.
         """
-        ...
+        match x:
+            case Float():
+                if x.ctx is not None and self.format() == x.ctx.format():
+                    # same context, so representable
+                    return True
+            case RealFloat():
+                pass
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        return self.format().representable_in(x)
 
-    @abstractmethod
     def canonical_under(self, x: Float) -> bool:
         """
         Returns if `x` is canonical under this context.
@@ -86,9 +116,8 @@ class Context(ABC):
         one canonical value for a given number despite the function name.
         The result of `self.normalize()` is always canonical.
         """
-        ...
+        return self.format().canonical_under(x)
 
-    @abstractmethod
     def normal_under(self, x: Float) -> bool:
         """
         Returns if `x` is "normal" under this context.
@@ -96,12 +125,13 @@ class Context(ABC):
         For IEEE-style contexts, this means that `x` is finite, non-zero,
         and `x.normalize()` has full precision.
         """
-        ...
+        return self.format().normal_under(x)
 
-    @abstractmethod
     def normalize(self, x: Float) -> Float:
         """Returns the canonical form of `x` under this context."""
-        ...
+        y = self.format().normalize(x)
+        y._ctx = self
+        return y
 
     @abstractmethod
     def round_params(self) -> tuple[int | None, int | None]:
@@ -208,6 +238,9 @@ class OrdinalContext(Context):
     """
 
     @abstractmethod
+    def format(self) -> OrdinalFormat:
+        ...
+
     def to_ordinal(self, x: Float, infval: bool = False) -> int:
         """
         Maps a number to an ordinal number.
@@ -216,9 +249,8 @@ class OrdinalContext(Context):
         logical ordinal value after +/-MAX_VAL. This option is only
         valid when the context has a maximum value.
         """
-        ...
+        return self.format().to_ordinal(x, infval)
 
-    @abstractmethod
     def to_fractional_ordinal(self, x: Float) -> Fraction:
         """
         Maps a number to a (fractional) ordinal number.
@@ -234,9 +266,8 @@ class OrdinalContext(Context):
 
         Raises a `ValueError` when `x.is_nar()` is `True`.
         """
-        ...
+        return self.format().to_fractional_ordinal(x)
 
-    @abstractmethod
     def from_ordinal(self, x: int, infval: bool = False) -> Float:
         """
         Maps an ordinal number to a number.
@@ -245,9 +276,10 @@ class OrdinalContext(Context):
         logical ordinal value after +/-MAX_VAL. This option is only
         valid when the context has a maximum value.
         """
-        ...
+        y = self.format().from_ordinal(x, infval)
+        y._ctx = self
+        return y
 
-    @abstractmethod
     def minval(self, s: bool = False) -> Float:
         """
         Returns the (signed) representable value with the minimum magnitude
@@ -255,37 +287,9 @@ class OrdinalContext(Context):
 
         This value will map to +/-1 through `to_ordinal()`.
         """
-        ...
-
-    def _next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
-        """
-        Returns the next representable value after `x` towards `y`.
-        """
-        if y.isinf:
-            # special case: we want to return the next value towards an infinity
-            step = -1 if y.s else 1
-            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
-        else:
-            # general case: we can just use the ordinal values to determine the next value
-            xord = self.to_ordinal(x)
-            yord = self.to_ordinal(y)
-            step = 1 if xord < yord else -1
-            return self.from_ordinal(xord + step, infval=allow_inf)
-
-    def _next_away(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
-        """
-        Returns the next representable value after `x` away from `y`.
-        """
-        if y.isinf:
-            # special case: we want to return the next value away from an infinity
-            step = 1 if y.s else -1
-            return self.from_ordinal(self.to_ordinal(x) + step, infval=allow_inf)
-        else:
-            # general case: we can just use the ordinal values to determine the next value
-            xord = self.to_ordinal(x)
-            yord = self.to_ordinal(y)
-            step = -1 if xord < yord else 1
-            return self.from_ordinal(xord + step, infval=allow_inf)
+        y = self.format().minval(s)
+        y._ctx = self
+        return y
 
     def next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
         """
@@ -309,7 +313,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == y:
             raise ValueError('x and y are equal so there is no next value towards y', x, y)
-        return self._next_towards(x, y, allow_inf)
+        z = self.format().next_towards(x, y, allow_inf)
+        z._ctx = self
+        return z
 
     def next_towards_zero(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -329,7 +335,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == 0:
             raise ValueError('x is zero so there is no next value towards zero', x)
-        return self._next_towards(x, self.from_ordinal(0), allow_inf)
+        y = self.format().next_towards_zero(x, allow_inf)
+        y._ctx = self
+        return y
 
     def next_away_zero(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -349,7 +357,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == 0:
             raise ValueError('x is zero so there is no next value away from zero', x)
-        return self._next_away(x, self.from_ordinal(0), allow_inf)
+        y = self.format().next_away_zero(x, allow_inf)
+        y._ctx = self
+        return y
 
     def next_up(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -369,7 +379,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x.isinf and not x.s:
             raise ValueError('x cannot be positive infinity', x)
-        return self._next_towards(x, Float(isinf=True), allow_inf)
+        y = self.format().next_up(x, allow_inf)
+        y._ctx = self
+        return y
 
     def next_down(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -389,7 +401,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x.isinf and x.s:
             raise ValueError('x cannot be negative infinity', x)
-        return self._next_towards(x, Float(isinf=True, s=True), allow_inf)
+        y = self.format().next_down(x, allow_inf)
+        y._ctx = self
+        return y
 
 
 class SizedContext(OrdinalContext):
@@ -411,6 +425,9 @@ class SizedContext(OrdinalContext):
         return max(pos_e, neg_e)
 
     @abstractmethod
+    def format(self) -> SizedFormat:
+        ...
+
     def maxval(self, s: bool = False) -> Float:
         """
         Returns the (signed) representable value with the maximum magnitude
@@ -419,31 +436,36 @@ class SizedContext(OrdinalContext):
         If `self.maxval() == 0`, then this context cannot represent
         any finite, non-zero values.
         """
-        ...
+        y = self.format().maxval(s)
+        y._ctx = self
+        return y
 
-    @abstractmethod
     def infval(self, s: bool = False) -> Float:
         """
         Returns the (signed) value that is the "next" value after
         the maximum representable value under this context.
         """
-        ...
+        y = self.format().infval(s)
+        y._ctx = self
+        return y
 
-    @abstractmethod
     def largest(self) -> Float:
         """
         Returns the largest representable value (towards positive infinity)
         under this context.
         """
-        ...
+        y = self.format().largest()
+        y._ctx = self
+        return y
 
-    @abstractmethod
     def smallest(self) -> Float:
         """
         Returns the smallest representable value (towards negative infinity)
         under this context.
         """
-        ...
+        y = self.format().smallest()
+        y._ctx = self
+        return y
 
 
 class EncodableContext(SizedContext):
@@ -455,22 +477,25 @@ class EncodableContext(SizedContext):
     """
 
     @abstractmethod
-    def total_bits(self) -> int:
-        """Returns the total number of bits used to encode a number under this context."""
+    def format(self) -> EncodableFormat:
         ...
 
-    @abstractmethod
+    def total_bits(self) -> int:
+        """Returns the total number of bits used to encode a number under this context."""
+        return self.format().total_bits()
+
     def encode(self, x: Float) -> int:
         """
         Encodes a number constructed under this context as a bitstring.
         This operation is context dependent.
         """
-        ...
+        return self.format().encode(x)
 
-    @abstractmethod
     def decode(self, x: int) -> Float:
         """
         Decodes a bitstring as a a number constructed under this context.
         This operation is context dependent.
         """
-        ...
+        y = self.format().decode(x)
+        y._ctx = self
+        return y
