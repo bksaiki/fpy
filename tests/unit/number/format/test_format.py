@@ -324,33 +324,33 @@ class TestFormatRepresentable:
         mps_float_formats(max_p=8, min_emin=-64, max_emin=64).flatmap(
             lambda fmt: st.tuples(
                 st.just(fmt),
-                floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+                floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fp.MPSFloatContext.from_format(fmt))
             )
         )
     )
     def test_mps_float_representable(self, fmt_x):
         fmt, x = fmt_x
-        assert fmt.representable_under(x)
+        assert fmt.representable_in(x)
 
     @given(efloat_formats(max_es=4, max_nbits=8, min_eoffset=-8, max_eoffset=8).flatmap(
         lambda fmt: st.tuples(
             st.just(fmt),
-            floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+            floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fp.EFloatContext.from_format(fmt))
         )
     ))
     def test_efloat_representable(self, fmt_x):
         fmt, x = fmt_x
-        assert fmt.representable_under(x)
+        assert fmt.representable_in(x)
 
     @given(ieee_formats(max_es=5, max_nbits=16).flatmap(
         lambda fmt: st.tuples(
             st.just(fmt),
-            floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+            floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fp.IEEEContext.from_format(fmt))
         )
     ))
     def test_ieee_representable(self, fmt_x):
         fmt, x = fmt_x
-        assert fmt.representable_under(x)
+        assert fmt.representable_in(x)
 
 
 ###########################################################
@@ -363,7 +363,7 @@ class TestOrdinalFormat:
         mps_float_formats(max_p=8, min_emin=-32, max_emin=32).flatmap(
             lambda fmt: st.tuples(
                 st.just(fmt),
-                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fp.MPSFloatContext.from_format(fmt))
             )
         )
     )
@@ -377,7 +377,7 @@ class TestOrdinalFormat:
         mp_fixed_formats(min_n=-16, max_n=16).flatmap(
             lambda fmt: st.tuples(
                 st.just(fmt),
-                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fp.MPFixedContext.from_format(fmt))
             )
         )
     )
@@ -390,7 +390,7 @@ class TestOrdinalFormat:
         mps_float_formats(max_p=4, min_emin=-8, max_emin=8).flatmap(
             lambda fmt: st.tuples(
                 st.just(fmt),
-                floats(prec_max=4, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+                floats(prec_max=4, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False, ctx=fp.MPSFloatContext.from_format(fmt))
             )
         )
     )
@@ -406,7 +406,7 @@ class TestOrdinalFormat:
         mps_float_formats(max_p=4, min_emin=-8, max_emin=8).flatmap(
             lambda fmt: st.tuples(
                 st.just(fmt),
-                floats(prec_max=4, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+                floats(prec_max=4, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False, ctx=fp.MPSFloatContext.from_format(fmt))
             )
         )
     )
@@ -425,7 +425,7 @@ class TestSizedFormat:
     """Test SizedFormat methods on format types."""
 
     @given(efloat_formats(max_es=4, max_nbits=8, min_eoffset=-8, max_eoffset=8).filter(
-        lambda fmt: fmt._ctx().has_nonzero()
+        lambda fmt: fp.EFloatContext.from_format(fmt).has_nonzero()
     ))
     def test_efloat_maxval(self, fmt: fp.number.format.EFloatFormat):
         maxval = fmt.maxval()
@@ -458,7 +458,7 @@ class TestEncodableFormat:
         ieee_formats(max_es=5, max_nbits=16).flatmap(
             lambda fmt: st.tuples(
                 st.just(fmt),
-                floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+                floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fp.IEEEContext.from_format(fmt))
             )
         )
     )
@@ -474,7 +474,7 @@ class TestEncodableFormat:
         fixed_formats(min_scale=-8, max_scale=8, max_nbits=8).flatmap(
             lambda fmt: st.tuples(
                 st.just(fmt),
-                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fmt._ctx())
+                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fp.FixedContext.from_format(fmt))
             )
         )
     )
@@ -593,7 +593,7 @@ class TestFormatKnownValues:
     def test_efloat_format_encode_decode(self):
         """EFloatFormat encode/decode works correctly."""
         fmt = fp.MX_E4M3.format()
-        ctx = fmt._ctx()
+        ctx = fp.MX_E4M3
         v = ctx.round(1.5)
         enc = fmt.encode(v)
         dec = fmt.decode(enc)
