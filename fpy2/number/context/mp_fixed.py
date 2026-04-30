@@ -60,14 +60,6 @@ class MPFixedFormat(OrdinalFormat):
         """The minimum exponent for this format. Equal to `nmin + 1`."""
         return self.nmin + 1
 
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, MPFixedFormat)
-            and self.nmin == other.nmin
-            and self.enable_nan == other.enable_nan
-            and self.enable_inf == other.enable_inf
-        )
-
     def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():

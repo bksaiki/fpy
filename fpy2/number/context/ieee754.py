@@ -30,9 +30,6 @@ class IEEEFormat(EFloatFormat):
     def __hash__(self):
         return hash((self.__class__, self.es, self.nbits))
 
-    def is_equiv(self, other) -> bool:
-        return isinstance(other, IEEEFormat) and self.es == other.es and self.nbits == other.nbits
-
 
 class IEEEContext(EFloatContext):
     """

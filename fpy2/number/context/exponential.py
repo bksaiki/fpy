@@ -90,13 +90,6 @@ class ExpFormat(EncodableFormat):
     def ebias(self) -> int:
         return bitmask(self.nbits - 1) - self.eoffset
 
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, ExpFormat)
-            and self.nbits == other.nbits
-            and self.eoffset == other.eoffset
-        )
-
     def representable_in(self, x: Float | RealFloat) -> bool:
         match x:
             case Float():

@@ -83,14 +83,6 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
     def __repr__(self):
         return self.__class__.__name__ + f'(signed={self.signed!r}, scale={self.scale!r}, nbits={self.nbits!r})'
 
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, FixedFormat)
-            and self.signed == other.signed
-            and self.scale == other.scale
-            and self.nbits == other.nbits
-        )
-
     def total_bits(self) -> int:
         return self.nbits
 

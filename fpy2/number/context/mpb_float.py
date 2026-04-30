@@ -112,15 +112,6 @@ class MPBFloatFormat(SizedFormat):
         """Maximum unnormalized exponent."""
         return self.emax - self.pmax + 1
 
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, MPBFloatFormat)
-            and self.pmax == other.pmax
-            and self.emin == other.emin
-            and self.pos_maxval == other.pos_maxval
-            and self.neg_maxval == other.neg_maxval
-        )
-
     def representable_in(self, x: RealFloat | Float) -> bool:
         if not self._mps_fmt.representable_in(x):
             return False

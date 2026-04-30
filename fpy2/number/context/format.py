@@ -29,11 +29,15 @@ class Format(ABC):
     """
 
     @abstractmethod
-    def is_equiv(self, other: 'Format') -> bool:
+    def __eq__(self, other: object) -> bool:
         """
         Returns if this format and another format represent
         the same set of values.
         """
+        ...
+
+    @abstractmethod
+    def __hash__(self) -> int:
         ...
 
     @abstractmethod

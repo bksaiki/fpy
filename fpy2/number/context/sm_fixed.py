@@ -54,13 +54,6 @@ class SMFixedFormat(MPBFixedFormat, EncodableFormat):
     def __repr__(self):
         return self.__class__.__name__ + f'(scale={self.scale!r}, nbits={self.nbits!r})'
 
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, SMFixedFormat)
-            and self.scale == other.scale
-            and self.nbits == other.nbits
-        )
-
     def total_bits(self) -> int:
         return self.nbits
 

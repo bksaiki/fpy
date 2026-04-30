@@ -36,9 +36,6 @@ class MPFloatFormat(Format):
     def __hash__(self):
         return hash((self.__class__, self.pmax))
 
-    def is_equiv(self, other: Format) -> bool:
-        return isinstance(other, MPFloatFormat) and self.pmax == other.pmax
-
     def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():

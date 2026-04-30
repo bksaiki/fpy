@@ -6,10 +6,51 @@ from ..number import Float, RealFloat
 from ...utils import default_repr
 
 from .context import Context
+from .format import Format
 
 __all__ = [
-    'REAL'
+    'RealFormat',
+    'REAL',
 ]
+
+#####################################################################
+# Real format
+
+@default_repr
+class RealFormat(Format):
+    """
+    Number format for real numbers.
+
+    Every finite value is representable under this format.
+    It describes the set of representable values for `RealContext`.
+    """
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, RealFormat)
+
+    def __hash__(self) -> int:
+        return hash(self.__class__)
+
+    def representable_in(self, x: Float | RealFloat) -> bool:
+        if not isinstance(x, Float | RealFloat):
+            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
+        return True
+
+    def canonical_under(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
+        return True
+
+    def normal_under(self, x: Float) -> bool:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return x.is_nonzero()
+
+    def normalize(self, x: Float) -> Float:
+        if not isinstance(x, Float):
+            raise TypeError(f'Expected \'Float\', got \'{type(x)}\' for x={x}')
+        return x
+
 
 #####################################################################
 # Real rounding context
@@ -22,6 +63,11 @@ class RealContext(Context):
     The rounding function under this context is the identity function.
     Values are never rounded under this context.
     """
+
+    _fmt: RealFormat
+
+    def __init__(self):
+        self._fmt = RealFormat()
 
     def __str__(self) -> str:
         return 'REAL'
@@ -37,34 +83,11 @@ class RealContext(Context):
             raise TypeError(f'Unexpected parameters {kwargs} for RealContext')
         return self
 
-    def format(self):
-        raise NotImplementedError('RealContext has no associated number format')
+    def format(self) -> RealFormat:
+        return self._fmt
 
     def is_stochastic(self) -> bool:
         return False
-
-    def is_equiv(self, other: Context) -> bool:
-        if not isinstance(other, Context):
-            raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
-        return isinstance(other, RealContext)
-
-    def representable_under(self, x: RealFloat | Float):
-        if not isinstance(x, RealFloat | Float):
-            raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
-        return True
-
-    def canonical_under(self, x: Float):
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return True
-
-    def normalize(self, x: Float) -> Float:
-        return Float(x=x, ctx=self)
-
-    def normal_under(self, x: Float) -> bool:
-        if not isinstance(x, Float):
-            raise TypeError(f'Expected a representable \'Float\', got \'{type(x)}\' for x={x}')
-        return x.is_nonzero()
 
     def round_params(self):
         return (None, None)
@@ -81,4 +104,9 @@ REAL = RealContext()
 """
 Alias for exact computation.
 Operations are never rounded under this context.
+"""
+
+REAL_FORMAT = REAL.format()
+"""
+Singleton instance of `RealFormat`.
 """

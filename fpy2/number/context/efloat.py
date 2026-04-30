@@ -141,16 +141,6 @@ class EFloatFormat(EncodableFormat):
         """Returns True if this format can represent any non-zero values."""
         return self._has_nonzero
 
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, EFloatFormat)
-            and self.es == other.es
-            and self.nbits == other.nbits
-            and self.enable_inf == other.enable_inf
-            and self.nan_kind == other.nan_kind
-            and self.eoffset == other.eoffset
-        )
-
     def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():

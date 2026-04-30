@@ -66,7 +66,7 @@ class Context(ABC):
 
         The format describes the set of representable values without
         the rounding rule. Format-only methods on `Context`
-        (`is_equiv`, `representable_under`, etc.) default to delegating
+        (`representable_under`, etc.) default to delegating
         to the corresponding method on `self.format()`.
         """
         ...
@@ -80,10 +80,14 @@ class Context(ABC):
         if not isinstance(other, Context):
             raise TypeError(f'Expected \'Context\', got \'{type(other)}\' for other={other}')
         try:
+            self_fmt = self.format()
+        except NotImplementedError:
+            self_fmt = None
+        try:
             other_fmt = other.format()
         except NotImplementedError:
-            return False
-        return self.format().is_equiv(other_fmt)
+            other_fmt = None
+        return self_fmt == other_fmt
 
     def representable_under(self, x: Float | RealFloat) -> bool:
         """

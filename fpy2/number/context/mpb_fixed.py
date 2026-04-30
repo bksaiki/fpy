@@ -113,16 +113,6 @@ class MPBFixedFormat(SizedFormat):
         """The minimum exponent for this format. Equal to `nmin + 1`."""
         return self.nmin + 1
 
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, MPBFixedFormat)
-            and self.nmin == other.nmin
-            and self.pos_maxval == other.pos_maxval
-            and self.neg_maxval == other.neg_maxval
-            and self.enable_nan == other.enable_nan
-            and self.enable_inf == other.enable_inf
-        )
-
     def representable_in(self, x: RealFloat | Float) -> bool:
         if not self._mp_fmt.representable_in(x):
             return False

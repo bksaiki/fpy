@@ -60,13 +60,6 @@ class MPSFloatFormat(OrdinalFormat):
         """First unrepresentable digit for every value in the format."""
         return self.expmin - 1
 
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, MPSFloatFormat)
-            and self.pmax == other.pmax
-            and self.emin == other.emin
-        )
-
     def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
