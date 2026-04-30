@@ -7,8 +7,6 @@ from .number import Float, RealFloat, Real
 from .context import (
     # abstract contexts
     Context, OrdinalContext, SizedContext, EncodableContext,
-    # abstract formats
-    Format, OrdinalFormat, SizedFormat, EncodableFormat,
     # concrete contexts
     ExpContext,
     EFloatContext, EFloatNanKind,

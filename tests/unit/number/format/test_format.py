@@ -10,6 +10,7 @@ For each context class, we verify:
 
 import pytest
 import fpy2 as fp
+import fpy2.number.format
 from fractions import Fraction
 from hypothesis import given, assume, strategies as st
 
@@ -31,20 +32,20 @@ from tests.unit.generators import (
 @st.composite
 def mp_float_formats(draw, max_p: int = 64):
     p = draw(st.integers(1, max_p))
-    return fp.MPFloatFormat(p)
+    return fp.number.format.MPFloatFormat(p)
 
 @st.composite
 def mp_fixed_formats(draw, min_n: int = -32, max_n: int = 32):
     n = draw(st.integers(min_n, max_n))
     enable_nan = draw(st.booleans())
     enable_inf = draw(st.booleans())
-    return fp.MPFixedFormat(n, enable_nan, enable_inf)
+    return fp.number.format.MPFixedFormat(n, enable_nan, enable_inf)
 
 @st.composite
 def mps_float_formats(draw, max_p: int = 64, min_emin: int = -128, max_emin: int = 128):
     p = draw(st.integers(1, max_p))
     emin = draw(st.integers(min_emin, max_emin))
-    return fp.MPSFloatFormat(p, emin)
+    return fp.number.format.MPSFloatFormat(p, emin)
 
 @st.composite
 def efloat_formats(draw, max_es: int = 4, max_nbits: int = 8,
@@ -58,7 +59,7 @@ def efloat_formats(draw, max_es: int = 4, max_nbits: int = 8,
 def ieee_formats(draw, max_es: int = 5, max_nbits: int = 16):
     es = draw(st.integers(2, max_es))
     nbits = draw(st.integers(es + 2, max_nbits))
-    return fp.IEEEFormat(es, nbits)
+    return fp.number.format.IEEEFormat(es, nbits)
 
 @st.composite
 def fixed_formats(draw, min_scale: int = -8, max_scale: int = 8, max_nbits: int = 8):
@@ -74,7 +75,7 @@ def sm_fixed_formats(draw, min_scale: int = -8, max_scale: int = 8, max_nbits: i
 def exp_formats(draw, max_nbits: int = 8, min_eoffset: int = -16, max_eoffset: int = 16):
     nbits = draw(st.integers(1, max_nbits))
     eoffset = draw(st.integers(min_eoffset, max_eoffset))
-    return fp.ExpFormat(nbits, eoffset)
+    return fp.number.format.ExpFormat(nbits, eoffset)
 
 
 ###########################################################
@@ -84,59 +85,59 @@ class TestFormatHierarchy:
     """Verify that format types implement the correct abstract interfaces."""
 
     def test_mp_float_format_is_format(self):
-        fmt = fp.MPFloatFormat(53)
-        assert isinstance(fmt, fp.Format)
-        assert not isinstance(fmt, fp.OrdinalFormat)
-        assert not isinstance(fmt, fp.SizedFormat)
-        assert not isinstance(fmt, fp.EncodableFormat)
+        fmt = fp.number.format.MPFloatFormat(53)
+        assert isinstance(fmt, fp.number.format.Format)
+        assert not isinstance(fmt, fp.number.format.OrdinalFormat)
+        assert not isinstance(fmt, fp.number.format.SizedFormat)
+        assert not isinstance(fmt, fp.number.format.EncodableFormat)
 
     def test_mp_fixed_format_is_ordinal(self):
-        fmt = fp.MPFixedFormat(-10)
-        assert isinstance(fmt, fp.Format)
-        assert isinstance(fmt, fp.OrdinalFormat)
-        assert not isinstance(fmt, fp.SizedFormat)
+        fmt = fp.number.format.MPFixedFormat(-10)
+        assert isinstance(fmt, fp.number.format.Format)
+        assert isinstance(fmt, fp.number.format.OrdinalFormat)
+        assert not isinstance(fmt, fp.number.format.SizedFormat)
 
     def test_mps_float_format_is_ordinal(self):
-        fmt = fp.MPSFloatFormat(24, -126)
-        assert isinstance(fmt, fp.OrdinalFormat)
-        assert not isinstance(fmt, fp.SizedFormat)
+        fmt = fp.number.format.MPSFloatFormat(24, -126)
+        assert isinstance(fmt, fp.number.format.OrdinalFormat)
+        assert not isinstance(fmt, fp.number.format.SizedFormat)
 
     def test_mpb_fixed_format_is_sized(self):
-        fmt = fp.MPBFixedFormat(-1, fp.RealFloat(exp=0, c=127))
-        assert isinstance(fmt, fp.OrdinalFormat)
-        assert isinstance(fmt, fp.SizedFormat)
-        assert not isinstance(fmt, fp.EncodableFormat)
+        fmt = fp.number.format.MPBFixedFormat(-1, fp.RealFloat(exp=0, c=127))
+        assert isinstance(fmt, fp.number.format.OrdinalFormat)
+        assert isinstance(fmt, fp.number.format.SizedFormat)
+        assert not isinstance(fmt, fp.number.format.EncodableFormat)
 
     def test_mpb_float_format_is_sized(self):
-        fmt = fp.MPBFloatFormat(24, -126, fp.RealFloat(exp=128, c=0xffffff))
-        assert isinstance(fmt, fp.OrdinalFormat)
-        assert isinstance(fmt, fp.SizedFormat)
-        assert not isinstance(fmt, fp.EncodableFormat)
+        fmt = fp.number.format.MPBFloatFormat(24, -126, fp.RealFloat(exp=128, c=0xffffff))
+        assert isinstance(fmt, fp.number.format.OrdinalFormat)
+        assert isinstance(fmt, fp.number.format.SizedFormat)
+        assert not isinstance(fmt, fp.number.format.EncodableFormat)
 
     def test_efloat_format_is_encodable(self):
         fmt = fp.MX_E4M3.format()
-        assert isinstance(fmt, fp.OrdinalFormat)
-        assert isinstance(fmt, fp.SizedFormat)
-        assert isinstance(fmt, fp.EncodableFormat)
+        assert isinstance(fmt, fp.number.format.OrdinalFormat)
+        assert isinstance(fmt, fp.number.format.SizedFormat)
+        assert isinstance(fmt, fp.number.format.EncodableFormat)
 
     def test_ieee_format_is_encodable(self):
-        fmt = fp.IEEEFormat(11, 64)
-        assert isinstance(fmt, fp.EFloatFormat)
-        assert isinstance(fmt, fp.EncodableFormat)
+        fmt = fp.number.format.IEEEFormat(11, 64)
+        assert isinstance(fmt, fp.number.format.EFloatFormat)
+        assert isinstance(fmt, fp.number.format.EncodableFormat)
 
     def test_fixed_format_is_encodable(self):
         fmt = fp.SINT8.format()
-        assert isinstance(fmt, fp.MPBFixedFormat)
-        assert isinstance(fmt, fp.EncodableFormat)
+        assert isinstance(fmt, fp.number.format.MPBFixedFormat)
+        assert isinstance(fmt, fp.number.format.EncodableFormat)
 
     def test_sm_fixed_format_is_encodable(self):
         fmt = fp.SMFixedContext(0, 8).format()
-        assert isinstance(fmt, fp.MPBFixedFormat)
-        assert isinstance(fmt, fp.EncodableFormat)
+        assert isinstance(fmt, fp.number.format.MPBFixedFormat)
+        assert isinstance(fmt, fp.number.format.EncodableFormat)
 
     def test_exp_format_is_encodable(self):
         fmt = fp.MX_E8M0.format()
-        assert isinstance(fmt, fp.EncodableFormat)
+        assert isinstance(fmt, fp.number.format.EncodableFormat)
 
 
 ###########################################################
@@ -148,7 +149,7 @@ class TestFormatRoundTrip:
     @given(mp_float_contexts(max_p=64))
     def test_mp_float_round_trip(self, ctx: fp.MPFloatContext):
         fmt = ctx.format()
-        assert isinstance(fmt, fp.MPFloatFormat)
+        assert isinstance(fmt, fp.number.format.MPFloatFormat)
         assert fmt.pmax == ctx.pmax
         # Reconstruct context from format
         ctx2 = fp.MPFloatContext.from_format(fmt)
@@ -157,7 +158,7 @@ class TestFormatRoundTrip:
     @given(mp_fixed_contexts(min_n=-32, max_n=32))
     def test_mp_fixed_round_trip(self, ctx: fp.MPFixedContext):
         fmt = ctx.format()
-        assert isinstance(fmt, fp.MPFixedFormat)
+        assert isinstance(fmt, fp.number.format.MPFixedFormat)
         assert fmt.nmin == ctx.nmin
         assert fmt.enable_nan == ctx.enable_nan
         assert fmt.enable_inf == ctx.enable_inf
@@ -169,7 +170,7 @@ class TestFormatRoundTrip:
     @given(mps_float_contexts(max_p=64, min_emin=-128, max_emin=128))
     def test_mps_float_round_trip(self, ctx: fp.MPSFloatContext):
         fmt = ctx.format()
-        assert isinstance(fmt, fp.MPSFloatFormat)
+        assert isinstance(fmt, fp.number.format.MPSFloatFormat)
         assert fmt.pmax == ctx.pmax
         assert fmt.emin == ctx.emin
         ctx2 = fp.MPSFloatContext.from_format(fmt)
@@ -179,7 +180,7 @@ class TestFormatRoundTrip:
     @given(efloat_contexts(max_es=4, max_nbits=8, min_eoffset=-8, max_eoffset=8))
     def test_efloat_round_trip(self, ctx: fp.EFloatContext):
         fmt = ctx.format()
-        assert isinstance(fmt, fp.EFloatFormat)
+        assert isinstance(fmt, fp.number.format.EFloatFormat)
         assert fmt.es == ctx.es
         assert fmt.nbits == ctx.nbits
         assert fmt.enable_inf == ctx.enable_inf
@@ -191,17 +192,17 @@ class TestFormatRoundTrip:
         assert ctx2.enable_inf == ctx.enable_inf
 
     @given(ieee_formats(max_es=5, max_nbits=16))
-    def test_ieee_round_trip(self, fmt: fp.IEEEFormat):
+    def test_ieee_round_trip(self, fmt: fp.number.format.IEEEFormat):
         ctx = fp.IEEEContext.from_format(fmt)
         assert isinstance(ctx, fp.IEEEContext)
         fmt2 = ctx.format()
-        assert isinstance(fmt2, fp.IEEEFormat)
+        assert isinstance(fmt2, fp.number.format.IEEEFormat)
         assert fmt == fmt2
 
     @given(fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8))
     def test_fixed_round_trip(self, ctx: fp.FixedContext):
         fmt = ctx.format()
-        assert isinstance(fmt, fp.FixedFormat)
+        assert isinstance(fmt, fp.number.format.FixedFormat)
         assert fmt.signed == ctx.signed
         assert fmt.scale == ctx.scale
         assert fmt.nbits == ctx.nbits
@@ -213,7 +214,7 @@ class TestFormatRoundTrip:
     @given(sm_fixed_contexts(min_scale=-8, max_scale=8, max_nbits=8))
     def test_sm_fixed_round_trip(self, ctx: fp.SMFixedContext):
         fmt = ctx.format()
-        assert isinstance(fmt, fp.SMFixedFormat)
+        assert isinstance(fmt, fp.number.format.SMFixedFormat)
         assert fmt.scale == ctx.scale
         assert fmt.nbits == ctx.nbits
         ctx2 = fp.SMFixedContext.from_format(fmt)
@@ -221,7 +222,7 @@ class TestFormatRoundTrip:
         assert ctx2.nbits == ctx.nbits
 
     @given(exp_formats(max_nbits=8, min_eoffset=-8, max_eoffset=8))
-    def test_exp_round_trip(self, fmt: fp.ExpFormat):
+    def test_exp_round_trip(self, fmt: fp.number.format.ExpFormat):
         ctx = fp.ExpContext.from_format(fmt)
         assert isinstance(ctx, fp.ExpContext)
         assert ctx.nbits == fmt.nbits
@@ -237,46 +238,46 @@ class TestFormatEquality:
     """Test that format __eq__ and __hash__ work correctly."""
 
     def test_mp_float_eq(self):
-        fmt1 = fp.MPFloatFormat(53)
-        fmt2 = fp.MPFloatFormat(53)
+        fmt1 = fp.number.format.MPFloatFormat(53)
+        fmt2 = fp.number.format.MPFloatFormat(53)
         assert fmt1 == fmt2
         assert hash(fmt1) == hash(fmt2)
 
     def test_mp_float_neq(self):
-        fmt1 = fp.MPFloatFormat(24)
-        fmt2 = fp.MPFloatFormat(53)
+        fmt1 = fp.number.format.MPFloatFormat(24)
+        fmt2 = fp.number.format.MPFloatFormat(53)
         assert fmt1 != fmt2
 
     def test_mp_fixed_eq(self):
-        fmt1 = fp.MPFixedFormat(-4, True, False)
-        fmt2 = fp.MPFixedFormat(-4, True, False)
+        fmt1 = fp.number.format.MPFixedFormat(-4, True, False)
+        fmt2 = fp.number.format.MPFixedFormat(-4, True, False)
         assert fmt1 == fmt2
         assert hash(fmt1) == hash(fmt2)
 
     def test_mp_fixed_neq_nmin(self):
-        assert fp.MPFixedFormat(-4) != fp.MPFixedFormat(-5)
+        assert fp.number.format.MPFixedFormat(-4) != fp.number.format.MPFixedFormat(-5)
 
     def test_mp_fixed_neq_enable_nan(self):
-        assert fp.MPFixedFormat(-4, True) != fp.MPFixedFormat(-4, False)
+        assert fp.number.format.MPFixedFormat(-4, True) != fp.number.format.MPFixedFormat(-4, False)
 
     def test_ieee_eq(self):
-        fmt1 = fp.IEEEFormat(11, 64)
-        fmt2 = fp.IEEEFormat(11, 64)
+        fmt1 = fp.number.format.IEEEFormat(11, 64)
+        fmt2 = fp.number.format.IEEEFormat(11, 64)
         assert fmt1 == fmt2
         assert hash(fmt1) == hash(fmt2)
 
     def test_ieee_neq(self):
-        assert fp.IEEEFormat(8, 32) != fp.IEEEFormat(11, 64)
+        assert fp.number.format.IEEEFormat(8, 32) != fp.number.format.IEEEFormat(11, 64)
 
     def test_fixed_format_eq(self):
-        fmt1 = fp.FixedFormat(True, 0, 8)
-        fmt2 = fp.FixedFormat(True, 0, 8)
+        fmt1 = fp.number.format.FixedFormat(True, 0, 8)
+        fmt2 = fp.number.format.FixedFormat(True, 0, 8)
         assert fmt1 == fmt2
         assert hash(fmt1) == hash(fmt2)
 
     def test_sm_fixed_format_eq(self):
-        fmt1 = fp.SMFixedFormat(0, 8)
-        fmt2 = fp.SMFixedFormat(0, 8)
+        fmt1 = fp.number.format.SMFixedFormat(0, 8)
+        fmt2 = fp.number.format.SMFixedFormat(0, 8)
         assert fmt1 == fmt2
         assert hash(fmt1) == hash(fmt2)
 
@@ -285,32 +286,32 @@ class TestFormatEquality:
 # Tests: is_equiv
 
 class TestFormatIsEquiv:
-    """Test the is_equiv method."""
+    """Test format equality (formerly is_equiv, now __eq__)."""
 
     def test_mp_float_is_equiv_self(self):
-        fmt = fp.MPFloatFormat(53)
-        assert fmt.is_equiv(fmt)
+        fmt = fp.number.format.MPFloatFormat(53)
+        assert fmt == fmt
 
     def test_mp_float_is_equiv_other(self):
-        fmt1 = fp.MPFloatFormat(53)
-        fmt2 = fp.MPFloatFormat(53)
-        assert fmt1.is_equiv(fmt2)
+        fmt1 = fp.number.format.MPFloatFormat(53)
+        fmt2 = fp.number.format.MPFloatFormat(53)
+        assert fmt1 == fmt2
 
     def test_mp_float_not_equiv_different_p(self):
-        assert not fp.MPFloatFormat(53).is_equiv(fp.MPFloatFormat(24))
+        assert fp.number.format.MPFloatFormat(53) != fp.number.format.MPFloatFormat(24)
 
     def test_mp_fixed_is_equiv(self):
-        fmt1 = fp.MPFixedFormat(-4, True, False)
-        fmt2 = fp.MPFixedFormat(-4, True, False)
-        assert fmt1.is_equiv(fmt2)
+        fmt1 = fp.number.format.MPFixedFormat(-4, True, False)
+        fmt2 = fp.number.format.MPFixedFormat(-4, True, False)
+        assert fmt1 == fmt2
 
     def test_ieee_is_equiv(self):
-        fmt1 = fp.IEEEFormat(11, 64)
-        fmt2 = fp.IEEEFormat(11, 64)
-        assert fmt1.is_equiv(fmt2)
+        fmt1 = fp.number.format.IEEEFormat(11, 64)
+        fmt2 = fp.number.format.IEEEFormat(11, 64)
+        assert fmt1 == fmt2
 
     def test_ieee_not_equiv_different_nbits(self):
-        assert not fp.IEEEFormat(8, 32).is_equiv(fp.IEEEFormat(11, 64))
+        assert fp.number.format.IEEEFormat(8, 32) != fp.number.format.IEEEFormat(11, 64)
 
 
 ###########################################################
@@ -426,13 +427,13 @@ class TestSizedFormat:
     @given(efloat_formats(max_es=4, max_nbits=8, min_eoffset=-8, max_eoffset=8).filter(
         lambda fmt: fmt._ctx().has_nonzero()
     ))
-    def test_efloat_maxval(self, fmt: fp.EFloatFormat):
+    def test_efloat_maxval(self, fmt: fp.number.format.EFloatFormat):
         maxval = fmt.maxval()
         assert isinstance(maxval, fp.Float)
         assert not maxval.is_negative()
 
     @given(ieee_formats(max_es=5, max_nbits=16))
-    def test_ieee_largest_smallest(self, fmt: fp.IEEEFormat):
+    def test_ieee_largest_smallest(self, fmt: fp.number.format.IEEEFormat):
         largest = fmt.largest()
         smallest = fmt.smallest()
         assert isinstance(largest, fp.Float)
@@ -441,7 +442,7 @@ class TestSizedFormat:
         assert not smallest.is_positive()
 
     @given(fixed_formats(min_scale=-8, max_scale=8, max_nbits=8))
-    def test_fixed_maxval(self, fmt: fp.FixedFormat):
+    def test_fixed_maxval(self, fmt: fp.number.format.FixedFormat):
         maxval = fmt.maxval()
         assert isinstance(maxval, fp.Float)
         assert not maxval.is_negative()
@@ -501,15 +502,15 @@ class TestEncodableFormat:
             assert x == decoded
 
     @given(ieee_formats(max_es=5, max_nbits=16))
-    def test_ieee_total_bits(self, fmt: fp.IEEEFormat):
+    def test_ieee_total_bits(self, fmt: fp.number.format.IEEEFormat):
         assert fmt.total_bits() == fmt.nbits
 
     @given(fixed_formats(min_scale=-8, max_scale=8, max_nbits=8))
-    def test_fixed_total_bits(self, fmt: fp.FixedFormat):
+    def test_fixed_total_bits(self, fmt: fp.number.format.FixedFormat):
         assert fmt.total_bits() == fmt.nbits
 
     @given(exp_formats(max_nbits=8, min_eoffset=-8, max_eoffset=8))
-    def test_exp_total_bits(self, fmt: fp.ExpFormat):
+    def test_exp_total_bits(self, fmt: fp.number.format.ExpFormat):
         assert fmt.total_bits() == fmt.nbits
 
 
@@ -522,7 +523,7 @@ class TestFormatKnownValues:
     def test_fp64_format_from_format(self):
         ctx = fp.FP64
         fmt = ctx.format()
-        assert isinstance(fmt, fp.IEEEFormat)
+        assert isinstance(fmt, fp.number.format.IEEEFormat)
         assert fmt.es == 11
         assert fmt.nbits == 64
         ctx2 = fp.IEEEContext.from_format(fmt)
@@ -531,7 +532,7 @@ class TestFormatKnownValues:
     def test_fp32_format_from_format(self):
         ctx = fp.FP32
         fmt = ctx.format()
-        assert isinstance(fmt, fp.IEEEFormat)
+        assert isinstance(fmt, fp.number.format.IEEEFormat)
         assert fmt.es == 8
         assert fmt.nbits == 32
         ctx2 = fp.IEEEContext.from_format(fmt)
@@ -540,40 +541,40 @@ class TestFormatKnownValues:
     def test_sint8_format(self):
         ctx = fp.SINT8
         fmt = ctx.format()
-        assert isinstance(fmt, fp.FixedFormat)
+        assert isinstance(fmt, fp.number.format.FixedFormat)
         assert fmt.signed
         assert fmt.nbits == 8
 
     def test_uint8_format(self):
         ctx = fp.UINT8
         fmt = ctx.format()
-        assert isinstance(fmt, fp.FixedFormat)
+        assert isinstance(fmt, fp.number.format.FixedFormat)
         assert not fmt.signed
         assert fmt.nbits == 8
 
     def test_mx_e8m0_format(self):
         ctx = fp.MX_E8M0
         fmt = ctx.format()
-        assert isinstance(fmt, fp.ExpFormat)
+        assert isinstance(fmt, fp.number.format.ExpFormat)
         assert fmt.nbits == 8
 
     def test_mp_float_format_format_method(self):
         """format() on MPFloatContext returns MPFloatFormat."""
         ctx = fp.MPFloatContext(24)
         fmt = ctx.format()
-        assert isinstance(fmt, fp.MPFloatFormat)
+        assert isinstance(fmt, fp.number.format.MPFloatFormat)
         assert fmt.pmax == 24
 
     def test_mpfloat_format_is_equiv_context(self):
-        """MPFloatFormat.is_equiv mirrors MPFloatContext.is_equiv."""
-        fmt1 = fp.MPFloatFormat(53)
-        fmt2 = fp.MPFloatFormat(53)
-        assert fmt1.is_equiv(fmt2)
-        assert not fmt1.is_equiv(fp.MPFloatFormat(24))
+        """MPFloatFormat equality mirrors MPFloatContext.is_equiv."""
+        fmt1 = fp.number.format.MPFloatFormat(53)
+        fmt2 = fp.number.format.MPFloatFormat(53)
+        assert fmt1 == fmt2
+        assert fmt1 != fp.number.format.MPFloatFormat(24)
 
     def test_mps_format_minval(self):
         """MPSFloatFormat.minval() works correctly."""
-        fmt = fp.MPSFloatFormat(24, -126)
+        fmt = fp.number.format.MPSFloatFormat(24, -126)
         minv = fmt.minval()
         assert isinstance(minv, fp.Float)
         assert minv.is_positive()
@@ -585,7 +586,7 @@ class TestFormatKnownValues:
         """MPBFloatFormat works correctly."""
         ctx = fp.MPBFloatContext(24, -126, fp.RealFloat(exp=128, c=0xffffff))
         fmt = ctx.format()
-        assert isinstance(fmt, fp.MPBFloatFormat)
+        assert isinstance(fmt, fp.number.format.MPBFloatFormat)
         assert fmt.pmax == ctx.pmax
         assert fmt.emin == ctx.emin
 

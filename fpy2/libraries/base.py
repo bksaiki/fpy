@@ -19,11 +19,6 @@ from ..number import (
     OrdinalContext,
     SizedContext,
     EncodableContext,
-    # abstract format types
-    Format,
-    OrdinalFormat,
-    SizedFormat,
-    EncodableFormat,
     # concrete context types
     EFloatContext,
     ExpContext,
