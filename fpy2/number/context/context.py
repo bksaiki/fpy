@@ -96,6 +96,15 @@ class Context(ABC):
         Representable is not the same as canonical,
         but every canonical value must be representable.
         """
+        match x:
+            case Float():
+                if x.ctx is not None and self.format() == x.ctx.format():
+                    # same context, so representable
+                    return True
+            case RealFloat():
+                pass
+            case _:
+                raise TypeError(f'Expected \'RealFloat\' or \'Float\', got \'{type(x)}\' for x={x}')
         return self.format().representable_in(x)
 
     def canonical_under(self, x: Float) -> bool:
@@ -120,7 +129,9 @@ class Context(ABC):
 
     def normalize(self, x: Float) -> Float:
         """Returns the canonical form of `x` under this context."""
-        return Float(x=self.format().normalize(x), ctx=self)
+        y = self.format().normalize(x)
+        y._ctx = self
+        return y
 
     @abstractmethod
     def round_params(self) -> tuple[int | None, int | None]:
@@ -265,7 +276,9 @@ class OrdinalContext(Context):
         logical ordinal value after +/-MAX_VAL. This option is only
         valid when the context has a maximum value.
         """
-        return Float(x=self.format().from_ordinal(x, infval), ctx=self)
+        y = self.format().from_ordinal(x, infval)
+        y._ctx = self
+        return y
 
     def minval(self, s: bool = False) -> Float:
         """
@@ -274,7 +287,9 @@ class OrdinalContext(Context):
 
         This value will map to +/-1 through `to_ordinal()`.
         """
-        return Float(x=self.format().minval(s), ctx=self)
+        y = self.format().minval(s)
+        y._ctx = self
+        return y
 
     def next_towards(self, x: Float, y: Float, allow_inf: bool = False) -> Float:
         """
@@ -298,7 +313,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == y:
             raise ValueError('x and y are equal so there is no next value towards y', x, y)
-        return Float(x=self.format().next_towards(x, y, allow_inf), ctx=self)
+        z = self.format().next_towards(x, y, allow_inf)
+        z._ctx = self
+        return z
 
     def next_towards_zero(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -318,7 +335,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == 0:
             raise ValueError('x is zero so there is no next value towards zero', x)
-        return Float(x=self.format().next_towards_zero(x, allow_inf), ctx=self)
+        y = self.format().next_towards_zero(x, allow_inf)
+        y._ctx = self
+        return y
 
     def next_away_zero(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -338,7 +357,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x == 0:
             raise ValueError('x is zero so there is no next value away from zero', x)
-        return Float(x=self.format().next_away_zero(x, allow_inf), ctx=self)
+        y = self.format().next_away_zero(x, allow_inf)
+        y._ctx = self
+        return y
 
     def next_up(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -358,7 +379,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x.isinf and not x.s:
             raise ValueError('x cannot be positive infinity', x)
-        return Float(x=self.format().next_up(x, allow_inf), ctx=self)
+        y = self.format().next_up(x, allow_inf)
+        y._ctx = self
+        return y
 
     def next_down(self, x: Float, allow_inf: bool = False) -> Float:
         """
@@ -378,7 +401,9 @@ class OrdinalContext(Context):
             raise ValueError('x is infinite', x)
         if x.isinf and x.s:
             raise ValueError('x cannot be negative infinity', x)
-        return Float(x=self.format().next_down(x, allow_inf), ctx=self)
+        y = self.format().next_down(x, allow_inf)
+        y._ctx = self
+        return y
 
 
 class SizedContext(OrdinalContext):
@@ -411,28 +436,36 @@ class SizedContext(OrdinalContext):
         If `self.maxval() == 0`, then this context cannot represent
         any finite, non-zero values.
         """
-        return Float(x=self.format().maxval(s), ctx=self)
+        y = self.format().maxval(s)
+        y._ctx = self
+        return y
 
     def infval(self, s: bool = False) -> Float:
         """
         Returns the (signed) value that is the "next" value after
         the maximum representable value under this context.
         """
-        return Float(x=self.format().infval(s), ctx=self)
+        y = self.format().infval(s)
+        y._ctx = self
+        return y
 
     def largest(self) -> Float:
         """
         Returns the largest representable value (towards positive infinity)
         under this context.
         """
-        return Float(x=self.format().largest(), ctx=self)
+        y = self.format().largest()
+        y._ctx = self
+        return y
 
     def smallest(self) -> Float:
         """
         Returns the smallest representable value (towards negative infinity)
         under this context.
         """
-        return Float(x=self.format().smallest(), ctx=self)
+        y = self.format().smallest()
+        y._ctx = self
+        return y
 
 
 class EncodableContext(SizedContext):
@@ -463,4 +496,6 @@ class EncodableContext(SizedContext):
         Decodes a bitstring as a a number constructed under this context.
         This operation is context dependent.
         """
-        return Float(x=self.format().decode(x), ctx=self)
+        y = self.format().decode(x)
+        y._ctx = self
+        return y
