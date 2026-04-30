@@ -9,8 +9,8 @@ from .context import Context
 from .format import Format
 
 __all__ = [
-    'RealFormat',
     'REAL',
+    'REAL_FORMAT'
 ]
 
 #####################################################################
