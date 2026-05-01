@@ -5,7 +5,6 @@ Unit tests for format analysis.
 import fpy2 as fp
 from fpy2.analysis import FormatInfer
 from fpy2.number.context.real import REAL_FORMAT
-from fpy2.transform import ConstFold
 
 
 class TestFormatInfer:
@@ -16,8 +15,7 @@ class TestFormatInfer:
 
     @staticmethod
     def _run(func: fp.Function):
-        ast = ConstFold.apply(func.ast, enable_op=True)
-        return FormatInfer.analyze(ast)
+        return FormatInfer.analyze(func.ast)
 
     # ------------------------------------------------------------------
     # Simple cases – no explicit rounding context
@@ -177,6 +175,32 @@ class TestFormatInfer:
         )
 
     # ------------------------------------------------------------------
+    # Type-info and context-use analysis are stored in the result
+
+    def test_result_has_type_info(self):
+        """The FormatAnalysis result stores the TypeAnalysis."""
+        from fpy2.analysis import TypeAnalysis
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return x
+
+        info = self._run(f)
+        assert isinstance(info.type_info, TypeAnalysis)
+
+    def test_result_has_ctx_use(self):
+        """The FormatAnalysis result stores the ContextUseAnalysis."""
+        from fpy2.analysis import ContextUseAnalysis
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                return fp.round(x)
+
+        info = self._run(f)
+        assert isinstance(info.ctx_use, ContextUseAnalysis)
+
+    # ------------------------------------------------------------------
     # Join lattice semantics
 
     def test_join_same_format(self):
@@ -218,5 +242,5 @@ class TestFormatInfer:
         """``FormatInfer.analyze`` raises ``TypeError`` for non-FuncDef input."""
         import pytest
 
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="expected a 'FuncDef'"):
             FormatInfer.analyze("not a FuncDef")  # type: ignore[arg-type]

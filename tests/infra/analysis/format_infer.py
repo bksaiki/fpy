@@ -5,7 +5,6 @@ Format analysis integration tests.
 import fpy2 as fp
 
 from fpy2.analysis import FormatInfer
-from fpy2.transform import ConstFold
 
 from ..examples import all_tests
 
@@ -17,9 +16,9 @@ _modules = [
     fp.libraries.matrix
 ]
 
-_unit_ignore = [
-    # These examples use dynamic or external contexts that cannot be
-    # resolved statically by ContextInfer, so FormatInfer cannot run on them.
+_unit_ignore: list[str] = [
+    # These examples use dynamically constructed or parametric contexts that
+    # cannot be resolved statically by TypeInfer or ContextUse.
     'test_context_expr1',
     'test_context_expr2',
     'test_context8',
@@ -36,8 +35,7 @@ def _test_format_infer_unit():
             continue
 
         print(core.name)
-        ast = ConstFold.apply(core.ast, enable_op=True)
-        info = FormatInfer.analyze(ast)
+        info = FormatInfer.analyze(core.ast)
         for d, fmt in info.by_def.items():
             print(f'  {d.name} -> {fmt}')
 
@@ -47,9 +45,8 @@ def _test_format_infer_library():
         for obj in mod.__dict__.values():
             match obj:
                 case fp.Function():
-                    ast = ConstFold.apply(obj.ast, enable_op=True)
                     print(obj.name)
-                    info = FormatInfer.analyze(ast)
+                    info = FormatInfer.analyze(obj.ast)
                     for d, fmt in info.by_def.items():
                         print(f'  {d.name} -> {fmt}')
 
