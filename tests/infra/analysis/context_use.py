@@ -4,7 +4,7 @@ Tests for context-use analysis
 
 import fpy2 as fp
 
-from fpy2.analysis import CtxUse
+from fpy2.analysis import ContextUse
 
 from ..examples import all_tests
 
@@ -17,7 +17,7 @@ _modules = [
 ]
 
 def _print_analysis(name: str, func: fp.ast.FuncDef):
-    info = CtxUse.analyze(func)
+    info = ContextUse.analyze(func)
     print(name)
     for scope in info.scopes:
         site = type(scope.site).__name__
@@ -34,9 +34,9 @@ def _test_analysis_library():
             if isinstance(obj, fp.Function):
                 _print_analysis(obj.name, obj.ast)
 
-def test_ctx_use():
+def test_context_use():
     _test_analysis_unit()
     _test_analysis_library()
 
 if __name__ == '__main__':
-    test_ctx_use()
+    test_context_use()

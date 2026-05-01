@@ -5,7 +5,7 @@ Unit tests for context-use analysis.
 import fpy2 as fp
 
 
-class TestCtxUse:
+class TestContextUse:
 
     # ------------------------------------------------------------------
     # Symbolic contexts (no overriding context on the function)
@@ -16,7 +16,7 @@ class TestCtxUse:
         def f(x):
             return x + 1.0
 
-        result = fp.analysis.CtxUse.analyze(f.ast)
+        result = fp.analysis.ContextUse.analyze(f.ast)
 
         # Exactly one context scope introduced by the FuncDef
         assert len(result.scopes) == 1
@@ -35,7 +35,7 @@ class TestCtxUse:
             b = a * 2.0
             return a - b
 
-        result = fp.analysis.CtxUse.analyze(f.ast)
+        result = fp.analysis.ContextUse.analyze(f.ast)
 
         assert len(result.scopes) == 1
         scope = result.scopes[0]
@@ -52,7 +52,7 @@ class TestCtxUse:
         def f(x):
             return x + 1.0
 
-        result = fp.analysis.CtxUse.analyze(f.ast)
+        result = fp.analysis.ContextUse.analyze(f.ast)
 
         assert len(result.scopes) == 1
         scope = result.scopes[0]
@@ -69,7 +69,7 @@ class TestCtxUse:
             with fp.IEEEContext(11, 64, fp.RM.RNE):
                 return x + 1.0
 
-        result = fp.analysis.CtxUse.analyze(f.ast)
+        result = fp.analysis.ContextUse.analyze(f.ast)
 
         # One scope for the function body, one for the with-block
         assert len(result.scopes) == 2
@@ -94,7 +94,7 @@ class TestCtxUse:
             with fp.IEEEContext(ES, NB, fp.RM.RNE):
                 return x + 1.0
 
-        result = fp.analysis.CtxUse.analyze(f.ast)
+        result = fp.analysis.ContextUse.analyze(f.ast)
 
         # The with-block context should be resolved to a concrete value
         with_scope = result.scopes[-1]
@@ -110,7 +110,7 @@ class TestCtxUse:
             with ctx:
                 return x + 1.0
 
-        result = fp.analysis.CtxUse.analyze(f.ast)
+        result = fp.analysis.ContextUse.analyze(f.ast)
 
         assert len(result.scopes) == 2
         with_scope = result.scopes[-1]
@@ -130,7 +130,7 @@ class TestCtxUse:
                     b = a * 2.0
                 return a - b
 
-        result = fp.analysis.CtxUse.analyze(f.ast)
+        result = fp.analysis.ContextUse.analyze(f.ast)
 
         # Three scopes: function, outer with, inner with
         assert len(result.scopes) == 3
@@ -153,7 +153,7 @@ class TestCtxUse:
                 b = a * 2.0
             return a - b
 
-        result = fp.analysis.CtxUse.analyze(f.ast)
+        result = fp.analysis.ContextUse.analyze(f.ast)
         func_scope, with_scope = result.scopes
 
         # Every use maps back to the correct scope
@@ -172,7 +172,7 @@ class TestCtxUse:
             return x + 1.0
 
         def_use = fp.analysis.DefineUse.analyze(f.ast)
-        result = fp.analysis.CtxUse.analyze(f.ast, def_use=def_use)
+        result = fp.analysis.ContextUse.analyze(f.ast, def_use=def_use)
 
         assert len(result.scopes) == 1
         assert isinstance(result.scopes[0].ctx, fp.utils.NamedId)
@@ -184,4 +184,4 @@ class TestCtxUse:
         """Passing a non-FuncDef raises TypeError."""
         import pytest
         with pytest.raises(TypeError):
-            fp.analysis.CtxUse.analyze("not a func")
+            fp.analysis.ContextUse.analyze("not a func")

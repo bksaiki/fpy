@@ -24,17 +24,17 @@ from .define_use import DefineUse, DefineUseAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo
 
 __all__ = [
-    'CtxUse',
-    'CtxUseAnalysis',
+    'ContextUse',
+    'ContextUseAnalysis',
     'ContextScope',
-    'CtxScopeSite',
-    'CtxUseSite',
+    'ContextScopeSite',
+    'ContextUseSite',
 ]
 
-CtxScopeSite: TypeAlias = FuncDef | ContextStmt
+ContextScopeSite: TypeAlias = FuncDef | ContextStmt
 """AST nodes that introduce a rounding context scope"""
 
-CtxUseSite: TypeAlias = NullaryOp | UnaryOp | BinaryOp | TernaryOp | NaryOp | Call
+ContextUseSite: TypeAlias = NullaryOp | UnaryOp | BinaryOp | TernaryOp | NaryOp | Call
 """AST nodes that use a rounding context"""
 
 
@@ -42,7 +42,7 @@ CtxUseSite: TypeAlias = NullaryOp | UnaryOp | BinaryOp | TernaryOp | NaryOp | Ca
 class ContextScope:
     """A rounding context scope."""
 
-    site: CtxScopeSite
+    site: ContextScopeSite
     """the AST node that introduces the scope"""
 
     ctx: ContextParam
@@ -50,22 +50,22 @@ class ContextScope:
 
 
 @default_repr
-class CtxUseAnalysis:
+class ContextUseAnalysis:
     """Result of context-use analysis."""
 
     scopes: list[ContextScope]
     """all context scopes, ordered by introduction"""
 
-    uses: dict[ContextScope, set[CtxUseSite]]
+    uses: dict[ContextScope, set[ContextUseSite]]
     """mapping from context scope to use sites"""
 
-    use_to_scope: dict[CtxUseSite, ContextScope]
+    use_to_scope: dict[ContextUseSite, ContextScope]
     """mapping from use site to context scope"""
 
     def __init__(
         self,
         scopes: list[ContextScope],
-        uses: dict[ContextScope, set[CtxUseSite]],
+        uses: dict[ContextScope, set[ContextUseSite]],
     ):
         self.scopes = scopes
         self.uses = uses
@@ -74,14 +74,14 @@ class CtxUseAnalysis:
             for u in us:
                 self.use_to_scope[u] = s
 
-    def find_scope_from_use(self, site: CtxUseSite) -> ContextScope:
+    def find_scope_from_use(self, site: ContextUseSite) -> ContextScope:
         """Returns the context scope active at a use site."""
         if site in self.use_to_scope:
             return self.use_to_scope[site]
         raise KeyError(f'no context scope found for use site {site}')
 
 
-class _CtxUseInstance(DefaultVisitor):
+class _ContextUseInstance(DefaultVisitor):
     """Per-IR instance of context-use analysis."""
 
     func: FuncDef
@@ -89,7 +89,7 @@ class _CtxUseInstance(DefaultVisitor):
     gensym: Gensym
 
     scopes: list[ContextScope]
-    uses: dict[ContextScope, set[CtxUseSite]]
+    uses: dict[ContextScope, set[ContextUseSite]]
 
     def __init__(self, func: FuncDef, eval_info: PartialEvalInfo):
         self.func = func
@@ -113,13 +113,13 @@ class _CtxUseInstance(DefaultVisitor):
                 return val
         return self._fresh_sym_ctx()
 
-    def _make_scope(self, site: CtxScopeSite, ctx: ContextParam) -> ContextScope:
+    def _make_scope(self, site: ContextScopeSite, ctx: ContextParam) -> ContextScope:
         s = ContextScope(site, ctx)
         self.scopes.append(s)
         self.uses[s] = set()
         return s
 
-    def _record_use(self, use: CtxUseSite, scope: ContextScope):
+    def _record_use(self, use: ContextUseSite, scope: ContextScope):
         self.uses[scope].add(use)
 
     # ------------------------------------------------------------------
@@ -189,12 +189,12 @@ class _CtxUseInstance(DefaultVisitor):
         func_scope = self._make_scope(func, body_ctx)
         self._visit_block(func.body, func_scope)
 
-    def analyze(self) -> CtxUseAnalysis:
+    def analyze(self) -> ContextUseAnalysis:
         self._visit_function(self.func, None)
-        return CtxUseAnalysis(self.scopes, self.uses)
+        return ContextUseAnalysis(self.scopes, self.uses)
 
 
-class CtxUse:
+class ContextUse:
     """
     Context-use analysis.
 
@@ -214,7 +214,7 @@ class CtxUse:
     """
 
     @staticmethod
-    def analyze(func: FuncDef, *, def_use: DefineUseAnalysis | None = None) -> CtxUseAnalysis:
+    def analyze(func: FuncDef, *, def_use: DefineUseAnalysis | None = None) -> ContextUseAnalysis:
         """
         Runs context-use analysis on a function.
 
@@ -231,4 +231,4 @@ class CtxUse:
         if def_use is None:
             def_use = DefineUse.analyze(func)
         eval_info = PartialEval.apply(func, def_use=def_use)
-        return _CtxUseInstance(func, eval_info).analyze()
+        return _ContextUseInstance(func, eval_info).analyze()
