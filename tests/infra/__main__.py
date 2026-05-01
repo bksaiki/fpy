@@ -23,6 +23,7 @@ def _run_tests():
     test_tcheck()
     test_context_infer()
     test_partial_eval()
+    test_ctx_use()
     test_array_size_infer()
     test_purity()
     # transformations
