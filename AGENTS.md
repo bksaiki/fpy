@@ -47,11 +47,11 @@ The main package lives in `fpy2/`. Its top-level modules and subpackages are:
 | `env.py` | Execution environment |
 | `primitive.py` | Primitive value definitions |
 | `ast/` | Abstract syntax tree (AST) node definitions and visitor infrastructure |
-| `frontend/` | Parsing, syntax checking, and IR code generation |
+| `frontend/` | Parsing, syntax checking, and AST code generation |
 | `analysis/` | Compiler analyses (type inference, liveness, reachability, purity, etc.) |
 | `transform/` | AST-level transformations (constant folding, inlining, loop unrolling, etc.) |
 | `interpret/` | FPy interpreters (bytecode, etc.) |
-| `backend/` | Code generation from FPy IR (e.g., FPCore, C++) |
+| `backend/` | Code generation from FPy AST (e.g., FPCore, C++) |
 | `rewrite/` | Pattern-based rewriting infrastructure |
 | `strategies/` | High-level rewriting strategies |
 | `number/` | Number system library (formats, rounding, contexts) |
