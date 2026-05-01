@@ -22,12 +22,16 @@ Format shape lattice
 The analysis tracks a **format shape** that mirrors the basic-type structure::
 
     FormatShape ::= None                            # non-numeric values
+                  | SetShape(values: frozenset)     # known finite real values
                   | Format                          # scalar real
                   | TupleShape(elts: tuple[Shape])  # heterogeneous tuple
                   | ListShape(elt: Shape)           # homogeneous list
 
 - ``None`` is used for booleans, contexts, foreign values, function values, and
   any other expression for which a number format is not meaningful.
+- :class:`SetShape` describes an expression with a known, finite set of real
+  values (e.g. a numeric literal or a join of numeric literals).  It is more
+  precise than any :class:`Format` containing all of its values.
 - A scalar :class:`Format` (e.g. ``IEEEFormat(es=8, nbits=32)``) describes a
   real-valued expression.  ``REAL_FORMAT`` is the **scalar top** — unrestricted
   real values (the format is unknown or unconstrained).
@@ -39,6 +43,9 @@ The analysis tracks a **format shape** that mirrors the basic-type structure::
 **Join rule** (least upper bound)::
 
     join(None, None)               = None
+    join(SetShape(a), SetShape(b)) = SetShape(a ∪ b)
+    join(SetShape(s), fmt)         = fmt   if every v in s is representable in fmt
+                                   = REAL_FORMAT   otherwise
     join(f, f)                     = f                 (scalar Format)
     join(f1, f2)                   = REAL_FORMAT       (different scalars)
     join(Tuple(a..), Tuple(b..))   = Tuple(join(ai, bi)..)
@@ -60,7 +67,7 @@ Format inference rules
   return type.
 - **Variable references** (``Var``): the shape of the variable's definition.
 - **Numeric literals** (``Decnum``, ``Integer``, ``Rational``, …):
-  ``REAL_FORMAT`` — constants are exact real values and are not rounded.
+  ``SetShape({v})`` — the singleton set containing the literal's exact value.
 - **Booleans, comparisons, foreign values, attributes**: ``None``.
 - **Tuple expressions**: ``TupleShape`` of the per-element shapes.
 - **List expressions**: ``ListShape`` of the join of element shapes; the top
@@ -73,6 +80,7 @@ Format inference rules
 """
 
 from dataclasses import dataclass
+from fractions import Fraction
 from functools import reduce
 from typing import TypeAlias
 
@@ -81,6 +89,8 @@ from ..ast.visitor import Visitor
 from ..number import Context
 from ..number.context.format import Format
 from ..number.context.real import REAL_FORMAT
+from ..number.number.reals import RealFloat
+from ..utils import is_dyadic
 from ..types import (
     Type,
     BoolType,
@@ -101,6 +111,7 @@ __all__ = [
     'FormatInfer',
     'FormatAnalysis',
     'FormatShape',
+    'SetShape',
     'TupleShape',
     'ListShape',
 ]
@@ -108,6 +119,18 @@ __all__ = [
 
 #####################################################################
 # Format shape lattice
+
+@dataclass(frozen=True)
+class SetShape:
+    """
+    Format shape for a real-valued expression with a known, finite set of values.
+
+    Strictly more precise than any :class:`Format` that contains every value;
+    when joined with such a format the format is returned (otherwise the join
+    widens to ``REAL_FORMAT``).
+    """
+    values: frozenset[Fraction]
+
 
 @dataclass(frozen=True)
 class TupleShape:
@@ -121,17 +144,38 @@ class ListShape:
     elt: 'FormatShape'
 
 
-FormatShape: TypeAlias = 'None | Format | TupleShape | ListShape'
+FormatShape: TypeAlias = 'None | SetShape | Format | TupleShape | ListShape'
 """
 Inferred format shape for an expression or variable definition.
 
 - ``None`` — no numeric format (booleans, contexts, foreign values, …).
+- :class:`SetShape` — known finite set of real values; more precise than any
+  format containing them.
 - :class:`Format` — scalar format; ``REAL_FORMAT`` is the top of the scalar
   lattice.
 - :class:`TupleShape` — heterogeneous tuple, per-element shapes preserved.
 - :class:`ListShape` — homogeneous list, single element shape (the join of
   all element shapes).
 """
+
+
+def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
+    """
+    Returns true iff every value in *values* is representable under *fmt*.
+
+    ``REAL_FORMAT`` represents all reals, so it admits everything.  For any
+    other format we require each value to be a dyadic rational (binary FP
+    formats only represent dyadic rationals) and to satisfy
+    :py:meth:`Format.representable_in`.
+    """
+    if fmt == REAL_FORMAT:
+        return True
+    for v in values:
+        if not is_dyadic(v):
+            return False
+        if not fmt.representable_in(RealFloat.from_rational(v)):
+            return False
+    return True
 
 
 def _top_shape(ty: Type) -> FormatShape:
@@ -165,6 +209,12 @@ def _join_shapes(s1: FormatShape, s2: FormatShape) -> FormatShape:
     match s1, s2:
         case None, None:
             return None
+        case SetShape(values=a), SetShape(values=b):
+            return SetShape(a | b)
+        case SetShape(values=vals), Format() as fmt:
+            return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
+        case Format() as fmt, SetShape(values=vals):
+            return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
         case Format(), Format():
             return s1 if s1 == s2 else REAL_FORMAT
         case TupleShape(elts=a), TupleShape(elts=b) if len(a) == len(b):
@@ -350,21 +400,21 @@ class _FormatInferInstance(Visitor):
         self.by_expr[e] = shape
         return shape
 
-    # Numeric literals: exact real values, not rounded
+    # Numeric literals: exact real values bounded by the singleton set {v}
     def _visit_decnum(self, e: Decnum, ctx: None) -> FormatShape:
-        return REAL_FORMAT
+        return SetShape(frozenset((e.as_rational(),)))
 
     def _visit_hexnum(self, e: Hexnum, ctx: None) -> FormatShape:
-        return REAL_FORMAT
+        return SetShape(frozenset((e.as_rational(),)))
 
     def _visit_integer(self, e: Integer, ctx: None) -> FormatShape:
-        return REAL_FORMAT
+        return SetShape(frozenset((e.as_rational(),)))
 
     def _visit_rational(self, e: Rational, ctx: None) -> FormatShape:
-        return REAL_FORMAT
+        return SetShape(frozenset((e.as_rational(),)))
 
     def _visit_digits(self, e: Digits, ctx: None) -> FormatShape:
-        return REAL_FORMAT
+        return SetShape(frozenset((e.as_rational(),)))
 
     # Non-real-valued leaves
     def _visit_bool(self, e: BoolVal, ctx: None) -> FormatShape:
@@ -604,6 +654,7 @@ class FormatInfer:
     **Format shape lattice**::
 
         FormatShape ::= None
+                      | SetShape(values)     (known finite set of reals)
                       | Format               (REAL_FORMAT is the scalar top)
                       | TupleShape(elts)
                       | ListShape(elt)
@@ -611,6 +662,9 @@ class FormatInfer:
     **Join rule**::
 
         join(None, None)             = None
+        join(SetShape(a), SetShape(b)) = SetShape(a ∪ b)
+        join(SetShape(s), fmt)       = fmt if every value in s fits in fmt
+                                     = REAL_FORMAT otherwise
         join(f, f)                   = f
         join(f1, f2)                 = REAL_FORMAT     (different scalars)
         join(Tuple(a..), Tuple(b..)) = Tuple(join(ai, bi)..)

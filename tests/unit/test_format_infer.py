@@ -236,6 +236,65 @@ class TestFormatInfer:
         assert _join_shapes(fmt, REAL_FORMAT) == REAL_FORMAT
 
     # ------------------------------------------------------------------
+    # SetShape semantics
+
+    def test_join_set_with_set(self):
+        """``join(SetShape(a), SetShape(b)) == SetShape(a ∪ b)``."""
+        from fractions import Fraction
+        from fpy2.analysis.format_infer import _join_shapes, SetShape
+
+        a = SetShape(frozenset((Fraction(1), Fraction(2))))
+        b = SetShape(frozenset((Fraction(2), Fraction(3))))
+        assert _join_shapes(a, b) == SetShape(
+            frozenset((Fraction(1), Fraction(2), Fraction(3)))
+        )
+
+    def test_join_set_with_compatible_format(self):
+        """``join(SetShape(s), fmt) == fmt`` when every value is representable."""
+        from fractions import Fraction
+        from fpy2.analysis.format_infer import _join_shapes, SetShape
+
+        fmt = fp.FP32.format()
+        s = SetShape(frozenset((Fraction(1), Fraction(2), Fraction(0.5))))
+        assert _join_shapes(s, fmt) == fmt
+        assert _join_shapes(fmt, s) == fmt
+
+    def test_join_set_with_incompatible_format(self):
+        """A non-dyadic value cannot fit in a binary FP format → REAL_FORMAT."""
+        from fractions import Fraction
+        from fpy2.analysis.format_infer import _join_shapes, SetShape
+
+        fmt = fp.FP32.format()
+        s = SetShape(frozenset((Fraction(1, 3),)))  # 1/3 is not dyadic
+        assert _join_shapes(s, fmt) == REAL_FORMAT
+        assert _join_shapes(fmt, s) == REAL_FORMAT
+
+    def test_join_set_with_real_format(self):
+        """Any set is contained in REAL_FORMAT, so the join is REAL_FORMAT."""
+        from fractions import Fraction
+        from fpy2.analysis.format_infer import _join_shapes, SetShape
+
+        s = SetShape(frozenset((Fraction(1, 3),)))
+        assert _join_shapes(s, REAL_FORMAT) == REAL_FORMAT
+        assert _join_shapes(REAL_FORMAT, s) == REAL_FORMAT
+
+    def test_literal_produces_set_shape(self):
+        """A numeric literal expression has a singleton ``SetShape``."""
+        from fractions import Fraction
+        from fpy2.analysis.format_infer import SetShape
+
+        @fp.fpy
+        def f() -> fp.Real:
+            return 42
+
+        info = self._run(f)
+        literal_shapes = [
+            shape for shape in info.by_expr.values()
+            if isinstance(shape, SetShape)
+        ]
+        assert SetShape(frozenset((Fraction(42),))) in literal_shapes
+
+    # ------------------------------------------------------------------
     # Error handling
 
     def test_type_error_on_non_funcdef(self):
