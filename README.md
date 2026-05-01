@@ -6,6 +6,7 @@ Important links:
  - PyPI package: [fpy2](https://pypi.org/project/fpy2/)
  - Documentation: [fpy.readthedocs.io](https://fpy.readthedocs.io/)
  - GitHub: [fpy](https://github.com/bksaiki/fpy)
+ - Guide: [USAGE.md](docs/USAGE.md)
 
 ## Installation
 
