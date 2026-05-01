@@ -3,7 +3,11 @@ Unit tests for format analysis.
 """
 
 import fpy2 as fp
-from fpy2.analysis import FormatInfer
+import pytest
+
+from fractions import Fraction
+from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
+from fpy2.analysis.format_infer import SetFormat, _join_bounds
 from fpy2.number.context.real import REAL_FORMAT
 
 
@@ -179,8 +183,6 @@ class TestFormatInfer:
 
     def test_result_has_type_info(self):
         """The FormatAnalysis result stores the TypeAnalysis."""
-        from fpy2.analysis import TypeAnalysis
-
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             return x
@@ -190,8 +192,6 @@ class TestFormatInfer:
 
     def test_result_has_ctx_use(self):
         """The FormatAnalysis result stores the ContextUseAnalysis."""
-        from fpy2.analysis import ContextUseAnalysis
-
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP32:
@@ -208,81 +208,60 @@ class TestFormatInfer:
         ``join(f, f) == f``:
         formats from two sources with the same format join to that format.
         """
-        from fpy2.analysis.format_infer import _join_shapes
-
         fmt = fp.FP32.format()
-        assert _join_shapes(fmt, fmt) == fmt
+        assert _join_bounds(fmt, fmt) == fmt
 
     def test_join_different_formats(self):
         """
         ``join(f1, f2) == REAL_FORMAT`` when f1 != f2:
         formats from two sources with different formats widen to REAL_FORMAT.
         """
-        from fpy2.analysis.format_infer import _join_shapes
-
         fmt1 = fp.FP32.format()
         fmt2 = fp.FP64.format()
-        assert _join_shapes(fmt1, fmt2) == REAL_FORMAT
+        assert _join_bounds(fmt1, fmt2) == REAL_FORMAT
 
     def test_join_real_is_top(self):
         """
         ``join(REAL_FORMAT, f) == REAL_FORMAT``:
         REAL_FORMAT is the top element of the lattice.
         """
-        from fpy2.analysis.format_infer import _join_shapes
-
         fmt = fp.FP32.format()
-        assert _join_shapes(REAL_FORMAT, fmt) == REAL_FORMAT
-        assert _join_shapes(fmt, REAL_FORMAT) == REAL_FORMAT
+        assert _join_bounds(REAL_FORMAT, fmt) == REAL_FORMAT
+        assert _join_bounds(fmt, REAL_FORMAT) == REAL_FORMAT
 
     # ------------------------------------------------------------------
-    # SetShape semantics
+    # SetFormat semantics
 
     def test_join_set_with_set(self):
-        """``join(SetShape(a), SetShape(b)) == SetShape(a ∪ b)``."""
-        from fractions import Fraction
-        from fpy2.analysis.format_infer import _join_shapes, SetShape
-
-        a = SetShape(frozenset((Fraction(1), Fraction(2))))
-        b = SetShape(frozenset((Fraction(2), Fraction(3))))
-        assert _join_shapes(a, b) == SetShape(
+        """``join(SetFormat(a), SetFormat(b)) == SetFormat(a ∪ b)``."""
+        a = SetFormat(frozenset((Fraction(1), Fraction(2))))
+        b = SetFormat(frozenset((Fraction(2), Fraction(3))))
+        assert _join_bounds(a, b) == SetFormat(
             frozenset((Fraction(1), Fraction(2), Fraction(3)))
         )
 
     def test_join_set_with_compatible_format(self):
-        """``join(SetShape(s), fmt) == fmt`` when every value is representable."""
-        from fractions import Fraction
-        from fpy2.analysis.format_infer import _join_shapes, SetShape
-
+        """``join(SetFormat(s), fmt) == fmt`` when every value is representable."""
         fmt = fp.FP32.format()
-        s = SetShape(frozenset((Fraction(1), Fraction(2), Fraction(0.5))))
-        assert _join_shapes(s, fmt) == fmt
-        assert _join_shapes(fmt, s) == fmt
+        s = SetFormat(frozenset((Fraction(1), Fraction(2), Fraction(0.5))))
+        assert _join_bounds(s, fmt) == fmt
+        assert _join_bounds(fmt, s) == fmt
 
     def test_join_set_with_incompatible_format(self):
         """A non-dyadic value cannot fit in a binary FP format → REAL_FORMAT."""
-        from fractions import Fraction
-        from fpy2.analysis.format_infer import _join_shapes, SetShape
-
         fmt = fp.FP32.format()
-        s = SetShape(frozenset((Fraction(1, 3),)))  # 1/3 is not dyadic
-        assert _join_shapes(s, fmt) == REAL_FORMAT
-        assert _join_shapes(fmt, s) == REAL_FORMAT
+        s = SetFormat(frozenset((Fraction(1, 3),)))  # 1/3 is not dyadic
+        assert _join_bounds(s, fmt) == REAL_FORMAT
+        assert _join_bounds(fmt, s) == REAL_FORMAT
 
     def test_join_set_with_real_format(self):
         """Any set is contained in REAL_FORMAT, so the join is REAL_FORMAT."""
-        from fractions import Fraction
-        from fpy2.analysis.format_infer import _join_shapes, SetShape
-
-        s = SetShape(frozenset((Fraction(1, 3),)))
-        assert _join_shapes(s, REAL_FORMAT) == REAL_FORMAT
-        assert _join_shapes(REAL_FORMAT, s) == REAL_FORMAT
+        s = SetFormat(frozenset((Fraction(1, 3),)))
+        assert _join_bounds(s, REAL_FORMAT) == REAL_FORMAT
+        assert _join_bounds(REAL_FORMAT, s) == REAL_FORMAT
 
     def test_literal_produces_set_shape(self):
-        """A numeric literal expression has a singleton ``SetShape``."""
-        from fractions import Fraction
-        from fpy2.analysis.format_infer import SetShape
-
+        """A numeric literal expression has a singleton ``SetFormat``."""
         @fp.fpy
         def f() -> fp.Real:
             return 42
@@ -290,16 +269,14 @@ class TestFormatInfer:
         info = self._run(f)
         literal_shapes = [
             shape for shape in info.by_expr.values()
-            if isinstance(shape, SetShape)
+            if isinstance(shape, SetFormat)
         ]
-        assert SetShape(frozenset((Fraction(42),))) in literal_shapes
+        assert SetFormat(frozenset((Fraction(42),))) in literal_shapes
 
     # ------------------------------------------------------------------
     # Error handling
 
     def test_type_error_on_non_funcdef(self):
         """``FormatInfer.analyze`` raises ``TypeError`` for non-FuncDef input."""
-        import pytest
-
         with pytest.raises(TypeError, match="expected a 'FuncDef'"):
             FormatInfer.analyze("not a FuncDef")  # type: ignore[arg-type]
