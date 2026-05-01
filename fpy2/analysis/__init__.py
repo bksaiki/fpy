@@ -6,9 +6,9 @@ from .array_size import (
     _Tuple as TupleSizeType
 )
 from .context_infer import ContextInfer, ContextAnalysis, ContextInferError
-from .ctx_def_use import (
-    CtxDefUse, CtxDefUseAnalysis,
-    ContextDef, CtxDefSite, CtxUseSite
+from .ctx_use import (
+    CtxUse, CtxUseAnalysis,
+    ContextScope, CtxScopeSite, CtxUseSite
 )
 from .defs import DefAnalysis
 from .define_use import (

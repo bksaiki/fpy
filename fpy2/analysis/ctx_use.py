@@ -1,7 +1,7 @@
 """
-Context definition-use analysis for FPy ASTs.
+Context-use analysis for FPy ASTs.
 
-This analysis links rounding context definitions (introduced by ``with``
+This analysis links rounding context scopes (introduced by ``with``
 statements or function-level context annotations) to the expressions
 evaluated under them.  It attempts partial evaluation to resolve
 context expressions to concrete :class:`Context` values.  When partial
@@ -24,78 +24,78 @@ from .define_use import DefineUse, DefineUseAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo
 
 __all__ = [
-    'CtxDefUse',
-    'CtxDefUseAnalysis',
-    'ContextDef',
-    'CtxDefSite',
+    'CtxUse',
+    'CtxUseAnalysis',
+    'ContextScope',
+    'CtxScopeSite',
     'CtxUseSite',
 ]
 
-CtxDefSite: TypeAlias = FuncDef | ContextStmt
-"""AST nodes that introduce a rounding context"""
+CtxScopeSite: TypeAlias = FuncDef | ContextStmt
+"""AST nodes that introduce a rounding context scope"""
 
 CtxUseSite: TypeAlias = NullaryOp | UnaryOp | BinaryOp | TernaryOp | NaryOp | Call
 """AST nodes that use a rounding context"""
 
 
 @dataclass(frozen=True)
-class ContextDef:
-    """A rounding context definition."""
+class ContextScope:
+    """A rounding context scope."""
 
-    site: CtxDefSite
-    """the AST node that introduces the context"""
+    site: CtxScopeSite
+    """the AST node that introduces the scope"""
 
     ctx: ContextParam
     """the resolved context: a concrete Context or a symbolic NamedId"""
 
 
 @default_repr
-class CtxDefUseAnalysis:
-    """Result of context definition-use analysis."""
+class CtxUseAnalysis:
+    """Result of context-use analysis."""
 
-    defs: list[ContextDef]
-    """all context definitions, ordered by introduction"""
+    scopes: list[ContextScope]
+    """all context scopes, ordered by introduction"""
 
-    uses: dict[ContextDef, set[CtxUseSite]]
-    """mapping from context definition to use sites"""
+    uses: dict[ContextScope, set[CtxUseSite]]
+    """mapping from context scope to use sites"""
 
-    use_to_def: dict[CtxUseSite, ContextDef]
-    """mapping from use site to context definition"""
+    use_to_scope: dict[CtxUseSite, ContextScope]
+    """mapping from use site to context scope"""
 
     def __init__(
         self,
-        defs: list[ContextDef],
-        uses: dict[ContextDef, set[CtxUseSite]],
+        scopes: list[ContextScope],
+        uses: dict[ContextScope, set[CtxUseSite]],
     ):
-        self.defs = defs
+        self.scopes = scopes
         self.uses = uses
-        self.use_to_def = {}
-        for d, us in uses.items():
+        self.use_to_scope = {}
+        for s, us in uses.items():
             for u in us:
-                self.use_to_def[u] = d
+                self.use_to_scope[u] = s
 
-    def find_def_from_use(self, site: CtxUseSite) -> ContextDef:
-        """Returns the context definition active at a use site."""
-        if site in self.use_to_def:
-            return self.use_to_def[site]
-        raise KeyError(f'no context definition found for use site {site}')
+    def find_scope_from_use(self, site: CtxUseSite) -> ContextScope:
+        """Returns the context scope active at a use site."""
+        if site in self.use_to_scope:
+            return self.use_to_scope[site]
+        raise KeyError(f'no context scope found for use site {site}')
 
 
-class _CtxDefUseInstance(DefaultVisitor):
-    """Per-IR instance of context definition-use analysis."""
+class _CtxUseInstance(DefaultVisitor):
+    """Per-IR instance of context-use analysis."""
 
     func: FuncDef
     eval_info: PartialEvalInfo
     gensym: Gensym
 
-    defs: list[ContextDef]
-    uses: dict[ContextDef, set[CtxUseSite]]
+    scopes: list[ContextScope]
+    uses: dict[ContextScope, set[CtxUseSite]]
 
     def __init__(self, func: FuncDef, eval_info: PartialEvalInfo):
         self.func = func
         self.eval_info = eval_info
         self.gensym = Gensym()
-        self.defs = []
+        self.scopes = []
         self.uses = {}
 
     def _fresh_sym_ctx(self) -> NamedId:
@@ -113,52 +113,52 @@ class _CtxDefUseInstance(DefaultVisitor):
                 return val
         return self._fresh_sym_ctx()
 
-    def _make_def(self, site: CtxDefSite, ctx: ContextParam) -> ContextDef:
-        d = ContextDef(site, ctx)
-        self.defs.append(d)
-        self.uses[d] = set()
-        return d
+    def _make_scope(self, site: CtxScopeSite, ctx: ContextParam) -> ContextScope:
+        s = ContextScope(site, ctx)
+        self.scopes.append(s)
+        self.uses[s] = set()
+        return s
 
-    def _record_use(self, use: CtxUseSite, ctx_def: ContextDef):
-        self.uses[ctx_def].add(use)
+    def _record_use(self, use: CtxUseSite, scope: ContextScope):
+        self.uses[scope].add(use)
 
     # ------------------------------------------------------------------
     # Expression visitors – record context-sensitive operations
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx_def: ContextDef):
-        self._record_use(e, ctx_def)
+    def _visit_nullaryop(self, e: NullaryOp, scope: ContextScope):
+        self._record_use(e, scope)
 
-    def _visit_unaryop(self, e: UnaryOp, ctx_def: ContextDef):
-        self._visit_expr(e.arg, ctx_def)
-        self._record_use(e, ctx_def)
+    def _visit_unaryop(self, e: UnaryOp, scope: ContextScope):
+        self._visit_expr(e.arg, scope)
+        self._record_use(e, scope)
 
-    def _visit_binaryop(self, e: BinaryOp, ctx_def: ContextDef):
-        self._visit_expr(e.first, ctx_def)
-        self._visit_expr(e.second, ctx_def)
-        self._record_use(e, ctx_def)
+    def _visit_binaryop(self, e: BinaryOp, scope: ContextScope):
+        self._visit_expr(e.first, scope)
+        self._visit_expr(e.second, scope)
+        self._record_use(e, scope)
 
-    def _visit_ternaryop(self, e: TernaryOp, ctx_def: ContextDef):
-        self._visit_expr(e.first, ctx_def)
-        self._visit_expr(e.second, ctx_def)
-        self._visit_expr(e.third, ctx_def)
-        self._record_use(e, ctx_def)
+    def _visit_ternaryop(self, e: TernaryOp, scope: ContextScope):
+        self._visit_expr(e.first, scope)
+        self._visit_expr(e.second, scope)
+        self._visit_expr(e.third, scope)
+        self._record_use(e, scope)
 
-    def _visit_naryop(self, e: NaryOp, ctx_def: ContextDef):
+    def _visit_naryop(self, e: NaryOp, scope: ContextScope):
         for arg in e.args:
-            self._visit_expr(arg, ctx_def)
-        self._record_use(e, ctx_def)
+            self._visit_expr(arg, scope)
+        self._record_use(e, scope)
 
-    def _visit_call(self, e: Call, ctx_def: ContextDef):
+    def _visit_call(self, e: Call, scope: ContextScope):
         for arg in e.args:
-            self._visit_expr(arg, ctx_def)
+            self._visit_expr(arg, scope)
         for _, kwarg in e.kwargs:
-            self._visit_expr(kwarg, ctx_def)
-        self._record_use(e, ctx_def)
+            self._visit_expr(kwarg, scope)
+        self._record_use(e, scope)
 
     # ------------------------------------------------------------------
     # Statement visitors
 
-    def _visit_context(self, stmt: ContextStmt, ctx_def: ContextDef):
+    def _visit_context(self, stmt: ContextStmt, scope: ContextScope):
         # The context expression is evaluated under real arithmetic (not the
         # enclosing floating-point context), so we do not visit it as a use
         # of the enclosing context.  This is consistent with how
@@ -166,14 +166,14 @@ class _CtxDefUseInstance(DefaultVisitor):
         # Resolve the context expression, falling back to a symbolic
         # variable when partial evaluation cannot determine the value.
         ctx = self._resolve_ctx_expr(stmt.ctx)
-        # Create a fresh context definition for the body.
-        new_def = self._make_def(stmt, ctx)
-        self._visit_block(stmt.body, new_def)
+        # Create a fresh context scope for the body.
+        new_scope = self._make_scope(stmt, ctx)
+        self._visit_block(stmt.body, new_scope)
 
     # ------------------------------------------------------------------
     # Function entry point
 
-    def _visit_function(self, func: FuncDef, _ctx_def: None):
+    def _visit_function(self, func: FuncDef, _scope: None):
         # Determine the body context from the function annotation.
         match func.ctx:
             case None:
@@ -186,22 +186,22 @@ class _CtxDefUseInstance(DefaultVisitor):
             case _:
                 raise RuntimeError(f'unreachable: {func.ctx}')
 
-        func_def = self._make_def(func, body_ctx)
-        self._visit_block(func.body, func_def)
+        func_scope = self._make_scope(func, body_ctx)
+        self._visit_block(func.body, func_scope)
 
-    def analyze(self) -> CtxDefUseAnalysis:
+    def analyze(self) -> CtxUseAnalysis:
         self._visit_function(self.func, None)
-        return CtxDefUseAnalysis(self.defs, self.uses)
+        return CtxUseAnalysis(self.scopes, self.uses)
 
 
-class CtxDefUse:
+class CtxUse:
     """
-    Context definition-use analysis.
+    Context-use analysis.
 
-    This analysis computes, for each rounding context definition in a
+    This analysis computes, for each rounding context scope in a
     function, the set of context-sensitive expressions evaluated under it.
 
-    Context definitions are introduced by:
+    Context scopes are introduced by:
 
     - ``with`` statements (:class:`ContextStmt`), and
     - the function-level context annotation in :class:`FuncDef`.
@@ -214,9 +214,9 @@ class CtxDefUse:
     """
 
     @staticmethod
-    def analyze(func: FuncDef, *, def_use: DefineUseAnalysis | None = None) -> CtxDefUseAnalysis:
+    def analyze(func: FuncDef, *, def_use: DefineUseAnalysis | None = None) -> CtxUseAnalysis:
         """
-        Runs context definition-use analysis on a function.
+        Runs context-use analysis on a function.
 
         Parameters
         ----------
@@ -231,4 +231,4 @@ class CtxDefUse:
         if def_use is None:
             def_use = DefineUse.analyze(func)
         eval_info = PartialEval.apply(func, def_use=def_use)
-        return _CtxDefUseInstance(func, eval_info).analyze()
+        return _CtxUseInstance(func, eval_info).analyze()
