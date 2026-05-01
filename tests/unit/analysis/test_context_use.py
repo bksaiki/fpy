@@ -100,6 +100,18 @@ class TestContextUse:
         with_scope = result.scopes[-1]
         assert isinstance(with_scope.ctx, fp.number.Context)
 
+    def test_context_stmt_kwargs(self):
+        """with-statement using keyword arguments resolves to a concrete context."""
+        @fp.fpy
+        def f(x):
+            with fp.IEEEContext(es=11, nbits=64, rm=fp.RM.RNE):
+                return x + 1.0
+
+        result = fp.analysis.ContextUse.analyze(f.ast)
+
+        with_scope = result.scopes[-1]
+        assert isinstance(with_scope.ctx, fp.number.Context)
+
     # ------------------------------------------------------------------
     # ContextStmt with a non-reducible context (symbolic fallback)
 
