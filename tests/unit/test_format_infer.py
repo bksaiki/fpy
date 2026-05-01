@@ -208,32 +208,32 @@ class TestFormatInfer:
         ``join(f, f) == f``:
         formats from two sources with the same format join to that format.
         """
-        from fpy2.analysis.format_infer import _join_formats
+        from fpy2.analysis.format_infer import _join_shapes
 
         fmt = fp.FP32.format()
-        assert _join_formats(fmt, fmt) == fmt
+        assert _join_shapes(fmt, fmt) == fmt
 
     def test_join_different_formats(self):
         """
         ``join(f1, f2) == REAL_FORMAT`` when f1 != f2:
         formats from two sources with different formats widen to REAL_FORMAT.
         """
-        from fpy2.analysis.format_infer import _join_formats
+        from fpy2.analysis.format_infer import _join_shapes
 
         fmt1 = fp.FP32.format()
         fmt2 = fp.FP64.format()
-        assert _join_formats(fmt1, fmt2) == REAL_FORMAT
+        assert _join_shapes(fmt1, fmt2) == REAL_FORMAT
 
     def test_join_real_is_top(self):
         """
         ``join(REAL_FORMAT, f) == REAL_FORMAT``:
         REAL_FORMAT is the top element of the lattice.
         """
-        from fpy2.analysis.format_infer import _join_formats
+        from fpy2.analysis.format_infer import _join_shapes
 
         fmt = fp.FP32.format()
-        assert _join_formats(REAL_FORMAT, fmt) == REAL_FORMAT
-        assert _join_formats(fmt, REAL_FORMAT) == REAL_FORMAT
+        assert _join_shapes(REAL_FORMAT, fmt) == REAL_FORMAT
+        assert _join_shapes(fmt, REAL_FORMAT) == REAL_FORMAT
 
     # ------------------------------------------------------------------
     # Error handling

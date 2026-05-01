@@ -81,7 +81,16 @@ from ..ast.visitor import Visitor
 from ..number import Context
 from ..number.context.format import Format
 from ..number.context.real import REAL_FORMAT
-from ..types import Type, RealType, TupleType, ListType
+from ..types import (
+    Type,
+    BoolType,
+    RealType,
+    ContextType,
+    TupleType,
+    ListType,
+    FunctionType,
+    VarType,
+)
 
 from .context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextUseSite
 from .define_use import DefineUse, DefineUseAnalysis
@@ -133,14 +142,17 @@ def _top_shape(ty: Type) -> FormatShape:
     a structural shape with ``REAL_FORMAT`` (or ``None``) at the leaves.  For
     non-numeric types (bool, context, function, type variable) it is ``None``.
     """
-    if isinstance(ty, RealType):
-        return REAL_FORMAT
-    if isinstance(ty, TupleType):
-        return TupleShape(tuple(_top_shape(t) for t in ty.elts))
-    if isinstance(ty, ListType):
-        return ListShape(_top_shape(ty.elt))
-    # BoolType, ContextType, FunctionType, VarType
-    return None
+    match ty:
+        case RealType():
+            return REAL_FORMAT
+        case TupleType():
+            return TupleShape(tuple(_top_shape(t) for t in ty.elts))
+        case ListType():
+            return ListShape(_top_shape(ty.elt))
+        case BoolType() | ContextType() | FunctionType() | VarType():
+            return None
+        case _:
+            raise RuntimeError(f'unreachable: unknown type {ty!r}')
 
 
 def _join_shapes(s1: FormatShape, s2: FormatShape) -> FormatShape:
@@ -150,25 +162,19 @@ def _join_shapes(s1: FormatShape, s2: FormatShape) -> FormatShape:
     Joins are structural and only defined for shapes of matching kind — the
     type checker guarantees this for well-typed programs.
     """
-    if s1 is None and s2 is None:
-        return None
-    if isinstance(s1, Format) and isinstance(s2, Format):
-        return s1 if s1 == s2 else REAL_FORMAT
-    if (
-        isinstance(s1, TupleShape)
-        and isinstance(s2, TupleShape)
-        and len(s1.elts) == len(s2.elts)
-    ):
-        return TupleShape(
-            tuple(_join_shapes(a, b) for a, b in zip(s1.elts, s2.elts))
-        )
-    if isinstance(s1, ListShape) and isinstance(s2, ListShape):
-        return ListShape(_join_shapes(s1.elt, s2.elt))
-    raise RuntimeError(f'cannot join incompatible format shapes: {s1!r}, {s2!r}')
-
-
-# Backwards-compatible name used by the existing test suite.
-_join_formats = _join_shapes
+    match s1, s2:
+        case None, None:
+            return None
+        case Format(), Format():
+            return s1 if s1 == s2 else REAL_FORMAT
+        case TupleShape(elts=a), TupleShape(elts=b) if len(a) == len(b):
+            return TupleShape(tuple(_join_shapes(x, y) for x, y in zip(a, b)))
+        case ListShape(elt=a), ListShape(elt=b):
+            return ListShape(_join_shapes(a, b))
+        case _:
+            raise RuntimeError(
+                f'unreachable: cannot join incompatible format shapes {s1!r}, {s2!r}'
+            )
 
 
 def _format_of_scope(scope: ContextScope) -> Format:
