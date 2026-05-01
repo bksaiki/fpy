@@ -4,6 +4,7 @@ Analysis tests
 
 from .array_size import test_array_size_infer
 from .context_infer import test_context_infer
+from .context_use import test_context_use
 from .define_use import test_define_use
 from .defs import test_defs
 from .reaching_defs import test_reaching_defs

@@ -6,6 +6,10 @@ from .array_size import (
     _Tuple as TupleSizeType
 )
 from .context_infer import ContextInfer, ContextAnalysis, ContextInferError
+from .context_use import (
+    ContextUse, ContextUseAnalysis,
+    ContextScope, ContextScopeSite, ContextUseSite
+)
 from .defs import DefAnalysis
 from .define_use import (
     DefineUse, DefineUseAnalysis,
