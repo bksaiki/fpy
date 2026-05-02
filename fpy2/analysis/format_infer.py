@@ -248,7 +248,7 @@ class FormatAnalysis:
     """
     Result of format analysis for an FPy function.
 
-    Maps each variable definition site and expression node to its inferred
+    Maps each variable definition site and expression to its inferred
     format shape.  For real-valued expressions the shape is a :class:`Format`;
     for booleans and other non-numeric expressions it is ``None``; for tuples
     and lists it is a structural :class:`TupleFormat` or :class:`ListFormat`.
@@ -271,7 +271,7 @@ class FormatAnalysis:
 
     by_expr: dict[Expr, FormatBound]
     """
-    Format shape inferred for each expression node.
+    Format shape inferred for each expression.
 
     For context-sensitive operations the shape is the format of the active
     rounding context.  For variable references it is the definition's shape.
@@ -321,19 +321,11 @@ class _FormatInferInstance(Visitor):
         self.by_def[d] = shape
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
-        if d in self.by_def:
-            return self.by_def[d]
-        # Unseen definition (e.g. an outer-scope free variable whose binding
-        # was not visited): fall back to the top shape of its type.
-        ty = self.type_info.by_def.get(d)
-        return _top_bound(ty) if ty is not None else None
+        return self.by_def[d]
 
     def _scope_format(self, e: ContextUseSite) -> Format:
         """Returns the format of the rounding context scope for *e*."""
-        scope = self.ctx_use.use_to_scope.get(e)
-        if scope is None:
-            return REAL_FORMAT
-        return _format_of_scope(scope)
+        return _format_of_scope(self.ctx_use.find_scope_from_use(e))
 
     def _op_bound(self, e: ContextUseSite) -> FormatBound:
         """
@@ -343,10 +335,10 @@ class _FormatInferInstance(Visitor):
         Operations that return any other type (bool, list, context, …) are
         not numerical computations — their shape is derived from the type.
         """
-        ret_ty = self.type_info.by_expr.get(e)
+        ret_ty = self.type_info.by_expr[e]
         if isinstance(ret_ty, RealType):
             return self._scope_format(e)
-        return _top_bound(ret_ty) if ret_ty is not None else REAL_FORMAT
+        return _top_bound(ret_ty)
 
     def _visit_binding(
         self,
@@ -378,8 +370,7 @@ class _FormatInferInstance(Visitor):
         match binding:
             case NamedId():
                 d = self.def_use.find_def_from_site(binding, site)
-                ty = self.type_info.by_def.get(d)
-                return _top_bound(ty) if ty is not None else None
+                return _top_bound(self.type_info.by_def[d])
             case UnderscoreId():
                 return None
             case TupleBinding():
@@ -464,8 +455,7 @@ class _FormatInferInstance(Visitor):
             self._visit_expr(arg, ctx)
         for _, kwarg in e.kwargs:
             self._visit_expr(kwarg, ctx)
-        ret_ty = self.type_info.by_expr.get(e)
-        return _top_bound(ret_ty) if ret_ty is not None else None
+        return _top_bound(self.type_info.by_expr[e])
 
     # Comparison: produces a bool, so no numeric shape
     def _visit_compare(self, e: Compare, ctx: None) -> FormatBound:
@@ -483,29 +473,24 @@ class _FormatInferInstance(Visitor):
             joined = reduce(_join_bounds, elt_shapes)
         else:
             # Empty list: derive the element shape from the inferred list type.
-            list_ty = self.type_info.by_expr.get(e)
-            if isinstance(list_ty, ListType):
-                joined = _top_bound(list_ty.elt)
-            else:
-                joined = None
+            list_ty = self.type_info.by_expr[e]
+            assert isinstance(list_ty, ListType)
+            joined = _top_bound(list_ty.elt)
         return ListFormat(joined)
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> FormatBound:
         for target, iterable in zip(e.targets, e.iterables):
             iter_shape = self._visit_expr(iterable, ctx)
-            elt_shape = iter_shape.elt if isinstance(iter_shape, ListFormat) else None
-            self._visit_binding(e, target, elt_shape)
+            assert isinstance(iter_shape, ListFormat)
+            self._visit_binding(e, target, iter_shape.elt)
         body_shape = self._visit_expr(e.elt, ctx)
         return ListFormat(body_shape)
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> FormatBound:
         value_shape = self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
-        if isinstance(value_shape, ListFormat):
-            return value_shape.elt
-        # Unexpected shape (e.g. unknown): fall back to the type's top shape.
-        ret_ty = self.type_info.by_expr.get(e)
-        return _top_bound(ret_ty) if ret_ty is not None else None
+        assert isinstance(value_shape, ListFormat)
+        return value_shape.elt
 
     def _visit_list_slice(self, e: ListSlice, ctx: None) -> FormatBound:
         value_shape = self._visit_expr(e.value, ctx)
@@ -574,8 +559,8 @@ class _FormatInferInstance(Visitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_shape = self._visit_expr(stmt.iterable, ctx)
-        elt_shape = iter_shape.elt if isinstance(iter_shape, ListFormat) else None
-        self._visit_binding(stmt, stmt.target, elt_shape)
+        assert isinstance(iter_shape, ListFormat)
+        self._visit_binding(stmt, stmt.target, iter_shape.elt)
         # Initialise phi shapes from pre-loop (lhs) definitions
         for phi in self.def_use.phis[stmt]:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
@@ -618,13 +603,11 @@ class _FormatInferInstance(Visitor):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
-                ty = self.type_info.by_def.get(d)
-                self._set_def_bound(d, _top_bound(ty) if ty is not None else None)
+                self._set_def_bound(d, _top_bound(self.type_info.by_def[d]))
         # Free variables (captured from outer scope): top shape of inferred type.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            ty = self.type_info.by_def.get(d)
-            self._set_def_bound(d, _top_bound(ty) if ty is not None else None)
+            self._set_def_bound(d, _top_bound(self.type_info.by_def[d]))
         self._visit_block(func.body, ctx)
 
     def analyze(self) -> FormatAnalysis:
@@ -707,7 +690,7 @@ class FormatInfer:
         Returns:
             A :class:`FormatAnalysis` result whose ``by_def`` and ``by_expr``
             maps contain the inferred format shapes for every definition site
-            and expression node in *func*.
+            and expression in *func*.
 
         Raises:
             TypeError: If *func* is not a :class:`FuncDef`.
