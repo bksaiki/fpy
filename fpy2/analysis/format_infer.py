@@ -17,15 +17,15 @@ Analysis pipeline
    to; at control-flow merge points (``if``/``while``/``for`` phi nodes) formats
    are joined.
 
-Format shape lattice
---------------------
-The analysis tracks a **format shape** that mirrors the basic-type structure::
+Format lattice
+--------------
+The analysis tracks a **format** that mirrors the basic-type structure::
 
-    FormatBound ::= None                            # non-numeric values
-                  | SetFormat(values: frozenset)     # known finite real values
-                  | Format                          # scalar real
-                  | TupleFormat(elts: tuple[Shape])  # heterogeneous tuple
-                  | ListFormat(elt: Shape)           # homogeneous list
+    FormatBound ::= None                                  # non-numeric values
+                  | SetFormat(values: frozenset)          # known finite real values
+                  | Format                                # scalar real
+                  | TupleFormat(elts: tuple[FormatBound]) # heterogeneous tuple
+                  | ListFormat(elt: FormatBound)          # homogeneous list
 
 - ``None`` is used for booleans, contexts, foreign values, function values, and
   any other expression for which a number format is not meaningful.
@@ -35,23 +35,23 @@ The analysis tracks a **format shape** that mirrors the basic-type structure::
 - A scalar :class:`Format` (e.g. ``IEEEFormat(es=8, nbits=32)``) describes a
   real-valued expression.  ``REAL_FORMAT`` is the **scalar top** — unrestricted
   real values (the format is unknown or unconstrained).
-- :class:`TupleFormat` tracks per-element shapes and is **not** weakened to a
+- :class:`TupleFormat` tracks per-element formats and is **not** weakened to a
   single scalar.
-- :class:`ListFormat` tracks a single element shape; the shapes of all elements
-  in a list expression are joined to obtain it (lists are homogeneous).
+- :class:`ListFormat` tracks a single element format; the formats of all
+  elements in a list expression are joined to obtain it (lists are homogeneous).
 
 **Join rule** (least upper bound)::
 
-    join(None, None)               = None
+    join(None, None)                 = None
     join(SetFormat(a), SetFormat(b)) = SetFormat(a ∪ b)
-    join(SetFormat(s), fmt)         = fmt   if every v in s is representable in fmt
-                                   = REAL_FORMAT   otherwise
-    join(f, f)                     = f                 (scalar Format)
-    join(f1, f2)                   = REAL_FORMAT       (different scalars)
-    join(Tuple(a..), Tuple(b..))   = Tuple(join(ai, bi)..)
-    join(List(a), List(b))         = List(join(a, b))
+    join(SetFormat(s), fmt)          = fmt   if every v in s is representable in fmt
+                                     = REAL_FORMAT   otherwise
+    join(f, f)                       = f                 (scalar Format)
+    join(f1, f2)                     = REAL_FORMAT       (different scalars)
+    join(Tuple(a..), Tuple(b..))     = Tuple(join(ai, bi)..)
+    join(List(a), List(b))           = List(join(a, b))
 
-For loops, phi nodes are initialised from the pre-loop definition's shape and
+For loops, phi nodes are initialised from the pre-loop definition's format and
 the body is iterated until the phi bounds stop changing.  The lattice has
 finite height (``REAL_FORMAT`` tops the scalar sub-lattice, ``SetFormat``
 values are drawn from the program's finitely many literals, and the structural
@@ -63,20 +63,20 @@ Format inference rules
   ``TernaryOp``, ``NaryOp``): the result is rounded to the active rounding
   context's format, i.e. ``scope.ctx.format()`` when the context is concrete,
   or ``REAL_FORMAT`` when it is a symbolic variable.
-- **Function calls** (``Call``): conservatively the top shape of the callee's
+- **Function calls** (``Call``): conservatively the top format of the callee's
   return type.
-- **Variable references** (``Var``): the shape of the variable's definition.
+- **Variable references** (``Var``): the format of the variable's definition.
 - **Numeric literals** (``Decnum``, ``Integer``, ``Rational``, …):
   ``SetFormat({v})`` — the singleton set containing the literal's exact value.
 - **Booleans, comparisons, foreign values, attributes**: ``None``.
-- **Tuple expressions**: ``TupleFormat`` of the per-element shapes.
-- **List expressions**: ``ListFormat`` of the join of element shapes; the top
-  shape of the list's element type when the list is empty.
-- **List comprehensions**: ``ListFormat`` of the body expression's shape; the
-  loop target is bound to the iterable's element shape.
-- **Indexing/slicing**: list indexing returns the list's element shape; list
+- **Tuple expressions**: ``TupleFormat`` of the per-element formats.
+- **List expressions**: ``ListFormat`` of the join of element formats; the top
+  format of the list's element type when the list is empty.
+- **List comprehensions**: ``ListFormat`` of the body expression's format; the
+  loop target is bound to the iterable's element format.
+- **Indexing/slicing**: list indexing returns the list's element format; list
   slicing returns the same ``ListFormat`` as the value.
-- **Inline conditionals** (``IfExpr``): ``join(then_shape, else_shape)``.
+- **Inline conditionals** (``IfExpr``): ``join(then_fmt, else_fmt)``.
 """
 
 from dataclasses import dataclass
@@ -118,12 +118,12 @@ __all__ = [
 
 
 #####################################################################
-# Format shape lattice
+# Format lattice
 
 @dataclass(frozen=True)
 class SetFormat:
     """
-    Format shape for a real-valued expression with a known, finite set of values.
+    Format for a real-valued expression with a known, finite set of values.
 
     Strictly more precise than any :class:`Format` that contains every value;
     when joined with such a format the format is returned (otherwise the join
@@ -134,28 +134,28 @@ class SetFormat:
 
 @dataclass(frozen=True)
 class TupleFormat:
-    """Format shape for a tuple-valued expression."""
+    """Format for a tuple-valued expression."""
     elts: tuple['FormatBound', ...]
 
 
 @dataclass(frozen=True)
 class ListFormat:
-    """Format shape for a list-valued expression (homogeneous element shape)."""
+    """Format for a list-valued expression (homogeneous element format)."""
     elt: 'FormatBound'
 
 
 FormatBound: TypeAlias = 'None | SetFormat | Format | TupleFormat | ListFormat'
 """
-Inferred format shape for an expression or variable definition.
+Inferred format for an expression or variable definition.
 
 - ``None`` — no numeric format (booleans, contexts, foreign values, …).
 - :class:`SetFormat` — known finite set of real values; more precise than any
   format containing them.
 - :class:`Format` — scalar format; ``REAL_FORMAT`` is the top of the scalar
   lattice.
-- :class:`TupleFormat` — heterogeneous tuple, per-element shapes preserved.
-- :class:`ListFormat` — homogeneous list, single element shape (the join of
-  all element shapes).
+- :class:`TupleFormat` — heterogeneous tuple, per-element formats preserved.
+- :class:`ListFormat` — homogeneous list, single element format (the join of
+  all element formats).
 """
 
 
@@ -180,10 +180,10 @@ def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
 
 def _top_bound(ty: Type) -> FormatBound:
     """
-    Returns the top of the format-shape lattice for *ty*.
+    Returns the top of the format lattice for *ty*.
 
     For scalar real values this is ``REAL_FORMAT``; for tuples and lists it is
-    a structural shape with ``REAL_FORMAT`` (or ``None``) at the leaves.  For
+    a structural format with ``REAL_FORMAT`` (or ``None``) at the leaves.  For
     non-numeric types (bool, context, function, type variable) it is ``None``.
     """
     match ty:
@@ -201,9 +201,9 @@ def _top_bound(ty: Type) -> FormatBound:
 
 def _join_bounds(s1: FormatBound, s2: FormatBound) -> FormatBound:
     """
-    Returns the join (least upper bound) of two format shapes.
+    Returns the join (least upper bound) of two formats.
 
-    Joins are structural and only defined for shapes of matching kind — the
+    Joins are structural and only defined for formats of matching kind — the
     type checker guarantees this for well-typed programs.
     """
     match s1, s2:
@@ -223,7 +223,7 @@ def _join_bounds(s1: FormatBound, s2: FormatBound) -> FormatBound:
             return ListFormat(_join_bounds(a, b))
         case _:
             raise RuntimeError(
-                f'unreachable: cannot join incompatible format shapes {s1!r}, {s2!r}'
+                f'unreachable: cannot join incompatible formats {s1!r}, {s2!r}'
             )
 
 
@@ -249,7 +249,7 @@ class FormatAnalysis:
     Result of format analysis for an FPy function.
 
     Maps each variable definition site and expression to its inferred
-    format shape.  For real-valued expressions the shape is a :class:`Format`;
+    format.  For real-valued expressions the format is a :class:`Format`;
     for booleans and other non-numeric expressions it is ``None``; for tuples
     and lists it is a structural :class:`TupleFormat` or :class:`ListFormat`.
     """
@@ -262,19 +262,19 @@ class FormatAnalysis:
 
     by_def: dict[Definition, FormatBound]
     """
-    Format shape inferred for each variable definition site.
+    Format inferred for each variable definition site.
 
     Keys are ``AssignDef`` or ``PhiDef`` objects from the definition-use
-    analysis.  For phi nodes the shape is the join of the two incoming
-    control-flow edge shapes.
+    analysis.  For phi nodes the format is the join of the two incoming
+    control-flow edge formats.
     """
 
     by_expr: dict[Expr, FormatBound]
     """
-    Format shape inferred for each expression.
+    Format inferred for each expression.
 
-    For context-sensitive operations the shape is the format of the active
-    rounding context.  For variable references it is the definition's shape.
+    For context-sensitive operations the format is that of the active
+    rounding context.  For variable references it is the definition's format.
     For non-numeric expressions it is ``None``.
     """
 
@@ -317,8 +317,8 @@ class _FormatInferInstance(Visitor):
     def def_use(self) -> DefineUseAnalysis:
         return self.type_info.def_use
 
-    def _set_def_bound(self, d: Definition, shape: FormatBound):
-        self.by_def[d] = shape
+    def _set_def_bound(self, d: Definition, fmt: FormatBound):
+        self.by_def[d] = fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
         return self.by_def[d]
@@ -329,11 +329,11 @@ class _FormatInferInstance(Visitor):
 
     def _op_bound(self, e: ContextUseSite) -> FormatBound:
         """
-        Shape of a rounded operation's result.
+        Format of a rounded operation's result.
 
         Real-valued operations are rounded to the active context's format.
         Operations that return any other type (bool, list, context, …) are
-        not numerical computations — their shape is derived from the type.
+        not numerical computations — their format is derived from the type.
         """
         ret_ty = self.type_info.by_expr[e]
         if isinstance(ret_ty, RealType):
@@ -344,20 +344,20 @@ class _FormatInferInstance(Visitor):
         self,
         site: DefSite,
         binding: Id | TupleBinding,
-        shape: FormatBound,
+        fmt: FormatBound,
     ):
-        """Records *shape* for every variable introduced by *binding* at *site*."""
+        """Records *fmt* for every variable introduced by *binding* at *site*."""
         match binding:
             case NamedId():
                 d = self.def_use.find_def_from_site(binding, site)
-                self._set_def_bound(d, shape)
+                self._set_def_bound(d, fmt)
             case UnderscoreId():
                 pass
             case TupleBinding():
-                if not isinstance(shape, TupleFormat) or len(shape.elts) != len(binding.elts):
-                    raise RuntimeError(f'expected TupleFormat of length {len(binding.elts)}, got {shape!r}')
-                for sub_binding, sub_shape in zip(binding.elts, shape.elts):
-                    self._visit_binding(site, sub_binding, sub_shape)
+                if not isinstance(fmt, TupleFormat) or len(fmt.elts) != len(binding.elts):
+                    raise RuntimeError(f'expected TupleFormat of length {len(binding.elts)}, got {fmt!r}')
+                for sub_binding, sub_fmt in zip(binding.elts, fmt.elts):
+                    self._visit_binding(site, sub_binding, sub_fmt)
             case _:
                 raise RuntimeError(f'unreachable: {binding}')
 
@@ -365,10 +365,10 @@ class _FormatInferInstance(Visitor):
     # Expression visitors — return the inferred FormatBound for *e*
 
     def _visit_expr(self, e: Expr, ctx: None) -> FormatBound:  # type: ignore[override]
-        """Dispatch, record in ``by_expr``, and return the inferred shape."""
-        shape: FormatBound = super()._visit_expr(e, ctx)
-        self.by_expr[e] = shape
-        return shape
+        """Dispatch, record in ``by_expr``, and return the inferred format."""
+        fmt: FormatBound = super()._visit_expr(e, ctx)
+        self.by_expr[e] = fmt
+        return fmt
 
     # Numeric literals: exact real values bounded by the singleton set {v}
     def _visit_decnum(self, e: Decnum, ctx: None) -> FormatBound:
@@ -404,7 +404,7 @@ class _FormatInferInstance(Visitor):
 
     # Context-sensitive operations: real-valued results take the active scope's
     # format; non-real results (bool predicates, range, declcontext, …) take
-    # the top shape of their inferred type.
+    # the top format of their inferred type.
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> FormatBound:
         return self._op_bound(e)
 
@@ -428,7 +428,7 @@ class _FormatInferInstance(Visitor):
             self._visit_expr(arg, ctx)
         return self._op_bound(e)
 
-    # Function calls: conservatively the top shape of the return type
+    # Function calls: conservatively the top format of the return type
     def _visit_call(self, e: Call, ctx: None) -> FormatBound:
         for arg in e.args:
             self._visit_expr(arg, ctx)
@@ -436,7 +436,7 @@ class _FormatInferInstance(Visitor):
             self._visit_expr(kwarg, ctx)
         return _top_bound(self.type_info.by_expr[e])
 
-    # Comparison: produces a bool, so no numeric shape
+    # Comparison: produces a bool, so no numeric format
     def _visit_compare(self, e: Compare, ctx: None) -> FormatBound:
         for arg in e.args:
             self._visit_expr(arg, ctx)
@@ -447,11 +447,11 @@ class _FormatInferInstance(Visitor):
         return TupleFormat(tuple(self._visit_expr(elt, ctx) for elt in e.elts))
 
     def _visit_list_expr(self, e: ListExpr, ctx: None) -> FormatBound:
-        elt_shapes = [self._visit_expr(elt, ctx) for elt in e.elts]
-        if elt_shapes:
-            joined = reduce(_join_bounds, elt_shapes)
+        elt_fmts = [self._visit_expr(elt, ctx) for elt in e.elts]
+        if elt_fmts:
+            joined = reduce(_join_bounds, elt_fmts)
         else:
-            # Empty list: derive the element shape from the inferred list type.
+            # Empty list: derive the element format from the inferred list type.
             list_ty = self.type_info.by_expr[e]
             assert isinstance(list_ty, ListType)
             joined = _top_bound(list_ty.elt)
@@ -459,52 +459,52 @@ class _FormatInferInstance(Visitor):
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> FormatBound:
         for target, iterable in zip(e.targets, e.iterables):
-            iter_shape = self._visit_expr(iterable, ctx)
-            assert isinstance(iter_shape, ListFormat)
-            self._visit_binding(e, target, iter_shape.elt)
-        body_shape = self._visit_expr(e.elt, ctx)
-        return ListFormat(body_shape)
+            iter_fmt = self._visit_expr(iterable, ctx)
+            assert isinstance(iter_fmt, ListFormat)
+            self._visit_binding(e, target, iter_fmt.elt)
+        body_fmt = self._visit_expr(e.elt, ctx)
+        return ListFormat(body_fmt)
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> FormatBound:
-        value_shape = self._visit_expr(e.value, ctx)
+        value_fmt = self._visit_expr(e.value, ctx)
         self._visit_expr(e.index, ctx)
-        assert isinstance(value_shape, ListFormat)
-        return value_shape.elt
+        assert isinstance(value_fmt, ListFormat)
+        return value_fmt.elt
 
     def _visit_list_slice(self, e: ListSlice, ctx: None) -> FormatBound:
-        value_shape = self._visit_expr(e.value, ctx)
+        value_fmt = self._visit_expr(e.value, ctx)
         if e.start is not None:
             self._visit_expr(e.start, ctx)
         if e.stop is not None:
             self._visit_expr(e.stop, ctx)
-        # Slice of a list has the same shape as the list itself.
-        return value_shape
+        # Slice of a list has the same format as the list itself.
+        return value_fmt
 
     def _visit_list_set(self, e: ListSet, ctx: None) -> FormatBound:
-        value_shape = self._visit_expr(e.value, ctx)
+        value_fmt = self._visit_expr(e.value, ctx)
         for s in e.indices:
             self._visit_expr(s, ctx)
         self._visit_expr(e.expr, ctx)
-        return value_shape
+        return value_fmt
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> FormatBound:
         self._visit_expr(e.cond, ctx)
-        then_shape = self._visit_expr(e.ift, ctx)
-        else_shape = self._visit_expr(e.iff, ctx)
-        return _join_bounds(then_shape, else_shape)
+        then_fmt = self._visit_expr(e.ift, ctx)
+        else_fmt = self._visit_expr(e.iff, ctx)
+        return _join_bounds(then_fmt, else_fmt)
 
     # ------------------------------------------------------------------
     # Statement visitors
 
     def _visit_assign(self, stmt: Assign, ctx: None):
-        shape = self._visit_expr(stmt.expr, ctx)
-        self._visit_binding(stmt, stmt.target, shape)
+        fmt = self._visit_expr(stmt.expr, ctx)
+        self._visit_binding(stmt, stmt.target, fmt)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         for s in stmt.indices:
             self._visit_expr(s, ctx)
         self._visit_expr(stmt.expr, ctx)
-        # The list variable's definition shape is unchanged by element mutation.
+        # The list variable's definition format is unchanged by element mutation.
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -524,7 +524,7 @@ class _FormatInferInstance(Visitor):
             self._set_def_bound(phi, _join_bounds(lhs, rhs))
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        # Initialise phi shapes from pre-loop (lhs) definitions so that the
+        # Initialise phi formats from pre-loop (lhs) definitions so that the
         # loop body can reference them before the back-edge has been processed.
         for phi in self.def_use.phis[stmt]:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
@@ -541,10 +541,10 @@ class _FormatInferInstance(Visitor):
                 break
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        iter_shape = self._visit_expr(stmt.iterable, ctx)
-        assert isinstance(iter_shape, ListFormat)
-        self._visit_binding(stmt, stmt.target, iter_shape.elt)
-        # Initialise phi shapes from pre-loop (lhs) definitions
+        iter_fmt = self._visit_expr(stmt.iterable, ctx)
+        assert isinstance(iter_fmt, ListFormat)
+        self._visit_binding(stmt, stmt.target, iter_fmt.elt)
+        # Initialise phi formats from pre-loop (lhs) definitions
         for phi in self.def_use.phis[stmt]:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
         # Iterate body + join until phi bounds stop changing.
@@ -560,7 +560,7 @@ class _FormatInferInstance(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # The context expression itself is not a numerical computation.
-        # Record the context variable (if named) with shape ``None``.
+        # Record the context variable (if named) with format ``None``.
         if isinstance(stmt.target, NamedId):
             d = self.def_use.find_def_from_site(stmt.target, stmt)
             self._set_def_bound(d, None)
@@ -585,13 +585,13 @@ class _FormatInferInstance(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _visit_function(self, func: FuncDef, ctx: None):
-        # Arguments: top shape of the declared type (REAL_FORMAT for reals,
+        # Arguments: top format of the declared type (REAL_FORMAT for reals,
         # None for non-numeric, structural for tuples/lists).
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
                 self._set_def_bound(d, _top_bound(self.type_info.by_def[d]))
-        # Free variables (captured from outer scope): top shape of inferred type.
+        # Free variables (captured from outer scope): top format of inferred type.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
             self._set_def_bound(d, _top_bound(self.type_info.by_def[d]))
@@ -621,7 +621,7 @@ class FormatInfer:
     (:class:`TypeInfer` and :class:`ContextUse`) and then performs a single
     forward pass over the AST.
 
-    **Format shape lattice**::
+    **Format lattice**::
 
         FormatBound ::= None
                       | SetFormat(values)     (known finite set of reals)
@@ -631,14 +631,14 @@ class FormatInfer:
 
     **Join rule**::
 
-        join(None, None)             = None
+        join(None, None)                 = None
         join(SetFormat(a), SetFormat(b)) = SetFormat(a ∪ b)
-        join(SetFormat(s), fmt)       = fmt if every value in s fits in fmt
-                                     = REAL_FORMAT otherwise
-        join(f, f)                   = f
-        join(f1, f2)                 = REAL_FORMAT     (different scalars)
-        join(Tuple(a..), Tuple(b..)) = Tuple(join(ai, bi)..)
-        join(List(a), List(b))       = List(join(a, b))
+        join(SetFormat(s), fmt)          = fmt if every value in s fits in fmt
+                                         = REAL_FORMAT otherwise
+        join(f, f)                       = f
+        join(f1, f2)                     = REAL_FORMAT     (different scalars)
+        join(Tuple(a..), Tuple(b..))     = Tuple(join(ai, bi)..)
+        join(List(a), List(b))           = List(join(a, b))
 
     This rule is applied at all control-flow merge points (phi nodes), including
     branch merges (``if``/``if1``) and loop back-edges (``while``/``for``).
@@ -650,8 +650,8 @@ class FormatInfer:
         from fpy2.analysis import FormatInfer
 
         info = FormatInfer.analyze(func)
-        for d, shape in info.by_def.items():
-            print(d.name, '->', shape)
+        for d, fmt in info.by_def.items():
+            print(d.name, '->', fmt)
     """
 
     @staticmethod
@@ -677,7 +677,7 @@ class FormatInfer:
 
         Returns:
             A :class:`FormatAnalysis` result whose ``by_def`` and ``by_expr``
-            maps contain the inferred format shapes for every definition site
+            maps contain the inferred formats for every definition site
             and expression in *func*.
 
         Raises:
