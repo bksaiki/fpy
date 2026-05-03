@@ -7,8 +7,14 @@ import pytest
 
 from fractions import Fraction
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
-from fpy2.analysis.format_infer import SetFormat, _join_bounds
+from fpy2.analysis.format_infer import (
+    ListFormat,
+    SetFormat,
+    _join_bounds,
+    _list_set_widen,
+)
 from fpy2.number.context.real import REAL_FORMAT
+from fpy2.transform import FuncUpdate
 
 
 class TestFormatInfer:
@@ -321,6 +327,55 @@ class TestFormatInfer:
             if isinstance(shape, SetFormat)
         ]
         assert SetFormat(frozenset((Fraction(42),))) in literal_shapes
+
+    # ------------------------------------------------------------------
+    # ListSet (functional update) semantics
+
+    def test_list_set_widens_element_format(self):
+        """
+        ``set(xs, i, val)`` (a functional update produced from ``xs[i] = val``
+        by :class:`FuncUpdate`) must widen the result's element format to
+        include *val*'s format.  Otherwise the analysis can keep reporting
+        the original ``SetFormat`` even after the list has been updated with
+        a value the set cannot represent.
+        """
+        @fp.fpy
+        def f(x: fp.Real) -> list[fp.Real]:
+            xs = [1.0, 2.0]
+            xs[0] = x
+            return xs
+
+        # FuncUpdate rewrites ``xs[0] = x`` to ``xs = ListSet(xs, (0,), x)``.
+        ast = FuncUpdate.apply(f.ast)
+        info = FormatInfer.analyze(ast)
+
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        # The pre-update binding has a precise SetFormat element;
+        # the post-update binding must widen to REAL_FORMAT (x's format).
+        assert ListFormat(REAL_FORMAT) in xs_bounds, (
+            f"expected post-update xs to be ListFormat(REAL_FORMAT), got {xs_bounds}"
+        )
+
+    def test_list_set_widen_helper_leaf(self):
+        """``_list_set_widen`` at depth 0 is just a join."""
+        a = SetFormat(frozenset((Fraction(1),)))
+        b = SetFormat(frozenset((Fraction(2),)))
+        assert _list_set_widen(a, 0, b) == SetFormat(
+            frozenset((Fraction(1), Fraction(2)))
+        )
+
+    def test_list_set_widen_helper_nested(self):
+        """``_list_set_widen`` peels one ``ListFormat`` layer per index."""
+        leaf = SetFormat(frozenset((Fraction(1),)))
+        nested = ListFormat(ListFormat(leaf))
+        # Inserting a non-dyadic value at depth 2 widens the leaf to REAL_FORMAT
+        # (1/3 is not representable in any concrete format here, so the join
+        # falls back to REAL_FORMAT).
+        insert = SetFormat(frozenset((Fraction(1, 3),)))
+        result = _list_set_widen(nested, 2, insert)
+        assert result == ListFormat(ListFormat(
+            SetFormat(frozenset((Fraction(1), Fraction(1, 3))))
+        ))
 
     # ------------------------------------------------------------------
     # Error handling
