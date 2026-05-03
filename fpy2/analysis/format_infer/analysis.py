@@ -84,14 +84,14 @@ from fractions import Fraction
 from functools import reduce
 from typing import TypeAlias
 
-from ..ast.fpyast import *
-from ..ast.visitor import Visitor
-from ..number import Context
-from ..number.context.format import Format
-from ..number.context.real import REAL_FORMAT
-from ..number.number.reals import RealFloat
-from ..utils import is_dyadic
-from ..types import (
+from ...ast.fpyast import *
+from ...ast.visitor import Visitor
+from ...number import Context
+from ...number.context.format import Format
+from ...number.context.real import REAL_FORMAT
+from ...number.number.reals import RealFloat
+from ...utils import is_dyadic
+from ...types import (
     Type,
     BoolType,
     RealType,
@@ -102,10 +102,10 @@ from ..types import (
     VarType,
 )
 
-from .context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextUseSite
-from .define_use import DefineUse, DefineUseAnalysis
-from .reaching_defs import PhiDef, Definition, DefSite
-from .type_infer import TypeInfer, TypeAnalysis
+from ..context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextUseSite
+from ..define_use import DefineUse, DefineUseAnalysis
+from ..reaching_defs import PhiDef, Definition, DefSite
+from ..type_infer import TypeInfer, TypeAnalysis
 
 __all__ = [
     'FormatInfer',

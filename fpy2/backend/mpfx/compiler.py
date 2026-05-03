@@ -19,8 +19,8 @@ from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListTy
 from ...utils import Gensym
 from ..backend import Backend
 
+from ...analysis.format_infer import AbstractFormat, SupportedContext
 from .elim_round import ElimRound
-from .format import AbstractFormat, SupportedContext
 from .format_infer import (
     FormatAnalysis, FormatInfer, FormatInferError,
     FormatType, ListFormatType, TupleFormatType

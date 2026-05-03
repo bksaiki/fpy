@@ -10,7 +10,7 @@ from hypothesis import given, settings, strategies as st
 from fractions import Fraction
 from typing import Generator
 
-from fpy2.backend.mpfx import AbstractFormat
+from fpy2.analysis.format_infer import AbstractFormat
 
 def is_power_of_two(v: Fraction) -> bool:
     assert v > 0

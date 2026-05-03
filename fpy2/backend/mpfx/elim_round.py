@@ -10,7 +10,7 @@ from ...analysis import ContextAnalysis, PartialEvalInfo
 from ...transform import CopyPropagate
 from ...utils import Gensym
 
-from .format import AbstractFormat
+from ...analysis.format_infer import AbstractFormat
 from .format_infer import FormatInfer, FormatAnalysis, convert_type
 
 @dataclass

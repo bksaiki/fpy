@@ -15,7 +15,7 @@ from ...number import Context, INTEGER, REAL
 from ...types import *
 from ...utils import default_repr
 
-from .format import AbstractFormat, SupportedContext
+from ...analysis.format_infer import AbstractFormat, SupportedContext
 
 __all__ = [
     'FormatInfer',

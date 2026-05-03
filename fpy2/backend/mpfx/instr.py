@@ -7,7 +7,7 @@ from typing import NoReturn
 
 from ...ast.fpyast import FuncDef
 from ...number import RM, Context, INTEGER, FP64, REAL
-from .format import AbstractFormat, SupportedContext
+from ...analysis.format_infer import AbstractFormat, SupportedContext
 from .utils import MPFXCompileError, CompileCtx
 
 

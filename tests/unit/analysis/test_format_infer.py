@@ -7,12 +7,8 @@ import pytest
 
 from fractions import Fraction
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
-from fpy2.analysis.format_infer import (
-    ListFormat,
-    SetFormat,
-    _join_bounds,
-    _list_set_widen,
-)
+from fpy2.analysis.format_infer import ListFormat, SetFormat
+from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
 from fpy2.number.context.real import REAL_FORMAT
 from fpy2.transform import FuncUpdate
 
