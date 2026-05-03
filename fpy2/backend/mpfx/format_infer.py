@@ -15,7 +15,7 @@ from ...number import Context, INTEGER, REAL
 from ...types import *
 from ...utils import default_repr
 
-from ...analysis.format_infer import AbstractFormat, AbstractableContext
+from ...analysis.format_infer import AbstractFormat, AbstractableFormat
 
 __all__ = [
     'FormatInfer',
@@ -84,10 +84,10 @@ FormatType: TypeAlias = (
 """The normal type system extended with abstract formats."""
 
 def _cvt_context(ctx: Context):
-    if isinstance(ctx, AbstractableContext):
-        return AbstractFormat.from_context(ctx)
-    else:
-        return None
+    fmt = ctx.format()
+    if isinstance(fmt, AbstractableFormat):
+        return AbstractFormat.from_format(fmt)
+    return None
 
 def convert_type(ty: Type) -> FormatType:
     """
@@ -252,7 +252,7 @@ class _FormatInfernce(Visitor):
         return self._expr_type(e)
 
     def _visit_integer(self, e: Integer, ctx: Context):
-        return AbstractFormat.from_context(INTEGER)
+        return AbstractFormat.from_format(INTEGER.format())
 
     def _visit_rational(self, e: Rational, ctx: Context):
         return self._expr_type(e)
@@ -288,13 +288,13 @@ class _FormatInfernce(Visitor):
         match e:
             case Len():
                 # len => INTEGER
-                return AbstractFormat.from_context(INTEGER)
+                return AbstractFormat.from_format(INTEGER.format())
             case Range1():
                 # range1 => list[INTEGER]
-                return ListFormatType(AbstractFormat.from_context(INTEGER))
+                return ListFormatType(AbstractFormat.from_format(INTEGER.format()))
             case Enumerate():
                 # enumerate => list[tuple(INTEGER, A)]
-                return ListFormatType(TupleFormatType((AbstractFormat.from_context(INTEGER), a_ty)))
+                return ListFormatType(TupleFormatType((AbstractFormat.from_format(INTEGER.format()), a_ty)))
 
             case Round() | Cast() | Neg() | Logb():
                 if isinstance(a_ty, AbstractFormat):
@@ -306,7 +306,7 @@ class _FormatInfernce(Visitor):
                         case Neg():
                             m_ty = -a_ty
                         case Logb():
-                            m_ty = AbstractFormat.from_context(INTEGER) # logb => INTEGER
+                            m_ty = AbstractFormat.from_format(INTEGER.format()) # logb => INTEGER
 
                     assert isinstance(e_ty, AbstractFormat | RealType)
                     e_ty = self._record_preround(e, m_ty, e_ty)
@@ -335,10 +335,10 @@ class _FormatInfernce(Visitor):
         match e:
             case Size():
                 # size => INTEGER
-                return AbstractFormat.from_context(INTEGER)
+                return AbstractFormat.from_format(INTEGER.format())
             case Range2():
                 # range2 => list[INTEGER]
-                return ListFormatType(AbstractFormat.from_context(INTEGER))
+                return ListFormatType(AbstractFormat.from_format(INTEGER.format()))
             case Add() | Sub() | Mul():
                 # add/sub/mul => A (if A and B are both abstract formats)
                 if isinstance(a_ty, AbstractFormat) and isinstance(b_ty, AbstractFormat):
@@ -366,7 +366,7 @@ class _FormatInfernce(Visitor):
         match e:
             case Range3():
                 # range3 => list[INTEGER]
-                return ListFormatType(AbstractFormat.from_context(INTEGER))
+                return ListFormatType(AbstractFormat.from_format(INTEGER.format()))
 
         return self._expr_type(e) # get the expected type
 

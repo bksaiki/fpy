@@ -6,23 +6,32 @@ import math
 
 from typing import TypeAlias
 
-from ...number import (
-    MPFixedContext, MPBFixedContext, FixedContext,
-    MPFloatContext, MPSFloatContext, MPBFloatContext, EFloatContext,
-    ExpContext,
-    RealFloat
-)
+from ...number import RealFloat
+from ...number.context.efloat import EFloatFormat
+from ...number.context.exponential import ExpFormat
+from ...number.context.fixed import FixedFormat
+from ...number.context.format import Format
+from ...number.context.mp_fixed import MPFixedFormat
+from ...number.context.mp_float import MPFloatFormat
+from ...number.context.mpb_fixed import MPBFixedFormat
+from ...number.context.mpb_float import MPBFloatFormat
+from ...number.context.mps_float import MPSFloatFormat
+from ...number.context.real import REAL_FORMAT, RealFormat
 from ...utils import default_repr
 
 __all__ = [
     'AbstractFormat',
-    'AbstractableContext'
+    'AbstractableFormat',
 ]
 
-AbstractableContext: TypeAlias = (
-    MPFixedContext | MPBFixedContext | ExpContext |
-    MPFloatContext | MPSFloatContext | MPBFloatContext | EFloatContext
+AbstractableFormat: TypeAlias = (
+    RealFormat
+    | MPFixedFormat | MPBFixedFormat
+    | ExpFormat
+    | MPFloatFormat | MPSFloatFormat | MPBFloatFormat
+    | EFloatFormat
 )
+"""Union of :class:`Format` subclasses supported by :meth:`AbstractFormat.from_format`."""
 
 
 def _maxval_precision(bound: RealFloat, exp: int) -> int:
@@ -223,37 +232,109 @@ class AbstractFormat:
         return max(self.pos_bound, abs(self.neg_bound))
 
     @staticmethod
-    def from_context(ctx: AbstractableContext) -> 'AbstractFormat':
-        match ctx:
-            case FixedContext() if not ctx.signed:
-                pos_maxval = ctx.maxval().as_real()
+    def from_format(fmt: AbstractableFormat) -> 'AbstractFormat':
+        """
+        Constructs an :class:`AbstractFormat` that represents the same set of
+        values as *fmt*.
+
+        Partial: raises :class:`ValueError` when *fmt* is not one of the
+        :class:`Format` subclasses listed in :data:`AbstractableFormat`.
+        Callers should gate with ``isinstance(fmt, AbstractableFormat)``.
+        """
+        match fmt:
+            case RealFormat():
+                return AbstractFormat(
+                    float('inf'),
+                    float('-inf'),
+                    float('inf'),
+                    neg_bound=float('-inf'),
+                )
+            case FixedFormat() if not fmt.signed:
                 neg_maxval = RealFloat.from_int(0)
-                return AbstractFormat(float('inf'), ctx.expmin, pos_maxval, neg_bound=neg_maxval)
-            case MPFloatContext():
-                return AbstractFormat(ctx.pmax, float('-inf'), float('inf'))
-            case MPSFloatContext():
-                return AbstractFormat(ctx.pmax, ctx.expmin, float('inf'))
-            case MPBFloatContext():
-                pos_maxval = ctx.maxval().as_real()
-                neg_maxval = ctx.maxval(True).as_real()
-                return AbstractFormat(ctx.pmax, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
-            case EFloatContext():
-                pos_maxval = ctx.maxval().as_real()
-                neg_maxval = ctx.maxval(True).as_real()
-                return AbstractFormat(ctx.pmax, ctx.expmin, pos_maxval, neg_bound=neg_maxval)
-            case MPFixedContext():
-                return AbstractFormat(float('inf'), ctx.expmin, float('inf'))
-            case MPBFixedContext():
-                pos_maxval = ctx.maxval().as_real()
-                neg_maxval = ctx.maxval(True).as_real()
-                return AbstractFormat(float('inf'), ctx.expmin, pos_maxval, neg_bound=neg_maxval)
-            case ExpContext():
-                pos_maxval = ctx.maxval().as_real()
+                return AbstractFormat(
+                    float('inf'), fmt.expmin, fmt.pos_maxval, neg_bound=neg_maxval
+                )
+            case MPBFixedFormat():
+                return AbstractFormat(
+                    float('inf'), fmt.expmin, fmt.pos_maxval, neg_bound=fmt.neg_maxval
+                )
+            case MPFixedFormat():
+                return AbstractFormat(float('inf'), fmt.expmin, float('inf'))
+            case ExpFormat():
+                pos_maxval = fmt.maxval().as_real()
                 neg_maxval = RealFloat.from_int(0)
-                expmin = ctx.minval().exp
+                expmin = fmt.minval().exp
                 return AbstractFormat(1, expmin, pos_maxval, neg_bound=neg_maxval)
+            case EFloatFormat():
+                return AbstractFormat(
+                    fmt.pmax,
+                    fmt.expmin,
+                    fmt._mpb_fmt.pos_maxval,
+                    neg_bound=fmt._mpb_fmt.neg_maxval,
+                )
+            case MPBFloatFormat():
+                return AbstractFormat(
+                    fmt.pmax, fmt.expmin, fmt.pos_maxval, neg_bound=fmt.neg_maxval
+                )
+            case MPSFloatFormat():
+                return AbstractFormat(fmt.pmax, fmt.expmin, float('inf'))
+            case MPFloatFormat():
+                return AbstractFormat(fmt.pmax, float('-inf'), float('inf'))
             case _:
-                raise TypeError(f'Unsupported context type: {type(ctx)}')
+                raise ValueError(f'format is not abstractable: {fmt!r}')
+
+    def format(self) -> Format:
+        """
+        Returns a :class:`Format` whose representable set is a (sound)
+        superset of ``self``'s representable set.
+
+        The mapping from abstract parameters to a concrete :class:`Format`
+        is not unique; this method picks a canonical choice by parameter
+        shape.  Fully-saturated abstract formats (all four parameters
+        unbounded) collapse to ``REAL_FORMAT``.  When the parameter shape
+        does not correspond cleanly to one of the supported :class:`Format`
+        subclasses, ``REAL_FORMAT`` is returned as a sound fall-back.
+        """
+        prec_inf = isinstance(self.prec, float)
+        exp_inf = isinstance(self.exp, float)
+        pos_inf = isinstance(self.pos_bound, float)
+        neg_inf = isinstance(self.neg_bound, float)
+        bounds_bounded = not pos_inf and not neg_inf
+        bounds_unbounded = pos_inf and neg_inf
+
+        if prec_inf and exp_inf and bounds_unbounded:
+            return REAL_FORMAT
+
+        if not prec_inf and not exp_inf:
+            assert isinstance(self.prec, int) and isinstance(self.exp, int)
+            emin = self.exp + self.prec - 1
+            if bounds_bounded:
+                assert isinstance(self.pos_bound, RealFloat)
+                assert isinstance(self.neg_bound, RealFloat)
+                neg_maxval = self.neg_bound
+                if not neg_maxval.s:
+                    # MPBFloatFormat requires a strictly-negative neg_maxval;
+                    # widen symmetrically (sound over-approximation).
+                    neg_maxval = RealFloat(s=True, x=self.pos_bound)
+                return MPBFloatFormat(self.prec, emin, self.pos_bound, neg_maxval)
+            if bounds_unbounded:
+                return MPSFloatFormat(self.prec, emin)
+
+        if not prec_inf and exp_inf and bounds_unbounded:
+            assert isinstance(self.prec, int)
+            return MPFloatFormat(self.prec)
+
+        if prec_inf and not exp_inf:
+            assert isinstance(self.exp, int)
+            nmin = self.exp - 1
+            if bounds_bounded:
+                assert isinstance(self.pos_bound, RealFloat)
+                assert isinstance(self.neg_bound, RealFloat)
+                return MPBFixedFormat(nmin, self.pos_bound, self.neg_bound)
+            if bounds_unbounded:
+                return MPFixedFormat(nmin)
+
+        return REAL_FORMAT
 
     def effective_prec(self):
         """Effective maximum precision."""

@@ -19,7 +19,7 @@ from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListTy
 from ...utils import Gensym
 from ..backend import Backend
 
-from ...analysis.format_infer import AbstractFormat, AbstractableContext
+from ...analysis.format_infer import AbstractFormat, AbstractableFormat
 from .elim_round import ElimRound
 from .format_infer import (
     FormatAnalysis, FormatInfer, FormatInferError,
@@ -41,10 +41,12 @@ def _compile_type(ty: FormatType, func: FuncDef | None = None) -> CppType:
         case BoolType():
             return CppBoolType()
         case AbstractFormat():
-            if ty <= AbstractFormat.from_context(FP64):
-                # fits within a double 
+            fp64_af = AbstractFormat.from_format(FP64.format())
+            int_af = AbstractFormat.from_format(INTEGER.format())
+            if ty <= fp64_af:
+                # fits within a double
                 return CppDoubleType()
-            elif ty <= AbstractFormat.from_context(INTEGER):
+            elif ty <= int_af:
                 # fits with an int64_t
                 return CppInt64Type()
             else:
@@ -907,7 +909,11 @@ class _MPFXBackendInstance(Visitor):
             ctx_val = self.eval_info.by_expr[stmt.ctx]
 
             # bind it if we can compile it
-            if isinstance(ctx_val, AbstractableContext) and ctx is not INTEGER:
+            if (
+                isinstance(ctx_val, Context)
+                and isinstance(ctx_val.format(), AbstractableFormat)
+                and ctx is not INTEGER
+            ):
                 ctx_name = self._fresh_var()
                 ctx_str = self._compile_context(ctx_val)
                 ctx.add_line(f'auto {ctx_name} = {ctx_str};')
@@ -997,10 +1003,11 @@ class MPFXCompiler(Backend):
             case VarType():
                 raise TypeError(f'Type is not monomorphic: {ty}')
             case RealType():
-                if isinstance(ty.ctx, AbstractableContext):
-                    return _compile_type(AbstractFormat.from_context(ty.ctx))
-                else:
-                    raise TypeError(f'Cannot compile an unbounded real number: {ty.ctx}')
+                if isinstance(ty.ctx, Context):
+                    fmt = ty.ctx.format()
+                    if isinstance(fmt, AbstractableFormat):
+                        return _compile_type(AbstractFormat.from_format(fmt))
+                raise TypeError(f'Cannot compile an unbounded real number: {ty.ctx}')
             case TupleType():
                 # compile recursively
                 return CppTupleType([self.compile_type(elem_ty) for elem_ty in ty.elts])
