@@ -47,7 +47,10 @@ The analysis tracks a **format** that mirrors the basic-type structure::
     join(SetFormat(s), fmt)          = fmt   if every v in s is representable in fmt
                                      = REAL_FORMAT   otherwise
     join(f, f)                       = f                 (scalar Format)
-    join(f1, f2)                     = REAL_FORMAT       (different scalars)
+    join(f1, f2)                     = (AbstractFormat.from_format(f1)
+                                        | AbstractFormat.from_format(f2)).format()
+                                                          (when both abstractable)
+                                     = REAL_FORMAT        (otherwise)
     join(Tuple(a..), Tuple(b..))     = Tuple(join(ai, bi)..)
     join(List(a), List(b))           = List(join(a, b))
 
@@ -106,6 +109,7 @@ from ..context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextU
 from ..define_use import DefineUse, DefineUseAnalysis
 from ..reaching_defs import PhiDef, Definition, DefSite
 from ..type_infer import TypeInfer, TypeAnalysis
+from .format import AbstractFormat, AbstractableFormat
 
 __all__ = [
     'FormatInfer',
@@ -216,7 +220,11 @@ def _join_bounds(s1: FormatBound, s2: FormatBound) -> FormatBound:
         case Format() as fmt, SetFormat(values=vals):
             return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
         case Format(), Format():
-            return s1 if s1 == s2 else REAL_FORMAT
+            if s1 == s2:
+                return s1
+            if isinstance(s1, AbstractableFormat) and isinstance(s2, AbstractableFormat):
+                return (AbstractFormat.from_format(s1) | AbstractFormat.from_format(s2)).format()
+            return REAL_FORMAT
         case TupleFormat(elts=a), TupleFormat(elts=b) if len(a) == len(b):
             return TupleFormat(tuple(_join_bounds(x, y) for x, y in zip(a, b)))
         case ListFormat(elt=a), ListFormat(elt=b):
@@ -658,7 +666,10 @@ class FormatInfer:
         join(SetFormat(s), fmt)          = fmt if every value in s fits in fmt
                                          = REAL_FORMAT otherwise
         join(f, f)                       = f
-        join(f1, f2)                     = REAL_FORMAT     (different scalars)
+        join(f1, f2)                     = (AbstractFormat.from_format(f1)
+                                            | AbstractFormat.from_format(f2)).format()
+                                                          (when both abstractable)
+                                         = REAL_FORMAT     (otherwise)
         join(Tuple(a..), Tuple(b..))     = Tuple(join(ai, bi)..)
         join(List(a), List(b))           = List(join(a, b))
 

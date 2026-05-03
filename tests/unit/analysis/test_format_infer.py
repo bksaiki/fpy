@@ -7,8 +7,9 @@ import pytest
 
 from fractions import Fraction
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
-from fpy2.analysis.format_infer import ListFormat, SetFormat
+from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat
 from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
+from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
 from fpy2.transform import FuncUpdate
 
@@ -264,12 +265,21 @@ class TestFormatInfer:
 
     def test_join_different_formats(self):
         """
-        ``join(f1, f2) == REAL_FORMAT`` when f1 != f2:
-        formats from two sources with different formats widen to REAL_FORMAT.
+        Joining two distinct abstractable Formats goes through
+        ``AbstractFormat`` and yields a single :class:`Format` whose
+        representable set contains both inputs (rather than widening
+        immediately to ``REAL_FORMAT``).
         """
         fmt1 = fp.FP32.format()
         fmt2 = fp.FP64.format()
-        assert _join_bounds(fmt1, fmt2) == REAL_FORMAT
+        joined = _join_bounds(fmt1, fmt2)
+        assert isinstance(joined, Format)
+        assert joined != REAL_FORMAT
+        # The joined format must contain every value representable by either
+        # input. Pick concrete witnesses near the bounds of FP32 / FP64.
+        for fmt in (fmt1, fmt2):
+            sample = fmt.maxval()._real
+            assert joined.representable_in(sample)
 
     def test_join_real_is_top(self):
         """
@@ -279,6 +289,80 @@ class TestFormatInfer:
         fmt = fp.FP32.format()
         assert _join_bounds(REAL_FORMAT, fmt) == REAL_FORMAT
         assert _join_bounds(fmt, REAL_FORMAT) == REAL_FORMAT
+
+    def test_branch_distinct_formats_joins_to_containing_format(self):
+        """
+        End-to-end: a function whose ``if`` branches are typed under FP32 and
+        FP64 should produce a single, containing :class:`Format` for the
+        merged value, not ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(cond: bool, x: fp.Real) -> fp.Real:
+            if cond:
+                with fp.FP32:
+                    y = fp.round(x)
+            else:
+                with fp.FP64:
+                    y = fp.round(x)
+            return y
+
+        info = self._run(f)
+        # Find the phi merging the two branches.
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        merged = [b for b in y_bounds if isinstance(b, Format) and b != REAL_FORMAT]
+        assert merged, f"expected a containing Format among y bounds, got {y_bounds}"
+        # Whichever specific Format we pick, it must contain both FP32 and FP64.
+        joined = merged[-1]
+        for fmt in (fp.FP32.format(), fp.FP64.format()):
+            assert joined.representable_in(fmt.maxval()._real)
+
+    def test_abstract_format_round_trip(self):
+        """
+        ``AbstractFormat.from_format(f).format()`` produces a :class:`Format`
+        whose representable set contains every value of *f*.
+        """
+        for ctx in (fp.FP32, fp.FP64):
+            fmt = ctx.format()
+            roundtripped = AbstractFormat.from_format(fmt).format()
+            assert isinstance(roundtripped, Format)
+            assert roundtripped.representable_in(fmt.maxval()._real)
+            assert roundtripped.representable_in(fmt.minval()._real)
+
+    def test_join_saturates_to_real(self):
+        """
+        Joining a concrete Format with ``REAL_FORMAT`` (the saturated
+        abstract format) collapses to ``REAL_FORMAT``.
+        """
+        af_fp32 = AbstractFormat.from_format(fp.FP32.format())
+        af_real = AbstractFormat.from_format(REAL_FORMAT)
+        assert (af_fp32 | af_real).format() == REAL_FORMAT
+
+    def test_loop_format_join_converges(self):
+        """
+        A loop whose body produces a different concrete Format than the
+        pre-loop binding must reach a fixpoint with the joined containing
+        Format (not diverge, not silently widen to ``REAL_FORMAT``).
+        """
+        @fp.fpy
+        def f(cond: bool, x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                y = fp.round(x)
+            while cond:
+                with fp.FP64:
+                    y = fp.round(x)
+            return y
+
+        info = self._run(f)
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        # The phi merging the FP32 pre-loop value with the FP64 body value
+        # must be a containing Format that is neither FP32 nor REAL_FORMAT.
+        joined = [
+            b for b in y_bounds
+            if isinstance(b, Format) and b not in (fp.FP32.format(), REAL_FORMAT)
+        ]
+        assert joined, f"expected a widened Format among y bounds, got {y_bounds}"
+        for fmt in (fp.FP32.format(), fp.FP64.format()):
+            assert joined[-1].representable_in(fmt.maxval()._real)
 
     # ------------------------------------------------------------------
     # SetFormat semantics
