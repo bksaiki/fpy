@@ -15,7 +15,7 @@ from ...number import Context, INTEGER, REAL
 from ...types import *
 from ...utils import default_repr
 
-from ...analysis.format_infer import AbstractFormat, SupportedContext
+from ...analysis.format_infer import AbstractFormat, AbstractableContext
 
 __all__ = [
     'FormatInfer',
@@ -84,7 +84,7 @@ FormatType: TypeAlias = (
 """The normal type system extended with abstract formats."""
 
 def _cvt_context(ctx: Context):
-    if isinstance(ctx, SupportedContext):
+    if isinstance(ctx, AbstractableContext):
         return AbstractFormat.from_context(ctx)
     else:
         return None

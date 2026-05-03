@@ -8,7 +8,7 @@ from .analysis import (
     SetFormat,
     TupleFormat,
 )
-from .format import AbstractFormat, SupportedContext
+from .format import AbstractFormat, AbstractableContext
 
 __all__ = [
     'AbstractFormat',
@@ -17,6 +17,6 @@ __all__ = [
     'FormatInfer',
     'ListFormat',
     'SetFormat',
-    'SupportedContext',
+    'AbstractableContext',
     'TupleFormat',
 ]

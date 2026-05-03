@@ -7,18 +7,18 @@ from typing import NoReturn
 
 from ...ast.fpyast import FuncDef
 from ...number import RM, Context, INTEGER, FP64, REAL
-from ...analysis.format_infer import AbstractFormat, SupportedContext
+from ...analysis.format_infer import AbstractFormat, AbstractableContext
 from .utils import MPFXCompileError, CompileCtx
 
 
 def _cvt_context(ctx: Context):
-    if isinstance(ctx, SupportedContext):
+    if isinstance(ctx, AbstractableContext):
         return AbstractFormat.from_context(ctx)
     else:
         return None
 
 def _round_mode(ctx: Context):
-    if isinstance(ctx, SupportedContext):
+    if isinstance(ctx, AbstractableContext):
         return ctx.rm
     else:
         raise ValueError("Unsupported context for rounding mode extraction.")

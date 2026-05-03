@@ -19,7 +19,7 @@ from ...types import BoolType, ContextType, RealType, VarType, TupleType, ListTy
 from ...utils import Gensym
 from ..backend import Backend
 
-from ...analysis.format_infer import AbstractFormat, SupportedContext
+from ...analysis.format_infer import AbstractFormat, AbstractableContext
 from .elim_round import ElimRound
 from .format_infer import (
     FormatAnalysis, FormatInfer, FormatInferError,
@@ -907,7 +907,7 @@ class _MPFXBackendInstance(Visitor):
             ctx_val = self.eval_info.by_expr[stmt.ctx]
 
             # bind it if we can compile it
-            if isinstance(ctx_val, SupportedContext) and ctx is not INTEGER:
+            if isinstance(ctx_val, AbstractableContext) and ctx is not INTEGER:
                 ctx_name = self._fresh_var()
                 ctx_str = self._compile_context(ctx_val)
                 ctx.add_line(f'auto {ctx_name} = {ctx_str};')
@@ -997,7 +997,7 @@ class MPFXCompiler(Backend):
             case VarType():
                 raise TypeError(f'Type is not monomorphic: {ty}')
             case RealType():
-                if isinstance(ty.ctx, SupportedContext):
+                if isinstance(ty.ctx, AbstractableContext):
                     return _compile_type(AbstractFormat.from_context(ty.ctx))
                 else:
                     raise TypeError(f'Cannot compile an unbounded real number: {ty.ctx}')

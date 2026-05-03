@@ -13,14 +13,13 @@ from ...number import (
     RealFloat
 )
 from ...utils import default_repr
-from ...utils.ordering import Ordering
 
 __all__ = [
     'AbstractFormat',
-    'SupportedContext'
+    'AbstractableContext'
 ]
 
-SupportedContext: TypeAlias = (
+AbstractableContext: TypeAlias = (
     MPFixedContext | MPBFixedContext | ExpContext |
     MPFloatContext | MPSFloatContext | MPBFloatContext | EFloatContext
 )
@@ -224,7 +223,7 @@ class AbstractFormat:
         return max(self.pos_bound, abs(self.neg_bound))
 
     @staticmethod
-    def from_context(ctx: SupportedContext) -> 'AbstractFormat':
+    def from_context(ctx: AbstractableContext) -> 'AbstractFormat':
         match ctx:
             case FixedContext() if not ctx.signed:
                 pos_maxval = ctx.maxval().as_real()
