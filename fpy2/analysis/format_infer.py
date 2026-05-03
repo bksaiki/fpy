@@ -354,31 +354,10 @@ class _FormatInferInstance(Visitor):
             case UnderscoreId():
                 pass
             case TupleBinding():
-                if isinstance(shape, TupleFormat) and len(shape.elts) == len(binding.elts):
-                    for sub_binding, sub_shape in zip(binding.elts, shape.elts):
-                        self._visit_binding(site, sub_binding, sub_shape)
-                else:
-                    # Shape unknown or mismatched: derive per-element shape from
-                    # the type of each bound variable instead.
-                    for sub_binding in binding.elts:
-                        self._visit_binding(site, sub_binding, self._bound_from_binding_type(site, sub_binding))
-            case _:
-                raise RuntimeError(f'unreachable: {binding}')
-
-    def _bound_from_binding_type(self, site: DefSite, binding: Id | TupleBinding) -> FormatBound:
-        """Top shape derived from the type of variables introduced by *binding*."""
-        match binding:
-            case NamedId():
-                d = self.def_use.find_def_from_site(binding, site)
-                return _top_bound(self.type_info.by_def[d])
-            case UnderscoreId():
-                return None
-            case TupleBinding():
-                return TupleFormat(
-                    tuple(
-                        self._bound_from_binding_type(site, sub) for sub in binding.elts
-                    )
-                )
+                if not isinstance(shape, TupleFormat) or len(shape.elts) != len(binding.elts):
+                    raise RuntimeError(f'expected TupleFormat of length {len(binding.elts)}, got {shape!r}')
+                for sub_binding, sub_shape in zip(binding.elts, shape.elts):
+                    self._visit_binding(site, sub_binding, sub_shape)
             case _:
                 raise RuntimeError(f'unreachable: {binding}')
 
