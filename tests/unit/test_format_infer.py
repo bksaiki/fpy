@@ -178,6 +178,55 @@ class TestFormatInfer:
             f"expected FP32 format among loop variable definitions, got {fmt_set}"
         )
 
+    def test_while_body_revisit_propagates_widened_phi(self):
+        """
+        A read of a loop-carried variable inside the body must observe the
+        phi bound widened by the back-edge, not just the pre-loop value.
+        Here ``y = x`` reads x's phi; x is further widened by ``x = 2`` in
+        the body's if-branch, so the back-edge widens x's phi to {0, 2}.
+        Without a fixpoint, the recorded bound for ``y`` (and for y's loop
+        phi) keeps x's pre-loop bound (``SetFormat({0})``).
+        """
+
+        @fp.fpy
+        def f(cond: bool) -> fp.Real:
+            x = 0
+            y = 0
+            while cond:
+                y = x
+                if cond:
+                    x = 2
+            return y
+
+        info = self._run(f)
+        expected = SetFormat(frozenset((Fraction(0), Fraction(2))))
+        # Every definition of ``y`` (the in-body assign and the while-phi)
+        # must reflect x's widened bound.
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        assert expected in y_bounds, (
+            f"expected SetFormat({{0, 2}}) among y bounds, got {y_bounds}"
+        )
+
+    def test_for_body_revisit_propagates_widened_phi(self):
+        """``for`` analogue of :meth:`test_while_body_revisit_propagates_widened_phi`."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], cond: bool) -> fp.Real:
+            x = 0
+            y = 0
+            for _ in xs:
+                y = x
+                if cond:
+                    x = 2
+            return y
+
+        info = self._run(f)
+        expected = SetFormat(frozenset((Fraction(0), Fraction(2))))
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        assert expected in y_bounds, (
+            f"expected SetFormat({{0, 2}}) among y bounds, got {y_bounds}"
+        )
+
     # ------------------------------------------------------------------
     # Type-info and context-use analysis are stored in the result
 

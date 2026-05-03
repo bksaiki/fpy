@@ -51,11 +51,11 @@ The analysis tracks a **format shape** that mirrors the basic-type structure::
     join(Tuple(a..), Tuple(b..))   = Tuple(join(ai, bi)..)
     join(List(a), List(b))         = List(join(a, b))
 
-For loops, phi nodes are initialised from the pre-loop definition's shape, the
-loop body is visited, and then the phi shape is updated with the join.  Because
-the scalar lattice has ``REAL_FORMAT`` as a top element and the structural
-lattice is shape-preserving, the fixpoint converges in **at most two
-iterations**.
+For loops, phi nodes are initialised from the pre-loop definition's shape and
+the body is iterated until the phi bounds stop changing.  The lattice has
+finite height (``REAL_FORMAT`` tops the scalar sub-lattice, ``SetFormat``
+values are drawn from the program's finitely many literals, and the structural
+lattice is shape-preserving), so the fixpoint terminates.
 
 Format inference rules
 ----------------------
@@ -286,8 +286,8 @@ class _FormatInferInstance(Visitor):
     """
     Single-use visitor that performs format inference.
 
-    The visitor walks the entire function body in a single pass (with a
-    two-step initialise-then-join for loop phi nodes) and populates
+    The visitor walks the entire function body in a single forward pass
+    (loops are iterated to a fixpoint over their phi bounds) and populates
     ``by_def`` and ``by_expr``.
     """
 
@@ -549,13 +549,17 @@ class _FormatInferInstance(Visitor):
         # loop body can reference them before the back-edge has been processed.
         for phi in self.def_use.phis[stmt]:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
-        self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.body, ctx)
-        # Recompute phi shapes as the join of pre-loop and body values.
-        for phi in self.def_use.phis[stmt]:
-            lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-            rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-            self._set_def_bound(phi, _join_bounds(lhs, rhs))
+        # Iterate body + join until phi bounds stop changing.
+        while True:
+            prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
+            self._visit_expr(stmt.cond, ctx)
+            self._visit_block(stmt.body, ctx)
+            for phi in self.def_use.phis[stmt]:
+                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
+                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
+                self._set_def_bound(phi, _join_bounds(lhs, rhs))
+            if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
+                break
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_shape = self._visit_expr(stmt.iterable, ctx)
@@ -564,12 +568,16 @@ class _FormatInferInstance(Visitor):
         # Initialise phi shapes from pre-loop (lhs) definitions
         for phi in self.def_use.phis[stmt]:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
-        self._visit_block(stmt.body, ctx)
-        # Recompute phi shapes as the join of pre-loop and body values
-        for phi in self.def_use.phis[stmt]:
-            lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-            rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-            self._set_def_bound(phi, _join_bounds(lhs, rhs))
+        # Iterate body + join until phi bounds stop changing.
+        while True:
+            prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
+            self._visit_block(stmt.body, ctx)
+            for phi in self.def_use.phis[stmt]:
+                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
+                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
+                self._set_def_bound(phi, _join_bounds(lhs, rhs))
+            if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
+                break
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # The context expression itself is not a numerical computation.
@@ -655,7 +663,8 @@ class FormatInfer:
 
     This rule is applied at all control-flow merge points (phi nodes), including
     branch merges (``if``/``if1``) and loop back-edges (``while``/``for``).
-    The fixpoint for loops converges in **at most two iterations**.
+    Loops iterate body + join until phi bounds stop changing; the lattice has
+    finite height, so the fixpoint terminates.
 
     **Usage**::
 
