@@ -92,6 +92,14 @@ Format inference rules
   :class:`AbstractFormat` instead of widening.  Under non-REAL contexts
   every pairwise add rounds to the scope's format, so the result is just
   the scope's format (the default rule).
+- **Integer-producing operations** (``Len``, ``Dim``, ``Size``,
+  ``Range1``/``Range2``/``Range3``, the integer projection of
+  ``Enumerate``): the result format is ``INTEGER`` regardless of the
+  active rounding context.  These ops always produce integer values, so
+  reporting the active context's format would be unnecessarily loose
+  (e.g., ``len(xs)`` under ``with fp.FP32`` is still an integer, not an
+  arbitrary FP32 value).  ``Range`` returns ``ListFormat(INTEGER)``;
+  ``Enumerate(xs)`` returns ``ListFormat(TupleFormat(INTEGER, xs.elt))``.
 - **Function calls** (``Call``): conservatively the top format of the callee's
   return type.
 - **Variable references** (``Var``): the format of the variable's definition.
@@ -115,7 +123,7 @@ from typing import Callable, Iterable, TypeAlias
 
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
-from ...number import Context
+from ...number import Context, INTEGER
 from ...number.context.format import Format
 from ...number.context.real import REAL_FORMAT, RealContext
 from ...number.number.reals import RealFloat
@@ -188,6 +196,17 @@ Inferred format for an expression or variable definition.
 - :class:`TupleFormat` — heterogeneous tuple, per-element formats preserved.
 - :class:`ListFormat` — homogeneous list, single element format (the join of
   all element formats).
+"""
+
+
+_INTEGER_FORMAT: Format = INTEGER.format()
+"""
+Cached format for the :data:`INTEGER` context — used as the result
+format of integer-producing operations (``Len``, ``Dim``, ``Size``,
+``Range1``/``Range2``/``Range3``, the integer projection of
+``Enumerate``).  These ops always produce integer values regardless of
+the active rounding context, so reporting the active context's format
+would be unnecessarily loose.
 """
 
 
@@ -653,6 +672,19 @@ class _FormatInferInstance(Visitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:
         arg_fmt = self._visit_expr(e.arg, ctx)
+        # Integer-producing scalar ops: result format is INTEGER
+        # regardless of the active rounding context.
+        if isinstance(e, Len | Dim):
+            return _INTEGER_FORMAT
+        # Integer-producing list ops: result is a list of integers.
+        if isinstance(e, Range1):
+            return ListFormat(_INTEGER_FORMAT)
+        # Enumerate(xs) → list of (int, elt) tuples; the int projection
+        # is INTEGER, the original element format is preserved.
+        if isinstance(e, Enumerate):
+            assert isinstance(arg_fmt, ListFormat), \
+                f'expected ListFormat for argument of Enumerate, got {arg_fmt!r}'
+            return ListFormat(TupleFormat((_INTEGER_FORMAT, arg_fmt.elt)))
         if isinstance(e, Sum):
             assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
             return self._sum_bound(e, arg_fmt)
@@ -698,6 +730,11 @@ class _FormatInferInstance(Visitor):
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> FormatBound:
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
+        # Integer-producing ops: result format is INTEGER.
+        if isinstance(e, Size):
+            return _INTEGER_FORMAT
+        if isinstance(e, Range2):
+            return ListFormat(_INTEGER_FORMAT)
         tight = self._exact_arith_bound(e, (lhs, rhs))
         return tight if tight is not None else self._op_bound(e)
 
@@ -705,6 +742,8 @@ class _FormatInferInstance(Visitor):
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
+        if isinstance(e, Range3):
+            return ListFormat(_INTEGER_FORMAT)
         return self._op_bound(e)
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> FormatBound:

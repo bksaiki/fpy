@@ -7,7 +7,7 @@ import pytest
 
 from fractions import Fraction
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
-from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat
+from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat, TupleFormat
 from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import IndexedAssign
@@ -871,6 +871,107 @@ class TestFormatInfer:
         # Concretely: big_sum.representable_in(small_sum.maxval) holds.
         small_max = small_sum.maxval()._real
         assert big_sum.representable_in(small_max)
+
+    # ------------------------------------------------------------------
+    # Integer-producing operations report INTEGER format
+
+    def test_len_returns_integer_format_under_concrete_ctx(self):
+        """
+        ``len(xs)`` always returns an integer; the format must be
+        ``INTEGER``, *not* the active rounding context's format.
+        """
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP32:
+                n = len(xs)
+            return n
+
+        info = self._run(f)
+        # The Len expression must be the INTEGER format, not FP32.
+        len_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Len'
+        ]
+        integer_fmt = fp.INTEGER.format()
+        assert len_bounds and len_bounds[0] == integer_fmt, (
+            f'expected Len to report INTEGER format, got {len_bounds}'
+        )
+        # And the binding for ``n`` must inherit that.
+        n_bounds = [b for d, b in info.by_def.items() if d.name.base == 'n']
+        assert integer_fmt in n_bounds, (
+            f'expected INTEGER among n bounds, got {n_bounds}'
+        )
+
+    def test_range1_returns_listformat_of_integer(self):
+        """``range(n)`` produces a list of integers."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = [0.0 for _ in range(len(xs))]
+            return ys
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Range1'
+        ]
+        integer_fmt = fp.INTEGER.format()
+        assert range_bounds, 'expected a Range1 expression'
+        assert range_bounds[0] == ListFormat(integer_fmt), (
+            f'expected ListFormat(INTEGER) for Range1, got {range_bounds}'
+        )
+
+    def test_range2_returns_listformat_of_integer(self):
+        """``range(start, stop)`` produces a list of integers."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(0, 10)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Range2'
+        ]
+        integer_fmt = fp.INTEGER.format()
+        assert range_bounds and range_bounds[0] == ListFormat(integer_fmt)
+
+    def test_range3_returns_listformat_of_integer(self):
+        """``range(start, stop, step)`` produces a list of integers."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(0, 10, 2)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Range3'
+        ]
+        integer_fmt = fp.INTEGER.format()
+        assert range_bounds and range_bounds[0] == ListFormat(integer_fmt)
+
+    def test_enumerate_returns_listformat_of_int_value_tuple(self):
+        """
+        ``enumerate(xs)`` produces a list of (int, x) tuples — the int
+        component is INTEGER, the value component preserves ``xs``'s
+        element format.
+        """
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP32:
+                ys = [fp.round(x) for x in xs]
+            for i, y in enumerate(ys):
+                pass
+            return 0.0
+
+        info = self._run(f)
+        enum_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Enumerate'
+        ]
+        assert enum_bounds, 'expected an Enumerate expression'
+        bound = enum_bounds[0]
+        # Outer: ListFormat. Element: TupleFormat((INTEGER, FP32)).
+        integer_fmt = fp.INTEGER.format()
+        fp32_fmt = fp.FP32.format()
+        assert isinstance(bound, ListFormat)
+        assert isinstance(bound.elt, TupleFormat)
+        assert bound.elt.elts == (integer_fmt, fp32_fmt), (
+            f'expected TupleFormat((INTEGER, FP32)), got {bound.elt}'
+        )
 
     def test_blockwise_quantized_accumulator_end_to_end(self):
         """
