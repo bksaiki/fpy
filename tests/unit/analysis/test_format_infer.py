@@ -773,6 +773,105 @@ class TestFormatInfer:
             f'expected block_acc to stay precise, got {block_acc_bounds}'
         )
 
+    # ------------------------------------------------------------------
+    # Sum reduction
+
+    def test_sum_under_real_with_known_size(self):
+        """
+        ``sum(ys)`` under ``with fp.REAL`` over a known-size list of
+        MX_E4M3 elements: simulate ``n - 1`` exact pairwise additions
+        through :class:`AbstractFormat`.  Result is a precise containing
+        Format, not ``REAL_FORMAT``.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            with fp.MX_E4M3:
+                ys = [fp.round(0.1), fp.round(0.2),
+                      fp.round(0.3), fp.round(0.4)]
+            return sum(ys)
+
+        info = self._run(f)
+        sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
+        assert sums and isinstance(sums[-1], Format) and sums[-1] != REAL_FORMAT, (
+            f'expected precise Sum bound under REAL, got {sums}'
+        )
+        # Bound must contain a single MX_E4M3 element.
+        mx_e4m3 = fp.MX_E4M3.format()
+        assert sums[-1].representable_in(mx_e4m3.maxval()._real)
+
+    def test_sum_under_concrete_ctx_returns_scope_format(self):
+        """
+        Under a concrete non-REAL context, every pairwise add rounds to
+        the scope's format, so ``sum(ys)`` reports the scope's format
+        (the default ``_op_bound`` rule).
+        """
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.MX_E4M3:
+                ys = [fp.round(0.1), fp.round(0.2),
+                      fp.round(0.3), fp.round(0.4)]
+            with fp.FP32:
+                return sum(ys)
+
+        info = self._run(f)
+        sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
+        assert sums and sums[-1] == fp.FP32.format(), (
+            f'expected Sum to report FP32 (scope format), got {sums}'
+        )
+
+    def test_sum_unknown_size_falls_back(self):
+        """
+        ``sum(xs)`` over a symbolic-size list under REAL: the iteration
+        count isn't known, so the analysis falls back to the default
+        rule which yields ``REAL_FORMAT`` under REAL scope.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.MX_E4M3:
+                ys = [fp.round(x) for x in xs]
+            return sum(ys)
+
+        info = self._run(f)
+        sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
+        assert sums and sums[-1] == REAL_FORMAT, (
+            f'expected REAL_FORMAT fall-back when size is unknown, got {sums}'
+        )
+
+    def test_sum_grows_with_known_size(self):
+        """
+        Sanity: larger N produces a wider precise format under REAL.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def small() -> fp.Real:
+            with fp.FP32:
+                ys = [fp.round(1.0), fp.round(1.0)]
+            return sum(ys)
+
+        @fp.fpy(ctx=fp.REAL)
+        def big() -> fp.Real:
+            with fp.FP32:
+                ys = [fp.round(1.0), fp.round(1.0), fp.round(1.0),
+                      fp.round(1.0), fp.round(1.0), fp.round(1.0),
+                      fp.round(1.0), fp.round(1.0)]
+            return sum(ys)
+
+        small_sum = [
+            b for e, b in self._run(small).by_expr.items()
+            if type(e).__name__ == 'Sum'
+        ][-1]
+        big_sum = [
+            b for e, b in self._run(big).by_expr.items()
+            if type(e).__name__ == 'Sum'
+        ][-1]
+        # Both must be precise (non-REAL_FORMAT).
+        assert isinstance(small_sum, Format) and small_sum != REAL_FORMAT
+        assert isinstance(big_sum, Format) and big_sum != REAL_FORMAT
+        # Size-8 sum's bound must contain size-2 sum's max value
+        # (since both bounds are non-negative and big_sum is wider).
+        # Concretely: big_sum.representable_in(small_sum.maxval) holds.
+        small_max = small_sum.maxval()._real
+        assert big_sum.representable_in(small_max)
+
     def test_blockwise_quantized_accumulator_end_to_end(self):
         """
         Regression: a realistic blockwise quantized-accumulator pattern.

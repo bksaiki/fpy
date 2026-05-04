@@ -86,6 +86,12 @@ Format inference rules
   :class:`AbstractFormat`'s arithmetic
   (``(AbstractFormat.from_format(f1) ⊕ AbstractFormat.from_format(f2)).format()``)
   rather than widening to ``REAL_FORMAT``.
+- **Sum reduction** (``Sum`` under a concrete :class:`RealContext` over a
+  list whose size is statically known via :class:`ArraySizeAnalysis`):
+  simulates ``n - 1`` exact pairwise additions through
+  :class:`AbstractFormat` instead of widening.  Under non-REAL contexts
+  every pairwise add rounds to the scope's format, so the result is just
+  the scope's format (the default rule).
 - **Function calls** (``Call``): conservatively the top format of the callee's
   return type.
 - **Variable references** (``Var``): the format of the variable's definition.
@@ -639,8 +645,47 @@ class _FormatInferInstance(Visitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:
         arg_fmt = self._visit_expr(e.arg, ctx)
+        if isinstance(e, Sum):
+            return self._sum_bound(e, arg_fmt)
         tight = self._exact_arith_bound(e, (arg_fmt,))
         return tight if tight is not None else self._op_bound(e)
+
+    def _sum_bound(self, e: Sum, arg_fmt: FormatBound) -> FormatBound:
+        """
+        Format of ``Sum(xs)`` — reduce-by-pairwise-addition with rounding
+        under the active context at each step.
+
+        - **Non-REAL scope**: each pairwise add rounds to the scope's
+          format, so the accumulator equals the scope's format
+          throughout.  Falls back to :meth:`_op_bound`.
+        - **REAL scope**: no rounding.  Simulate ``n - 1`` exact
+          additions through :class:`AbstractFormat` to produce a precise
+          containing format.  Requires the list size to be statically
+          known via :class:`ArraySizeAnalysis`; otherwise falls back to
+          ``REAL_FORMAT`` via :meth:`_op_bound`.
+        """
+        if not self._is_real_scope(e):
+            return self._op_bound(e)
+        if not isinstance(arg_fmt, ListFormat):
+            return self._op_bound(e)
+        n = self._known_iter_count(e.arg)
+        if n is None:
+            return self._op_bound(e)
+        elt_fmt = arg_fmt.elt
+        if n == 0:
+            # ``sum([])`` is conventionally 0.
+            return SetFormat(frozenset((Fraction(0),)))
+        if n == 1:
+            # No addition occurs; the lone element passes through.
+            return elt_fmt
+        # Lift the element format once and accumulate ``n - 1`` times.
+        af_elt = _to_abstract(elt_fmt)
+        if af_elt is None:
+            return self._op_bound(e)
+        af_acc = af_elt
+        for _ in range(n - 1):
+            af_acc = af_acc + af_elt
+        return af_acc.format()
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> FormatBound:
         lhs = self._visit_expr(e.first, ctx)
