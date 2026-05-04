@@ -209,12 +209,24 @@ def _top_bound(ty: Type) -> FormatBound:
             raise RuntimeError(f'unreachable: unknown type {ty!r}')
 
 
-def _join_bounds(s1: FormatBound, s2: FormatBound) -> FormatBound:
+def _join_bounds(
+    s1: FormatBound,
+    s2: FormatBound,
+    *,
+    widen: bool = False,
+) -> FormatBound:
     """
     Returns the join (least upper bound) of two formats.
 
     Joins are structural and only defined for formats of matching kind — the
     type checker guarantees this for well-typed programs.
+
+    When ``widen`` is true, the scalar ``Format ⊔ Format`` case for distinct
+    inputs falls back to ``REAL_FORMAT`` instead of going through
+    :class:`AbstractFormat`-mediated union.  This is used inside loop
+    fixpoints once an iteration cap is reached, to force convergence on
+    AbstractFormat lattices that have infinite ascending chains under
+    arithmetic.
     """
     match s1, s2:
         case None, None:
@@ -228,13 +240,15 @@ def _join_bounds(s1: FormatBound, s2: FormatBound) -> FormatBound:
         case Format(), Format():
             if s1 == s2:
                 return s1
+            if widen:
+                return REAL_FORMAT
             if isinstance(s1, AbstractableFormat) and isinstance(s2, AbstractableFormat):
                 return (AbstractFormat.from_format(s1) | AbstractFormat.from_format(s2)).format()
             return REAL_FORMAT
         case TupleFormat(elts=a), TupleFormat(elts=b) if len(a) == len(b):
-            return TupleFormat(tuple(_join_bounds(x, y) for x, y in zip(a, b)))
+            return TupleFormat(tuple(_join_bounds(x, y, widen=widen) for x, y in zip(a, b)))
         case ListFormat(elt=a), ListFormat(elt=b):
-            return ListFormat(_join_bounds(a, b))
+            return ListFormat(_join_bounds(a, b, widen=widen))
         case _:
             raise RuntimeError(
                 f'unreachable: cannot join incompatible formats {s1!r}, {s2!r}'
@@ -245,6 +259,8 @@ def _list_set_widen(
     value_fmt: FormatBound,
     depth: int,
     insert_fmt: FormatBound,
+    *,
+    widen: bool = False,
 ) -> FormatBound:
     """
     Widen a list format for a functional update at *depth* levels of nesting.
@@ -253,12 +269,15 @@ def _list_set_widen(
     in which ``xs[i1]…[iN]`` is replaced by *val*.  The result's format is the
     join of the original format with *insert_fmt* at the leaf level after
     peeling *depth* layers of :class:`ListFormat` (one per index).
+
+    *widen* propagates to the leaf-level :func:`_join_bounds` call so that
+    ListSet expressions inside a saturated loop iteration also widen.
     """
     if depth == 0:
-        return _join_bounds(value_fmt, insert_fmt)
+        return _join_bounds(value_fmt, insert_fmt, widen=widen)
     assert isinstance(value_fmt, ListFormat), \
         f'expected ListFormat at depth {depth}, got {value_fmt!r}'
-    return ListFormat(_list_set_widen(value_fmt.elt, depth - 1, insert_fmt))
+    return ListFormat(_list_set_widen(value_fmt.elt, depth - 1, insert_fmt, widen=widen))
 
 
 def _format_of_scope(scope: ContextScope) -> Format:
@@ -337,12 +356,20 @@ class _FormatInferInstance(Visitor):
         func: FuncDef,
         type_info: TypeAnalysis,
         ctx_use: ContextUseAnalysis,
+        loop_iter_limit: int,
     ):
         self.func = func
         self.type_info = type_info
         self.ctx_use = ctx_use
         self.by_def = {}
         self.by_expr = {}
+        self._loop_iter_limit = loop_iter_limit
+        # When True, joins forced inside a saturated loop fixpoint widen
+        # distinct scalar Formats to ``REAL_FORMAT`` instead of going through
+        # an :class:`AbstractFormat` union (which has infinite ascending
+        # chains under arithmetic).  Saved/restored around each loop so that
+        # nested loops manage their own state.
+        self._widen: bool = False
 
     # ------------------------------------------------------------------
     # Helpers
@@ -356,6 +383,10 @@ class _FormatInferInstance(Visitor):
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
         return self.by_def[d]
+
+    def _join(self, s1: FormatBound, s2: FormatBound) -> FormatBound:
+        """Join two formats, respecting the visitor's current widen state."""
+        return _join_bounds(s1, s2, widen=self._widen)
 
     def _scope_format(self, e: ContextUseSite) -> Format:
         """Returns the format of the rounding context scope for *e*."""
@@ -533,7 +564,7 @@ class _FormatInferInstance(Visitor):
     def _visit_list_expr(self, e: ListExpr, ctx: None) -> FormatBound:
         elt_fmts = [self._visit_expr(elt, ctx) for elt in e.elts]
         if elt_fmts:
-            joined = reduce(_join_bounds, elt_fmts)
+            joined = reduce(self._join, elt_fmts)
         else:
             # Empty list: derive the element format from the inferred list type.
             list_ty = self.type_info.by_expr[e]
@@ -571,13 +602,13 @@ class _FormatInferInstance(Visitor):
         for s in e.indices:
             self._visit_expr(s, ctx)
         insert_fmt = self._visit_expr(e.expr, ctx)
-        return _list_set_widen(value_fmt, len(e.indices), insert_fmt)
+        return _list_set_widen(value_fmt, len(e.indices), insert_fmt, widen=self._widen)
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> FormatBound:
         self._visit_expr(e.cond, ctx)
         then_fmt = self._visit_expr(e.ift, ctx)
         else_fmt = self._visit_expr(e.iff, ctx)
-        return _join_bounds(then_fmt, else_fmt)
+        return self._join(then_fmt, else_fmt)
 
     # ------------------------------------------------------------------
     # Statement visitors
@@ -598,7 +629,7 @@ class _FormatInferInstance(Visitor):
         for phi in self.def_use.phis[stmt]:
             lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-            self._set_def_bound(phi, _join_bounds(lhs, rhs))
+            self._set_def_bound(phi, self._join(lhs, rhs))
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -607,24 +638,34 @@ class _FormatInferInstance(Visitor):
         for phi in self.def_use.phis[stmt]:
             lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-            self._set_def_bound(phi, _join_bounds(lhs, rhs))
+            self._set_def_bound(phi, self._join(lhs, rhs))
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         # Initialise phi formats from pre-loop (lhs) definitions so that the
         # loop body can reference them before the back-edge has been processed.
         for phi in self.def_use.phis[stmt]:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
-        # Iterate body + join until phi bounds stop changing.
-        while True:
-            prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
-            self._visit_expr(stmt.cond, ctx)
-            self._visit_block(stmt.body, ctx)
-            for phi in self.def_use.phis[stmt]:
-                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-                self._set_def_bound(phi, _join_bounds(lhs, rhs))
-            if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
-                break
+        # Iterate body + join until phi bounds stop changing.  After
+        # ``_loop_iter_limit`` iterations without convergence, switch joins
+        # to widen-mode to force termination on infinite-height
+        # AbstractFormat chains (e.g., arithmetic in the body).
+        saved_widen = self._widen
+        try:
+            iter_count = 0
+            while True:
+                prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
+                self._widen = saved_widen or iter_count >= self._loop_iter_limit
+                self._visit_expr(stmt.cond, ctx)
+                self._visit_block(stmt.body, ctx)
+                for phi in self.def_use.phis[stmt]:
+                    lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
+                    rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
+                    self._set_def_bound(phi, self._join(lhs, rhs))
+                if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
+                    break
+                iter_count += 1
+        finally:
+            self._widen = saved_widen
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
@@ -633,16 +674,23 @@ class _FormatInferInstance(Visitor):
         # Initialise phi formats from pre-loop (lhs) definitions
         for phi in self.def_use.phis[stmt]:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
-        # Iterate body + join until phi bounds stop changing.
-        while True:
-            prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
-            self._visit_block(stmt.body, ctx)
-            for phi in self.def_use.phis[stmt]:
-                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-                self._set_def_bound(phi, _join_bounds(lhs, rhs))
-            if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
-                break
+        # See ``_visit_while`` for the widen-mode rationale.
+        saved_widen = self._widen
+        try:
+            iter_count = 0
+            while True:
+                prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
+                self._widen = saved_widen or iter_count >= self._loop_iter_limit
+                self._visit_block(stmt.body, ctx)
+                for phi in self.def_use.phis[stmt]:
+                    lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
+                    rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
+                    self._set_def_bound(phi, self._join(lhs, rhs))
+                if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
+                    break
+                iter_count += 1
+        finally:
+            self._widen = saved_widen
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # The context expression itself is not a numerical computation.
@@ -731,8 +779,13 @@ class FormatInfer:
 
     This rule is applied at all control-flow merge points (phi nodes), including
     branch merges (``if``/``if1``) and loop back-edges (``while``/``for``).
-    Loops iterate body + join until phi bounds stop changing; the lattice has
-    finite height, so the fixpoint terminates.
+    Loops iterate body + join until phi bounds stop changing.  The
+    AbstractFormat-mediated scalar join introduces infinite ascending chains
+    when exact arithmetic (``+``/``-``/``*`` under :class:`RealContext`) is
+    applied to a phi'd value, so each loop fixpoint runs at most
+    ``loop_iter_limit`` iterations before switching joins to widen-mode
+    (distinct scalar Formats fall back to ``REAL_FORMAT``) to force
+    convergence.
 
     **Usage**::
 
@@ -743,6 +796,14 @@ class FormatInfer:
             print(d.name, '->', fmt)
     """
 
+    DEFAULT_LOOP_ITER_LIMIT = 10
+    """
+    Default number of body+join iterations a loop fixpoint runs before
+    switching to widen-mode (joins of distinct scalar Formats fall back to
+    ``REAL_FORMAT`` to force convergence).  Tunable via the ``loop_iter_limit``
+    parameter of :meth:`analyze`.
+    """
+
     @staticmethod
     def analyze(
         func: FuncDef,
@@ -750,6 +811,7 @@ class FormatInfer:
         def_use: DefineUseAnalysis | None = None,
         type_info: TypeAnalysis | None = None,
         ctx_use: ContextUseAnalysis | None = None,
+        loop_iter_limit: int | None = None,
     ) -> FormatAnalysis:
         """
         Performs format analysis on a compiled FPy function.
@@ -763,6 +825,15 @@ class FormatInfer:
             def_use:   Optional pre-computed definition-use analysis.
             type_info: Optional pre-computed type analysis.
             ctx_use:   Optional pre-computed context-use analysis.
+            loop_iter_limit:
+                Number of loop body+join iterations to run before forcing
+                joins of distinct scalar Formats to widen to ``REAL_FORMAT``.
+                Required because exact-arithmetic operations (``+``, ``-``,
+                ``*``) under :class:`RealContext` produce ``AbstractFormat``
+                lattices with infinite ascending chains; without a cap, a
+                loop body that performs such arithmetic on a phi'd value
+                would not converge.  Defaults to
+                :attr:`DEFAULT_LOOP_ITER_LIMIT`.
 
         Returns:
             A :class:`FormatAnalysis` result whose ``by_def`` and ``by_expr``
@@ -781,5 +852,9 @@ class FormatInfer:
             type_info = TypeInfer.check(func, def_use=def_use)
         if ctx_use is None:
             ctx_use = ContextUse.analyze(func, def_use=def_use)
+        if loop_iter_limit is None:
+            loop_iter_limit = FormatInfer.DEFAULT_LOOP_ITER_LIMIT
 
-        return _FormatInferInstance(func, type_info, ctx_use).analyze()
+        return _FormatInferInstance(
+            func, type_info, ctx_use, loop_iter_limit=loop_iter_limit
+        ).analyze()

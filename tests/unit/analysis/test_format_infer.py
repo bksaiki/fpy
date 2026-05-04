@@ -444,6 +444,81 @@ class TestFormatInfer:
         adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
         assert adds and adds[-1] == REAL_FORMAT
 
+    def test_loop_widens_to_real_format(self):
+        """
+        A loop whose body applies exact arithmetic to a phi'd value would
+        produce an infinite ascending chain of AbstractFormats (each
+        iteration widens prec/bounds).  After ``loop_iter_limit`` iterations
+        the analysis switches to widen-mode joins so the fixpoint terminates
+        at ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP32:
+                x = fp.round(0)
+            while n > 0:
+                with fp.REAL:
+                    x = x + x
+            return x
+
+        # With a small limit, the fixpoint must terminate and widen x's
+        # while-phi to REAL_FORMAT.
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
+        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
+        assert REAL_FORMAT in x_bounds, (
+            f"expected REAL_FORMAT among x bounds with widening, got {x_bounds}"
+        )
+
+    def test_loop_iter_limit_zero_widens_immediately(self):
+        """
+        ``loop_iter_limit=0`` forces every loop join to widen on the very
+        first iteration — distinct scalar Formats merge to ``REAL_FORMAT``
+        without going through ``AbstractFormat``.
+        """
+        @fp.fpy
+        def f(cond: bool, x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                y = fp.round(x)
+            while cond:
+                with fp.FP64:
+                    y = fp.round(x)
+            return y
+
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=0)
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        # The loop phi should be REAL_FORMAT (widen-mode forced join of
+        # FP32 and FP64 to top), not an MPB-float containing both.
+        assert REAL_FORMAT in y_bounds, (
+            f"expected REAL_FORMAT among y bounds with limit=0, got {y_bounds}"
+        )
+
+    def test_loop_iter_limit_high_keeps_precision(self):
+        """
+        With a generous limit, a non-divergent loop must still produce a
+        precise join (an MPB-float containing FP32 and FP64), not widen to
+        ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(cond: bool, x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                y = fp.round(x)
+            while cond:
+                with fp.FP64:
+                    y = fp.round(x)
+            return y
+
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=100)
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        # Some bound must be a Format containing both FP32 and FP64 but not
+        # equal to REAL_FORMAT (the AbstractFormat-mediated join survives).
+        precise = [
+            b for b in y_bounds
+            if isinstance(b, Format) and b not in (fp.FP32.format(), REAL_FORMAT)
+        ]
+        assert precise, (
+            f"expected an AbstractFormat-derived join among y bounds, got {y_bounds}"
+        )
+
     def test_exact_arith_skipped_under_concrete_round(self):
         """
         Under a concrete non-REAL context (e.g., FP32), arithmetic results
