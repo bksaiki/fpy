@@ -100,8 +100,8 @@ class AbstractFormat:
         return AbstractFormat(self.prec, self.exp, -self.neg_bound, neg_bound=-self.pos_bound)
 
     def __abs__(self) -> 'AbstractFormat':
-        """Absolute value of the format (makes negative bound equal to positive bound)."""
-        return AbstractFormat(self.prec, self.exp, self.pos_bound, neg_bound=0)
+        """Absolute value of the format (clamps the negative bound to zero)."""
+        return AbstractFormat(self.prec, self.exp, self.pos_bound, neg_bound=RealFloat.from_int(0))
 
     def __add__(self, other: 'AbstractFormat') -> 'AbstractFormat':
         """

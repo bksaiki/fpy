@@ -66,6 +66,12 @@ Format inference rules
   ``TernaryOp``, ``NaryOp``): the result is rounded to the active rounding
   context's format, i.e. ``scope.ctx.format()`` when the context is concrete,
   or ``REAL_FORMAT`` when it is a symbolic variable.
+- **Exact arithmetic** (``Neg``, ``Abs``, ``Add``, ``Sub``, ``Mul`` under a
+  concrete :class:`RealContext`): tighter than the default rule.  When all
+  operand formats are abstractable, the result is computed via
+  :class:`AbstractFormat`'s arithmetic
+  (``(AbstractFormat.from_format(f1) ⊕ AbstractFormat.from_format(f2)).format()``)
+  rather than widening to ``REAL_FORMAT``.
 - **Function calls** (``Call``): conservatively the top format of the callee's
   return type.
 - **Variable references** (``Var``): the format of the variable's definition.
@@ -91,7 +97,7 @@ from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...number import Context
 from ...number.context.format import Format
-from ...number.context.real import REAL_FORMAT
+from ...number.context.real import REAL_FORMAT, RealContext
 from ...number.number.reals import RealFloat
 from ...utils import is_dyadic
 from ...types import (
@@ -368,6 +374,54 @@ class _FormatInferInstance(Visitor):
             return self._scope_format(e)
         return _top_bound(ret_ty)
 
+    def _is_real_scope(self, e: ContextUseSite) -> bool:
+        """Returns True iff *e*'s active scope is a concrete :class:`RealContext`.
+
+        Distinct from ``_scope_format(e) == REAL_FORMAT`` because the latter
+        also fires for symbolic (unresolved) context variables, where we
+        cannot assume the rounding is the identity.
+        """
+        return isinstance(self.ctx_use.find_scope_from_use(e).ctx, RealContext)
+
+    def _exact_arith_bound(
+        self,
+        e: ContextUseSite,
+        operands: tuple[FormatBound, ...],
+    ) -> FormatBound | None:
+        """
+        Tries to compute a tight format for an exact arithmetic operation.
+
+        Under a concrete :class:`RealContext` (no rounding), negation, abs,
+        addition, subtraction, and multiplication preserve enough structure
+        that a containing :class:`Format` can be derived from the operand
+        formats via :class:`AbstractFormat`'s arithmetic.
+
+        Returns ``None`` to signal that the caller should fall back to
+        :meth:`_op_bound` (e.g., the operator is not exact-arithmetic, the
+        scope is not concretely REAL, or some operand is not abstractable).
+        """
+        if not self._is_real_scope(e):
+            return None
+        afs: list[AbstractFormat] = []
+        for f in operands:
+            if not isinstance(f, AbstractableFormat):
+                return None
+            afs.append(AbstractFormat.from_format(f))
+        match e, afs:
+            case Neg(), [af]:
+                result = -af
+            case Abs(), [af]:
+                result = abs(af)
+            case Add(), [a, b]:
+                result = a + b
+            case Sub(), [a, b]:
+                result = a - b
+            case Mul(), [a, b]:
+                result = a * b
+            case _:
+                return None
+        return result.format()
+
     def _visit_binding(
         self,
         site: DefSite,
@@ -437,13 +491,15 @@ class _FormatInferInstance(Visitor):
         return self._op_bound(e)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:
-        self._visit_expr(e.arg, ctx)
-        return self._op_bound(e)
+        arg_fmt = self._visit_expr(e.arg, ctx)
+        tight = self._exact_arith_bound(e, (arg_fmt,))
+        return tight if tight is not None else self._op_bound(e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> FormatBound:
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        return self._op_bound(e)
+        lhs = self._visit_expr(e.first, ctx)
+        rhs = self._visit_expr(e.second, ctx)
+        tight = self._exact_arith_bound(e, (lhs, rhs))
+        return tight if tight is not None else self._op_bound(e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> FormatBound:
         self._visit_expr(e.first, ctx)

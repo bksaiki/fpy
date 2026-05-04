@@ -365,6 +365,103 @@ class TestFormatInfer:
             assert joined[-1].representable_in(fmt.maxval()._real)
 
     # ------------------------------------------------------------------
+    # Exact arithmetic under a concrete REAL context
+
+    def test_exact_add_under_real(self):
+        """
+        ``a + b`` under ``with fp.REAL`` (no rounding) where both operands
+        are FP32 should produce a Format strictly tighter than ``REAL_FORMAT``
+        whose bounds contain ``2 * FP32_MAX``.
+        """
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+                b = fp.round(y)
+            with fp.REAL:
+                return a + b
+
+        info = self._run(f)
+        adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
+        assert adds, 'expected an Add expression in by_expr'
+        result = adds[-1]
+        assert isinstance(result, Format)
+        assert result != REAL_FORMAT
+        fp32_max = fp.FP32.format().maxval()._real
+        assert result.representable_in(fp32_max + fp32_max)
+
+    def test_exact_mul_under_real(self):
+        """
+        ``a * b`` under ``with fp.REAL`` produces a Format that contains
+        ``FP32_MAX**2`` (which itself does not fit in FP32 / FP64 ranges
+        cleanly, but does fit in the AbstractFormat-derived bound).
+        """
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+                b = fp.round(y)
+            with fp.REAL:
+                return a * b
+
+        info = self._run(f)
+        muls = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Mul']
+        assert muls and isinstance(muls[-1], Format)
+        assert muls[-1] != REAL_FORMAT
+
+    def test_exact_neg_under_real(self):
+        """``-a`` under REAL preserves a's format (up to the sign-flip)."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            with fp.REAL:
+                return -a
+
+        info = self._run(f)
+        negs = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Neg']
+        assert negs and isinstance(negs[-1], Format)
+        assert negs[-1] != REAL_FORMAT
+        # Negation cannot widen beyond ±FP32_MAX.
+        fp32_max = fp.FP32.format().maxval()._real
+        assert negs[-1].representable_in(-fp32_max)
+
+    def test_exact_arith_skipped_under_symbolic_context(self):
+        """
+        When the active context is a symbolic / unresolved variable (the
+        default top-level scope), exact arithmetic is *not* applied — we
+        cannot assume the rounding is the identity.  Result falls back to
+        ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+                b = fp.round(y)
+            return a + b  # default top-level scope, symbolic ctx
+
+        info = self._run(f)
+        adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
+        assert adds and adds[-1] == REAL_FORMAT
+
+    def test_exact_arith_skipped_under_concrete_round(self):
+        """
+        Under a concrete non-REAL context (e.g., FP32), arithmetic results
+        are rounded to that format — exact-arithmetic widening would be
+        unsound.  The visitor must still return the scope's format.
+        """
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+                b = fp.round(y)
+                return a + b
+
+        info = self._run(f)
+        adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
+        assert adds and adds[-1] == fp.FP32.format()
+
+    # ------------------------------------------------------------------
     # SetFormat semantics
 
     def test_join_set_with_set(self):
