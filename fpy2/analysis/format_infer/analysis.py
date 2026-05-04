@@ -846,17 +846,20 @@ class _FormatInferInstance(Visitor):
         return None
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        def body():
+        def iterate():
             self._visit_expr(stmt.cond, ctx)
             self._visit_block(stmt.body, ctx)
 
-        self._fixpoint(self.def_use.phis[stmt], body)
+        self._fixpoint(self.def_use.phis[stmt], iterate)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
         assert isinstance(iter_fmt, ListFormat)
         self._visit_binding(stmt, stmt.target, iter_fmt.elt)
-        body = lambda: self._visit_block(stmt.body, ctx)
+
+        def iterate():
+            self._visit_block(stmt.body, ctx)
+
         # If the iterable's length is statically known, drive the phi
         # update for exactly that many body executions instead of
         # iterating to a fixpoint.  This matches the runtime semantics
@@ -864,9 +867,9 @@ class _FormatInferInstance(Visitor):
         # exact-arithmetic lattice.
         n = self._known_iter_count(stmt.iterable)
         if n is not None:
-            self._unroll(self.def_use.phis[stmt], body, n)
+            self._unroll(self.def_use.phis[stmt], iterate, n)
         else:
-            self._fixpoint(self.def_use.phis[stmt], body)
+            self._fixpoint(self.def_use.phis[stmt], iterate)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # The context expression itself is not a numerical computation.
