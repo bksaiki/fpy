@@ -96,7 +96,7 @@ Format inference rules
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
-from typing import Callable, TypeAlias
+from typing import Callable, Iterable, TypeAlias
 
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
@@ -659,11 +659,7 @@ class _FormatInferInstance(Visitor):
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
             self._set_def_bound(phi, self._join(lhs, rhs))
 
-    def _iterate_to_fixpoint(
-        self,
-        phis: list[PhiDef],
-        run_body: Callable[[], None],
-    ):
+    def _fixpoint(self, phis: Iterable[PhiDef], run_body: Callable[[], None]):
         """
         Drive a loop's phi-bound fixpoint to convergence.
 
@@ -698,13 +694,13 @@ class _FormatInferInstance(Visitor):
             self._visit_expr(stmt.cond, ctx)
             self._visit_block(stmt.body, ctx)
 
-        self._iterate_to_fixpoint(self.def_use.phis[stmt], body)
+        self._fixpoint(self.def_use.phis[stmt], body)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
         assert isinstance(iter_fmt, ListFormat)
         self._visit_binding(stmt, stmt.target, iter_fmt.elt)
-        self._iterate_to_fixpoint(
+        self._fixpoint(
             self.def_use.phis[stmt], lambda: self._visit_block(stmt.body, ctx)
         )
 
