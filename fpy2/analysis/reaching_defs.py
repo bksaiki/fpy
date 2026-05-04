@@ -24,7 +24,7 @@ __all__ = [
 ]
 
 
-DefSite: TypeAlias = FuncDef | Argument | Assign | ForStmt | ContextStmt | ListComp
+DefSite: TypeAlias = FuncDef | Argument | Assign | IndexedAssign | ForStmt | ContextStmt | ListComp
 """AST nodes that can define variables"""
 PhiSite: TypeAlias = If1Stmt | IfStmt | WhileStmt | ForStmt
 """AST nodes that can introduce phi nodes"""
@@ -351,9 +351,16 @@ class _ReachingDefs(DefaultVisitor):
         return ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _DefCtx):
+        # Visit children first so reads of stmt.var (or anything else)
+        # resolve to the pre-mutation context.
         for index in stmt.indices:
             self._visit_expr(index, ctx)
         self._visit_expr(stmt.expr, ctx)
+        # ``xs[i] = e`` creates a fresh definition of ``xs``: semantically
+        # ``xs = update(xs, [i], e)``.  The new def is what subsequent uses
+        # of ``xs`` resolve to, and it's what loop phis pick up via the
+        # back-edge.
+        _, ctx = self._add_assign(stmt.var, stmt, ctx)
         return ctx
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _DefCtx):
