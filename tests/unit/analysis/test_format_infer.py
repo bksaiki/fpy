@@ -773,6 +773,92 @@ class TestFormatInfer:
             f'expected block_acc to stay precise, got {block_acc_bounds}'
         )
 
+    def test_blockwise_quantized_accumulator_end_to_end(self):
+        """
+        Regression: a realistic blockwise quantized-accumulator pattern.
+
+        - ``ys`` is quantized to MX_E4M3.
+        - Outer loop iterates blocks of K=32; each iteration takes a
+          slice ``block = ys[i:i+K]`` and accumulates K elements under
+          REAL into ``block_acc``.
+        - The block accumulator is then added into ``acc`` under FP32.
+
+        This exercises every load-bearing piece of the analysis at once:
+
+        - ``ListSize`` resolution for ``range(K)`` (= 32) so the inner
+          loop is unrolled exactly 32 times instead of fixpoint+widening.
+        - ``SetFormat({0}) + EFloatFormat`` lifted through
+          :class:`AbstractFormat` so the inner accumulator stays precise.
+        - The FP32 ``with`` block forcing a clean rounded format on
+          ``acc`` regardless of the symbolic outer-loop count.
+
+        Before the SetFormat → AbstractFormat lift and the bounded-iter
+        mode, ``block_acc`` widened to ``REAL_FORMAT`` on the first
+        body pass and contaminated everything downstream.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def foo(xs: list[fp.Real]):
+            # block size
+            K = 32
+
+            # quantize to E4M3
+            with fp.MX_E4M3:
+                ys = [fp.round(x) for x in xs]
+            # accumulate in blocks of K
+            acc = 0
+            for i in range(0, len(ys), K):
+                block = ys[i : i + K]
+                block_acc = 0
+                for j in range(K):
+                    block_acc += block[j]
+                # quantize block accumulation to FP32
+                with fp.FP32:
+                    acc += block_acc
+            # return final result in FP32
+            return acc
+
+        info = self._run(foo)
+
+        # 1. block_acc must stay precise (no REAL_FORMAT contamination
+        #    from the inner accumulator).
+        block_acc_bounds = [
+            b for d, b in info.by_def.items() if d.name.base == 'block_acc'
+        ]
+        assert REAL_FORMAT not in block_acc_bounds, (
+            f'expected block_acc to stay precise, got {block_acc_bounds}'
+        )
+        # And it must reach a Format strictly tighter than REAL_FORMAT
+        # at the loop phi (the bounded-iter mode produced an
+        # MPB-Float-shaped accumulator that contains 32 × MX_E4M3_max).
+        widened = [
+            b for b in block_acc_bounds
+            if isinstance(b, Format) and b != REAL_FORMAT
+        ]
+        assert widened, (
+            f'expected a precise containing Format among block_acc bounds, '
+            f'got {block_acc_bounds}'
+        )
+
+        # 2. acc must reach FP32 — every write is inside ``with fp.FP32``,
+        #    so the FP32 round dominates regardless of the outer loop's
+        #    symbolic iteration count.
+        acc_bounds = [
+            b for d, b in info.by_def.items() if d.name.base == 'acc'
+        ]
+        assert fp.FP32.format() in acc_bounds, (
+            f'expected FP32 among acc bounds, got {acc_bounds}'
+        )
+
+        # 3. ys is the rounded list — its element format is MX_E4M3.
+        ys_bounds = [
+            b for d, b in info.by_def.items() if d.name.base == 'ys'
+        ]
+        mx_e4m3 = fp.MX_E4M3.format()
+        assert any(
+            isinstance(b, ListFormat) and b.elt == mx_e4m3
+            for b in ys_bounds
+        ), f'expected ListFormat(MX_E4M3) among ys bounds, got {ys_bounds}'
+
     def test_exact_arith_skipped_under_concrete_round(self):
         """
         Under a concrete non-REAL context (e.g., FP32), arithmetic results
