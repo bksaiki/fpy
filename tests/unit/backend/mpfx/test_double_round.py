@@ -74,8 +74,8 @@ class TestDoubleRound():
     def test_rtz_rtz(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RTZ](ctx2[RTZ](x)) == ctx1[RTZ](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTZ, fp.RM.RTZ)
-        A1 = AbstractFormat.from_context(ctx1)
-        A2 = AbstractFormat.from_context(ctx2)
+        A1 = AbstractFormat.from_format(ctx1.format())
+        A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
@@ -94,8 +94,8 @@ class TestDoubleRound():
     def test_raz_raz(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RAZ](ctx2[RAZ](x)) == ctx1[RAZ](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RAZ, fp.RM.RAZ)
-        A1 = AbstractFormat.from_context(ctx1)
-        A2 = AbstractFormat.from_context(ctx2)
+        A1 = AbstractFormat.from_format(ctx1.format())
+        A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
@@ -115,8 +115,8 @@ class TestDoubleRound():
         """ctx1[RTO](ctx2[RTO](x)) == ctx1[RTO](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTO, fp.RM.RTO)
         assume(ctx1.pos_maxval < ctx2.pos_maxval)
-        A1 = AbstractFormat.from_context(ctx1)
-        A2 = AbstractFormat.from_context(ctx2)
+        A1 = AbstractFormat.from_format(ctx1.format())
+        A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
@@ -137,8 +137,8 @@ class TestDoubleRound():
     # def test_rto_rtz(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
     #     """ctx1[RTZ](ctx2[RTO](x)) == ctx1[RTZ](x)"""
     #     ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTZ, fp.RM.RTO)
-    #     A1 = AbstractFormat.from_context(ctx1)
-    #     A2 = AbstractFormat.from_context(ctx2)
+    #     A1 = AbstractFormat.from_format(ctx1.format())
+    #     A2 = AbstractFormat.from_format(ctx2.format())
     #     y1 = ctx1.round(x)
     #     y2 = ctx2.round(x)
     #     y3 = ctx1.round(y2)
@@ -158,8 +158,8 @@ class TestDoubleRound():
         """ctx1[RAZ](ctx2[RTO](x)) == ctx1[RAZ](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RAZ, fp.RM.RTO)
         assume(ctx1.pos_maxval < ctx2.pos_maxval)
-        A1 = AbstractFormat.from_context(ctx1)
-        A2 = AbstractFormat.from_context(ctx2)
+        A1 = AbstractFormat.from_format(ctx1.format())
+        A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
@@ -179,8 +179,8 @@ class TestDoubleRound():
         """ctx1[RNE](ctx2[RTO](x)) == ctx1[RNE](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RNE, fp.RM.RTO)
         assume(_next_float(ctx1, ctx1.pos_maxval) <= ctx2.pos_maxval)
-        A1 = AbstractFormat.from_context(ctx1)
-        A2 = AbstractFormat.from_context(ctx2)
+        A1 = AbstractFormat.from_format(ctx1.format())
+        A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)

@@ -7,12 +7,9 @@ import pytest
 
 from fractions import Fraction
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
-from fpy2.analysis.format_infer import (
-    ListFormat,
-    SetFormat,
-    _join_bounds,
-    _list_set_widen,
-)
+from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat
+from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
+from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
 from fpy2.transform import FuncUpdate
 
@@ -268,12 +265,21 @@ class TestFormatInfer:
 
     def test_join_different_formats(self):
         """
-        ``join(f1, f2) == REAL_FORMAT`` when f1 != f2:
-        formats from two sources with different formats widen to REAL_FORMAT.
+        Joining two distinct abstractable Formats goes through
+        ``AbstractFormat`` and yields a single :class:`Format` whose
+        representable set contains both inputs (rather than widening
+        immediately to ``REAL_FORMAT``).
         """
         fmt1 = fp.FP32.format()
         fmt2 = fp.FP64.format()
-        assert _join_bounds(fmt1, fmt2) == REAL_FORMAT
+        joined = _join_bounds(fmt1, fmt2)
+        assert isinstance(joined, Format)
+        assert joined != REAL_FORMAT
+        # The joined format must contain every value representable by either
+        # input. Pick concrete witnesses near the bounds of FP32 / FP64.
+        for fmt in (fmt1, fmt2):
+            sample = fmt.maxval()._real
+            assert joined.representable_in(sample)
 
     def test_join_real_is_top(self):
         """
@@ -283,6 +289,308 @@ class TestFormatInfer:
         fmt = fp.FP32.format()
         assert _join_bounds(REAL_FORMAT, fmt) == REAL_FORMAT
         assert _join_bounds(fmt, REAL_FORMAT) == REAL_FORMAT
+
+    def test_branch_distinct_formats_joins_to_containing_format(self):
+        """
+        End-to-end: a function whose ``if`` branches are typed under FP32 and
+        FP64 should produce a single, containing :class:`Format` for the
+        merged value, not ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(cond: bool, x: fp.Real) -> fp.Real:
+            if cond:
+                with fp.FP32:
+                    y = fp.round(x)
+            else:
+                with fp.FP64:
+                    y = fp.round(x)
+            return y
+
+        info = self._run(f)
+        # Find the phi merging the two branches.
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        merged = [b for b in y_bounds if isinstance(b, Format) and b != REAL_FORMAT]
+        assert merged, f"expected a containing Format among y bounds, got {y_bounds}"
+        # Whichever specific Format we pick, it must contain both FP32 and FP64.
+        joined = merged[-1]
+        for fmt in (fp.FP32.format(), fp.FP64.format()):
+            assert joined.representable_in(fmt.maxval()._real)
+
+    def test_join_subsumed_format_returns_wider_input(self):
+        """
+        When one Format is contained in the other (e.g., FP32 ⊆ FP64), the
+        join short-circuits to the wider input Format directly rather than
+        projecting through ``(af1 | af2).format()``.  This preserves the
+        original Format's identity (e.g., ``IEEEFormat`` not
+        ``MPBFloatFormat``) when no widening is needed.
+        """
+        fp32 = fp.FP32.format()
+        fp64 = fp.FP64.format()
+        # FP32 ⊆ FP64 → join returns FP64 in either order.
+        assert _join_bounds(fp32, fp64) == fp64
+        assert _join_bounds(fp64, fp32) == fp64
+
+    def test_abstract_format_round_trip(self):
+        """
+        ``AbstractFormat.from_format(f).format()`` produces a :class:`Format`
+        whose representable set contains every value of *f*.
+        """
+        for ctx in (fp.FP32, fp.FP64):
+            fmt = ctx.format()
+            roundtripped = AbstractFormat.from_format(fmt).format()
+            assert isinstance(roundtripped, Format)
+            assert roundtripped.representable_in(fmt.maxval()._real)
+            assert roundtripped.representable_in(fmt.minval()._real)
+
+    def test_join_saturates_to_real(self):
+        """
+        Joining a concrete Format with ``REAL_FORMAT`` (the saturated
+        abstract format) collapses to ``REAL_FORMAT``.
+        """
+        af_fp32 = AbstractFormat.from_format(fp.FP32.format())
+        af_real = AbstractFormat.from_format(REAL_FORMAT)
+        assert (af_fp32 | af_real).format() == REAL_FORMAT
+
+    def test_loop_format_join_converges(self):
+        """
+        A loop whose body produces a different concrete Format than the
+        pre-loop binding must reach a fixpoint with the joined containing
+        Format (not diverge, not silently widen to ``REAL_FORMAT``).
+        """
+        @fp.fpy
+        def f(cond: bool, x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                y = fp.round(x)
+            while cond:
+                with fp.FP64:
+                    y = fp.round(x)
+            return y
+
+        info = self._run(f)
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        # The phi merging the FP32 pre-loop value with the FP64 body value
+        # must be a containing Format that is neither FP32 nor REAL_FORMAT.
+        joined = [
+            b for b in y_bounds
+            if isinstance(b, Format) and b not in (fp.FP32.format(), REAL_FORMAT)
+        ]
+        assert joined, f"expected a widened Format among y bounds, got {y_bounds}"
+        for fmt in (fp.FP32.format(), fp.FP64.format()):
+            assert joined[-1].representable_in(fmt.maxval()._real)
+
+    # ------------------------------------------------------------------
+    # Exact arithmetic under a concrete REAL context
+
+    def test_exact_add_under_real(self):
+        """
+        ``a + b`` under ``with fp.REAL`` (no rounding) where both operands
+        are FP32 should produce a Format strictly tighter than ``REAL_FORMAT``
+        whose bounds contain ``2 * FP32_MAX``.
+        """
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+                b = fp.round(y)
+            with fp.REAL:
+                return a + b
+
+        info = self._run(f)
+        adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
+        assert adds, 'expected an Add expression in by_expr'
+        result = adds[-1]
+        assert isinstance(result, Format)
+        assert result != REAL_FORMAT
+        fp32_max = fp.FP32.format().maxval()._real
+        assert result.representable_in(fp32_max + fp32_max)
+
+    def test_exact_mul_under_real(self):
+        """
+        ``a * b`` under ``with fp.REAL`` produces a Format that contains
+        ``FP32_MAX**2`` (which itself does not fit in FP32 / FP64 ranges
+        cleanly, but does fit in the AbstractFormat-derived bound).
+        """
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+                b = fp.round(y)
+            with fp.REAL:
+                return a * b
+
+        info = self._run(f)
+        muls = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Mul']
+        assert muls and isinstance(muls[-1], Format)
+        assert muls[-1] != REAL_FORMAT
+
+    def test_exact_neg_under_real(self):
+        """``-a`` under REAL preserves a's format (up to the sign-flip)."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            with fp.REAL:
+                return -a
+
+        info = self._run(f)
+        negs = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Neg']
+        assert negs and isinstance(negs[-1], Format)
+        assert negs[-1] != REAL_FORMAT
+        # Negation cannot widen beyond ±FP32_MAX.
+        fp32_max = fp.FP32.format().maxval()._real
+        assert negs[-1].representable_in(-fp32_max)
+
+    def test_exact_arith_skipped_under_symbolic_context(self):
+        """
+        When the active context is a symbolic / unresolved variable (the
+        default top-level scope), exact arithmetic is *not* applied — we
+        cannot assume the rounding is the identity.  Result falls back to
+        ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+                b = fp.round(y)
+            return a + b  # default top-level scope, symbolic ctx
+
+        info = self._run(f)
+        adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
+        assert adds and adds[-1] == REAL_FORMAT
+
+    def test_loop_widens_to_real_format(self):
+        """
+        A loop whose body applies exact arithmetic to a phi'd value would
+        produce an infinite ascending chain of AbstractFormats (each
+        iteration widens prec/bounds).  After ``loop_iter_limit`` iterations
+        the analysis switches to widen-mode joins so the fixpoint terminates
+        at ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP32:
+                x = fp.round(0)
+            while n > 0:
+                with fp.REAL:
+                    x = x + x
+            return x
+
+        # With a small limit, the fixpoint must terminate and widen x's
+        # while-phi to REAL_FORMAT.
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
+        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
+        assert REAL_FORMAT in x_bounds, (
+            f"expected REAL_FORMAT among x bounds with widening, got {x_bounds}"
+        )
+
+    def test_loop_iter_limit_zero_widens_immediately(self):
+        """
+        ``loop_iter_limit=0`` forces every loop join to widen on the very
+        first iteration — distinct scalar Formats merge to ``REAL_FORMAT``
+        without going through ``AbstractFormat``.
+        """
+        @fp.fpy
+        def f(cond: bool, x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                y = fp.round(x)
+            while cond:
+                with fp.FP64:
+                    y = fp.round(x)
+            return y
+
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=0)
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        # The loop phi should be REAL_FORMAT (widen-mode forced join of
+        # FP32 and FP64 to top), not an MPB-float containing both.
+        assert REAL_FORMAT in y_bounds, (
+            f"expected REAL_FORMAT among y bounds with limit=0, got {y_bounds}"
+        )
+
+    def test_loop_iter_limit_high_keeps_precision(self):
+        """
+        With a generous limit, a non-divergent loop must still produce a
+        precise join (an MPB-float containing FP32 and FP64), not widen to
+        ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(cond: bool, x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                y = fp.round(x)
+            while cond:
+                with fp.FP64:
+                    y = fp.round(x)
+            return y
+
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=100)
+        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
+        # Some bound must be a Format containing both FP32 and FP64 but not
+        # equal to REAL_FORMAT (the AbstractFormat-mediated join survives).
+        precise = [
+            b for b in y_bounds
+            if isinstance(b, Format) and b not in (fp.FP32.format(), REAL_FORMAT)
+        ]
+        assert precise, (
+            f"expected an AbstractFormat-derived join among y bounds, got {y_bounds}"
+        )
+
+    def test_nested_loop_widen_propagates_inward(self):
+        """
+        When an outer loop's fixpoint enters widen-mode (its iteration
+        count crosses ``loop_iter_limit``), the inner loop's joins also
+        widen — the ``saved_widen or iter >= limit`` plumbing in
+        ``_iterate_to_fixpoint`` must propagate the outer state through
+        nested ``while``/``for``.
+
+        The probe: an outer ``while`` whose body diverges (``x = x + x``
+        under REAL) and contains an inner ``while`` whose body merges two
+        Formats that would normally produce a precise containing Format.
+        With a small outer limit, the outer enters widen-mode quickly;
+        because that state propagates inward, the inner loop's phi must
+        also widen to ``REAL_FORMAT`` rather than producing the
+        AbstractFormat-mediated join.
+        """
+        @fp.fpy
+        def f(n: fp.Real, m: fp.Real, c: bool) -> fp.Real:
+            with fp.FP32:
+                x = fp.round(0)
+                z = fp.round(0)
+            while n > 0:
+                with fp.REAL:
+                    x = x + x  # diverges → forces outer widen
+                while m > 0:
+                    if c:
+                        with fp.FP32:
+                            z = fp.round(0)
+                    else:
+                        with fp.FP64:
+                            z = fp.round(0)
+            return x + z
+
+        # outer limit small → outer widens, propagates to inner.
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
+        z_bounds = [b for d, b in info.by_def.items() if d.name.base == 'z']
+        # The inner loop's z-phi (which merges FP32 and FP64) must reach
+        # REAL_FORMAT once the outer loop's widen state propagates in.
+        assert REAL_FORMAT in z_bounds, (
+            f"expected outer widen-mode to propagate into inner loop, got {z_bounds}"
+        )
+
+    def test_exact_arith_skipped_under_concrete_round(self):
+        """
+        Under a concrete non-REAL context (e.g., FP32), arithmetic results
+        are rounded to that format — exact-arithmetic widening would be
+        unsound.  The visitor must still return the scope's format.
+        """
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+                b = fp.round(y)
+                return a + b
+
+        info = self._run(f)
+        adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
+        assert adds and adds[-1] == fp.FP32.format()
 
     # ------------------------------------------------------------------
     # SetFormat semantics
