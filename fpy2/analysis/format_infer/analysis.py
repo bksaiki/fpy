@@ -56,9 +56,14 @@ The analysis tracks a **format** that mirrors the basic-type structure::
 
 For loops, phi nodes are initialised from the pre-loop definition's format and
 the body is iterated until the phi bounds stop changing.  The lattice has
-finite height (``REAL_FORMAT`` tops the scalar sub-lattice, ``SetFormat``
-values are drawn from the program's finitely many literals, and the structural
-lattice is shape-preserving), so the fixpoint terminates.
+**infinite ascending chains** in the scalar sub-lattice when exact arithmetic
+(``+``/``-``/``*`` under :class:`RealContext`, see below) is applied to a
+phi'd value: each iteration widens the resulting :class:`AbstractFormat`'s
+precision and bounds without bound.  To force termination, each loop
+fixpoint runs at most ``loop_iter_limit`` iterations before switching joins
+to **widen-mode** — distinct scalar :class:`Format` inputs fall back to
+``REAL_FORMAT`` instead of going through :class:`AbstractFormat` union, at
+which point the fixpoint converges in one more iteration.
 
 Format inference rules
 ----------------------
@@ -91,7 +96,7 @@ Format inference rules
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
-from typing import TypeAlias
+from typing import Callable, TypeAlias
 
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
@@ -246,8 +251,13 @@ def _join_bounds(
                 af1 = AbstractFormat.from_format(s1)
                 af2 = AbstractFormat.from_format(s2)
                 # Subsumption: if one input contains the other, return the
-                # original (more precise / un-canonicalized) Format rather
-                # than projecting through ``(af1 | af2).format()``.
+                # original (un-canonicalized) Format directly.  This is
+                # important for **fixpoint idempotence**: ``(af | af).format()``
+                # may return an MPB-float that is value-equivalent to the
+                # input but compares unequal under ``==`` (e.g.,
+                # ``IEEEFormat(FP64)`` vs the corresponding
+                # ``MPBFloatFormat``), which would prevent loop phis from
+                # detecting convergence.
                 if af1 <= af2:
                     return s2
                 if af2 <= af1:
@@ -427,7 +437,7 @@ class _FormatInferInstance(Visitor):
         self,
         e: ContextUseSite,
         operands: tuple[FormatBound, ...],
-    ) -> FormatBound:
+    ) -> Format | None:
         """
         Tries to compute a tight format for an exact arithmetic operation.
 
@@ -649,53 +659,54 @@ class _FormatInferInstance(Visitor):
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
             self._set_def_bound(phi, self._join(lhs, rhs))
 
-    def _visit_while(self, stmt: WhileStmt, ctx: None):
-        # Initialise phi formats from pre-loop (lhs) definitions so that the
-        # loop body can reference them before the back-edge has been processed.
-        for phi in self.def_use.phis[stmt]:
+    def _iterate_to_fixpoint(
+        self,
+        phis: list[PhiDef],
+        run_body: Callable[[], None],
+    ):
+        """
+        Drive a loop's phi-bound fixpoint to convergence.
+
+        Initialises each phi from its pre-loop (lhs) definition, then
+        repeatedly runs *run_body* and joins the post-body (rhs) into each
+        phi.  After ``_loop_iter_limit`` iterations without convergence,
+        switches joins to widen-mode (``self._widen = True``) to force
+        termination on infinite-height AbstractFormat chains (e.g., from
+        exact arithmetic in the body).  Save/restore semantics mean an
+        outer loop already in widen-mode propagates that into nested
+        iterations.
+        """
+        for phi in phis:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
-        # Iterate body + join until phi bounds stop changing.  After
-        # ``_loop_iter_limit`` iterations without convergence, switch joins
-        # to widen-mode to force termination on infinite-height
-        # AbstractFormat chains (e.g., arithmetic in the body).
         saved_widen = self._widen
         iter_count = 0
         while True:
-            prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
+            prev = {phi: self.by_def[phi] for phi in phis}
             self._widen = saved_widen or iter_count >= self._loop_iter_limit
-            self._visit_expr(stmt.cond, ctx)
-            self._visit_block(stmt.body, ctx)
-            for phi in self.def_use.phis[stmt]:
+            run_body()
+            for phi in phis:
                 lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
                 rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
                 self._set_def_bound(phi, self._join(lhs, rhs))
-            if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
+            if all(self.by_def[phi] == prev[phi] for phi in phis):
                 break
             iter_count += 1
         self._widen = saved_widen
+
+    def _visit_while(self, stmt: WhileStmt, ctx: None):
+        def body():
+            self._visit_expr(stmt.cond, ctx)
+            self._visit_block(stmt.body, ctx)
+
+        self._iterate_to_fixpoint(self.def_use.phis[stmt], body)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
         assert isinstance(iter_fmt, ListFormat)
         self._visit_binding(stmt, stmt.target, iter_fmt.elt)
-        # Initialise phi formats from pre-loop (lhs) definitions
-        for phi in self.def_use.phis[stmt]:
-            self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
-        # See ``_visit_while`` for the widen-mode rationale.
-        saved_widen = self._widen
-        iter_count = 0
-        while True:
-            prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
-            self._widen = saved_widen or iter_count >= self._loop_iter_limit
-            self._visit_block(stmt.body, ctx)
-            for phi in self.def_use.phis[stmt]:
-                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-                self._set_def_bound(phi, self._join(lhs, rhs))
-            if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
-                break
-            iter_count += 1
-        self._widen = saved_widen
+        self._iterate_to_fixpoint(
+            self.def_use.phis[stmt], lambda: self._visit_block(stmt.body, ctx)
+        )
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # The context expression itself is not a numerical computation.

@@ -327,7 +327,7 @@ class TestFormatInfer:
         fp32 = fp.FP32.format()
         fp64 = fp.FP64.format()
         # FP32 ⊆ FP64 → join returns FP64 in either order.
-        assert _join_bounds(fp32, fp64) is fp64 or _join_bounds(fp32, fp64) == fp64
+        assert _join_bounds(fp32, fp64) == fp64
         assert _join_bounds(fp64, fp32) == fp64
 
     def test_abstract_format_round_trip(self):
@@ -531,6 +531,48 @@ class TestFormatInfer:
         ]
         assert precise, (
             f"expected an AbstractFormat-derived join among y bounds, got {y_bounds}"
+        )
+
+    def test_nested_loop_widen_propagates_inward(self):
+        """
+        When an outer loop's fixpoint enters widen-mode (its iteration
+        count crosses ``loop_iter_limit``), the inner loop's joins also
+        widen — the ``saved_widen or iter >= limit`` plumbing in
+        ``_iterate_to_fixpoint`` must propagate the outer state through
+        nested ``while``/``for``.
+
+        The probe: an outer ``while`` whose body diverges (``x = x + x``
+        under REAL) and contains an inner ``while`` whose body merges two
+        Formats that would normally produce a precise containing Format.
+        With a small outer limit, the outer enters widen-mode quickly;
+        because that state propagates inward, the inner loop's phi must
+        also widen to ``REAL_FORMAT`` rather than producing the
+        AbstractFormat-mediated join.
+        """
+        @fp.fpy
+        def f(n: fp.Real, m: fp.Real, c: bool) -> fp.Real:
+            with fp.FP32:
+                x = fp.round(0)
+                z = fp.round(0)
+            while n > 0:
+                with fp.REAL:
+                    x = x + x  # diverges → forces outer widen
+                while m > 0:
+                    if c:
+                        with fp.FP32:
+                            z = fp.round(0)
+                    else:
+                        with fp.FP64:
+                            z = fp.round(0)
+            return x + z
+
+        # outer limit small → outer widens, propagates to inner.
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
+        z_bounds = [b for d, b in info.by_def.items() if d.name.base == 'z']
+        # The inner loop's z-phi (which merges FP32 and FP64) must reach
+        # REAL_FORMAT once the outer loop's widen state propagates in.
+        assert REAL_FORMAT in z_bounds, (
+            f"expected outer widen-mode to propagate into inner loop, got {z_bounds}"
         )
 
     def test_exact_arith_skipped_under_concrete_round(self):

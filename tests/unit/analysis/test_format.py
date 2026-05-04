@@ -139,6 +139,96 @@ class TestAbstractFormat():
         CTX2 = AbstractFormat(4, 0, fp.RealFloat.from_int(12))
         assert CTX1 <= CTX2, "Expected INT4 to be contained in A(4, 0, 12)."
 
+    # ------------------------------------------------------------------
+    # Subnormal-region containment: the asymmetric branch of
+    # ``_is_contained_in`` where ``self.prec > other.prec`` but every
+    # value in ``self`` lives within ``other``'s subnormal region.
+
+    def test_contains_high_prec_but_small_bound_in_subnormal_region(self):
+        """
+        ``self`` has more precision than ``other``, but every value of
+        ``self`` fits within ``other``'s subnormal region (where the
+        effective quantum is ``2^other.exp`` and is finer than the
+        normal-region spacing implied by ``other.prec``).  Containment
+        should hold via the cutoff check.
+
+        cutoff = ``2^(self.exp + other.prec)``; if ``self.bound <= cutoff``,
+        ``self`` is contained.
+        """
+        # self: 10 bits of precision, quantum=1, bound=4. Represents the
+        # integers {-4, ..., 4}.
+        # other: 2 bits of precision, quantum=1, bound=4. Normal-region
+        # spacing widens past 4 but every value <= 4 is exactly
+        # representable in the subnormal region.
+        # cutoff = 2^(0 + 2) = 4. self.bound = 4 <= 4 → contained.
+        SELF = AbstractFormat(10, 0, fp.RealFloat.from_int(4))
+        OTHER = AbstractFormat(2, 0, fp.RealFloat.from_int(4))
+        assert SELF <= OTHER, \
+            'high-prec self with bound at cutoff should be contained'
+
+    def test_contains_high_prec_bound_just_above_cutoff(self):
+        """
+        Same parameters as the previous test except ``self``'s bound is
+        one unit above the subnormal-region cutoff.  Containment must
+        fail — values just above the cutoff land in ``other``'s normal
+        region where the spacing is too coarse for ``self``'s precision.
+        """
+        # cutoff = 2^(0 + 2) = 4. self.bound = 8 > 4.  Even though
+        # other.bound (16) covers self.bound (8), the precision check
+        # rejects.
+        SELF = AbstractFormat(10, 0, fp.RealFloat.from_int(8))
+        OTHER = AbstractFormat(2, 0, fp.RealFloat.from_int(16))
+        assert not SELF <= OTHER, \
+            'high-prec self with bound past cutoff must not be contained'
+
+    def test_contains_high_prec_neg_bound_above_cutoff(self):
+        """
+        Symmetric counter-test: positive bound stays at the cutoff but
+        the *negative* bound exceeds it.  Containment must still fail.
+        """
+        SELF = AbstractFormat(
+            10, 0,
+            fp.RealFloat.from_int(4),
+            neg_bound=fp.RealFloat(s=True, exp=0, c=8),  # -8
+        )
+        OTHER = AbstractFormat(
+            2, 0,
+            fp.RealFloat.from_int(16),
+            neg_bound=fp.RealFloat(s=True, exp=0, c=16),  # -16
+        )
+        assert not SELF <= OTHER, \
+            'asymmetric subnormal check should also examine neg_bound'
+
+    def test_contains_high_prec_other_unbounded_prec(self):
+        """
+        When ``other.prec`` is unbounded (float('inf')), the precision
+        check is skipped entirely — any finite-prec ``self`` with bounds
+        and quantum that fit is contained regardless of its precision.
+        """
+        # MPFixedFormat-shaped: prec=inf, finite exp, unbounded bound.
+        OTHER = AbstractFormat(float('inf'), -10, float('inf'))
+        SELF = AbstractFormat(53, -10, fp.RealFloat.from_int(1024))
+        assert SELF <= OTHER
+
+    # ------------------------------------------------------------------
+    # __abs__ returns a RealFloat-typed neg_bound
+
+    def test_abs_neg_bound_is_realfloat(self):
+        """
+        Regression: a previous version of ``__abs__`` stored the integer
+        literal ``0`` as ``neg_bound``, violating the documented
+        ``RealFloat | float`` typing and tripping ``format()``'s
+        ``isinstance(self.neg_bound, RealFloat)`` assertion.
+        """
+        af = AbstractFormat.from_format((fp.FP32).format())
+        absolute = abs(af)
+        assert isinstance(absolute.neg_bound, fp.RealFloat)
+        assert absolute.neg_bound == fp.RealFloat.from_int(0)
+        # The result must round-trip through .format() without tripping
+        # the bounded-float assertion.
+        result = absolute.format()
+        assert result is not None
+
 
     @given(
         st.one_of(st.integers(1, 6), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
