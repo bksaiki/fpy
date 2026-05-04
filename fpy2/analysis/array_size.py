@@ -190,6 +190,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case Enumerate():
                 assert isinstance(ty, ListSize)
                 return ListSize(TupleSize((None, ty.elt)), ty.size)
+            case _:
+                return None
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None):
         self._visit_expr(e.first, ctx)
@@ -205,6 +207,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     return ListSize(None, size)
                 else:
                     return ListSize(None, None)
+            case _:
+                return None
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None):
         self._visit_expr(e.first, ctx)
@@ -229,6 +233,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     return ListSize(None, len(range(start_i, stop_i, step_i)))
                 else:
                     return ListSize(None, None)
+            case _:
+                return None
 
     def _visit_naryop(self, e: NaryOp, ctx: None):
         tys = [self._visit_expr(arg, ctx) for arg in e.args]
@@ -280,6 +286,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     ty = ListSize(ty, size)
 
                 return ty
+
+            case _:
+                return None
 
     def _visit_list_expr(self, e: ListExpr, ctx: None):
         elt_sizes = [self._visit_expr(elt, ctx) for elt in e.elts]
