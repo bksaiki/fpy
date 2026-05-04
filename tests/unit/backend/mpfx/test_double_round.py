@@ -20,11 +20,11 @@ def _cvt_to_context(p, exp, b):
 def _next_float(ctx, x: fp.RealFloat):
     """Returns the value just above maxval in ordinal space."""
     if isinstance(ctx, fp.MPBFixedContext):
-        o = ctx._mp_ctx.to_ordinal(fp.Float.from_real(x))
-        return ctx._mp_ctx.from_ordinal(o + 1).as_real()
+        o = ctx.format()._mp_fmt.to_ordinal(fp.Float.from_real(x))
+        return ctx.format()._mp_fmt.from_ordinal(o + 1).as_real()
     elif isinstance(ctx, fp.MPBFloatContext):
-        o = ctx._mps_ctx.to_ordinal(fp.Float.from_real(x))
-        return ctx._mps_ctx.from_ordinal(o + 1).as_real()
+        o = ctx.format()._mps_fmt.to_ordinal(fp.Float.from_real(x))
+        return ctx.format()._mps_fmt.from_ordinal(o + 1).as_real()
     else:
         raise TypeError(f'unexpected context type: {type(ctx)}')
 
