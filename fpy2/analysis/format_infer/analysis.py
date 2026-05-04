@@ -111,7 +111,6 @@ Format inference rules
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
-from re import match
 from typing import Callable, Iterable, TypeAlias
 
 from ...ast.fpyast import *
@@ -1012,13 +1011,23 @@ class FormatInfer:
 
     This rule is applied at all control-flow merge points (phi nodes), including
     branch merges (``if``/``if1``) and loop back-edges (``while``/``for``).
-    Loops iterate body + join until phi bounds stop changing.  The
-    AbstractFormat-mediated scalar join introduces infinite ascending chains
-    when exact arithmetic (``+``/``-``/``*`` under :class:`RealContext`) is
-    applied to a phi'd value, so each loop fixpoint runs at most
-    ``loop_iter_limit`` iterations before switching joins to widen-mode
-    (distinct scalar Formats fall back to ``REAL_FORMAT``) to force
-    convergence.
+
+    **Loops** are handled in one of two modes:
+
+    - **Bounded iteration**: when a ``for`` loop's iterable has a
+      statically-known length (per :class:`ArraySizeAnalysis`), the
+      analysis drives the phi update for *exactly* that many body
+      executions.  This mirrors runtime semantics and avoids any
+      widening fall-back — important for the exact-arithmetic lattice,
+      which has infinite ascending chains.
+    - **Fixpoint + widening**: ``while`` loops and ``for`` loops over
+      symbolic-length iterables iterate body + join until phi bounds
+      stop changing.  The AbstractFormat-mediated scalar join introduces
+      infinite ascending chains when exact arithmetic
+      (``+``/``-``/``*`` under :class:`RealContext`) is applied to a
+      phi'd value, so the fixpoint runs at most ``loop_iter_limit``
+      iterations before switching joins to widen-mode (distinct scalar
+      Formats fall back to ``REAL_FORMAT``) to force convergence.
 
     **Usage**::
 
