@@ -18,8 +18,6 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..number import Float, INTEGER
 from ..types import ListType, TupleType, Type
-from ..utils import default_repr
-
 from .define_use import Definition, DefSite, DefineUseAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo, Value
 from .type_infer import TypeInfer, TypeAnalysis
@@ -37,47 +35,32 @@ __all__ = [
 #####################################################################
 # Array-size lattice
 
-@default_repr
-class ArraySize:
-    """
-    Set of possible static sizes for a list-valued expression.
+ArraySize: TypeAlias = int | None
+"""
+Static size of a list-valued expression: a concrete ``int`` when the
+size is known, ``None`` when unknown.
 
-    Used as the ``size`` attribute of :class:`ListSize`; analogous in
-    spirit to :class:`SetFormat` in the format-inference lattice (a
-    finite set of statically-known values).  Joins union the sets.
-    """
-    sizes: set[int]
-
-    def __init__(self, sizes: set[int] | None = None):
-        self.sizes = set(sizes) if sizes is not None else set()
-
-    def __eq__(self, other):
-        if not isinstance(other, ArraySize):
-            return NotImplemented
-        return self.sizes == other.sizes
-
-    def __hash__(self):
-        return hash(frozenset(self.sizes))
-
-    def union(self, other: 'ArraySize') -> 'ArraySize':
-        return ArraySize(self.sizes.union(other.sizes))
-
-    def resolve(self) -> int | None:
-        """Resolve to a single concrete size if possible, else ``None``."""
-        if len(self.sizes) == 1:
-            return next(iter(self.sizes))
-        else:
-            return None
+This is a flat 3-element lattice — ``None`` is top; equal known sizes
+join to themselves; unequal known sizes join to ``None``.  It is *not*
+a set of possible sizes: every consumer that ever inspected the size
+treated "multiple possibilities" identically to "unknown", so the
+information was not load-bearing.
+"""
 
 
-@dataclass
+def _join_size(a: ArraySize, b: ArraySize) -> ArraySize:
+    """Lattice join for :data:`ArraySize`.  Equal sizes survive; otherwise top."""
+    return a if a == b else None
+
+
+@dataclass(frozen=True)
 class ListSize:
     """Array-size info for a list-valued expression."""
     elt: 'ArraySizeBound'
     size: ArraySize
 
 
-@dataclass
+@dataclass(frozen=True)
 class TupleSize:
     """Array-size info for a tuple-valued expression."""
     elts: tuple['ArraySizeBound', ...]
@@ -146,7 +129,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         match ty:
             case ListType():
                 elt = self._cvt_type(ty.elt)
-                return ListSize(elt, ArraySize())
+                return ListSize(elt, None)
             case TupleType():
                 elts = tuple(self._cvt_type(e) for e in ty.elts)
                 return TupleSize(elts)
@@ -163,7 +146,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         match t1, t2:
             case ListSize(), ListSize():
                 elt = self._unify(t1.elt, t2.elt)
-                size = t1.size.union(t2.size)
+                size = _join_size(t1.size, t2.size)
                 return ListSize(elt, size)
             case TupleSize(), TupleSize():
                 elts = tuple(self._unify(e1, e2) for e1, e2 in zip(t1.elts, t2.elts, strict=True))
@@ -196,9 +179,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 stop = self._get_eval(e.arg)
                 if isinstance(stop, Float | Fraction):
                     size = int(INTEGER.round(stop))
-                    return ListSize(None, ArraySize({size}))
+                    return ListSize(None, size)
                 else:
-                    return ListSize(None, ArraySize())
+                    return ListSize(None, None)
             case Enumerate():
                 assert isinstance(ty, ListSize)
                 return ListSize(TupleSize((None, ty.elt)), ty.size)
@@ -214,9 +197,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     start_i = int(INTEGER.round(start))
                     stop_i = int(INTEGER.round(stop))
                     size = max(0, stop_i - start_i)
-                    return ListSize(None, ArraySize({size}))
+                    return ListSize(None, size)
                 else:
-                    return ListSize(None, ArraySize())
+                    return ListSize(None, None)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None):
         self._visit_expr(e.first, ctx)
@@ -226,14 +209,14 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case Range3():
                 # TODO: implement
                 # for now just return a symbolic list
-                return ListSize(None, ArraySize())
+                return ListSize(None, None)
 
     def _visit_naryop(self, e: NaryOp, ctx: None):
         tys = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case Zip():
                 if len(e.args) == 0:
-                    return ListSize(None, ArraySize({0}))
+                    return ListSize(None, 0)
                 else:
                     assert isinstance(tys[0], ListSize)
                     elt_tys: list[ArraySizeBound] = [tys[0].elt]
@@ -241,7 +224,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     for ty in tys[1:]:
                         assert isinstance(ty, ListSize)
                         elt_tys.append(ty.elt)
-                        size = size.union(ty.size)
+                        size = _join_size(size, ty.size)
 
                     return ListSize(TupleSize(tuple(elt_tys)), size)
 
@@ -257,10 +240,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
                 # innermost dimension
                 size_v = self._get_eval(arg_rev[0])
-                if isinstance(size_v, Float | Fraction):
-                    size = ArraySize({int(INTEGER.round(size_v))})
-                else:
-                    size = ArraySize()
+                size: ArraySize = (
+                    int(INTEGER.round(size_v))
+                    if isinstance(size_v, Float | Fraction)
+                    else None
+                )
 
                 # type of the innermost dimension
                 ty = ListSize(elt_ty, size)
@@ -268,10 +252,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 # outer dimensions
                 for arg in arg_rev[1:]:
                     size_v = self._get_eval(arg)
-                    if isinstance(size_v, Float | Fraction):
-                        size = ArraySize({int(INTEGER.round(size_v))})
-                    else:
-                        size = ArraySize()
+                    size = (
+                        int(INTEGER.round(size_v))
+                        if isinstance(size_v, Float | Fraction)
+                        else None
+                    )
 
                     ty = ListSize(ty, size)
 
@@ -286,7 +271,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
             elt_size = elt_sizes[0]
         else:
             elt_size = None
-        return ListSize(elt_size, ArraySize({len(e.elts)}))
+        return ListSize(elt_size, len(e.elts))
 
     def _visit_list_comp(self, e: ListComp, ctx: None):
         # process iterables and bindings
@@ -303,12 +288,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
         # try to compute size
         size = 1
         for ty in iter_tys:
-            iter_size = ty.size.resolve()
-            if iter_size is None:
-                return ListSize(elt_ty, ArraySize())
-            size *= iter_size
+            if ty.size is None:
+                return ListSize(elt_ty, None)
+            size *= ty.size
 
-        return ListSize(elt_ty, ArraySize({size}))
+        return ListSize(elt_ty, size)
 
     def _visit_list_ref(self, e: ListRef, ctx: None):
         ty = self._visit_expr(e.value, ctx)
@@ -340,12 +324,12 @@ class _ArraySizeInferInstance(DefaultVisitor):
             else:
                 stop = None
 
-        size = ty.size.resolve()
+        size = ty.size
         if size is not None and start is not None and stop is not None:
             # can compute size of the slice
             size = max(0, min(stop, size) - min(start, size))
 
-        return ListSize(ty.elt, ArraySize({size} if size is not None else set()))
+        return ListSize(ty.elt, size)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         return TupleSize(tuple(self._visit_expr(elt, ctx) for elt in e.elts))

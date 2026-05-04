@@ -317,13 +317,11 @@ class _FormatInfernce(Visitor):
                     size_ty = self.array_size.by_expr.get(e.arg, None)
                     if isinstance(size_ty, ListSize) and size_ty.size is not None:
                         m_ty = a_ty.elt
-                        size = size_ty.size.resolve()
-                        if size is not None:
-                            for _ in range(1, size):
-                                m_ty += a_ty.elt
+                        for _ in range(1, size_ty.size):
+                            m_ty += a_ty.elt
 
-                            assert isinstance(e_ty, AbstractFormat | RealType)
-                            e_ty = self._record_preround(e, m_ty, e_ty)
+                        assert isinstance(e_ty, AbstractFormat | RealType)
+                        e_ty = self._record_preround(e, m_ty, e_ty)
 
         return e_ty
 

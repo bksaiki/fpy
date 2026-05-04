@@ -6,7 +6,6 @@ import fpy2 as fp
 import pytest
 
 from fpy2.analysis import (
-    ArraySize,
     ArraySizeAnalysis,
     ArraySizeInfer,
     ListSize,
@@ -70,7 +69,7 @@ class TestArraySizeInfer:
         bound = xs_bounds[0]
         assert isinstance(bound, ListSize)
         assert bound.elt is None
-        assert bound.size == ArraySize()
+        assert bound.size is None
 
     def test_tuple_argument_has_tuplesize(self):
         """A tuple argument is a TupleSize with one entry per element."""
@@ -100,7 +99,7 @@ class TestArraySizeInfer:
         info = self._run(f)
         list_bounds = [
             b for b in info.by_expr.values()
-            if isinstance(b, ListSize) and b.size.resolve() == 3
+            if isinstance(b, ListSize) and b.size == 3
         ]
         assert list_bounds, 'expected a ListSize with size {3}'
 
@@ -114,7 +113,7 @@ class TestArraySizeInfer:
         info = self._run(f)
         list_bounds = [
             b for b in info.by_expr.values()
-            if isinstance(b, ListSize) and b.size.resolve() == 0
+            if isinstance(b, ListSize) and b.size == 0
         ]
         assert list_bounds, 'expected a ListSize with size {0}'
 
@@ -142,7 +141,7 @@ class TestArraySizeInfer:
         info = self._run(f)
         range_bounds = [
             b for b in info.by_expr.values()
-            if isinstance(b, ListSize) and b.size.resolve() == 5
+            if isinstance(b, ListSize) and b.size == 5
         ]
         assert range_bounds, f'expected a ListSize with size 5, got {info.by_expr.values()}'
 
@@ -156,7 +155,7 @@ class TestArraySizeInfer:
         info = self._run(f)
         range_bounds = [
             b for b in info.by_expr.values()
-            if isinstance(b, ListSize) and b.size.resolve() == 5
+            if isinstance(b, ListSize) and b.size == 5
         ]
         assert range_bounds
 
@@ -170,7 +169,7 @@ class TestArraySizeInfer:
         info = self._run(f)
         comp_bounds = [
             b for b in info.by_expr.values()
-            if isinstance(b, ListSize) and b.size.resolve() == 4
+            if isinstance(b, ListSize) and b.size == 4
         ]
         assert comp_bounds
 
@@ -206,13 +205,17 @@ class TestArraySizeInfer:
         assert len(slice_bounds) == 1
         bound = slice_bounds[0]
         assert isinstance(bound, ListSize)
-        assert bound.size.resolve() == 2
+        assert bound.size == 2
 
     # ------------------------------------------------------------------
     # Control-flow merges
 
-    def test_if_phi_unifies_listsizes(self):
-        """An ``if`` merge unions the two branches' size sets."""
+    def test_if_phi_unequal_sizes_widens_to_unknown(self):
+        """
+        An ``if`` merge of two lists with different known sizes joins
+        to ``None`` (unknown) — the flat lattice has no
+        "set-of-possible-sizes" representation.
+        """
 
         @fp.fpy
         def f(c: bool) -> list[fp.Real]:
@@ -223,16 +226,37 @@ class TestArraySizeInfer:
             return xs
 
         info = self._run(f)
-        # The phi's ArraySize should contain {2, 3}.
         xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
         merged = [
             b for b in xs_bounds
-            if isinstance(b, ListSize) and b.size.sizes == {2, 3}
+            if isinstance(b, ListSize) and b.size is None
         ]
-        assert merged, f'expected a phi with size {{2, 3}}, got {xs_bounds}'
+        assert merged, f'expected a phi with size=None, got {xs_bounds}'
+
+    def test_if_phi_equal_sizes_preserves_size(self):
+        """
+        An ``if`` merge of two lists with the same known size keeps
+        that size on the phi.
+        """
+
+        @fp.fpy
+        def f(c: bool) -> list[fp.Real]:
+            if c:
+                xs = [1.0, 2.0, 3.0]
+            else:
+                xs = [4.0, 5.0, 6.0]
+            return xs
+
+        info = self._run(f)
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        merged = [
+            b for b in xs_bounds
+            if isinstance(b, ListSize) and b.size == 3
+        ]
+        assert merged, f'expected a phi with size=3, got {xs_bounds}'
 
     def test_for_loop_phi_keeps_listsize(self):
-        """A loop-carried list maintains its (single-source) ArraySize."""
+        """A loop-carried list maintains its (single-source) size."""
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
@@ -243,39 +267,11 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         ys_bounds = [b for d, b in info.by_def.items() if d.name.base == 'ys']
-        # All ys bounds (initial + phi) must be ListSize with size {3}.
+        # All ys bounds (initial + phi) must be ListSize with size 3.
         assert all(
-            isinstance(b, ListSize) and b.size.resolve() == 3
+            isinstance(b, ListSize) and b.size == 3
             for b in ys_bounds
         ), f'expected all ys bounds to be ListSize size 3, got {ys_bounds}'
-
-    # ------------------------------------------------------------------
-    # ArraySize semantics
-
-    def test_arraysize_resolve_unique(self):
-        """``ArraySize({n}).resolve() == n`` for a singleton."""
-        assert ArraySize({4}).resolve() == 4
-
-    def test_arraysize_resolve_empty(self):
-        """``ArraySize().resolve()`` is ``None`` (no information)."""
-        assert ArraySize().resolve() is None
-
-    def test_arraysize_resolve_multi(self):
-        """A multi-element set cannot resolve to a single size."""
-        assert ArraySize({2, 3}).resolve() is None
-
-    def test_arraysize_union(self):
-        """``union`` merges the size sets."""
-        a = ArraySize({1, 2})
-        b = ArraySize({2, 3})
-        assert a.union(b) == ArraySize({1, 2, 3})
-
-    def test_arraysize_eq_and_hash(self):
-        """``ArraySize`` is hashable and compares structurally."""
-        a = ArraySize({1, 2})
-        b = ArraySize({2, 1})
-        assert a == b
-        assert hash(a) == hash(b)
 
     # ------------------------------------------------------------------
     # Return-size capture
@@ -289,7 +285,7 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         assert isinstance(info.ret_size, ListSize)
-        assert info.ret_size.size.resolve() == 3
+        assert info.ret_size.size == 3
 
     def test_ret_size_none_for_scalar_return(self):
         """``ret_size`` stays ``None`` when the return value isn't a list."""
