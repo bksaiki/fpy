@@ -207,9 +207,23 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self._visit_expr(e.third, ctx)
         match e:
             case Range3():
-                # TODO: implement
-                # for now just return a symbolic list
-                return ListSize(None, None)
+                start = self._get_eval(e.first)
+                stop = self._get_eval(e.second)
+                step = self._get_eval(e.third)
+                if (
+                    isinstance(start, Float | Fraction)
+                    and isinstance(stop, Float | Fraction)
+                    and isinstance(step, Float | Fraction)
+                ):
+                    start_i = int(INTEGER.round(start))
+                    stop_i = int(INTEGER.round(stop))
+                    step_i = int(INTEGER.round(step))
+                    if step_i == 0:
+                        # invalid (Python's range raises); leave size unknown
+                        return ListSize(None, None)
+                    return ListSize(None, len(range(start_i, stop_i, step_i)))
+                else:
+                    return ListSize(None, None)
 
     def _visit_naryop(self, e: NaryOp, ctx: None):
         tys = [self._visit_expr(arg, ctx) for arg in e.args]

@@ -159,6 +159,62 @@ class TestArraySizeInfer:
         ]
         assert range_bounds
 
+    def test_range3_positive_step(self):
+        """``range(0, 10, 3)`` has size 4 (== ``len(range(0, 10, 3))``)."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(0, 10, 3)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Range3'
+        ]
+        assert range_bounds and range_bounds[0].size == 4
+
+    def test_range3_negative_step(self):
+        """``range(10, 0, -3)`` walks down: size 4."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(10, 0, -3)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Range3'
+        ]
+        assert range_bounds and range_bounds[0].size == 4
+
+    def test_range3_empty_when_step_overshoots(self):
+        """``range(5, 5, 1)`` is empty: size 0."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(5, 5, 1)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Range3'
+        ]
+        assert range_bounds and range_bounds[0].size == 0
+
+    def test_range3_zero_step_unknown(self):
+        """A zero step is invalid; size falls back to unknown."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(0, 5, 0)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Range3'
+        ]
+        assert range_bounds and range_bounds[0].size is None
+
     def test_list_comprehension_size(self):
         """A comprehension's size is the iterable's size."""
 
