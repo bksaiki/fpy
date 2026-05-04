@@ -243,7 +243,16 @@ def _join_bounds(
             if widen:
                 return REAL_FORMAT
             if isinstance(s1, AbstractableFormat) and isinstance(s2, AbstractableFormat):
-                return (AbstractFormat.from_format(s1) | AbstractFormat.from_format(s2)).format()
+                af1 = AbstractFormat.from_format(s1)
+                af2 = AbstractFormat.from_format(s2)
+                # Subsumption: if one input contains the other, return the
+                # original (more precise / un-canonicalized) Format rather
+                # than projecting through ``(af1 | af2).format()``.
+                if af1 <= af2:
+                    return s2
+                if af2 <= af1:
+                    return s1
+                return (af1 | af2).format()
             return REAL_FORMAT
         case TupleFormat(elts=a), TupleFormat(elts=b) if len(a) == len(b):
             return TupleFormat(tuple(_join_bounds(x, y, widen=widen) for x, y in zip(a, b)))
@@ -650,22 +659,20 @@ class _FormatInferInstance(Visitor):
         # to widen-mode to force termination on infinite-height
         # AbstractFormat chains (e.g., arithmetic in the body).
         saved_widen = self._widen
-        try:
-            iter_count = 0
-            while True:
-                prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
-                self._widen = saved_widen or iter_count >= self._loop_iter_limit
-                self._visit_expr(stmt.cond, ctx)
-                self._visit_block(stmt.body, ctx)
-                for phi in self.def_use.phis[stmt]:
-                    lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-                    rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-                    self._set_def_bound(phi, self._join(lhs, rhs))
-                if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
-                    break
-                iter_count += 1
-        finally:
-            self._widen = saved_widen
+        iter_count = 0
+        while True:
+            prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
+            self._widen = saved_widen or iter_count >= self._loop_iter_limit
+            self._visit_expr(stmt.cond, ctx)
+            self._visit_block(stmt.body, ctx)
+            for phi in self.def_use.phis[stmt]:
+                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
+                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
+                self._set_def_bound(phi, self._join(lhs, rhs))
+            if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
+                break
+            iter_count += 1
+        self._widen = saved_widen
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
@@ -676,21 +683,19 @@ class _FormatInferInstance(Visitor):
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
         # See ``_visit_while`` for the widen-mode rationale.
         saved_widen = self._widen
-        try:
-            iter_count = 0
-            while True:
-                prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
-                self._widen = saved_widen or iter_count >= self._loop_iter_limit
-                self._visit_block(stmt.body, ctx)
-                for phi in self.def_use.phis[stmt]:
-                    lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-                    rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-                    self._set_def_bound(phi, self._join(lhs, rhs))
-                if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
-                    break
-                iter_count += 1
-        finally:
-            self._widen = saved_widen
+        iter_count = 0
+        while True:
+            prev = {phi: self.by_def[phi] for phi in self.def_use.phis[stmt]}
+            self._widen = saved_widen or iter_count >= self._loop_iter_limit
+            self._visit_block(stmt.body, ctx)
+            for phi in self.def_use.phis[stmt]:
+                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
+                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
+                self._set_def_bound(phi, self._join(lhs, rhs))
+            if all(self.by_def[phi] == prev[phi] for phi in self.def_use.phis[stmt]):
+                break
+            iter_count += 1
+        self._widen = saved_widen
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # The context expression itself is not a numerical computation.

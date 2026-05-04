@@ -316,6 +316,20 @@ class TestFormatInfer:
         for fmt in (fp.FP32.format(), fp.FP64.format()):
             assert joined.representable_in(fmt.maxval()._real)
 
+    def test_join_subsumed_format_returns_wider_input(self):
+        """
+        When one Format is contained in the other (e.g., FP32 ⊆ FP64), the
+        join short-circuits to the wider input Format directly rather than
+        projecting through ``(af1 | af2).format()``.  This preserves the
+        original Format's identity (e.g., ``IEEEFormat`` not
+        ``MPBFloatFormat``) when no widening is needed.
+        """
+        fp32 = fp.FP32.format()
+        fp64 = fp.FP64.format()
+        # FP32 ⊆ FP64 → join returns FP64 in either order.
+        assert _join_bounds(fp32, fp64) is fp64 or _join_bounds(fp32, fp64) == fp64
+        assert _join_bounds(fp64, fp32) == fp64
+
     def test_abstract_format_round_trip(self):
         """
         ``AbstractFormat.from_format(f).format()`` produces a :class:`Format`
