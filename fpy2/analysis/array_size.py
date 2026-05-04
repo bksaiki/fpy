@@ -95,7 +95,7 @@ class ArraySizeAnalysis:
     """
     by_expr: dict[Expr, ArraySizeBound]
     by_def: dict[Definition, ArraySizeBound]
-    ret_size: ArraySizeBound | None
+    ret_size: ArraySizeBound
     def_use: DefineUseAnalysis
 
 
@@ -111,7 +111,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     by_expr: dict[Expr, ArraySizeBound]
     by_def: dict[Definition, ArraySizeBound]
-    ret_size: ArraySizeBound | None
+    ret_size: ArraySizeBound
 
     def __init__(self, func: FuncDef, partial_eval: PartialEvalInfo, type_info: TypeAnalysis):
         self.func = func
@@ -258,7 +258,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
                 # innermost dimension
                 size_v = self._get_eval(arg_rev[0])
-                size: ArraySize = (
+                size = (
                     int(INTEGER.round(size_v))
                     if isinstance(size_v, Float | Fraction)
                     else None
