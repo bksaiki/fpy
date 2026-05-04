@@ -365,14 +365,14 @@ class _ArraySizeInferInstance(DefaultVisitor):
             else:
                 stop = None
 
-        # Compute the slice size only when start, stop, AND the list's
-        # own size are all concrete.  Otherwise the slice size is
-        # unknown — falling back to ``ty.size`` would be unsound (the
-        # original list's size is generally larger than the slice).
-        if start is not None and stop is not None and ty.size is not None:
-            slice_size: int | None = max(
-                0, min(stop, ty.size) - min(start, ty.size)
-            )
+        # FPy slicing is *strict*: ``xs[a:b]`` is valid only when
+        # ``0 <= a <= b <= len(xs)``.  Out-of-range bounds raise at
+        # runtime rather than being clamped (Python's behavior).  So
+        # when both bounds are concrete the static size is exactly
+        # ``stop - start`` — no ``min``/``max`` clamping.  We don't
+        # need ``ty.size`` to be known to compute the difference.
+        if start is not None and stop is not None and stop >= start:
+            slice_size: int | None = stop - start
         else:
             slice_size = None
 
