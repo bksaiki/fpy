@@ -617,6 +617,10 @@ class ContextTypeInferInstance(Visitor):
 
         elt_ty = self._visit_expr(stmt.expr, ctx)
         self._unify(ty, elt_ty)
+        # Propagate the variable's context type to the fresh SSA def
+        # introduced by ``reaching_defs`` for this IndexedAssign.
+        d_new = self.def_use.find_def_from_site(stmt.var, stmt)
+        self.by_def[d_new] = self.by_def[d]
         return ctx
 
     def _visit_if1(self, stmt: If1Stmt, ctx: ContextParam):

@@ -319,20 +319,28 @@ class _ArraySizeVisitor(DefaultVisitor):
         self._visit_binding(stmt, stmt.target, ty)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-        d = self.def_use.find_def_from_use(stmt)
+        # ``xs[i1]…[iN] = expr`` is treated as a functional update:
+        # ``xs = update(xs, [i1, …, iN], expr)``.  The use of ``xs`` reads
+        # the pre-mutation bound; the fresh def at this site (introduced
+        # by ``reaching_defs``) receives the widened bound — the inserted
+        # value's bound joined into the element bound at depth
+        # ``len(indices)``.
+        d_use = self.def_use.find_def_from_use(stmt)
+        target_ty = self.by_def[d_use]
 
-        def recur(indices: tuple[Expr, ...], target_ty: _Type) -> _Type:
+        def recur(indices: tuple[Expr, ...], cur_ty: _Type) -> _Type:
             if len(indices) == 0:
                 ty = self._visit_expr(stmt.expr, ctx)
-                return self._unify(target_ty, ty)
+                return self._unify(cur_ty, ty)
             else:
                 self._visit_expr(indices[0], ctx)
-                assert isinstance(target_ty, _Array), f'Expected array type for indexed assignment, got {target_ty} for {stmt}'
-                elt_ty = recur(indices[1:], target_ty.elt)
-                return _Array(elt_ty, target_ty.size)
+                assert isinstance(cur_ty, _Array), f'Expected array type for indexed assignment, got {cur_ty} for {stmt}'
+                elt_ty = recur(indices[1:], cur_ty.elt)
+                return _Array(elt_ty, cur_ty.size)
 
-        ty = recur(stmt.indices, self.by_def[d])
-        self.by_def[d] = ty
+        new_ty = recur(stmt.indices, target_ty)
+        d_def = self.def_use.find_def_from_site(stmt.var, stmt)
+        self.by_def[d_def] = new_ty
 
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):

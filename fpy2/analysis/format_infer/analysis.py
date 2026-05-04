@@ -637,10 +637,21 @@ class _FormatInferInstance(Visitor):
         self._visit_binding(stmt, stmt.target, fmt)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+        # ``xs[i1]…[iN] = expr`` is treated as ``xs = update(xs, …, expr)``
+        # — a fresh SSA def of ``xs`` (per ``reaching_defs``).  The new
+        # def's format is the original element format widened with the
+        # inserted value's format at depth ``len(indices)``, matching the
+        # semantics of ``ListSet`` (see :func:`_list_set_widen`).
+        d_use = self.def_use.find_def_from_use(stmt)
+        value_fmt = self._bound_of_def(d_use)
         for s in stmt.indices:
             self._visit_expr(s, ctx)
-        self._visit_expr(stmt.expr, ctx)
-        # The list variable's definition format is unchanged by element mutation.
+        insert_fmt = self._visit_expr(stmt.expr, ctx)
+        new_fmt = _list_set_widen(
+            value_fmt, len(stmt.indices), insert_fmt, widen=self._widen
+        )
+        d_def = self.def_use.find_def_from_site(stmt.var, stmt)
+        self._set_def_bound(d_def, new_fmt)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)

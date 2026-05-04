@@ -591,6 +591,12 @@ class _TypeInferInstance(Visitor):
         val_ty = self._visit_expr(stmt.expr, None)
         self._unify(val_ty, arr_ty)
 
+        # ``xs[i] = e`` produces a fresh SSA def of ``xs`` (per
+        # ``reaching_defs``).  The static type of ``xs`` is unchanged by
+        # element mutation, so propagate the same type.
+        d_new = self.def_use.find_def_from_site(stmt.var, stmt)
+        self.by_def[d_new] = self.by_def[d]
+
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         # type check condition
         cond_ty = self._visit_expr(stmt.cond, None)
