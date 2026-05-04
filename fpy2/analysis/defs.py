@@ -32,8 +32,10 @@ class _DefAnalysis(DefaultVisitor):
         return defs
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-        # does not introduce bindings
-        return set()
+        # ``xs[i] = e`` is treated as a fresh definition of ``xs``
+        # (semantically ``xs = update(xs, [i], e)``); reaching_defs
+        # uses this set for phi insertion at loop heads.
+        return {stmt.var}
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         # does not introduce bindings but body might

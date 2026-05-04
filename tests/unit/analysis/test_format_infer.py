@@ -9,6 +9,8 @@ from fractions import Fraction
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
 from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat
 from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
+from fpy2.analysis.reaching_defs import AssignDef
+from fpy2.ast.fpyast import IndexedAssign
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
 from fpy2.transform import FuncUpdate
@@ -663,6 +665,63 @@ class TestFormatInfer:
         assert ListFormat(REAL_FORMAT) in xs_bounds, (
             f"expected post-update xs to be ListFormat(REAL_FORMAT), got {xs_bounds}"
         )
+
+    def test_indexed_assign_widens_format_at_fresh_def(self):
+        """
+        ``xs[i] = x`` (raw ``IndexedAssign``, no ``FuncUpdate`` applied)
+        creates a *fresh* SSA def of ``xs`` (per ``reaching_defs``'s
+        treatment of indexed assignment as ``xs = update(xs, [i], x)``).
+        The new def's format must be widened to match the inserted value's
+        format — i.e., the same semantics as the post-FuncUpdate
+        ``ListSet`` path tested above.
+        """
+        @fp.fpy
+        def f(x: fp.Real) -> list[fp.Real]:
+            xs = [1.0, 2.0]
+            xs[0] = x
+            return xs
+
+        # NOTE: no FuncUpdate applied — IndexedAssign survives in the AST.
+        info = FormatInfer.analyze(f.ast)
+
+        # Two distinct defs for xs: the original Assign-sited binding and
+        # the IndexedAssign-sited fresh def.
+        xs_defs = [d for d in info.by_def if d.name.base == 'xs']
+        assert len(xs_defs) == 2, f"expected 2 xs defs, got {xs_defs}"
+
+        # Identify each by site kind.
+        assign_defs = [
+            d for d in xs_defs
+            if isinstance(d, AssignDef) and not isinstance(d.site, IndexedAssign)
+        ]
+        idx_defs = [
+            d for d in xs_defs
+            if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign)
+        ]
+        assert len(assign_defs) == 1, f"expected 1 Assign-sited xs def, got {assign_defs}"
+        assert len(idx_defs) == 1, f"expected 1 IndexedAssign-sited xs def, got {idx_defs}"
+
+        # Pre-mutation: ListFormat over the literal element SetFormat.
+        pre_bound = info.by_def[assign_defs[0]]
+        assert isinstance(pre_bound, ListFormat)
+        assert isinstance(pre_bound.elt, SetFormat)
+
+        # Post-mutation (the fresh def at the IndexedAssign): the element
+        # format must widen to REAL_FORMAT (the format of x), matching the
+        # ListSet-path semantics asserted in
+        # ``test_list_set_widens_element_format`` above.
+        post_bound = info.by_def[idx_defs[0]]
+        assert post_bound == ListFormat(REAL_FORMAT), (
+            f"expected fresh IndexedAssign-sited xs def to widen to "
+            f"ListFormat(REAL_FORMAT), got {post_bound}"
+        )
+
+        # Sanity: the IndexedAssign and post-FuncUpdate ListSet paths agree.
+        funcupdate_info = FormatInfer.analyze(FuncUpdate.apply(f.ast))
+        funcupdate_xs = [
+            b for d, b in funcupdate_info.by_def.items() if d.name.base == 'xs'
+        ]
+        assert ListFormat(REAL_FORMAT) in funcupdate_xs
 
     def test_list_set_widen_helper_leaf(self):
         """``_list_set_widen`` at depth 0 is just a join."""
