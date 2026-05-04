@@ -264,6 +264,94 @@ class TestArraySizeInfer:
         assert bound.size == 2
 
     # ------------------------------------------------------------------
+    # IndexedAssign as a fresh SSA def
+
+    def test_indexed_assign_creates_fresh_def(self):
+        """
+        ``xs[i] = e`` is treated as ``xs = update(xs, [i], e)``: the
+        mutation produces a *new* SSA definition of ``xs``.  Both the
+        pre- and post-mutation defs appear in ``by_def`` with their own
+        bounds.
+        """
+
+        @fp.fpy
+        def f() -> list[list[fp.Real]]:
+            xs = [[1.0], [1.0]]
+            xs[0] = [1.0, 2.0]
+            return xs
+
+        info = self._run(f)
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        # Two distinct defs for xs: original and post-IndexedAssign.
+        assert len(xs_bounds) == 2, f'expected 2 xs defs, got {xs_bounds}'
+
+    def test_indexed_assign_widens_inner_element_size(self):
+        """
+        Element mutation that inserts a list of a different size widens
+        the inner-element bound at the new def to ``None`` (the flat
+        lattice's "unknown" top), while the outer size is preserved.
+        """
+
+        @fp.fpy
+        def f() -> list[list[fp.Real]]:
+            xs = [[1.0], [1.0]]      # outer 2, inner 1
+            xs[0] = [1.0, 2.0]       # widens inner size to None
+            return xs
+
+        info = self._run(f)
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        # Original def: inner size 1, outer size 2.
+        original = [
+            b for b in xs_bounds
+            if isinstance(b, ListSize)
+            and b.size == 2
+            and isinstance(b.elt, ListSize)
+            and b.elt.size == 1
+        ]
+        # Post-mutation def: inner size widened to None, outer still 2.
+        widened = [
+            b for b in xs_bounds
+            if isinstance(b, ListSize)
+            and b.size == 2
+            and isinstance(b.elt, ListSize)
+            and b.elt.size is None
+        ]
+        assert original, f'expected pre-mutation def with inner size=1, got {xs_bounds}'
+        assert widened, f'expected post-mutation def with inner size=None, got {xs_bounds}'
+
+    def test_indexed_assign_in_loop_propagates_through_phi(self):
+        """
+        ``xs[0] = …`` inside a loop body must be observed by the loop
+        phi.  Without the SSA-fresh-def treatment of ``IndexedAssign``,
+        the body would produce no new def and the phi would degenerate
+        to ``phi(xs, xs)``.  With the fresh def + the loop fixpoint, the
+        widening propagates through.
+        """
+
+        @fp.fpy
+        def f(n: fp.Real) -> list[list[fp.Real]]:
+            xs = [[1.0], [1.0]]
+            for _ in range(0, 1):
+                xs[0] = [1.0, 2.0, 3.0]
+            return xs
+
+        info = self._run(f)
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        # The loop phi (and post-loop reads) must observe the inner
+        # element widening induced by the body's IndexedAssign.
+        widened = [
+            b for b in xs_bounds
+            if isinstance(b, ListSize)
+            and b.size == 2
+            and isinstance(b.elt, ListSize)
+            and b.elt.size is None
+        ]
+        assert widened, (
+            f'expected loop phi/post-loop xs to widen inner size to None, '
+            f'got {xs_bounds}'
+        )
+
+    # ------------------------------------------------------------------
     # Control-flow merges
 
     def test_if_phi_unequal_sizes_widens_to_unknown(self):

@@ -7,7 +7,11 @@ sizes through control-flow merges.  Mirrors the structure of
 expression / definition is a structural type that mirrors the basic-type
 shape, and joins are performed at phi nodes.
 
-TODO: inference algorithm likely broken for list assignment
+Indexed assignment (``xs[i] = e``) is handled via the SSA-fresh-def
+treatment that ``reaching_defs`` provides — semantically a functional
+update ``xs = update(xs, [i], e)``.  ``_visit_indexed_assign`` reads
+the pre-mutation bound from the use def, widens the element bound at
+depth ``len(indices)``, and writes the result to the fresh def.
 """
 
 from dataclasses import dataclass
