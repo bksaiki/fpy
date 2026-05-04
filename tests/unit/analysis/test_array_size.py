@@ -273,6 +273,62 @@ class TestArraySizeInfer:
             for b in ys_bounds
         ), f'expected all ys bounds to be ListSize size 3, got {ys_bounds}'
 
+    def test_for_loop_body_revisit_propagates_widened_phi(self):
+        """
+        A body-internal read of one phi'd variable depends on another
+        phi'd variable's value, and the latter only widens to ``None``
+        after the back-edge is processed.  Without a fixpoint the analysis
+        would lock in the pre-loop size for the dependent variable; with
+        the fixpoint, the widening propagates through.
+
+        Iter 1: phi(ys) = size 2 (pre-loop).  ``xs = ys`` records xs as
+                size 2.  ``ys = [...]`` (size 3) widens phi(ys) → None.
+        Iter 2: phi(ys) = None.  ``xs = ys`` widens phi(xs) → None.
+        """
+
+        @fp.fpy
+        def f(n: fp.Real) -> list[fp.Real]:
+            xs = [1.0, 2.0]
+            ys = xs
+            for _ in range(0, 1):
+                xs = ys
+                ys = [1.0, 2.0, 3.0]
+            return xs
+
+        info = self._run(f)
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        # xs's loop-phi must have widened to size=None (would be stuck at
+        # 2 without a fixpoint).
+        widened = [
+            b for b in xs_bounds
+            if isinstance(b, ListSize) and b.size is None
+        ]
+        assert widened, (
+            f'expected the back-edge to widen xs to size=None, got {xs_bounds}'
+        )
+
+    def test_while_loop_body_revisit_propagates_widened_phi(self):
+        """``while`` analogue of the for-loop fixpoint test."""
+
+        @fp.fpy
+        def f(cond: bool) -> list[fp.Real]:
+            xs = [1.0, 2.0]
+            ys = xs
+            while cond:
+                xs = ys
+                ys = [1.0, 2.0, 3.0]
+            return xs
+
+        info = self._run(f)
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        widened = [
+            b for b in xs_bounds
+            if isinstance(b, ListSize) and b.size is None
+        ]
+        assert widened, (
+            f'expected the back-edge to widen xs to size=None, got {xs_bounds}'
+        )
+
     # ------------------------------------------------------------------
     # Return-size capture
 

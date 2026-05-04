@@ -397,39 +397,44 @@ class _ArraySizeInferInstance(DefaultVisitor):
             rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
             self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
 
+    def _iterate_to_fixpoint(self, phis, run_body):
+        """
+        Drive a loop's phi-bound fixpoint to convergence.
+
+        Initialises each phi from its pre-loop (lhs) definition, then
+        repeatedly runs *run_body* and unifies the post-body (rhs) into
+        each phi until no phi changes.  The lattice has finite height
+        (``ArraySize`` is ``int | None``, structural lattice is
+        shape-preserving), so this terminates.
+        """
+        for phi in phis:
+            self.by_def[phi] = self.by_def[self.def_use.defs[phi.lhs]]
+        while True:
+            prev = {phi: self.by_def[phi] for phi in phis}
+            run_body()
+            for phi in phis:
+                lhs = self.by_def[self.def_use.defs[phi.lhs]]
+                rhs = self.by_def[self.def_use.defs[phi.rhs]]
+                self.by_def[phi] = self._unify(lhs, rhs)
+            if all(self.by_def[phi] == prev[phi] for phi in phis):
+                break
+
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        # add types to phi variables
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            self.by_def[phi] = lhs_ty
+        def body():
+            self._visit_expr(stmt.cond, ctx)
+            self._visit_block(stmt.body, ctx)
 
-        self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.body, ctx)
-
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+        self._iterate_to_fixpoint(self.def_use.phis[stmt], body)
 
     def _visit_for(self, stmt, ctx):
-        # process iterable and binding
+        # process iterable and binding (once, before the fixpoint)
         iter_ty = self._visit_expr(stmt.iterable, ctx)
         assert isinstance(iter_ty, ListSize)
         self._visit_binding(stmt, stmt.target, iter_ty.elt)
 
-        # add types to phi variables
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            self.by_def[phi] = lhs_ty
-
-        # visit body
-        self._visit_block(stmt.body, ctx)
-
-        # unify any merged variable
-        for phi in self.def_use.phis[stmt]:
-            lhs_ty = self.by_def[self.def_use.defs[phi.lhs]]
-            rhs_ty = self.by_def[self.def_use.defs[phi.rhs]]
-            self.by_def[phi] = self._unify(lhs_ty, rhs_ty)
+        self._iterate_to_fixpoint(
+            self.def_use.phis[stmt], lambda: self._visit_block(stmt.body, ctx)
+        )
 
     def _visit_context(self, stmt, ctx):
         ty = self._visit_expr(stmt.ctx, ctx)
