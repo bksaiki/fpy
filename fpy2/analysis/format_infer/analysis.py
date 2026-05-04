@@ -176,6 +176,7 @@ class ListFormat:
     elt: 'FormatBound'
 
 
+ScalarFormatBound: TypeAlias = None | SetFormat | Format
 FormatBound: TypeAlias = None | SetFormat | Format | TupleFormat | ListFormat
 """
 Inferred format for an expression or variable definition.
@@ -265,7 +266,7 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
 
-def _to_abstract(f: FormatBound) -> AbstractFormat | None:
+def _to_abstract(f: ScalarFormatBound) -> AbstractFormat | None:
     """
     Lifts an abstractable :class:`FormatBound` to an
     :class:`AbstractFormat`.  Returns ``None`` for variants that the
@@ -524,6 +525,7 @@ class _FormatInferInstance(Visitor):
             case Neg():
                 assert len(operands) == 1
                 op_fmt, = operands
+                assert isinstance(op_fmt, ScalarFormatBound), f'expected scalar format for operand of Neg, got {op_fmt!r}'
                 if isinstance(op_fmt, AbstractableFormat):
                     return (-AbstractFormat.from_format(op_fmt)).format()
                 elif isinstance(op_fmt, SetFormat):
@@ -533,6 +535,7 @@ class _FormatInferInstance(Visitor):
             case Abs():
                 assert len(operands) == 1
                 op_fmt, = operands
+                assert isinstance(op_fmt, ScalarFormatBound), f'expected scalar format for operand of Abs, got {op_fmt!r}'
                 if isinstance(op_fmt, AbstractableFormat):
                     return abs(AbstractFormat.from_format(op_fmt)).format()
                 elif isinstance(op_fmt, SetFormat):
@@ -542,6 +545,8 @@ class _FormatInferInstance(Visitor):
             case Add():
                 assert len(operands) == 2
                 a, b = operands
+                assert isinstance(a, ScalarFormatBound), f'expected scalar format for first operand of Add, got {a!r}'
+                assert isinstance(b, ScalarFormatBound), f'expected scalar format for second operand of Add, got {b!r}'
                 # Both SetFormat: keep precision by pairwise sum.
                 if isinstance(a, SetFormat) and isinstance(b, SetFormat):
                     return SetFormat(frozenset(va + vb for va in a.values for vb in b.values))
@@ -554,6 +559,8 @@ class _FormatInferInstance(Visitor):
             case Sub():
                 assert len(operands) == 2
                 a, b = operands
+                assert isinstance(a, ScalarFormatBound), f'expected scalar format for first operand of Sub, got {a!r}'
+                assert isinstance(b, ScalarFormatBound), f'expected scalar format for second operand of Sub, got {b!r}'
                 if isinstance(a, SetFormat) and isinstance(b, SetFormat):
                     return SetFormat(frozenset(va - vb for va in a.values for vb in b.values))
                 af_a = _to_abstract(a)
@@ -564,6 +571,8 @@ class _FormatInferInstance(Visitor):
             case Mul():
                 assert len(operands) == 2
                 a, b = operands
+                assert isinstance(a, ScalarFormatBound), f'expected scalar format for first operand of Mul, got {a!r}'
+                assert isinstance(b, ScalarFormatBound), f'expected scalar format for second operand of Mul, got {b!r}'
                 if isinstance(a, SetFormat) and isinstance(b, SetFormat):
                     return SetFormat(frozenset(va * vb for va in a.values for vb in b.values))
                 af_a = _to_abstract(a)
@@ -646,11 +655,12 @@ class _FormatInferInstance(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:
         arg_fmt = self._visit_expr(e.arg, ctx)
         if isinstance(e, Sum):
+            assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
             return self._sum_bound(e, arg_fmt)
         tight = self._exact_arith_bound(e, (arg_fmt,))
         return tight if tight is not None else self._op_bound(e)
 
-    def _sum_bound(self, e: Sum, arg_fmt: FormatBound) -> FormatBound:
+    def _sum_bound(self, e: Sum, arg_fmt: ListFormat) -> FormatBound:
         """
         Format of ``Sum(xs)`` — reduce-by-pairwise-addition with rounding
         under the active context at each step.
@@ -666,8 +676,6 @@ class _FormatInferInstance(Visitor):
         """
         if not self._is_real_scope(e):
             return self._op_bound(e)
-        if not isinstance(arg_fmt, ListFormat):
-            return self._op_bound(e)
         n = self._known_iter_count(e.arg)
         if n is None:
             return self._op_bound(e)
@@ -679,6 +687,7 @@ class _FormatInferInstance(Visitor):
             # No addition occurs; the lone element passes through.
             return elt_fmt
         # Lift the element format once and accumulate ``n - 1`` times.
+        assert isinstance(elt_fmt, ScalarFormatBound), f'expected scalar format for elements of sum operand, got {elt_fmt!r}'
         af_elt = _to_abstract(elt_fmt)
         if af_elt is None:
             return self._op_bound(e)
