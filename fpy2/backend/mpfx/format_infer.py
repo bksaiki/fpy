@@ -7,7 +7,7 @@ from typing import NoReturn, TypeAlias, Iterable
 
 from ...ast import *
 from ...analysis import (
-    ArraySizeInfer, ArraySizeAnalysis, ArraySizeType,
+    ArraySizeInfer, ArraySizeAnalysis, ListSize,
     ContextAnalysis, ContextInfer, PartialEval, PartialEvalInfo,
     Definition, DefSite
 )
@@ -315,15 +315,13 @@ class _FormatInfernce(Visitor):
                 assert isinstance(a_ty, ListFormatType)
                 if isinstance(a_ty.elt, AbstractFormat):
                     size_ty = self.array_size.by_expr.get(e.arg, None)
-                    if isinstance(size_ty, ArraySizeType) and size_ty.size is not None:
+                    if isinstance(size_ty, ListSize) and size_ty.size is not None:
                         m_ty = a_ty.elt
-                        size = size_ty.size.resolve()
-                        if size is not None:
-                            for _ in range(1, size):
-                                m_ty += a_ty.elt
+                        for _ in range(1, size_ty.size):
+                            m_ty += a_ty.elt
 
-                            assert isinstance(e_ty, AbstractFormat | RealType)
-                            e_ty = self._record_preround(e, m_ty, e_ty)
+                        assert isinstance(e_ty, AbstractFormat | RealType)
+                        e_ty = self._record_preround(e, m_ty, e_ty)
 
         return e_ty
 
@@ -613,7 +611,7 @@ class FormatInfer:
             eval_info = PartialEval.apply(func, def_use=ctx_info.def_use)
 
         # array size inference
-        array_size = ArraySizeInfer.infer(func, partial_eval=eval_info, type_info=ctx_info.type_info)
+        array_size = ArraySizeInfer.analyze(func, partial_eval=eval_info, type_info=ctx_info.type_info)
 
         # perform format inference
         format_info = _FormatInfernce(func, ctx_info, eval_info, array_size).infer()
