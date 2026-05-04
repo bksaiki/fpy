@@ -1,9 +1,12 @@
 """Program analyses for FPy programs"""
 
 from .array_size import (
-    ArraySizeInfer, ArraySizeAnalysis,
-    _Array as ArraySizeType,
-    _Tuple as TupleSizeType
+    ArraySize,
+    ArraySizeAnalysis,
+    ArraySizeBound,
+    ArraySizeInfer,
+    ListSize,
+    TupleSize,
 )
 from .context_infer import ContextInfer, ContextAnalysis, ContextInferError
 from .context_use import (
