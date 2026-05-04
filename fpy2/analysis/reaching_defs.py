@@ -25,7 +25,24 @@ __all__ = [
 
 
 DefSite: TypeAlias = FuncDef | Argument | Assign | IndexedAssign | ForStmt | ContextStmt | ListComp
-"""AST nodes that can define variables"""
+"""
+AST nodes that can define variables.
+
+``IndexedAssign`` is a slightly special case worth flagging: ``xs[i] = e``
+is modelled as a *fresh* SSA def of ``xs``, semantically
+``xs = update(xs, [i], e)``.  This is the right abstraction for any
+**value-tracking** analysis (types, formats, sizes, contexts, …) — the
+post-mutation value is conceptually distinct from the pre-mutation value,
+and the new def's ``prev`` field chains back to that previous def so the
+history is recoverable.
+
+For **physical-property** analyses (allocation tracking, alias analysis,
+lifetime/escape, borrow checking, …) the underlying storage is the *same*
+as the previous def's — no allocation occurs at an ``IndexedAssign``-sited
+def.  Such analyses should dispatch on ``isinstance(d.site, IndexedAssign)``
+to recognize in-place mutations and walk ``d.prev`` to find the original
+allocation site.
+"""
 PhiSite: TypeAlias = If1Stmt | IfStmt | WhileStmt | ForStmt
 """AST nodes that can introduce phi nodes"""
 

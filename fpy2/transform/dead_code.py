@@ -218,6 +218,14 @@ class _DeadCodeEliminate:
                         ):
                             # assignment
                             unused_assign.add(d.site)
+                        # TODO: IndexedAssign-sited defs are not eliminated
+                        # here.  ``xs[i] = e`` creates a fresh SSA def of
+                        # ``xs`` (per ``reaching_defs``), and if no later
+                        # statement reads ``xs`` the def is technically
+                        # unused — but eliminating the IndexedAssign would
+                        # be unsound without alias analysis (a different
+                        # name aliasing the same list might still observe
+                        # the mutation).  Conservatively leave them in.
                     case PhiDef():
                         # phi variable with no uses
                         unused_phi.add(d)
