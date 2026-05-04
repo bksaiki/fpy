@@ -59,8 +59,17 @@ the body is iterated until the phi bounds stop changing.  The lattice has
 **infinite ascending chains** in the scalar sub-lattice when exact arithmetic
 (``+``/``-``/``*`` under :class:`RealContext`, see below) is applied to a
 phi'd value: each iteration widens the resulting :class:`AbstractFormat`'s
-precision and bounds without bound.  To force termination, each loop
-fixpoint runs at most ``loop_iter_limit`` iterations before switching joins
+precision and bounds without bound.
+
+When a ``for`` loop's iterable has a **statically-known length** (per
+:class:`ArraySizeAnalysis`), the analysis drives the phi update for
+*exactly* that many body executions instead of iterating to a fixpoint.
+This matches the runtime semantics exactly and avoids any widening fall-back
+— important for the exact-arithmetic lattice.
+
+For ``for`` loops with symbolic-length iterables and for ``while`` loops, the
+iteration count isn't known statically.  These fall back to the fixpoint
+loop, which runs at most ``loop_iter_limit`` iterations before switching joins
 to **widen-mode** — distinct scalar :class:`Format` inputs fall back to
 ``REAL_FORMAT`` instead of going through :class:`AbstractFormat` union, at
 which point the fixpoint converges in one more iteration.
@@ -96,6 +105,7 @@ Format inference rules
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
+from re import match
 from typing import Callable, Iterable, TypeAlias
 
 from ...ast.fpyast import *
@@ -116,6 +126,7 @@ from ...types import (
     VarType,
 )
 
+from ..array_size import ArraySizeAnalysis, ArraySizeInfer, ListSize
 from ..context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextUseSite
 from ..define_use import DefineUse, DefineUseAnalysis
 from ..reaching_defs import PhiDef, Definition, DefSite
@@ -159,7 +170,7 @@ class ListFormat:
     elt: 'FormatBound'
 
 
-FormatBound: TypeAlias = 'None | SetFormat | Format | TupleFormat | ListFormat'
+FormatBound: TypeAlias = None | SetFormat | Format | TupleFormat | ListFormat
 """
 Inferred format for an expression or variable definition.
 
@@ -212,6 +223,54 @@ def _top_bound(ty: Type) -> FormatBound:
             return None
         case _:
             raise RuntimeError(f'unreachable: unknown type {ty!r}')
+
+
+def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
+    """
+    Returns a tight :class:`AbstractFormat` containing every value in *s*,
+    or ``None`` when any value is non-dyadic (and therefore can't be
+    pinned by an :class:`AbstractFormat`'s integer ``prec``/``exp``).
+
+    Used by :meth:`_exact_arith_bound` to bridge a :class:`SetFormat`
+    operand into the :class:`AbstractFormat` arithmetic path so that
+    e.g. ``SetFormat({0}) + EFloatFormat`` doesn't bail to
+    ``REAL_FORMAT`` under exact-arithmetic.
+    """
+    if not s.values:
+        return None
+    if not all(is_dyadic(v) for v in s.values):
+        return None
+    rfs = [RealFloat.from_rational(v) for v in s.values]
+    # Bounds: max non-negative value and min non-positive value, with
+    # zero used when no value falls on the corresponding side.  This
+    # matches AbstractFormat's convention of pos_bound >= 0 and
+    # neg_bound <= 0.
+    pos_rfs = [rf for rf in rfs if not rf.s and not rf.is_zero()]
+    neg_rfs = [rf for rf in rfs if rf.s]
+    pos_bound = max(pos_rfs, default=RealFloat.from_int(0))
+    neg_bound = min(neg_rfs, default=RealFloat.from_int(0))
+    # Precision and exponent: tight enough to represent every value.
+    # ``RealFloat.p`` is 0 for zero values; AbstractFormat requires
+    # ``prec >= 1``, so floor at 1.
+    prec = max((rf.p for rf in rfs), default=1)
+    if prec < 1:
+        prec = 1
+    exp = min((rf.exp for rf in rfs), default=0)
+    return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+
+
+def _to_abstract(f: FormatBound) -> AbstractFormat | None:
+    """
+    Lifts an abstractable :class:`FormatBound` to an
+    :class:`AbstractFormat`.  Returns ``None`` for variants that the
+    abstract arithmetic doesn't accept (``None``, ``TupleFormat``,
+    ``ListFormat``, non-dyadic ``SetFormat``).
+    """
+    if isinstance(f, AbstractableFormat):
+        return AbstractFormat.from_format(f)
+    if isinstance(f, SetFormat):
+        return _setformat_to_abstract(f)
+    return None
 
 
 def _join_bounds(
@@ -366,6 +425,7 @@ class _FormatInferInstance(Visitor):
     func: FuncDef
     type_info: TypeAnalysis
     ctx_use: ContextUseAnalysis
+    array_size: ArraySizeAnalysis
 
     by_def: dict[Definition, FormatBound]
     by_expr: dict[Expr, FormatBound]
@@ -375,11 +435,13 @@ class _FormatInferInstance(Visitor):
         func: FuncDef,
         type_info: TypeAnalysis,
         ctx_use: ContextUseAnalysis,
+        array_size: ArraySizeAnalysis,
         loop_iter_limit: int,
     ):
         self.func = func
         self.type_info = type_info
         self.ctx_use = ctx_use
+        self.array_size = array_size
         self.by_def = {}
         self.by_expr = {}
         self._loop_iter_limit = loop_iter_limit
@@ -437,7 +499,7 @@ class _FormatInferInstance(Visitor):
         self,
         e: ContextUseSite,
         operands: tuple[FormatBound, ...],
-    ) -> Format | None:
+    ) -> Format | SetFormat | None:
         """
         Tries to compute a tight format for an exact arithmetic operation.
 
@@ -452,25 +514,60 @@ class _FormatInferInstance(Visitor):
         """
         if not self._is_real_scope(e):
             return None
-        afs: list[AbstractFormat] = []
-        for f in operands:
-            if not isinstance(f, AbstractableFormat):
-                return None
-            afs.append(AbstractFormat.from_format(f))
-        match e, afs:
-            case Neg(), [af]:
-                result = -af
-            case Abs(), [af]:
-                result = abs(af)
-            case Add(), [a, b]:
-                result = a + b
-            case Sub(), [a, b]:
-                result = a - b
-            case Mul(), [a, b]:
-                result = a * b
+        match e:
+            case Neg():
+                assert len(operands) == 1
+                op_fmt, = operands
+                if isinstance(op_fmt, AbstractableFormat):
+                    return (-AbstractFormat.from_format(op_fmt)).format()
+                elif isinstance(op_fmt, SetFormat):
+                    return SetFormat(frozenset(-v for v in op_fmt.values))
+                else:
+                    return None
+            case Abs():
+                assert len(operands) == 1
+                op_fmt, = operands
+                if isinstance(op_fmt, AbstractableFormat):
+                    return abs(AbstractFormat.from_format(op_fmt)).format()
+                elif isinstance(op_fmt, SetFormat):
+                    return SetFormat(frozenset(abs(v) for v in op_fmt.values))
+                else:
+                    return None
+            case Add():
+                assert len(operands) == 2
+                a, b = operands
+                # Both SetFormat: keep precision by pairwise sum.
+                if isinstance(a, SetFormat) and isinstance(b, SetFormat):
+                    return SetFormat(frozenset(va + vb for va in a.values for vb in b.values))
+                # Mixed or both AbstractableFormat: lift to AbstractFormat.
+                af_a = _to_abstract(a)
+                af_b = _to_abstract(b)
+                if af_a is None or af_b is None:
+                    return None
+                return (af_a + af_b).format()
+            case Sub():
+                assert len(operands) == 2
+                a, b = operands
+                if isinstance(a, SetFormat) and isinstance(b, SetFormat):
+                    return SetFormat(frozenset(va - vb for va in a.values for vb in b.values))
+                af_a = _to_abstract(a)
+                af_b = _to_abstract(b)
+                if af_a is None or af_b is None:
+                    return None
+                return (af_a - af_b).format()
+            case Mul():
+                assert len(operands) == 2
+                a, b = operands
+                if isinstance(a, SetFormat) and isinstance(b, SetFormat):
+                    return SetFormat(frozenset(va * vb for va in a.values for vb in b.values))
+                af_a = _to_abstract(a)
+                af_b = _to_abstract(b)
+                if af_a is None or af_b is None:
+                    return None
+                return (af_a * af_b).format()
             case _:
+                # unsupported operation
                 return None
-        return result.format()
 
     def _visit_binding(
         self,
@@ -700,6 +797,54 @@ class _FormatInferInstance(Visitor):
             iter_count += 1
         self._widen = saved_widen
 
+    def _unroll(
+        self,
+        phis: Iterable[PhiDef],
+        run_body: Callable[[], None],
+        n: int,
+    ):
+        """
+        Drive a loop's phi update for *exactly* ``n`` body executions.
+
+        Used when the iterable's length is statically known (via
+        :class:`ArraySizeAnalysis`).  At runtime the loop walks exactly
+        ``n`` body iterations, so the analysis can mirror that walk and
+        avoid widening — important for the exact-arithmetic
+        (``+``/``-``/``*`` under :class:`RealContext`) lattice, which has
+        infinite ascending chains.
+
+        Iter-by-iter visit produces a precise (if potentially wide)
+        bound after exactly ``n`` joins; the result is sound and
+        strictly more precise than the fixpoint+widening fall-back when
+        ``n`` is small.
+        """
+        phis = list(phis)
+        for phi in phis:
+            self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
+        if n == 0:
+            # Body never runs; the phi stays at the pre-loop value.
+            return
+        for _ in range(n):
+            run_body()
+            for phi in phis:
+                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
+                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
+                self._set_def_bound(phi, self._join(lhs, rhs))
+
+    def _known_iter_count(self, iterable: Expr) -> int | None:
+        """
+        Returns the iterable's statically-known length, or ``None``.
+
+        Consults :class:`ArraySizeAnalysis`.  Recognises ``ListSize``
+        expressions whose ``size`` is a concrete ``int`` (e.g. ``range``
+        with static bounds, list literals, comprehensions over
+        known-size iterables).
+        """
+        bound = self.array_size.by_expr.get(iterable)
+        if isinstance(bound, ListSize) and isinstance(bound.size, int):
+            return bound.size
+        return None
+
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         def body():
             self._visit_expr(stmt.cond, ctx)
@@ -711,9 +856,17 @@ class _FormatInferInstance(Visitor):
         iter_fmt = self._visit_expr(stmt.iterable, ctx)
         assert isinstance(iter_fmt, ListFormat)
         self._visit_binding(stmt, stmt.target, iter_fmt.elt)
-        self._fixpoint(
-            self.def_use.phis[stmt], lambda: self._visit_block(stmt.body, ctx)
-        )
+        body = lambda: self._visit_block(stmt.body, ctx)
+        # If the iterable's length is statically known, drive the phi
+        # update for exactly that many body executions instead of
+        # iterating to a fixpoint.  This matches the runtime semantics
+        # exactly and avoids the widening fall-back for the
+        # exact-arithmetic lattice.
+        n = self._known_iter_count(stmt.iterable)
+        if n is not None:
+            self._unroll(self.def_use.phis[stmt], body, n)
+        else:
+            self._fixpoint(self.def_use.phis[stmt], body)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # The context expression itself is not a numerical computation.
@@ -834,29 +987,36 @@ class FormatInfer:
         def_use: DefineUseAnalysis | None = None,
         type_info: TypeAnalysis | None = None,
         ctx_use: ContextUseAnalysis | None = None,
-        loop_iter_limit: int | None = None,
+        array_size: ArraySizeAnalysis | None = None,
+        loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
     ) -> FormatAnalysis:
         """
         Performs format analysis on a compiled FPy function.
 
-        All three pre-analyses (``def_use``, ``type_info``, ``ctx_use``) are
-        computed automatically when not supplied.  Pre-computing them externally
-        is useful when they are also needed for other purposes.
+        All four pre-analyses (``def_use``, ``type_info``, ``ctx_use``,
+        ``array_size``) are computed automatically when not supplied.
+        Pre-computing them externally is useful when they are also needed
+        for other purposes.
 
         Args:
-            func:      The :class:`FuncDef` AST node to analyse.
-            def_use:   Optional pre-computed definition-use analysis.
-            type_info: Optional pre-computed type analysis.
-            ctx_use:   Optional pre-computed context-use analysis.
+            func:        The :class:`FuncDef` AST node to analyse.
+            def_use:     Optional pre-computed definition-use analysis.
+            type_info:   Optional pre-computed type analysis.
+            ctx_use:     Optional pre-computed context-use analysis.
+            array_size:  Optional pre-computed array-size analysis.
+                Used to recognise ``for`` loops whose iterable has a
+                statically-known length, so the phi update can be driven
+                exactly that many times instead of iterating to a
+                fixpoint.  This is strictly more precise — important for
+                the exact-arithmetic lattice (``+``/``-``/``*`` under
+                :class:`RealContext`) which has infinite ascending
+                chains.
             loop_iter_limit:
                 Number of loop body+join iterations to run before forcing
                 joins of distinct scalar Formats to widen to ``REAL_FORMAT``.
-                Required because exact-arithmetic operations (``+``, ``-``,
-                ``*``) under :class:`RealContext` produce ``AbstractFormat``
-                lattices with infinite ascending chains; without a cap, a
-                loop body that performs such arithmetic on a phi'd value
-                would not converge.  Defaults to
-                :attr:`DEFAULT_LOOP_ITER_LIMIT`.
+                Only applies to loops without a known iteration count
+                (``while`` loops, and ``for`` loops over symbolic-size
+                iterables).  Defaults to :attr:`DEFAULT_LOOP_ITER_LIMIT`.
 
         Returns:
             A :class:`FormatAnalysis` result whose ``by_def`` and ``by_expr``
@@ -875,9 +1035,9 @@ class FormatInfer:
             type_info = TypeInfer.check(func, def_use=def_use)
         if ctx_use is None:
             ctx_use = ContextUse.analyze(func, def_use=def_use)
-        if loop_iter_limit is None:
-            loop_iter_limit = FormatInfer.DEFAULT_LOOP_ITER_LIMIT
+        if array_size is None:
+            array_size = ArraySizeInfer.analyze(func, type_info=type_info)
 
         return _FormatInferInstance(
-            func, type_info, ctx_use, loop_iter_limit=loop_iter_limit
+            func, type_info, ctx_use, array_size, loop_iter_limit=loop_iter_limit
         ).analyze()
