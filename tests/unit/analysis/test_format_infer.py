@@ -577,6 +577,387 @@ class TestFormatInfer:
             f"expected outer widen-mode to propagate into inner loop, got {z_bounds}"
         )
 
+    # ------------------------------------------------------------------
+    # Bounded-iteration mode for for-loops with statically known length
+
+    def test_for_loop_with_known_count_is_unrolled_precisely(self):
+        """
+        ``for _ in range(0, N)`` where ``N`` is a static int: the analysis
+        drives the phi update for exactly ``N`` body executions instead of
+        iterating to a fixpoint.  Under a body that uses exact arithmetic
+        (``z = z + a`` under ``with fp.REAL``) this avoids the
+        widen-to-REAL_FORMAT fall-back and produces a precise containing
+        Format — the AbstractFormat-mediated bound after exactly N
+        iterations.
+        """
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            z = a
+            for _ in range(0, 3):
+                with fp.REAL:
+                    z = z + a
+            return z
+
+        info = self._run(f)
+        z_bounds = [b for d, b in info.by_def.items() if d.name.base == 'z']
+        # The loop phi must be a precise Format containing FP32, *not*
+        # REAL_FORMAT (which would happen if widening kicked in).
+        precise = [
+            b for b in z_bounds
+            if isinstance(b, Format) and b != REAL_FORMAT
+        ]
+        assert precise, (
+            f'expected a precise (non-REAL_FORMAT) z bound, got {z_bounds}'
+        )
+        assert REAL_FORMAT not in z_bounds, (
+            f'bounded iteration must not widen to REAL_FORMAT, got {z_bounds}'
+        )
+
+    def test_for_loop_with_unknown_count_still_widens(self):
+        """
+        Counterpart: when the iterable's length is *not* statically
+        known (here: ``range(0, n)`` with symbolic ``n``), the analysis
+        falls back to fixpoint+widening and the loop phi widens to
+        ``REAL_FORMAT`` because exact arithmetic produces an
+        infinite-height chain.
+        """
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            z = a
+            for _ in range(0, n):  # n symbolic → unknown size
+                with fp.REAL:
+                    z = z + a
+            return z
+
+        info = self._run(f)
+        z_bounds = [b for d, b in info.by_def.items() if d.name.base == 'z']
+        assert REAL_FORMAT in z_bounds, (
+            f'expected fixpoint+widen to widen to REAL_FORMAT, got {z_bounds}'
+        )
+
+    def test_for_loop_with_zero_count_keeps_pre_loop_bound(self):
+        """
+        ``for _ in range(0, 0)`` runs 0 iterations.  The body never
+        executes, so the loop phi stays at the pre-loop value.
+        """
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            z = a
+            for _ in range(0, 0):
+                with fp.REAL:
+                    z = z + a
+            return z
+
+        info = self._run(f)
+        # All z-bounds must be FP32 (no widening since body didn't run).
+        z_bounds = [b for d, b in info.by_def.items() if d.name.base == 'z']
+        fp32 = fp.FP32.format()
+        assert all(b == fp32 for b in z_bounds), (
+            f'expected all z bounds to be FP32 with N=0, got {z_bounds}'
+        )
+
+    # ------------------------------------------------------------------
+    # Exact arithmetic with SetFormat operands
+
+    def test_exact_add_setformat_with_format(self):
+        """
+        ``acc + x`` under REAL where ``acc`` starts as ``SetFormat({0})``
+        and ``x`` has a concrete Format.  The SetFormat operand must be
+        lifted to an :class:`AbstractFormat`, allowing exact-arith to
+        produce a precise containing Format instead of falling back to
+        ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            with fp.REAL:
+                acc = 0
+                acc = acc + a
+            return acc
+
+        info = self._run(f)
+        # The Add expression's format should be a precise Format
+        # (containing FP32), not REAL_FORMAT.
+        adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
+        assert adds, 'expected an Add expression'
+        result = adds[-1]
+        assert isinstance(result, Format)
+        assert result != REAL_FORMAT, (
+            f'expected SetFormat({{0}}) + FP32 to lift through AbstractFormat, '
+            f'got {result}'
+        )
+
+    def test_exact_add_two_setformats_stays_precise(self):
+        """
+        ``SetFormat({a}) + SetFormat({b})`` under REAL stays a SetFormat
+        with the pairwise sum — strictly more precise than going through
+        AbstractFormat.
+        """
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.REAL:
+                z = 1.0 + 2.0
+            return z
+
+        info = self._run(f)
+        adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
+        assert adds, 'expected an Add expression'
+        result = adds[-1]
+        assert isinstance(result, SetFormat), f'expected SetFormat, got {result}'
+        assert result.values == frozenset((Fraction(3),)), (
+            f'expected SetFormat({{3}}), got {result}'
+        )
+
+    def test_exact_sub_setformat_with_format(self):
+        """``a - SetFormat({0})`` under REAL preserves a's format."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            with fp.REAL:
+                z = a - 0
+            return z
+
+        info = self._run(f)
+        subs = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sub']
+        assert subs, 'expected a Sub expression'
+        assert isinstance(subs[-1], Format) and subs[-1] != REAL_FORMAT
+
+    def test_exact_mul_setformat_with_format(self):
+        """``a * SetFormat({2})`` under REAL produces a containing Format."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            with fp.REAL:
+                z = a * 2.0
+            return z
+
+        info = self._run(f)
+        muls = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Mul']
+        assert muls, 'expected a Mul expression'
+        assert isinstance(muls[-1], Format) and muls[-1] != REAL_FORMAT
+
+    def test_exact_arith_setformat_accumulator_pattern(self):
+        """
+        End-to-end: the user's block-accumulator pattern.  ``block_acc =
+        0; for j in range(K): block_acc += block[j]`` under REAL must
+        produce a precise containing Format for ``block_acc``, not
+        ``REAL_FORMAT`` (which would happen if ``SetFormat({0}) +
+        EFloatFormat`` bailed to the scope's format).
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.MX_E4M3:
+                ys = [fp.round(x) for x in xs]
+            block_acc = 0
+            for j in range(0, 4):
+                block_acc = block_acc + ys[j]
+            return block_acc
+
+        info = self._run(f)
+        block_acc_bounds = [
+            b for d, b in info.by_def.items() if d.name.base == 'block_acc'
+        ]
+        # The loop phi must be a precise (non-REAL_FORMAT) format
+        # containing MX_E4M3 — the SetFormat({0}) initial value lifted
+        # through AbstractFormat into the inner-loop accumulation.
+        assert REAL_FORMAT not in block_acc_bounds, (
+            f'expected block_acc to stay precise, got {block_acc_bounds}'
+        )
+
+    # ------------------------------------------------------------------
+    # Sum reduction
+
+    def test_sum_under_real_with_known_size(self):
+        """
+        ``sum(ys)`` under ``with fp.REAL`` over a known-size list of
+        MX_E4M3 elements: simulate ``n - 1`` exact pairwise additions
+        through :class:`AbstractFormat`.  Result is a precise containing
+        Format, not ``REAL_FORMAT``.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            with fp.MX_E4M3:
+                ys = [fp.round(0.1), fp.round(0.2),
+                      fp.round(0.3), fp.round(0.4)]
+            return sum(ys)
+
+        info = self._run(f)
+        sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
+        assert sums and isinstance(sums[-1], Format) and sums[-1] != REAL_FORMAT, (
+            f'expected precise Sum bound under REAL, got {sums}'
+        )
+        # Bound must contain a single MX_E4M3 element.
+        mx_e4m3 = fp.MX_E4M3.format()
+        assert sums[-1].representable_in(mx_e4m3.maxval()._real)
+
+    def test_sum_under_concrete_ctx_returns_scope_format(self):
+        """
+        Under a concrete non-REAL context, every pairwise add rounds to
+        the scope's format, so ``sum(ys)`` reports the scope's format
+        (the default ``_op_bound`` rule).
+        """
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.MX_E4M3:
+                ys = [fp.round(0.1), fp.round(0.2),
+                      fp.round(0.3), fp.round(0.4)]
+            with fp.FP32:
+                return sum(ys)
+
+        info = self._run(f)
+        sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
+        assert sums and sums[-1] == fp.FP32.format(), (
+            f'expected Sum to report FP32 (scope format), got {sums}'
+        )
+
+    def test_sum_unknown_size_falls_back(self):
+        """
+        ``sum(xs)`` over a symbolic-size list under REAL: the iteration
+        count isn't known, so the analysis falls back to the default
+        rule which yields ``REAL_FORMAT`` under REAL scope.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.MX_E4M3:
+                ys = [fp.round(x) for x in xs]
+            return sum(ys)
+
+        info = self._run(f)
+        sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
+        assert sums and sums[-1] == REAL_FORMAT, (
+            f'expected REAL_FORMAT fall-back when size is unknown, got {sums}'
+        )
+
+    def test_sum_grows_with_known_size(self):
+        """
+        Sanity: larger N produces a wider precise format under REAL.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def small() -> fp.Real:
+            with fp.FP32:
+                ys = [fp.round(1.0), fp.round(1.0)]
+            return sum(ys)
+
+        @fp.fpy(ctx=fp.REAL)
+        def big() -> fp.Real:
+            with fp.FP32:
+                ys = [fp.round(1.0), fp.round(1.0), fp.round(1.0),
+                      fp.round(1.0), fp.round(1.0), fp.round(1.0),
+                      fp.round(1.0), fp.round(1.0)]
+            return sum(ys)
+
+        small_sum = [
+            b for e, b in self._run(small).by_expr.items()
+            if type(e).__name__ == 'Sum'
+        ][-1]
+        big_sum = [
+            b for e, b in self._run(big).by_expr.items()
+            if type(e).__name__ == 'Sum'
+        ][-1]
+        # Both must be precise (non-REAL_FORMAT).
+        assert isinstance(small_sum, Format) and small_sum != REAL_FORMAT
+        assert isinstance(big_sum, Format) and big_sum != REAL_FORMAT
+        # Size-8 sum's bound must contain size-2 sum's max value
+        # (since both bounds are non-negative and big_sum is wider).
+        # Concretely: big_sum.representable_in(small_sum.maxval) holds.
+        small_max = small_sum.maxval()._real
+        assert big_sum.representable_in(small_max)
+
+    def test_blockwise_quantized_accumulator_end_to_end(self):
+        """
+        Regression: a realistic blockwise quantized-accumulator pattern.
+
+        - ``ys`` is quantized to MX_E4M3.
+        - Outer loop iterates blocks of K=32; each iteration takes a
+          slice ``block = ys[i:i+K]`` and accumulates K elements under
+          REAL into ``block_acc``.
+        - The block accumulator is then added into ``acc`` under FP32.
+
+        This exercises every load-bearing piece of the analysis at once:
+
+        - ``ListSize`` resolution for ``range(K)`` (= 32) so the inner
+          loop is unrolled exactly 32 times instead of fixpoint+widening.
+        - ``SetFormat({0}) + EFloatFormat`` lifted through
+          :class:`AbstractFormat` so the inner accumulator stays precise.
+        - The FP32 ``with`` block forcing a clean rounded format on
+          ``acc`` regardless of the symbolic outer-loop count.
+
+        Before the SetFormat → AbstractFormat lift and the bounded-iter
+        mode, ``block_acc`` widened to ``REAL_FORMAT`` on the first
+        body pass and contaminated everything downstream.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def foo(xs: list[fp.Real]):
+            # block size
+            K = 32
+
+            # quantize to E4M3
+            with fp.MX_E4M3:
+                ys = [fp.round(x) for x in xs]
+            # accumulate in blocks of K
+            acc = 0
+            for i in range(0, len(ys), K):
+                block = ys[i : i + K]
+                block_acc = 0
+                for j in range(K):
+                    block_acc += block[j]
+                # quantize block accumulation to FP32
+                with fp.FP32:
+                    acc += block_acc
+            # return final result in FP32
+            return acc
+
+        info = self._run(foo)
+
+        # 1. block_acc must stay precise (no REAL_FORMAT contamination
+        #    from the inner accumulator).
+        block_acc_bounds = [
+            b for d, b in info.by_def.items() if d.name.base == 'block_acc'
+        ]
+        assert REAL_FORMAT not in block_acc_bounds, (
+            f'expected block_acc to stay precise, got {block_acc_bounds}'
+        )
+        # And it must reach a Format strictly tighter than REAL_FORMAT
+        # at the loop phi (the bounded-iter mode produced an
+        # MPB-Float-shaped accumulator that contains 32 × MX_E4M3_max).
+        widened = [
+            b for b in block_acc_bounds
+            if isinstance(b, Format) and b != REAL_FORMAT
+        ]
+        assert widened, (
+            f'expected a precise containing Format among block_acc bounds, '
+            f'got {block_acc_bounds}'
+        )
+
+        # 2. acc must reach FP32 — every write is inside ``with fp.FP32``,
+        #    so the FP32 round dominates regardless of the outer loop's
+        #    symbolic iteration count.
+        acc_bounds = [
+            b for d, b in info.by_def.items() if d.name.base == 'acc'
+        ]
+        assert fp.FP32.format() in acc_bounds, (
+            f'expected FP32 among acc bounds, got {acc_bounds}'
+        )
+
+        # 3. ys is the rounded list — its element format is MX_E4M3.
+        ys_bounds = [
+            b for d, b in info.by_def.items() if d.name.base == 'ys'
+        ]
+        mx_e4m3 = fp.MX_E4M3.format()
+        assert any(
+            isinstance(b, ListFormat) and b.elt == mx_e4m3
+            for b in ys_bounds
+        ), f'expected ListFormat(MX_E4M3) among ys bounds, got {ys_bounds}'
+
     def test_exact_arith_skipped_under_concrete_round(self):
         """
         Under a concrete non-REAL context (e.g., FP32), arithmetic results
