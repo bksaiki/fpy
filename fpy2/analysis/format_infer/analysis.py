@@ -387,7 +387,7 @@ class _FormatInferInstance(Visitor):
         self,
         e: ContextUseSite,
         operands: tuple[FormatBound, ...],
-    ) -> FormatBound | None:
+    ) -> FormatBound:
         """
         Tries to compute a tight format for an exact arithmetic operation.
 
