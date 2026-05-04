@@ -16,6 +16,7 @@ depth ``len(indices)``, and writes the result to the fresh def.
 
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import reduce
 from typing import TypeAlias
 
 from ..ast.fpyast import *
@@ -282,13 +283,21 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     def _visit_list_expr(self, e: ListExpr, ctx: None):
         elt_sizes = [self._visit_expr(elt, ctx) for elt in e.elts]
-        ty = self.type_info.by_expr[e]
-        assert isinstance(ty, ListType)
-        if isinstance(ty.elt, ListType):
-            assert isinstance(elt_sizes[0], ListSize)
-            elt_size = elt_sizes[0]
+        if elt_sizes:
+            # Unify across all elements so heterogeneous inner sizes
+            # widen correctly (e.g., ``[[1.0], [1.0, 2.0]]`` collapses
+            # the inner size to ``None`` rather than retaining the
+            # first element's size).
+            elt_size = reduce(self._unify, elt_sizes)
         else:
-            elt_size = None
+            # Empty list literal: derive the structural top of the
+            # element type from the type checker's verdict.  This
+            # avoids an IndexError on ``[]`` annotated as
+            # ``list[list[...]]`` and gives the right shape for any
+            # nested type (lists, tuples).
+            list_ty = self.type_info.by_expr[e]
+            assert isinstance(list_ty, ListType)
+            elt_size = self._cvt_type(list_ty.elt)
         return ListSize(elt_size, len(e.elts))
 
     def _visit_list_comp(self, e: ListComp, ctx: None):
@@ -322,8 +331,10 @@ class _ArraySizeInferInstance(DefaultVisitor):
         ty = self._visit_expr(e.value, ctx)
         assert isinstance(ty, ListSize)
 
+        # Resolve the start bound.  Omitted ``e.start`` defaults to 0;
+        # otherwise we need partial-eval to pin it to a concrete int.
         if e.start is None:
-            start = 0
+            start: int | None = 0
         else:
             self._visit_expr(e.start, ctx)
             start_val = self._get_eval(e.start)
@@ -332,8 +343,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
             else:
                 start = None
 
+        # Resolve the stop bound.  Omitted ``e.stop`` defaults to the
+        # *list's own size* (``ty.size``) — which itself may be ``None``
+        # if the list size isn't known.  Otherwise partial-eval it.
         if e.stop is None:
-            stop = None
+            stop = ty.size
         else:
             self._visit_expr(e.stop, ctx)
             stop_val = self._get_eval(e.stop)
@@ -342,12 +356,18 @@ class _ArraySizeInferInstance(DefaultVisitor):
             else:
                 stop = None
 
-        size = ty.size
-        if size is not None and start is not None and stop is not None:
-            # can compute size of the slice
-            size = max(0, min(stop, size) - min(start, size))
+        # Compute the slice size only when start, stop, AND the list's
+        # own size are all concrete.  Otherwise the slice size is
+        # unknown — falling back to ``ty.size`` would be unsound (the
+        # original list's size is generally larger than the slice).
+        if start is not None and stop is not None and ty.size is not None:
+            slice_size: int | None = max(
+                0, min(stop, ty.size) - min(start, ty.size)
+            )
+        else:
+            slice_size = None
 
-        return ListSize(ty.elt, size)
+        return ListSize(ty.elt, slice_size)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         return TupleSize(tuple(self._visit_expr(elt, ctx) for elt in e.elts))

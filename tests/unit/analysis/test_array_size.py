@@ -117,6 +117,83 @@ class TestArraySizeInfer:
         ]
         assert list_bounds, 'expected a ListSize with size {0}'
 
+    def test_empty_nested_list_literal_does_not_crash(self):
+        """
+        Regression: an empty list literal annotated as ``list[list[…]]``
+        must not raise ``IndexError`` when the analysis builds the
+        element bound (the previous implementation indexed
+        ``elt_sizes[0]`` unconditionally).  The analysis runs to
+        completion and reports a ``ListSize`` with size 0; the element
+        bound's precision depends on whether the type checker resolved
+        the inner type variable.
+        """
+
+        @fp.fpy
+        def f() -> list[list[fp.Real]]:
+            xs: list[list[fp.Real]] = []
+            return xs
+
+        # The fact that ``self._run(f)`` completes is half the test —
+        # before the fix, this raised IndexError.
+        info = self._run(f)
+        empty_bounds = [
+            b for b in info.by_expr.values()
+            if isinstance(b, ListSize) and b.size == 0
+        ]
+        assert empty_bounds, (
+            f'expected an outer ListSize of size 0, got {list(info.by_expr.values())}'
+        )
+
+    def test_nested_list_literal_with_differing_inner_sizes(self):
+        """
+        ``[[1.0], [1.0, 2.0]]``: inner sizes 1 and 2 conflict — the
+        element bound's size must widen to ``None`` rather than retain
+        only the first element's size.
+        """
+
+        @fp.fpy
+        def f() -> list[list[fp.Real]]:
+            return [[1.0], [1.0, 2.0]]
+
+        info = self._run(f)
+        # Find the outer ListExpr by its nested-ListSize element bound.
+        outer_bounds = [
+            b for b in info.by_expr.values()
+            if isinstance(b, ListSize)
+            and b.size == 2
+            and isinstance(b.elt, ListSize)
+        ]
+        assert outer_bounds, (
+            f'expected outer ListSize of size 2 with nested element, '
+            f'got {list(info.by_expr.values())}'
+        )
+        # Inner sizes are 1 and 2 — must widen to None.
+        assert outer_bounds[0].elt.size is None, (
+            f'expected widened inner size None, got {outer_bounds[0].elt.size}'
+        )
+
+    def test_nested_list_literal_with_matching_inner_sizes(self):
+        """
+        ``[[1.0, 2.0], [3.0, 4.0]]``: inner sizes both 2 — the element
+        bound's size survives the unify.
+        """
+
+        @fp.fpy
+        def f() -> list[list[fp.Real]]:
+            return [[1.0, 2.0], [3.0, 4.0]]
+
+        info = self._run(f)
+        outer_bounds = [
+            b for b in info.by_expr.values()
+            if isinstance(b, ListSize)
+            and b.size == 2
+            and isinstance(b.elt, ListSize)
+            and b.elt.size == 2
+        ]
+        assert outer_bounds, (
+            f'expected outer size 2 with inner size 2, got {list(info.by_expr.values())}'
+        )
+
     def test_tuple_literal(self):
         """A tuple literal records per-element bounds."""
 
@@ -262,6 +339,75 @@ class TestArraySizeInfer:
         bound = slice_bounds[0]
         assert isinstance(bound, ListSize)
         assert bound.size == 2
+
+    def test_list_slice_omitted_stop_uses_list_size(self):
+        """
+        ``xs[1:]`` (omitted stop) on a size-5 list has size 4.  Falling
+        back to the original list size (5) would be unsound — downstream
+        passes (e.g., Sum expansion) could overrun the slice.
+        """
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+            return xs[1:]
+
+        info = self._run(f)
+        slice_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'ListSlice'
+        ]
+        assert len(slice_bounds) == 1 and slice_bounds[0].size == 4, (
+            f'expected slice size 4, got {slice_bounds}'
+        )
+
+    def test_list_slice_omitted_start_uses_zero(self):
+        """``xs[:3]`` on a size-5 list has size 3."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+            return xs[:3]
+
+        info = self._run(f)
+        slice_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'ListSlice'
+        ]
+        assert len(slice_bounds) == 1 and slice_bounds[0].size == 3
+
+    def test_list_slice_unknown_list_size_falls_back_to_none(self):
+        """
+        When the underlying list's size is unknown, the slice size is
+        also unknown — *not* the original list's size (which would be
+        unsoundly equal to ``None``-and-also-claim-precision).
+        """
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return xs[1:]
+
+        info = self._run(f)
+        slice_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'ListSlice'
+        ]
+        assert len(slice_bounds) == 1 and slice_bounds[0].size is None
+
+    def test_list_slice_start_past_end(self):
+        """``xs[10:]`` on a size-5 list has size 0 (clamped to non-negative)."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+            return xs[10:]
+
+        info = self._run(f)
+        slice_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'ListSlice'
+        ]
+        assert len(slice_bounds) == 1 and slice_bounds[0].size == 0
 
     # ------------------------------------------------------------------
     # IndexedAssign as a fresh SSA def
