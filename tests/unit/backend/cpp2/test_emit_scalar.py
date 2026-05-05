@@ -55,10 +55,16 @@ class TestScalarSlice:
                 return t1 + t2 + t3 + t4
 
         out = _compile(cc, f)
-        assert 'double t1 = (a + b);' in out
-        assert 'double t2 = (a - b);' in out
-        assert 'double t3 = (a * b);' in out
-        assert 'double t4 = (a / b);' in out
+        # Locals are hoisted as zero-initialised declarations and the
+        # assigns become reassignments.
+        assert 'double t1{};' in out
+        assert 'double t2{};' in out
+        assert 'double t3{};' in out
+        assert 'double t4{};' in out
+        assert 't1 = (a + b);' in out
+        assert 't2 = (a - b);' in out
+        assert 't3 = (a * b);' in out
+        assert 't4 = (a / b);' in out
         assert out.startswith('double f(double a, double b) {')
         assert out.rstrip().endswith('}')
 
@@ -70,7 +76,8 @@ class TestScalarSlice:
                 return abs(a)
 
         out = _compile(cc, f)
-        assert 'double a = (-x);' in out
+        assert 'double a{};' in out
+        assert 'a = (-x);' in out
         assert 'return std::fabs(a);' in out
 
     def test_fp32_args(self, cc):

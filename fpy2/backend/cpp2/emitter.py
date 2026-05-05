@@ -111,26 +111,69 @@ class _Cpp2Emitter(Visitor):
     # Function emission
 
     def _visit_function(self, func: FuncDef, ctx):
-        # Determine return type from the return-statement's expression
-        # bound — this Phase-2 slice assumes a single ReturnStmt at the
-        # tail of the body, which the caller is responsible for ensuring.
+        # Determine return type from the return statement's expression
+        # bound (the slice assumes a single return, possibly nested in a
+        # ``with`` block).
         ret_ty = self._infer_return_storage(func)
         ret_str = ret_ty.format() if ret_ty is not None else 'void'
 
-        # Emit arg list.
+        # Emit arg list.  Argument defs are declared in the signature;
+        # they don't get hoisted with other locals.
         arg_strs: list[str] = []
+        arg_defs: set = set()
         for arg in func.args:
             if not isinstance(arg.name, NamedId):
                 raise Cpp2EmitError(f'unsupported arg pattern: {arg.name!r}')
             storage = self._storage_for_arg(arg)
             arg_strs.append(f'{storage.format()} {arg.name}')
+            arg_defs.add(self.def_use.find_def_from_site(arg.name, arg))
         sig = f'{ret_str} {func.name}({", ".join(arg_strs)})'
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
+        # Hoist all non-arg, non-free local declarations to the top of
+        # the function body.  Each source name gets one C++ variable
+        # whose type is the storage aggregated across all SSA defs.
+        # Subsequent assignments are plain reassignments.  This makes
+        # the phi-merge case in the upcoming control-flow phases trivial:
+        # both branches just assign into the same C++ variable.
+        free_defs = {
+            self.def_use.find_def_from_site(v, func) for v in func.free_vars
+        }
+        self._emit_local_declarations(arg_defs | free_defs)
         self._visit_block(func.body, None)
         self.writer.dedent()
         self.writer.add_line('}')
+
+    def _emit_local_declarations(self, skip_defs: set):
+        """
+        Pre-walk all definitions and declare one zero-initialised C++
+        variable per source name, using the storage aggregated across
+        SSA defs.  Skips the *skip_defs* set (function arguments and
+        free variables).
+        """
+        # Group def → storage by source name, taking the storage that's
+        # the same across all defs of that name (storage aggregation
+        # already happened in the pipeline).
+        by_name: dict[str, CppType] = {}
+        for d, storage in self.def_storage.items():
+            if d in skip_defs:
+                continue
+            name = str(d.name)
+            existing = by_name.get(name)
+            if existing is None:
+                by_name[name] = storage
+            else:
+                assert existing == storage, (
+                    f'inconsistent aggregated storage for `{name}`: '
+                    f'{existing!r} vs {storage!r}'
+                )
+        for name in sorted(by_name):
+            storage = by_name[name]
+            # Zero-initialise via ``T name{};`` so reads-before-writes
+            # are well-defined (FPy analyses ensure this can't happen,
+            # but the initialiser also serves as a paper-trail).
+            self.writer.add_line(f'{storage.format()} {name}{{}};')
 
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
         """Pull the type of the function's return expression from the
@@ -170,11 +213,12 @@ class _Cpp2Emitter(Visitor):
                 f'unsupported assignment target {stmt.target!r}; '
                 'tuple unpacking and underscore targets land in a later phase'
             )
-        storage = self._storage_for_assign_target(stmt.target, stmt)
         rhs = self._visit_expr(stmt.expr, ctx)
-        # Phase-2 slice: every assign declares a fresh C++ variable.
-        # Mutation/reassignment handling lands with control-flow.
-        self.writer.add_line(f'{storage.format()} {stmt.target} = {rhs};')
+        # Locals are declared at the top of the function body via
+        # ``_emit_local_declarations``, so each Assign is a plain
+        # reassignment.  This means every SSA def of the same source
+        # name shares one C++ variable, and phi merges fall out for free.
+        self.writer.add_line(f'{stmt.target} = {rhs};')
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         rhs = self._visit_expr(stmt.expr, ctx)
