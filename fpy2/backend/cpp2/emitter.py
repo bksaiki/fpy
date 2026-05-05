@@ -76,12 +76,12 @@ class _Cpp2Emitter(Visitor):
     def __init__(
         self,
         ast: FuncDef,
-        def_storage,  # dict[Definition, CppType]
+        phi_web,  # PhiWeb
         def_use,
         format_info,
     ):
         self.ast = ast
-        self.def_storage = def_storage
+        self.phi_web = phi_web
         self.def_use = def_use
         self.format_info = format_info
         self.writer = _IndentedWriter()
@@ -96,17 +96,17 @@ class _Cpp2Emitter(Visitor):
     # ------------------------------------------------------------------
     # Helpers
 
-    def _storage_for_var_use(self, var: Var) -> CppType:
+    def _name_for_var_use(self, var: Var) -> str:
         d = self.def_use.find_def_from_use(var)
-        return self.def_storage[d]
+        return self.phi_web.def_to_name[d]
+
+    def _name_for_def_at_site(self, name: NamedId, site) -> str:
+        d = self.def_use.find_def_from_site(name, site)
+        return self.phi_web.def_to_name[d]
 
     def _storage_for_arg(self, arg) -> CppType:
         d = self.def_use.find_def_from_site(arg.name, arg)
-        return self.def_storage[d]
-
-    def _storage_for_assign_target(self, name: NamedId, site) -> CppType:
-        d = self.def_use.find_def_from_site(name, site)
-        return self.def_storage[d]
+        return self.phi_web.class_storage[self.phi_web.def_class[d]]
 
     # ------------------------------------------------------------------
     # Function emission
@@ -118,59 +118,39 @@ class _Cpp2Emitter(Visitor):
         ret_ty = self._infer_return_storage(func)
         ret_str = ret_ty.format() if ret_ty is not None else 'void'
 
-        # Emit arg list.  Argument defs are declared in the signature;
-        # they don't get hoisted with other locals.
+        # Emit arg list.  Each argument's class is anchored to the bare
+        # source name in the phi-web, so it's safe to use ``arg.name``
+        # directly here (and any body-side reassignment that flows
+        # through the arg's phi-class will write to the same variable).
         arg_strs: list[str] = []
-        arg_defs: set = set()
         for arg in func.args:
             if not isinstance(arg.name, NamedId):
                 raise Cpp2EmitError(f'unsupported arg pattern: {arg.name!r}')
             storage = self._storage_for_arg(arg)
             arg_strs.append(f'{storage.format()} {arg.name}')
-            arg_defs.add(self.def_use.find_def_from_site(arg.name, arg))
         sig = f'{ret_str} {func.name}({", ".join(arg_strs)})'
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
-        # Hoist all non-arg, non-free local declarations to the top of
-        # the function body.  Each source name gets one C++ variable
-        # whose type is the storage aggregated across all SSA defs.
-        # Subsequent assignments are plain reassignments.  This makes
-        # the phi-merge case in the upcoming control-flow phases trivial:
-        # both branches just assign into the same C++ variable.
-        free_defs = {
-            self.def_use.find_def_from_site(v, func) for v in func.free_vars
-        }
-        self._emit_local_declarations(arg_defs | free_defs)
+        # Hoist one declaration per phi-web class.  Classes anchored to
+        # function args / free variables are external (already declared
+        # by the signature or the surrounding scope) and skipped.  All
+        # other classes get a ``T <name>{};`` so reassigns inside
+        # branches and loop bodies don't need declarations.
+        self._emit_local_declarations()
         self._visit_block(func.body, None)
         self.writer.dedent()
         self.writer.add_line('}')
 
-    def _emit_local_declarations(self, skip_defs: set):
+    def _emit_local_declarations(self):
         """
-        Pre-walk all definitions and declare one zero-initialised C++
-        variable per source name, using the storage aggregated across
-        SSA defs.  Skips the *skip_defs* set (function arguments and
-        free variables).
+        Emit one zero-initialised C++ variable declaration per
+        non-external phi-web class, using the class's chosen name and
+        aggregated storage type.
         """
-        # Group def → storage by source name, taking the storage that's
-        # the same across all defs of that name (storage aggregation
-        # already happened in the pipeline).
-        by_name: dict[str, CppType] = {}
-        for d, storage in self.def_storage.items():
-            if d in skip_defs:
-                continue
-            name = str(d.name)
-            existing = by_name.get(name)
-            if existing is None:
-                by_name[name] = storage
-            else:
-                assert existing == storage, (
-                    f'inconsistent aggregated storage for `{name}`: '
-                    f'{existing!r} vs {storage!r}'
-                )
-        for name in sorted(by_name):
-            storage = by_name[name]
+        for c in self.phi_web.decl_classes:
+            name = self.phi_web.def_to_name[self.phi_web.class_members[c][0]]
+            storage = self.phi_web.class_storage[c]
             # Zero-initialise via ``T name{};`` so reads-before-writes
             # are well-defined (FPy analyses ensure this can't happen,
             # but the initialiser also serves as a paper-trail).
@@ -215,11 +195,13 @@ class _Cpp2Emitter(Visitor):
                 'tuple unpacking and underscore targets land in a later phase'
             )
         rhs = self._visit_expr(stmt.expr, ctx)
-        # Locals are declared at the top of the function body via
-        # ``_emit_local_declarations``, so each Assign is a plain
-        # reassignment.  This means every SSA def of the same source
-        # name shares one C++ variable, and phi merges fall out for free.
-        self.writer.add_line(f'{stmt.target} = {rhs};')
+        # The phi-web maps this Assign's SSA def to one C++ variable.
+        # Distinct SSA rebinds of the same source name may live in
+        # different classes (with their own narrower storage), so we
+        # have to look the target name up rather than reuse
+        # ``stmt.target`` directly.
+        target_name = self._name_for_def_at_site(stmt.target, stmt)
+        self.writer.add_line(f'{target_name} = {rhs};')
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         rhs = self._visit_expr(stmt.expr, ctx)
@@ -258,11 +240,11 @@ class _Cpp2Emitter(Visitor):
             )
 
     def _visit_var(self, e: Var, ctx) -> str:
-        # Storage type is implicit — the variable was declared at its
-        # def site.  The use just refers to its name.
+        # Resolve the use to its SSA def, then consult the phi-web for
+        # the C++ identifier of that def's class.
         if not isinstance(e.name, NamedId):
             raise Cpp2EmitError(f'non-named variable use: {e.name!r}')
-        return str(e.name)
+        return self._name_for_var_use(e)
 
     def _visit_decnum(self, e: Decnum, ctx) -> str:
         return self._emit_numeric_literal(e.as_rational())
@@ -381,7 +363,7 @@ class _Cpp2Emitter(Visitor):
             raise Cpp2EmitError(
                 'tuple-binding for-loop targets are not yet supported'
             )
-        target = str(stmt.target)
+        target = self._name_for_def_at_site(stmt.target, stmt)
         match stmt.iterable:
             case Range1():
                 stop = self._visit_expr(stmt.iterable.arg, ctx)

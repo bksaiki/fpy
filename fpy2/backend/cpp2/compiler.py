@@ -15,9 +15,8 @@ from ...analysis import (
     ContextUse,
     DefineUse,
     FormatInfer,
-    Definition,
 )
-from ...analysis.format_infer import FormatAnalysis, FormatBound
+from ...analysis.format_infer import FormatAnalysis
 from ...ast.fpyast import FuncDef
 from ...function import Function
 from ...number import Context
@@ -26,8 +25,8 @@ from ...types import Type
 from ..backend import Backend, CompileError
 
 from .emitter import Cpp2EmitError, _Cpp2Emitter
-from .storage import StorageSelectionError, aggregate_storage
-from .types import CppType
+from .phi_web import PhiWeb, compute_phi_web
+from .storage import StorageSelectionError
 
 
 class Cpp2CompileError(CompileError):
@@ -46,12 +45,13 @@ class Cpp2PipelineResult:
 
     - ``ast``: the (post-monomorphization) :class:`FuncDef`.
     - ``format_info``: per-expression and per-definition format bounds.
-    - ``def_storage``: the chosen C++ storage type for each definition,
-      aggregated across SSA defs that share a name.
+    - ``phi_web``: phi-equivalence partition.  Each SSA def maps to a
+      class; each class has a single C++ name and storage type.  Two
+      defs share storage iff they are connected by phi edges.
     """
     ast: FuncDef
     format_info: FormatAnalysis
-    def_storage: dict[Definition, CppType]
+    phi_web: PhiWeb
 
 
 class Cpp2Compiler(Backend):
@@ -92,28 +92,21 @@ class Cpp2Compiler(Backend):
             array_size=array_size,
         )
 
-        # Aggregate storage across SSA defs sharing a name.  The cpp2
-        # emitter declares one C++ variable per source-level name, so
-        # the storage must subsume every SSA def's bound.
-        by_name: dict[str, list[Definition]] = {}
-        for d in format_info.by_def:
-            by_name.setdefault(d.name.base, []).append(d)
-        def_storage: dict[Definition, CppType] = {}
-        for defs in by_name.values():
-            bounds = [format_info.by_def[d] for d in defs]
-            try:
-                storage = aggregate_storage(bounds)
-            except StorageSelectionError as e:
-                raise Cpp2CompileError(
-                    f'cannot pick storage for `{defs[0].name.base}`: {e}'
-                ) from e
-            for d in defs:
-                def_storage[d] = storage
+        # Compute the phi-web partition: defs joined by phi edges share
+        # a C++ variable, anything else is free to rename.  See
+        # ``phi_web.py`` for the full contract.
+        try:
+            phi_web = compute_phi_web(
+                format_info.type_info.def_use,
+                format_info.by_def,
+            )
+        except StorageSelectionError as e:
+            raise Cpp2CompileError(str(e)) from e
 
         return Cpp2PipelineResult(
             ast=ast,
             format_info=format_info,
-            def_storage=def_storage,
+            phi_web=phi_web,
         )
 
     def compile(
@@ -139,7 +132,7 @@ class Cpp2Compiler(Backend):
         result = self._run_pipeline(func, ctx, arg_types)
         emitter = _Cpp2Emitter(
             ast=result.ast,
-            def_storage=result.def_storage,
+            phi_web=result.phi_web,
             def_use=result.format_info.type_info.def_use,
             format_info=result.format_info,
         )
