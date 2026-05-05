@@ -147,10 +147,11 @@ class TestListComp:
         ) in out
         assert '.push_back((x * y));' in out
 
-    def test_tuple_binding_target_unsupported(self):
-        """Tuple bindings in the for-clause aren't yet wired up."""
-        import pytest
-        from fpy2.backend.cpp2 import Cpp2CompileError
+    def test_tuple_binding_target(self):
+        """Tuple-binding targets in the for-clause destructure each
+        element via ``std::get<i>`` inside the loop body — see
+        ``test_emit_tuple.TestTupleDestructure`` for the detailed
+        shape; this test just confirms list-comp wiring composes."""
 
         @fp.fpy
         def f(xs: list[tuple[fp.Real, fp.Real]]) -> fp.Real:
@@ -159,13 +160,15 @@ class TestListComp:
                 return ys[0]
 
         from fpy2.types import TupleType
-        with pytest.raises(Cpp2CompileError, match='tuple-binding'):
-            Cpp2Compiler().compile(
-                f, ctx=fp.FP64,
-                arg_types=[
-                    ListType(TupleType(RealType(fp.FP64), RealType(fp.FP64)))
-                ],
-            )
+        out = Cpp2Compiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[
+                ListType(TupleType(RealType(fp.FP64), RealType(fp.FP64)))
+            ],
+        )
+        assert 'std::get<0>' in out
+        assert 'std::get<1>' in out
+        assert '.push_back((a + b));' in out
 
 
 class TestListSlice:

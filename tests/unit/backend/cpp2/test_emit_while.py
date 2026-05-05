@@ -38,7 +38,7 @@ class TestWhileStmt:
             '        y = (y - 1);\n'
             '    }\n'
             '    return y;\n'
-            '}\n'
+            '}'
         )
 
     def test_two_accumulators(self):

@@ -80,6 +80,12 @@ class Cpp2Compiler(Backend):
         if ast.ctx is not None:
             ctx = None
         ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
+        # ``IndexedAssign`` (``xs[i] = e``) is left intact — C++ can
+        # mutate vector elements directly, so we don't need
+        # ``FuncUpdate``'s functional-update rewrite.  The matching
+        # in-place coalescing edge in ``StorageInfer`` keeps the
+        # post-mutation SSA def in the same storage class as its
+        # ``prev``.
 
         # The analyses are independent up to def_use.
         def_use = DefineUse.analyze(ast)

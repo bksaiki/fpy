@@ -23,10 +23,10 @@ from fractions import Fraction
 from ...analysis import DefineUseAnalysis, FormatAnalysis
 from ...ast.fpyast import (
     Abs, Add, Argument, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
-    Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, Integer, Len, ListComp,
-    ListExpr, ListRef, ListSlice, Mul, NamedId, Neg, Range1, Range2, Range3,
-    Rational, ReturnStmt, Stmt, StmtBlock, Sub, TupleExpr, UnaryOp, Var,
-    ContextStmt, UnderscoreId, WhileStmt,
+    Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign, Integer,
+    Len, ListComp, ListExpr, ListRef, ListSlice, Mul, NamedId, Neg, Range1,
+    Range2, Range3, Rational, ReturnStmt, Stmt, StmtBlock, Sub, TupleBinding,
+    TupleExpr, UnaryOp, Var, ContextStmt, UnderscoreId, WhileStmt,
 )
 from ...ast.visitor import Visitor
 from ...utils.compare import CompareOp
@@ -56,7 +56,7 @@ class _IndentedWriter:
         self._depth -= 1
 
     def render(self) -> str:
-        return '\n'.join(self._lines) + '\n'
+        return '\n'.join(self._lines)
 
 
 # Maps from AST op nodes to their infix C++ operators.
@@ -130,6 +130,50 @@ class _Cpp2Emitter(Visitor):
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
         return self.storage.class_storage[self.storage.def_class[d]]
+
+    def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
+        """Emit a single ``T name = rhs;`` (declare-on-assign) or
+        ``name = rhs;`` (reassign) line for a NamedId target whose
+        SSA def is registered at *site*.
+
+        Whether to declare or reassign is decided by the
+        :class:`StorageAnalysis`."""
+        target_def = self.def_use.find_def_from_site(name, site)
+        target_name = self.storage.def_to_name[target_def]
+        if target_def in self.storage.declare_at_assign:
+            storage = self.storage.class_storage[
+                self.storage.def_class[target_def]
+            ]
+            self.writer.add_line(f'{storage.format()} {target_name} = {rhs};')
+        else:
+            self.writer.add_line(f'{target_name} = {rhs};')
+
+    def _destructure(
+        self,
+        binding: TupleBinding,
+        src: str,
+        site,
+    ) -> None:
+        """Emit destructuring assigns extracting each element of
+        *binding* from the tuple-valued local *src*.  The SSA defs
+        for every NamedId in *binding* are registered at *site* (the
+        enclosing :class:`Assign` / :class:`ForStmt` / :class:`ListComp`
+        node).  Underscore positions are skipped; nested tuple bindings
+        recurse via a fresh temp."""
+        for i, elt in enumerate(binding.elts):
+            if isinstance(elt, UnderscoreId):
+                continue
+            access = f'std::get<{i}>({src})'
+            if isinstance(elt, NamedId):
+                self._emit_bind(elt, site, access)
+            elif isinstance(elt, TupleBinding):
+                sub_tmp = self._fresh_temp()
+                self.writer.add_line(f'auto {sub_tmp} = {access};')
+                self._destructure(elt, sub_tmp, site)
+            else:
+                raise Cpp2EmitError(
+                    f'unsupported tuple-binding element {elt!r}'
+                )
 
     def _storage_for_expr(self, e: Expr) -> CppType:
         """The C++ storage chosen for an expression's result.
@@ -223,23 +267,24 @@ class _Cpp2Emitter(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx):
-        if not isinstance(stmt.target, NamedId):
-            raise Cpp2EmitError(
-                f'unsupported assignment target {stmt.target!r}; '
-                'tuple unpacking and underscore targets land in a later phase'
-            )
         rhs = self._visit_expr(stmt.expr, ctx)
-        # ``StorageInfer`` maps this Assign's SSA def to a C++ variable
-        # and tells us whether the assign should declare the variable
-        # (single-writer class) or just reassign into a hoisted decl
-        # (multi-writer class).
-        target_def = self.def_use.find_def_from_site(stmt.target, stmt)
-        target_name = self.storage.def_to_name[target_def]
-        if target_def in self.storage.declare_at_assign:
-            storage = self.storage.class_storage[self.storage.def_class[target_def]]
-            self.writer.add_line(f'{storage.format()} {target_name} = {rhs};')
+        if isinstance(stmt.target, NamedId):
+            # ``StorageInfer`` maps this Assign's SSA def to a C++
+            # variable and tells us whether the assign should declare
+            # the variable (single-writer class) or just reassign into
+            # a hoisted decl (multi-writer class).
+            self._emit_bind(stmt.target, stmt, rhs)
+        elif isinstance(stmt.target, TupleBinding):
+            # ``(a, b) = expr``: bind the rhs to a tuple-valued temp
+            # once, then destructure.  Each NamedId in the binding has
+            # its own SSA def registered at the Assign statement.
+            tmp = self._fresh_temp()
+            self.writer.add_line(f'auto {tmp} = {rhs};')
+            self._destructure(stmt.target, tmp, stmt)
         else:
-            self.writer.add_line(f'{target_name} = {rhs};')
+            raise Cpp2EmitError(
+                f'unsupported assignment target {stmt.target!r}'
+            )
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         rhs = self._visit_expr(stmt.expr, ctx)
@@ -375,10 +420,6 @@ class _Cpp2Emitter(Visitor):
         self.writer.add_line(f'{result_ty.format()} {tmp};')
 
         for target, iterable in zip(e.targets, e.iterables):
-            if not isinstance(target, NamedId):
-                raise Cpp2EmitError(
-                    'tuple-binding comprehension targets land in a later phase'
-                )
             self._open_comp_loop(target, iterable, e, ctx)
 
         elt = self._visit_expr(e.elt, ctx)
@@ -392,37 +433,61 @@ class _Cpp2Emitter(Visitor):
 
     def _open_comp_loop(
         self,
-        target: NamedId,
+        target,
         iterable: Expr,
         comp_site: ListComp,
         ctx,
     ) -> None:
         """Emit one ``for`` line for a single comprehension stage,
-        leaving the writer indented inside the loop body."""
-        # The target's storage class is determined by ``StorageInfer``
-        # exactly as for any other AssignDef.  We always declare-on-
-        # assign in the for header — the comprehension's target lives
-        # only inside the loop's lexical scope.  The comp target's
-        # SSA site is the ``ListComp`` node, not the target id itself
-        # (see ``define_use._visit_list_comp``).
-        target_def = self.def_use.find_def_from_site(target, comp_site)
-        target_name = self.storage.def_to_name[target_def]
-        target_ty = self.storage.class_storage[
-            self.storage.def_class[target_def]
-        ].format()
+        leaving the writer indented inside the loop body.
+
+        The target's storage class is determined by ``StorageInfer``
+        exactly as for any other AssignDef.  We always declare-on-
+        assign in the for header — the comprehension's target lives
+        only inside the loop's lexical scope.  The comp target's
+        SSA site is the ``ListComp`` node, not the target id itself
+        (see ``define_use._visit_list_comp``).
+        """
+        if isinstance(target, NamedId):
+            target_def = self.def_use.find_def_from_site(target, comp_site)
+            target_name = self.storage.def_to_name[target_def]
+            target_ty = self.storage.class_storage[
+                self.storage.def_class[target_def]
+            ].format()
+            decl = f'{target_ty} {target_name}'
+        elif isinstance(target, TupleBinding):
+            # ``for (a, b) in xs`` — bind the tuple element to an
+            # anonymous temp via ``auto`` and destructure inside the
+            # loop body.  Range iterables can't pair with a tuple
+            # binding; reject early.
+            if isinstance(iterable, (Range1, Range2, Range3)):
+                raise Cpp2EmitError(
+                    'tuple-binding comprehension target requires a '
+                    'non-range iterable'
+                )
+            tmp = self._fresh_temp()
+            iter_str = self._visit_expr(iterable, ctx)
+            self.writer.add_line(f'for (auto {tmp} : {iter_str}) {{')
+            self.writer.indent()
+            self._destructure(target, tmp, comp_site)
+            return
+        else:
+            raise Cpp2EmitError(
+                f'unsupported comprehension target {target!r}'
+            )
 
         match iterable:
             case Range1():
                 stop = self._visit_expr(iterable.arg, ctx)
                 self.writer.add_line(
-                    f'for ({target_ty} {target_name} = 0; '
+                    f'for ({decl} = 0; '
                     f'{target_name} < {stop}; ++{target_name}) {{'
                 )
             case Range2():
                 start = self._visit_expr(iterable.first, ctx)
                 stop = self._visit_expr(iterable.second, ctx)
                 self.writer.add_line(
-                    f'for ({target_ty} {target_name} = {start}; '
+                    f'for ({decl} = {start}; '
                     f'{target_name} < {stop}; ++{target_name}) {{'
                 )
             case Range3():
@@ -430,17 +495,12 @@ class _Cpp2Emitter(Visitor):
                 stop = self._visit_expr(iterable.args[1], ctx)
                 step = self._visit_expr(iterable.args[2], ctx)
                 self.writer.add_line(
-                    f'for ({target_ty} {target_name} = {start}; '
+                    f'for ({decl} = {start}; '
                     f'{target_name} < {stop}; {target_name} += {step}) {{'
                 )
             case _:
-                # Generic iterable — list-typed Var, list literal, etc.
-                # Emitted as a range-based for over the iterable's
-                # value.
                 iter_str = self._visit_expr(iterable, ctx)
-                self.writer.add_line(
-                    f'for ({target_ty} {target_name} : {iter_str}) {{'
-                )
+                self.writer.add_line(f'for ({decl} : {iter_str}) {{')
         self.writer.indent()
 
     def _visit_list_ref(self, e: ListRef, ctx) -> str:
@@ -481,9 +541,25 @@ class _Cpp2Emitter(Visitor):
             f'{arr_tmp}.begin() + {start}, '
             f'{arr_tmp}.begin() + {stop})'
         )
-    def _visit_list_set(self, e, ctx): self._unsupported('ListSet')
+    def _visit_list_set(self, e, ctx):
+        # ``ListSet`` is only produced by the ``FuncUpdate`` transform,
+        # which the cpp2 pipeline does not run — C++ mutates vector
+        # elements directly via ``IndexedAssign``.  Reaching this
+        # visitor would be a pipeline bug.
+        self._unsupported('ListSet')
     def _visit_if_expr(self, e, ctx): self._unsupported('IfExpr')
-    def _visit_indexed_assign(self, stmt, ctx): self._unsupported('IndexedAssign')
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+        # ``xs[i1]…[iN] = e`` is in-place mutation in C++.  The
+        # post-mutation SSA def of ``xs`` shares a storage class with
+        # its ``prev`` (see ``_is_in_place_assign`` in
+        # ``storage_infer``), so the C++ name is the same on both
+        # sides — emit a direct subscript-store.
+        target_def = self.def_use.find_def_from_site(stmt.var, stmt)
+        target_name = self.storage.def_to_name[target_def]
+        idx_strs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
+        chain = target_name + ''.join(f'[{i}]' for i in idx_strs)
+        rhs = self._visit_expr(stmt.expr, ctx)
+        self.writer.add_line(f'{chain} = {rhs};')
 
     def _visit_if1(self, stmt: If1Stmt, ctx):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -512,10 +588,17 @@ class _Cpp2Emitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
     def _visit_for(self, stmt: ForStmt, ctx):
-        if not isinstance(stmt.target, NamedId):
+        if isinstance(stmt.target, NamedId):
+            self._emit_for_named_target(stmt, ctx)
+        elif isinstance(stmt.target, TupleBinding):
+            self._emit_for_tuple_target(stmt, ctx)
+        else:
             raise Cpp2EmitError(
-                'tuple-binding for-loop targets are not yet supported'
+                f'unsupported for-loop target {stmt.target!r}'
             )
+
+    def _emit_for_named_target(self, stmt: ForStmt, ctx):
+        assert isinstance(stmt.target, NamedId)
         target_def = self.def_use.find_def_from_site(stmt.target, stmt)
         target = self.storage.def_to_name[target_def]
         # Fold the type into the for header iff the counter is a
@@ -546,12 +629,29 @@ class _Cpp2Emitter(Visitor):
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
-                # Generic iterable (list-typed Var, list literal, etc.):
-                # emit a range-based for loop over the iterable's value.
                 iter_str = self._visit_expr(stmt.iterable, ctx)
                 header = f'for ({decl} : {iter_str})'
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
+        self._visit_block(stmt.body, ctx)
+        self.writer.dedent()
+        self.writer.add_line('}')
+
+    def _emit_for_tuple_target(self, stmt: ForStmt, ctx):
+        # ``for (a, b) in xs:`` — a tuple-binding target only makes
+        # sense for non-``range`` iterables (range produces ints).
+        # Iterate via a tuple-typed temp, then destructure into the
+        # binding's named SSA defs at the top of the loop body.
+        if isinstance(stmt.iterable, (Range1, Range2, Range3)):
+            raise Cpp2EmitError(
+                'tuple-binding for-loop target requires a non-range iterable'
+            )
+        iter_str = self._visit_expr(stmt.iterable, ctx)
+        tmp = self._fresh_temp()
+        self.writer.add_line(f'for (auto {tmp} : {iter_str}) {{')
+        self.writer.indent()
+        assert isinstance(stmt.target, TupleBinding)
+        self._destructure(stmt.target, tmp, stmt)
         self._visit_block(stmt.body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')

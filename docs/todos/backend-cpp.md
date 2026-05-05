@@ -133,10 +133,19 @@ double f(double x, double y) {
   `_visit_for`).
 - 4d ✅ List slicing (`xs[a:b]`, with `[:b]`/`[a:]`/`[:]` defaults).
   Strict bounds checking against the interpreter is still TODO.
-- 4e ☐ `IndexedAssign` (`xs[i] = e`) via `FuncUpdate` →
-  `Assign(xs, ListSet(...))`.
-- 4f ⏳ Tuples: `TupleExpr` ✅. `TupleBinding` destructuring still
-  TODO (lands with `IndexedAssign`).
+- 4e ✅ `IndexedAssign` (`xs[i] = e`) — in-place mutation, matching
+  the FPy interpreter (`interpret/byte.py:_visit_indexed_assign`).
+  C++ already supports in-place vector-element mutation, so the
+  pipeline does **not** run `FuncUpdate`.  `IndexedAssign` is
+  emitted directly as `xs[idx_chain] = e;`.  `StorageInfer` adds
+  an in-place coalescing edge: any `AssignDef` whose site is an
+  `IndexedAssign` is unioned with its `prev`, ensuring the post-
+  mutation def shares a storage class with the pre-mutation def
+  — same C++ name, no widening, no rename.
+- 4f ✅ Tuples: `TupleExpr` (`std::make_tuple(...)`) and
+  `TupleBinding` destructuring (`std::get<i>` extraction in
+  `Assign`, `ForStmt`, and `ListComp`, with underscore skips and
+  nested bindings).
 - 4g ☐ Remaining built-ins: `enumerate`, `zip`, `sum`.
 
 #### Phase 5 — Rounding & contexts ☐

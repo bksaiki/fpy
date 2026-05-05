@@ -17,7 +17,7 @@ class TestBoolAndCompare:
             return True
 
         out = Cpp2Compiler().compile(f)
-        assert out == 'bool f() {\n    return true;\n}\n'
+        assert out == 'bool f() {\n    return true;\n}'
 
     def test_bool_literal_false(self):
         @fp.fpy
@@ -25,7 +25,7 @@ class TestBoolAndCompare:
             return False
 
         out = Cpp2Compiler().compile(f)
-        assert out == 'bool f() {\n    return false;\n}\n'
+        assert out == 'bool f() {\n    return false;\n}'
 
     def test_pairwise_lt(self):
         @fp.fpy

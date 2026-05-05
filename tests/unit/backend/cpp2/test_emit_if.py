@@ -39,7 +39,7 @@ class TestIfStmt:
             '        y = x;\n'
             '    }\n'
             '    return y;\n'
-            '}\n'
+            '}'
         )
 
     def test_if1_no_else(self):
@@ -63,7 +63,7 @@ class TestIfStmt:
             '        y = (-x);\n'
             '    }\n'
             '    return y;\n'
-            '}\n'
+            '}'
         )
 
     def test_nested_if(self):
@@ -95,7 +95,7 @@ class TestIfStmt:
             '        z = y;\n'
             '    }\n'
             '    return z;\n'
-            '}\n'
+            '}'
         )
 
     def test_hoist_lands_just_before_if(self):
@@ -126,7 +126,7 @@ class TestIfStmt:
             '        y = a;\n'
             '    }\n'
             '    return y;\n'
-            '}\n'
+            '}'
         )
 
     def test_nested_if_else_anchors_at_outermost(self):

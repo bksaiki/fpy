@@ -41,7 +41,7 @@ class TestScalarSlice:
         assert out == (
             'double f(double x, double y) {\n'
             '    return (x + y);\n'
-            '}\n'
+            '}'
         )
 
     def test_all_four_arith_ops(self, cc):

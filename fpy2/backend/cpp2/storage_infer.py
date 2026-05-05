@@ -25,7 +25,7 @@ numeric suffixes (``x_1``, ``x_2``, …).
 from collections import defaultdict
 from dataclasses import dataclass
 
-from ...ast.fpyast import Argument, Stmt
+from ...ast.fpyast import Argument, IndexedAssign, Stmt
 from ...analysis import Definition
 from ...analysis.format_infer import FormatBound
 from ...analysis.define_use import DefineUseAnalysis
@@ -97,6 +97,19 @@ def _is_external(members: list[Definition]) -> bool:
     return False
 
 
+def _is_in_place_assign(d: AssignDef) -> bool:
+    """Does *d* come from an in-place ``IndexedAssign`` (``xs[i] = e``)?
+
+    The FPy interpreter mutates the underlying list in place
+    (``interpret/byte.py:_visit_indexed_assign``).  SSA gives the
+    post-mutation name its own AssignDef anyway so value-tracking
+    analyses can reason about it, but for the cpp2 backend the new
+    def must share storage with its ``prev`` — no copy, no widening,
+    no rename.
+    """
+    return isinstance(d.site, IndexedAssign)
+
+
 class StorageInfer:
     """
     Storage-type inference for the cpp2 emitter.
@@ -130,12 +143,30 @@ class StorageInfer:
         """
         defs = def_use.defs
 
-        # ---- 1. union-find over phi edges ----
+        # ---- 1. union-find over coalescing edges ----
+        # Two kinds of edges force defs into the same storage class:
+        #   * Phi edges: a phi merge is exactly "both incoming defs
+        #     write to the same C++ variable."
+        #   * In-place mutation edges: ``xs[i] = e`` is in-place per
+        #     the FPy interpreter, but ``FuncUpdate`` has rewritten it
+        #     to ``xs = ListSet(xs, [i], e)`` and the SSA pass
+        #     introduced a fresh def for ``xs``.  Detect that
+        #     canonical shape and union with ``prev`` — the underlying
+        #     vector is the same, so storage cannot widen and the
+        #     C++ name must be reused.  This mirrors the comment in
+        #     ``reaching_defs`` that physical-property analyses treat
+        #     IndexedAssign-sited defs as sharing storage with prev.
         uf: Unionfind[Definition] = Unionfind(defs)
         for d in defs:
             if isinstance(d, PhiDef):
                 uf.union(d, defs[d.lhs])
                 uf.union(d, defs[d.rhs])
+            elif (
+                isinstance(d, AssignDef)
+                and d.prev is not None
+                and _is_in_place_assign(d)
+            ):
+                uf.union(d, defs[d.prev])
 
         def_class: dict[Definition, Definition] = {d: uf.find(d) for d in defs}
         class_members: dict[Definition, list[Definition]] = defaultdict(list)
