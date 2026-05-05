@@ -1,21 +1,29 @@
 """
-cpp2 backend: emitter (Phase 2 — scalar arithmetic).
+cpp2 backend: emitter.
 
-The emitter walks the (post-monomorphization) :class:`FuncDef` and
-produces a C++ source string.  This first cut covers the language's
-*scalar-arithmetic* subset only:
+Walks the (post-pipeline) :class:`FuncDef` and produces a C++ source
+string.  Storage types and per-def C++ identifiers come from
+:class:`Cpp2PipelineResult.storage` (a :class:`StorageAnalysis`
+produced by :class:`StorageInfer`); per-expression bounds come from
+:class:`FormatAnalysis`.
 
-- Function signatures (arg/return types come from
-  :class:`Cpp2PipelineResult.def_storage`).
-- :class:`Assign` and :class:`ReturnStmt`.
-- :class:`Var`, numeric literals.
-- :class:`UnaryOp`/:class:`BinaryOp` for ``+``/``-``/``*``/``/``,
-  :class:`Neg`, :class:`Abs`.
-- :class:`ContextStmt` is descended into without emitting
-  ``fesetround`` (rounding-boundary handling lands in a later phase).
+Currently supported:
 
-Anything else raises :class:`Cpp2CompileError`.  Subsequent phases will
-add booleans, control flow, lists, and rounding boundaries.
+- Function signatures, ``Assign`` (with ``TupleBinding``
+  destructuring), ``Return``, numeric literals, comparisons and
+  booleans.
+- Control flow: ``if`` / ``if1`` / ``while`` / ``for``-over-range
+  and ``for``-over-list (with optional tuple-binding target).
+- Lists: literals, indexing, slicing, comprehensions (with optional
+  tuple-binding target), and ``IndexedAssign`` as direct in-place
+  subscript-stores.
+- Tuples: ``TupleExpr`` and tuple-binding destructuring everywhere.
+- Built-ins: ``len``, ``sum``, ``enumerate``, ``zip``, ``range1/2/3``.
+- ``ContextStmt`` is descended into without emitting
+  ``fesetround`` — rounding-boundary handling is Phase 5.
+
+Anything else raises :class:`Cpp2EmitError`, which the public
+``Cpp2Compiler`` re-wraps as :class:`Cpp2CompileError`.
 """
 
 from fractions import Fraction
@@ -25,12 +33,11 @@ from ...ast.fpyast import (
     Abs, Add, Argument, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
     Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign,
     Integer, Len, ListComp, ListExpr, ListRef, ListSlice, Mul, NamedId,
-    NaryOp, Neg, Range1, Range2, Range3, Rational, ReturnStmt, Stmt, StmtBlock,
+    NaryOp, Neg, Range1, Range2, Range3, Rational, ReturnStmt, StmtBlock,
     Sub, Sum, TupleBinding, TupleExpr, UnaryOp, Var, ContextStmt, UnderscoreId,
     WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
-from ...utils.compare import CompareOp
 
 from .storage import StorageSelectionError, choose_storage
 from .storage_infer import StorageAnalysis
@@ -101,10 +108,11 @@ class _Cpp2Emitter(Visitor):
         """Allocate a fresh emitter-only temporary identifier.
 
         Used by visitors that need to emit setup statements alongside
-        an expression result (currently :class:`ListComp`).  The
-        returned name uses a double-underscore prefix to keep it
-        distinct from any identifier the source program could
-        introduce.
+        an expression result — comprehensions, slices, tuple-binding
+        destructure sources, ``enumerate``, ``zip``, etc.  The
+        ``__cpp2_tmp`` prefix keeps these distinct from any identifier
+        the source program could introduce (FPy doesn't allow leading
+        underscores in user-visible names).
         """
         self._tmp_counter += 1
         return f'__cpp2_tmp{self._tmp_counter}'
@@ -201,7 +209,7 @@ class _Cpp2Emitter(Visitor):
         ret_str = ret_ty.format() if ret_ty is not None else 'void'
 
         # Emit arg list.  Each argument's class is anchored to the bare
-        # source name in the phi-web, so it's safe to use ``arg.name``
+        # source name in ``StorageInfer``, so it's safe to use ``arg.name``
         # directly here (and any body-side reassignment that flows
         # through the arg's phi-class will write to the same variable).
         arg_strs: list[str] = []
@@ -233,8 +241,11 @@ class _Cpp2Emitter(Visitor):
 
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
         """Pull the type of the function's return expression from the
-        format analysis (Phase-2 slice: assumes one return statement,
-        possibly nested inside a ``with`` block)."""
+        format analysis.  Walks the body and any directly-nested
+        ``with`` blocks; the AST shape FPy guarantees is that every
+        path either falls off the end (rejected upstream) or hits a
+        single ``Return`` whose expression's bound is the function's
+        return type."""
 
         def find_return(block: StmtBlock) -> ReturnStmt | None:
             for stmt in block.stmts:
@@ -292,13 +303,13 @@ class _Cpp2Emitter(Visitor):
         self.writer.add_line(f'return {rhs};')
 
     def _visit_context(self, stmt: ContextStmt, ctx):
-        # Phase 2: rounding boundaries are not yet emitted.  Descend
-        # into the body and trust the format-inference / storage choices
-        # made earlier.  ``with`` itself doesn't generate C++ statements.
+        # Rounding boundaries (Phase 5) aren't emitted yet — descend
+        # into the body and rely on the format-inference / storage
+        # choices already baked into ``StorageInfer``.  The ``with``
+        # itself contributes no C++ statement.
         if not isinstance(stmt.target, UnderscoreId):
             raise Cpp2EmitError(
-                'binding the active context to a name is not supported '
-                'in the Phase-2 slice'
+                'binding the active context to a name is not yet supported'
             )
         self._visit_block(stmt.body, ctx)
 
@@ -407,9 +418,9 @@ class _Cpp2Emitter(Visitor):
         return f'({lhs} {op} {rhs})'
 
     # ------------------------------------------------------------------
-    # Stubs for AST nodes not handled in Phase 2 — each raises a clean
-    # error pointing at the node kind.  Subsequent phases will replace
-    # these one at a time.
+    # Stubs for AST nodes not yet handled — each raises a clean error
+    # pointing at the node kind so later phases (rounding, transcendental
+    # ops, etc.) know what's left.
 
     def _unsupported(self, kind: str):
         raise Cpp2EmitError(f'cpp2 emitter does not handle {kind}')

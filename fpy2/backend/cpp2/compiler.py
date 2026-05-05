@@ -1,10 +1,13 @@
 """
 Public API for the cpp2 backend.
 
-The compiler is built up across several phases (see
-``docs/todos/backend-cpp.md``).  At present this is a stub: the public
-surface is defined so callers can import :class:`Cpp2Compiler`, but
-:meth:`Cpp2Compiler.compile` is not yet implemented.
+:class:`Cpp2Compiler` runs the analysis pipeline (monomorphization,
+def-use, context-use, array-size, format inference, storage
+inference) on a :class:`Function` and hands the result to
+:class:`_Cpp2Emitter`, which produces a C++ source string.  Errors
+surface as :class:`Cpp2CompileError`.
+
+Phase notes live in ``docs/todos/backend-cpp.md``.
 """
 
 from dataclasses import dataclass
@@ -37,17 +40,14 @@ class Cpp2CompileError(CompileError):
 @dataclass
 class Cpp2PipelineResult:
     """
-    Carrier for the per-function analysis state computed in Phase 1.
-
-    The cpp2 emitter (Phase 2 onward) consumes this rather than re-running
-    each pre-analysis itself.  The fields parallel the analyses listed in
-    ``docs/todos/backend-cpp.md``:
+    Carrier for the per-function analysis state the emitter consumes.
 
     - ``ast``: the (post-monomorphization) :class:`FuncDef`.
     - ``format_info``: per-expression and per-definition format bounds.
     - ``storage``: per-SSA-def storage assignment.  Each def maps to a
       C++ identifier and storage type; two defs share storage iff they
-      are connected by phi edges.
+      are connected either by phi edges *or* by an in-place mutation
+      edge (the SSA-fresh def at an ``IndexedAssign`` site).
     """
     ast: FuncDef
     format_info: FormatAnalysis
@@ -58,15 +58,15 @@ class Cpp2Compiler(Backend):
     """
     Format-inference-driven C++ compiler.
 
-    Phase 1 wires the pre-analysis pipeline and chooses storage types
-    per definition.  Code emission lands in subsequent phases.
+    The pipeline runs all pre-analyses and assigns each SSA def to a
+    C++ variable; the emitter then walks the AST and produces source.
     """
 
     def __init__(self):
         pass
 
     # ------------------------------------------------------------------
-    # Pipeline (Phase 1) — runs all pre-analyses and selects storage.
+    # Pipeline — runs all pre-analyses and selects storage.
 
     def _run_pipeline(
         self,
@@ -79,15 +79,11 @@ class Cpp2Compiler(Backend):
             arg_types = [None for _ in func.args]
         if ast.ctx is not None:
             ctx = None
-        ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
-        # ``IndexedAssign`` (``xs[i] = e``) is left intact — C++ can
-        # mutate vector elements directly, so we don't need
-        # ``FuncUpdate``'s functional-update rewrite.  The matching
-        # in-place coalescing edge in ``StorageInfer`` keeps the
-        # post-mutation SSA def in the same storage class as its
-        # ``prev``.
 
-        # The analyses are independent up to def_use.
+        # apply monomorphization to get concrete types
+        ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
+
+        # run program analyses to get the information the emitter needs
         def_use = DefineUse.analyze(ast)
         ctx_use = ContextUse.analyze(ast, def_use=def_use)
         array_size = ArraySizeInfer.analyze(ast)
@@ -98,8 +94,9 @@ class Cpp2Compiler(Backend):
             array_size=array_size,
         )
 
-        # Per-SSA-def storage assignment.  Defs joined by phi edges
-        # share a C++ variable; anything else is free to rename.  See
+        # Per-SSA-def storage assignment.  Defs joined by phi edges or
+        # by an in-place mutation edge (``IndexedAssign``) share a
+        # C++ variable; anything else is free to rename.  See
         # ``storage_infer.py`` for the full contract.
         try:
             storage = StorageInfer.infer(

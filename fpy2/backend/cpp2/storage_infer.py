@@ -5,11 +5,20 @@ Assigns each SSA def to a C++ variable: the variable's identifier and
 its storage type.  The emitter consumes the result directly — every
 ``Var``/``Assign`` is just a lookup.
 
-The underlying partition is the SSA "phi web": two defs share a C++
-variable iff they are connected by phi edges (computed via union-find
-over the phi nodes).  Anything else is free to rename, so a sequential
-rebind of a name without a phi merge gets its *own* variable with its
-*own* (possibly narrower) storage type.
+The partition is computed via union-find over two kinds of coalescing
+edges:
+
+- **Phi edges.**  A phi merge means both incoming defs must write to
+  the same C++ variable, so they share storage.
+- **In-place mutation edges.**  An ``IndexedAssign`` (``xs[i] = e``)
+  produces an SSA-fresh def of ``xs`` so value-tracking analyses can
+  reason about it, but physically the same vector is mutated — the
+  new def is unioned with its ``prev`` so they share a single C++
+  name and the emitter produces a direct subscript-store.
+
+Anything *not* connected by either edge is free to rename, so a
+sequential rebind of a name without a phi merge gets its *own*
+variable with its *own* (possibly narrower) storage type.
 
 Storage per class is chosen by aggregating every member's
 :class:`FormatBound` through :func:`aggregate_storage`.  Only members
@@ -41,11 +50,12 @@ class StorageAnalysis:
     """
     Result of :class:`StorageInfer`.
 
-    Each SSA def is assigned to a *class* (the phi-web equivalence
-    class), and each class is assigned a single C++ identifier and
-    storage type.  The class id is the union-find representative —
-    the canonical :class:`Definition` standing in for the whole class.
-    Storage classes split into two emission shapes:
+    Each SSA def is assigned to a *class* (the union-find equivalence
+    class over phi and in-place mutation edges), and each class is
+    assigned a single C++ identifier and storage type.  The class id
+    is the union-find representative — the canonical
+    :class:`Definition` standing in for the whole class.  Storage
+    classes split into two emission shapes:
 
     - ``declare_at_assign``: the lowest-index writer in the class is
       its declaration site.  The emitter folds the declaration into
