@@ -237,12 +237,22 @@ def _top_bound(ty: Type) -> FormatBound:
     """
     Returns the top of the format lattice for *ty*.
 
-    For scalar real values this is ``REAL_FORMAT``; for tuples and lists it is
-    a structural format with ``REAL_FORMAT`` (or ``None``) at the leaves.  For
-    non-numeric types (bool, context, function, type variable) it is ``None``.
+    For scalar real values this is ``REAL_FORMAT`` by default — but when
+    a monomorphizing pass has embedded a concrete :class:`Context` in
+    ``RealType.ctx``, the precise ``ctx.format()`` is returned instead.
+    For tuples and lists it is a structural format whose leaves are
+    derived recursively (so a list-of-FP32 argument produces
+    ``ListFormat(IEEEFormat(es=8, nbits=32))``).  For non-numeric types
+    (bool, context, function, type variable) it is ``None``.
     """
     match ty:
         case RealType():
+            # If the type carries a concrete rounding context, the format
+            # is pinned by that context — typically the case after a
+            # monomorphization pass.  Otherwise (symbolic or absent ctx)
+            # the format is unknown and we report the scalar top.
+            if isinstance(ty.ctx, Context):
+                return ty.ctx.format()
             return REAL_FORMAT
         case TupleType():
             return TupleFormat(tuple(_top_bound(t) for t in ty.elts))

@@ -42,6 +42,65 @@ class TestFormatInfer:
             assert fmt == REAL_FORMAT
 
     # ------------------------------------------------------------------
+    # Format pinned by monomorphized argument types
+
+    def test_monomorphized_scalar_arg_format(self):
+        """
+        After monomorphization, ``RealType.ctx`` carries the concrete
+        format.  ``_top_bound`` extracts that format so the argument's
+        bound is the precise pinned format, not ``REAL_FORMAT``.
+        """
+        from fpy2.transform import Monomorphize
+        from fpy2.types import RealType
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return x
+
+        mono_ast = Monomorphize.apply_by_arg(
+            f.ast, None, [RealType(fp.FP32)]
+        )
+        info = FormatInfer.analyze(mono_ast)
+        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
+        assert fp.FP32.format() in x_bounds, (
+            f'expected FP32 among x bounds after monomorphization, got {x_bounds}'
+        )
+
+    def test_monomorphized_list_arg_format(self):
+        """
+        Monomorphization propagates through structural types: a
+        ``list[Real[FP32]]`` argument becomes ``ListFormat(IEEEFormat)``.
+        """
+        from fpy2.transform import Monomorphize
+        from fpy2.types import RealType, ListType
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return xs[0]
+
+        mono_ast = Monomorphize.apply_by_arg(
+            f.ast, None, [ListType(RealType(fp.FP32))]
+        )
+        info = FormatInfer.analyze(mono_ast)
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        assert ListFormat(fp.FP32.format()) in xs_bounds, (
+            f'expected ListFormat(FP32) among xs bounds, got {xs_bounds}'
+        )
+
+    def test_unmonomorphized_arg_keeps_real_format(self):
+        """
+        Without a monomorphization pass, ``RealType.ctx`` is ``None`` and
+        ``_top_bound`` reports ``REAL_FORMAT`` as before — no regression.
+        """
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return x
+
+        info = self._run(f)
+        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
+        assert REAL_FORMAT in x_bounds
+
+    # ------------------------------------------------------------------
     # Single context block
 
     def test_fp32_context(self):
