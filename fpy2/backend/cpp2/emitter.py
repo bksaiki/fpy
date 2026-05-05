@@ -22,8 +22,8 @@ from fractions import Fraction
 
 from ...ast.fpyast import (
     Abs, Add, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
-    Expr, FuncDef, Hexnum, Integer, Mul, NamedId, Neg, Rational,
-    ReturnStmt, Stmt, StmtBlock, Sub, UnaryOp, Var,
+    Expr, FuncDef, Hexnum, If1Stmt, IfStmt, Integer, Mul, NamedId,
+    Neg, Rational, ReturnStmt, Stmt, StmtBlock, Sub, UnaryOp, Var,
     ContextStmt, UnderscoreId,
 )
 from ...ast.visitor import Visitor
@@ -349,8 +349,26 @@ class _Cpp2Emitter(Visitor):
     def _visit_list_set(self, e, ctx): self._unsupported('ListSet')
     def _visit_if_expr(self, e, ctx): self._unsupported('IfExpr')
     def _visit_indexed_assign(self, stmt, ctx): self._unsupported('IndexedAssign')
-    def _visit_if1(self, stmt, ctx): self._unsupported('If1Stmt')
-    def _visit_if(self, stmt, ctx): self._unsupported('IfStmt')
+
+    def _visit_if1(self, stmt: If1Stmt, ctx):
+        cond = self._visit_expr(stmt.cond, ctx)
+        self.writer.add_line(f'if ({cond}) {{')
+        self.writer.indent()
+        self._visit_block(stmt.body, ctx)
+        self.writer.dedent()
+        self.writer.add_line('}')
+
+    def _visit_if(self, stmt: IfStmt, ctx):
+        cond = self._visit_expr(stmt.cond, ctx)
+        self.writer.add_line(f'if ({cond}) {{')
+        self.writer.indent()
+        self._visit_block(stmt.ift, ctx)
+        self.writer.dedent()
+        self.writer.add_line('} else {')
+        self.writer.indent()
+        self._visit_block(stmt.iff, ctx)
+        self.writer.dedent()
+        self.writer.add_line('}')
     def _visit_while(self, stmt, ctx): self._unsupported('WhileStmt')
     def _visit_for(self, stmt, ctx): self._unsupported('ForStmt')
     def _visit_assert(self, stmt, ctx): self._unsupported('AssertStmt')
