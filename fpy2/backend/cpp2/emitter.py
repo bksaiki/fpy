@@ -76,12 +76,12 @@ class _Cpp2Emitter(Visitor):
     def __init__(
         self,
         ast: FuncDef,
-        phi_web,  # PhiWeb
+        storage,  # StorageAnalysis
         def_use,
         format_info,
     ):
         self.ast = ast
-        self.phi_web = phi_web
+        self.storage = storage
         self.def_use = def_use
         self.format_info = format_info
         self.writer = _IndentedWriter()
@@ -98,15 +98,15 @@ class _Cpp2Emitter(Visitor):
 
     def _name_for_var_use(self, var: Var) -> str:
         d = self.def_use.find_def_from_use(var)
-        return self.phi_web.def_to_name[d]
+        return self.storage.def_to_name[d]
 
     def _name_for_def_at_site(self, name: NamedId, site) -> str:
         d = self.def_use.find_def_from_site(name, site)
-        return self.phi_web.def_to_name[d]
+        return self.storage.def_to_name[d]
 
     def _storage_for_arg(self, arg) -> CppType:
         d = self.def_use.find_def_from_site(arg.name, arg)
-        return self.phi_web.class_storage[self.phi_web.def_class[d]]
+        return self.storage.class_storage[self.storage.def_class[d]]
 
     # ------------------------------------------------------------------
     # Function emission
@@ -132,7 +132,7 @@ class _Cpp2Emitter(Visitor):
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
-        # Hoist one declaration per phi-web class.  Classes anchored to
+        # Hoist one declaration per storage class.  Classes anchored to
         # function args / free variables are external (already declared
         # by the signature or the surrounding scope) and skipped.  All
         # other classes get a ``T <name>{};`` so reassigns inside
@@ -145,12 +145,12 @@ class _Cpp2Emitter(Visitor):
     def _emit_local_declarations(self):
         """
         Emit one zero-initialised C++ variable declaration per
-        non-external phi-web class, using the class's chosen name and
+        non-external storage class, using the class's chosen name and
         aggregated storage type.
         """
-        for c in self.phi_web.decl_classes:
-            name = self.phi_web.def_to_name[self.phi_web.class_members[c][0]]
-            storage = self.phi_web.class_storage[c]
+        for c in self.storage.decl_classes:
+            name = self.storage.def_to_name[self.storage.class_members[c][0]]
+            storage = self.storage.class_storage[c]
             # Zero-initialise via ``T name{};`` so reads-before-writes
             # are well-defined (FPy analyses ensure this can't happen,
             # but the initialiser also serves as a paper-trail).
@@ -195,10 +195,10 @@ class _Cpp2Emitter(Visitor):
                 'tuple unpacking and underscore targets land in a later phase'
             )
         rhs = self._visit_expr(stmt.expr, ctx)
-        # The phi-web maps this Assign's SSA def to one C++ variable.
-        # Distinct SSA rebinds of the same source name may live in
-        # different classes (with their own narrower storage), so we
-        # have to look the target name up rather than reuse
+        # ``StorageInfer`` maps this Assign's SSA def to one C++
+        # variable.  Distinct SSA rebinds of the same source name may
+        # live in different classes (with their own narrower storage),
+        # so we have to look the target name up rather than reuse
         # ``stmt.target`` directly.
         target_name = self._name_for_def_at_site(stmt.target, stmt)
         self.writer.add_line(f'{target_name} = {rhs};')
@@ -240,8 +240,8 @@ class _Cpp2Emitter(Visitor):
             )
 
     def _visit_var(self, e: Var, ctx) -> str:
-        # Resolve the use to its SSA def, then consult the phi-web for
-        # the C++ identifier of that def's class.
+        # Resolve the use to its SSA def, then look up the C++
+        # identifier ``StorageInfer`` assigned to that def's class.
         if not isinstance(e.name, NamedId):
             raise Cpp2EmitError(f'non-named variable use: {e.name!r}')
         return self._name_for_var_use(e)

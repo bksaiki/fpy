@@ -25,8 +25,8 @@ from ...types import Type
 from ..backend import Backend, CompileError
 
 from .emitter import Cpp2EmitError, _Cpp2Emitter
-from .phi_web import PhiWeb, compute_phi_web
 from .storage import StorageSelectionError
+from .storage_infer import StorageAnalysis, StorageInfer
 
 
 class Cpp2CompileError(CompileError):
@@ -45,13 +45,13 @@ class Cpp2PipelineResult:
 
     - ``ast``: the (post-monomorphization) :class:`FuncDef`.
     - ``format_info``: per-expression and per-definition format bounds.
-    - ``phi_web``: phi-equivalence partition.  Each SSA def maps to a
-      class; each class has a single C++ name and storage type.  Two
-      defs share storage iff they are connected by phi edges.
+    - ``storage``: per-SSA-def storage assignment.  Each def maps to a
+      C++ identifier and storage type; two defs share storage iff they
+      are connected by phi edges.
     """
     ast: FuncDef
     format_info: FormatAnalysis
-    phi_web: PhiWeb
+    storage: StorageAnalysis
 
 
 class Cpp2Compiler(Backend):
@@ -92,11 +92,11 @@ class Cpp2Compiler(Backend):
             array_size=array_size,
         )
 
-        # Compute the phi-web partition: defs joined by phi edges share
-        # a C++ variable, anything else is free to rename.  See
-        # ``phi_web.py`` for the full contract.
+        # Per-SSA-def storage assignment.  Defs joined by phi edges
+        # share a C++ variable; anything else is free to rename.  See
+        # ``storage_infer.py`` for the full contract.
         try:
-            phi_web = compute_phi_web(
+            storage = StorageInfer.infer(
                 format_info.type_info.def_use,
                 format_info.by_def,
             )
@@ -106,7 +106,7 @@ class Cpp2Compiler(Backend):
         return Cpp2PipelineResult(
             ast=ast,
             format_info=format_info,
-            phi_web=phi_web,
+            storage=storage,
         )
 
     def compile(
@@ -132,7 +132,7 @@ class Cpp2Compiler(Backend):
         result = self._run_pipeline(func, ctx, arg_types)
         emitter = _Cpp2Emitter(
             ast=result.ast,
-            phi_web=result.phi_web,
+            storage=result.storage,
             def_use=result.format_info.type_info.def_use,
             format_info=result.format_info,
         )
