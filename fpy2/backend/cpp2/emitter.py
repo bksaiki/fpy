@@ -24,7 +24,7 @@ from ...ast.fpyast import (
     Abs, Add, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
     Expr, FuncDef, Hexnum, If1Stmt, IfStmt, Integer, Mul, NamedId,
     Neg, Rational, ReturnStmt, Stmt, StmtBlock, Sub, UnaryOp, Var,
-    ContextStmt, UnderscoreId,
+    ContextStmt, UnderscoreId, WhileStmt,
 )
 from ...ast.visitor import Visitor
 from ...utils.compare import CompareOp
@@ -369,7 +369,13 @@ class _Cpp2Emitter(Visitor):
         self._visit_block(stmt.iff, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
-    def _visit_while(self, stmt, ctx): self._unsupported('WhileStmt')
+    def _visit_while(self, stmt: WhileStmt, ctx):
+        cond = self._visit_expr(stmt.cond, ctx)
+        self.writer.add_line(f'while ({cond}) {{')
+        self.writer.indent()
+        self._visit_block(stmt.body, ctx)
+        self.writer.dedent()
+        self.writer.add_line('}')
     def _visit_for(self, stmt, ctx): self._unsupported('ForStmt')
     def _visit_assert(self, stmt, ctx): self._unsupported('AssertStmt')
     def _visit_effect(self, stmt, ctx): self._unsupported('EffectStmt')

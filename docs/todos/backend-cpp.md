@@ -120,7 +120,7 @@ double f(double x, double y) {
   become reassignments (foundation for phi handling).
 - 3b ✅ Bool literals and comparisons.
 - 3c ✅ `if` / `if1` with phi assignment.
-- 3d ☐ `while` with phi declaration before the loop.
+- 3d ✅ `while` with phi declaration before the loop.
 - 3e ☐ `for` over `range`/list (plain integer counter for known
   sizes; iterator pattern otherwise).
 - Test: compile a mix of branching/looping programs.

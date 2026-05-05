@@ -99,9 +99,9 @@ class TestScalarSlice:
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
                 y = x
-                while y > 0:
-                    y = y - 1
+                for _ in range(3):
+                    y = y + 1
                 return y
 
-        with pytest.raises(Cpp2CompileError, match='does not handle WhileStmt'):
+        with pytest.raises(Cpp2CompileError, match='does not handle ForStmt'):
             _compile(cc, f)
