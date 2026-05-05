@@ -659,19 +659,33 @@ class _FormatInferInstance(Visitor):
           containing format.  Requires the list size to be statically
           known via :class:`ArraySizeAnalysis`; otherwise falls back to
           ``REAL_FORMAT`` via :meth:`_op_bound`.
+
+        The branches below are ordered so that the trivial cases
+        (``n == 0`` and ``n == 1``) are decided before any
+        abstractability check on the element format — those cases
+        produce a precise bound independent of whether the elements
+        could be lifted to :class:`AbstractFormat`.
         """
         n = self._known_iter_count(e.arg)
-        elt_fmt = arg_fmt.elt
-        if not self._is_real_scope(e) or n is None or not isinstance(elt_fmt, AbstractableFormatBound):
+        if not self._is_real_scope(e) or n is None:
             return self._op_bound(e)
 
+        # ``sum([])`` is conventionally 0 — independent of what the
+        # (absent) elements would have looked like.
         if n == 0:
-            # ``sum([])`` is conventionally 0.
             return SetFormat(frozenset((Fraction(0),)))
+
+        elt_fmt = arg_fmt.elt
+        # Single-element reduction: no addition occurs, the lone element
+        # passes through with its existing format.  Independent of
+        # abstractability.
         if n == 1:
-            # No addition occurs; the lone element passes through.
             return elt_fmt
-        # Lift the element format once and accumulate ``n - 1`` times.
+
+        # ``n >= 2``: simulate ``n - 1`` pairwise additions through
+        # AbstractFormat.  Requires the element to be abstractable.
+        if not isinstance(elt_fmt, AbstractableFormatBound):
+            return self._op_bound(e)
         af_elt = _to_abstract(elt_fmt)
         if af_elt is None:
             return self._op_bound(e)

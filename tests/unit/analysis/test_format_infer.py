@@ -896,6 +896,25 @@ class TestFormatInfer:
             f'expected REAL_FORMAT fall-back when size is unknown, got {sums}'
         )
 
+    def test_sum_empty_list_returns_zero_set_format(self):
+        """
+        Regression: ``sum([])`` under REAL must report ``SetFormat({0})``
+        regardless of the element format.  An earlier version short-
+        circuited to ``REAL_FORMAT`` via the abstractability guard
+        before checking the ``n == 0`` case.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            xs: list[fp.Real] = []
+            return sum(xs)
+
+        info = self._run(f)
+        sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
+        assert sums, 'expected a Sum expression in by_expr'
+        assert sums[-1] == SetFormat(frozenset((Fraction(0),))), (
+            f'expected SetFormat({{0}}) for sum([]) under REAL, got {sums[-1]}'
+        )
+
     def test_sum_grows_with_known_size(self):
         """
         Sanity: larger N produces a wider precise format under REAL.
