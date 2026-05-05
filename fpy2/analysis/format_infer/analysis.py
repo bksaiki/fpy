@@ -57,9 +57,9 @@ The analysis tracks a **format** that mirrors the basic-type structure::
 For loops, phi nodes are initialised from the pre-loop definition's format and
 the body is iterated until the phi bounds stop changing.  The lattice has
 **infinite ascending chains** in the scalar sub-lattice when exact arithmetic
-(``+``/``-``/``*`` under :class:`RealContext`, see below) is applied to a
-phi'd value: each iteration widens the resulting :class:`AbstractFormat`'s
-precision and bounds without bound.
+(``+``/``-``/``*`` under :data:`REAL`, see below) is applied to a phi'd value:
+each iteration widens the resulting :class:`AbstractFormat`'s precision and
+bounds without bound.
 
 When a ``for`` loop's iterable has a **statically-known length** (per
 :class:`ArraySizeAnalysis`), the analysis drives the phi update for
@@ -80,18 +80,20 @@ Format inference rules
   ``TernaryOp``, ``NaryOp``): the result is rounded to the active rounding
   context's format, i.e. ``scope.ctx.format()`` when the context is concrete,
   or ``REAL_FORMAT`` when it is a symbolic variable.
-- **Exact arithmetic** (``Neg``, ``Abs``, ``Add``, ``Sub``, ``Mul`` under a
-  concrete :class:`RealContext`): tighter than the default rule.  When all
+- **Exact arithmetic** (``Neg``, ``Abs``, ``Add``, ``Sub``, ``Mul`` under
+  the :data:`REAL` singleton): tighter than the default rule.  When all
   operand formats are abstractable, the result is computed via
   :class:`AbstractFormat`'s arithmetic
   (``(AbstractFormat.from_format(f1) ⊕ AbstractFormat.from_format(f2)).format()``)
-  rather than widening to ``REAL_FORMAT``.
-- **Sum reduction** (``Sum`` under a concrete :class:`RealContext` over a
-  list whose size is statically known via :class:`ArraySizeAnalysis`):
-  simulates ``n - 1`` exact pairwise additions through
-  :class:`AbstractFormat` instead of widening.  Under non-REAL contexts
-  every pairwise add rounds to the scope's format, so the result is just
-  the scope's format (the default rule).
+  rather than widening to ``REAL_FORMAT``.  The check is identity
+  against the singleton — other :class:`RealContext` instances are not
+  recognised.
+- **Sum reduction** (``Sum`` under :data:`REAL` over a list whose size is
+  statically known via :class:`ArraySizeAnalysis`): simulates ``n - 1``
+  exact pairwise additions through :class:`AbstractFormat` instead of
+  widening.  Under non-REAL contexts every pairwise add rounds to the
+  scope's format, so the result is just the scope's format (the default
+  rule).
 - **Integer-producing operations** (``Len``, ``Dim``, ``Size``,
   ``Range1``/``Range2``/``Range3``, the integer projection of
   ``Enumerate``): the result format is ``INTEGER`` regardless of the
@@ -125,7 +127,8 @@ from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...number import Context, INTEGER
 from ...number.context.format import Format
-from ...number.context.real import REAL_FORMAT, RealContext
+from ...number import REAL
+from ...number.context.real import REAL_FORMAT
 from ...number.number.reals import RealFloat
 from ...utils import is_dyadic
 from ...types import (
@@ -504,13 +507,16 @@ class _FormatInferInstance(Visitor):
         return _top_bound(ret_ty)
 
     def _is_real_scope(self, e: ContextUseSite) -> bool:
-        """Returns True iff *e*'s active scope is a concrete :class:`RealContext`.
+        """Returns True iff *e*'s active scope is the :data:`REAL` singleton.
 
         Distinct from ``_scope_format(e) == REAL_FORMAT`` because the latter
         also fires for symbolic (unresolved) context variables, where we
-        cannot assume the rounding is the identity.
+        cannot assume the rounding is the identity.  ``REAL`` is a unique
+        singleton, so identity comparison is the right check (and avoids
+        accidentally matching other ``RealContext`` instances that this
+        analysis does not support).
         """
-        return isinstance(self.ctx_use.find_scope_from_use(e).ctx, RealContext)
+        return self.ctx_use.find_scope_from_use(e).ctx is REAL
 
     def _visit_binding(
         self,
@@ -862,7 +868,7 @@ class _FormatInferInstance(Visitor):
         :class:`ArraySizeAnalysis`).  At runtime the loop walks exactly
         ``n`` body iterations, so the analysis can mirror that walk and
         avoid widening — important for the exact-arithmetic
-        (``+``/``-``/``*`` under :class:`RealContext`) lattice, which has
+        (``+``/``-``/``*`` under :data:`REAL`) lattice, which has
         infinite ascending chains.
 
         Iter-by-iter visit produces a precise (if potentially wide)
@@ -1023,10 +1029,10 @@ class FormatInfer:
       symbolic-length iterables iterate body + join until phi bounds
       stop changing.  The AbstractFormat-mediated scalar join introduces
       infinite ascending chains when exact arithmetic
-      (``+``/``-``/``*`` under :class:`RealContext`) is applied to a
-      phi'd value, so the fixpoint runs at most ``loop_iter_limit``
-      iterations before switching joins to widen-mode (distinct scalar
-      Formats fall back to ``REAL_FORMAT``) to force convergence.
+      (``+``/``-``/``*`` under :data:`REAL`) is applied to a phi'd
+      value, so the fixpoint runs at most ``loop_iter_limit`` iterations
+      before switching joins to widen-mode (distinct scalar Formats fall
+      back to ``REAL_FORMAT``) to force convergence.
 
     **Usage**::
 
@@ -1074,8 +1080,7 @@ class FormatInfer:
                 exactly that many times instead of iterating to a
                 fixpoint.  This is strictly more precise — important for
                 the exact-arithmetic lattice (``+``/``-``/``*`` under
-                :class:`RealContext`) which has infinite ascending
-                chains.
+                :data:`REAL`) which has infinite ascending chains.
             loop_iter_limit:
                 Number of loop body+join iterations to run before forcing
                 joins of distinct scalar Formats to widen to ``REAL_FORMAT``.
