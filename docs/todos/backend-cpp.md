@@ -115,15 +115,15 @@ double f(double x, double y) {
 - Test: compile + verify output is byte-identical to the expected
   string.
 
-#### Phase 3 — Booleans, comparisons, control flow ⏳
+#### Phase 3 — Booleans, comparisons, control flow ✅
 - 3a ✅ Hoist local declarations to the top of the function; assigns
   become reassignments (foundation for phi handling).
 - 3b ✅ Bool literals and comparisons.
 - 3c ✅ `if` / `if1` with phi assignment.
 - 3d ✅ `while` with phi declaration before the loop.
-- 3e ☐ `for` over `range`/list (plain integer counter for known
-  sizes; iterator pattern otherwise).
-- Test: compile a mix of branching/looping programs.
+- 3e ✅ `for` over `range(...)` (plain integer counter; iterables
+  other than `range` and tuple-binding targets land with list
+  support in Phase 4).
 
 #### Phase 4 — Lists & tuples ☐
 - `std::vector<T>` for lists, `std::tuple<T...>` for tuples.

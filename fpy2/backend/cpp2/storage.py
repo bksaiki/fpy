@@ -22,6 +22,7 @@ from ...number import (
     UINT8, UINT16, UINT32, UINT64,
 )
 from ...number.context.format import Format
+from ...number.context.mp_fixed import MPFixedFormat
 from ...number.context.real import REAL_FORMAT
 
 from .types import CppList, CppScalar, CppTuple, CppType
@@ -89,6 +90,8 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
     for cpp_ty, ladder_af in _LADDER:
         if af <= ladder_af:
             return cpp_ty
+    if isinstance(bound, MPFixedFormat) and bound.expmin >= 0:
+        return CppScalar.S64
     raise StorageSelectionError(
         f'no storage type on the ladder contains {bound!r}'
     )

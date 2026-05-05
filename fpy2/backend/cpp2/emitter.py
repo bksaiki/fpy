@@ -22,9 +22,9 @@ from fractions import Fraction
 
 from ...ast.fpyast import (
     Abs, Add, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
-    Expr, FuncDef, Hexnum, If1Stmt, IfStmt, Integer, Mul, NamedId,
-    Neg, Rational, ReturnStmt, Stmt, StmtBlock, Sub, UnaryOp, Var,
-    ContextStmt, UnderscoreId, WhileStmt,
+    Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, Integer, Mul, NamedId,
+    Neg, Range1, Range2, Range3, Rational, ReturnStmt, Stmt, StmtBlock,
+    Sub, UnaryOp, Var, ContextStmt, UnderscoreId, WhileStmt,
 )
 from ...ast.visitor import Visitor
 from ...utils.compare import CompareOp
@@ -376,7 +376,41 @@ class _Cpp2Emitter(Visitor):
         self._visit_block(stmt.body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
-    def _visit_for(self, stmt, ctx): self._unsupported('ForStmt')
+    def _visit_for(self, stmt: ForStmt, ctx):
+        if not isinstance(stmt.target, NamedId):
+            raise Cpp2EmitError(
+                'tuple-binding for-loop targets are not yet supported'
+            )
+        target = str(stmt.target)
+        match stmt.iterable:
+            case Range1():
+                stop = self._visit_expr(stmt.iterable.arg, ctx)
+                header = f'for ({target} = 0; {target} < {stop}; ++{target})'
+            case Range2():
+                start = self._visit_expr(stmt.iterable.first, ctx)
+                stop = self._visit_expr(stmt.iterable.second, ctx)
+                header = (
+                    f'for ({target} = {start}; '
+                    f'{target} < {stop}; ++{target})'
+                )
+            case Range3():
+                start = self._visit_expr(stmt.iterable.args[0], ctx)
+                stop = self._visit_expr(stmt.iterable.args[1], ctx)
+                step = self._visit_expr(stmt.iterable.args[2], ctx)
+                header = (
+                    f'for ({target} = {start}; '
+                    f'{target} < {stop}; {target} += {step})'
+                )
+            case _:
+                raise Cpp2EmitError(
+                    'cpp2 Phase 3 only supports for-loops over '
+                    f'range(...); got {type(stmt.iterable).__name__}'
+                )
+        self.writer.add_line(f'{header} {{')
+        self.writer.indent()
+        self._visit_block(stmt.body, ctx)
+        self.writer.dedent()
+        self.writer.add_line('}')
     def _visit_assert(self, stmt, ctx): self._unsupported('AssertStmt')
     def _visit_effect(self, stmt, ctx): self._unsupported('EffectStmt')
     def _visit_pass(self, stmt, ctx): self._unsupported('PassStmt')

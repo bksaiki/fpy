@@ -98,10 +98,8 @@ class TestScalarSlice:
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
-                y = x
-                for _ in range(3):
-                    y = y + 1
-                return y
+                assert x > 0
+                return x
 
-        with pytest.raises(Cpp2CompileError, match='does not handle ForStmt'):
+        with pytest.raises(Cpp2CompileError, match='does not handle AssertStmt'):
             _compile(cc, f)

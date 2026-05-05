@@ -54,6 +54,20 @@ class TestStorageScalar:
         with pytest.raises(StorageSelectionError, match='unconstrained real'):
             choose_storage_scalar(REAL_FORMAT)
 
+    def test_unbounded_integer_falls_back_to_s64(self):
+        """``MPFixedFormat`` representing unbounded integers — e.g.,
+        the result of ``range(...)`` — falls back to ``S64``.
+
+        Strictly speaking S64 doesn't *contain* an unbounded integer,
+        but the alternative is rejecting every loop counter that the
+        format-inference doesn't tighten with a numeric bound.  Overflow
+        is the user's responsibility; multi-precision storage is
+        out-of-scope per ``docs/todos/backend-cpp.md``.
+        """
+        from fpy2.number.context.mp_fixed import MPFixedFormat
+        unbounded_int = MPFixedFormat(nmin=-1)
+        assert choose_storage_scalar(unbounded_int) == CppScalar.S64
+
 
 class TestStorageStructural:
     """``choose_storage`` recurses through TupleFormat / ListFormat."""
