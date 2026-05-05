@@ -394,8 +394,13 @@ class TestArraySizeInfer:
         ]
         assert len(slice_bounds) == 1 and slice_bounds[0].size is None
 
-    def test_list_slice_start_past_end(self):
-        """``xs[10:]`` on a size-5 list has size 0 (clamped to non-negative)."""
+    def test_list_slice_start_past_end_is_unknown(self):
+        """
+        ``xs[10:]`` on a size-5 list is invalid under FPy's strict
+        slicing semantics (start past end of list).  The runtime raises
+        ``IndexError``; the static size analysis reports ``None``
+        (unknown) rather than committing to Python's clamping value of 0.
+        """
 
         @fp.fpy
         def f() -> list[fp.Real]:
@@ -407,7 +412,27 @@ class TestArraySizeInfer:
             b for e, b in info.by_expr.items()
             if type(e).__name__ == 'ListSlice'
         ]
-        assert len(slice_bounds) == 1 and slice_bounds[0].size == 0
+        assert len(slice_bounds) == 1 and slice_bounds[0].size is None
+
+    def test_list_slice_concrete_bounds_resolves_without_list_size(self):
+        """
+        With strict semantics, ``xs[1:3]`` has size exactly ``3 - 1 = 2``
+        when both bounds are concrete — *regardless of whether the
+        underlying list's size is statically known*.  (At runtime, if
+        ``len(xs) < 3``, the slice raises; the static analysis trusts
+        the runtime check and reports the size the slice *would* have.)
+        """
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return xs[1:3]
+
+        info = self._run(f)
+        slice_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'ListSlice'
+        ]
+        assert len(slice_bounds) == 1 and slice_bounds[0].size == 2
 
     # ------------------------------------------------------------------
     # IndexedAssign as a fresh SSA def

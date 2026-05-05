@@ -188,6 +188,39 @@ def example_builtin():
     ...
 ```
 
+#### Slicing
+
+FPy supports list slicing `xs[start:stop]`, but its semantics **differ
+from Python's**.  Where Python silently *clamps* out-of-range bounds
+(`xs[10:]` on a length-3 list returns `[]`), FPy treats out-of-range
+bounds as an error: a slice expression must extract a block of *exactly*
+`stop - start` elements.
+
+The runtime check is `0 <= start <= stop <= len(xs)`; any violation
+raises `IndexError` (and a non-integer bound raises `TypeError`).
+Omitted bounds default to `0` and `len(xs)` respectively.
+
+```python
+@fp.fpy
+def example_slicing(xs: list[fp.Real]):
+    a = xs[1:3]   # OK iff len(xs) >= 3 — extracts exactly 2 elements
+    b = xs[:3]    # OK iff len(xs) >= 3 — equivalent to xs[0:3]
+    c = xs[2:]    # OK iff len(xs) >= 2 — equivalent to xs[2:len(xs)]
+    d = xs[:]     # always OK — full copy
+    # The next three would all raise IndexError at runtime:
+    # e = xs[10:]    # start past end of list
+    # f = xs[:100]   # stop past end of list
+    # g = xs[2:1]    # start > stop
+    ...
+```
+
+The motivation is to make static reasoning about slice sizes precise:
+under FPy's rule, `xs[a:b]` always has size `b - a` when both bounds are
+concrete (regardless of `len(xs)`), and program analyses can rely on
+this without the conditional branching that Python's clamping would
+require.  Programs that need Python-style "best-effort" truncation must
+clamp the bounds explicitly before slicing.
+
 ## Control Flow
 
 FPy supports control flow constructs like `if` statements and `for` loops.

@@ -195,6 +195,60 @@ def _eval_enumerate(val: list[Value], ctx: Context):
         for i, v in enumerate(val)
     ]
 
+def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None):
+    """
+    Strict slice ``lst[start:stop]``.
+
+    FPy slicing semantics differ from Python's: the slice must extract a
+    block of *exactly* ``stop - start`` elements.  Out-of-range bounds
+    are an error rather than being clamped silently.
+
+    Defaults follow Python: ``start=None`` means 0; ``stop=None`` means
+    ``len(lst)``.
+
+    Raises:
+        TypeError:  if *lst* isn't a list, or *start*/*stop* aren't
+                    integer-valued real numbers.
+        IndexError: if the bounds violate ``0 <= start <= stop <= len(lst)``.
+    """
+    if not isinstance(lst, list):
+        raise TypeError(f'expected a list, got {lst}')
+
+    n = len(lst)
+    if start is None:
+        start_idx = 0
+    else:
+        if not isinstance(start, RealValue):
+            raise TypeError(f'expected a real number slice bound, got {start}')
+        if not _is_integer(start):
+            raise TypeError(f'expected an integer slice bound, got {start}')
+        start_idx = int(start)
+    if stop is None:
+        stop_idx = n
+    else:
+        if not isinstance(stop, RealValue):
+            raise TypeError(f'expected a real number slice bound, got {stop}')
+        if not _is_integer(stop):
+            raise TypeError(f'expected an integer slice bound, got {stop}')
+        stop_idx = int(stop)
+
+    # Strict bounds: 0 <= start <= stop <= len(lst).
+    if start_idx < 0:
+        raise IndexError(
+            f'slice start {start_idx} out of range (must be >= 0)'
+        )
+    if stop_idx > n:
+        raise IndexError(
+            f'slice stop {stop_idx} out of range (list length {n})'
+        )
+    if start_idx > stop_idx:
+        raise IndexError(
+            f'slice bounds invalid: start {start_idx} > stop {stop_idx}'
+        )
+
+    return lst[start_idx:stop_idx]
+
+
 def _eval_list_set(lst: list[Value], idxs: list[RealValue], val: Value):
     if not isinstance(lst, list):
         raise TypeError(f'expected a list, got {lst}')
@@ -374,6 +428,7 @@ def make_namespace() -> dict[str, object]:
         '__fpy_fraction': Fraction,
         '__fpy_int': _cvt_int,
         '__fpy_list_set': _eval_list_set,
+        '__fpy_list_slice': _eval_list_slice,
         '__fpy_range': _eval_range,
     }
 
@@ -704,30 +759,25 @@ class BytecodeCompiler(Visitor):
         arr = self._visit_expr(e.value, ctx)
         attrs = self._location_to_attributes(e.loc)
 
-        # start index
+        # start index — pass through unchanged so the runtime helper
+        # can default it (None ↦ 0) and validate.
         if e.start is None:
             start: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
-            # convert index to an integer using `__fpy_int` to ensure it's a valid list index
             start = self._visit_expr(e.start, ctx)
-            cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
-            start = pyast.Call(func=cvt_name, args=[start], keywords=[], **attrs)
 
-        # stop index
+        # stop index — same treatment (None ↦ len(arr) at runtime).
         if e.stop is None:
             stop: pyast.expr = pyast.Constant(value=None, kind=None, **attrs)
         else:
-            # convert index to an integer using `__fpy_int` to ensure it's a valid list index
             stop = self._visit_expr(e.stop, ctx)
-            cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
-            stop = pyast.Call(func=cvt_name, args=[stop], keywords=[], **attrs)
 
-        # generate a slice of the form `arr[start:stop]`
-        return pyast.Subscript(
-            value=arr,
-            slice=pyast.Slice(lower=start, upper=stop, step=None, **attrs),
-            ctx=pyast.Load(),
-            **attrs
+        # FPy slicing semantics are strict: out-of-range bounds raise
+        # ``IndexError`` rather than clamping (Python's behavior).  The
+        # runtime helper validates ``0 <= start <= stop <= len(arr)``.
+        helper = pyast.Name(id='__fpy_list_slice', ctx=pyast.Load(), **attrs)
+        return pyast.Call(
+            func=helper, args=[arr, start, stop], keywords=[], **attrs
         )
 
     def _visit_list_set(self, e: ListSet, ctx: None):
