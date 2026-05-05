@@ -25,6 +25,7 @@ from ...transform import Monomorphize
 from ...types import Type
 from ..backend import Backend, CompileError
 
+from .emitter import Cpp2EmitError, _Cpp2Emitter
 from .storage import StorageSelectionError, aggregate_storage
 from .types import CppType
 
@@ -135,10 +136,14 @@ class Cpp2Compiler(Backend):
         """
         if not isinstance(func, Function):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
-        # Phase 1: pipeline runs but emission isn't implemented yet.
-        self._run_pipeline(func, ctx, arg_types)
-        raise Cpp2CompileError(
-            'cpp2 backend code emission is under construction; '
-            'pipeline ran but no source was emitted.  '
-            'See docs/todos/backend-cpp.md.'
+        result = self._run_pipeline(func, ctx, arg_types)
+        emitter = _Cpp2Emitter(
+            ast=result.ast,
+            def_storage=result.def_storage,
+            def_use=result.format_info.type_info.def_use,
+            format_info=result.format_info,
         )
+        try:
+            return emitter.emit()
+        except Cpp2EmitError as e:
+            raise Cpp2CompileError(str(e)) from e
