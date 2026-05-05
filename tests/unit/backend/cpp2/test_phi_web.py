@@ -22,7 +22,8 @@ class TestPhiWebRenaming:
     """Per-SSA-def renaming."""
 
     def test_sequential_rebind_renames(self):
-        """A rebind without a phi merge becomes its own C++ variable."""
+        """A rebind without a phi merge becomes its own C++ variable;
+        single-writer classes fold the type into the assign."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -33,13 +34,13 @@ class TestPhiWebRenaming:
         out = _compile(f)
         # The arg is still ``x``; the rebind class picks ``x_1``.
         assert 'double f(double x)' in out
-        assert 'double x_1{};' in out
-        assert 'x_1 = (x * 2);' in out
+        assert 'double x_1 = (x * 2);' in out
         assert 'return x_1;' in out
 
     def test_rebind_in_if_merges_with_arg(self):
         """A branch-only rebind has a phi linking it to the arg, so
-        the whole class shares the bare arg name — no rename."""
+        the whole class shares the bare arg name — no rename, and no
+        extra declaration since the arg already declares it."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -49,14 +50,15 @@ class TestPhiWebRenaming:
                 return x
 
         out = _compile(f)
-        # No ``x_1`` declaration — the phi binds arg + rebind together.
-        assert 'double x_1{}' not in out
+        # No ``x_1`` anywhere — the phi binds arg + rebind together.
+        assert 'x_1' not in out
         assert 'x = (-x);' in out
         assert 'return x;' in out
 
     def test_two_independent_rebinds_each_get_a_class(self):
         """Sequential rebinds without phi merges each form their own
-        class.  The third reads the second, the second reads the first."""
+        single-writer class.  The third reads the second, the second
+        reads the first."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -66,16 +68,17 @@ class TestPhiWebRenaming:
                 return x
 
         out = _compile(f)
-        # Two non-arg classes for ``x``.
-        assert 'double x_1{};' in out
-        assert 'double x_2{};' in out
-        assert 'x_1 = (x + 1);' in out
-        assert 'x_2 = (x_1 + 1);' in out
+        # Two non-arg classes for ``x``, each declared on its assign.
+        assert 'double x_1 = (x + 1);' in out
+        assert 'double x_2 = (x_1 + 1);' in out
         assert 'return x_2;' in out
 
     def test_loop_carried_var_keeps_one_class(self):
         """Loop phis pull the pre-loop init, the carry, and the
-        body-rebind all into one class — single C++ variable."""
+        body-rebind all into one class — single C++ variable.  Since
+        the loop phi has ``is_intro=False`` (acc was assigned before
+        the loop), the pre-loop assign declares and the body
+        reassigns."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -86,8 +89,9 @@ class TestPhiWebRenaming:
                 return acc
 
         out = _compile(f)
-        # ``acc`` should appear exactly once as a hoisted decl.
-        assert out.count('acc{};') == 1
-        # No suffixed acc anywhere.
+        # The pre-loop assign declares ``acc``; the body reassigns.
+        assert 'double acc = 0;' in out
+        assert 'acc = (acc + x);' in out
+        # No suffixed acc anywhere — it's all one class.
         assert 'acc_1' not in out
         assert 'acc_2' not in out

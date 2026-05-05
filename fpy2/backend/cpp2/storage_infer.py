@@ -25,7 +25,7 @@ numeric suffixes (``x_1``, ``x_2``, …).
 from collections import defaultdict
 from dataclasses import dataclass
 
-from ...ast.fpyast import Argument
+from ...ast.fpyast import Argument, Stmt
 from ...analysis import Definition
 from ...analysis.format_infer import FormatBound
 from ...analysis.define_use import DefineUseAnalysis
@@ -45,25 +45,46 @@ class StorageAnalysis:
     class), and each class is assigned a single C++ identifier and
     storage type.  The class id is the union-find representative —
     the canonical :class:`Definition` standing in for the whole class.
-    The emitter looks up ``def_to_name`` for every use/assign, and
-    walks ``decl_classes`` to emit hoisted declarations at the top of
-    the function body.
+    Storage classes split into two emission shapes:
+
+    - ``declare_at_assign``: the lowest-index writer in the class is
+      its declaration site.  The emitter folds the declaration into
+      that assign, e.g. ``double t = (a + b);``,
+      ``for (int64_t i = 0; …)``, or ``double y = x;`` immediately
+      followed by reassignments inside an ``if1`` body or loop.
+    - ``hoists_before``: a class has writers in disjoint branches of
+      an ``if/else`` and the variable did not exist before the
+      ``if`` (the merge phi has ``is_intro=True``).  In that case
+      no single AssignDef dominates the others, so the emitter
+      hoists ``T name{};`` *just before* the responsible ``IfStmt``.
+      Each ``AssignDef`` in the class then reassigns into that
+      variable.
+
+    External classes (containing a function arg or free variable)
+    don't appear in either set: the C++ signature / surrounding scope
+    already declares them.
 
     Attributes:
-        def_class:       maps each def to its class id (the canonical
-                         representative def of the class).
-        class_members:   maps each class id to its member defs.
-        class_storage:   the C++ storage chosen for each class.
-        def_to_name:     the C++ identifier each def reads/writes through.
-        decl_classes:    class ids whose declaration the emitter must
-                         hoist (everything except classes anchored to
-                         function args or free variables).
+        def_class:          maps each def to its class id (the canonical
+                            representative def of the class).
+        class_members:      maps each class id to its member defs.
+        class_storage:      the C++ storage chosen for each class.
+        def_to_name:        the C++ identifier each def reads/writes
+                            through.
+        hoists_before:      maps each anchor statement (an ``IfStmt``)
+                            to the storage classes whose declarations
+                            the emitter must emit *just before* that
+                            statement.
+        declare_at_assign:  AssignDefs whose statement should declare
+                            *and* assign in one go (the canonical
+                            declaration site of their class).
     """
     def_class: dict[Definition, Definition]
     class_members: dict[Definition, list[Definition]]
     class_storage: dict[Definition, CppType]
     def_to_name: dict[Definition, str]
-    decl_classes: list[Definition]
+    hoists_before: dict[Stmt, list[Definition]]
+    declare_at_assign: set[AssignDef]
 
 
 
@@ -180,15 +201,51 @@ class StorageInfer:
 
         def_to_name = {d: class_to_name[c] for d, c in def_class.items()}
 
-        # Declaration set: everything we emit a hoisted ``T name{};`` for.
-        decl_classes = [c for c in class_members if c not in external_classes]
-        # Order declarations by their chosen C++ name for stable output.
-        decl_classes.sort(key=lambda c: class_to_name[c])
+        # Decide each non-external class's emission shape.
+        #
+        # The only case where we *must* hoist is a phi merge that
+        # introduces a name fresh in both branches — i.e., a PhiDef
+        # with ``is_intro=True``.  In every other case, FPy
+        # well-formedness guarantees the lowest-index AssignDef
+        # dominates the rest of the class (it's either a single writer,
+        # or a pre-loop / pre-if writer that the body then rebinds via
+        # phi).  So that AssignDef can declare-on-assign and any other
+        # AssignDefs become plain reassignments.
+        #
+        # When we *do* hoist, we don't go all the way to the function
+        # top — we anchor at the outermost responsible ``IfStmt`` and
+        # emit the declaration just before it, narrowing the variable's
+        # scope to exactly what its writers need.  For nested if/else
+        # introductions the outermost is_intro phi is the one with the
+        # highest def index, since phis are appended after their
+        # branches finish in pre-order traversal.
+        hoists_before: dict[Stmt, list[Definition]] = defaultdict(list)
+        declare_at_assign: set[AssignDef] = set()
+        for c, members in class_members.items():
+            if c in external_classes:
+                continue
+            intro_phis = [d for d in members
+                          if isinstance(d, PhiDef) and d.is_intro]
+            if intro_phis:
+                anchor_phi = max(intro_phis, key=lambda d: def_use.def_to_idx[d])
+                hoists_before[anchor_phi.site].append(c)
+                continue
+            assigns = [d for d in members if isinstance(d, AssignDef)]
+            assert assigns, (
+                f'non-external class {c} has no AssignDef members '
+                f'(members={members})'
+            )
+            first_assign = min(assigns, key=lambda d: def_use.def_to_idx[d])
+            declare_at_assign.add(first_assign)
+        # Stable order per anchor for deterministic output.
+        for cs in hoists_before.values():
+            cs.sort(key=lambda c: class_to_name[c])
 
         return StorageAnalysis(
             def_class=def_class,
             class_members=dict(class_members),
             class_storage=class_storage,
             def_to_name=def_to_name,
-            decl_classes=decl_classes,
+            hoists_before=dict(hoists_before),
+            declare_at_assign=declare_at_assign,
         )

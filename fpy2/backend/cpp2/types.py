@@ -96,8 +96,6 @@ CppType: TypeAlias = CppScalar | CppList | CppTuple
 
 
 FLOAT_TYPES = [CppScalar.F32, CppScalar.F64]
-INT_TYPES = [
-    CppScalar.S8, CppScalar.S16, CppScalar.S32, CppScalar.S64,
-    CppScalar.U8, CppScalar.U16, CppScalar.U32, CppScalar.U64,
-]
-ALL_SCALARS = [CppScalar.BOOL] + FLOAT_TYPES + INT_TYPES
+UNSIGNED_INT_TYPES = [CppScalar.U8, CppScalar.U16, CppScalar.U32, CppScalar.U64]
+SIGNED_INT_TYPES = [CppScalar.S8, CppScalar.S16, CppScalar.S32, CppScalar.S64]
+INT_TYPES = SIGNED_INT_TYPES + UNSIGNED_INT_TYPES

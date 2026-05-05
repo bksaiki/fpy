@@ -18,7 +18,9 @@ class TestWhileStmt:
     """Phase 3d — ``while`` loops with phi-style accumulators."""
 
     def test_simple_countdown(self):
-        """The accumulator ``y`` is hoisted and reassigned across iterations."""
+        """The pre-loop assign declares ``y``; the body reassigns
+        across iterations.  The loop's phi is not is_intro because
+        ``y`` already existed when the loop started."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -31,8 +33,7 @@ class TestWhileStmt:
         out = _compile(Cpp2Compiler(), f)
         assert out == (
             'double f(double x) {\n'
-            '    double y{};\n'
-            '    y = x;\n'
+            '    double y = x;\n'
             '    while ((y > 0)) {\n'
             '        y = (y - 1);\n'
             '    }\n'
@@ -41,8 +42,8 @@ class TestWhileStmt:
         )
 
     def test_two_accumulators(self):
-        """Multiple loop-carried variables share the hoist-and-reassign
-        pattern."""
+        """Multiple loop-carried variables each declare-on-first-assign
+        before the loop and reassign in the body."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -55,8 +56,8 @@ class TestWhileStmt:
                 return acc
 
         out = _compile(Cpp2Compiler(), f)
-        assert 'double acc{};' in out
-        assert 'double i{};' in out
+        assert 'double acc = 0;' in out
+        assert 'double i = x;' in out
         assert 'while ((i > 0)) {' in out
         assert 'acc = (acc + i);' in out
         assert 'i = (i - 1);' in out

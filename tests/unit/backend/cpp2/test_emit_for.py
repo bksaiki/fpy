@@ -29,10 +29,11 @@ class TestForRange:
                 return acc
 
         out = _compile(Cpp2Compiler(), f)
-        # The loop variable is hoisted at the function top alongside acc.
-        assert 'double acc{};' in out
-        assert 'int64_t i{};' in out
-        assert 'for (i = 0; i < 10; ++i) {' in out
+        # ``i`` is single-writer; ``acc``'s loop phi has is_intro=False
+        # (acc was assigned before the loop), so the pre-loop assign
+        # declares and the body reassigns.
+        assert 'double acc = 0;' in out
+        assert 'for (int64_t i = 0; i < 10; ++i) {' in out
         assert 'acc = (acc + x);' in out
 
     def test_for_range2(self):
@@ -47,7 +48,7 @@ class TestForRange:
                 return acc
 
         out = _compile(Cpp2Compiler(), f)
-        assert 'for (i = 2; i < 8; ++i) {' in out
+        assert 'for (int64_t i = 2; i < 8; ++i) {' in out
 
     def test_for_range3(self):
         """``range(start, stop, step)`` increments by ``step``."""
@@ -61,11 +62,11 @@ class TestForRange:
                 return acc
 
         out = _compile(Cpp2Compiler(), f)
-        assert 'for (i = 0; i < 12; i += 3) {' in out
+        assert 'for (int64_t i = 0; i < 12; i += 3) {' in out
 
     def test_two_loops_share_independent_counters(self):
-        """Two for-loops over different counters get independent
-        hoisted declarations."""
+        """Two for-loops over different counters each declare-on-assign
+        in their own header."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -78,12 +79,12 @@ class TestForRange:
                 return acc
 
         out = _compile(Cpp2Compiler(), f)
-        assert 'int64_t i{};' in out
-        assert 'int64_t j{};' in out
+        assert 'for (int64_t i = 2; i < 8; ++i) {' in out
+        assert 'for (int64_t j = 0; j < 12; j += 3) {' in out
 
     def test_nested_for(self):
-        """A loop nested inside another emits indented bodies and
-        hoists both counters at the function top."""
+        """A nested loop's counter declares in the inner header; the
+        bodies indent normally."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -95,10 +96,12 @@ class TestForRange:
                 return acc
 
         out = _compile(Cpp2Compiler(), f)
-        assert 'int64_t i{};' in out
-        assert 'int64_t j{};' in out
-        # Inner loop sits inside the outer loop's body.
-        assert 'for (i = 0; i < 3; ++i) {\n        for (j = 0; j < 2; ++j) {' in out
+        # Inner loop sits inside the outer loop's body, both folded
+        # into their own headers.
+        assert (
+            'for (int64_t i = 0; i < 3; ++i) {\n'
+            '        for (int64_t j = 0; j < 2; ++j) {'
+        ) in out
 
     def test_non_range_iterable_rejects(self):
         """Iterables other than ``range(...)`` fall outside the slice."""

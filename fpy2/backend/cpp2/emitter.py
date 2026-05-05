@@ -20,6 +20,7 @@ add booleans, control flow, lists, and rounding boundaries.
 
 from fractions import Fraction
 
+from ...analysis import DefineUseAnalysis, FormatAnalysis
 from ...ast.fpyast import (
     Abs, Add, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
     Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, Integer, Mul, NamedId,
@@ -30,6 +31,7 @@ from ...ast.visitor import Visitor
 from ...utils.compare import CompareOp
 
 from .storage import StorageSelectionError
+from .storage_infer import StorageAnalysis
 from .types import CppType
 
 
@@ -73,12 +75,18 @@ class Cpp2EmitError(Exception):
 class _Cpp2Emitter(Visitor):
     """Single-use visitor that produces a C++ source string."""
 
+    ast: FuncDef
+    storage: StorageAnalysis
+    def_use: DefineUseAnalysis
+    format_info: FormatAnalysis
+    writer: _IndentedWriter
+
     def __init__(
         self,
         ast: FuncDef,
-        storage,  # StorageAnalysis
-        def_use,
-        format_info,
+        storage: StorageAnalysis,
+        def_use: DefineUseAnalysis,
+        format_info: FormatAnalysis,
     ):
         self.ast = ast
         self.storage = storage
@@ -132,29 +140,22 @@ class _Cpp2Emitter(Visitor):
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
-        # Hoist one declaration per storage class.  Classes anchored to
-        # function args / free variables are external (already declared
-        # by the signature or the surrounding scope) and skipped.  All
-        # other classes get a ``T <name>{};`` so reassigns inside
-        # branches and loop bodies don't need declarations.
-        self._emit_local_declarations()
         self._visit_block(func.body, None)
         self.writer.dedent()
         self.writer.add_line('}')
 
-    def _emit_local_declarations(self):
+    def _emit_hoist_for_class(self, c):
         """
-        Emit one zero-initialised C++ variable declaration per
-        non-external storage class, using the class's chosen name and
-        aggregated storage type.
+        Emit a zero-initialised C++ variable declaration for a single
+        storage class (used to anchor declarations just before the
+        ``IfStmt`` that introduces a fresh-in-both-branches name).
         """
-        for c in self.storage.decl_classes:
-            name = self.storage.def_to_name[self.storage.class_members[c][0]]
-            storage = self.storage.class_storage[c]
-            # Zero-initialise via ``T name{};`` so reads-before-writes
-            # are well-defined (FPy analyses ensure this can't happen,
-            # but the initialiser also serves as a paper-trail).
-            self.writer.add_line(f'{storage.format()} {name}{{}};')
+        name = self.storage.def_to_name[self.storage.class_members[c][0]]
+        storage = self.storage.class_storage[c]
+        # Zero-initialise via ``T name{};`` so reads-before-writes
+        # are well-defined (FPy analyses ensure this can't happen,
+        # but the initialiser also serves as a paper-trail).
+        self.writer.add_line(f'{storage.format()} {name}{{}};')
 
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
         """Pull the type of the function's return expression from the
@@ -186,6 +187,11 @@ class _Cpp2Emitter(Visitor):
 
     def _visit_block(self, block: StmtBlock, ctx):
         for stmt in block.stmts:
+            # Storage classes anchored to this stmt (currently only
+            # ``IfStmt``s with is_intro phi merges) declare just before
+            # the stmt, narrowing the variable's scope.
+            for c in self.storage.hoists_before.get(stmt, ()):
+                self._emit_hoist_for_class(c)
             self._visit_statement(stmt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx):
@@ -195,13 +201,17 @@ class _Cpp2Emitter(Visitor):
                 'tuple unpacking and underscore targets land in a later phase'
             )
         rhs = self._visit_expr(stmt.expr, ctx)
-        # ``StorageInfer`` maps this Assign's SSA def to one C++
-        # variable.  Distinct SSA rebinds of the same source name may
-        # live in different classes (with their own narrower storage),
-        # so we have to look the target name up rather than reuse
-        # ``stmt.target`` directly.
-        target_name = self._name_for_def_at_site(stmt.target, stmt)
-        self.writer.add_line(f'{target_name} = {rhs};')
+        # ``StorageInfer`` maps this Assign's SSA def to a C++ variable
+        # and tells us whether the assign should declare the variable
+        # (single-writer class) or just reassign into a hoisted decl
+        # (multi-writer class).
+        target_def = self.def_use.find_def_from_site(stmt.target, stmt)
+        target_name = self.storage.def_to_name[target_def]
+        if target_def in self.storage.declare_at_assign:
+            storage = self.storage.class_storage[self.storage.def_class[target_def]]
+            self.writer.add_line(f'{storage.format()} {target_name} = {rhs};')
+        else:
+            self.writer.add_line(f'{target_name} = {rhs};')
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         rhs = self._visit_expr(stmt.expr, ctx)
@@ -363,16 +373,25 @@ class _Cpp2Emitter(Visitor):
             raise Cpp2EmitError(
                 'tuple-binding for-loop targets are not yet supported'
             )
-        target = self._name_for_def_at_site(stmt.target, stmt)
+        target_def = self.def_use.find_def_from_site(stmt.target, stmt)
+        target = self.storage.def_to_name[target_def]
+        # Fold the type into the for header iff the counter is a
+        # single-writer class (the common case).  Otherwise the counter
+        # was hoisted at the function top and we just reassign here.
+        if target_def in self.storage.declare_at_assign:
+            storage = self.storage.class_storage[self.storage.def_class[target_def]]
+            decl = f'{storage.format()} {target}'
+        else:
+            decl = target
         match stmt.iterable:
             case Range1():
                 stop = self._visit_expr(stmt.iterable.arg, ctx)
-                header = f'for ({target} = 0; {target} < {stop}; ++{target})'
+                header = f'for ({decl} = 0; {target} < {stop}; ++{target})'
             case Range2():
                 start = self._visit_expr(stmt.iterable.first, ctx)
                 stop = self._visit_expr(stmt.iterable.second, ctx)
                 header = (
-                    f'for ({target} = {start}; '
+                    f'for ({decl} = {start}; '
                     f'{target} < {stop}; ++{target})'
                 )
             case Range3():
@@ -380,7 +399,7 @@ class _Cpp2Emitter(Visitor):
                 stop = self._visit_expr(stmt.iterable.args[1], ctx)
                 step = self._visit_expr(stmt.iterable.args[2], ctx)
                 header = (
-                    f'for ({target} = {start}; '
+                    f'for ({decl} = {start}; '
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
