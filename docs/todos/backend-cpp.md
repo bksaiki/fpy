@@ -125,12 +125,19 @@ double f(double x, double y) {
   other than `range` and tuple-binding targets land with list
   support in Phase 4).
 
-#### Phase 4 — Lists & tuples ☐
-- `std::vector<T>` for lists, `std::tuple<T...>` for tuples.
-- List literal, list comprehension, indexing, slicing (with strict
-  bounds — match the interpreter), `IndexedAssign` as fresh C++ var.
-- Built-ins: `len`, `range`, `enumerate`, `zip`, `sum`.
-- Test: round-trip list-shaped programs.
+#### Phase 4 — Lists & tuples ⏳
+- 4a ✅ List literals (`[a, b, c]`), indexing (`xs[i]`), `len(xs)`.
+- 4b ✅ List comprehension (`[expr for x in iter ...]`) — temp +
+  range-based for; nested clauses supported.
+- 4c ✅ For-over-list (`for x in xs:` — non-`range` iterables in
+  `_visit_for`).
+- 4d ✅ List slicing (`xs[a:b]`, with `[:b]`/`[a:]`/`[:]` defaults).
+  Strict bounds checking against the interpreter is still TODO.
+- 4e ☐ `IndexedAssign` (`xs[i] = e`) via `FuncUpdate` →
+  `Assign(xs, ListSet(...))`.
+- 4f ⏳ Tuples: `TupleExpr` ✅. `TupleBinding` destructuring still
+  TODO (lands with `IndexedAssign`).
+- 4g ☐ Remaining built-ins: `enumerate`, `zip`, `sum`.
 
 #### Phase 5 — Rounding & contexts ☐
 - `with FP32: …` blocks: emit explicit casts at the boundary, set

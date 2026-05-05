@@ -22,15 +22,16 @@ from fractions import Fraction
 
 from ...analysis import DefineUseAnalysis, FormatAnalysis
 from ...ast.fpyast import (
-    Abs, Add, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
-    Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, Integer, Mul, NamedId,
-    Neg, Range1, Range2, Range3, Rational, ReturnStmt, Stmt, StmtBlock,
-    Sub, UnaryOp, Var, ContextStmt, UnderscoreId, WhileStmt,
+    Abs, Add, Argument, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
+    Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, Integer, Len, ListComp,
+    ListExpr, ListRef, ListSlice, Mul, NamedId, Neg, Range1, Range2, Range3,
+    Rational, ReturnStmt, Stmt, StmtBlock, Sub, TupleExpr, UnaryOp, Var,
+    ContextStmt, UnderscoreId, WhileStmt,
 )
 from ...ast.visitor import Visitor
 from ...utils.compare import CompareOp
 
-from .storage import StorageSelectionError
+from .storage import StorageSelectionError, choose_storage
 from .storage_infer import StorageAnalysis
 from .types import CppType
 
@@ -93,6 +94,19 @@ class _Cpp2Emitter(Visitor):
         self.def_use = def_use
         self.format_info = format_info
         self.writer = _IndentedWriter()
+        self._tmp_counter = 0
+
+    def _fresh_temp(self) -> str:
+        """Allocate a fresh emitter-only temporary identifier.
+
+        Used by visitors that need to emit setup statements alongside
+        an expression result (currently :class:`ListComp`).  The
+        returned name uses a double-underscore prefix to keep it
+        distinct from any identifier the source program could
+        introduce.
+        """
+        self._tmp_counter += 1
+        return f'__cpp2_tmp{self._tmp_counter}'
 
     # ------------------------------------------------------------------
     # Public entry
@@ -112,9 +126,24 @@ class _Cpp2Emitter(Visitor):
         d = self.def_use.find_def_from_site(name, site)
         return self.storage.def_to_name[d]
 
-    def _storage_for_arg(self, arg) -> CppType:
+    def _storage_for_arg(self, arg: Argument) -> CppType:
+        assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
         return self.storage.class_storage[self.storage.def_class[d]]
+
+    def _storage_for_expr(self, e: Expr) -> CppType:
+        """The C++ storage chosen for an expression's result.
+
+        Falls back to ``Cpp2EmitError`` if format inference produced
+        nothing storable (e.g., a symbolic ``REAL_FORMAT``).
+        """
+        fmt = self.format_info.by_expr.get(e)
+        try:
+            return choose_storage(fmt)
+        except StorageSelectionError as err:
+            raise Cpp2EmitError(
+                f'cannot pick storage for {type(e).__name__}: {err}'
+            ) from err
 
     # ------------------------------------------------------------------
     # Function emission
@@ -161,7 +190,6 @@ class _Cpp2Emitter(Visitor):
         """Pull the type of the function's return expression from the
         format analysis (Phase-2 slice: assumes one return statement,
         possibly nested inside a ``with`` block)."""
-        from .storage import choose_storage
 
         def find_return(block: StmtBlock) -> ReturnStmt | None:
             for stmt in block.stmts:
@@ -228,32 +256,12 @@ class _Cpp2Emitter(Visitor):
             )
         self._visit_block(stmt.body, ctx)
 
-    def _visit_statement(self, stmt: Stmt, ctx):
-        # Dispatch into the visitor methods, raising cleanly for
-        # unsupported shapes.
-        try:
-            return super()._visit_statement(stmt, ctx)
-        except NotImplementedError:
-            raise Cpp2EmitError(
-                f'unsupported statement kind: {type(stmt).__name__}'
-            )
-
     # ------------------------------------------------------------------
     # Expression visitors — return a C++ source fragment
-
-    def _visit_expr(self, e: Expr, ctx) -> str:  # type: ignore[override]
-        try:
-            return super()._visit_expr(e, ctx)
-        except NotImplementedError:
-            raise Cpp2EmitError(
-                f'unsupported expression kind: {type(e).__name__}'
-            )
 
     def _visit_var(self, e: Var, ctx) -> str:
         # Resolve the use to its SSA def, then look up the C++
         # identifier ``StorageInfer`` assigned to that def's class.
-        if not isinstance(e.name, NamedId):
-            raise Cpp2EmitError(f'non-named variable use: {e.name!r}')
         return self._name_for_var_use(e)
 
     def _visit_decnum(self, e: Decnum, ctx) -> str:
@@ -289,6 +297,13 @@ class _Cpp2Emitter(Visitor):
             return f'(-{arg})'
         if isinstance(e, Abs):
             return f'std::fabs({arg})'
+        if isinstance(e, Len):
+            # ``len(xs)`` — the result format is INTEGER, which storage
+            # selection rounds to a concrete C++ integer type.  Casting
+            # ``size()`` (a ``size_t``) keeps the inferred type stable
+            # across platforms where ``size_t`` differs from ``int64_t``.
+            result_ty = self._storage_for_expr(e)
+            return f'static_cast<{result_ty.format()}>({arg}.size())'
         raise Cpp2EmitError(f'unsupported unary op: {type(e).__name__}')
 
     def _visit_binaryop(self, e: BinaryOp, ctx) -> str:
@@ -305,7 +320,7 @@ class _Cpp2Emitter(Visitor):
     # these one at a time.
 
     def _unsupported(self, kind: str):
-        raise Cpp2EmitError(f'cpp2 Phase 2 does not handle {kind}')
+        raise Cpp2EmitError(f'cpp2 emitter does not handle {kind}')
 
     def _visit_bool(self, e: BoolVal, ctx) -> str:
         return 'true' if e.val else 'false'
@@ -333,11 +348,139 @@ class _Cpp2Emitter(Visitor):
     def _visit_round(self, e, ctx): self._unsupported('Round / RoundExact')
     def _visit_round_at(self, e, ctx): self._unsupported('RoundAt')
     def _visit_call(self, e, ctx): self._unsupported('Call')
-    def _visit_tuple_expr(self, e, ctx): self._unsupported('TupleExpr')
-    def _visit_list_expr(self, e, ctx): self._unsupported('ListExpr')
-    def _visit_list_comp(self, e, ctx): self._unsupported('ListComp')
-    def _visit_list_ref(self, e, ctx): self._unsupported('ListRef')
-    def _visit_list_slice(self, e, ctx): self._unsupported('ListSlice')
+    def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
+        # ``(a, b, c)`` → ``std::make_tuple(a, b, c)``.  Type deduction
+        # from the argument types matches what the format-inference
+        # pipeline assigns to the tuple slot — no explicit type prefix.
+        elts = ', '.join(self._visit_expr(elt, ctx) for elt in e.elts)
+        return f'std::make_tuple({elts})'
+    def _visit_list_expr(self, e: ListExpr, ctx) -> str:
+        # ``[a, b, c]`` → ``std::vector<T>{a, b, c}`` where ``T`` comes
+        # from format inference on the list expression.
+        elts = ', '.join(self._visit_expr(elt, ctx) for elt in e.elts)
+        result_ty = self._storage_for_expr(e)
+        return f'{result_ty.format()}{{{elts}}}'
+
+    def _visit_list_comp(self, e: ListComp, ctx) -> str:
+        # ``[elt for x1 in iter1 [for x2 in iter2 ...]]``
+        #
+        # Emitted as a temporary ``std::vector<T> tmp;`` followed by
+        # nested for-loops that ``push_back`` the element expression
+        # into ``tmp``.  Returns the temp's name as the comprehension's
+        # value.  The temp shape mirrors the cpp/ backend; future
+        # polish may inline directly into an ``Assign`` target to skip
+        # the temp + copy.
+        result_ty = self._storage_for_expr(e)
+        tmp = self._fresh_temp()
+        self.writer.add_line(f'{result_ty.format()} {tmp};')
+
+        for target, iterable in zip(e.targets, e.iterables):
+            if not isinstance(target, NamedId):
+                raise Cpp2EmitError(
+                    'tuple-binding comprehension targets land in a later phase'
+                )
+            self._open_comp_loop(target, iterable, e, ctx)
+
+        elt = self._visit_expr(e.elt, ctx)
+        self.writer.add_line(f'{tmp}.push_back({elt});')
+
+        for _ in e.targets:
+            self.writer.dedent()
+            self.writer.add_line('}')
+
+        return tmp
+
+    def _open_comp_loop(
+        self,
+        target: NamedId,
+        iterable: Expr,
+        comp_site: ListComp,
+        ctx,
+    ) -> None:
+        """Emit one ``for`` line for a single comprehension stage,
+        leaving the writer indented inside the loop body."""
+        # The target's storage class is determined by ``StorageInfer``
+        # exactly as for any other AssignDef.  We always declare-on-
+        # assign in the for header — the comprehension's target lives
+        # only inside the loop's lexical scope.  The comp target's
+        # SSA site is the ``ListComp`` node, not the target id itself
+        # (see ``define_use._visit_list_comp``).
+        target_def = self.def_use.find_def_from_site(target, comp_site)
+        target_name = self.storage.def_to_name[target_def]
+        target_ty = self.storage.class_storage[
+            self.storage.def_class[target_def]
+        ].format()
+
+        match iterable:
+            case Range1():
+                stop = self._visit_expr(iterable.arg, ctx)
+                self.writer.add_line(
+                    f'for ({target_ty} {target_name} = 0; '
+                    f'{target_name} < {stop}; ++{target_name}) {{'
+                )
+            case Range2():
+                start = self._visit_expr(iterable.first, ctx)
+                stop = self._visit_expr(iterable.second, ctx)
+                self.writer.add_line(
+                    f'for ({target_ty} {target_name} = {start}; '
+                    f'{target_name} < {stop}; ++{target_name}) {{'
+                )
+            case Range3():
+                start = self._visit_expr(iterable.args[0], ctx)
+                stop = self._visit_expr(iterable.args[1], ctx)
+                step = self._visit_expr(iterable.args[2], ctx)
+                self.writer.add_line(
+                    f'for ({target_ty} {target_name} = {start}; '
+                    f'{target_name} < {stop}; {target_name} += {step}) {{'
+                )
+            case _:
+                # Generic iterable — list-typed Var, list literal, etc.
+                # Emitted as a range-based for over the iterable's
+                # value.
+                iter_str = self._visit_expr(iterable, ctx)
+                self.writer.add_line(
+                    f'for ({target_ty} {target_name} : {iter_str}) {{'
+                )
+        self.writer.indent()
+
+    def _visit_list_ref(self, e: ListRef, ctx) -> str:
+        # ``xs[i]`` → ``xs[i]``.  C++ ``operator[]`` doesn't bounds-
+        # check; FPy's interpreter does.  Strict bounds-checking is
+        # deferred to a later phase along with slicing.
+        value = self._visit_expr(e.value, ctx)
+        index = self._visit_expr(e.index, ctx)
+        return f'{value}[{index}]'
+    def _visit_list_slice(self, e: ListSlice, ctx) -> str:
+        # ``xs[start:stop]`` →
+        #   auto __cpp2_tmpN = <xs>;
+        #   <result_ty>(__cpp2_tmpN.begin() + start,
+        #               __cpp2_tmpN.begin() + stop)
+        #
+        # Binding the value to a temp avoids re-evaluating ``<xs>``
+        # when it isn't a simple lvalue (and matches the interpreter,
+        # which evaluates the value exactly once).  Indices are cast to
+        # ``size_t`` to match the iterator-arithmetic API.  Strict
+        # bounds-checking against the interpreter's behaviour is a TODO
+        # (slice-out-of-range, negative-index handling, etc.).
+        arr_tmp = self._fresh_temp()
+        arr_str = self._visit_expr(e.value, ctx)
+        self.writer.add_line(f'auto {arr_tmp} = {arr_str};')
+
+        if e.start is None:
+            start = '0'
+        else:
+            start = f'static_cast<size_t>({self._visit_expr(e.start, ctx)})'
+        if e.stop is None:
+            stop = f'{arr_tmp}.size()'
+        else:
+            stop = f'static_cast<size_t>({self._visit_expr(e.stop, ctx)})'
+
+        result_ty = self._storage_for_expr(e)
+        return (
+            f'{result_ty.format()}('
+            f'{arr_tmp}.begin() + {start}, '
+            f'{arr_tmp}.begin() + {stop})'
+        )
     def _visit_list_set(self, e, ctx): self._unsupported('ListSet')
     def _visit_if_expr(self, e, ctx): self._unsupported('IfExpr')
     def _visit_indexed_assign(self, stmt, ctx): self._unsupported('IndexedAssign')
@@ -403,10 +546,10 @@ class _Cpp2Emitter(Visitor):
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
-                raise Cpp2EmitError(
-                    'cpp2 Phase 3 only supports for-loops over '
-                    f'range(...); got {type(stmt.iterable).__name__}'
-                )
+                # Generic iterable (list-typed Var, list literal, etc.):
+                # emit a range-based for loop over the iterable's value.
+                iter_str = self._visit_expr(stmt.iterable, ctx)
+                header = f'for ({decl} : {iter_str})'
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)

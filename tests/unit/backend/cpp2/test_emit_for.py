@@ -103,20 +103,21 @@ class TestForRange:
             '        for (int64_t j = 0; j < 2; ++j) {'
         ) in out
 
-    def test_non_range_iterable_rejects(self):
-        """Iterables other than ``range(...)`` fall outside the slice."""
-
-        from fpy2.backend.cpp2 import Cpp2CompileError
-        import pytest
+    def test_for_over_list(self):
+        """A list-typed iterable becomes a range-based ``for`` loop."""
 
         @fp.fpy
-        def f() -> fp.Real:
+        def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
                 acc = 0
-                xs = [1, 2, 3]
                 for x in xs:
                     acc = acc + x
                 return acc
 
-        with pytest.raises(Cpp2CompileError):
-            Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
+        from fpy2.types import ListType
+        out = Cpp2Compiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(RealType(fp.FP64))],
+        )
+        assert 'for (double x : xs) {' in out
+        assert 'acc = (acc + x);' in out
