@@ -7,13 +7,26 @@ surface is defined so callers can import :class:`Cpp2Compiler`, but
 :meth:`Cpp2Compiler.compile` is not yet implemented.
 """
 
+from dataclasses import dataclass
 from typing import Collection
 
+from ...analysis import (
+    ArraySizeInfer,
+    ContextUse,
+    DefineUse,
+    FormatInfer,
+    Definition,
+)
+from ...analysis.format_infer import FormatAnalysis, FormatBound
 from ...ast.fpyast import FuncDef
 from ...function import Function
 from ...number import Context
+from ...transform import Monomorphize
 from ...types import Type
 from ..backend import Backend, CompileError
+
+from .storage import StorageSelectionError, aggregate_storage
+from .types import CppType
 
 
 class Cpp2CompileError(CompileError):
@@ -21,27 +34,86 @@ class Cpp2CompileError(CompileError):
     pass
 
 
+@dataclass
+class Cpp2PipelineResult:
+    """
+    Carrier for the per-function analysis state computed in Phase 1.
+
+    The cpp2 emitter (Phase 2 onward) consumes this rather than re-running
+    each pre-analysis itself.  The fields parallel the analyses listed in
+    ``docs/todos/backend-cpp.md``:
+
+    - ``ast``: the (post-monomorphization) :class:`FuncDef`.
+    - ``format_info``: per-expression and per-definition format bounds.
+    - ``def_storage``: the chosen C++ storage type for each definition,
+      aggregated across SSA defs that share a name.
+    """
+    ast: FuncDef
+    format_info: FormatAnalysis
+    def_storage: dict[Definition, CppType]
+
+
 class Cpp2Compiler(Backend):
     """
     Format-inference-driven C++ compiler.
 
-    This is the stub from Phase 0 of the cpp2 plan.  It exposes the
-    public API surface (constructor, :meth:`compile`) so callers can
-    import the class and so we can layer the compilation logic on top
-    in subsequent phases.
-
-    Subsequent phases will fill in:
-
-    1. The pre-analysis pipeline (def-use, type-info, ctx-use,
-       array-size, format-infer).
-    2. Storage-type selection driven by the inferred format per def.
-    3. Code emission for the language's expression and statement nodes,
-       starting with scalar arithmetic under a concrete context and
-       expanding to lists, tuples, control flow, and rounding boundaries.
+    Phase 1 wires the pre-analysis pipeline and chooses storage types
+    per definition.  Code emission lands in subsequent phases.
     """
 
     def __init__(self):
         pass
+
+    # ------------------------------------------------------------------
+    # Pipeline (Phase 1) — runs all pre-analyses and selects storage.
+
+    def _run_pipeline(
+        self,
+        func: Function,
+        ctx: Context | None,
+        arg_types: Collection[Type | None] | None,
+    ) -> Cpp2PipelineResult:
+        ast = func.ast
+        if arg_types is None:
+            arg_types = [None for _ in func.args]
+        if ast.ctx is not None:
+            ctx = None
+        ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
+
+        # The analyses are independent up to def_use.
+        def_use = DefineUse.analyze(ast)
+        ctx_use = ContextUse.analyze(ast, def_use=def_use)
+        array_size = ArraySizeInfer.analyze(ast)
+        format_info = FormatInfer.analyze(
+            ast,
+            def_use=def_use,
+            ctx_use=ctx_use,
+            array_size=array_size,
+        )
+
+        # Aggregate storage across SSA defs sharing a name.  The cpp2
+        # emitter declares one C++ variable per source-level name, so
+        # the storage must subsume every SSA def's bound.
+        by_name: dict[str, list[Definition]] = {}
+        for d in format_info.by_def:
+            by_name.setdefault(d.name.base, []).append(d)
+        def_storage: dict[Definition, CppType] = {}
+        for defs in by_name.values():
+            bounds = [format_info.by_def[d] for d in defs]
+            try:
+                storage = aggregate_storage(bounds)
+            except StorageSelectionError as e:
+                raise Cpp2CompileError(
+                    f'cannot pick storage for `{defs[0].name.base}`: {e}'
+                ) from e
+            for d in defs:
+                def_storage[d] = storage
+
+        return Cpp2PipelineResult(
+            ast=ast,
+            format_info=format_info,
+            def_storage=def_storage,
+        )
 
     def compile(
         self,
@@ -63,8 +135,10 @@ class Cpp2Compiler(Backend):
         """
         if not isinstance(func, Function):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
-        # Phase 0: not yet implemented.
+        # Phase 1: pipeline runs but emission isn't implemented yet.
+        self._run_pipeline(func, ctx, arg_types)
         raise Cpp2CompileError(
-            'cpp2 backend is under construction; compile() is not yet '
-            'implemented.  See docs/todos/backend-cpp.md.'
+            'cpp2 backend code emission is under construction; '
+            'pipeline ran but no source was emitted.  '
+            'See docs/todos/backend-cpp.md.'
         )
