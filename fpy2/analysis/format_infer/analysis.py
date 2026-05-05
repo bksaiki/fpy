@@ -57,9 +57,9 @@ The analysis tracks a **format** that mirrors the basic-type structure::
 For loops, phi nodes are initialised from the pre-loop definition's format and
 the body is iterated until the phi bounds stop changing.  The lattice has
 **infinite ascending chains** in the scalar sub-lattice when exact arithmetic
-(``+``/``-``/``*`` under :class:`RealContext`, see below) is applied to a
-phi'd value: each iteration widens the resulting :class:`AbstractFormat`'s
-precision and bounds without bound.
+(``+``/``-``/``*`` under :data:`REAL`, see below) is applied to a phi'd value:
+each iteration widens the resulting :class:`AbstractFormat`'s precision and
+bounds without bound.
 
 When a ``for`` loop's iterable has a **statically-known length** (per
 :class:`ArraySizeAnalysis`), the analysis drives the phi update for
@@ -80,18 +80,28 @@ Format inference rules
   ``TernaryOp``, ``NaryOp``): the result is rounded to the active rounding
   context's format, i.e. ``scope.ctx.format()`` when the context is concrete,
   or ``REAL_FORMAT`` when it is a symbolic variable.
-- **Exact arithmetic** (``Neg``, ``Abs``, ``Add``, ``Sub``, ``Mul`` under a
-  concrete :class:`RealContext`): tighter than the default rule.  When all
+- **Exact arithmetic** (``Neg``, ``Abs``, ``Add``, ``Sub``, ``Mul`` under
+  the :data:`REAL` singleton): tighter than the default rule.  When all
   operand formats are abstractable, the result is computed via
   :class:`AbstractFormat`'s arithmetic
   (``(AbstractFormat.from_format(f1) ⊕ AbstractFormat.from_format(f2)).format()``)
-  rather than widening to ``REAL_FORMAT``.
-- **Sum reduction** (``Sum`` under a concrete :class:`RealContext` over a
-  list whose size is statically known via :class:`ArraySizeAnalysis`):
-  simulates ``n - 1`` exact pairwise additions through
-  :class:`AbstractFormat` instead of widening.  Under non-REAL contexts
-  every pairwise add rounds to the scope's format, so the result is just
-  the scope's format (the default rule).
+  rather than widening to ``REAL_FORMAT``.  The check is identity
+  against the singleton — other :class:`RealContext` instances are not
+  recognised.
+- **Sum reduction** (``Sum`` under :data:`REAL` over a list whose size is
+  statically known via :class:`ArraySizeAnalysis`): simulates ``n - 1``
+  exact pairwise additions through :class:`AbstractFormat` instead of
+  widening.  Under non-REAL contexts every pairwise add rounds to the
+  scope's format, so the result is just the scope's format (the default
+  rule).
+- **Integer-producing operations** (``Len``, ``Dim``, ``Size``,
+  ``Range1``/``Range2``/``Range3``, the integer projection of
+  ``Enumerate``): the result format is ``INTEGER`` regardless of the
+  active rounding context.  These ops always produce integer values, so
+  reporting the active context's format would be unnecessarily loose
+  (e.g., ``len(xs)`` under ``with fp.FP32`` is still an integer, not an
+  arbitrary FP32 value).  ``Range`` returns ``ListFormat(INTEGER)``;
+  ``Enumerate(xs)`` returns ``ListFormat(TupleFormat(INTEGER, xs.elt))``.
 - **Function calls** (``Call``): conservatively the top format of the callee's
   return type.
 - **Variable references** (``Var``): the format of the variable's definition.
@@ -115,9 +125,10 @@ from typing import Callable, Iterable, TypeAlias
 
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
-from ...number import Context
+from ...number import Context, INTEGER
 from ...number.context.format import Format
-from ...number.context.real import REAL_FORMAT, RealContext
+from ...number import REAL
+from ...number.context.real import REAL_FORMAT
 from ...number.number.reals import RealFloat
 from ...utils import is_dyadic
 from ...types import (
@@ -176,6 +187,7 @@ class ListFormat:
 
 
 ScalarFormatBound: TypeAlias = None | SetFormat | Format
+AbstractableFormatBound: TypeAlias = SetFormat | AbstractableFormat
 FormatBound: TypeAlias = None | SetFormat | Format | TupleFormat | ListFormat
 """
 Inferred format for an expression or variable definition.
@@ -188,6 +200,17 @@ Inferred format for an expression or variable definition.
 - :class:`TupleFormat` — heterogeneous tuple, per-element formats preserved.
 - :class:`ListFormat` — homogeneous list, single element format (the join of
   all element formats).
+"""
+
+
+_INTEGER_FORMAT: Format = INTEGER.format()
+"""
+Cached format for the :data:`INTEGER` context — used as the result
+format of integer-producing operations (``Len``, ``Dim``, ``Size``,
+``Range1``/``Range2``/``Range3``, the integer projection of
+``Enumerate``).  These ops always produce integer values regardless of
+the active rounding context, so reporting the active context's format
+would be unnecessarily loose.
 """
 
 
@@ -210,21 +233,44 @@ def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
     return True
 
 
-def _top_bound(ty: Type) -> FormatBound:
+def _bound_of_type(ty: Type) -> FormatBound:
     """
-    Returns the top of the format lattice for *ty*.
+    Derives the most precise :data:`FormatBound` we can from a static
+    type alone — used to seed argument bindings, free variables, and
+    other places where no expression-level format is yet available.
 
-    For scalar real values this is ``REAL_FORMAT``; for tuples and lists it is
-    a structural format with ``REAL_FORMAT`` (or ``None``) at the leaves.  For
-    non-numeric types (bool, context, function, type variable) it is ``None``.
+    For scalar real values, the result depends on whether the type
+    carries a concrete rounding context (``RealType.ctx``):
+
+    - **No context** (the default for un-monomorphized programs): the
+      format is unknown, so we return the scalar top ``REAL_FORMAT``.
+    - **Concrete context** (typical after a monomorphizing pass): the
+      format is pinned to ``ctx.format()`` directly.
+
+    For tuples and lists this is applied recursively to the element
+    types, so a monomorphized ``list[Real[FP32]]`` becomes
+    ``ListFormat(IEEEFormat(es=8, nbits=32))``.  For non-numeric types
+    (bool, context, function, type variable) the result is ``None``.
+
+    Note: the function is no longer always the *top* of the lattice —
+    when a concrete ctx is present the result is a pinned, possibly
+    non-top format.  The name reflects that it derives a bound *from a
+    type* (parallel to :meth:`_bound_of_def`, which retrieves a bound
+    by definition site).
     """
     match ty:
         case RealType():
+            # If the type carries a concrete rounding context, the format
+            # is pinned by that context — typically the case after a
+            # monomorphization pass.  Otherwise (symbolic or absent ctx)
+            # the format is unknown and we report the scalar top.
+            if isinstance(ty.ctx, Context):
+                return ty.ctx.format()
             return REAL_FORMAT
         case TupleType():
-            return TupleFormat(tuple(_top_bound(t) for t in ty.elts))
+            return TupleFormat(tuple(_bound_of_type(t) for t in ty.elts))
         case ListType():
-            return ListFormat(_top_bound(ty.elt))
+            return ListFormat(_bound_of_type(ty.elt))
         case BoolType() | ContextType() | FunctionType() | VarType():
             return None
         case _:
@@ -237,10 +283,11 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     or ``None`` when any value is non-dyadic (and therefore can't be
     pinned by an :class:`AbstractFormat`'s integer ``prec``/``exp``).
 
-    Used by :meth:`_exact_arith_bound` to bridge a :class:`SetFormat`
-    operand into the :class:`AbstractFormat` arithmetic path so that
-    e.g. ``SetFormat({0}) + EFloatFormat`` doesn't bail to
-    ``REAL_FORMAT`` under exact-arithmetic.
+    Used by the exact-arithmetic cases in :meth:`_visit_unaryop` and
+    :meth:`_visit_binaryop` to bridge a :class:`SetFormat` operand into
+    the :class:`AbstractFormat` arithmetic path so that e.g.
+    ``SetFormat({0}) + EFloatFormat`` doesn't bail to ``REAL_FORMAT``
+    under exact-arithmetic.
     """
     if not s.values:
         return None
@@ -265,7 +312,7 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
 
-def _to_abstract(f: ScalarFormatBound) -> AbstractFormat | None:
+def _to_abstract(f: AbstractableFormatBound) -> AbstractFormat | None:
     """
     Lifts an abstractable :class:`FormatBound` to an
     :class:`AbstractFormat`.  Returns ``None`` for variants that the
@@ -274,10 +321,8 @@ def _to_abstract(f: ScalarFormatBound) -> AbstractFormat | None:
     """
     if isinstance(f, AbstractableFormat):
         return AbstractFormat.from_format(f)
-    if isinstance(f, SetFormat):
+    else:
         return _setformat_to_abstract(f)
-    return None
-
 
 def _join_bounds(
     s1: FormatBound,
@@ -315,14 +360,6 @@ def _join_bounds(
             if isinstance(s1, AbstractableFormat) and isinstance(s2, AbstractableFormat):
                 af1 = AbstractFormat.from_format(s1)
                 af2 = AbstractFormat.from_format(s2)
-                # Subsumption: if one input contains the other, return the
-                # original (un-canonicalized) Format directly.  This is
-                # important for **fixpoint idempotence**: ``(af | af).format()``
-                # may return an MPB-float that is value-equivalent to the
-                # input but compares unequal under ``==`` (e.g.,
-                # ``IEEEFormat(FP64)`` vs the corresponding
-                # ``MPBFloatFormat``), which would prevent loop phis from
-                # detecting convergence.
                 if af1 <= af2:
                     return s2
                 if af2 <= af1:
@@ -490,98 +527,19 @@ class _FormatInferInstance(Visitor):
         ret_ty = self.type_info.by_expr[e]
         if isinstance(ret_ty, RealType):
             return self._scope_format(e)
-        return _top_bound(ret_ty)
+        return _bound_of_type(ret_ty)
 
     def _is_real_scope(self, e: ContextUseSite) -> bool:
-        """Returns True iff *e*'s active scope is a concrete :class:`RealContext`.
+        """Returns True iff *e*'s active scope is the :data:`REAL` singleton.
 
         Distinct from ``_scope_format(e) == REAL_FORMAT`` because the latter
         also fires for symbolic (unresolved) context variables, where we
-        cannot assume the rounding is the identity.
+        cannot assume the rounding is the identity.  ``REAL`` is a unique
+        singleton, so identity comparison is the right check (and avoids
+        accidentally matching other ``RealContext`` instances that this
+        analysis does not support).
         """
-        return isinstance(self.ctx_use.find_scope_from_use(e).ctx, RealContext)
-
-    def _exact_arith_bound(
-        self,
-        e: ContextUseSite,
-        operands: tuple[FormatBound, ...],
-    ) -> Format | SetFormat | None:
-        """
-        Tries to compute a tight format for an exact arithmetic operation.
-
-        Under a concrete :class:`RealContext` (no rounding), negation, abs,
-        addition, subtraction, and multiplication preserve enough structure
-        that a containing :class:`Format` can be derived from the operand
-        formats via :class:`AbstractFormat`'s arithmetic.
-
-        Returns ``None`` to signal that the caller should fall back to
-        :meth:`_op_bound` (e.g., the operator is not exact-arithmetic, the
-        scope is not concretely REAL, or some operand is not abstractable).
-        """
-        if not self._is_real_scope(e):
-            return None
-        match e:
-            case Neg():
-                assert len(operands) == 1
-                op_fmt, = operands
-                assert isinstance(op_fmt, ScalarFormatBound), f'expected scalar format for operand of Neg, got {op_fmt!r}'
-                if isinstance(op_fmt, AbstractableFormat):
-                    return (-AbstractFormat.from_format(op_fmt)).format()
-                elif isinstance(op_fmt, SetFormat):
-                    return SetFormat(frozenset(-v for v in op_fmt.values))
-                else:
-                    return None
-            case Abs():
-                assert len(operands) == 1
-                op_fmt, = operands
-                assert isinstance(op_fmt, ScalarFormatBound), f'expected scalar format for operand of Abs, got {op_fmt!r}'
-                if isinstance(op_fmt, AbstractableFormat):
-                    return abs(AbstractFormat.from_format(op_fmt)).format()
-                elif isinstance(op_fmt, SetFormat):
-                    return SetFormat(frozenset(abs(v) for v in op_fmt.values))
-                else:
-                    return None
-            case Add():
-                assert len(operands) == 2
-                a, b = operands
-                assert isinstance(a, ScalarFormatBound), f'expected scalar format for first operand of Add, got {a!r}'
-                assert isinstance(b, ScalarFormatBound), f'expected scalar format for second operand of Add, got {b!r}'
-                # Both SetFormat: keep precision by pairwise sum.
-                if isinstance(a, SetFormat) and isinstance(b, SetFormat):
-                    return SetFormat(frozenset(va + vb for va in a.values for vb in b.values))
-                # Mixed or both AbstractableFormat: lift to AbstractFormat.
-                af_a = _to_abstract(a)
-                af_b = _to_abstract(b)
-                if af_a is None or af_b is None:
-                    return None
-                return (af_a + af_b).format()
-            case Sub():
-                assert len(operands) == 2
-                a, b = operands
-                assert isinstance(a, ScalarFormatBound), f'expected scalar format for first operand of Sub, got {a!r}'
-                assert isinstance(b, ScalarFormatBound), f'expected scalar format for second operand of Sub, got {b!r}'
-                if isinstance(a, SetFormat) and isinstance(b, SetFormat):
-                    return SetFormat(frozenset(va - vb for va in a.values for vb in b.values))
-                af_a = _to_abstract(a)
-                af_b = _to_abstract(b)
-                if af_a is None or af_b is None:
-                    return None
-                return (af_a - af_b).format()
-            case Mul():
-                assert len(operands) == 2
-                a, b = operands
-                assert isinstance(a, ScalarFormatBound), f'expected scalar format for first operand of Mul, got {a!r}'
-                assert isinstance(b, ScalarFormatBound), f'expected scalar format for second operand of Mul, got {b!r}'
-                if isinstance(a, SetFormat) and isinstance(b, SetFormat):
-                    return SetFormat(frozenset(va * vb for va in a.values for vb in b.values))
-                af_a = _to_abstract(a)
-                af_b = _to_abstract(b)
-                if af_a is None or af_b is None:
-                    return None
-                return (af_a * af_b).format()
-            case _:
-                # unsupported operation
-                return None
+        return self.ctx_use.find_scope_from_use(e).ctx is REAL
 
     def _visit_binding(
         self,
@@ -653,11 +611,40 @@ class _FormatInferInstance(Visitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:
         arg_fmt = self._visit_expr(e.arg, ctx)
-        if isinstance(e, Sum):
-            assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
-            return self._sum_bound(e, arg_fmt)
-        tight = self._exact_arith_bound(e, (arg_fmt,))
-        return tight if tight is not None else self._op_bound(e)
+        match e:
+            case Len() | Dim():
+                # len(...) / dim(...) -> result format is INTEGER regardless
+                # of the active rounding context.
+                return _INTEGER_FORMAT
+            case Range1():
+                # range(...) -> result is a list of integers.
+                return ListFormat(_INTEGER_FORMAT)
+            case Enumerate():
+                # enumerate(xs) -> list of (int, elt) tuples; the int projection
+                # is INTEGER, the original element format is preserved.
+                assert isinstance(arg_fmt, ListFormat), \
+                    f'expected ListFormat for argument of Enumerate, got {arg_fmt!r}'
+                return ListFormat(TupleFormat((_INTEGER_FORMAT, arg_fmt.elt)))
+            case Sum():
+                assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
+                return self._sum_bound(e, arg_fmt)
+            case Abs():
+                # abs: preserves precision under exact arithmetic, otherwise rounds to the scope's format
+                if self._is_real_scope(e) and isinstance(arg_fmt, AbstractableFormatBound):
+                    if isinstance(arg_fmt, SetFormat):
+                        return SetFormat(frozenset(abs(v) for v in arg_fmt.values))
+                    else:
+                        return abs(AbstractFormat.from_format(arg_fmt)).format()
+            case Neg():
+                # negation: preserves precision under exact arithmetic, otherwise rounds to the scope's format
+                if self._is_real_scope(e) and isinstance(arg_fmt, AbstractableFormatBound):
+                    if isinstance(arg_fmt, SetFormat):
+                        return SetFormat(frozenset(-v for v in arg_fmt.values))
+                    else:
+                        return (-AbstractFormat.from_format(arg_fmt)).format()
+
+        return self._op_bound(e)
+
 
     def _sum_bound(self, e: Sum, arg_fmt: ListFormat) -> FormatBound:
         """
@@ -672,21 +659,33 @@ class _FormatInferInstance(Visitor):
           containing format.  Requires the list size to be statically
           known via :class:`ArraySizeAnalysis`; otherwise falls back to
           ``REAL_FORMAT`` via :meth:`_op_bound`.
+
+        The branches below are ordered so that the trivial cases
+        (``n == 0`` and ``n == 1``) are decided before any
+        abstractability check on the element format — those cases
+        produce a precise bound independent of whether the elements
+        could be lifted to :class:`AbstractFormat`.
         """
-        if not self._is_real_scope(e):
-            return self._op_bound(e)
         n = self._known_iter_count(e.arg)
-        if n is None:
+        if not self._is_real_scope(e) or n is None:
             return self._op_bound(e)
-        elt_fmt = arg_fmt.elt
+
+        # ``sum([])`` is conventionally 0 — independent of what the
+        # (absent) elements would have looked like.
         if n == 0:
-            # ``sum([])`` is conventionally 0.
             return SetFormat(frozenset((Fraction(0),)))
+
+        elt_fmt = arg_fmt.elt
+        # Single-element reduction: no addition occurs, the lone element
+        # passes through with its existing format.  Independent of
+        # abstractability.
         if n == 1:
-            # No addition occurs; the lone element passes through.
             return elt_fmt
-        # Lift the element format once and accumulate ``n - 1`` times.
-        assert isinstance(elt_fmt, ScalarFormatBound), f'expected scalar format for elements of sum operand, got {elt_fmt!r}'
+
+        # ``n >= 2``: simulate ``n - 1`` pairwise additions through
+        # AbstractFormat.  Requires the element to be abstractable.
+        if not isinstance(elt_fmt, AbstractableFormatBound):
+            return self._op_bound(e)
         af_elt = _to_abstract(elt_fmt)
         if af_elt is None:
             return self._op_bound(e)
@@ -698,13 +697,56 @@ class _FormatInferInstance(Visitor):
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> FormatBound:
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
-        tight = self._exact_arith_bound(e, (lhs, rhs))
-        return tight if tight is not None else self._op_bound(e)
+        match e:
+            case Size():
+                # size(...) -> result format is INTEGER regardless of scope.
+                return _INTEGER_FORMAT
+            case Range2():
+                # range(...) -> result is a list of integers.
+                return ListFormat(_INTEGER_FORMAT)
+            case Add():
+                # exact addition: precise under exact arithmetic with
+                # abstractable operands, otherwise rounds to the scope's format.
+                if (self._is_real_scope(e)
+                        and isinstance(lhs, AbstractableFormatBound)
+                        and isinstance(rhs, AbstractableFormatBound)):
+                    if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
+                        return SetFormat(frozenset(va + vb for va in lhs.values for vb in rhs.values))
+                    af_a = _to_abstract(lhs)
+                    af_b = _to_abstract(rhs)
+                    if af_a is not None and af_b is not None:
+                        return (af_a + af_b).format()
+            case Sub():
+                # exact subtraction: same dispatch shape as Add.
+                if (self._is_real_scope(e)
+                        and isinstance(lhs, AbstractableFormatBound)
+                        and isinstance(rhs, AbstractableFormatBound)):
+                    if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
+                        return SetFormat(frozenset(va - vb for va in lhs.values for vb in rhs.values))
+                    af_a = _to_abstract(lhs)
+                    af_b = _to_abstract(rhs)
+                    if af_a is not None and af_b is not None:
+                        return (af_a - af_b).format()
+            case Mul():
+                # exact multiplication: same dispatch shape as Add.
+                if (self._is_real_scope(e)
+                        and isinstance(lhs, AbstractableFormatBound)
+                        and isinstance(rhs, AbstractableFormatBound)):
+                    if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
+                        return SetFormat(frozenset(va * vb for va in lhs.values for vb in rhs.values))
+                    af_a = _to_abstract(lhs)
+                    af_b = _to_abstract(rhs)
+                    if af_a is not None and af_b is not None:
+                        return (af_a * af_b).format()
+
+        return self._op_bound(e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> FormatBound:
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
+        if isinstance(e, Range3):
+            return ListFormat(_INTEGER_FORMAT)
         return self._op_bound(e)
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> FormatBound:
@@ -718,7 +760,7 @@ class _FormatInferInstance(Visitor):
             self._visit_expr(arg, ctx)
         for _, kwarg in e.kwargs:
             self._visit_expr(kwarg, ctx)
-        return _top_bound(self.type_info.by_expr[e])
+        return _bound_of_type(self.type_info.by_expr[e])
 
     # Comparison: produces a bool, so no numeric format
     def _visit_compare(self, e: Compare, ctx: None) -> FormatBound:
@@ -738,7 +780,7 @@ class _FormatInferInstance(Visitor):
             # Empty list: derive the element format from the inferred list type.
             list_ty = self.type_info.by_expr[e]
             assert isinstance(list_ty, ListType)
-            joined = _top_bound(list_ty.elt)
+            joined = _bound_of_type(list_ty.elt)
         return ListFormat(joined)
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> FormatBound:
@@ -863,7 +905,7 @@ class _FormatInferInstance(Visitor):
         :class:`ArraySizeAnalysis`).  At runtime the loop walks exactly
         ``n`` body iterations, so the analysis can mirror that walk and
         avoid widening — important for the exact-arithmetic
-        (``+``/``-``/``*`` under :class:`RealContext`) lattice, which has
+        (``+``/``-``/``*`` under :data:`REAL`) lattice, which has
         infinite ascending chains.
 
         Iter-by-iter visit produces a precise (if potentially wide)
@@ -956,11 +998,11 @@ class _FormatInferInstance(Visitor):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
-                self._set_def_bound(d, _top_bound(self.type_info.by_def[d]))
+                self._set_def_bound(d, _bound_of_type(self.type_info.by_def[d]))
         # Free variables (captured from outer scope): top format of inferred type.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            self._set_def_bound(d, _top_bound(self.type_info.by_def[d]))
+            self._set_def_bound(d, _bound_of_type(self.type_info.by_def[d]))
         self._visit_block(func.body, ctx)
 
     def analyze(self) -> FormatAnalysis:
@@ -1024,10 +1066,10 @@ class FormatInfer:
       symbolic-length iterables iterate body + join until phi bounds
       stop changing.  The AbstractFormat-mediated scalar join introduces
       infinite ascending chains when exact arithmetic
-      (``+``/``-``/``*`` under :class:`RealContext`) is applied to a
-      phi'd value, so the fixpoint runs at most ``loop_iter_limit``
-      iterations before switching joins to widen-mode (distinct scalar
-      Formats fall back to ``REAL_FORMAT``) to force convergence.
+      (``+``/``-``/``*`` under :data:`REAL`) is applied to a phi'd
+      value, so the fixpoint runs at most ``loop_iter_limit`` iterations
+      before switching joins to widen-mode (distinct scalar Formats fall
+      back to ``REAL_FORMAT``) to force convergence.
 
     **Usage**::
 
@@ -1075,8 +1117,7 @@ class FormatInfer:
                 exactly that many times instead of iterating to a
                 fixpoint.  This is strictly more precise — important for
                 the exact-arithmetic lattice (``+``/``-``/``*`` under
-                :class:`RealContext`) which has infinite ascending
-                chains.
+                :data:`REAL`) which has infinite ascending chains.
             loop_iter_limit:
                 Number of loop body+join iterations to run before forcing
                 joins of distinct scalar Formats to widen to ``REAL_FORMAT``.

@@ -7,7 +7,7 @@ import pytest
 
 from fractions import Fraction
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
-from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat
+from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat, TupleFormat
 from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import IndexedAssign
@@ -40,6 +40,65 @@ class TestFormatInfer:
         # All definitions should be REAL_FORMAT (no context)
         for fmt in info.by_def.values():
             assert fmt == REAL_FORMAT
+
+    # ------------------------------------------------------------------
+    # Format pinned by monomorphized argument types
+
+    def test_monomorphized_scalar_arg_format(self):
+        """
+        After monomorphization, ``RealType.ctx`` carries the concrete
+        format.  ``_top_bound`` extracts that format so the argument's
+        bound is the precise pinned format, not ``REAL_FORMAT``.
+        """
+        from fpy2.transform import Monomorphize
+        from fpy2.types import RealType
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return x
+
+        mono_ast = Monomorphize.apply_by_arg(
+            f.ast, None, [RealType(fp.FP32)]
+        )
+        info = FormatInfer.analyze(mono_ast)
+        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
+        assert fp.FP32.format() in x_bounds, (
+            f'expected FP32 among x bounds after monomorphization, got {x_bounds}'
+        )
+
+    def test_monomorphized_list_arg_format(self):
+        """
+        Monomorphization propagates through structural types: a
+        ``list[Real[FP32]]`` argument becomes ``ListFormat(IEEEFormat)``.
+        """
+        from fpy2.transform import Monomorphize
+        from fpy2.types import RealType, ListType
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return xs[0]
+
+        mono_ast = Monomorphize.apply_by_arg(
+            f.ast, None, [ListType(RealType(fp.FP32))]
+        )
+        info = FormatInfer.analyze(mono_ast)
+        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        assert ListFormat(fp.FP32.format()) in xs_bounds, (
+            f'expected ListFormat(FP32) among xs bounds, got {xs_bounds}'
+        )
+
+    def test_unmonomorphized_arg_keeps_real_format(self):
+        """
+        Without a monomorphization pass, ``RealType.ctx`` is ``None`` and
+        ``_top_bound`` reports ``REAL_FORMAT`` as before — no regression.
+        """
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return x
+
+        info = self._run(f)
+        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
+        assert REAL_FORMAT in x_bounds
 
     # ------------------------------------------------------------------
     # Single context block
@@ -837,6 +896,25 @@ class TestFormatInfer:
             f'expected REAL_FORMAT fall-back when size is unknown, got {sums}'
         )
 
+    def test_sum_empty_list_returns_zero_set_format(self):
+        """
+        Regression: ``sum([])`` under REAL must report ``SetFormat({0})``
+        regardless of the element format.  An earlier version short-
+        circuited to ``REAL_FORMAT`` via the abstractability guard
+        before checking the ``n == 0`` case.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            xs: list[fp.Real] = []
+            return sum(xs)
+
+        info = self._run(f)
+        sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
+        assert sums, 'expected a Sum expression in by_expr'
+        assert sums[-1] == SetFormat(frozenset((Fraction(0),))), (
+            f'expected SetFormat({{0}}) for sum([]) under REAL, got {sums[-1]}'
+        )
+
     def test_sum_grows_with_known_size(self):
         """
         Sanity: larger N produces a wider precise format under REAL.
@@ -871,6 +949,107 @@ class TestFormatInfer:
         # Concretely: big_sum.representable_in(small_sum.maxval) holds.
         small_max = small_sum.maxval()._real
         assert big_sum.representable_in(small_max)
+
+    # ------------------------------------------------------------------
+    # Integer-producing operations report INTEGER format
+
+    def test_len_returns_integer_format_under_concrete_ctx(self):
+        """
+        ``len(xs)`` always returns an integer; the format must be
+        ``INTEGER``, *not* the active rounding context's format.
+        """
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP32:
+                n = len(xs)
+            return n
+
+        info = self._run(f)
+        # The Len expression must be the INTEGER format, not FP32.
+        len_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Len'
+        ]
+        integer_fmt = fp.INTEGER.format()
+        assert len_bounds and len_bounds[0] == integer_fmt, (
+            f'expected Len to report INTEGER format, got {len_bounds}'
+        )
+        # And the binding for ``n`` must inherit that.
+        n_bounds = [b for d, b in info.by_def.items() if d.name.base == 'n']
+        assert integer_fmt in n_bounds, (
+            f'expected INTEGER among n bounds, got {n_bounds}'
+        )
+
+    def test_range1_returns_listformat_of_integer(self):
+        """``range(n)`` produces a list of integers."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = [0.0 for _ in range(len(xs))]
+            return ys
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Range1'
+        ]
+        integer_fmt = fp.INTEGER.format()
+        assert range_bounds, 'expected a Range1 expression'
+        assert range_bounds[0] == ListFormat(integer_fmt), (
+            f'expected ListFormat(INTEGER) for Range1, got {range_bounds}'
+        )
+
+    def test_range2_returns_listformat_of_integer(self):
+        """``range(start, stop)`` produces a list of integers."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(0, 10)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Range2'
+        ]
+        integer_fmt = fp.INTEGER.format()
+        assert range_bounds and range_bounds[0] == ListFormat(integer_fmt)
+
+    def test_range3_returns_listformat_of_integer(self):
+        """``range(start, stop, step)`` produces a list of integers."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(0, 10, 2)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Range3'
+        ]
+        integer_fmt = fp.INTEGER.format()
+        assert range_bounds and range_bounds[0] == ListFormat(integer_fmt)
+
+    def test_enumerate_returns_listformat_of_int_value_tuple(self):
+        """
+        ``enumerate(xs)`` produces a list of (int, x) tuples — the int
+        component is INTEGER, the value component preserves ``xs``'s
+        element format.
+        """
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP32:
+                ys = [fp.round(x) for x in xs]
+            for i, y in enumerate(ys):
+                pass
+            return 0.0
+
+        info = self._run(f)
+        enum_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Enumerate'
+        ]
+        assert enum_bounds, 'expected an Enumerate expression'
+        bound = enum_bounds[0]
+        # Outer: ListFormat. Element: TupleFormat((INTEGER, FP32)).
+        integer_fmt = fp.INTEGER.format()
+        fp32_fmt = fp.FP32.format()
+        assert isinstance(bound, ListFormat)
+        assert isinstance(bound.elt, TupleFormat)
+        assert bound.elt.elts == (integer_fmt, fp32_fmt), (
+            f'expected TupleFormat((INTEGER, FP32)), got {bound.elt}'
+        )
 
     def test_blockwise_quantized_accumulator_end_to_end(self):
         """
