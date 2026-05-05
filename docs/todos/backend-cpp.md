@@ -71,7 +71,9 @@ bounded-iteration mode (loops with statically-known length).
 
 ### Phase plan (each phase is a commit)
 
-#### Phase 0 — Skeleton
+Progress markers: ✅ done, ⏳ in progress, ☐ todo.
+
+#### Phase 0 — Skeleton ✅
 - `fpy2/backend/cpp2/__init__.py` exporting `Cpp2Compiler`,
   `Cpp2CompileError`.
 - `fpy2/backend/cpp2/compiler.py` with the public API class and a
@@ -79,7 +81,7 @@ bounded-iteration mode (loops with statically-known length).
 - A minimal test in `tests/unit/backend/cpp2/test_compile.py` that
   asserts the import works and the stub raises.
 
-#### Phase 1 — Pipeline + storage selection
+#### Phase 1 — Pipeline + storage selection ✅
 - Wire all pre-analyses through `Cpp2Compiler.compile`.
 - Define a `StorageType` ladder (mirroring `cpp/types.py:CppScalar` but
   driven by format inference rather than concrete contexts).
@@ -89,7 +91,7 @@ bounded-iteration mode (loops with statically-known length).
 - Aggregate across SSA defs that share a name (loop phi widening).
 - Test: storage selection on a few hand-built `FormatBound` instances.
 
-#### Phase 2 — Vertical slice: scalar arithmetic
+#### Phase 2 — Vertical slice: scalar arithmetic ✅
 Goal: compile this end-to-end.
 
 ```python
@@ -113,7 +115,7 @@ double f(double x, double y) {
 - Test: compile + verify output is byte-identical to the expected
   string.
 
-#### Phase 3 — Booleans, comparisons, control flow
+#### Phase 3 — Booleans, comparisons, control flow ☐
 - `if` / `if1` with phi assignment.
 - `while` with phi declaration before the loop.
 - `for` over `range`/list (plain integer counter for known sizes; iterator
@@ -121,20 +123,20 @@ double f(double x, double y) {
 - Boolean ops, comparisons.
 - Test: compile a mix of branching/looping programs.
 
-#### Phase 4 — Lists & tuples
+#### Phase 4 — Lists & tuples ☐
 - `std::vector<T>` for lists, `std::tuple<T...>` for tuples.
 - List literal, list comprehension, indexing, slicing (with strict
   bounds — match the interpreter), `IndexedAssign` as fresh C++ var.
 - Built-ins: `len`, `range`, `enumerate`, `zip`, `sum`.
 - Test: round-trip list-shaped programs.
 
-#### Phase 5 — Rounding & contexts
+#### Phase 5 — Rounding & contexts ☐
 - `with FP32: …` blocks: emit explicit casts at the boundary, set
   rounding mode if needed.
 - `Round`, `RoundExact`, `Cast` operations.
 - Algebraic / transcendental ops: dispatch to `<cmath>`.
 
-#### Phase 6 — Polish
+#### Phase 6 — Polish ☐
 - Header / helper code emission (mirror `cpp/utils.py:CPP_HELPERS`).
 - Round-trip tests against a reference compiler (`cc -std=c++17`) — same
   pattern as `tests/infra/backend/cpp.py`.
