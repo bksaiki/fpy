@@ -23,17 +23,18 @@ from fractions import Fraction
 from ...analysis import DefineUseAnalysis, FormatAnalysis
 from ...ast.fpyast import (
     Abs, Add, Argument, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
-    Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign, Integer,
-    Len, ListComp, ListExpr, ListRef, ListSlice, Mul, NamedId, Neg, Range1,
-    Range2, Range3, Rational, ReturnStmt, Stmt, StmtBlock, Sub, TupleBinding,
-    TupleExpr, UnaryOp, Var, ContextStmt, UnderscoreId, WhileStmt,
+    Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign,
+    Integer, Len, ListComp, ListExpr, ListRef, ListSlice, Mul, NamedId,
+    NaryOp, Neg, Range1, Range2, Range3, Rational, ReturnStmt, Stmt, StmtBlock,
+    Sub, Sum, TupleBinding, TupleExpr, UnaryOp, Var, ContextStmt, UnderscoreId,
+    WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
 from ...utils.compare import CompareOp
 
 from .storage import StorageSelectionError, choose_storage
 from .storage_infer import StorageAnalysis
-from .types import CppType
+from .types import CppList, CppTuple, CppType
 
 
 class _IndentedWriter:
@@ -349,7 +350,53 @@ class _Cpp2Emitter(Visitor):
             # across platforms where ``size_t`` differs from ``int64_t``.
             result_ty = self._storage_for_expr(e)
             return f'static_cast<{result_ty.format()}>({arg}.size())'
+        if isinstance(e, Sum):
+            # ``sum(xs)`` → ``std::accumulate(begin, end, T(0))`` with
+            # ``T`` taken from format inference (so the accumulator's
+            # type matches the inferred bound on the result).
+            result_ty = self._storage_for_expr(e)
+            return (
+                f'std::accumulate({arg}.begin(), {arg}.end(), '
+                f'static_cast<{result_ty.format()}>(0))'
+            )
+        if isinstance(e, Enumerate):
+            return self._emit_enumerate(e, arg)
         raise Cpp2EmitError(f'unsupported unary op: {type(e).__name__}')
+
+    def _emit_enumerate(self, e: Enumerate, src_str: str) -> str:
+        """``enumerate(xs)`` builds a ``std::vector<std::tuple<I, T>>``
+        where ``I`` is the index integer type and ``T`` is the source
+        element type — both come from format inference on the
+        Enumerate node itself.
+        """
+        result_ty = self._storage_for_expr(e)
+        if not (isinstance(result_ty, CppList)
+                and isinstance(result_ty.elt, CppTuple)
+                and len(result_ty.elt.elts) == 2):
+            raise Cpp2EmitError(
+                'expected list[(int, T)] for enumerate result, '
+                f'got {result_ty!r}'
+            )
+        idx_ty = result_ty.elt.elts[0]
+
+        src = self._fresh_temp()
+        self.writer.add_line(f'auto {src} = {src_str};')
+        result = self._fresh_temp()
+        self.writer.add_line(
+            f'{result_ty.format()} {result}({src}.size());'
+        )
+        i = self._fresh_temp()
+        self.writer.add_line(
+            f'for (size_t {i} = 0; {i} < {src}.size(); ++{i}) {{'
+        )
+        self.writer.indent()
+        self.writer.add_line(
+            f'{result}[{i}] = std::make_tuple('
+            f'static_cast<{idx_ty.format()}>({i}), {src}[{i}]);'
+        )
+        self.writer.dedent()
+        self.writer.add_line('}')
+        return result
 
     def _visit_binaryop(self, e: BinaryOp, ctx) -> str:
         op = _BINARY_OPS.get(type(e))
@@ -389,7 +436,45 @@ class _Cpp2Emitter(Visitor):
     def _visit_attribute(self, e, ctx): self._unsupported('Attribute')
     def _visit_nullaryop(self, e, ctx): self._unsupported('NullaryOp')
     def _visit_ternaryop(self, e, ctx): self._unsupported('TernaryOp')
-    def _visit_naryop(self, e, ctx): self._unsupported('NaryOp')
+    def _visit_naryop(self, e: NaryOp, ctx) -> str:
+        if isinstance(e, Zip):
+            return self._emit_zip(e, ctx)
+        raise Cpp2EmitError(f'unsupported nary op: {type(e).__name__}')
+
+    def _emit_zip(self, e: Zip, ctx) -> str:
+        """``zip(xs1, …, xsN)`` builds a
+        ``std::vector<std::tuple<T1, …, TN>>`` whose length matches the
+        first iterable.  Each iterable is bound to a temp once to
+        evaluate side-effects in source order; the tuple type comes
+        from format inference on the Zip node."""
+        result_ty = self._storage_for_expr(e)
+        if not (isinstance(result_ty, CppList)
+                and isinstance(result_ty.elt, CppTuple)):
+            raise Cpp2EmitError(
+                f'expected list[tuple[...]] for zip result, got {result_ty!r}'
+            )
+
+        srcs: list[str] = []
+        for arg in e.args:
+            arg_str = self._visit_expr(arg, ctx)
+            s = self._fresh_temp()
+            self.writer.add_line(f'auto {s} = {arg_str};')
+            srcs.append(s)
+
+        result = self._fresh_temp()
+        self.writer.add_line(
+            f'{result_ty.format()} {result}({srcs[0]}.size());'
+        )
+        i = self._fresh_temp()
+        self.writer.add_line(
+            f'for (size_t {i} = 0; {i} < {srcs[0]}.size(); ++{i}) {{'
+        )
+        self.writer.indent()
+        elts = ', '.join(f'{s}[{i}]' for s in srcs)
+        self.writer.add_line(f'{result}[{i}] = std::make_tuple({elts});')
+        self.writer.dedent()
+        self.writer.add_line('}')
+        return result
     def _visit_round(self, e, ctx): self._unsupported('Round / RoundExact')
     def _visit_round_at(self, e, ctx): self._unsupported('RoundAt')
     def _visit_call(self, e, ctx): self._unsupported('Call')

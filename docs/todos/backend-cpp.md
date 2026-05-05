@@ -125,7 +125,7 @@ double f(double x, double y) {
   other than `range` and tuple-binding targets land with list
   support in Phase 4).
 
-#### Phase 4 — Lists & tuples ⏳
+#### Phase 4 — Lists & tuples ✅
 - 4a ✅ List literals (`[a, b, c]`), indexing (`xs[i]`), `len(xs)`.
 - 4b ✅ List comprehension (`[expr for x in iter ...]`) — temp +
   range-based for; nested clauses supported.
@@ -146,7 +146,9 @@ double f(double x, double y) {
   `TupleBinding` destructuring (`std::get<i>` extraction in
   `Assign`, `ForStmt`, and `ListComp`, with underscore skips and
   nested bindings).
-- 4g ☐ Remaining built-ins: `enumerate`, `zip`, `sum`.
+- 4g ✅ Remaining built-ins: `sum` (`std::accumulate`),
+  `enumerate` (vector of `tuple<I,T>` populated by an indexed
+  for-loop), `zip` (variadic, vector of `tuple<T1,…,Tn>`).
 
 #### Phase 5 — Rounding & contexts ☐
 - `with FP32: …` blocks: emit explicit casts at the boundary, set
