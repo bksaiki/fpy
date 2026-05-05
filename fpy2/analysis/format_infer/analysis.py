@@ -233,17 +233,30 @@ def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
     return True
 
 
-def _top_bound(ty: Type) -> FormatBound:
+def _bound_of_type(ty: Type) -> FormatBound:
     """
-    Returns the top of the format lattice for *ty*.
+    Derives the most precise :data:`FormatBound` we can from a static
+    type alone — used to seed argument bindings, free variables, and
+    other places where no expression-level format is yet available.
 
-    For scalar real values this is ``REAL_FORMAT`` by default — but when
-    a monomorphizing pass has embedded a concrete :class:`Context` in
-    ``RealType.ctx``, the precise ``ctx.format()`` is returned instead.
-    For tuples and lists it is a structural format whose leaves are
-    derived recursively (so a list-of-FP32 argument produces
-    ``ListFormat(IEEEFormat(es=8, nbits=32))``).  For non-numeric types
-    (bool, context, function, type variable) it is ``None``.
+    For scalar real values, the result depends on whether the type
+    carries a concrete rounding context (``RealType.ctx``):
+
+    - **No context** (the default for un-monomorphized programs): the
+      format is unknown, so we return the scalar top ``REAL_FORMAT``.
+    - **Concrete context** (typical after a monomorphizing pass): the
+      format is pinned to ``ctx.format()`` directly.
+
+    For tuples and lists this is applied recursively to the element
+    types, so a monomorphized ``list[Real[FP32]]`` becomes
+    ``ListFormat(IEEEFormat(es=8, nbits=32))``.  For non-numeric types
+    (bool, context, function, type variable) the result is ``None``.
+
+    Note: the function is no longer always the *top* of the lattice —
+    when a concrete ctx is present the result is a pinned, possibly
+    non-top format.  The name reflects that it derives a bound *from a
+    type* (parallel to :meth:`_bound_of_def`, which retrieves a bound
+    by definition site).
     """
     match ty:
         case RealType():
@@ -255,9 +268,9 @@ def _top_bound(ty: Type) -> FormatBound:
                 return ty.ctx.format()
             return REAL_FORMAT
         case TupleType():
-            return TupleFormat(tuple(_top_bound(t) for t in ty.elts))
+            return TupleFormat(tuple(_bound_of_type(t) for t in ty.elts))
         case ListType():
-            return ListFormat(_top_bound(ty.elt))
+            return ListFormat(_bound_of_type(ty.elt))
         case BoolType() | ContextType() | FunctionType() | VarType():
             return None
         case _:
@@ -514,7 +527,7 @@ class _FormatInferInstance(Visitor):
         ret_ty = self.type_info.by_expr[e]
         if isinstance(ret_ty, RealType):
             return self._scope_format(e)
-        return _top_bound(ret_ty)
+        return _bound_of_type(ret_ty)
 
     def _is_real_scope(self, e: ContextUseSite) -> bool:
         """Returns True iff *e*'s active scope is the :data:`REAL` singleton.
@@ -733,7 +746,7 @@ class _FormatInferInstance(Visitor):
             self._visit_expr(arg, ctx)
         for _, kwarg in e.kwargs:
             self._visit_expr(kwarg, ctx)
-        return _top_bound(self.type_info.by_expr[e])
+        return _bound_of_type(self.type_info.by_expr[e])
 
     # Comparison: produces a bool, so no numeric format
     def _visit_compare(self, e: Compare, ctx: None) -> FormatBound:
@@ -753,7 +766,7 @@ class _FormatInferInstance(Visitor):
             # Empty list: derive the element format from the inferred list type.
             list_ty = self.type_info.by_expr[e]
             assert isinstance(list_ty, ListType)
-            joined = _top_bound(list_ty.elt)
+            joined = _bound_of_type(list_ty.elt)
         return ListFormat(joined)
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> FormatBound:
@@ -971,11 +984,11 @@ class _FormatInferInstance(Visitor):
         for arg in func.args:
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
-                self._set_def_bound(d, _top_bound(self.type_info.by_def[d]))
+                self._set_def_bound(d, _bound_of_type(self.type_info.by_def[d]))
         # Free variables (captured from outer scope): top format of inferred type.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            self._set_def_bound(d, _top_bound(self.type_info.by_def[d]))
+            self._set_def_bound(d, _bound_of_type(self.type_info.by_def[d]))
         self._visit_block(func.body, ctx)
 
     def analyze(self) -> FormatAnalysis:
