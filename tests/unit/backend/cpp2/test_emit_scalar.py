@@ -92,13 +92,17 @@ class TestScalarSlice:
         assert out.startswith('float f(float x, float y) {')
 
     def test_unsupported_node_kind_errors(self, cc):
-        """Anything outside the Phase-2 slice (here: comparisons) raises
-        a clear Cpp2CompileError pointing at the node kind."""
+        """Anything outside the supported subset raises a clear
+        Cpp2CompileError pointing at the node kind."""
 
         @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> bool:
+        def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
-                return x < y
+                if x < 0:
+                    y = -x
+                else:
+                    y = x
+                return y
 
-        with pytest.raises(Cpp2CompileError, match='Phase 2 does not handle'):
+        with pytest.raises(Cpp2CompileError, match='does not handle IfStmt'):
             _compile(cc, f)

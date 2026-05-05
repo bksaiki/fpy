@@ -21,12 +21,13 @@ add booleans, control flow, lists, and rounding boundaries.
 from fractions import Fraction
 
 from ...ast.fpyast import (
-    Abs, Add, Assign, BinaryOp, Decnum, Digits, Div,
+    Abs, Add, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
     Expr, FuncDef, Hexnum, Integer, Mul, NamedId, Neg, Rational,
     ReturnStmt, Stmt, StmtBlock, Sub, UnaryOp, Var,
     ContextStmt, UnderscoreId,
 )
 from ...ast.visitor import Visitor
+from ...utils.compare import CompareOp
 
 from .storage import StorageSelectionError
 from .types import CppType
@@ -314,7 +315,24 @@ class _Cpp2Emitter(Visitor):
     def _unsupported(self, kind: str):
         raise Cpp2EmitError(f'cpp2 Phase 2 does not handle {kind}')
 
-    def _visit_bool(self, e, ctx): self._unsupported('BoolVal')
+    def _visit_bool(self, e: BoolVal, ctx) -> str:
+        return 'true' if e.val else 'false'
+
+    def _visit_compare(self, e: Compare, ctx) -> str:
+        # Chained comparisons (``a < b < c``) expand to a conjunction
+        # of pairwise comparisons.  FPy's evaluation order is
+        # left-to-right with no short-circuit semantics that differ
+        # from C++'s — the operands are pure expressions, so ``&&``
+        # is fine.
+        args = [self._visit_expr(a, ctx) for a in e.args]
+        clauses = [
+            f'({args[i]} {op.symbol()} {args[i + 1]})'
+            for i, op in enumerate(e.ops)
+        ]
+        if len(clauses) == 1:
+            return clauses[0]
+        return '(' + ' && '.join(clauses) + ')'
+
     def _visit_foreign(self, e, ctx): self._unsupported('ForeignVal')
     def _visit_attribute(self, e, ctx): self._unsupported('Attribute')
     def _visit_nullaryop(self, e, ctx): self._unsupported('NullaryOp')
@@ -323,7 +341,6 @@ class _Cpp2Emitter(Visitor):
     def _visit_round(self, e, ctx): self._unsupported('Round / RoundExact')
     def _visit_round_at(self, e, ctx): self._unsupported('RoundAt')
     def _visit_call(self, e, ctx): self._unsupported('Call')
-    def _visit_compare(self, e, ctx): self._unsupported('Compare')
     def _visit_tuple_expr(self, e, ctx): self._unsupported('TupleExpr')
     def _visit_list_expr(self, e, ctx): self._unsupported('ListExpr')
     def _visit_list_comp(self, e, ctx): self._unsupported('ListComp')
