@@ -155,18 +155,26 @@ double f(double x, double y) {
 
 #### Phase 5 — Rounding & contexts ☐
 - 5a ✅ **Operation type tables.**  `fpy2/backend/cpp2/ops.py`
-  enumerates the supported C++ signatures per FPy op type.  The
-  emitter dispatches every `UnaryOp` / `BinaryOp` through the
-  table: direct match if operand and result storage types already
-  agree; cast-to-result fallback otherwise.  **Every** conversion
-  goes through an explicit `static_cast` — no reliance on C++
-  implicit promotion, even for "lossless" widenings like
-  `U8 → F64`.  Same policy applied to comparisons (`_visit_compare`
-  casts each pair of operands to their scalar supremum) and to
-  vector subscripting in `_visit_list_ref` / `_visit_indexed_assign`
-  (indices wrap in `static_cast<size_t>(...)`).  Coverage: `Add`,
-  `Sub`, `Mul`, `Div`, `Neg`, `Abs`.  Algebraic / transcendental
-  ops add their entries here as 5d lands.
+  enumerates supported C++ signatures per FPy op type.  Each
+  signature is parameterized by *argument formats* and an
+  *active rounding context* — inputs only carry value-range info
+  (a `Format`); the operation rounds its mathematical result
+  under the active context, so the output slot carries a full
+  `Context` (format + RM).  Dispatch consults
+  `ContextUseAnalysis.find_scope_from_use(e)` to get the active
+  context and `format_info.by_expr` to get operand formats; a
+  signature matches when its `out_ctx == active_ctx` and each
+  operand's format ⊆ the corresponding `in_fmt`.  When no sig
+  matches directly, the all-active-context sig is used and both
+  operands are explicit-cast to that context's storage.  **Every**
+  conversion goes through `static_cast` — no reliance on C++
+  implicit promotion.  Same explicit-cast policy applies to
+  comparisons (`_visit_compare` casts to scalar supremum) and
+  vector subscripting (`xs[static_cast<size_t>(i)]`).  Coverage:
+  `Add`, `Sub`, `Mul`, `Div`, `Neg`, `Abs` across native FP / int
+  contexts (FP32 / FP64 × four RMs, SINT8/16/32/64, UINT8/16/32/64,
+  INTEGER).  Algebraic / transcendental ops add their entries
+  here as 5d lands.
 - 5b ✅ Context boundaries.  Active rounding context is taken from
   :class:`ContextUseAnalysis` at every ``FuncDef`` / ``ContextStmt``
   site.  Programs whose contexts can't be statically resolved are

@@ -1,10 +1,13 @@
 """
 Phase 5a tests for the cpp2 emitter — operation type dispatch.
 
-The emitter routes every primitive op through :class:`ScalarOpTable`.
-Direct signature matches emit unchanged; cast-to-result falls back
-to a same-type signature, inserting ``static_cast`` only when the
-implicit C++ widening would actually drop precision.
+Each primitive op is parameterized by *input contexts* and an
+*output context*.  Dispatch picks a signature whose ``out_ctx``
+matches the active rounding context, with operand formats ⊆ each
+``in_ctx.format()``.  When the operand format isn't admitted by any
+sig directly, the all-active-context signature is used and operands
+are explicit-cast to the active context's storage.  All conversions
+go through ``static_cast`` (no implicit promotion).
 """
 
 import fpy2 as fp
@@ -16,38 +19,43 @@ from fpy2.backend.cpp2.ops import (
     UnaryCppOp,
     make_op_table,
 )
-from fpy2.backend.cpp2.types import CppScalar
 from fpy2.types import RealType
 
 
 class TestOpTableShape:
-    """``make_op_table`` returns a table covering the ops cpp2 emits."""
+    """``make_op_table`` returns a table covering the ops cpp2 emits,
+    keyed by per-op-kind context signatures."""
 
     def test_binary_table_has_arith(self):
         t = make_op_table()
         from fpy2.ast.fpyast import Add, Sub, Mul, Div
+        fp64_fmt = fp.FP64.format()
         for op in (Add, Sub, Mul, Div):
             assert op in t.binary
-            # F64 self-application must be present (the common case).
+            # FP64 self-application (RNE) must be present — the
+            # common-case signature for ``with FP64:`` blocks.
             assert any(
-                sig.matches(CppScalar.F64, CppScalar.F64, CppScalar.F64)
+                sig.in1_fmt == fp64_fmt
+                and sig.in2_fmt == fp64_fmt
+                and sig.out_ctx == fp.FP64
                 for sig in t.binary[op]
             )
 
     def test_unary_table_has_neg_abs(self):
         t = make_op_table()
         from fpy2.ast.fpyast import Neg, Abs
+        fp64_fmt = fp.FP64.format()
         for op in (Neg, Abs):
             assert op in t.unary
             assert any(
-                sig.matches(CppScalar.F64, CppScalar.F64)
+                sig.arg_fmt == fp64_fmt and sig.out_ctx == fp.FP64
                 for sig in t.unary[op]
             )
 
     def test_abs_uses_fabs_for_floats(self):
         t = make_op_table()
         from fpy2.ast.fpyast import Abs
-        sigs = [s for s in t.unary[Abs] if s.arg == CppScalar.F64]
+        sigs = [s for s in t.unary[Abs] if s.out_ctx == fp.FP64]
         assert len(sigs) == 1
         assert sigs[0].name == 'std::fabs'
         assert sigs[0].format('x') == 'std::fabs(x)'
@@ -55,9 +63,24 @@ class TestOpTableShape:
     def test_abs_uses_std_abs_for_ints(self):
         t = make_op_table()
         from fpy2.ast.fpyast import Abs
-        sigs = [s for s in t.unary[Abs] if s.arg == CppScalar.S32]
+        sigs = [s for s in t.unary[Abs] if s.out_ctx == fp.SINT32]
         assert len(sigs) == 1
         assert sigs[0].name == 'std::abs'
+
+    def test_binary_table_has_per_rm_fp_signatures(self):
+        """Each FP base gets one signature per supported rounding
+        mode — the dispatch matches the active context's RM
+        exactly."""
+        t = make_op_table()
+        from fpy2.ast.fpyast import Add
+        rms = [fp.RM.RNE, fp.RM.RTZ, fp.RM.RTP, fp.RM.RTN]
+        for rm in rms:
+            ctx = fp.IEEEContext(11, 64, rm)
+            ctx_fmt = ctx.format()
+            assert any(
+                sig.in1_fmt == ctx_fmt and sig.out_ctx == ctx
+                for sig in t.binary[Add]
+            )
 
 
 class TestDispatchDirect:

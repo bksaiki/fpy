@@ -506,23 +506,6 @@ class _Cpp2Emitter(Visitor):
             )
         return ty
 
-    def _dispatch_unary(self, e: UnaryOp, arg: str) -> str:
-        """Dispatch a unary op through the op table.
-
-        Tries direct match first; if the operand needs to widen into
-        the result type, looks for a same-type signature and inserts
-        an explicit ``static_cast``.  Raises :class:`Cpp2EmitError`
-        if no signature accommodates the operand/result types.
-        """
-        sigs = self.op_table.unary.get(type(e))
-        if sigs is None:
-            raise Cpp2EmitError(
-                f'no signatures for unary op: {type(e).__name__}'
-            )
-        arg_ty = self._scalar_storage_for_expr(e.arg)
-        ret_ty = self._scalar_storage_for_expr(e)
-        return self._format_unary(e, sigs, arg, arg_ty, ret_ty)
-
     def _maybe_cast(self, arg: str, arg_ty: CppScalar, target_ty: CppScalar) -> str:
         """Emit *arg* in *target_ty* form.
 
@@ -536,60 +519,123 @@ class _Cpp2Emitter(Visitor):
             return arg
         return f'static_cast<{target_ty.format()}>({arg})'
 
-    def _format_unary(
-        self,
-        e: UnaryOp,
-        sigs: list[UnaryCppOp],
-        arg: str,
-        arg_ty: CppScalar,
-        ret_ty: CppScalar,
-    ) -> str:
-        for op in sigs:
-            if op.matches(arg_ty, ret_ty):
-                return op.format(arg)
-        # Cast-to-result fallback.  Falls back to a same-type
-        # signature; only the operand is wrapped in ``static_cast``
-        # when the implicit conversion would lose precision (per
-        # ``_maybe_cast``).  Matches FPy's "operate under the active
-        # context" semantics — the operand is rounded at the operator
-        # boundary.
-        for op in sigs:
-            if op.matches(ret_ty, ret_ty):
-                return op.format(self._maybe_cast(arg, arg_ty, ret_ty))
+    def _active_ctx_for(self, e: Expr) -> Context:
+        """Look up the rounding context active at expression *e*.
+
+        Symbolic / unresolved scopes are rejected — the cpp2 backend
+        only dispatches primitive ops under statically-known
+        contexts.
+        """
+        try:
+            scope = self.ctx_use.find_scope_from_use(e)
+        except KeyError as err:
+            raise Cpp2EmitError(
+                f'no context scope registered for {type(e).__name__}'
+            ) from err
+        if not isinstance(scope.ctx, Context):
+            raise Cpp2EmitError(
+                f'cannot dispatch {type(e).__name__} under symbolic '
+                f'context `{scope.ctx}`'
+            )
+        return scope.ctx
+
+    def _scalar_for_ctx(self, ctx: Context) -> CppScalar:
+        """Resolve a context to its C++ scalar storage type."""
+        return self._scalar_for_format(ctx.format())
+
+    def _scalar_for_format(self, fmt) -> CppScalar:
+        """Resolve a :class:`Format` to its C++ scalar storage type."""
+        try:
+            storage = choose_storage(fmt)
+        except StorageSelectionError as e:
+            raise Cpp2EmitError(
+                f'unsupported format `{fmt}`: {e}'
+            ) from e
+        if not isinstance(storage, CppScalar):
+            raise Cpp2EmitError(
+                f'format `{fmt}` resolves to non-scalar storage `{storage!r}`'
+            )
+        return storage
+
+    def _dispatch_unary(self, e: UnaryOp, arg: str) -> str:
+        """Dispatch a unary op via the op table.
+
+        Picks a signature whose ``out_ctx`` matches the active
+        rounding context.  Direct match is preferred (operand
+        format admitted by the signature's ``arg_ctx``); on
+        mismatch we fall back to the all-active-context signature
+        and explicit-cast the operand to that context's storage.
+        """
+        sigs = self.op_table.unary.get(type(e))
+        if sigs is None:
+            raise Cpp2EmitError(
+                f'no signatures for unary op: {type(e).__name__}'
+            )
+        active = self._active_ctx_for(e)
+        arg_fmt = self.format_info.by_expr.get(e.arg)
+        arg_storage = self._scalar_storage_for_expr(e.arg)
+
+        for sig in sigs:
+            if sig.matches(arg_fmt, active):
+                target = self._scalar_for_format(sig.arg_fmt)
+                return sig.format(self._maybe_cast(arg, arg_storage, target))
+        # Cast-to-active fallback: pick the all-active signature
+        # (input format == active.format()) and cast the operand
+        # into the active context's storage.
+        target = self._scalar_for_ctx(active)
+        active_fmt = active.format()
+        for sig in sigs:
+            if sig.arg_fmt == active_fmt and sig.out_ctx == active:
+                return sig.format(self._maybe_cast(arg, arg_storage, target))
         raise Cpp2EmitError(
-            f'no matching signature for {type(e).__name__}: '
-            f'{arg_ty.format()} -> {ret_ty.format()}'
+            f'no matching signature for {type(e).__name__} under '
+            f'context `{active}`: arg format `{arg_fmt}`'
         )
 
     def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
-        """Dispatch a binary op through the op table.
+        """Dispatch a binary op via the op table.
 
-        Tries direct match first; if both operands fit in the result
-        type, looks for a same-type signature and inserts explicit
-        ``static_cast``s on whichever operand is narrower.  Raises
-        :class:`Cpp2EmitError` if no signature accommodates the
-        operand/result types."""
+        Picks a signature whose ``out_ctx`` matches the active
+        rounding context.  Direct match is preferred (operand
+        formats admitted by the signature's ``in*_ctx``); on
+        mismatch we fall back to the all-active-context signature
+        and explicit-cast both operands to that context's storage.
+        """
         sigs = self.op_table.binary.get(type(e))
         if sigs is None:
             raise Cpp2EmitError(
                 f'no signatures for binary op: {type(e).__name__}'
             )
-        lhs_ty = self._scalar_storage_for_expr(e.first)
-        rhs_ty = self._scalar_storage_for_expr(e.second)
-        ret_ty = self._scalar_storage_for_expr(e)
-        for op in sigs:
-            if op.matches(lhs_ty, rhs_ty, ret_ty):
-                return op.format(lhs, rhs)
-        # Cast-to-result fallback (see ``_format_unary``).
-        for op in sigs:
-            if op.matches(ret_ty, ret_ty, ret_ty):
-                return op.format(
-                    self._maybe_cast(lhs, lhs_ty, ret_ty),
-                    self._maybe_cast(rhs, rhs_ty, ret_ty),
+        active = self._active_ctx_for(e)
+        lhs_fmt = self.format_info.by_expr.get(e.first)
+        rhs_fmt = self.format_info.by_expr.get(e.second)
+        lhs_storage = self._scalar_storage_for_expr(e.first)
+        rhs_storage = self._scalar_storage_for_expr(e.second)
+
+        for sig in sigs:
+            if sig.matches(lhs_fmt, rhs_fmt, active):
+                lhs_target = self._scalar_for_format(sig.in1_fmt)
+                rhs_target = self._scalar_for_format(sig.in2_fmt)
+                return sig.format(
+                    self._maybe_cast(lhs, lhs_storage, lhs_target),
+                    self._maybe_cast(rhs, rhs_storage, rhs_target),
+                )
+        # Cast-to-active fallback: pick the all-active signature
+        # (in1_fmt == in2_fmt == active.format()) and cast both
+        # operands into the active context's storage.
+        target = self._scalar_for_ctx(active)
+        active_fmt = active.format()
+        for sig in sigs:
+            if (sig.in1_fmt == active_fmt
+                    and sig.in2_fmt == active_fmt
+                    and sig.out_ctx == active):
+                return sig.format(
+                    self._maybe_cast(lhs, lhs_storage, target),
+                    self._maybe_cast(rhs, rhs_storage, target),
                 )
         raise Cpp2EmitError(
-            f'no matching signature for {type(e).__name__}: '
-            f'{lhs_ty.format()} -> {rhs_ty.format()} -> {ret_ty.format()}'
+            f'no matching signature for {type(e).__name__} under '
+            f'context `{active}`: lhs `{lhs_fmt}`, rhs `{rhs_fmt}`'
         )
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:

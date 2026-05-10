@@ -8,6 +8,8 @@ phi merging two branches), the storage type is the smallest entry that
 contains every constituent format.
 """
 
+from fractions import Fraction
+
 from ...analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
@@ -17,6 +19,8 @@ from ...analysis.format_infer import (
     TupleFormat,
 )
 from ...analysis.format_infer.analysis import _to_abstract
+from ...number import RealFloat
+from ...utils import is_dyadic
 from ...number import (
     FP32, FP64,
     SINT8, SINT16, SINT32, SINT64,
@@ -60,6 +64,40 @@ covering type."""
 
 
 _LADDER_LOOKUP = {ty: af for ty, af in _LADDER}
+
+
+def format_fits_in(value: FormatBound, target: Format) -> bool:
+    """Is every value bounded by *value* representable in *target*?
+
+    Used by op-table dispatch to check that an operand's inferred
+    rounding format is "small enough" for a candidate signature's
+    declared input context.
+
+    - ``None`` (bool): never fits a numeric format.
+    - :class:`SetFormat`: each value must be dyadic and
+      ``Format.representable_in``-checkable.
+    - Abstractable scalar formats: lift both sides to
+      :class:`AbstractFormat` and use lattice ``<=``.
+    - Tuples / lists: never fit a scalar context.
+    """
+    if value is None:
+        return False
+    if isinstance(value, SetFormat):
+        if target == REAL_FORMAT:
+            return True
+        for v in value.values:
+            if not isinstance(v, Fraction) or not is_dyadic(v):
+                return False
+            if not target.representable_in(RealFloat.from_rational(v)):
+                return False
+        return True
+    if isinstance(value, AbstractableFormat):
+        af_v = AbstractFormat.from_format(value)
+        af_t = AbstractFormat.from_format(target)
+        if af_v is None or af_t is None:
+            return False
+        return af_v <= af_t
+    return False
 
 
 def scalar_abstract(s: CppScalar) -> AbstractFormat:
