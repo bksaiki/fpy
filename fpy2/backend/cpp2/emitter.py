@@ -29,20 +29,37 @@ Anything else raises :class:`Cpp2EmitError`, which the public
 from fractions import Fraction
 
 from ...analysis import DefineUseAnalysis, FormatAnalysis
+from ...analysis.context_use import (
+    ContextScope,
+    ContextScopeSite,
+    ContextUseAnalysis,
+)
 from ...ast.fpyast import (
     Abs, Argument, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits,
-    Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign,
-    Integer, Len, ListComp, ListExpr, ListRef, ListSlice, NamedId, NaryOp,
-    Neg, Range1, Range2, Range3, Rational, ReturnStmt, StmtBlock, Sum,
-    TupleBinding, TupleExpr, UnaryOp, Var, ContextStmt, UnderscoreId,
-    WhileStmt, Zip,
+    Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt,
+    IndexedAssign, Integer, Len, ListComp, ListExpr, ListRef, ListSlice,
+    NamedId, NaryOp, Neg, Range1, Range2, Range3, Rational, ReturnStmt,
+    StmtBlock, Sum, TupleBinding, TupleExpr, UnaryOp, Var, ContextStmt,
+    UnderscoreId, WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
+from ...number import RM
+from ...number.context.context import Context
 
 from .ops import BinaryCppOp, ScalarOpTable, UnaryCppOp, make_op_table
 from .storage import StorageSelectionError, choose_storage, scalar_sup
 from .storage_infer import StorageAnalysis
 from .types import CppList, CppScalar, CppTuple, CppType
+
+
+# Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
+# in this table can be set via ``fesetround``.
+_FE_RM_MACRO: dict[RM, str] = {
+    RM.RNE: 'FE_TONEAREST',
+    RM.RTZ: 'FE_TOWARDZERO',
+    RM.RTP: 'FE_UPWARD',
+    RM.RTN: 'FE_DOWNWARD',
+}
 
 
 class _IndentedWriter:
@@ -80,6 +97,7 @@ class _Cpp2Emitter(Visitor):
     storage: StorageAnalysis
     def_use: DefineUseAnalysis
     format_info: FormatAnalysis
+    ctx_use: ContextUseAnalysis
     writer: _IndentedWriter
 
     def __init__(
@@ -88,14 +106,26 @@ class _Cpp2Emitter(Visitor):
         storage: StorageAnalysis,
         def_use: DefineUseAnalysis,
         format_info: FormatAnalysis,
+        ctx_use: ContextUseAnalysis,
     ):
         self.ast = ast
         self.storage = storage
         self.def_use = def_use
         self.format_info = format_info
+        self.ctx_use = ctx_use
         self.writer = _IndentedWriter()
         self._tmp_counter = 0
         self.op_table: ScalarOpTable = make_op_table()
+        # Build a site → scope lookup over the analysis's scope list.
+        self._scope_by_site: dict[ContextScopeSite, ContextScope] = {
+            scope.site: scope for scope in ctx_use.scopes
+        }
+        # Track the rounding mode in effect at the current emission
+        # point.  ``_visit_function`` initialises this from the
+        # function's own context scope; ``_visit_context`` updates it
+        # so nested ``with`` blocks only emit ``fesetround`` when the
+        # mode actually changes.
+        self._current_rm: RM = RM.RNE
 
     def _fresh_temp(self) -> str:
         """Allocate a fresh emitter-only temporary identifier.
@@ -215,7 +245,37 @@ class _Cpp2Emitter(Visitor):
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
-        self._visit_block(func.body, None)
+        # The function-level scope determines the rounding mode in
+        # effect at function entry.  When it resolves to a concrete
+        # FP context with non-default RM, save the caller's ``fenv``
+        # and ``fesetround`` to the function's mode (restoring on
+        # every exit path is a Phase 6 refinement — for now we
+        # save/restore around the body).  An unresolved (symbolic)
+        # outer scope is allowed for context-free programs (bool
+        # returns, integer-only work whose context never appears in
+        # the source); nested ``with`` blocks still validate strictly.
+        func_ctx = self._try_resolve_scope_ctx(func)
+        if func_ctx is None:
+            self._current_rm = RM.RNE
+            self._visit_block(func.body, None)
+        else:
+            func_storage = self._validate_context_rm(func_ctx)
+            if func_storage.is_float() and func_ctx.rm != RM.RNE:
+                fenv = self._fresh_temp()
+                self.writer.add_line(
+                    f'const auto {fenv} = std::fegetround();'
+                )
+                self.writer.add_line(
+                    f'std::fesetround({_FE_RM_MACRO[func_ctx.rm]});'
+                )
+                self._current_rm = func_ctx.rm
+                self._visit_block(func.body, None)
+                self.writer.add_line(f'std::fesetround({fenv});')
+            else:
+                self._current_rm = (
+                    func_ctx.rm if func_storage.is_float() else RM.RNE
+                )
+                self._visit_block(func.body, None)
         self.writer.dedent()
         self.writer.add_line('}')
 
@@ -295,16 +355,110 @@ class _Cpp2Emitter(Visitor):
         rhs = self._visit_expr(stmt.expr, ctx)
         self.writer.add_line(f'return {rhs};')
 
+    def _resolve_scope_ctx(self, site: ContextScopeSite) -> Context:
+        """Pull the scope's resolved context, requiring it to be
+        statically known.  Symbolic context variables (``ContextUse``
+        falls back to a fresh ``NamedId`` when partial-eval can't
+        pin a concrete :class:`Context`) are rejected — the cpp2
+        backend only compiles programs whose contexts are known at
+        compile time."""
+        try:
+            scope = self._scope_by_site[site]
+        except KeyError as e:
+            raise Cpp2EmitError(
+                f'no context scope registered for `{type(site).__name__}`'
+            ) from e
+        rctx = scope.ctx
+        if not isinstance(rctx, Context):
+            raise Cpp2EmitError(
+                'context expression must be a statically-resolvable '
+                f'Context value; got symbolic `{rctx}`'
+            )
+        return rctx
+
+    def _try_resolve_scope_ctx(self, site: ContextScopeSite) -> Context | None:
+        """Like :meth:`_resolve_scope_ctx` but returns ``None`` for a
+        symbolic / unresolved scope rather than raising.
+
+        Used at the function-level scope: a function that only does
+        bool / context-free work doesn't need a ``ctx`` annotation,
+        so its outer scope can be symbolic.  Nested ``with`` blocks
+        still validate strictly via :meth:`_resolve_scope_ctx`."""
+        scope = self._scope_by_site.get(site)
+        if scope is None:
+            return None
+        return scope.ctx if isinstance(scope.ctx, Context) else None
+
+    def _validate_context_rm(self, rctx: Context) -> CppScalar:
+        """Validate *rctx* and return its scalar storage type.
+
+        - Float storage (F32 / F64): rounding mode must be one of
+          the four supported by ``fesetround`` (RNE / RTZ / RTP / RTN).
+        - Integer storage: rounding mode must be RTZ — C++ integer
+          arithmetic rounds toward zero, and other modes would need
+          per-operation emulation.
+        - Anything else (bool, list, tuple) is out of scope.
+        """
+        try:
+            storage = choose_storage(rctx.format())
+        except StorageSelectionError as e:
+            raise Cpp2EmitError(
+                f'unsupported context `{rctx}`: {e}'
+            ) from e
+        if not isinstance(storage, CppScalar):
+            raise Cpp2EmitError(
+                f'unsupported context storage `{storage!r}` for `{rctx}`'
+            )
+        if storage.is_float():
+            if rctx.rm not in _FE_RM_MACRO:
+                raise Cpp2EmitError(
+                    f'rounding mode {rctx.rm} for context `{rctx}` is not '
+                    'supported by ``fesetround`` (need RNE, RTZ, RTP, or RTN)'
+                )
+        elif storage.is_integer():
+            if rctx.rm != RM.RTZ:
+                raise Cpp2EmitError(
+                    f'integer context `{rctx}` must use RTZ rounding mode '
+                    '(C++ integer arithmetic rounds toward zero); got '
+                    f'{rctx.rm}'
+                )
+        else:
+            raise Cpp2EmitError(
+                f'unsupported context storage `{storage!r}` for `{rctx}`'
+            )
+        return storage
+
     def _visit_context(self, stmt: ContextStmt, ctx):
-        # Rounding boundaries (Phase 5) aren't emitted yet — descend
-        # into the body and rely on the format-inference / storage
-        # choices already baked into ``StorageInfer``.  The ``with``
-        # itself contributes no C++ statement.
+        # Phase 5b: ``with <ctx>:`` blocks.  The active rounding
+        # context is taken from the :class:`ContextUseAnalysis` scope
+        # registered at this statement's site (which has already
+        # resolved attribute references / partial-eval'd the context
+        # expression).  Float contexts may emit ``fesetround`` save /
+        # set / restore around the body; integer contexts pass
+        # through unchanged.
         if not isinstance(stmt.target, UnderscoreId):
             raise Cpp2EmitError(
                 'binding the active context to a name is not yet supported'
             )
-        self._visit_block(stmt.body, ctx)
+        rctx = self._resolve_scope_ctx(stmt)
+        storage = self._validate_context_rm(rctx)
+        if storage.is_integer() or rctx.rm == self._current_rm:
+            # Integer arithmetic doesn't consult ``fenv``, and a float
+            # ``with`` that doesn't change the active RM has nothing
+            # to save / restore.  Either way: just descend.
+            self._visit_block(stmt.body, ctx)
+            return
+
+        fenv = self._fresh_temp()
+        prev_rm = self._current_rm
+        self.writer.add_line(f'const auto {fenv} = std::fegetround();')
+        self.writer.add_line(f'std::fesetround({_FE_RM_MACRO[rctx.rm]});')
+        self._current_rm = rctx.rm
+        try:
+            self._visit_block(stmt.body, ctx)
+        finally:
+            self._current_rm = prev_rm
+        self.writer.add_line(f'std::fesetround({fenv});')
 
     # ------------------------------------------------------------------
     # Expression visitors — return a C++ source fragment

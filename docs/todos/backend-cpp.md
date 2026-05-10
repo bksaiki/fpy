@@ -167,10 +167,19 @@ double f(double x, double y) {
   (indices wrap in `static_cast<size_t>(...)`).  Coverage: `Add`,
   `Sub`, `Mul`, `Div`, `Neg`, `Abs`.  Algebraic / transcendental
   ops add their entries here as 5d lands.
-- 5b ☐ `with FP32: …` blocks: emit explicit casts at the rounding
-  boundary, set rounding mode (`fesetround`) if needed, restore on
-  block exit.  Composes with 5a — the op-table check uses the
-  innermost context's storage type.
+- 5b ✅ Context boundaries.  Active rounding context is taken from
+  :class:`ContextUseAnalysis` at every ``FuncDef`` / ``ContextStmt``
+  site.  Programs whose contexts can't be statically resolved are
+  rejected (``ConstFold`` runs first to resolve attribute
+  references).  Float contexts must use a rounding mode supported
+  by ``fesetround`` (RNE / RTZ / RTP / RTN) — the emitter saves /
+  sets / restores ``fenv`` only when the active mode actually
+  changes, so plain ``with FP64:`` blocks emit no fenv noise.
+  Integer contexts must use RTZ (matches C++ truncation) and emit
+  no runtime support.  **Known limitation**: when a function-level
+  fesetround is active, a ``return`` inside the body skips the
+  trailing ``fesetround(prev)``, leaking the mode to the caller.
+  Best fix is an RAII guard, deferred to Phase 6 helpers.
 - 5c ☐ `Round`, `RoundExact`, `Cast` expressions.
 - 5d ☐ Algebraic / transcendental ops: dispatch each FPy op to its
   `<cmath>` counterpart through the op table from 5a.

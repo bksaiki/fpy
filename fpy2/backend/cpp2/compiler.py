@@ -19,6 +19,7 @@ from ...analysis import (
     DefineUse,
     FormatInfer,
 )
+from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.format_infer import FormatAnalysis
 from ...ast.fpyast import FuncDef
 from ...function import Function
@@ -44,6 +45,9 @@ class Cpp2PipelineResult:
 
     - ``ast``: the (post-monomorphization) :class:`FuncDef`.
     - ``format_info``: per-expression and per-definition format bounds.
+    - ``ctx_use``: context scopes — used by the emitter to identify
+      the active rounding context at every ``FuncDef`` / ``with``
+      site (so it can validate / emit ``fesetround``).
     - ``storage``: per-SSA-def storage assignment.  Each def maps to a
       C++ identifier and storage type; two defs share storage iff they
       are connected either by phi edges *or* by an in-place mutation
@@ -51,6 +55,7 @@ class Cpp2PipelineResult:
     """
     ast: FuncDef
     format_info: FormatAnalysis
+    ctx_use: ContextUseAnalysis
     storage: StorageAnalysis
 
 
@@ -109,6 +114,7 @@ class Cpp2Compiler(Backend):
         return Cpp2PipelineResult(
             ast=ast,
             format_info=format_info,
+            ctx_use=ctx_use,
             storage=storage,
         )
 
@@ -138,6 +144,7 @@ class Cpp2Compiler(Backend):
             storage=result.storage,
             def_use=result.format_info.type_info.def_use,
             format_info=result.format_info,
+            ctx_use=result.ctx_use,
         )
         try:
             return emitter.emit()
