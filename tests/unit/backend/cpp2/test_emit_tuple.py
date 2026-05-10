@@ -26,7 +26,11 @@ class TestTupleExpr:
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         assert out.startswith('std::tuple<double, double> f(double x, double y)')
-        assert 'return std::make_tuple((x + 1), (y - 1));' in out
+        assert (
+            'return std::make_tuple('
+            '(x + static_cast<double>(1)), '
+            '(y - static_cast<double>(1)));'
+        ) in out
 
     def test_tuple_passed_through_arg(self):
         @fp.fpy

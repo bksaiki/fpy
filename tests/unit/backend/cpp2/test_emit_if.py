@@ -33,7 +33,7 @@ class TestIfStmt:
         assert out == (
             'double f(double x) {\n'
             '    double y{};\n'
-            '    if ((x < 0)) {\n'
+            '    if ((x < static_cast<double>(0))) {\n'
             '        y = (-x);\n'
             '    } else {\n'
             '        y = x;\n'
@@ -59,7 +59,7 @@ class TestIfStmt:
         assert out == (
             'double f(double x) {\n'
             '    double y = x;\n'
-            '    if ((x < 0)) {\n'
+            '    if ((x < static_cast<double>(0))) {\n'
             '        y = (-x);\n'
             '    }\n'
             '    return y;\n'
@@ -86,7 +86,7 @@ class TestIfStmt:
             'double f(double x, double y) {\n'
             '    double z{};\n'
             '    if ((x < y)) {\n'
-            '        if ((x < 0)) {\n'
+            '        if ((x < static_cast<double>(0))) {\n'
             '            z = (-x);\n'
             '        } else {\n'
             '            z = x;\n'
@@ -118,9 +118,9 @@ class TestIfStmt:
         # Hoist is anchored to the if, after the unrelated ``a`` decl.
         assert out == (
             'double f(double x) {\n'
-            '    double a = (x + 1);\n'
+            '    double a = (x + static_cast<double>(1));\n'
             '    double y{};\n'
-            '    if ((a < 0)) {\n'
+            '    if ((a < static_cast<double>(0))) {\n'
             '        y = (-a);\n'
             '    } else {\n'
             '        y = a;\n'
@@ -158,7 +158,7 @@ class TestIfStmt:
         assert out.count('y{};') == 1
         # The hoist sits between ``a``'s decl and the outer if.
         assert (
-            '    double a = (x + 1);\n'
+            '    double a = (x + static_cast<double>(1));\n'
             '    uint8_t y{};\n'
             '    if (c1) {'
         ) in out
@@ -184,4 +184,4 @@ class TestIfStmt:
         assert 'double y{};' in out
         # ``t`` declares-on-assign inside the if-branch.
         assert '        double t = (-x);' in out
-        assert '        y = (t + 1);' in out
+        assert '        y = (t + static_cast<double>(1));' in out

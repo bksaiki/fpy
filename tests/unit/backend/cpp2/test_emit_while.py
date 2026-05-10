@@ -34,8 +34,8 @@ class TestWhileStmt:
         assert out == (
             'double f(double x) {\n'
             '    double y = x;\n'
-            '    while ((y > 0)) {\n'
-            '        y = (y - 1);\n'
+            '    while ((y > static_cast<double>(0))) {\n'
+            '        y = (y - static_cast<double>(1));\n'
             '    }\n'
             '    return y;\n'
             '}'
@@ -58,9 +58,9 @@ class TestWhileStmt:
         out = _compile(Cpp2Compiler(), f)
         assert 'double acc = 0;' in out
         assert 'double i = x;' in out
-        assert 'while ((i > 0)) {' in out
+        assert 'while ((i > static_cast<double>(0))) {' in out
         assert 'acc = (acc + i);' in out
-        assert 'i = (i - 1);' in out
+        assert 'i = (i - static_cast<double>(1));' in out
 
     def test_nested_while(self):
         """Nested loops indent and emit independently."""
@@ -78,4 +78,7 @@ class TestWhileStmt:
 
         out = _compile(Cpp2Compiler(), f)
         # The inner while is properly nested under the outer one.
-        assert 'while ((a > 0)) {\n        while ((b > 0)) {' in out
+        assert (
+            'while ((a > static_cast<double>(0))) {\n'
+            '        while ((b > static_cast<double>(0))) {'
+        ) in out

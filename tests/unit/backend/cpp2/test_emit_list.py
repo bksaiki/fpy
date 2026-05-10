@@ -52,8 +52,8 @@ class TestListRef:
                 return xs[0] + xs[1]
 
         out = _compile_list_arg(f)
-        assert 'xs[0]' in out
-        assert 'xs[1]' in out
+        assert 'xs[static_cast<size_t>(0)]' in out
+        assert 'xs[static_cast<size_t>(1)]' in out
 
     def test_variable_index(self):
         @fp.fpy
@@ -66,7 +66,7 @@ class TestListRef:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64)), RealType(fp.FP64)],
         )
-        assert 'xs[i]' in out
+        assert 'xs[static_cast<size_t>(i)]' in out
 
 
 class TestLen:
@@ -99,7 +99,7 @@ class TestListComp:
 
         out = _compile_list_arg(f)
         assert 'for (double x : xs) {' in out
-        assert '.push_back((x + 1));' in out
+        assert '.push_back((x + static_cast<double>(1)));' in out
 
     def test_range_iterable(self):
         """``range(...)`` in a comprehension expands to a counter loop.

@@ -81,11 +81,11 @@ class TestDispatchCastFallback:
     """Cast-to-result fires only when the implicit conversion is
     lossy.  Lossless widenings (e.g., ``U8 → F64``) stay implicit."""
 
-    def test_int64_minus_literal_under_fp64_casts_int64(self):
-        """``len(xs) - 1`` with result F64: ``len`` is ``int64_t``
-        which doesn't fit in ``double``, so it's cast explicitly.
-        The literal ``1`` is ``U8`` — ``U8`` does fit in ``double``
-        so the implicit conversion is left alone."""
+    def test_int64_minus_literal_under_fp64_casts_both(self):
+        """``len(xs) - 1`` with result F64.  Every conversion goes
+        through an explicit ``static_cast`` (no implicit promotion)
+        — both the ``int64_t`` operand and the ``U8`` literal cast
+        to ``double``."""
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -98,9 +98,9 @@ class TestDispatchCastFallback:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        # int64_t operand cast; literal operand left bare.
-        assert 'static_cast<double>(n)' in out
-        assert '(static_cast<double>(n) - 1)' in out
+        assert (
+            '(static_cast<double>(n) - static_cast<double>(1))'
+        ) in out
 
     def test_int_int_under_fp_casts_both(self):
         """Two int64 operands under FP64 both need explicit casts —
@@ -116,8 +116,10 @@ class TestDispatchCastFallback:
             '(static_cast<double>(i) * static_cast<double>(i))'
         ) in out
 
-    def test_float_double_widening_no_cast(self):
-        """``F32`` fits losslessly in ``F64``; no cast emitted."""
+    def test_float_double_widening_casts_explicitly(self):
+        """``F32`` fits losslessly in ``F64`` but we still emit the
+        cast — the policy is "every conversion is explicit", not
+        "every cast carries a precision warning"."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -130,7 +132,7 @@ class TestDispatchCastFallback:
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64)],
         )
-        # ``a`` is float, ``x`` is double, result is double.  Float
-        # fits in double so no explicit cast.
-        assert 'return (a + x);' in out
-        assert 'static_cast<double>(a)' not in out
+        # ``a`` is float, ``x`` is double, result is double — explicit
+        # cast on the narrower operand even though widening to
+        # double is lossless.
+        assert 'return (static_cast<double>(a) + x);' in out

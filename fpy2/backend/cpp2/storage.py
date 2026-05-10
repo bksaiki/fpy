@@ -193,6 +193,12 @@ def _supremum(storages: list[CppType]) -> CppType:
     raise TypeError(f'unexpected CppType: {head!r}')
 
 
+def scalar_sup(scalars: list[CppScalar]) -> CppScalar:
+    """Public alias for :func:`_scalar_sup` — smallest ladder scalar
+    that subsumes every input."""
+    return _scalar_sup(scalars)
+
+
 def _scalar_sup(scalars: list[CppScalar]) -> CppScalar:
     """Smallest scalar on the ladder that subsumes every input."""
     # Filter out BOOL specifically — mixing bool with numeric storage is

@@ -158,12 +158,15 @@ double f(double x, double y) {
   enumerates the supported C++ signatures per FPy op type.  The
   emitter dispatches every `UnaryOp` / `BinaryOp` through the
   table: direct match if operand and result storage types already
-  agree; cast-to-result fallback otherwise, with `static_cast`
-  inserted *only* when the implicit C++ widening would actually
-  drop precision (`scalar_fits_in` predicate).  Lossless cases
-  like `U8 → F64` stay implicit so `(y - 1)` reads as expected.
-  Coverage: `Add`, `Sub`, `Mul`, `Div`, `Neg`, `Abs`.  Algebraic
-  / transcendental ops add their entries here as 5d lands.
+  agree; cast-to-result fallback otherwise.  **Every** conversion
+  goes through an explicit `static_cast` — no reliance on C++
+  implicit promotion, even for "lossless" widenings like
+  `U8 → F64`.  Same policy applied to comparisons (`_visit_compare`
+  casts each pair of operands to their scalar supremum) and to
+  vector subscripting in `_visit_list_ref` / `_visit_indexed_assign`
+  (indices wrap in `static_cast<size_t>(...)`).  Coverage: `Add`,
+  `Sub`, `Mul`, `Div`, `Neg`, `Abs`.  Algebraic / transcendental
+  ops add their entries here as 5d lands.
 - 5b ☐ `with FP32: …` blocks: emit explicit casts at the rounding
   boundary, set rounding mode (`fesetround`) if needed, restore on
   block exit.  Composes with 5a — the op-table check uses the

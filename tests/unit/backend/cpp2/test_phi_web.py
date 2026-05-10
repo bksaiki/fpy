@@ -34,7 +34,7 @@ class TestPhiWebRenaming:
         out = _compile(f)
         # The arg is still ``x``; the rebind class picks ``x_1``.
         assert 'double f(double x)' in out
-        assert 'double x_1 = (x * 2);' in out
+        assert 'double x_1 = (x * static_cast<double>(2));' in out
         assert 'return x_1;' in out
 
     def test_rebind_in_if_merges_with_arg(self):
@@ -69,8 +69,8 @@ class TestPhiWebRenaming:
 
         out = _compile(f)
         # Two non-arg classes for ``x``, each declared on its assign.
-        assert 'double x_1 = (x + 1);' in out
-        assert 'double x_2 = (x_1 + 1);' in out
+        assert 'double x_1 = (x + static_cast<double>(1));' in out
+        assert 'double x_2 = (x_1 + static_cast<double>(1));' in out
         assert 'return x_2;' in out
 
     def test_loop_carried_var_keeps_one_class(self):

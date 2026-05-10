@@ -40,7 +40,7 @@ from ...ast.fpyast import (
 from ...ast.visitor import Visitor
 
 from .ops import BinaryCppOp, ScalarOpTable, UnaryCppOp, make_op_table
-from .storage import StorageSelectionError, choose_storage, scalar_fits_in
+from .storage import StorageSelectionError, choose_storage, scalar_sup
 from .storage_infer import StorageAnalysis
 from .types import CppList, CppScalar, CppTuple, CppType
 
@@ -370,13 +370,15 @@ class _Cpp2Emitter(Visitor):
         return self._format_unary(e, sigs, arg, arg_ty, ret_ty)
 
     def _maybe_cast(self, arg: str, arg_ty: CppScalar, target_ty: CppScalar) -> str:
-        """Emit *arg* in *target_ty* form, eliding the cast when the
-        implicit conversion would already be lossless.
+        """Emit *arg* in *target_ty* form.
 
-        Used by the op-table dispatch to keep readable output for
-        common widenings (``U8 → F64``) while making lossy or
-        bool↔numeric crossings explicit."""
-        if arg_ty == target_ty or scalar_fits_in(arg_ty, target_ty):
+        Every conversion crosses through an explicit ``static_cast``
+        — we don't rely on C++'s implicit-conversion rules even when
+        they'd be lossless.  This keeps the generated source honest
+        about where rounding / promotion happens (matching FPy's
+        "operate under the active context" semantics) and avoids
+        narrowing-conversion warnings on stricter compiler flags."""
+        if arg_ty == target_ty:
             return arg
         return f'static_cast<{target_ty.format()}>({arg})'
 
@@ -517,11 +519,18 @@ class _Cpp2Emitter(Visitor):
         # left-to-right with no short-circuit semantics that differ
         # from C++'s — the operands are pure expressions, so ``&&``
         # is fine.
+        #
+        # Each pair of operands is converted to its scalar supremum
+        # via explicit ``static_cast`` (no implicit promotion) so the
+        # comparison happens in a well-defined common type.
         args = [self._visit_expr(a, ctx) for a in e.args]
-        clauses = [
-            f'({args[i]} {op.symbol()} {args[i + 1]})'
-            for i, op in enumerate(e.ops)
-        ]
+        arg_tys = [self._scalar_storage_for_expr(a) for a in e.args]
+        clauses = []
+        for i, op in enumerate(e.ops):
+            common = scalar_sup([arg_tys[i], arg_tys[i + 1]])
+            lhs = self._maybe_cast(args[i], arg_tys[i], common)
+            rhs = self._maybe_cast(args[i + 1], arg_tys[i + 1], common)
+            clauses.append(f'({lhs} {op.symbol()} {rhs})')
         if len(clauses) == 1:
             return clauses[0]
         return '(' + ' && '.join(clauses) + ')'
@@ -683,12 +692,14 @@ class _Cpp2Emitter(Visitor):
         self.writer.indent()
 
     def _visit_list_ref(self, e: ListRef, ctx) -> str:
-        # ``xs[i]`` → ``xs[i]``.  C++ ``operator[]`` doesn't bounds-
-        # check; FPy's interpreter does.  Strict bounds-checking is
-        # deferred to a later phase along with slicing.
+        # ``xs[i]`` — C++ ``operator[]`` takes ``size_t``, so we route
+        # the index through an explicit ``static_cast<size_t>`` rather
+        # than relying on implicit conversion.  Bounds-checking is
+        # still TODO (FPy's interpreter is strict; we currently match
+        # C++'s undefined-behaviour-on-out-of-range).
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
-        return f'{value}[{index}]'
+        return f'{value}[static_cast<size_t>({index})]'
     def _visit_list_slice(self, e: ListSlice, ctx) -> str:
         # ``xs[start:stop]`` →
         #   auto __cpp2_tmpN = <xs>;
@@ -735,7 +746,10 @@ class _Cpp2Emitter(Visitor):
         # sides — emit a direct subscript-store.
         target_def = self.def_use.find_def_from_site(stmt.var, stmt)
         target_name = self.storage.def_to_name[target_def]
-        idx_strs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
+        idx_strs = [
+            f'static_cast<size_t>({self._visit_expr(idx, ctx)})'
+            for idx in stmt.indices
+        ]
         chain = target_name + ''.join(f'[{i}]' for i in idx_strs)
         rhs = self._visit_expr(stmt.expr, ctx)
         self.writer.add_line(f'{chain} = {rhs};')
