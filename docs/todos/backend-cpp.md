@@ -212,13 +212,23 @@ double f(double x, double y) {
   `IsNan`, `Signbit`, …) and nary `Min` / `Max` aren't in this
   pass — they need a bool / nary slot in the table.
 
-#### Phase 6 — Polish ☐
-- Header / helper code emission (mirror `cpp/utils.py:CPP_HELPERS`).
-- Round-trip tests against a reference compiler (`cc -std=c++17`) — same
-  pattern as `tests/infra/backend/cpp.py`.
-- Compare output to the existing `cpp/` backend on a corpus of programs.
-- Document the new backend's contract in a brief README under
-  `fpy2/backend/cpp2/`.
+#### Phase 6 — Polish ⏳
+- 6a ✅ Header / helper code emission.  `fpy2/backend/cpp2/utils.py`
+  defines `CPP_HEADERS` (every `#include` the emitted code uses —
+  `<cassert>`, `<cfenv>`, `<cmath>`, `<cstddef>`, `<cstdint>`,
+  `<numeric>`, `<vector>`, `<tuple>`) and `CPP_HELPERS` (currently
+  empty; reserved for future RAII fenv guard / bounds-checked
+  subscript helpers).  `Cpp2Compiler` exposes `headers()`,
+  `helpers()`, and a `prelude()` convenience.  `compile()` itself
+  still returns the function definition only so exact-string tests
+  in the rest of the suite remain stable.
+- 6b ☐ Round-trip tests against a reference compiler
+  (`cc -std=c++17`) — same pattern as
+  `tests/infra/backend/cpp.py`.
+- 6c ☐ Compare output to the existing `cpp/` backend on a corpus
+  of programs.
+- 6d ☐ Document the new backend's contract in a brief README
+  under `fpy2/backend/cpp2/`.
 
 ### Out of scope (for the first pass)
 - Linking against an external multi-precision library (mpfr, etc.).

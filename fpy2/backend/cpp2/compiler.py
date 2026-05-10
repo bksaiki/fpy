@@ -31,6 +31,7 @@ from ..backend import Backend, CompileError
 from .emitter import Cpp2EmitError, _Cpp2Emitter
 from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
+from .utils import CPP_HEADERS, CPP_HELPERS
 
 
 class Cpp2CompileError(CompileError):
@@ -69,6 +70,32 @@ class Cpp2Compiler(Backend):
 
     def __init__(self):
         pass
+
+    # ------------------------------------------------------------------
+    # Translation-unit preamble
+    #
+    # ``compile`` returns a function definition only, so single-function
+    # tests can use exact-string equality.  Callers that want a full
+    # translation unit pull these explicitly:
+    #
+    #     headers = '\\n'.join(cc.headers())
+    #     unit = headers + '\\n' + cc.helpers() + cc.compile(f) + '\\n'
+
+    def headers(self) -> list[str]:
+        """C++ headers required by every emitted unit."""
+        return list(CPP_HEADERS)
+
+    def helpers(self) -> str:
+        """Runtime helper definitions emitted alongside compiled
+        functions.  Currently empty — cpp2 doesn't yet need custom
+        runtime support beyond ``<cmath>`` / ``std::vector``."""
+        return CPP_HELPERS
+
+    def prelude(self) -> str:
+        """Convenience: the headers and helpers concatenated as a
+        single source-ready string.  Equivalent to
+        ``'\\n'.join(self.headers()) + '\\n' + self.helpers()``."""
+        return '\n'.join(self.headers()) + '\n' + self.helpers()
 
     # ------------------------------------------------------------------
     # Pipeline — runs all pre-analyses and selects storage.
