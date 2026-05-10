@@ -188,7 +188,16 @@ double f(double x, double y) {
   fesetround is active, a ``return`` inside the body skips the
   trailing ``fesetround(prev)``, leaking the mode to the caller.
   Best fix is an RAII guard, deferred to Phase 6 helpers.
-- 5c ☐ `Round`, `RoundExact`, `Cast` expressions.
+- 5c ✅ `Round`, `RoundExact`, `Cast` expressions.  `Round` is a
+  plain `static_cast<target>(arg)` — the cast's rounding mode
+  comes from Phase 5b's `fesetround` boundary, not the cast
+  itself.  `RoundExact` adds a runtime assertion that the cast
+  was lossless: cast-bind-to-temp, then
+  `assert(arg == tmp || (std::isnan(arg) && std::isnan(tmp)))`
+  for FP operands (NaN-aware) or `assert(arg == tmp)` for purely
+  integer operand pairs.  `Cast` is the identity — analysis-only
+  annotation, no generated code.  Same-type round / round-exact
+  short-circuit to the identity.
 - 5d ☐ Algebraic / transcendental ops: dispatch each FPy op to its
   `<cmath>` counterpart through the op table from 5a.
 

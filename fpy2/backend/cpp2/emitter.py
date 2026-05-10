@@ -35,12 +35,12 @@ from ...analysis.context_use import (
     ContextUseAnalysis,
 )
 from ...ast.fpyast import (
-    Abs, Argument, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits,
+    Abs, Argument, Assign, BinaryOp, BoolVal, Cast, Compare, Decnum, Digits,
     Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt,
     IndexedAssign, Integer, Len, ListComp, ListExpr, ListRef, ListSlice,
     NamedId, NaryOp, Neg, Range1, Range2, Range3, Rational, ReturnStmt,
-    StmtBlock, Sum, TupleBinding, TupleExpr, UnaryOp, Var, ContextStmt,
-    UnderscoreId, WhileStmt, Zip,
+    Round, RoundExact, StmtBlock, Sum, TupleBinding, TupleExpr, UnaryOp,
+    Var, ContextStmt, UnderscoreId, WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
 from ...number import RM
@@ -640,6 +640,14 @@ class _Cpp2Emitter(Visitor):
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
         arg = self._visit_expr(e.arg, ctx)
+        if isinstance(e, Cast):
+            # ``Cast`` is an analysis-only annotation: it asserts the
+            # argument's value is contained in the active context's
+            # format.  At the C++ level it's the identity — no
+            # generated code, no static_cast (the explicit-cast policy
+            # is enforced by the op-table dispatch elsewhere, not by
+            # ``Cast`` itself).
+            return arg
         if isinstance(e, (Neg, Abs)):
             return self._dispatch_unary(e, arg)
         if isinstance(e, Len):
@@ -778,7 +786,51 @@ class _Cpp2Emitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
         return result
-    def _visit_round(self, e, ctx): self._unsupported('Round / RoundExact')
+    def _visit_round(self, e, ctx) -> str:
+        # ``Round(arg)`` rounds ``arg`` to the active rounding
+        # context — emitted as a plain ``static_cast`` (the cast's
+        # rounding mode is the active ``fesetround`` mode set by
+        # Phase 5b at the surrounding ``with`` boundary).
+        #
+        # ``RoundExact(arg)`` is the same cast plus a runtime
+        # assertion that the cast was lossless: cast → bind to a
+        # temp → ``assert(arg == tmp || (NaN-aware equality))``.
+        if not isinstance(e, (Round, RoundExact)):
+            raise Cpp2EmitError(
+                f'unsupported round op: {type(e).__name__}'
+            )
+        arg = self._visit_expr(e.arg, ctx)
+        arg_ty = self._scalar_storage_for_expr(e.arg)
+        active = self._active_ctx_for(e)
+        target_ty = self._scalar_for_ctx(active)
+
+        if isinstance(e, Round):
+            return self._maybe_cast(arg, arg_ty, target_ty)
+
+        # RoundExact: same-type is a guaranteed no-op, no assert.
+        if arg_ty == target_ty:
+            return arg
+        # Bind the rounded value to a temp so the assertion can name
+        # it without re-evaluating the source expression.
+        tmp = self._fresh_temp()
+        self.writer.add_line(
+            f'{target_ty.format()} {tmp} = '
+            f'static_cast<{target_ty.format()}>({arg});'
+        )
+        # NaN-aware comparison: ``NaN == NaN`` is false in C++, so
+        # FP operands need an extra ``isnan`` guard to avoid false
+        # asserts when both sides round to NaN.  Skipped for purely
+        # integer operand pairs.
+        if target_ty.is_float() or arg_ty.is_float():
+            check = (
+                f'{arg} == {tmp} || '
+                f'(std::isnan({arg}) && std::isnan({tmp}))'
+            )
+        else:
+            check = f'{arg} == {tmp}'
+        self.writer.add_line(f'assert({check});')
+        return tmp
+
     def _visit_round_at(self, e, ctx): self._unsupported('RoundAt')
     def _visit_call(self, e, ctx): self._unsupported('Call')
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
