@@ -102,7 +102,9 @@ class TestListComp:
         assert '.push_back((x + 1));' in out
 
     def test_range_iterable(self):
-        """``range(...)`` in a comprehension expands to a counter loop."""
+        """``range(...)`` in a comprehension expands to a counter loop.
+        ``i * i`` under FP64 with ``i: int64_t`` casts both operands
+        to ``double`` (int64 ⊄ double, so the cast isn't a no-op)."""
 
         @fp.fpy
         def f() -> fp.Real:
@@ -112,7 +114,9 @@ class TestListComp:
 
         out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
         assert 'for (int64_t i = 0; i < 5; ++i) {' in out
-        assert '.push_back((i * i));' in out
+        assert (
+            '.push_back((static_cast<double>(i) * static_cast<double>(i)));'
+        ) in out
 
     def test_range2_iterable(self):
         @fp.fpy

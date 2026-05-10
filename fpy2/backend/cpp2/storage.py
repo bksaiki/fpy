@@ -9,6 +9,7 @@ contains every constituent format.
 """
 
 from ...analysis.format_infer import (
+    AbstractableFormat,
     AbstractFormat,
     FormatBound,
     ListFormat,
@@ -36,7 +37,7 @@ from .types import CppList, CppScalar, CppTuple, CppType
 # ladder in order and picks the first entry whose AbstractFormat
 # contains the inferred bound.  Order matters: smaller types first.
 
-def _af(fmt: Format) -> AbstractFormat:
+def _af(fmt: AbstractableFormat) -> AbstractFormat:
     af = AbstractFormat.from_format(fmt)
     assert af is not None, f'expected abstractable format, got {fmt!r}'
     return af
@@ -56,6 +57,31 @@ _LADDER: tuple[tuple[CppScalar, AbstractFormat], ...] = (
 )
 """Storage ladder, smallest first.  Searched linearly for the first
 covering type."""
+
+
+_LADDER_LOOKUP = {ty: af for ty, af in _LADDER}
+
+
+def scalar_abstract(s: CppScalar) -> AbstractFormat:
+    """Returns the :class:`AbstractFormat` for a ladder scalar.
+
+    Used for containment checks (``a <= b``) when validating that an
+    operation's operands fit into its result/context format.
+    Raises ``KeyError`` if *s* is :attr:`CppScalar.BOOL` (bool isn't
+    on the numeric ladder)."""
+    return _LADDER_LOOKUP[s]
+
+
+def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
+    """Does scalar *a* fit (as a subset) in scalar *b*?
+
+    ``BOOL`` only fits in itself.  Other scalars dispatch to ladder
+    abstract-format containment, capturing the standard inclusions
+    ``U8 ⊆ U16 ⊆ U32 ⊆ U64``, ``S8 ⊆ S16 ⊆ …``, ``F32 ⊆ F64``, and
+    integer→float when the mantissa is wide enough."""
+    if a is CppScalar.BOOL or b is CppScalar.BOOL:
+        return a is b
+    return _LADDER_LOOKUP[a] <= _LADDER_LOOKUP[b]
 
 
 class StorageSelectionError(Exception):
@@ -81,6 +107,11 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
             'is the active rounding context symbolic? '
             'Try monomorphizing the function with a concrete context.'
         )
+    if not isinstance(bound, AbstractableFormat | SetFormat):
+        raise StorageSelectionError(
+            f'cannot reason about format: {bound!r}'
+        )
+
     af = _to_abstract(bound)
     if af is None:
         raise StorageSelectionError(
@@ -181,7 +212,7 @@ def _scalar_sup(scalars: list[CppScalar]) -> CppScalar:
     except KeyError as e:
         raise StorageSelectionError(
             f'storage scalar not on the ladder: {e.args[0]!r}'
-        )
+        ) from None
     # The max isn't necessarily a covering type for all of them — e.g.,
     # S32 ⊔ U32 needs S64 (signed must absorb unsigned of equal width).
     # Walk the ladder from max_idx upward until we find a type that

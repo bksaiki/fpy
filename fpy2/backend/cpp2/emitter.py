@@ -30,18 +30,19 @@ from fractions import Fraction
 
 from ...analysis import DefineUseAnalysis, FormatAnalysis
 from ...ast.fpyast import (
-    Abs, Add, Argument, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits, Div,
+    Abs, Argument, Assign, BinaryOp, BoolVal, Compare, Decnum, Digits,
     Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign,
-    Integer, Len, ListComp, ListExpr, ListRef, ListSlice, Mul, NamedId,
-    NaryOp, Neg, Range1, Range2, Range3, Rational, ReturnStmt, StmtBlock,
-    Sub, Sum, TupleBinding, TupleExpr, UnaryOp, Var, ContextStmt, UnderscoreId,
+    Integer, Len, ListComp, ListExpr, ListRef, ListSlice, NamedId, NaryOp,
+    Neg, Range1, Range2, Range3, Rational, ReturnStmt, StmtBlock, Sum,
+    TupleBinding, TupleExpr, UnaryOp, Var, ContextStmt, UnderscoreId,
     WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
 
-from .storage import StorageSelectionError, choose_storage
+from .ops import BinaryCppOp, ScalarOpTable, UnaryCppOp, make_op_table
+from .storage import StorageSelectionError, choose_storage, scalar_fits_in
 from .storage_infer import StorageAnalysis
-from .types import CppList, CppTuple, CppType
+from .types import CppList, CppScalar, CppTuple, CppType
 
 
 class _IndentedWriter:
@@ -65,15 +66,6 @@ class _IndentedWriter:
 
     def render(self) -> str:
         return '\n'.join(self._lines)
-
-
-# Maps from AST op nodes to their infix C++ operators.
-_BINARY_OPS: dict[type, str] = {
-    Add: '+',
-    Sub: '-',
-    Mul: '*',
-    Div: '/',
-}
 
 
 class Cpp2EmitError(Exception):
@@ -103,6 +95,7 @@ class _Cpp2Emitter(Visitor):
         self.format_info = format_info
         self.writer = _IndentedWriter()
         self._tmp_counter = 0
+        self.op_table: ScalarOpTable = make_op_table()
 
     def _fresh_temp(self) -> str:
         """Allocate a fresh emitter-only temporary identifier.
@@ -348,12 +341,105 @@ class _Cpp2Emitter(Visitor):
             return str(v.numerator)
         return f'((double){v.numerator} / (double){v.denominator})'
 
+    def _scalar_storage_for_expr(self, e: Expr) -> CppScalar:
+        """Like :meth:`_storage_for_expr` but asserts the result is a
+        scalar.  Used by op-table dispatch — primitive numeric ops
+        only take/return scalars."""
+        ty = self._storage_for_expr(e)
+        if not isinstance(ty, CppScalar):
+            raise Cpp2EmitError(
+                f'expected scalar storage for {type(e).__name__}, got {ty!r}'
+            )
+        return ty
+
+    def _dispatch_unary(self, e: UnaryOp, arg: str) -> str:
+        """Dispatch a unary op through the op table.
+
+        Tries direct match first; if the operand needs to widen into
+        the result type, looks for a same-type signature and inserts
+        an explicit ``static_cast``.  Raises :class:`Cpp2EmitError`
+        if no signature accommodates the operand/result types.
+        """
+        sigs = self.op_table.unary.get(type(e))
+        if sigs is None:
+            raise Cpp2EmitError(
+                f'no signatures for unary op: {type(e).__name__}'
+            )
+        arg_ty = self._scalar_storage_for_expr(e.arg)
+        ret_ty = self._scalar_storage_for_expr(e)
+        return self._format_unary(e, sigs, arg, arg_ty, ret_ty)
+
+    def _maybe_cast(self, arg: str, arg_ty: CppScalar, target_ty: CppScalar) -> str:
+        """Emit *arg* in *target_ty* form, eliding the cast when the
+        implicit conversion would already be lossless.
+
+        Used by the op-table dispatch to keep readable output for
+        common widenings (``U8 → F64``) while making lossy or
+        bool↔numeric crossings explicit."""
+        if arg_ty == target_ty or scalar_fits_in(arg_ty, target_ty):
+            return arg
+        return f'static_cast<{target_ty.format()}>({arg})'
+
+    def _format_unary(
+        self,
+        e: UnaryOp,
+        sigs: list[UnaryCppOp],
+        arg: str,
+        arg_ty: CppScalar,
+        ret_ty: CppScalar,
+    ) -> str:
+        for op in sigs:
+            if op.matches(arg_ty, ret_ty):
+                return op.format(arg)
+        # Cast-to-result fallback.  Falls back to a same-type
+        # signature; only the operand is wrapped in ``static_cast``
+        # when the implicit conversion would lose precision (per
+        # ``_maybe_cast``).  Matches FPy's "operate under the active
+        # context" semantics — the operand is rounded at the operator
+        # boundary.
+        for op in sigs:
+            if op.matches(ret_ty, ret_ty):
+                return op.format(self._maybe_cast(arg, arg_ty, ret_ty))
+        raise Cpp2EmitError(
+            f'no matching signature for {type(e).__name__}: '
+            f'{arg_ty.format()} -> {ret_ty.format()}'
+        )
+
+    def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
+        """Dispatch a binary op through the op table.
+
+        Tries direct match first; if both operands fit in the result
+        type, looks for a same-type signature and inserts explicit
+        ``static_cast``s on whichever operand is narrower.  Raises
+        :class:`Cpp2EmitError` if no signature accommodates the
+        operand/result types."""
+        sigs = self.op_table.binary.get(type(e))
+        if sigs is None:
+            raise Cpp2EmitError(
+                f'no signatures for binary op: {type(e).__name__}'
+            )
+        lhs_ty = self._scalar_storage_for_expr(e.first)
+        rhs_ty = self._scalar_storage_for_expr(e.second)
+        ret_ty = self._scalar_storage_for_expr(e)
+        for op in sigs:
+            if op.matches(lhs_ty, rhs_ty, ret_ty):
+                return op.format(lhs, rhs)
+        # Cast-to-result fallback (see ``_format_unary``).
+        for op in sigs:
+            if op.matches(ret_ty, ret_ty, ret_ty):
+                return op.format(
+                    self._maybe_cast(lhs, lhs_ty, ret_ty),
+                    self._maybe_cast(rhs, rhs_ty, ret_ty),
+                )
+        raise Cpp2EmitError(
+            f'no matching signature for {type(e).__name__}: '
+            f'{lhs_ty.format()} -> {rhs_ty.format()} -> {ret_ty.format()}'
+        )
+
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
         arg = self._visit_expr(e.arg, ctx)
-        if isinstance(e, Neg):
-            return f'(-{arg})'
-        if isinstance(e, Abs):
-            return f'std::fabs({arg})'
+        if isinstance(e, (Neg, Abs)):
+            return self._dispatch_unary(e, arg)
         if isinstance(e, Len):
             # ``len(xs)`` — the result format is INTEGER, which storage
             # selection rounds to a concrete C++ integer type.  Casting
@@ -410,12 +496,9 @@ class _Cpp2Emitter(Visitor):
         return result
 
     def _visit_binaryop(self, e: BinaryOp, ctx) -> str:
-        op = _BINARY_OPS.get(type(e))
-        if op is None:
-            raise Cpp2EmitError(f'unsupported binary op: {type(e).__name__}')
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
-        return f'({lhs} {op} {rhs})'
+        return self._dispatch_binary(e, lhs, rhs)
 
     # ------------------------------------------------------------------
     # Stubs for AST nodes not yet handled — each raises a clean error

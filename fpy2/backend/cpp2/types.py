@@ -41,17 +41,28 @@ class CppScalar(enum.Enum):
 
     def format(self) -> str:
         match self:
-            case CppScalar.BOOL: return 'bool'
-            case CppScalar.F32: return 'float'
-            case CppScalar.F64: return 'double'
-            case CppScalar.U8: return 'uint8_t'
-            case CppScalar.U16: return 'uint16_t'
-            case CppScalar.U32: return 'uint32_t'
-            case CppScalar.U64: return 'uint64_t'
-            case CppScalar.S8: return 'int8_t'
-            case CppScalar.S16: return 'int16_t'
-            case CppScalar.S32: return 'int32_t'
-            case CppScalar.S64: return 'int64_t'
+            case CppScalar.BOOL:
+                return 'bool'
+            case CppScalar.F32:
+                return 'float'
+            case CppScalar.F64:
+                return 'double'
+            case CppScalar.U8:
+                return 'uint8_t'
+            case CppScalar.U16:
+                return 'uint16_t'
+            case CppScalar.U32:
+                return 'uint32_t'
+            case CppScalar.U64:
+                return 'uint64_t'
+            case CppScalar.S8:
+                return 'int8_t'
+            case CppScalar.S16:
+                return 'int16_t'
+            case CppScalar.S32:
+                return 'int32_t'
+            case CppScalar.S64:
+                return 'int64_t'
 
 
 @default_repr

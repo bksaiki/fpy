@@ -1,27 +1,4 @@
-# C++ backend
-
-I'd like to replace the current C++ backend with a new implementation.
-In particular, I'd like to take advantage of the new format inference algorithm
-that we just developed to infer the "minimal" number format that can be used to represent the data.
-
-Here are a few new insights that might be helpful in the implementation:
- - storage and rounding are separate, albeit related, concerns: while FPy exposes how to _round_ operations,
-   in C++ we also need to be able to _store_ data in a specific format. As long as the inferred format
-   is contained in some data format for each expression, and each operation can be rounded
-   accordingly with the correctly-typed inputs, then compilation is valid
- - mutation in FPy can be compiled as a new variable in C++. This is especially helpful
-   for loops where the loop variable may be in a wider format.
- - use type checking, context-use, and format inference to determine the format of each variable and expression, and use that information
-   to generate the appropriate C++ code with the correct types and rounding operations.
-
-Make a plan for the implementation of the new C++ backend, write the todo list in this directory, and begin working on it.
-Adhere to the following steps:
-- when working on the new backend, you can put it under `fpy2/backend/cpp2` to avoid conflicts with the current implementation
-- feel free to edit this Markdown file to add more details to the plan as you go along.
-- make commits after each significant step in the implementation, and write clear commit messages to document your progress.
-- please use testing to validate the correctness of your implementation at each step
-
-## Plan
+# C++ backend - Plan
 
 The strategy is **vertical slices**: get a minimal program compiling
 end-to-end first, then expand the language coverage one node-kind at a
@@ -51,6 +28,32 @@ multi-precision fallback.
 a *new C++ variable* whose storage may differ from the predecessor's.
 A loop phi whose lhs and rhs have different formats yields a
 **widened** C++ variable initialised before the loop.
+
+### Operation type matching
+
+C++ doesn't have ad-hoc polymorphism for the primitive numeric ops:
+each operator is only defined on a fixed set of operand-type
+combinations.  For `+` (modulo type promotion) those are roughly:
+
+```
++ : uint{8,16,32,64}_t -> uint{8,16,32,64}_t -> uint{...}_t
++ : int{8,16,32,64}_t  -> int{8,16,32,64}_t  -> int{...}_t
++ : float              -> float              -> float
++ : double             -> double             -> double
+```
+
+For an FPy expression `a + b` evaluated under context `C`, with
+`storage(a) = F_a` and `storage(b) = F_b`, emission is valid iff
+`F_a` and `F_b` are both subsets of `C`'s storage type.  When they
+aren't (e.g., mixed int + float, or narrower-than-context operands),
+the emitter must either insert explicit casts at the operator's
+boundary or reject as a type-shape error pointing at the offending
+expression.  Each FPy op needs a table of supported C++ signatures so
+the dispatch is explicit rather than relying on C++'s implicit
+conversion rules — which can silently drop precision or change
+rounding behaviour.
+
+This is the cpp2 analogue of `cpp/types.py` + `ScalarOpTable`.
 
 ### Pipeline
 
@@ -151,10 +154,23 @@ double f(double x, double y) {
   for-loop), `zip` (variadic, vector of `tuple<T1,…,Tn>`).
 
 #### Phase 5 — Rounding & contexts ☐
-- `with FP32: …` blocks: emit explicit casts at the boundary, set
-  rounding mode if needed.
-- `Round`, `RoundExact`, `Cast` operations.
-- Algebraic / transcendental ops: dispatch to `<cmath>`.
+- 5a ✅ **Operation type tables.**  `fpy2/backend/cpp2/ops.py`
+  enumerates the supported C++ signatures per FPy op type.  The
+  emitter dispatches every `UnaryOp` / `BinaryOp` through the
+  table: direct match if operand and result storage types already
+  agree; cast-to-result fallback otherwise, with `static_cast`
+  inserted *only* when the implicit C++ widening would actually
+  drop precision (`scalar_fits_in` predicate).  Lossless cases
+  like `U8 → F64` stay implicit so `(y - 1)` reads as expected.
+  Coverage: `Add`, `Sub`, `Mul`, `Div`, `Neg`, `Abs`.  Algebraic
+  / transcendental ops add their entries here as 5d lands.
+- 5b ☐ `with FP32: …` blocks: emit explicit casts at the rounding
+  boundary, set rounding mode (`fesetround`) if needed, restore on
+  block exit.  Composes with 5a — the op-table check uses the
+  innermost context's storage type.
+- 5c ☐ `Round`, `RoundExact`, `Cast` expressions.
+- 5d ☐ Algebraic / transcendental ops: dispatch each FPy op to its
+  `<cmath>` counterpart through the op table from 5a.
 
 #### Phase 6 — Polish ☐
 - Header / helper code emission (mirror `cpp/utils.py:CPP_HELPERS`).
