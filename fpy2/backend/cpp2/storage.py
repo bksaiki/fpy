@@ -1,11 +1,22 @@
 """
 cpp2 backend: storage-type selection.
 
-For each definition with a known :class:`FormatBound`, choose the
-smallest C++ type from the storage ladder whose representable set
-contains the bound.  When a name has multiple SSA defs (e.g., a loop
-phi merging two branches), the storage type is the smallest entry that
-contains every constituent format.
+For each :class:`FormatBound`, pick the smallest C++ type from the
+storage ladder whose representable set contains the bound.  Sibling
+:mod:`.storage_infer` consumes the ladder to assign a single storage
+type per phi-web equivalence class.
+
+The module also exposes:
+
+- :func:`format_fits_in` — is every value of a :class:`FormatBound`
+  representable in a target :class:`Format`?  Used by
+  :mod:`.ops` to validate operand formats against op-table
+  signatures.
+- :func:`scalar_abstract` / :func:`scalar_fits_in` — ladder-level
+  containment helpers keyed off :class:`CppScalar`.
+- :func:`scalar_sup` — smallest ladder scalar subsuming every
+  input.  Used by :meth:`_visit_compare` to pick the common type
+  for a chained comparison.
 """
 
 from fractions import Fraction
@@ -19,16 +30,16 @@ from ...analysis.format_infer import (
     TupleFormat,
 )
 from ...analysis.format_infer.analysis import _to_abstract
-from ...number import RealFloat
-from ...utils import is_dyadic
 from ...number import (
     FP32, FP64,
+    RealFloat,
     SINT8, SINT16, SINT32, SINT64,
     UINT8, UINT16, UINT32, UINT64,
 )
 from ...number.context.format import Format
 from ...number.context.mp_fixed import MPFixedFormat
 from ...number.context.real import REAL_FORMAT
+from ...utils import is_dyadic
 
 from .types import CppList, CppScalar, CppTuple, CppType
 

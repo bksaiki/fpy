@@ -21,8 +21,8 @@ When a signature matches, the emitter uses :func:`choose_storage`
 on the signature's input formats to derive the C++ scalar types and
 casts each operand to that type via :meth:`_maybe_cast`.  The
 rounding-mode half of the active context is enforced separately by
-Phase 5b's ``fesetround`` boundary, so emission only depends on the
-formats and storage selection.
+the ``fesetround`` boundary emitted around ``with`` blocks, so
+emission only depends on the formats and storage selection.
 
 This mirrors :mod:`fpy2.backend.cpp.ops` in shape but the input
 slots are :class:`Format`-typed and the output is :class:`Context`-typed.

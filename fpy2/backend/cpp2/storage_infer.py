@@ -96,6 +96,9 @@ class StorageAnalysis:
     hoists_before: dict[Stmt, list[Definition]]
     declare_at_assign: set[AssignDef]
 
+    def storage_of(self, d: Definition) -> CppType:
+        """Convenience: the C++ storage type chosen for *d*'s class."""
+        return self.class_storage[self.def_class[d]]
 
 
 def _is_external(members: list[Definition]) -> bool:
@@ -157,11 +160,11 @@ class StorageInfer:
         # Two kinds of edges force defs into the same storage class:
         #   * Phi edges: a phi merge is exactly "both incoming defs
         #     write to the same C++ variable."
-        #   * In-place mutation edges: ``xs[i] = e`` is in-place per
-        #     the FPy interpreter, but ``FuncUpdate`` has rewritten it
-        #     to ``xs = ListSet(xs, [i], e)`` and the SSA pass
-        #     introduced a fresh def for ``xs``.  Detect that
-        #     canonical shape and union with ``prev`` — the underlying
+        #   * In-place mutation edges: SSA gives ``xs[i] = e`` a
+        #     fresh def of ``xs`` so value-tracking analyses can
+        #     reason about it, but the FPy interpreter mutates the
+        #     existing list in place and C++ does the same — so the
+        #     new def is unioned with its ``prev``.  Underlying
         #     vector is the same, so storage cannot widen and the
         #     C++ name must be reused.  This mirrors the comment in
         #     ``reaching_defs`` that physical-property analyses treat

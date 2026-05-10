@@ -18,9 +18,15 @@ Currently supported:
   tuple-binding target), and ``IndexedAssign`` as direct in-place
   subscript-stores.
 - Tuples: ``TupleExpr`` and tuple-binding destructuring everywhere.
-- Built-ins: ``len``, ``sum``, ``enumerate``, ``zip``, ``range1/2/3``.
-- ``ContextStmt`` is descended into without emitting
-  ``fesetround`` — rounding-boundary handling is Phase 5.
+- Built-ins: ``len``, ``sum``, ``enumerate``, ``zip``, ``range``.
+- Primitive arithmetic / transcendental ops dispatched through
+  the :class:`ScalarOpTable` from :mod:`.ops`, which validates
+  the operand formats against the active rounding context and
+  inserts explicit ``static_cast`` conversions.
+- Rounding-context boundaries: ``with`` blocks emit save / set /
+  restore around ``fesetround`` when the active mode changes;
+  ``Round`` / ``RoundExact`` / ``Cast`` lower as
+  ``static_cast`` (with a NaN-aware assertion for ``RoundExact``).
 
 Anything else raises :class:`Cpp2EmitError`, which the public
 ``Cpp2Compiler`` re-wraps as :class:`Cpp2CompileError`.
@@ -35,12 +41,12 @@ from ...analysis.context_use import (
     ContextUseAnalysis,
 )
 from ...ast.fpyast import (
-    Abs, Argument, Assign, BinaryOp, BoolVal, Cast, Compare, Decnum, Digits,
-    Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt,
-    IndexedAssign, Integer, Len, ListComp, ListExpr, ListRef, ListSlice,
-    NamedId, NaryOp, Neg, Range1, Range2, Range3, Rational, ReturnStmt,
-    Round, RoundExact, StmtBlock, Sum, TupleBinding, TupleExpr, UnaryOp,
-    Var, ContextStmt, UnderscoreId, WhileStmt, Zip,
+    Abs, Argument, Assign, BinaryOp, BoolVal, Cast, Compare, ContextStmt,
+    Decnum, Digits, Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt,
+    IfStmt, IndexedAssign, Integer, Len, ListComp, ListExpr, ListRef,
+    ListSlice, NamedId, NaryOp, Neg, Range1, Range2, Range3, Rational,
+    ReturnStmt, Round, RoundExact, StmtBlock, Sum, TernaryOp, TupleBinding,
+    TupleExpr, UnaryOp, UnderscoreId, Var, WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
 from ...number import RM
@@ -163,7 +169,7 @@ class _Cpp2Emitter(Visitor):
     def _storage_for_arg(self, arg: Argument) -> CppType:
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
-        return self.storage.class_storage[self.storage.def_class[d]]
+        return self.storage.storage_of(d)
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
         """Emit a single ``T name = rhs;`` (declare-on-assign) or
@@ -175,9 +181,7 @@ class _Cpp2Emitter(Visitor):
         target_def = self.def_use.find_def_from_site(name, site)
         target_name = self.storage.def_to_name[target_def]
         if target_def in self.storage.declare_at_assign:
-            storage = self.storage.class_storage[
-                self.storage.def_class[target_def]
-            ]
+            storage = self.storage.storage_of(target_def)
             self.writer.add_line(f'{storage.format()} {target_name} = {rhs};')
         else:
             self.writer.add_line(f'{target_name} = {rhs};')
@@ -713,9 +717,10 @@ class _Cpp2Emitter(Visitor):
         return self._dispatch_binary(e, lhs, rhs)
 
     # ------------------------------------------------------------------
-    # Stubs for AST nodes not yet handled — each raises a clean error
-    # pointing at the node kind so later phases (rounding, transcendental
-    # ops, etc.) know what's left.
+    # Stubs for AST nodes not yet handled — classification ops
+    # (``IsFinite`` / ``IsNan`` / etc.) and statement kinds
+    # (``Assert`` / ``Effect`` / ``Pass``) raise a clean error
+    # pointing at the node kind.
 
     def _unsupported(self, kind: str):
         raise Cpp2EmitError(f'cpp2 emitter does not handle {kind}')
@@ -748,10 +753,7 @@ class _Cpp2Emitter(Visitor):
     def _visit_foreign(self, e, ctx): self._unsupported('ForeignVal')
     def _visit_attribute(self, e, ctx): self._unsupported('Attribute')
     def _visit_nullaryop(self, e, ctx): self._unsupported('NullaryOp')
-    def _visit_ternaryop(self, e, ctx) -> str:
-        from ...ast.fpyast import TernaryOp
-        if not isinstance(e, TernaryOp):
-            self._unsupported('TernaryOp')
+    def _visit_ternaryop(self, e: TernaryOp, ctx) -> str:
         a1 = self._visit_expr(e.args[0], ctx)
         a2 = self._visit_expr(e.args[1], ctx)
         a3 = self._visit_expr(e.args[2], ctx)
@@ -759,7 +761,7 @@ class _Cpp2Emitter(Visitor):
 
     def _dispatch_ternary(
         self,
-        e,
+        e: TernaryOp,
         a1: str,
         a2: str,
         a3: str,
@@ -895,12 +897,14 @@ class _Cpp2Emitter(Visitor):
 
     def _visit_round_at(self, e, ctx): self._unsupported('RoundAt')
     def _visit_call(self, e, ctx): self._unsupported('Call')
+
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
         # ``(a, b, c)`` → ``std::make_tuple(a, b, c)``.  Type deduction
         # from the argument types matches what the format-inference
         # pipeline assigns to the tuple slot — no explicit type prefix.
         elts = ', '.join(self._visit_expr(elt, ctx) for elt in e.elts)
         return f'std::make_tuple({elts})'
+
     def _visit_list_expr(self, e: ListExpr, ctx) -> str:
         # ``[a, b, c]`` → ``std::vector<T>{a, b, c}`` where ``T`` comes
         # from format inference on the list expression.
@@ -953,9 +957,7 @@ class _Cpp2Emitter(Visitor):
         if isinstance(target, NamedId):
             target_def = self.def_use.find_def_from_site(target, comp_site)
             target_name = self.storage.def_to_name[target_def]
-            target_ty = self.storage.class_storage[
-                self.storage.def_class[target_def]
-            ].format()
+            target_ty = self.storage.storage_of(target_def).format()
             decl = f'{target_ty} {target_name}'
         elif isinstance(target, TupleBinding):
             # ``for (a, b) in xs`` — bind the tuple element to an
@@ -1051,7 +1053,9 @@ class _Cpp2Emitter(Visitor):
         # elements directly via ``IndexedAssign``.  Reaching this
         # visitor would be a pipeline bug.
         self._unsupported('ListSet')
+
     def _visit_if_expr(self, e, ctx): self._unsupported('IfExpr')
+
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         # ``xs[i1]…[iN] = e`` is in-place mutation in C++.  The
         # post-mutation SSA def of ``xs`` shares a storage class with
@@ -1087,6 +1091,7 @@ class _Cpp2Emitter(Visitor):
         self._visit_block(stmt.iff, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
+
     def _visit_while(self, stmt: WhileStmt, ctx):
         cond = self._visit_expr(stmt.cond, ctx)
         self.writer.add_line(f'while ({cond}) {{')
@@ -1094,6 +1099,7 @@ class _Cpp2Emitter(Visitor):
         self._visit_block(stmt.body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
+
     def _visit_for(self, stmt: ForStmt, ctx):
         if isinstance(stmt.target, NamedId):
             self._emit_for_named_target(stmt, ctx)
@@ -1112,7 +1118,7 @@ class _Cpp2Emitter(Visitor):
         # single-writer class (the common case).  Otherwise the counter
         # was hoisted at the function top and we just reassign here.
         if target_def in self.storage.declare_at_assign:
-            storage = self.storage.class_storage[self.storage.def_class[target_def]]
+            storage = self.storage.storage_of(target_def)
             decl = f'{storage.format()} {target}'
         else:
             decl = target
