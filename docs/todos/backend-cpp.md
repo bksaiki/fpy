@@ -153,7 +153,7 @@ double f(double x, double y) {
   `enumerate` (vector of `tuple<I,T>` populated by an indexed
   for-loop), `zip` (variadic, vector of `tuple<T1,…,Tn>`).
 
-#### Phase 5 — Rounding & contexts ☐
+#### Phase 5 — Rounding & contexts ✅
 - 5a ✅ **Operation type tables.**  `fpy2/backend/cpp2/ops.py`
   enumerates supported C++ signatures per FPy op type.  Each
   signature is parameterized by *argument formats* and an
@@ -198,8 +198,19 @@ double f(double x, double y) {
   integer operand pairs.  `Cast` is the identity — analysis-only
   annotation, no generated code.  Same-type round / round-exact
   short-circuit to the identity.
-- 5d ☐ Algebraic / transcendental ops: dispatch each FPy op to its
-  `<cmath>` counterpart through the op table from 5a.
+- 5d ✅ Algebraic / transcendental ops: dispatch each FPy op to
+  its `<cmath>` counterpart through the op table from 5a.
+  Coverage: roots (`Sqrt`, `Cbrt`); FP rounding (`Ceil`, `Floor`,
+  `Trunc`, `RoundInt`, `NearbyInt`); trig + inverse + hyperbolic
+  + inverse-hyperbolic (`Sin/Cos/Tan/Asin/Acos/Atan/Sinh/Cosh/Tanh/
+  Asinh/Acosh/Atanh`); exp / log family (`Exp`, `Exp2`, `Expm1`,
+  `Log`, `Log2`, `Log10`, `Log1p`); special (`Erf`, `Erfc`,
+  `Lgamma`, `Tgamma`); `Logb`.  Binary: `Pow`, `Fmod`, `Remainder`,
+  `Copysign`, `Fdim`, `Hypot`, `Atan2`.  Ternary: `Fma`.  Each is
+  registered for FP32 and FP64 across all four `fesetround`-
+  supported rounding modes.  Classification ops (`IsFinite`,
+  `IsNan`, `Signbit`, …) and nary `Min` / `Max` aren't in this
+  pass — they need a bool / nary slot in the table.
 
 #### Phase 6 — Polish ☐
 - Header / helper code emission (mirror `cpp/utils.py:CPP_HELPERS`).

@@ -46,7 +46,9 @@ from ...ast.visitor import Visitor
 from ...number import RM
 from ...number.context.context import Context
 
-from .ops import BinaryCppOp, ScalarOpTable, UnaryCppOp, make_op_table
+from .ops import (
+    BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp, make_op_table,
+)
 from .storage import StorageSelectionError, choose_storage, scalar_sup
 from .storage_infer import StorageAnalysis
 from .types import CppList, CppScalar, CppTuple, CppType
@@ -648,7 +650,7 @@ class _Cpp2Emitter(Visitor):
             # is enforced by the op-table dispatch elsewhere, not by
             # ``Cast`` itself).
             return arg
-        if isinstance(e, (Neg, Abs)):
+        if type(e) in self.op_table.unary:
             return self._dispatch_unary(e, arg)
         if isinstance(e, Len):
             # ``len(xs)`` — the result format is INTEGER, which storage
@@ -746,7 +748,67 @@ class _Cpp2Emitter(Visitor):
     def _visit_foreign(self, e, ctx): self._unsupported('ForeignVal')
     def _visit_attribute(self, e, ctx): self._unsupported('Attribute')
     def _visit_nullaryop(self, e, ctx): self._unsupported('NullaryOp')
-    def _visit_ternaryop(self, e, ctx): self._unsupported('TernaryOp')
+    def _visit_ternaryop(self, e, ctx) -> str:
+        from ...ast.fpyast import TernaryOp
+        if not isinstance(e, TernaryOp):
+            self._unsupported('TernaryOp')
+        a1 = self._visit_expr(e.args[0], ctx)
+        a2 = self._visit_expr(e.args[1], ctx)
+        a3 = self._visit_expr(e.args[2], ctx)
+        return self._dispatch_ternary(e, a1, a2, a3)
+
+    def _dispatch_ternary(
+        self,
+        e,
+        a1: str,
+        a2: str,
+        a3: str,
+    ) -> str:
+        """Dispatch a ternary op via the op table.
+
+        Same shape as :meth:`_dispatch_binary` — direct match if all
+        three operand formats fit the signature; otherwise the
+        all-active-context signature with explicit casts on each
+        operand.
+        """
+        sigs = self.op_table.ternary.get(type(e))
+        if sigs is None:
+            raise Cpp2EmitError(
+                f'no signatures for ternary op: {type(e).__name__}'
+            )
+        active = self._active_ctx_for(e)
+        in_fmts = [self.format_info.by_expr.get(a) for a in e.args]
+        in_storages = [self._scalar_storage_for_expr(a) for a in e.args]
+
+        for sig in sigs:
+            if sig.matches(in_fmts[0], in_fmts[1], in_fmts[2], active):
+                targets = [
+                    self._scalar_for_format(sig.in1_fmt),
+                    self._scalar_for_format(sig.in2_fmt),
+                    self._scalar_for_format(sig.in3_fmt),
+                ]
+                return sig.format(
+                    self._maybe_cast(a1, in_storages[0], targets[0]),
+                    self._maybe_cast(a2, in_storages[1], targets[1]),
+                    self._maybe_cast(a3, in_storages[2], targets[2]),
+                )
+        # Cast-to-active fallback.
+        target = self._scalar_for_ctx(active)
+        active_fmt = active.format()
+        for sig in sigs:
+            if (sig.in1_fmt == active_fmt
+                    and sig.in2_fmt == active_fmt
+                    and sig.in3_fmt == active_fmt
+                    and sig.out_ctx == active):
+                return sig.format(
+                    self._maybe_cast(a1, in_storages[0], target),
+                    self._maybe_cast(a2, in_storages[1], target),
+                    self._maybe_cast(a3, in_storages[2], target),
+                )
+        raise Cpp2EmitError(
+            f'no matching signature for {type(e).__name__} under '
+            f'context `{active}`: {in_fmts}'
+        )
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
         if isinstance(e, Zip):
             return self._emit_zip(e, ctx)

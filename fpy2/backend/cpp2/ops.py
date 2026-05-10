@@ -33,7 +33,13 @@ from __future__ import annotations
 import dataclasses
 from typing import TypeAlias
 
-from ...ast.fpyast import Abs, Add, Div, Expr, Mul, Neg, Sub
+from ...ast.fpyast import (
+    Abs, Acos, Acosh, Add, Asin, Asinh, Atan, Atan2, Atanh, Cbrt,
+    Ceil, Copysign, Cos, Cosh, Div, Erf, Erfc, Exp, Exp2, Expm1,
+    Expr, Fdim, Fma, Floor, Fmod, Hypot, Lgamma, Log, Log10, Log1p,
+    Log2, Logb, Mul, NearbyInt, Neg, Pow, Remainder, RoundInt,
+    Sin, Sinh, Sqrt, Sub, Tan, Tanh, Tgamma, Trunc,
+)
 from ...analysis.format_infer import FormatBound
 from ...number import (
     RM,
@@ -97,8 +103,37 @@ class BinaryCppOp:
         return f'{self.name}({lhs}, {rhs})'
 
 
+@dataclasses.dataclass(frozen=True)
+class TernaryCppOp:
+    """A single supported C++ signature for a ternary FPy op
+    (e.g., ``Fma``).  Same parameterization as the binary case."""
+    name: str
+    in1_fmt: Format
+    in2_fmt: Format
+    in3_fmt: Format
+    out_ctx: Context
+
+    def matches(
+        self,
+        in1_fmt: FormatBound,
+        in2_fmt: FormatBound,
+        in3_fmt: FormatBound,
+        active_ctx: Context,
+    ) -> bool:
+        return (
+            self.out_ctx == active_ctx
+            and format_fits_in(in1_fmt, self.in1_fmt)
+            and format_fits_in(in2_fmt, self.in2_fmt)
+            and format_fits_in(in3_fmt, self.in3_fmt)
+        )
+
+    def format(self, a: str, b: str, c: str) -> str:
+        return f'{self.name}({a}, {b}, {c})'
+
+
 UnaryOpTable: TypeAlias = dict[type[Expr], list[UnaryCppOp]]
 BinaryOpTable: TypeAlias = dict[type[Expr], list[BinaryCppOp]]
+TernaryOpTable: TypeAlias = dict[type[Expr], list[TernaryCppOp]]
 
 
 @dataclasses.dataclass
@@ -106,6 +141,7 @@ class ScalarOpTable:
     """Per-op-kind tables of supported C++ signatures."""
     unary: UnaryOpTable
     binary: BinaryOpTable
+    ternary: TernaryOpTable
 
 
 # ---------------------------------------------------------------------
@@ -145,11 +181,88 @@ def _all_arith_ctxs() -> list[Context]:
     return _fp_ctxs() + _int_ctxs()
 
 
+def _fp_unary(name: str) -> list[UnaryCppOp]:
+    """Same-context FP-only unary signatures for one ``<cmath>``
+    function.  One sig per FP context (FP32 / FP64 × the four
+    supported rounding modes)."""
+    return [
+        UnaryCppOp(name, is_func=True, arg_fmt=c.format(), out_ctx=c)
+        for c in _fp_ctxs()
+    ]
+
+
+def _fp_binary(name: str) -> list[BinaryCppOp]:
+    """Same-context FP-only binary signatures for one ``<cmath>``
+    function (function-call form, not infix)."""
+    return [
+        BinaryCppOp(name, is_infix=False,
+                    in1_fmt=c.format(), in2_fmt=c.format(), out_ctx=c)
+        for c in _fp_ctxs()
+    ]
+
+
+def _fp_ternary(name: str) -> list[TernaryCppOp]:
+    """Same-context FP-only ternary signatures."""
+    return [
+        TernaryCppOp(name,
+                     in1_fmt=c.format(), in2_fmt=c.format(),
+                     in3_fmt=c.format(), out_ctx=c)
+        for c in _fp_ctxs()
+    ]
+
+
+# ``<cmath>`` unary functions defined for FP types only.  Each entry
+# pairs an FPy AST node with its C++ name; signatures cover both FP32
+# and FP64 across every supported rounding mode.
+_UNARY_CMATH = (
+    # Roots
+    (Sqrt, 'std::sqrt'),
+    (Cbrt, 'std::cbrt'),
+    # FP rounding to integer-valued FP
+    (Ceil, 'std::ceil'),
+    (Floor, 'std::floor'),
+    (NearbyInt, 'std::nearbyint'),
+    (RoundInt, 'std::round'),
+    (Trunc, 'std::trunc'),
+    # Trigonometric
+    (Sin, 'std::sin'), (Cos, 'std::cos'), (Tan, 'std::tan'),
+    (Asin, 'std::asin'), (Acos, 'std::acos'), (Atan, 'std::atan'),
+    # Hyperbolic
+    (Sinh, 'std::sinh'), (Cosh, 'std::cosh'), (Tanh, 'std::tanh'),
+    (Asinh, 'std::asinh'), (Acosh, 'std::acosh'), (Atanh, 'std::atanh'),
+    # Exp / log family
+    (Exp, 'std::exp'), (Exp2, 'std::exp2'), (Expm1, 'std::expm1'),
+    (Log, 'std::log'), (Log10, 'std::log10'),
+    (Log1p, 'std::log1p'), (Log2, 'std::log2'),
+    # Special functions
+    (Erf, 'std::erf'), (Erfc, 'std::erfc'),
+    (Lgamma, 'std::lgamma'), (Tgamma, 'std::tgamma'),
+    # Numerical data
+    (Logb, 'std::logb'),
+)
+
+
+_BINARY_CMATH = (
+    (Pow, 'std::pow'),
+    (Fmod, 'std::fmod'),
+    (Remainder, 'std::remainder'),
+    (Copysign, 'std::copysign'),
+    (Fdim, 'std::fdim'),
+    (Hypot, 'std::hypot'),
+    (Atan2, 'std::atan2'),
+)
+
+
+_TERNARY_CMATH = (
+    (Fma, 'std::fma'),
+)
+
+
 def _make_unary_table() -> UnaryOpTable:
     fp = _fp_ctxs()
     ints = _int_ctxs()
     same = _all_arith_ctxs()
-    return {
+    table: UnaryOpTable = {
         Neg: [UnaryCppOp('-', is_func=False, arg_fmt=c.format(), out_ctx=c)
               for c in same],
         Abs: (
@@ -161,11 +274,14 @@ def _make_unary_table() -> UnaryOpTable:
                for c in ints]
         ),
     }
+    for op_cls, name in _UNARY_CMATH:
+        table[op_cls] = _fp_unary(name)
+    return table
 
 
 def _make_binary_table() -> BinaryOpTable:
     same = _all_arith_ctxs()
-    return {
+    table: BinaryOpTable = {
         op_cls: [
             BinaryCppOp(name, True, c.format(), c.format(), c)
             for c in same
@@ -177,6 +293,13 @@ def _make_binary_table() -> BinaryOpTable:
             (Div, '/'),
         )
     }
+    for op_cls, name in _BINARY_CMATH:
+        table[op_cls] = _fp_binary(name)
+    return table
+
+
+def _make_ternary_table() -> TernaryOpTable:
+    return {op_cls: _fp_ternary(name) for op_cls, name in _TERNARY_CMATH}
 
 
 def make_op_table() -> ScalarOpTable:
@@ -184,4 +307,5 @@ def make_op_table() -> ScalarOpTable:
     return ScalarOpTable(
         unary=_make_unary_table(),
         binary=_make_binary_table(),
+        ternary=_make_ternary_table(),
     )
