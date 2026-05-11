@@ -91,10 +91,88 @@ class TestScalarSlice:
         Cpp2CompileError pointing at the node kind."""
 
         @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                return fp.const_pi()
+
+        with pytest.raises(Cpp2CompileError, match='does not handle NullaryOp'):
+            _compile(cc, f)
+
+
+class TestAssert:
+    """``assert`` statements lower to ``<cassert>`` ``assert(...)``.
+    With a message, the standard ``cond && \"text\"`` idiom is used so
+    the message shows up in the failure output."""
+
+    def test_assert_no_message(self, cc):
+        @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
                 assert x > 0
                 return x
 
-        with pytest.raises(Cpp2CompileError, match='does not handle AssertStmt'):
-            _compile(cc, f)
+        out = _compile(cc, f)
+        assert 'assert((x > static_cast<double>(0)));' in out
+
+    def test_assert_with_message(self, cc):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                assert x > 0, 'x must be positive'
+                return x
+
+        out = _compile(cc, f)
+        # ``stmt.msg.format()`` round-trips the AST literal, so the
+        # quoted form is what ends up inside the C string.
+        assert (
+            "assert((x > static_cast<double>(0)) "
+            "&& \"fpy assert: 'x must be positive'\");"
+        ) in out
+
+    def test_assert_message_escapes_quotes(self, cc):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                assert x > 0, 'has \\ backslash'
+                return x
+
+        out = _compile(cc, f)
+        # The Python literal escapes ``\`` as ``\\``; that doubled
+        # backslash in the formatted text must in turn be C-escaped
+        # to four backslashes.
+        assert '&& "fpy assert: \'has \\\\\\\\ backslash\'"' in out
+
+
+class TestIfExpr:
+    """``cond ? ift : iff`` lowers to a C++ ternary.  When the two
+    branches have different storage types, both are cast (losslessly)
+    into the IfExpr's unified type."""
+
+    def test_same_type_branches(self, cc):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x if x > 0 else -x
+
+        out = _compile(cc, f)
+        assert (
+            'return ((x > static_cast<double>(0)) ? x : (-x));'
+        ) in out
+
+    def test_branches_widen_to_unified(self, cc):
+        """One branch is ``F32`` (arg), the other is ``F64`` (arg) —
+        the IfExpr's storage is the wider type, and the narrower
+        branch widens losslessly via ``static_cast``."""
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x if y > 0 else y
+
+        out = cc.compile(
+            f, ctx=fp.FP64,
+            arg_types=[RealType(fp.FP32), RealType(fp.FP64)],
+        )
+        # The narrow branch (F32 ``x``) widens to ``double``; the
+        # wide branch (``y``) stays as-is.
+        assert '? static_cast<double>(x) : y' in out

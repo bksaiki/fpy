@@ -40,10 +40,10 @@ from ...analysis import (
     DefineUseAnalysis, FormatAnalysis
 )
 from ...ast.fpyast import (
-    Argument, Assign, BinaryOp, BoolVal, Cast, Compare, ContextStmt,
-    Decnum, Digits, Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt,
-    IfStmt, IndexedAssign, Integer, Len, ListComp, ListExpr, ListRef,
-    ListSlice, NamedId, NaryOp, Range1, Range2, Range3, Rational,
+    Argument, Assign, AssertStmt, BinaryOp, BoolVal, Cast, Compare, ContextStmt,
+    Decnum, Digits, EffectStmt, Enumerate, Expr, ForStmt, FuncDef, Hexnum,
+    If1Stmt, IfStmt, IndexedAssign, Integer, Len, ListComp, ListExpr,
+    ListRef, ListSlice, NamedId, NaryOp, Range1, Range2, Range3, Rational,
     ReturnStmt, Round, RoundExact, StmtBlock, Sum, TernaryOp, TupleBinding,
     TupleExpr, UnaryOp, UnderscoreId, Var, WhileStmt, Zip,
 )
@@ -787,9 +787,15 @@ class _Cpp2Emitter(Visitor):
             return clauses[0]
         return '(' + ' && '.join(clauses) + ')'
 
-    def _visit_foreign(self, e, ctx): self._unsupported('ForeignVal')
-    def _visit_attribute(self, e, ctx): self._unsupported('Attribute')
-    def _visit_nullaryop(self, e, ctx): self._unsupported('NullaryOp')
+    def _visit_foreign(self, e, ctx):
+        self._unsupported('ForeignVal')
+
+    def _visit_attribute(self, e, ctx):
+        self._unsupported('Attribute')
+
+    def _visit_nullaryop(self, e, ctx):
+        self._unsupported('NullaryOp')
+
     def _visit_ternaryop(self, e: TernaryOp, ctx) -> str:
         a1 = self._visit_expr(e.args[0], ctx)
         a2 = self._visit_expr(e.args[1], ctx)
@@ -1090,8 +1096,31 @@ class _Cpp2Emitter(Visitor):
         # visitor would be a pipeline bug.
         self._unsupported('ListSet')
 
-    def _visit_if_expr(self, e, ctx):
-        self._unsupported('IfExpr')
+    def _visit_if_expr(self, e, ctx) -> str:
+        # ``cond ? ift : iff`` — both branches must share a C++ type,
+        # so when their storages differ we cast each to the IfExpr's
+        # unified storage (chosen by format inference + storage
+        # selection over the merged formats).  Non-scalar branches
+        # must already match — there's no widening for lists/tuples.
+        cond = self._visit_expr(e.cond, ctx)
+        ift = self._visit_expr(e.ift, ctx)
+        iff = self._visit_expr(e.iff, ctx)
+        out_ty = self._storage_for_expr(e)
+        if isinstance(out_ty, CppScalar):
+            ift_ty = self._scalar_storage_for_expr(e.ift)
+            iff_ty = self._scalar_storage_for_expr(e.iff)
+            ift = self._maybe_cast(ift, ift_ty, out_ty)
+            iff = self._maybe_cast(iff, iff_ty, out_ty)
+        else:
+            ift_ty = self._storage_for_expr(e.ift)
+            iff_ty = self._storage_for_expr(e.iff)
+            if ift_ty != out_ty or iff_ty != out_ty:
+                raise Cpp2EmitError(
+                    f'IfExpr branches have incompatible non-scalar '
+                    f'storages: ift=`{ift_ty!r}`, iff=`{iff_ty!r}`, '
+                    f'expected `{out_ty!r}`'
+                )
+        return f'({cond} ? {ift} : {iff})'
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         # ``xs[i1]…[iN] = e`` is in-place mutation in C++.  The
@@ -1206,11 +1235,18 @@ class _Cpp2Emitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
 
-    def _visit_assert(self, stmt, ctx):
-        self._unsupported('AssertStmt')
+    def _visit_assert(self, stmt: AssertStmt, ctx):
+        test = self._visit_expr(stmt.test, ctx)
+        if stmt.msg is None:
+            self.writer.add_line(f'assert({test});')
+        else:
+            msg = stmt.msg.format()
+            escaped = msg.replace('\\', '\\\\').replace('"', '\\"')
+            self.writer.add_line(f'assert({test} && "fpy assert: {escaped}");')
 
-    def _visit_effect(self, stmt, ctx):
-        self._unsupported('EffectStmt')
+    def _visit_effect(self, stmt: EffectStmt, ctx):
+        expr = self._visit_expr(stmt.expr, ctx)
+        self.writer.add_line(f'{expr};')
 
     def _visit_pass(self, stmt, ctx):
-        self._unsupported('PassStmt')
+        pass
