@@ -159,8 +159,18 @@ When a scope *is* used, validation runs:
 - **Float contexts** must use a rounding mode supported by
   `fesetround` (RNE / RTZ / RTP / RTN).  `_visit_function` /
   `_visit_context` save / set / restore `fenv` only when the active
-  mode actually changes, so plain `with FP64:` blocks emit no fenv
-  noise.
+  mode actually *changes*.  The active mode is tracked on
+  `_current_rm: RM | None`:
+  - At function entry it's seeded from the function-level scope:
+    a concrete FP context's RM (the FPy contract says the caller
+    delivers it), or `None` for a symbolic / integer / unsupported
+    outer scope.
+  - `None` means "unknown" — any nested concrete-FP `with` block
+    must emit `fesetround` unconditionally to recover certainty,
+    matching the user's "safest option" rule.
+  - When `_current_rm` is concrete and matches the target, the
+    `with` block is a no-op at the C++ level (no fenv noise for
+    plain `with FP64:` under an FP64 function).
 - **Integer contexts** must use RTZ — that matches C++'s integer
   truncation, and other modes would require per-operation
   emulation.  No runtime support emitted.

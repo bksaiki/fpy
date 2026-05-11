@@ -128,11 +128,16 @@ class _Cpp2Emitter(Visitor):
             scope.site: scope for scope in ctx_use.scopes
         }
         # Track the rounding mode in effect at the current emission
-        # point.  ``_visit_function`` initialises this from the
-        # function's own context scope; ``_visit_context`` updates it
-        # so nested ``with`` blocks only emit ``fesetround`` when the
-        # mode actually changes.
-        self._current_rm: RM = RM.RNE
+        # point.  ``None`` means *unknown* — that's the safe initial
+        # state (the C++ caller's ``fenv`` could be anything) and the
+        # state we restore to after a saved scope exits.  When we
+        # transition from an unknown mode to any concrete mode, the
+        # ``_fenv_scope`` helper always emits ``fesetround`` so we
+        # never operate under a rounding mode we don't know.  When
+        # the active mode is known and matches the target, we skip
+        # the ``fesetround`` to keep simple ``with FP64:`` blocks
+        # under an FP64-RNE function free of fenv noise.
+        self._current_rm: RM | None = None
 
     def _fresh_temp(self) -> str:
         """Allocate a fresh emitter-only temporary identifier.
@@ -257,13 +262,18 @@ class _Cpp2Emitter(Visitor):
         # tuple shuffling, ops fully nested in inner ``with`` blocks)
         # doesn't need its outer scope to be supported.  See
         # :meth:`_resolve_used_ctx`.
-        # C++ functions enter at the caller's ``fenv`` — which is
-        # ``FE_TONEAREST`` by convention on a fresh thread.  Treat
-        # the pre-function RM as ``RNE`` so the shared
-        # :meth:`_fenv_scope` helper emits a save / set / restore
-        # whenever the function's used context demands a different
-        # mode, and no fenv code otherwise.
-        self._current_rm = RM.RNE
+        #
+        # ``self._current_rm`` tracks the rounding mode the live
+        # ``fenv`` is guaranteed to hold.  For a concrete FP
+        # function-level scope the FPy contract says the caller
+        # delivers that RM, so :meth:`_entry_rm` returns it and the
+        # shared :meth:`_fenv_scope` skips an entry ``fesetround``
+        # when the body's used context already matches.  Symbolic /
+        # integer / unsupported function-level scopes leave
+        # ``_current_rm`` at ``None`` (unknown), which forces
+        # nested concrete contexts to emit ``fesetround``
+        # unconditionally.
+        self._current_rm = self._entry_rm(func)
         func_ctx = self._resolve_used_ctx(func)
         if func_ctx is None or self._validate_context_rm(func_ctx).is_integer():
             self._visit_block(func.body, None)
@@ -375,6 +385,24 @@ class _Cpp2Emitter(Visitor):
             )
         return rctx
 
+    def _entry_rm(self, site: ContextScopeSite) -> RM | None:
+        """The rounding mode the C++ caller is contractually
+        delivering when control enters *site*'s scope.
+
+        Returns the scope's RM for a concrete, fesetround-supported
+        FP context (the FPy annotation pins the caller's
+        responsibility).  Returns ``None`` for symbolic, integer,
+        or unsupported contexts — in those cases the caller's mode
+        is treated as unknown and any nested concrete context must
+        emit an explicit ``fesetround`` to recover certainty.
+        """
+        scope = self._scope_by_site.get(site)
+        if scope is None or not isinstance(scope.ctx, EFloatContext):
+            return None
+        if scope.ctx.rm not in _FE_RM_MACRO:
+            return None
+        return scope.ctx.rm
+
     def _validate_context_rm(self, rctx: Context) -> CppScalar:
         """Validate *rctx* and return its scalar storage type.
 
@@ -419,15 +447,17 @@ class _Cpp2Emitter(Visitor):
     @contextmanager
     def _fenv_scope(self, target_rm: RM):
         """Wrap the contained emission in a ``fesetround`` save / set
-        / restore when *target_rm* differs from ``self._current_rm``.
-        When the mode already matches, yield without any fenv code.
+        / restore unless the active mode is already *target_rm*.
 
-        The current rounding mode is tracked on ``self._current_rm``
-        so nested scopes only emit ``fesetround`` at actual mode
-        boundaries — plain ``with FP64:`` blocks under an FP64-RNE
-        function add no noise.
+        ``self._current_rm`` is ``None`` when the live mode is
+        unknown (function entry, after restoring a previously-saved
+        scope, etc.) — in that case we *always* emit ``fesetround``,
+        never relying on a guess about what the C++ runtime is doing.
+        When the active mode is known and equals *target_rm* we skip
+        the save / set / restore so plain ``with FP64:`` blocks
+        under an FP64-RNE function add no fenv noise.
         """
-        if target_rm == self._current_rm:
+        if self._current_rm is not None and target_rm == self._current_rm:
             yield
             return
         fenv = self._fresh_temp()

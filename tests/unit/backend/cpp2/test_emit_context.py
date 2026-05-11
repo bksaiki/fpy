@@ -124,10 +124,16 @@ class TestDefaultRmIsImplicit:
 
 
 class TestNonDefaultRmEmitsFesetround:
-    """Non-RNE float contexts emit save / set / restore around
-    their body."""
+    """Non-RNE float contexts emit ``fesetround`` only when the
+    active mode actually changes.  A concrete function-level
+    annotation is the caller's contract: we trust the caller to
+    deliver that RM and emit nothing at function entry."""
 
-    def test_function_level_rtz(self):
+    def test_function_level_rtz_trusts_caller(self):
+        """A concrete function-level RTZ context does *not* emit
+        ``fesetround`` at entry — the caller is contractually
+        delivering RTZ."""
+
         @fp.fpy(ctx=_RTZ_64)
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
             return x + y
@@ -135,12 +141,12 @@ class TestNonDefaultRmEmitsFesetround:
         out = Cpp2Compiler().compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
-        assert 'std::fegetround()' in out
-        assert 'std::fesetround(FE_TOWARDZERO)' in out
+        assert 'fesetround' not in out
 
     def test_with_block_changes_rm(self):
         """An inner ``with`` that switches to a different RM emits
-        fesetround on entry and restores on exit."""
+        fesetround on entry and restores on exit.  The function-
+        level RTZ is trusted (no entry emission)."""
 
         @fp.fpy(ctx=_RTZ_64)
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -152,14 +158,16 @@ class TestNonDefaultRmEmitsFesetround:
         out = Cpp2Compiler().compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
-        # Outer (function-level) sets RTZ.
-        assert 'std::fesetround(FE_TOWARDZERO)' in out
-        # Inner switches to RNE (the default), then restores.
+        # Inner switches RTZ→RNE — one save / set / restore pair.
+        assert out.count('std::fegetround()') == 1
         assert 'std::fesetround(FE_TONEAREST)' in out
+        # No fesetround at function entry.
+        assert 'std::fesetround(FE_TOWARDZERO)' not in out
 
     def test_with_block_same_rm_skips_fesetround(self):
-        """A nested ``with`` whose RM matches the current mode
-        emits no fesetround — nothing to change."""
+        """A nested ``with`` whose RM matches the contracted
+        function-level mode emits no fesetround — nothing changes
+        and the caller already delivered the right mode."""
 
         @fp.fpy(ctx=_RTZ_64)
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -169,9 +177,31 @@ class TestNonDefaultRmEmitsFesetround:
         out = Cpp2Compiler().compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
-        # One save (function entry) + one set; no inner change.
-        assert out.count('std::fegetround()') == 1
-        assert out.count('std::fesetround(FE_TOWARDZERO)') == 1
+        # No fesetround anywhere — caller is contracted to deliver
+        # RTZ and the inner block doesn't change that.
+        assert 'fesetround' not in out
+
+    def test_symbolic_outer_forces_inner_fesetround(self):
+        """When the function-level scope is symbolic (no annotation
+        and no compile-time ``ctx`` to monomorphize against), we
+        don't know the caller's rounding mode — every concrete
+        inner ``with`` must emit ``fesetround`` to recover
+        certainty."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            # Outer scope is symbolic — only the inner ``with`` uses
+            # a rounding context.
+            with _RTZ_64:
+                return xs[0] + xs[1]
+
+        from fpy2.types import ListType
+        out = Cpp2Compiler().compile(
+            f, arg_types=[ListType(RealType(fp.FP64))],
+        )
+        # Inner RTZ block must emit fesetround — outer is unknown.
+        assert 'std::fesetround(FE_TOWARDZERO)' in out
+        assert 'std::fegetround()' in out
 
 
 class TestRejection:
