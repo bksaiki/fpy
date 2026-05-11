@@ -1,10 +1,10 @@
 """
-Phase 3b tests for the cpp2 emitter — booleans and comparisons.
+Phase 3b tests for the cpp emitter — booleans and comparisons.
 """
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
 
 
@@ -16,7 +16,7 @@ class TestBoolAndCompare:
         def f() -> bool:
             return True
 
-        out = Cpp2Compiler().compile(f)
+        out = CppCompiler().compile(f)
         assert out == 'bool f() {\n    return true;\n}'
 
     def test_bool_literal_false(self):
@@ -24,7 +24,7 @@ class TestBoolAndCompare:
         def f() -> bool:
             return False
 
-        out = Cpp2Compiler().compile(f)
+        out = CppCompiler().compile(f)
         assert out == 'bool f() {\n    return false;\n}'
 
     def test_pairwise_lt(self):
@@ -33,7 +33,7 @@ class TestBoolAndCompare:
             with fp.FP64:
                 return x < y
 
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         out = cc.compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
@@ -53,7 +53,7 @@ class TestBoolAndCompare:
                 g = x != y
                 return a
 
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         out = cc.compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
@@ -73,7 +73,7 @@ class TestBoolAndCompare:
             with fp.FP64:
                 return x < y < z
 
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         out = cc.compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64)] * 3,

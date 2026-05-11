@@ -1,15 +1,15 @@
 """
-Phase 4a tests for the cpp2 emitter — list literals, indexing, ``len``.
+Phase 4a tests for the cpp emitter — list literals, indexing, ``len``.
 """
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import ListType, RealType
 
 
 def _compile_list_arg(func) -> str:
-    return Cpp2Compiler().compile(
+    return CppCompiler().compile(
         func, ctx=fp.FP64,
         arg_types=[ListType(RealType(fp.FP64)) for _ in func.args],
     )
@@ -25,7 +25,7 @@ class TestListLiteral:
                 xs = [1, 2, 3]
                 return xs[0]
 
-        out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
         assert 'std::vector<uint8_t>' in out
         assert '{1, 2, 3}' in out
 
@@ -61,7 +61,7 @@ class TestListRef:
             with fp.FP64:
                 return xs[i]
 
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         out = cc.compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64)), RealType(fp.FP64)],
@@ -116,7 +116,7 @@ class TestListComp:
             with fp.FP64:
                 return sq[0]
 
-        out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
         assert 'for (int64_t i = 0; i < 5; ++i) {' in out
         assert '.push_back((i * i));' in out
 
@@ -127,7 +127,7 @@ class TestListComp:
                 ks = [k for k in range(3, 9)]
                 return ks[0]
 
-        out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
         # ``range(3, 9)`` widens through the unbounded-integer fallback
         # to ``int64_t`` (no tighter ladder entry covers it).
         assert 'for (int64_t k = 3; k < 9; ++k) {' in out
@@ -142,7 +142,7 @@ class TestListComp:
                 zs = [x * y for x in xs for y in ys]
                 return zs[0]
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64)), ListType(RealType(fp.FP64))],
         )
@@ -166,7 +166,7 @@ class TestListComp:
                 return ys[0]
 
         from fpy2.types import TupleType
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[
                 ListType(TupleType(RealType(fp.FP64), RealType(fp.FP64)))
@@ -190,10 +190,10 @@ class TestListSlice:
         out = _compile_list_arg(f)
         # Value bound to a temp, then both endpoints emit as iterator
         # arithmetic with size_t casts.
-        assert 'auto __cpp2_tmp1 = xs;' in out
+        assert 'auto __cpp_tmp1 = xs;' in out
         assert (
-            '__cpp2_tmp1.begin() + static_cast<size_t>(1), '
-            '__cpp2_tmp1.begin() + static_cast<size_t>(4)'
+            '__cpp_tmp1.begin() + static_cast<size_t>(1), '
+            '__cpp_tmp1.begin() + static_cast<size_t>(4)'
         ) in out
 
     def test_open_stop(self):
@@ -207,8 +207,8 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            '__cpp2_tmp1.begin() + static_cast<size_t>(2), '
-            '__cpp2_tmp1.begin() + __cpp2_tmp1.size()'
+            '__cpp_tmp1.begin() + static_cast<size_t>(2), '
+            '__cpp_tmp1.begin() + __cpp_tmp1.size()'
         ) in out
 
     def test_open_start(self):
@@ -222,8 +222,8 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            '__cpp2_tmp1.begin() + 0, '
-            '__cpp2_tmp1.begin() + static_cast<size_t>(3)'
+            '__cpp_tmp1.begin() + 0, '
+            '__cpp_tmp1.begin() + static_cast<size_t>(3)'
         ) in out
 
     def test_full_slice(self):
@@ -237,6 +237,6 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            '__cpp2_tmp1.begin() + 0, '
-            '__cpp2_tmp1.begin() + __cpp2_tmp1.size()'
+            '__cpp_tmp1.begin() + 0, '
+            '__cpp_tmp1.begin() + __cpp_tmp1.size()'
         ) in out

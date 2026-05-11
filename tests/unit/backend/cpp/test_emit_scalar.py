@@ -1,5 +1,5 @@
 """
-Phase 2 tests for the cpp2 emitter — scalar arithmetic vertical slice.
+Phase 2 tests for the cpp emitter — scalar arithmetic vertical slice.
 
 Each test compiles a small FPy function and asserts the exact emitted
 C++ source string.  This pins both the structure and the formatting,
@@ -12,16 +12,16 @@ For now we just check the source is what we expect.
 import fpy2 as fp
 import pytest
 
-from fpy2.backend.cpp2 import Cpp2Compiler, Cpp2CompileError
+from fpy2.backend.cpp import CppCompiler, CppCompileError
 from fpy2.types import RealType
 
 
 @pytest.fixture
 def cc():
-    return Cpp2Compiler()
+    return CppCompiler()
 
 
-def _compile(cc: Cpp2Compiler, func, *, arg_ctx=None) -> str:
+def _compile(cc: CppCompiler, func, *, arg_ctx=None) -> str:
     """Helper: monomorphize args + body to FP64 unless told otherwise."""
     arg_ctx = arg_ctx or fp.FP64
     arg_types = [RealType(arg_ctx) for _ in func.args]
@@ -88,14 +88,14 @@ class TestScalarSlice:
 
     def test_unsupported_node_kind_errors(self, cc):
         """Anything outside the supported subset raises a clear
-        Cpp2CompileError pointing at the node kind."""
+        CppCompileError pointing at the node kind."""
 
         @fp.fpy
         def f() -> fp.Real:
             with fp.FP64:
                 return fp.const_pi()
 
-        with pytest.raises(Cpp2CompileError, match='does not handle NullaryOp'):
+        with pytest.raises(CppCompileError, match='does not handle NullaryOp'):
             _compile(cc, f)
 
 

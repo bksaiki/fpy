@@ -1,5 +1,5 @@
 """
-Phase 4e tests for the cpp2 emitter — ``IndexedAssign`` (``xs[i] = e``).
+Phase 4e tests for the cpp emitter — ``IndexedAssign`` (``xs[i] = e``).
 
 The pipeline runs ``FuncUpdate`` first, rewriting every
 ``IndexedAssign`` into ``Assign(xs, ListSet(xs, [i], e))``.  Per the
@@ -12,7 +12,7 @@ so the emitter produces a direct subscript-store.
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import ListType, RealType
 
 
@@ -30,7 +30,7 @@ class TestIndexedAssign:
                     xs[i] = xs[i] * 2
                 return xs
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
@@ -39,7 +39,7 @@ class TestIndexedAssign:
             '(xs[static_cast<size_t>(i)] * static_cast<double>(2));'
         ) in out
         # No copy temp inside the loop body.
-        assert '__cpp2_tmp' not in out
+        assert '__cpp_tmp' not in out
 
     def test_alias_rebind_is_still_in_place(self):
         """``ys = xs; ys[0] = 99`` mutates ``ys`` in place after the
@@ -55,14 +55,14 @@ class TestIndexedAssign:
                 ys[0] = 99
                 return ys
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
         assert 'std::vector<double> ys = xs;' in out
         assert 'ys[static_cast<size_t>(0)] = 99;' in out
         # No copy temp for the mutation.
-        assert '__cpp2_tmp' not in out
+        assert '__cpp_tmp' not in out
 
     def test_sequential_mutations_in_place(self):
         """Sequential mutations of a freshly-built list reuse the
@@ -76,14 +76,14 @@ class TestIndexedAssign:
                 xs[1] = 10.0
                 return xs[1]
 
-        out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
         # Single ``xs`` declaration; both mutations are direct stores.
         assert 'xs[static_cast<size_t>(0)] = 5;' in out
         assert 'xs[static_cast<size_t>(1)] = 10;' in out
         # No suffixed copy variables.
         assert 'xs_1' not in out
         assert 'xs_2' not in out
-        assert '__cpp2_tmp' not in out
+        assert '__cpp_tmp' not in out
 
     def test_indexed_assign_arg(self):
         """A function-arg list mutated directly compiles to a direct
@@ -96,7 +96,7 @@ class TestIndexedAssign:
                 xs[i] = v
                 return xs[0]
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[
                 ListType(RealType(fp.FP64)),
@@ -108,4 +108,4 @@ class TestIndexedAssign:
         assert 'return xs[static_cast<size_t>(0)];' in out
         # No SSA-suffix variable, no copy temp.
         assert 'xs_1' not in out
-        assert '__cpp2_tmp' not in out
+        assert '__cpp_tmp' not in out

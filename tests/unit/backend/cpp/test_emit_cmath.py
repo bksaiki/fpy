@@ -1,5 +1,5 @@
 """
-Phase 5d tests for the cpp2 emitter — algebraic / transcendental
+Phase 5d tests for the cpp emitter — algebraic / transcendental
 ops dispatched through the op table to ``<cmath>``.
 
 Coverage check rather than per-op exhaustive: each category (unary,
@@ -10,7 +10,7 @@ function-name string and the dispatch path.  Detailed
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
 
 
@@ -23,7 +23,7 @@ class TestUnaryCmath:
             with fp.FP64:
                 return fp.sqrt(x) + fp.sin(x) + fp.exp(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
         )
         assert 'std::sqrt(x)' in out
@@ -36,7 +36,7 @@ class TestUnaryCmath:
             with fp.FP64:
                 return fp.ceil(x) + fp.floor(x) + fp.trunc(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
         )
         assert 'std::ceil(x)' in out
@@ -52,7 +52,7 @@ class TestUnaryCmath:
             with fp.FP32:
                 return fp.sqrt(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP32, arg_types=[RealType(fp.FP32)],
         )
         assert 'float f(float x)' in out
@@ -68,7 +68,7 @@ class TestBinaryCmath:
             with fp.FP64:
                 return fp.pow(x, y) + fp.atan2(x, y) + fp.hypot(x, y)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -82,7 +82,7 @@ class TestBinaryCmath:
             with fp.FP64:
                 return fp.copysign(x, y) + fp.fmod(x, y)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -99,7 +99,7 @@ class TestTernaryCmath:
             with fp.FP64:
                 return fp.fma(x, y, z)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64)] * 3,
         )
@@ -111,7 +111,7 @@ class TestTernaryCmath:
             with fp.FP32:
                 return fp.fma(x, y, z)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP32,
             arg_types=[RealType(fp.FP32)] * 3,
         )
@@ -124,7 +124,7 @@ class TestCmathTableShape:
 
     def test_unary_table_has_transcendentals(self):
         from fpy2.ast.fpyast import Sqrt, Sin, Exp, Log, Erf, Cbrt
-        from fpy2.backend.cpp2.ops import make_op_table
+        from fpy2.backend.cpp.ops import make_op_table
         t = make_op_table()
         for op in (Sqrt, Sin, Exp, Log, Erf, Cbrt):
             assert op in t.unary
@@ -132,7 +132,7 @@ class TestCmathTableShape:
 
     def test_binary_table_has_pow_etc(self):
         from fpy2.ast.fpyast import Pow, Atan2, Hypot, Copysign
-        from fpy2.backend.cpp2.ops import make_op_table
+        from fpy2.backend.cpp.ops import make_op_table
         t = make_op_table()
         for op in (Pow, Atan2, Hypot, Copysign):
             assert op in t.binary
@@ -140,7 +140,7 @@ class TestCmathTableShape:
 
     def test_ternary_table_has_fma(self):
         from fpy2.ast.fpyast import Fma
-        from fpy2.backend.cpp2.ops import make_op_table
+        from fpy2.backend.cpp.ops import make_op_table
         t = make_op_table()
         assert Fma in t.ternary
         assert any(s.out_ctx == fp.FP64 for s in t.ternary[Fma])

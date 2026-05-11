@@ -1,5 +1,5 @@
 """
-Phase 5a tests for the cpp2 emitter — operation type dispatch.
+Phase 5a tests for the cpp emitter — operation type dispatch.
 
 Each primitive op is parameterized by *argument C++ types* and an
 *output rounding context*.  Dispatch picks a signature whose
@@ -14,14 +14,14 @@ promotion).
 import fpy2 as fp
 import pytest
 
-from fpy2.backend.cpp2 import Cpp2Compiler, Cpp2CompileError
-from fpy2.backend.cpp2.ops import make_op_table
-from fpy2.backend.cpp2.types import CppScalar
+from fpy2.backend.cpp import CppCompiler, CppCompileError
+from fpy2.backend.cpp.ops import make_op_table
+from fpy2.backend.cpp.types import CppScalar
 from fpy2.types import RealType
 
 
 class TestOpTableShape:
-    """``make_op_table`` returns a table covering the ops cpp2 emits,
+    """``make_op_table`` returns a table covering the ops the cpp emitter emits,
     keyed by per-op-kind context signatures."""
 
     def test_binary_table_has_arith(self):
@@ -87,7 +87,7 @@ class TestDispatchDirect:
             with fp.FP64:
                 return x + y
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -110,7 +110,7 @@ class TestDispatchCastFallback:
             with fp.FP64:
                 return x + y
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP32), RealType(fp.FP64)],
         )
@@ -130,10 +130,10 @@ class TestDispatchCastFallback:
 
         from fpy2.types import ListType
         with pytest.raises(
-            Cpp2CompileError,
+            CppCompileError,
             match='cannot implicitly cast.*int64_t.*to.*double',
         ):
-            Cpp2Compiler().compile(
+            CppCompiler().compile(
                 f, ctx=fp.FP64,
                 arg_types=[ListType(RealType(fp.FP64))],
             )
@@ -148,10 +148,10 @@ class TestDispatchCastFallback:
                 return x + 1
 
         with pytest.raises(
-            Cpp2CompileError,
+            CppCompileError,
             match='cannot implicitly cast.*double.*to.*float',
         ):
-            Cpp2Compiler().compile(
+            CppCompiler().compile(
                 f, ctx=fp.FP32,
                 arg_types=[RealType(fp.FP64)],
             )
@@ -165,7 +165,7 @@ class TestDispatchCastFallback:
             with fp.FP32:
                 return fp.round(x) + 1
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP32,
             arg_types=[RealType(fp.FP64)],
         )

@@ -1,11 +1,11 @@
 """
-Public API for the cpp2 backend.
+Public API for the cpp backend.
 
-:class:`Cpp2Compiler` runs the analysis pipeline (monomorphization,
+:class:`CppCompiler` runs the analysis pipeline (monomorphization,
 def-use, context-use, array-size, format inference, storage
 inference) on a :class:`Function` and hands the result to
-:class:`_Cpp2Emitter`, which produces a C++ source string.  Errors
-surface as :class:`Cpp2CompileError`.
+:class:`_CppEmitter`, which produces a C++ source string.  Errors
+surface as :class:`CppCompileError`.
 
 Phase notes live in ``docs/todos/backend-cpp.md``.
 """
@@ -28,19 +28,19 @@ from ...transform import Monomorphize
 from ...types import Type
 from ..backend import Backend, CompileError
 
-from .emitter import Cpp2EmitError, _Cpp2Emitter
+from .emitter import CppEmitError, _CppEmitter
 from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
 from .utils import CPP_HEADERS, CPP_HELPERS
 
 
-class Cpp2CompileError(CompileError):
-    """Raised when cpp2 compilation fails."""
+class CppCompileError(CompileError):
+    """Raised when cpp compilation fails."""
     pass
 
 
 @dataclass
-class Cpp2PipelineResult:
+class CppPipelineResult:
     """
     Carrier for the per-function analysis state the emitter consumes.
 
@@ -60,7 +60,7 @@ class Cpp2PipelineResult:
     storage: StorageAnalysis
 
 
-class Cpp2Compiler(Backend):
+class CppCompiler(Backend):
     """
     Format-inference-driven C++ compiler.
 
@@ -87,7 +87,7 @@ class Cpp2Compiler(Backend):
 
     def helpers(self) -> str:
         """Runtime helper definitions emitted alongside compiled
-        functions.  Currently empty — cpp2 doesn't yet need custom
+        functions.  Currently empty — cpp doesn't yet need custom
         runtime support beyond ``<cmath>`` / ``std::vector``."""
         return CPP_HELPERS
 
@@ -105,7 +105,7 @@ class Cpp2Compiler(Backend):
         func: Function,
         ctx: Context | None,
         arg_types: Collection[Type | None] | None,
-    ) -> Cpp2PipelineResult:
+    ) -> CppPipelineResult:
         ast = func.ast
         if arg_types is None:
             arg_types = [None for _ in func.args]
@@ -136,9 +136,9 @@ class Cpp2Compiler(Backend):
                 format_info.by_def,
             )
         except StorageSelectionError as e:
-            raise Cpp2CompileError(str(e)) from e
+            raise CppCompileError(str(e)) from e
 
-        return Cpp2PipelineResult(
+        return CppPipelineResult(
             ast=ast,
             format_info=format_info,
             ctx_use=ctx_use,
@@ -166,7 +166,7 @@ class Cpp2Compiler(Backend):
         if not isinstance(func, Function):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
         result = self._run_pipeline(func, ctx, arg_types)
-        emitter = _Cpp2Emitter(
+        emitter = _CppEmitter(
             ast=result.ast,
             storage=result.storage,
             def_use=result.format_info.type_info.def_use,
@@ -175,7 +175,7 @@ class Cpp2Compiler(Backend):
         )
         try:
             return emitter.emit()
-        except Cpp2EmitError as e:
-            raise Cpp2CompileError(
+        except CppEmitError as e:
+            raise CppCompileError(
                 f'compilation failed for `{func.name}`: {e}'
             ) from e

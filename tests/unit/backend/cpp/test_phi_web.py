@@ -1,21 +1,21 @@
 """
 Tests for the per-SSA-def renaming via phi-web equivalence classes.
 
-The cpp2 emitter is free to map distinct SSA defs of the same source
+The cpp emitter is free to map distinct SSA defs of the same source
 name to distinct C++ variables.  Only defs joined by a phi node share
 storage.  These tests pin that behavior.
 """
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
 
 
 def _compile(func, *, arg_ctx=None) -> str:
     arg_ctx = arg_ctx or fp.FP64
     arg_types = [RealType(arg_ctx) for _ in func.args]
-    return Cpp2Compiler().compile(func, ctx=arg_ctx, arg_types=arg_types)
+    return CppCompiler().compile(func, ctx=arg_ctx, arg_types=arg_types)
 
 
 class TestPhiWebRenaming:

@@ -1,5 +1,5 @@
 """
-cpp2 backend: storage-type selection.
+cpp backend: storage-type selection.
 
 For each :class:`FormatBound`, pick the smallest C++ type from the
 storage ladder whose representable set contains the bound.  Sibling

@@ -1,5 +1,5 @@
 """
-cpp2 backend: C++ storage types.
+cpp backend: C++ storage types.
 
 A *storage type* is the C++ type used to hold a value at runtime.  It
 is distinct from the *rounding format* (per :mod:`format_infer`) — the

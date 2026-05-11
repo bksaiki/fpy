@@ -1,5 +1,5 @@
 """
-cpp2 backend: operation type tables.
+cpp backend: operation type tables.
 
 Each primitive operation is parameterized by *argument C++ types*
 (:class:`CppScalar`) and an *active rounding context*
@@ -146,7 +146,7 @@ class ScalarOpTable:
 #
 # We enumerate same-context signatures (input C++ types taken from
 # ``choose_storage_scalar(ctx.format())``) for every native context
-# the cpp2 backend supports.  FP bases pair with each
+# the cpp backend supports.  FP bases pair with each
 # ``fesetround``-supported rounding mode (RNE/RTZ/RTP/RTN) so context
 # equality at the dispatch site can match the active RM exactly.
 
@@ -154,7 +154,7 @@ _FP_RMS = (RM.RNE, RM.RTZ, RM.RTP, RM.RTN)
 
 
 def _fp_ctxs() -> list[Context]:
-    """All FP32 / FP64 contexts the cpp2 backend dispatches against
+    """All FP32 / FP64 contexts the cpp backend dispatches against
     — one per supported rounding mode."""
     return [
         IEEEContext(es, nbits, rm)
@@ -164,7 +164,7 @@ def _fp_ctxs() -> list[Context]:
 
 
 def _int_ctxs() -> list[Context]:
-    """Integer contexts the cpp2 backend dispatches against.
+    """Integer contexts the cpp backend dispatches against.
     ``INTEGER`` is the unbounded fallback — kept for backward compat
     with programs that don't pin a width."""
     return [
@@ -306,7 +306,7 @@ def _make_ternary_table() -> TernaryOpTable:
 
 
 def make_op_table() -> ScalarOpTable:
-    """Build the default cpp2 op table."""
+    """Build the default cpp op table."""
     return ScalarOpTable(
         unary=_make_unary_table(),
         binary=_make_binary_table(),

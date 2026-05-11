@@ -1,13 +1,13 @@
 # C++ backend — design notes & open TODOs
 
-The cpp2 backend (`fpy2/backend/cpp2/`) compiles FPy to C++ end-to-end
+The cpp backend (`fpy2/backend/cpp/`) compiles FPy to C++ end-to-end
 across scalar arithmetic, control flow, lists, tuples, in-place
 mutation, the `<cmath>` family, and rounding-context boundaries.  Unit
-coverage lives at `tests/unit/backend/cpp2/`.
+coverage lives at `tests/unit/backend/cpp/`.
 
 Module layout:
 
-- `compiler.py` — public `Cpp2Compiler`, pipeline orchestration.
+- `compiler.py` — public `CppCompiler`, pipeline orchestration.
 - `emitter.py` — AST walker that produces C++ source.
 - `ops.py` — per-op tables of supported C++ signatures.
 - `storage.py` — storage-type ladder, format-containment helpers.
@@ -50,7 +50,7 @@ rejected with an error pointing at the offending expression.
 
 ### SSA rebinds → fresh C++ variables
 
-The cpp2 emitter is free to give every SSA def its own C++ variable.
+The cpp emitter is free to give every SSA def its own C++ variable.
 The *one* constraint is that defs joined by either of two coalescing
 edges must share storage:
 
@@ -209,7 +209,7 @@ also consults for `with` boundaries and per-op active contexts.
 
 ### Translation-unit preamble
 
-`Cpp2Compiler.compile` returns a function definition only so
+`CppCompiler.compile` returns a function definition only so
 single-function tests can use exact-string equality.  Callers that
 want a complete translation unit pull `headers()`, `helpers()`, or
 `prelude()` (the two combined) explicitly.  Header coverage tracks
@@ -218,7 +218,7 @@ exactly what the emitted code uses (`<cassert>` for assertions,
 `<cstdint>` for fixed-width ints, `<numeric>` for `accumulate`,
 `<vector>` and `<tuple>`).
 
-Helpers is currently empty — cpp2 doesn't yet need custom runtime
+Helpers is currently empty — cpp doesn't yet need custom runtime
 support — but the slot exists for future additions
 (see [TODOs](#open-todos)).
 
@@ -233,7 +233,7 @@ to your changes.
 `_visit_list_ref`, `_visit_list_slice`, and `_visit_indexed_assign`
 currently emit raw `xs[i]` / iterator arithmetic with no out-of-
 range check.  The FPy interpreter is strict (raises on out-of-range
-indices); cpp2 should match.  Likely shape: a small bounds-checked
+indices); cpp should match.  Likely shape: a small bounds-checked
 subscript helper added to `CPP_HELPERS`, called from each subscript
 site.  See the TODO comments at `emitter.py:_visit_list_ref` and
 `_visit_list_slice` for current behavior.
@@ -246,12 +246,12 @@ caller's rounding mode is leaked.  Best fix is an RAII guard
 emitted as part of the helper preamble:
 
 ```cpp
-struct __cpp2_FenvGuard {
+struct __cpp_FenvGuard {
     int prev;
-    explicit __cpp2_FenvGuard(int new_rm) : prev(std::fegetround()) {
+    explicit __cpp_FenvGuard(int new_rm) : prev(std::fegetround()) {
         std::fesetround(new_rm);
     }
-    ~__cpp2_FenvGuard() { std::fesetround(prev); }
+    ~__cpp_FenvGuard() { std::fesetround(prev); }
 };
 ```
 
@@ -268,27 +268,21 @@ output isn't a numeric context).  Either add a `bool`-output slot to
 the op-table classes, or special-case these in `_visit_unaryop`
 alongside `Len` / `Sum` / `Enumerate`.
 
-`Min` / `Max` are nary in FPy.  cpp/ reduces them to pairwise
-`std::fmin` / `std::fmax`; cpp2 could do the same in `_visit_naryop`.
+`Min` / `Max` are nary in FPy.  These reduce naturally to pairwise
+`std::fmin` / `std::fmax` in `_visit_naryop`.
 
 ### Round-trip tests against `cc -std=c++17`
 
 Mirror `tests/infra/backend/cpp.py`: compile each test program with
-the cpp2 backend, run it through `cc -std=c++17`, link, and exec —
+the cpp backend, run it through `cc -std=c++17`, link, and exec —
 asserting the runtime result matches the FPy interpreter's.  Catches
 header-omission bugs and silent dispatch errors that pure-string
 unit tests miss.
 
-### Corpus comparison vs. the legacy `cpp/` backend
-
-Compile a representative corpus with both backends and diff the
-output (or the runtime results).  Useful for confidence that cpp2
-is at least as expressive as cpp/ before any deprecation discussion.
-
-### `fpy2/backend/cpp2/README.md`
+### `fpy2/backend/cpp/README.md`
 
 A short README in the package directory pointing at this file and
-listing the public surface (`Cpp2Compiler.compile` / `headers` /
+listing the public surface (`CppCompiler.compile` / `headers` /
 `helpers` / `prelude`, exception types).
 
 ## Out of scope (for the first pass)

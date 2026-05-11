@@ -1,10 +1,10 @@
 """
-cpp2 backend: utilities — headers and runtime helpers.
+cpp backend: utilities — headers and runtime helpers.
 
-The compiler's :meth:`Cpp2Compiler.compile` returns just a function
+The compiler's :meth:`CppCompiler.compile` returns just a function
 definition (so single-function tests can use exact-string equality).
 Callers that want a complete translation unit pull
-:meth:`Cpp2Compiler.headers` and :meth:`Cpp2Compiler.helpers`
+:meth:`CppCompiler.headers` and :meth:`CppCompiler.helpers`
 explicitly and concatenate them — same shape as the legacy
 ``cpp/`` backend.
 
@@ -22,7 +22,7 @@ Header coverage tracks what the emitter actually uses:
 - ``<tuple>``: ``std::tuple`` / ``std::make_tuple`` / ``std::get`` for
   tuples and tuple-binding destructuring.
 
-Helpers is currently empty — cpp2 doesn't yet need any custom
+Helpers is currently empty — cpp doesn't yet need any custom
 runtime support beyond what ``<cmath>`` / ``std::vector`` already
 give us.  The slot exists so future additions (e.g., an RAII
 ``fenv`` guard to fix the function-level fesetround leak, or
