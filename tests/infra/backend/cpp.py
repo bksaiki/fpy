@@ -164,16 +164,25 @@ def _test_unit_tests(
     no_cc: bool = False
 ):
     compiler = fp.CppCompiler()
+    failures: list[tuple[str, str]] = []
     for func in funcs:
         if func.name in ignore:
             continue
 
-        # compile function to C++ file
-        cpp_path = _compile(output_dir, prefix, compiler, func)
+        try:
+            cpp_path = _compile(output_dir, prefix, compiler, func)
+        except fp.backend.CppCompileError as e:
+            print(f'  FAILED `{func.name}`: {e}')
+            failures.append((func.name, str(e)))
+            continue
 
         # try to compile with C++ compiler
         if not no_cc:
             _compile_obj(cpp_path)
+    if failures:
+        print(f'\n{len(failures)} failures in `{prefix}`:')
+        for name, msg in failures:
+            print(f'  - {name}: {msg}')
 
 def _test_unit(output_dir: Path, no_cc: bool = False):
     _test_unit_tests(output_dir, 'unit_tests', all_unit_tests(), _test_ignore, no_cc=no_cc)
@@ -210,6 +219,7 @@ def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[s
     compiler = fp.CppCompiler()
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
+    failures: list[tuple[str, str]] = []
     with open(cpp_path, 'w') as f:
         print('\n'.join(compiler.headers()), file=f)
         print(compiler.helpers(), file=f)
@@ -219,10 +229,19 @@ def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[s
                 ty_info = fp.analysis.TypeInfer.check(func.ast)
                 arg_types = [ _inst_type(ty) for ty in ty_info.arg_types ]
 
-                # compile
-                s = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
+                try:
+                    s = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
+                except fp.backend.CppCompileError as e:
+                    print(f'  FAILED `{func.name}`: {e}')
+                    failures.append((func.name, str(e)))
+                    continue
                 print(s, file=f)
                 print(file=f)
+
+    if failures:
+        print(f'\n{len(failures)} failures in `library_{prefix}`:')
+        for name, msg in failures:
+            print(f'  - {name}: {msg}')
 
     if not no_cc:
         _compile_obj(cpp_path)

@@ -18,14 +18,15 @@ from ...analysis import (
     ContextUse,
     DefineUse,
     FormatInfer,
+    TypeInfer,
 )
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.format_infer import FormatAnalysis
-from ...ast.fpyast import FuncDef
+from ...ast.fpyast import Ast, Call, FuncDef
 from ...function import Function
-from ...number import Context
+from ...number import Context, FP64
 from ...transform import Monomorphize
-from ...types import Type
+from ...types import BoolType, ContextType, ListType, RealType, TupleType, Type, VarType
 from ..backend import Backend, CompileError
 
 from .emitter import CppEmitError, _CppEmitter
@@ -161,10 +162,45 @@ class CppCompiler(Backend):
             arg_types: Optional per-argument types to monomorphize against.
 
         Returns:
-            The compiled C++ source as a single string.
+            The compiled C++ source.  When *func* invokes other
+            FPy functions, each callee is emitted in topological
+            order above *func* so the result is a self-contained
+            sequence of definitions.
         """
         if not isinstance(func, Function):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
+
+        # Compile transitive callees first so each is defined before
+        # any user.  Callees are monomorphized at ``FP64`` with their
+        # declared parameter types instantiated the same way the
+        # infra harness does for top-level functions — symbolic Real
+        # / Var slots collapse to ``RealType(FP64)``.
+        defs: list[str] = []
+        seen: set[str] = set()
+        for callee in _collect_callees(func):
+            if callee.name in seen:
+                continue
+            seen.add(callee.name)
+            try:
+                callee_arg_types = _default_arg_types(callee)
+            except _UninstantiableType as e:
+                raise CppCompileError(
+                    f'cannot derive arg types for callee `{callee.name}`: {e}'
+                )
+            defs.append(self._compile_single(callee, FP64, callee_arg_types))
+
+        defs.append(self._compile_single(func, ctx, arg_types))
+        return '\n\n'.join(defs)
+
+    def _compile_single(
+        self,
+        func: Function,
+        ctx: Context | None,
+        arg_types: Collection[Type | None] | None,
+    ) -> str:
+        """Single-function compile — runs the pipeline and the emitter
+        without touching callees.  Used by :meth:`compile` to emit
+        each transitive callee independently."""
         result = self._run_pipeline(func, ctx, arg_types)
         emitter = _CppEmitter(
             ast=result.ast,
@@ -179,3 +215,92 @@ class CppCompiler(Backend):
             raise CppCompileError(
                 f'compilation failed for `{func.name}`: {e}'
             ) from e
+
+
+# ---------------------------------------------------------------------
+# Cross-function call support.
+#
+# When a function ``f`` invokes another FPy function ``g`` via a
+# :class:`Call` node, the C++ output needs ``g``'s definition above
+# ``f``'s.  We walk the AST for ``Call`` nodes, recursively collecting
+# the callees in pre-order — duplicates are filtered at the caller side
+# so the first occurrence in topological order wins.
+
+
+class _UninstantiableType(Exception):
+    """A callee parameter has a type the C++ backend can't
+    instantiate (e.g., function or context types)."""
+
+
+def _instantiate_type(ty: Type) -> Type:
+    """Mirror of ``tests/infra/backend/cpp.py``'s ``_inst_type``:
+    collapse symbolic ``VarType`` / ``RealType`` to ``RealType(FP64)``
+    and recurse through aggregates.  Bool / Context types pass through
+    unchanged.  Anything else is :class:`_UninstantiableType`."""
+    match ty:
+        case BoolType() | ContextType():
+            return ty
+        case VarType() | RealType():
+            return RealType(FP64)
+        case TupleType():
+            return TupleType(*[_instantiate_type(elt) for elt in ty.elts])
+        case ListType():
+            return ListType(_instantiate_type(ty.elt))
+        case _:
+            raise _UninstantiableType(ty.format())
+
+
+def _default_arg_types(func: Function) -> list[Type]:
+    """Default per-arg types for a callee: run :class:`TypeInfer`
+    over its body, then instantiate symbolic slots to ``FP64``."""
+    ty_info = TypeInfer.check(func.ast)
+    return [_instantiate_type(ty) for ty in ty_info.arg_types]
+
+
+class _CalleeCollector(Visitor):
+    """Pre-order walk for ``Call`` nodes — collects each call's
+    :class:`Function` value (``Call.fn``) without compiling
+    anything."""
+
+    def __init__(self):
+        self.callees: list[Function] = []
+
+    def _visit_call(self, e: Call, ctx):
+        if isinstance(e.fn, Function):
+            self.callees.append(e.fn)
+        # Recurse into the call's args so nested calls show up.
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        for _, v in e.kwargs:
+            self._visit_expr(v, ctx)
+        return None
+
+
+def _collect_callees(func: Function) -> list[Function]:
+    """Topologically-ordered (callee-before-caller) list of every
+    :class:`Function` transitively reachable from *func* via
+    :class:`Call`.  Direct calls come first, then their callees, etc.
+    ``func`` itself is not included."""
+    out: list[Function] = []
+    queue: list[Function] = []
+    enqueued: set[str] = set()
+
+    def _enqueue(f: Function):
+        # Walk the AST once and harvest direct callees.
+        collector = _CalleeCollector()
+        collector._visit_block(f.ast.body, None)
+        for callee in collector.callees:
+            if callee.name in enqueued:
+                continue
+            enqueued.add(callee.name)
+            queue.append(callee)
+
+    _enqueue(func)
+    while queue:
+        f = queue.pop(0)
+        out.append(f)
+        _enqueue(f)
+    # Reverse so leaf callees emit first: each function comes before
+    # everyone that calls it.
+    out.reverse()
+    return out

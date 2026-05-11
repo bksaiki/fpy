@@ -40,12 +40,14 @@ from ...analysis import (
     DefineUseAnalysis, FormatAnalysis
 )
 from ...ast.fpyast import (
-    Argument, Assign, AssertStmt, BinaryOp, BoolVal, Cast, Compare, ContextStmt,
-    Decnum, Digits, EffectStmt, Enumerate, Expr, ForStmt, FuncDef, Hexnum,
-    If1Stmt, IfStmt, IndexedAssign, Integer, Len, ListComp, ListExpr,
-    ListRef, ListSlice, NamedId, NaryOp, Range1, Range2, Range3, Rational,
-    ReturnStmt, Round, RoundExact, StmtBlock, Sum, TernaryOp, TupleBinding,
-    TupleExpr, UnaryOp, UnderscoreId, Var, WhileStmt, Zip,
+    And, Argument, Assign, AssertStmt, BinaryOp, BoolVal, Cast, Compare,
+    ContextStmt, Decnum, Digits, Dim, EffectStmt, Empty, Enumerate, Expr,
+    ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign, Integer,
+    IsFinite, IsInf, IsNan, IsNormal, Len, ListComp, ListExpr, ListRef,
+    ListSlice, Max, Min, NamedId, NaryOp, Not, Or, Range1, Range2, Range3,
+    Rational, ReturnStmt, Round, RoundExact, Signbit, Size, StmtBlock, Sum,
+    TernaryOp, TupleBinding, TupleExpr, UnaryOp, UnderscoreId, Var,
+    WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
 from ...number import EFloatContext, MPFixedContext, MPBFixedContext, RM
@@ -67,6 +69,20 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTP: 'FE_UPWARD',
     RM.RTN: 'FE_DOWNWARD',
 }
+
+
+def _list_depth(ty: CppType) -> int:
+    """Number of nested ``CppList`` layers in *ty*.
+
+    Implements the ``dim(xs)`` semantics: a flat ``vector<T>`` has
+    depth 1, ``vector<vector<T>>`` has depth 2, etc.  Scalars and
+    tuples count as 0 — ragged shapes are out of scope (the FPy
+    semantics for ``dim`` assume a non-ragged tensor)."""
+    depth = 0
+    while isinstance(ty, CppList):
+        depth += 1
+        ty = ty.elt
+    return depth
 
 
 class _IndentedWriter:
@@ -691,6 +707,22 @@ class _CppEmitter(Visitor):
             # is enforced by the op-table dispatch elsewhere, not by
             # ``Cast`` itself).
             return arg
+        if isinstance(e, Not):
+            # Logical negation — operand is bool, result is bool.
+            # No rounding context involved.
+            return f'(!{arg})'
+        if isinstance(e, (IsFinite, IsInf, IsNan, IsNormal, Signbit)):
+            return self._emit_fp_predicate(e, arg)
+        if isinstance(e, Range1):
+            return self._emit_range(e, ctx)
+        if isinstance(e, Dim):
+            # ``dim(xs)`` returns the nesting depth of a list — a
+            # static property of the value's storage shape.  Compute
+            # it at compile time from format inference and emit the
+            # literal integer.
+            result_ty = self._storage_for_expr(e)
+            depth = _list_depth(self._storage_for_expr(e.arg))
+            return f'static_cast<{result_ty.format()}>({depth})'
         if type(e) in self.op_table.unary:
             return self._dispatch_unary(e, arg)
         if isinstance(e, Len):
@@ -749,9 +781,134 @@ class _CppEmitter(Visitor):
         return result
 
     def _visit_binaryop(self, e: BinaryOp, ctx) -> str:
+        if isinstance(e, Size):
+            return self._emit_size(e, ctx)
+        if isinstance(e, Range2):
+            return self._emit_range(e, ctx)
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
         return self._dispatch_binary(e, lhs, rhs)
+
+    def _emit_fp_predicate(self, e: UnaryOp, arg: str) -> str:
+        """Bool-returning FP predicates: ``isnan`` / ``isinf`` /
+        ``isfinite`` / ``isnormal`` / ``signbit``.  These take a float
+        and return ``bool`` — they sit outside the op-table because
+        the output isn't a rounding context."""
+        name = {
+            IsFinite: 'std::isfinite',
+            IsInf: 'std::isinf',
+            IsNan: 'std::isnan',
+            IsNormal: 'std::isnormal',
+            Signbit: 'std::signbit',
+        }[type(e)]
+        return f'{name}({arg})'
+
+    def _emit_range(self, e: 'Range1 | Range2 | Range3', ctx) -> str:
+        """``range(...)`` as an expression — materialise a vector via
+        ``std::iota`` for unit-step ranges, or a manual fill loop for
+        ``Range3``'s explicit step.  Used outside for-loop iterables,
+        where the loop visitor handles the same shapes without
+        materialising the vector."""
+        result_ty = self._storage_for_expr(e)
+        if not (isinstance(result_ty, CppList)
+                and isinstance(result_ty.elt, CppScalar)
+                and result_ty.elt.is_integer()):
+            raise CppEmitError(
+                f'range(...) expected integer-list result, '
+                f'got `{result_ty!r}`'
+            )
+        int_ty = result_ty.elt.format()
+        tmp = self._fresh_temp()
+        if isinstance(e, Range1):
+            stop = self._visit_expr(e.arg, ctx)
+            stop_ty = self._scalar_storage_for_expr(e.arg)
+            stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
+            self.writer.add_line(
+                f'{result_ty.format()} {tmp}(static_cast<size_t>({stop_cast}));'
+            )
+            self.writer.add_line(
+                f'std::iota({tmp}.begin(), {tmp}.end(), '
+                f'static_cast<{int_ty}>(0));'
+            )
+            return tmp
+        if isinstance(e, Range2):
+            start = self._visit_expr(e.first, ctx)
+            stop = self._visit_expr(e.second, ctx)
+            start_ty = self._scalar_storage_for_expr(e.first)
+            stop_ty = self._scalar_storage_for_expr(e.second)
+            start_cast = self._maybe_cast(start, start_ty, result_ty.elt)
+            stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
+            size_expr = (
+                f'static_cast<size_t>({stop_cast} > {start_cast} '
+                f'? ({stop_cast} - {start_cast}) : 0)'
+            )
+            self.writer.add_line(
+                f'{result_ty.format()} {tmp}({size_expr});'
+            )
+            self.writer.add_line(
+                f'std::iota({tmp}.begin(), {tmp}.end(), {start_cast});'
+            )
+            return tmp
+        # Range3: explicit step — emit a fill loop.
+        assert isinstance(e, Range3)
+        start = self._visit_expr(e.args[0], ctx)
+        stop = self._visit_expr(e.args[1], ctx)
+        step = self._visit_expr(e.args[2], ctx)
+        start_ty = self._scalar_storage_for_expr(e.args[0])
+        stop_ty = self._scalar_storage_for_expr(e.args[1])
+        step_ty = self._scalar_storage_for_expr(e.args[2])
+        start_cast = self._maybe_cast(start, start_ty, result_ty.elt)
+        stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
+        step_cast = self._maybe_cast(step, step_ty, result_ty.elt)
+        ctr = self._fresh_temp()
+        self.writer.add_line(f'{result_ty.format()} {tmp};')
+        self.writer.add_line(
+            f'for ({int_ty} {ctr} = {start_cast}; '
+            f'{ctr} < {stop_cast}; {ctr} += {step_cast}) {{'
+        )
+        self.writer.indent()
+        self.writer.add_line(f'{tmp}.push_back({ctr});')
+        self.writer.dedent()
+        self.writer.add_line('}')
+        return tmp
+
+    def _emit_size(self, e: Size, ctx) -> str:
+        """``size(xs, d)`` returns the size of *xs* at dimension *d*.
+        The compile-time shape of *xs* is known from format inference
+        — we follow ``d`` ``[0]`` indices into the first element to
+        reach the right ``vector``, then take ``.size()``.
+
+        Requires a constant integer ``d``; symbolic / runtime ``d``
+        would need a more sophisticated dispatch and isn't worth the
+        complexity for the current corpus."""
+        if not isinstance(e.second, Integer):
+            raise CppEmitError(
+                'size(xs, d) requires a constant integer dimension; '
+                f'got `{type(e.second).__name__}`'
+            )
+        d = e.second.val
+        if d < 0:
+            raise CppEmitError(f'size(xs, d) needs d >= 0, got {d}')
+        xs_ty = self._storage_for_expr(e.first)
+        # Walk d list layers; the d-th call is on a value of the
+        # appropriate vector type.
+        cur_ty = xs_ty
+        for _ in range(d):
+            if not isinstance(cur_ty, CppList):
+                raise CppEmitError(
+                    f'size(xs, {d}): xs is not deep enough '
+                    f'(type `{xs_ty!r}`)'
+                )
+            cur_ty = cur_ty.elt
+        if not isinstance(cur_ty, CppList):
+            raise CppEmitError(
+                f'size(xs, {d}): not a list at depth {d} '
+                f'(type `{xs_ty!r}`)'
+            )
+        xs = self._visit_expr(e.first, ctx)
+        access = xs + ''.join(['[0]'] * d)
+        result_ty = self._storage_for_expr(e)
+        return f'static_cast<{result_ty.format()}>({access}.size())'
 
     # ------------------------------------------------------------------
     # Stubs for AST nodes not yet handled — classification ops
@@ -797,6 +954,8 @@ class _CppEmitter(Visitor):
         self._unsupported('NullaryOp')
 
     def _visit_ternaryop(self, e: TernaryOp, ctx) -> str:
+        if isinstance(e, Range3):
+            return self._emit_range(e, ctx)
         a1 = self._visit_expr(e.args[0], ctx)
         a2 = self._visit_expr(e.args[1], ctx)
         a3 = self._visit_expr(e.args[2], ctx)
@@ -848,7 +1007,99 @@ class _CppEmitter(Visitor):
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
         if isinstance(e, Zip):
             return self._emit_zip(e, ctx)
+        if isinstance(e, (And, Or)):
+            return self._emit_bool_chain(e, ctx)
+        if isinstance(e, (Min, Max)):
+            return self._emit_min_max(e, ctx)
+        if isinstance(e, Empty):
+            return self._emit_empty(e, ctx)
         raise CppEmitError(f'unsupported nary op: {type(e).__name__}')
+
+    def _emit_bool_chain(self, e: 'And | Or', ctx) -> str:
+        """Reduce an ``And`` / ``Or`` to a fully-parenthesised chain
+        of ``&&`` / ``||``.  C++'s short-circuit semantics match FPy's
+        for pure expressions, and the operands are already bool —
+        :class:`StorageInfer` chose ``BOOL`` storage for each one.
+        Zero-arg ``and()`` / ``or()`` shouldn't reach here (the
+        front-end rejects them), but we degenerate cleanly anyway."""
+        if not e.args:
+            return 'true' if isinstance(e, And) else 'false'
+        args = [self._visit_expr(a, ctx) for a in e.args]
+        if len(args) == 1:
+            return args[0]
+        op = '&&' if isinstance(e, And) else '||'
+        return '(' + f' {op} '.join(args) + ')'
+
+    def _emit_min_max(self, e: 'Min | Max', ctx) -> str:
+        """Reduce an ``n``-ary ``min`` / ``max`` to a nested pairwise
+        call.  We pick ``std::fmin`` / ``std::fmax`` for FP results
+        and ``std::min`` / ``std::max`` for integer results — the
+        active context's storage decides which.  Each operand is
+        cast (losslessly) into the active context's storage so the
+        pairwise calls have a single deduced template type."""
+        if not e.args:
+            raise CppEmitError(
+                f'{type(e).__name__} requires at least one argument'
+            )
+        active = self._active_ctx_for(e)
+        target = self._scalar_for_ctx(active)
+        args = [self._visit_expr(a, ctx) for a in e.args]
+        arg_storages = [self._scalar_storage_for_expr(a) for a in e.args]
+        casted = [
+            self._maybe_cast(a, s, target)
+            for a, s in zip(args, arg_storages)
+        ]
+        if target.is_float():
+            fn = 'std::fmin' if isinstance(e, Min) else 'std::fmax'
+        else:
+            fn = 'std::min' if isinstance(e, Min) else 'std::max'
+        result = casted[0]
+        for nxt in casted[1:]:
+            result = f'{fn}({result}, {nxt})'
+        return result
+
+    def _emit_empty(self, e: Empty, ctx) -> str:
+        """``empty(d1, ..., dN)`` builds an ``N``-dimensional zero-
+        initialised vector.  The result's storage shape comes from
+        format inference; we read the dimension sizes off the call
+        site and emit nested ``std::vector<T>(d, ...)`` constructors
+        right-to-left so the innermost element type bubbles out.
+
+        ``empty()`` with zero args returns ``T()`` — a scalar, which
+        format inference resolves to whatever storage the call site
+        expects."""
+        result_ty = self._storage_for_expr(e)
+        dims = [self._visit_expr(a, ctx) for a in e.args]
+        dim_storages = [
+            self._scalar_storage_for_expr(a) for a in e.args
+        ]
+        # Each dimension index goes through size_t in the vector
+        # constructor — cast explicitly so we don't rely on implicit
+        # narrowing.
+        dim_strs = [
+            self._explicit_cast(d, CppScalar.U64) if s != CppScalar.U64 else d
+            for d, s in zip(dims, dim_storages)
+        ]
+        if _list_depth(result_ty) != len(dim_strs):
+            raise CppEmitError(
+                f'empty(...) shape mismatch: result type `{result_ty!r}` '
+                f'has depth {_list_depth(result_ty)}, but {len(dim_strs)} '
+                f'dimensions were given'
+            )
+        # Build from the inside out: innermost is ``T()``-default,
+        # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
+        ty: CppType = result_ty
+        # Peel down to the innermost element type so we know what
+        # default value to seed with.
+        peeled: list[CppType] = []
+        while isinstance(ty, CppList):
+            peeled.append(ty)
+            ty = ty.elt
+        # ``ty`` is now the scalar / tuple leaf.
+        inner = f'{ty.format()}{{}}'
+        for layer, d in zip(reversed(peeled), reversed(dim_strs)):
+            inner = f'{layer.format()}({d}, {inner})'
+        return inner
 
     def _emit_zip(self, e: Zip, ctx) -> str:
         """``zip(xs1, …, xsN)`` builds a
@@ -898,7 +1149,14 @@ class _CppEmitter(Visitor):
                 f'unsupported round op: {type(e).__name__}'
             )
         arg = self._visit_expr(e.arg, ctx)
-        arg_ty = self._scalar_storage_for_expr(e.arg)
+        # The argument's storage is only used to short-circuit
+        # same-type casts.  Non-dyadic numeric literals
+        # (e.g., ``fp.round(3.14159265359)``) have a SetFormat with
+        # no representable storage — that's fine, we always cast.
+        try:
+            arg_ty = self._scalar_storage_for_expr(e.arg)
+        except CppEmitError:
+            arg_ty = None
         active = self._active_ctx_for(e)
         target_ty = self._scalar_for_ctx(active)
 
@@ -923,7 +1181,7 @@ class _CppEmitter(Visitor):
         # FP operands need an extra ``isnan`` guard to avoid false
         # asserts when both sides round to NaN.  Skipped for purely
         # integer operand pairs.
-        if target_ty.is_float() or arg_ty.is_float():
+        if target_ty.is_float() or (arg_ty is not None and arg_ty.is_float()):
             check = (
                 f'{arg} == {tmp} || '
                 f'(std::isnan({arg}) && std::isnan({tmp}))'
@@ -936,8 +1194,27 @@ class _CppEmitter(Visitor):
     def _visit_round_at(self, e, ctx):
         self._unsupported('RoundAt')
 
-    def _visit_call(self, e, ctx):
-        self._unsupported('Call')
+    def _visit_call(self, e, ctx) -> str:
+        # FPy ``Call(args, fn=Function(...), ...)`` lowers to a
+        # plain C++ ``func(arg1, ..., argN)``.  The callee is
+        # compiled independently by :class:`CppCompiler.compile` and
+        # placed in the same translation unit; here we just emit
+        # the call expression.
+        #
+        # No implicit casts at the call boundary — the callee's
+        # parameters are monomorphized at ``FP64`` (matching the
+        # infra harness's default), and FPy programs are expected
+        # to round explicitly when the call site's types differ.
+        # An unsafe-cast at the call site can be added later as a
+        # safety check if it proves useful.
+        if not e.kwargs:
+            args = ', '.join(self._visit_expr(a, ctx) for a in e.args)
+        else:
+            raise CppEmitError(
+                f'unsupported call: kwargs are not supported '
+                f'(call to `{e.func}`)'
+            )
+        return f'{e.func}({args})'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
         # ``(a, b, c)`` → ``std::make_tuple(a, b, c)``.  Type deduction
@@ -1000,6 +1277,21 @@ class _CppEmitter(Visitor):
             target_name = self.storage.def_to_name[target_def]
             target_ty = self.storage.storage_of(target_def).format()
             decl = f'{target_ty} {target_name}'
+        elif isinstance(target, UnderscoreId):
+            # ``_`` discards the loop variable — no SSA def, no
+            # storage class.  Synthesize a fresh name and pick the
+            # iterator type from the iterable: for range iterables
+            # the stop bound's storage; for value iterables ``auto``
+            # lets the for-range loop deduce.
+            target_name = self._fresh_temp()
+            if isinstance(iterable, Range1):
+                stop_ty = self._scalar_storage_for_expr(iterable.arg)
+                decl = f'{stop_ty.format()} {target_name}'
+            elif isinstance(iterable, (Range2, Range3)):
+                stop_ty = self._scalar_storage_for_expr(iterable.args[1])
+                decl = f'{stop_ty.format()} {target_name}'
+            else:
+                decl = f'auto {target_name}'
         elif isinstance(target, TupleBinding):
             # ``for (a, b) in xs`` — bind the tuple element to an
             # anonymous temp via ``auto`` and destructure inside the
@@ -1169,12 +1461,55 @@ class _CppEmitter(Visitor):
     def _visit_for(self, stmt: ForStmt, ctx):
         if isinstance(stmt.target, NamedId):
             self._emit_for_named_target(stmt, ctx)
+        elif isinstance(stmt.target, UnderscoreId):
+            self._emit_for_underscore_target(stmt, ctx)
         elif isinstance(stmt.target, TupleBinding):
             self._emit_for_tuple_target(stmt, ctx)
         else:
             raise CppEmitError(
                 f'unsupported for-loop target {stmt.target!r}'
             )
+
+    def _emit_for_underscore_target(self, stmt: ForStmt, ctx):
+        """``for _ in iter:`` — the loop body never reads the counter,
+        so we just emit a synthetic name and pick its type the same
+        way :meth:`_open_comp_loop` does for an ``UnderscoreId``
+        comprehension target."""
+        target = self._fresh_temp()
+        if isinstance(stmt.iterable, Range1):
+            ty = self._scalar_storage_for_expr(stmt.iterable.arg).format()
+        elif isinstance(stmt.iterable, (Range2, Range3)):
+            ty = self._scalar_storage_for_expr(stmt.iterable.args[1]).format()
+        else:
+            ty = 'auto'
+        decl = f'{ty} {target}'
+        match stmt.iterable:
+            case Range1():
+                stop = self._visit_expr(stmt.iterable.arg, ctx)
+                header = f'for ({decl} = 0; {target} < {stop}; ++{target})'
+            case Range2():
+                start = self._visit_expr(stmt.iterable.first, ctx)
+                stop = self._visit_expr(stmt.iterable.second, ctx)
+                header = (
+                    f'for ({decl} = {start}; '
+                    f'{target} < {stop}; ++{target})'
+                )
+            case Range3():
+                start = self._visit_expr(stmt.iterable.args[0], ctx)
+                stop = self._visit_expr(stmt.iterable.args[1], ctx)
+                step = self._visit_expr(stmt.iterable.args[2], ctx)
+                header = (
+                    f'for ({decl} = {start}; '
+                    f'{target} < {stop}; {target} += {step})'
+                )
+            case _:
+                iter_str = self._visit_expr(stmt.iterable, ctx)
+                header = f'for ({decl} : {iter_str})'
+        self.writer.add_line(f'{header} {{')
+        self.writer.indent()
+        self._visit_block(stmt.body, ctx)
+        self.writer.dedent()
+        self.writer.add_line('}')
 
     def _emit_for_named_target(self, stmt: ForStmt, ctx):
         assert isinstance(stmt.target, NamedId)
