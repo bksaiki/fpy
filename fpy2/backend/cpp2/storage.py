@@ -77,50 +77,6 @@ covering type."""
 _LADDER_LOOKUP = {ty: af for ty, af in _LADDER}
 
 
-def format_fits_in(value: FormatBound, target: Format) -> bool:
-    """Is every value bounded by *value* representable in *target*?
-
-    Used by op-table dispatch to check that an operand's inferred
-    rounding format is "small enough" for a candidate signature's
-    declared input context.
-
-    - ``None`` (bool): never fits a numeric format.
-    - :class:`SetFormat`: each value must be dyadic and
-      ``Format.representable_in``-checkable.
-    - Abstractable scalar formats: lift both sides to
-      :class:`AbstractFormat` and use lattice ``<=``.
-    - Tuples / lists: never fit a scalar context.
-    """
-    if value is None:
-        return False
-    if isinstance(value, SetFormat):
-        if target == REAL_FORMAT:
-            return True
-        for v in value.values:
-            if not isinstance(v, Fraction) or not is_dyadic(v):
-                return False
-            if not target.representable_in(RealFloat.from_rational(v)):
-                return False
-        return True
-    if isinstance(value, AbstractableFormat):
-        af_v = AbstractFormat.from_format(value)
-        af_t = AbstractFormat.from_format(target)
-        if af_v is None or af_t is None:
-            return False
-        return af_v <= af_t
-    return False
-
-
-def scalar_abstract(s: CppScalar) -> AbstractFormat:
-    """Returns the :class:`AbstractFormat` for a ladder scalar.
-
-    Used for containment checks (``a <= b``) when validating that an
-    operation's operands fit into its result/context format.
-    Raises ``KeyError`` if *s* is :attr:`CppScalar.BOOL` (bool isn't
-    on the numeric ladder)."""
-    return _LADDER_LOOKUP[s]
-
-
 def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
     """Does scalar *a* fit (as a subset) in scalar *b*?
 
@@ -226,7 +182,7 @@ def _supremum(storages: list[CppType]) -> CppType:
         assert all(isinstance(s, CppScalar) for s in rest), (
             f'inconsistent storage shapes: {storages!r}'
         )
-        return _scalar_sup([head] + [s for s in rest if isinstance(s, CppScalar)])
+        return scalar_sup([head] + [s for s in rest if isinstance(s, CppScalar)])
     if isinstance(head, CppList):
         assert all(isinstance(s, CppList) for s in rest)
         elts = [head.elt] + [s.elt for s in rest if isinstance(s, CppList)]
@@ -243,12 +199,6 @@ def _supremum(storages: list[CppType]) -> CppType:
 
 
 def scalar_sup(scalars: list[CppScalar]) -> CppScalar:
-    """Public alias for :func:`_scalar_sup` — smallest ladder scalar
-    that subsumes every input."""
-    return _scalar_sup(scalars)
-
-
-def _scalar_sup(scalars: list[CppScalar]) -> CppScalar:
     """Smallest scalar on the ladder that subsumes every input."""
     # Filter out BOOL specifically — mixing bool with numeric storage is
     # a typing bug, not a widening situation.

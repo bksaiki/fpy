@@ -1,31 +1,32 @@
 """
 cpp2 backend: operation type tables.
 
-Each primitive operation is parameterized by *argument formats* and
-an *active rounding context*.  Inputs carry only value-range info
-(a :class:`Format`) — the rounding has already happened upstream.
-The operation rounds its mathematical result under the active
-context, which is why the *output* slot carries a full
-:class:`Context` (format + rounding mode), not just a format.
+Each primitive operation is parameterized by *argument C++ types*
+(:class:`CppScalar`) and an *active rounding context*
+(:class:`Context`).  The split mirrors what emission actually needs:
+
+- A signature's input slots are the concrete C++ scalar types the
+  generated code feeds the operator.  ``int8_t + int8_t`` is one
+  signature, ``float + float`` is another.
+- The output slot is the active rounding context.  Its C++ type
+  (``choose_storage(out_ctx.format())``) determines the result's
+  storage; its rounding mode is enforced separately by the
+  ``fesetround`` boundary emitted around ``with`` blocks.
 
 At an op site the emitter consults:
 
-- The **active rounding context** (from
-  :class:`ContextUseAnalysis.find_scope_from_use`) — must equal the
+- The **active rounding context** from
+  :class:`ContextUseAnalysis.find_scope_from_use` — must equal the
   signature's ``out_ctx``.
-- Each operand's **rounding format** (from ``FormatInfer``) — must
-  fit (via :func:`format_fits_in`) within the corresponding
-  signature's ``in_fmt``.
+- Each operand's **C++ storage type** from
+  :class:`StorageAnalysis` — must equal the signature's input
+  slot.  On mismatch the emitter falls back to the
+  all-active-context signature and inserts an explicit
+  ``static_cast`` per operand.
 
-When a signature matches, the emitter uses :func:`choose_storage`
-on the signature's input formats to derive the C++ scalar types and
-casts each operand to that type via :meth:`_maybe_cast`.  The
-rounding-mode half of the active context is enforced separately by
-the ``fesetround`` boundary emitted around ``with`` blocks, so
-emission only depends on the formats and storage selection.
-
-This mirrors :mod:`fpy2.backend.cpp.ops` in shape but the input
-slots are :class:`Format`-typed and the output is :class:`Context`-typed.
+This mirrors :mod:`fpy2.backend.cpp.ops` in shape, but the output
+slot carries a full :class:`Context` (so RM-specific signatures are
+distinct) rather than a bare :class:`CppScalar`.
 """
 
 from __future__ import annotations
@@ -40,7 +41,6 @@ from ...ast.fpyast import (
     Log2, Logb, Mul, NearbyInt, Neg, Pow, Remainder, RoundInt,
     Sin, Sinh, Sqrt, Sub, Tan, Tanh, Tgamma, Trunc,
 )
-from ...analysis.format_infer import FormatBound
 from ...number import (
     RM,
     INTEGER,
@@ -48,27 +48,24 @@ from ...number import (
     UINT8, UINT16, UINT32, UINT64,
 )
 from ...number.context.context import Context
-from ...number.context.format import Format
 from ...number.context.ieee754 import IEEEContext
 
-from .storage import format_fits_in
+from .storage import choose_storage_scalar
+from .types import CppScalar
 
 
 @dataclasses.dataclass(frozen=True)
 class UnaryCppOp:
     """A single supported C++ signature for a unary FPy op,
-    parameterized by an argument format and an active rounding
+    parameterized by an argument C++ type and an active rounding
     context for the output."""
     name: str
     is_func: bool
-    arg_fmt: Format
+    arg_ty: CppScalar
     out_ctx: Context
 
-    def matches(self, arg_fmt: FormatBound, active_ctx: Context) -> bool:
-        return (
-            self.out_ctx == active_ctx
-            and format_fits_in(arg_fmt, self.arg_fmt)
-        )
+    def matches(self, arg_ty: CppScalar, active_ctx: Context) -> bool:
+        return self.out_ctx == active_ctx and self.arg_ty == arg_ty
 
     def format(self, arg: str) -> str:
         return f'{self.name}({arg})' if self.is_func else f'({self.name}{arg})'
@@ -77,24 +74,24 @@ class UnaryCppOp:
 @dataclasses.dataclass(frozen=True)
 class BinaryCppOp:
     """A single supported C++ signature for a binary FPy op,
-    parameterized by per-operand argument formats and an active
-    rounding context for the output."""
+    parameterized by per-operand C++ types and an active rounding
+    context for the output."""
     name: str
     is_infix: bool
-    in1_fmt: Format
-    in2_fmt: Format
+    in1_ty: CppScalar
+    in2_ty: CppScalar
     out_ctx: Context
 
     def matches(
         self,
-        in1_fmt: FormatBound,
-        in2_fmt: FormatBound,
+        in1_ty: CppScalar,
+        in2_ty: CppScalar,
         active_ctx: Context,
     ) -> bool:
         return (
             self.out_ctx == active_ctx
-            and format_fits_in(in1_fmt, self.in1_fmt)
-            and format_fits_in(in2_fmt, self.in2_fmt)
+            and self.in1_ty == in1_ty
+            and self.in2_ty == in2_ty
         )
 
     def format(self, lhs: str, rhs: str) -> str:
@@ -108,23 +105,23 @@ class TernaryCppOp:
     """A single supported C++ signature for a ternary FPy op
     (e.g., ``Fma``).  Same parameterization as the binary case."""
     name: str
-    in1_fmt: Format
-    in2_fmt: Format
-    in3_fmt: Format
+    in1_ty: CppScalar
+    in2_ty: CppScalar
+    in3_ty: CppScalar
     out_ctx: Context
 
     def matches(
         self,
-        in1_fmt: FormatBound,
-        in2_fmt: FormatBound,
-        in3_fmt: FormatBound,
+        in1_ty: CppScalar,
+        in2_ty: CppScalar,
+        in3_ty: CppScalar,
         active_ctx: Context,
     ) -> bool:
         return (
             self.out_ctx == active_ctx
-            and format_fits_in(in1_fmt, self.in1_fmt)
-            and format_fits_in(in2_fmt, self.in2_fmt)
-            and format_fits_in(in3_fmt, self.in3_fmt)
+            and self.in1_ty == in1_ty
+            and self.in2_ty == in2_ty
+            and self.in3_ty == in3_ty
         )
 
     def format(self, a: str, b: str, c: str) -> str:
@@ -147,11 +144,11 @@ class ScalarOpTable:
 # ---------------------------------------------------------------------
 # Default tables.
 #
-# We enumerate same-context signatures (input formats taken from the
-# context's ``.format()``) for every native context the cpp2 backend
-# supports.  FP bases pair with each ``fesetround``-supported
-# rounding mode (RNE/RTZ/RTP/RTN) so context equality at the
-# dispatch site can match the active RM exactly.
+# We enumerate same-context signatures (input C++ types taken from
+# ``choose_storage_scalar(ctx.format())``) for every native context
+# the cpp2 backend supports.  FP bases pair with each
+# ``fesetround``-supported rounding mode (RNE/RTZ/RTP/RTN) so context
+# equality at the dispatch site can match the active RM exactly.
 
 _FP_RMS = (RM.RNE, RM.RTZ, RM.RTP, RM.RTN)
 
@@ -181,12 +178,18 @@ def _all_arith_ctxs() -> list[Context]:
     return _fp_ctxs() + _int_ctxs()
 
 
+def _ty_of(ctx: Context) -> CppScalar:
+    """Map a same-context signature's context to the C++ scalar that
+    its inputs (and output) carry."""
+    return choose_storage_scalar(ctx.format())
+
+
 def _fp_unary(name: str) -> list[UnaryCppOp]:
     """Same-context FP-only unary signatures for one ``<cmath>``
     function.  One sig per FP context (FP32 / FP64 × the four
     supported rounding modes)."""
     return [
-        UnaryCppOp(name, is_func=True, arg_fmt=c.format(), out_ctx=c)
+        UnaryCppOp(name, is_func=True, arg_ty=_ty_of(c), out_ctx=c)
         for c in _fp_ctxs()
     ]
 
@@ -196,7 +199,7 @@ def _fp_binary(name: str) -> list[BinaryCppOp]:
     function (function-call form, not infix)."""
     return [
         BinaryCppOp(name, is_infix=False,
-                    in1_fmt=c.format(), in2_fmt=c.format(), out_ctx=c)
+                    in1_ty=_ty_of(c), in2_ty=_ty_of(c), out_ctx=c)
         for c in _fp_ctxs()
     ]
 
@@ -205,8 +208,8 @@ def _fp_ternary(name: str) -> list[TernaryCppOp]:
     """Same-context FP-only ternary signatures."""
     return [
         TernaryCppOp(name,
-                     in1_fmt=c.format(), in2_fmt=c.format(),
-                     in3_fmt=c.format(), out_ctx=c)
+                     in1_ty=_ty_of(c), in2_ty=_ty_of(c),
+                     in3_ty=_ty_of(c), out_ctx=c)
         for c in _fp_ctxs()
     ]
 
@@ -263,14 +266,14 @@ def _make_unary_table() -> UnaryOpTable:
     ints = _int_ctxs()
     same = _all_arith_ctxs()
     table: UnaryOpTable = {
-        Neg: [UnaryCppOp('-', is_func=False, arg_fmt=c.format(), out_ctx=c)
+        Neg: [UnaryCppOp('-', is_func=False, arg_ty=_ty_of(c), out_ctx=c)
               for c in same],
         Abs: (
             [UnaryCppOp('std::fabs', is_func=True,
-                        arg_fmt=c.format(), out_ctx=c)
+                        arg_ty=_ty_of(c), out_ctx=c)
              for c in fp]
             + [UnaryCppOp('std::abs', is_func=True,
-                          arg_fmt=c.format(), out_ctx=c)
+                          arg_ty=_ty_of(c), out_ctx=c)
                for c in ints]
         ),
     }
@@ -283,7 +286,7 @@ def _make_binary_table() -> BinaryOpTable:
     same = _all_arith_ctxs()
     table: BinaryOpTable = {
         op_cls: [
-            BinaryCppOp(name, True, c.format(), c.format(), c)
+            BinaryCppOp(name, True, _ty_of(c), _ty_of(c), c)
             for c in same
         ]
         for op_cls, name in (

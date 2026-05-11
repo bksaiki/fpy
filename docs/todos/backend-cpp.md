@@ -88,25 +88,43 @@ combinations.  `ops.py` enumerates the supported signatures per
 FPy op type.  Each `UnaryCppOp` / `BinaryCppOp` / `TernaryCppOp` is
 parameterized by:
 
-- *argument formats* (`Format`s, value-range info only — rounding
-  has already happened upstream).
+- *argument C++ types* (`CppScalar`) — the concrete scalar types
+  the generated C++ feeds the operator.  ``int8_t + int8_t`` is
+  one signature, ``float + float`` is another.
 - *output context* (a full `Context` — format + rounding mode).
+  Its C++ type comes from `choose_storage(out_ctx.format())`; the
+  rounding-mode half is enforced separately by the `fesetround`
+  boundary at `with` blocks.
 
 At an op site the emitter consults:
 
 - The **active rounding context** at the expression
   (`ContextUseAnalysis.find_scope_from_use(e).ctx`) — must equal
   the signature's `out_ctx`.
-- Each operand's **rounding format** (`format_info.by_expr[e.arg]`)
-  — must fit (`format_fits_in`) the signature's `in_fmt`.
+- Each operand's **C++ storage type** (from `StorageAnalysis`) —
+  must equal the signature's `in_ty`.
 
 Direct-match preferred; on miss the emitter falls back to the
 all-active-context signature and casts every operand into the active
 context's storage type.  **Every** type conversion goes through an
 explicit `static_cast` — no reliance on C++ implicit promotion, even
-for "lossless" widenings.  The same explicit-cast policy applies to
-comparisons (`_visit_compare` casts each pair to its scalar
-supremum) and vector subscripting (`xs[static_cast<size_t>(i)]`).
+for "lossless" widenings.
+
+The cast helper splits into two paths:
+
+- `_maybe_cast` — used for *implicit* casts (op-dispatch fallback,
+  comparison cast-to-supremum).  Rejects the compilation when the
+  conversion is lossy (`not scalar_fits_in(arg_ty, target_ty)`).
+  The error tells the user to wrap the operand in `fp.round(...)`
+  or pick a context that holds the value.
+- `_explicit_cast` — used for *user-explicit* casts (`Round` /
+  `RoundExact` lowerings, `xs[static_cast<size_t>(i)]` subscripts).
+  Emits the `static_cast` unconditionally; the user has already
+  said they accept the conversion.
+
+So a lossy implicit cast like FP64 → FP32 (or int64 → FP64) fails
+to compile until the program wraps the wider operand in
+`fp.round(...)` — making the rounding step part of the source.
 
 The default table covers `Add`/`Sub`/`Mul`/`Div`, `Neg`, `Abs`, all
 of `<cmath>` (transcendental + algebraic + FP rounding helpers),

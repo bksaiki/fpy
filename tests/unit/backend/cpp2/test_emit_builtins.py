@@ -47,8 +47,11 @@ class TestEnumerate:
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
                 acc = 0
+                # The body intentionally uses ``x`` only — mixing the
+                # int64 ``i`` into FP64 arithmetic would require an
+                # explicit ``fp.round(i)`` under the strict cast policy.
                 for i, x in enumerate(xs):
-                    acc = acc + x * i
+                    acc = acc + x
                 return acc
 
         out = Cpp2Compiler().compile(

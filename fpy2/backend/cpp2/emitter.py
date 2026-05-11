@@ -34,11 +34,9 @@ Anything else raises :class:`Cpp2EmitError`, which the public
 
 from fractions import Fraction
 
-from ...analysis import DefineUseAnalysis, FormatAnalysis
-from ...analysis.context_use import (
-    ContextScope,
-    ContextScopeSite,
-    ContextUseAnalysis,
+from ...analysis import (
+    ContextScope, ContextScopeSite, ContextUseSite, ContextUseAnalysis,
+    DefineUseAnalysis, FormatAnalysis
 )
 from ...ast.fpyast import (
     Abs, Argument, Assign, BinaryOp, BoolVal, Cast, Compare, ContextStmt,
@@ -55,7 +53,9 @@ from ...number.context.context import Context
 from .ops import (
     BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp, make_op_table,
 )
-from .storage import StorageSelectionError, choose_storage, scalar_sup
+from .storage import (
+    StorageSelectionError, choose_storage, scalar_fits_in, scalar_sup,
+)
 from .storage_infer import StorageAnalysis
 from .types import CppList, CppScalar, CppTuple, CppType
 
@@ -513,19 +513,42 @@ class _Cpp2Emitter(Visitor):
         return ty
 
     def _maybe_cast(self, arg: str, arg_ty: CppScalar, target_ty: CppScalar) -> str:
-        """Emit *arg* in *target_ty* form.
+        """Emit *arg* in *target_ty* form, rejecting unsafe casts.
 
-        Every conversion crosses through an explicit ``static_cast``
-        — we don't rely on C++'s implicit-conversion rules even when
-        they'd be lossless.  This keeps the generated source honest
-        about where rounding / promotion happens (matching FPy's
-        "operate under the active context" semantics) and avoids
-        narrowing-conversion warnings on stricter compiler flags."""
+        Used by op-dispatch / comparison cast-to-active paths where
+        the conversion is implicit from the user's perspective —
+        format inference + storage selection together decided to
+        rebind the operand into *target_ty*.  If the conversion
+        isn't lossless (``scalar_fits_in``), we refuse to compile
+        rather than silently emit a lossy ``static_cast``: the user
+        should either narrow the active context or wrap the operand
+        in ``fp.round(...)`` to acknowledge the precision change.
+
+        For user-explicit casts (``Round`` / ``RoundExact``, vector
+        subscript), use :meth:`_explicit_cast` instead — that path
+        never refuses."""
         if arg_ty == target_ty:
             return arg
+        if not scalar_fits_in(arg_ty, target_ty):
+            raise Cpp2EmitError(
+                f'cannot implicitly cast `{arg_ty.format()}` to '
+                f'`{target_ty.format()}`: conversion is lossy.  '
+                f'Wrap the operand in ``fp.round(...)`` to make the '
+                f'rounding explicit, or use a context whose format '
+                f'contains the operand.'
+            )
+        return self._explicit_cast(arg, target_ty)
+
+    def _explicit_cast(self, arg: str, target_ty: CppScalar) -> str:
+        """Emit ``static_cast<target>(arg)`` unconditionally.
+
+        Used at sites where the cast is part of the FPy semantics
+        the user wrote — ``Round`` / ``RoundExact`` lower to a cast,
+        ``xs[i]`` needs ``static_cast<size_t>(i)``.  These callers
+        accept that the conversion may be lossy."""
         return f'static_cast<{target_ty.format()}>({arg})'
 
-    def _active_ctx_for(self, e: Expr) -> Context:
+    def _active_ctx_for(self, e: ContextUseSite) -> Context:
         """Look up the rounding context active at expression *e*.
 
         Symbolic / unresolved scopes are rejected — the cpp2 backend
@@ -547,19 +570,15 @@ class _Cpp2Emitter(Visitor):
 
     def _scalar_for_ctx(self, ctx: Context) -> CppScalar:
         """Resolve a context to its C++ scalar storage type."""
-        return self._scalar_for_format(ctx.format())
-
-    def _scalar_for_format(self, fmt) -> CppScalar:
-        """Resolve a :class:`Format` to its C++ scalar storage type."""
         try:
-            storage = choose_storage(fmt)
+            storage = choose_storage(ctx.format())
         except StorageSelectionError as e:
             raise Cpp2EmitError(
-                f'unsupported format `{fmt}`: {e}'
+                f'unsupported context `{ctx}`: {e}'
             ) from e
         if not isinstance(storage, CppScalar):
             raise Cpp2EmitError(
-                f'format `{fmt}` resolves to non-scalar storage `{storage!r}`'
+                f'context `{ctx}` resolves to non-scalar storage `{storage!r}`'
             )
         return storage
 
@@ -567,8 +586,8 @@ class _Cpp2Emitter(Visitor):
         """Dispatch a unary op via the op table.
 
         Picks a signature whose ``out_ctx`` matches the active
-        rounding context.  Direct match is preferred (operand
-        format admitted by the signature's ``arg_ctx``); on
+        rounding context.  Direct match is preferred (operand's C++
+        storage type equals the signature's ``arg_ty``); on
         mismatch we fall back to the all-active-context signature
         and explicit-cast the operand to that context's storage.
         """
@@ -578,32 +597,28 @@ class _Cpp2Emitter(Visitor):
                 f'no signatures for unary op: {type(e).__name__}'
             )
         active = self._active_ctx_for(e)
-        arg_fmt = self.format_info.by_expr.get(e.arg)
         arg_storage = self._scalar_storage_for_expr(e.arg)
 
         for sig in sigs:
-            if sig.matches(arg_fmt, active):
-                target = self._scalar_for_format(sig.arg_fmt)
-                return sig.format(self._maybe_cast(arg, arg_storage, target))
-        # Cast-to-active fallback: pick the all-active signature
-        # (input format == active.format()) and cast the operand
-        # into the active context's storage.
+            if sig.matches(arg_storage, active):
+                return sig.format(arg)
+        # Cast-to-active fallback: pick the all-active signature and
+        # cast the operand into the active context's storage.
         target = self._scalar_for_ctx(active)
-        active_fmt = active.format()
         for sig in sigs:
-            if sig.arg_fmt == active_fmt and sig.out_ctx == active:
+            if sig.arg_ty == target and sig.out_ctx == active:
                 return sig.format(self._maybe_cast(arg, arg_storage, target))
         raise Cpp2EmitError(
             f'no matching signature for {type(e).__name__} under '
-            f'context `{active}`: arg format `{arg_fmt}`'
+            f'context `{active}`: arg type `{arg_storage.format()}`'
         )
 
     def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
         """Dispatch a binary op via the op table.
 
         Picks a signature whose ``out_ctx`` matches the active
-        rounding context.  Direct match is preferred (operand
-        formats admitted by the signature's ``in*_ctx``); on
+        rounding context.  Direct match is preferred (operand C++
+        storage types equal the signature's ``in*_ty``); on
         mismatch we fall back to the all-active-context signature
         and explicit-cast both operands to that context's storage.
         """
@@ -613,27 +628,18 @@ class _Cpp2Emitter(Visitor):
                 f'no signatures for binary op: {type(e).__name__}'
             )
         active = self._active_ctx_for(e)
-        lhs_fmt = self.format_info.by_expr.get(e.first)
-        rhs_fmt = self.format_info.by_expr.get(e.second)
         lhs_storage = self._scalar_storage_for_expr(e.first)
         rhs_storage = self._scalar_storage_for_expr(e.second)
 
         for sig in sigs:
-            if sig.matches(lhs_fmt, rhs_fmt, active):
-                lhs_target = self._scalar_for_format(sig.in1_fmt)
-                rhs_target = self._scalar_for_format(sig.in2_fmt)
-                return sig.format(
-                    self._maybe_cast(lhs, lhs_storage, lhs_target),
-                    self._maybe_cast(rhs, rhs_storage, rhs_target),
-                )
-        # Cast-to-active fallback: pick the all-active signature
-        # (in1_fmt == in2_fmt == active.format()) and cast both
-        # operands into the active context's storage.
+            if sig.matches(lhs_storage, rhs_storage, active):
+                return sig.format(lhs, rhs)
+        # Cast-to-active fallback: pick the all-active signature and
+        # cast both operands into the active context's storage.
         target = self._scalar_for_ctx(active)
-        active_fmt = active.format()
         for sig in sigs:
-            if (sig.in1_fmt == active_fmt
-                    and sig.in2_fmt == active_fmt
+            if (sig.in1_ty == target
+                    and sig.in2_ty == target
                     and sig.out_ctx == active):
                 return sig.format(
                     self._maybe_cast(lhs, lhs_storage, target),
@@ -641,7 +647,8 @@ class _Cpp2Emitter(Visitor):
                 )
         raise Cpp2EmitError(
             f'no matching signature for {type(e).__name__} under '
-            f'context `{active}`: lhs `{lhs_fmt}`, rhs `{rhs_fmt}`'
+            f'context `{active}`: lhs `{lhs_storage.format()}`, '
+            f'rhs `{rhs_storage.format()}`'
         )
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
@@ -768,10 +775,10 @@ class _Cpp2Emitter(Visitor):
     ) -> str:
         """Dispatch a ternary op via the op table.
 
-        Same shape as :meth:`_dispatch_binary` — direct match if all
-        three operand formats fit the signature; otherwise the
-        all-active-context signature with explicit casts on each
-        operand.
+        Same shape as :meth:`_dispatch_binary` — direct match if
+        every operand's C++ storage equals the signature's input
+        slots; otherwise the all-active-context signature with
+        explicit casts on each operand.
         """
         sigs = self.op_table.ternary.get(type(e))
         if sigs is None:
@@ -779,28 +786,17 @@ class _Cpp2Emitter(Visitor):
                 f'no signatures for ternary op: {type(e).__name__}'
             )
         active = self._active_ctx_for(e)
-        in_fmts = [self.format_info.by_expr.get(a) for a in e.args]
         in_storages = [self._scalar_storage_for_expr(a) for a in e.args]
 
         for sig in sigs:
-            if sig.matches(in_fmts[0], in_fmts[1], in_fmts[2], active):
-                targets = [
-                    self._scalar_for_format(sig.in1_fmt),
-                    self._scalar_for_format(sig.in2_fmt),
-                    self._scalar_for_format(sig.in3_fmt),
-                ]
-                return sig.format(
-                    self._maybe_cast(a1, in_storages[0], targets[0]),
-                    self._maybe_cast(a2, in_storages[1], targets[1]),
-                    self._maybe_cast(a3, in_storages[2], targets[2]),
-                )
+            if sig.matches(in_storages[0], in_storages[1], in_storages[2], active):
+                return sig.format(a1, a2, a3)
         # Cast-to-active fallback.
         target = self._scalar_for_ctx(active)
-        active_fmt = active.format()
         for sig in sigs:
-            if (sig.in1_fmt == active_fmt
-                    and sig.in2_fmt == active_fmt
-                    and sig.in3_fmt == active_fmt
+            if (sig.in1_ty == target
+                    and sig.in2_ty == target
+                    and sig.in3_ty == target
                     and sig.out_ctx == active):
                 return sig.format(
                     self._maybe_cast(a1, in_storages[0], target),
@@ -809,8 +805,10 @@ class _Cpp2Emitter(Visitor):
                 )
         raise Cpp2EmitError(
             f'no matching signature for {type(e).__name__} under '
-            f'context `{active}`: {in_fmts}'
+            f'context `{active}`: '
+            f'{[s.format() for s in in_storages]}'
         )
+
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
         if isinstance(e, Zip):
             return self._emit_zip(e, ctx)
@@ -869,7 +867,12 @@ class _Cpp2Emitter(Visitor):
         target_ty = self._scalar_for_ctx(active)
 
         if isinstance(e, Round):
-            return self._maybe_cast(arg, arg_ty, target_ty)
+            # The user explicitly asked to round into the active
+            # context — emit the cast even when lossy.  Same-type
+            # short-circuits to a no-op.
+            if arg_ty == target_ty:
+                return arg
+            return self._explicit_cast(arg, target_ty)
 
         # RoundExact: same-type is a guaranteed no-op, no assert.
         if arg_ty == target_ty:
@@ -878,8 +881,7 @@ class _Cpp2Emitter(Visitor):
         # it without re-evaluating the source expression.
         tmp = self._fresh_temp()
         self.writer.add_line(
-            f'{target_ty.format()} {tmp} = '
-            f'static_cast<{target_ty.format()}>({arg});'
+            f'{target_ty.format()} {tmp} = {self._explicit_cast(arg, target_ty)};'
         )
         # NaN-aware comparison: ``NaN == NaN`` is false in C++, so
         # FP operands need an extra ``isnan`` guard to avoid false
@@ -895,8 +897,11 @@ class _Cpp2Emitter(Visitor):
         self.writer.add_line(f'assert({check});')
         return tmp
 
-    def _visit_round_at(self, e, ctx): self._unsupported('RoundAt')
-    def _visit_call(self, e, ctx): self._unsupported('Call')
+    def _visit_round_at(self, e, ctx):
+        self._unsupported('RoundAt')
+
+    def _visit_call(self, e, ctx):
+        self._unsupported('Call')
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
         # ``(a, b, c)`` → ``std::make_tuple(a, b, c)``.  Type deduction
@@ -1016,6 +1021,7 @@ class _Cpp2Emitter(Visitor):
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
         return f'{value}[static_cast<size_t>({index})]'
+
     def _visit_list_slice(self, e: ListSlice, ctx) -> str:
         # ``xs[start:stop]`` →
         #   auto __cpp2_tmpN = <xs>;
@@ -1054,7 +1060,8 @@ class _Cpp2Emitter(Visitor):
         # visitor would be a pipeline bug.
         self._unsupported('ListSet')
 
-    def _visit_if_expr(self, e, ctx): self._unsupported('IfExpr')
+    def _visit_if_expr(self, e, ctx):
+        self._unsupported('IfExpr')
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         # ``xs[i1]…[iN] = e`` is in-place mutation in C++.  The
@@ -1168,6 +1175,12 @@ class _Cpp2Emitter(Visitor):
         self._visit_block(stmt.body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
-    def _visit_assert(self, stmt, ctx): self._unsupported('AssertStmt')
-    def _visit_effect(self, stmt, ctx): self._unsupported('EffectStmt')
-    def _visit_pass(self, stmt, ctx): self._unsupported('PassStmt')
+
+    def _visit_assert(self, stmt, ctx):
+        self._unsupported('AssertStmt')
+
+    def _visit_effect(self, stmt, ctx):
+        self._unsupported('EffectStmt')
+
+    def _visit_pass(self, stmt, ctx):
+        self._unsupported('PassStmt')

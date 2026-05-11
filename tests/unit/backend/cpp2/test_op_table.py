@@ -1,24 +1,22 @@
 """
 Phase 5a tests for the cpp2 emitter — operation type dispatch.
 
-Each primitive op is parameterized by *input contexts* and an
-*output context*.  Dispatch picks a signature whose ``out_ctx``
-matches the active rounding context, with operand formats ⊆ each
-``in_ctx.format()``.  When the operand format isn't admitted by any
-sig directly, the all-active-context signature is used and operands
-are explicit-cast to the active context's storage.  All conversions
-go through ``static_cast`` (no implicit promotion).
+Each primitive op is parameterized by *argument C++ types* and an
+*output rounding context*.  Dispatch picks a signature whose
+``out_ctx`` matches the active rounding context, with operand C++
+storage types equal to each ``in_ty``.  When operand storages
+don't match a signature directly, the all-active-context signature
+is used and operands are explicit-cast to the active context's
+storage.  All conversions go through ``static_cast`` (no implicit
+promotion).
 """
 
 import fpy2 as fp
 import pytest
 
 from fpy2.backend.cpp2 import Cpp2Compiler, Cpp2CompileError
-from fpy2.backend.cpp2.ops import (
-    BinaryCppOp,
-    UnaryCppOp,
-    make_op_table,
-)
+from fpy2.backend.cpp2.ops import make_op_table
+from fpy2.backend.cpp2.types import CppScalar
 from fpy2.types import RealType
 
 
@@ -29,14 +27,13 @@ class TestOpTableShape:
     def test_binary_table_has_arith(self):
         t = make_op_table()
         from fpy2.ast.fpyast import Add, Sub, Mul, Div
-        fp64_fmt = fp.FP64.format()
         for op in (Add, Sub, Mul, Div):
             assert op in t.binary
             # FP64 self-application (RNE) must be present — the
             # common-case signature for ``with FP64:`` blocks.
             assert any(
-                sig.in1_fmt == fp64_fmt
-                and sig.in2_fmt == fp64_fmt
+                sig.in1_ty == CppScalar.F64
+                and sig.in2_ty == CppScalar.F64
                 and sig.out_ctx == fp.FP64
                 for sig in t.binary[op]
             )
@@ -44,11 +41,10 @@ class TestOpTableShape:
     def test_unary_table_has_neg_abs(self):
         t = make_op_table()
         from fpy2.ast.fpyast import Neg, Abs
-        fp64_fmt = fp.FP64.format()
         for op in (Neg, Abs):
             assert op in t.unary
             assert any(
-                sig.arg_fmt == fp64_fmt and sig.out_ctx == fp.FP64
+                sig.arg_ty == CppScalar.F64 and sig.out_ctx == fp.FP64
                 for sig in t.unary[op]
             )
 
@@ -76,9 +72,8 @@ class TestOpTableShape:
         rms = [fp.RM.RNE, fp.RM.RTZ, fp.RM.RTP, fp.RM.RTN]
         for rm in rms:
             ctx = fp.IEEEContext(11, 64, rm)
-            ctx_fmt = ctx.format()
             assert any(
-                sig.in1_fmt == ctx_fmt and sig.out_ctx == ctx
+                sig.in1_ty == CppScalar.F64 and sig.out_ctx == ctx
                 for sig in t.binary[Add]
             )
 
@@ -101,14 +96,31 @@ class TestDispatchDirect:
 
 
 class TestDispatchCastFallback:
-    """Cast-to-result fires only when the implicit conversion is
-    lossy.  Lossless widenings (e.g., ``U8 → F64``) stay implicit."""
+    """Cast-to-active fires when operand storage doesn't match the
+    signature's input slot.  The cast must be lossless — lossy
+    implicit casts are rejected, telling the user to round
+    explicitly with ``fp.round(...)``."""
 
-    def test_int64_minus_literal_under_fp64_casts_both(self):
-        """``len(xs) - 1`` with result F64.  Every conversion goes
-        through an explicit ``static_cast`` (no implicit promotion)
-        — both the ``int64_t`` operand and the ``U8`` literal cast
-        to ``double``."""
+    def test_lossless_widening_casts_implicit(self):
+        """``F32`` widens losslessly into ``F64``; the cast emits
+        without rejection."""
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x + y
+
+        out = Cpp2Compiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[RealType(fp.FP32), RealType(fp.FP64)],
+        )
+        # ``x`` is float (F32) — fits in double, so cast is emitted.
+        assert 'return (static_cast<double>(x) + y);' in out
+
+    def test_lossy_int64_to_double_rejected(self):
+        """``len(xs) - 1`` with result F64: ``len(xs)`` is
+        ``int64_t``, which doesn't fit losslessly in ``double``.
+        The implicit cast is rejected."""
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -117,45 +129,45 @@ class TestDispatchCastFallback:
                 return xs[n - 1]
 
         from fpy2.types import ListType
-        out = Cpp2Compiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[ListType(RealType(fp.FP64))],
-        )
-        assert (
-            '(static_cast<double>(n) - static_cast<double>(1))'
-        ) in out
+        with pytest.raises(
+            Cpp2CompileError,
+            match='cannot implicitly cast.*int64_t.*to.*double',
+        ):
+            Cpp2Compiler().compile(
+                f, ctx=fp.FP64,
+                arg_types=[ListType(RealType(fp.FP64))],
+            )
 
-    def test_int_int_under_fp_casts_both(self):
-        """Two int64 operands under FP64 both need explicit casts —
-        neither fits losslessly in ``double``."""
-
-        @fp.fpy
-        def f() -> fp.Real:
-            with fp.FP64:
-                return sum([i * i for i in range(5)])
-
-        out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
-        assert (
-            '(static_cast<double>(i) * static_cast<double>(i))'
-        ) in out
-
-    def test_float_double_widening_casts_explicitly(self):
-        """``F32`` fits losslessly in ``F64`` but we still emit the
-        cast — the policy is "every conversion is explicit", not
-        "every cast carries a precision warning"."""
+    def test_lossy_fp64_to_fp32_rejected(self):
+        """Casting ``double`` into an ``FP32`` context is lossy
+        — must be made explicit with ``fp.round(...)``."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP32:
-                a = x + 1
-            with fp.FP64:
-                return a + x
+                return x + 1
+
+        with pytest.raises(
+            Cpp2CompileError,
+            match='cannot implicitly cast.*double.*to.*float',
+        ):
+            Cpp2Compiler().compile(
+                f, ctx=fp.FP32,
+                arg_types=[RealType(fp.FP64)],
+            )
+
+    def test_explicit_round_makes_lossy_cast_legal(self):
+        """Wrapping the wider operand in ``fp.round(...)`` is the
+        sanctioned escape hatch — the user is explicitly opting in."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                return fp.round(x) + 1
 
         out = Cpp2Compiler().compile(
-            f, ctx=fp.FP64,
+            f, ctx=fp.FP32,
             arg_types=[RealType(fp.FP64)],
         )
-        # ``a`` is float, ``x`` is double, result is double — explicit
-        # cast on the narrower operand even though widening to
-        # double is lossless.
-        assert 'return (static_cast<double>(a) + x);' in out
+        # ``fp.round(x)`` emits the lossy ``static_cast<float>(x)``.
+        assert 'static_cast<float>(x)' in out

@@ -75,9 +75,12 @@ class TestLen:
     def test_len_used(self):
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.INTEGER:
+                # Integer arithmetic stays int64_t; doesn't trigger
+                # a lossy implicit cast into the outer FP context.
+                n = len(xs) - 1
             with fp.FP64:
-                n = len(xs)
-                return xs[n - 1]
+                return xs[n]
 
         out = _compile_list_arg(f)
         # ``len`` lowers to ``size()`` cast to the inferred integer type.
@@ -103,20 +106,19 @@ class TestListComp:
 
     def test_range_iterable(self):
         """``range(...)`` in a comprehension expands to a counter loop.
-        ``i * i`` under FP64 with ``i: int64_t`` casts both operands
-        to ``double`` (int64 ⊄ double, so the cast isn't a no-op)."""
+        Stay in the integer context so the body's arithmetic doesn't
+        trigger a lossy int64 → double cast under the strict policy."""
 
         @fp.fpy
         def f() -> fp.Real:
-            with fp.FP64:
+            with fp.INTEGER:
                 sq = [i * i for i in range(5)]
+            with fp.FP64:
                 return sq[0]
 
         out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
         assert 'for (int64_t i = 0; i < 5; ++i) {' in out
-        assert (
-            '.push_back((static_cast<double>(i) * static_cast<double>(i)));'
-        ) in out
+        assert '.push_back((i * i));' in out
 
     def test_range2_iterable(self):
         @fp.fpy

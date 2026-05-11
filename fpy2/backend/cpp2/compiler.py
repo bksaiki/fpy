@@ -176,4 +176,4 @@ class Cpp2Compiler(Backend):
         try:
             return emitter.emit()
         except Cpp2EmitError as e:
-            raise Cpp2CompileError(str(e)) from e
+            raise Cpp2CompileError(f'compilation failed for {func.name}') from e
