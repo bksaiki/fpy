@@ -25,10 +25,13 @@ _RNA_64 = fp.IEEEContext(11, 64, fp.RM.RNA)
 
 
 class TestStaticResolution:
-    """The context expression must resolve to a concrete Context."""
+    """Validation gates on context use: a scope must resolve to a
+    concrete, supported :class:`Context` *iff* a primitive op
+    dispatches under it.  Scopes that hold an exotic context but
+    have no uses compile freely."""
 
     def test_function_with_no_fp_doesnt_need_ctx(self):
-        """A bool-returning function has no FP ops so its outer
+        """A bool-returning function has no op uses, so its outer
         scope can be symbolic — no error."""
 
         @fp.fpy
@@ -50,6 +53,41 @@ class TestStaticResolution:
         )
         # FP64 default-RM (RNE) — no fesetround.
         assert 'fesetround' not in out
+
+    def test_function_scope_unused_when_all_ops_nested(self):
+        """When every op lives inside an inner ``with``, the
+        function-level scope has no uses and isn't validated — so
+        the outer (function-level) context can be anything,
+        including a context the cpp2 backend doesn't natively
+        support."""
+
+        @fp.fpy(ctx=_RNA_64)              # RNA is unsupported by fesetround,
+        def f(x: fp.Real) -> fp.Real:     # but this function never dispatches
+            with fp.FP64:                  # under the outer scope — every op
+                return x + x               # is inside ``with fp.FP64:``.
+
+        # No error: compilation succeeds.
+        out = Cpp2Compiler().compile(f, arg_types=[RealType(fp.FP64)])
+        assert 'return (x + x);' in out
+
+    def test_with_block_scope_unused_compiles(self):
+        """A ``with`` block whose body has no ops compiles fine
+        even if the context itself is unsupported — there's nothing
+        to validate."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with _RNA_64:                  # unsupported RM …
+                n = 0                      # … but only a literal
+            with fp.FP64:                  # assign — no op dispatches
+                return xs[n]               # under the outer scope.
+
+        from fpy2.types import ListType
+        out = Cpp2Compiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(RealType(fp.FP64))],
+        )
+        assert 'return xs[' in out
 
 
 class TestDefaultRmIsImplicit:

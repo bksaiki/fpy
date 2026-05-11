@@ -32,6 +32,7 @@ Anything else raises :class:`Cpp2EmitError`, which the public
 ``Cpp2Compiler`` re-wraps as :class:`Cpp2CompileError`.
 """
 
+from contextlib import contextmanager
 from fractions import Fraction
 
 from ...analysis import (
@@ -39,20 +40,18 @@ from ...analysis import (
     DefineUseAnalysis, FormatAnalysis
 )
 from ...ast.fpyast import (
-    Abs, Argument, Assign, BinaryOp, BoolVal, Cast, Compare, ContextStmt,
+    Argument, Assign, BinaryOp, BoolVal, Cast, Compare, ContextStmt,
     Decnum, Digits, Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt,
     IfStmt, IndexedAssign, Integer, Len, ListComp, ListExpr, ListRef,
-    ListSlice, NamedId, NaryOp, Neg, Range1, Range2, Range3, Rational,
+    ListSlice, NamedId, NaryOp, Range1, Range2, Range3, Rational,
     ReturnStmt, Round, RoundExact, StmtBlock, Sum, TernaryOp, TupleBinding,
     TupleExpr, UnaryOp, UnderscoreId, Var, WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
-from ...number import RM
+from ...number import EFloatContext, MPFixedContext, MPBFixedContext, RM
 from ...number.context.context import Context
 
-from .ops import (
-    BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp, make_op_table,
-)
+from .ops import ScalarOpTable, make_op_table
 from .storage import (
     StorageSelectionError, choose_storage, scalar_fits_in, scalar_sup,
 )
@@ -252,35 +251,25 @@ class _Cpp2Emitter(Visitor):
         self.writer.add_line(sig + ' {')
         self.writer.indent()
         # The function-level scope determines the rounding mode in
-        # effect at function entry.  When it resolves to a concrete
-        # FP context with non-default RM, save the caller's ``fenv``
-        # and ``fesetround`` to the function's mode (restoring on
-        # every exit path is a Phase 6 refinement — for now we
-        # save/restore around the body).  An unresolved (symbolic)
-        # outer scope is allowed for context-free programs (bool
-        # returns, integer-only work whose context never appears in
-        # the source); nested ``with`` blocks still validate strictly.
-        func_ctx = self._try_resolve_scope_ctx(func)
-        if func_ctx is None:
-            self._current_rm = RM.RNE
+        # effect at function entry — but only when something actually
+        # *uses* the context (a primitive op dispatching under it).
+        # A function that does only context-free work (bool returns,
+        # tuple shuffling, ops fully nested in inner ``with`` blocks)
+        # doesn't need its outer scope to be supported.  See
+        # :meth:`_resolve_used_ctx`.
+        # C++ functions enter at the caller's ``fenv`` — which is
+        # ``FE_TONEAREST`` by convention on a fresh thread.  Treat
+        # the pre-function RM as ``RNE`` so the shared
+        # :meth:`_fenv_scope` helper emits a save / set / restore
+        # whenever the function's used context demands a different
+        # mode, and no fenv code otherwise.
+        self._current_rm = RM.RNE
+        func_ctx = self._resolve_used_ctx(func)
+        if func_ctx is None or self._validate_context_rm(func_ctx).is_integer():
             self._visit_block(func.body, None)
         else:
-            func_storage = self._validate_context_rm(func_ctx)
-            if func_storage.is_float() and func_ctx.rm != RM.RNE:
-                fenv = self._fresh_temp()
-                self.writer.add_line(
-                    f'const auto {fenv} = std::fegetround();'
-                )
-                self.writer.add_line(
-                    f'std::fesetround({_FE_RM_MACRO[func_ctx.rm]});'
-                )
-                self._current_rm = func_ctx.rm
-                self._visit_block(func.body, None)
-                self.writer.add_line(f'std::fesetround({fenv});')
-            else:
-                self._current_rm = (
-                    func_ctx.rm if func_storage.is_float() else RM.RNE
-                )
+            assert isinstance(func_ctx, EFloatContext)
+            with self._fenv_scope(func_ctx.rm):
                 self._visit_block(func.body, None)
         self.writer.dedent()
         self.writer.add_line('}')
@@ -361,19 +350,23 @@ class _Cpp2Emitter(Visitor):
         rhs = self._visit_expr(stmt.expr, ctx)
         self.writer.add_line(f'return {rhs};')
 
-    def _resolve_scope_ctx(self, site: ContextScopeSite) -> Context:
-        """Pull the scope's resolved context, requiring it to be
-        statically known.  Symbolic context variables (``ContextUse``
-        falls back to a fresh ``NamedId`` when partial-eval can't
-        pin a concrete :class:`Context`) are rejected — the cpp2
-        backend only compiles programs whose contexts are known at
-        compile time."""
-        try:
-            scope = self._scope_by_site[site]
-        except KeyError as e:
-            raise Cpp2EmitError(
-                f'no context scope registered for `{type(site).__name__}`'
-            ) from e
+    def _resolve_used_ctx(self, site: ContextScopeSite) -> Context | None:
+        """Pull the scope's resolved context, *but only if some
+        primitive op actually dispatches under it*.
+
+        Returns ``None`` when the scope has no uses — in that case
+        the caller skips validation, skips ``fesetround``, and just
+        descends into the body.  Programs without rounding-context
+        uses don't need a supported context.
+
+        When uses exist, the scope's context must be statically
+        resolvable (a concrete :class:`Context`); symbolic context
+        variables are rejected here, with the error pointing at the
+        ``with`` site rather than at the op that consumed it.
+        """
+        scope = self._scope_by_site.get(site)
+        if scope is None or not self.ctx_use.uses.get(scope):
+            return None
         rctx = scope.ctx
         if not isinstance(rctx, Context):
             raise Cpp2EmitError(
@@ -381,19 +374,6 @@ class _Cpp2Emitter(Visitor):
                 f'Context value; got symbolic `{rctx}`'
             )
         return rctx
-
-    def _try_resolve_scope_ctx(self, site: ContextScopeSite) -> Context | None:
-        """Like :meth:`_resolve_scope_ctx` but returns ``None`` for a
-        symbolic / unresolved scope rather than raising.
-
-        Used at the function-level scope: a function that only does
-        bool / context-free work doesn't need a ``ctx`` annotation,
-        so its outer scope can be symbolic.  Nested ``with`` blocks
-        still validate strictly via :meth:`_resolve_scope_ctx`."""
-        scope = self._scope_by_site.get(site)
-        if scope is None:
-            return None
-        return scope.ctx if isinstance(scope.ctx, Context) else None
 
     def _validate_context_rm(self, rctx: Context) -> CppScalar:
         """Validate *rctx* and return its scalar storage type.
@@ -416,12 +396,14 @@ class _Cpp2Emitter(Visitor):
                 f'unsupported context storage `{storage!r}` for `{rctx}`'
             )
         if storage.is_float():
+            assert isinstance(rctx, EFloatContext)
             if rctx.rm not in _FE_RM_MACRO:
                 raise Cpp2EmitError(
                     f'rounding mode {rctx.rm} for context `{rctx}` is not '
                     'supported by ``fesetround`` (need RNE, RTZ, RTP, or RTN)'
                 )
         elif storage.is_integer():
+            assert isinstance(rctx, MPFixedContext | MPBFixedContext)
             if rctx.rm != RM.RTZ:
                 raise Cpp2EmitError(
                     f'integer context `{rctx}` must use RTZ rounding mode '
@@ -434,37 +416,55 @@ class _Cpp2Emitter(Visitor):
             )
         return storage
 
+    @contextmanager
+    def _fenv_scope(self, target_rm: RM):
+        """Wrap the contained emission in a ``fesetround`` save / set
+        / restore when *target_rm* differs from ``self._current_rm``.
+        When the mode already matches, yield without any fenv code.
+
+        The current rounding mode is tracked on ``self._current_rm``
+        so nested scopes only emit ``fesetround`` at actual mode
+        boundaries — plain ``with FP64:`` blocks under an FP64-RNE
+        function add no noise.
+        """
+        if target_rm == self._current_rm:
+            yield
+            return
+        fenv = self._fresh_temp()
+        prev_rm = self._current_rm
+        self.writer.add_line(f'const auto {fenv} = std::fegetround();')
+        self.writer.add_line(f'std::fesetround({_FE_RM_MACRO[target_rm]});')
+        self._current_rm = target_rm
+        try:
+            yield
+        finally:
+            self._current_rm = prev_rm
+        self.writer.add_line(f'std::fesetround({fenv});')
+
     def _visit_context(self, stmt: ContextStmt, ctx):
-        # Phase 5b: ``with <ctx>:`` blocks.  The active rounding
-        # context is taken from the :class:`ContextUseAnalysis` scope
-        # registered at this statement's site (which has already
-        # resolved attribute references / partial-eval'd the context
-        # expression).  Float contexts may emit ``fesetround`` save /
-        # set / restore around the body; integer contexts pass
-        # through unchanged.
+        # ``with <ctx>:`` blocks.  The active rounding context is
+        # taken from the :class:`ContextUseAnalysis` scope registered
+        # at this statement's site (which has already resolved
+        # attribute references / partial-eval'd the context
+        # expression).  Validation only fires when something inside
+        # the block actually uses the context — see
+        # :meth:`_resolve_used_ctx`.  For used FP scopes we may emit
+        # ``fesetround`` save / set / restore around the body.
         if not isinstance(stmt.target, UnderscoreId):
             raise Cpp2EmitError(
                 'binding the active context to a name is not yet supported'
             )
-        rctx = self._resolve_scope_ctx(stmt)
-        storage = self._validate_context_rm(rctx)
-        if storage.is_integer() or rctx.rm == self._current_rm:
-            # Integer arithmetic doesn't consult ``fenv``, and a float
-            # ``with`` that doesn't change the active RM has nothing
-            # to save / restore.  Either way: just descend.
+        rctx = self._resolve_used_ctx(stmt)
+        if rctx is None or self._validate_context_rm(rctx).is_integer():
+            # No op uses this scope, or the scope is integer (no
+            # ``fenv`` to manage either way).  Just descend.
             self._visit_block(stmt.body, ctx)
             return
-
-        fenv = self._fresh_temp()
-        prev_rm = self._current_rm
-        self.writer.add_line(f'const auto {fenv} = std::fegetround();')
-        self.writer.add_line(f'std::fesetround({_FE_RM_MACRO[rctx.rm]});')
-        self._current_rm = rctx.rm
-        try:
+        # Float context: validation above guarantees an
+        # ``EFloatContext`` with a ``fesetround``-supported RM.
+        assert isinstance(rctx, EFloatContext)
+        with self._fenv_scope(rctx.rm):
             self._visit_block(stmt.body, ctx)
-        finally:
-            self._current_rm = prev_rm
-        self.writer.add_line(f'std::fesetround({fenv});')
 
     # ------------------------------------------------------------------
     # Expression visitors — return a C++ source fragment

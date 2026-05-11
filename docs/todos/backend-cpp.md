@@ -136,12 +136,26 @@ where applicable.
 ### Context boundaries
 
 The active rounding context at every `FuncDef` / `ContextStmt` site
-comes from `ContextUseAnalysis`.  Programs whose contexts can't be
-statically resolved are **rejected** — `ContextUse` consults
-`PartialEval` internally to resolve attribute references like
-`fp.FP64`, but anything truly symbolic (a context bound to a name)
-fails with a clear error.
+comes from `ContextUseAnalysis`.
 
+**Validation is gated on use.**  A scope is only validated when
+some primitive op (`NullaryOp` / `UnaryOp` / `BinaryOp` /
+`TernaryOp` / `Call`) actually dispatches under it — i.e., when
+`ctx_use.uses[scope]` is non-empty.  Scopes with no uses (e.g.,
+a function-level scope where every op lives inside a nested `with`,
+or a `with` block that holds an exotic context but only does
+context-free work like list indexing) are skipped entirely: no
+validation, no `fesetround`.  This means programs without a
+rounding-context use don't need a supported function-level context,
+and `with UnsupportedCtx:` blocks compile freely as long as nothing
+inside them dispatches under that scope.
+
+When a scope *is* used, validation runs:
+
+- The context must be a concrete :class:`Context` — symbolic
+  context variables (`ContextUse` falls back to a fresh `NamedId`
+  when partial-eval can't pin one) are rejected at the
+  introduction site.
 - **Float contexts** must use a rounding mode supported by
   `fesetround` (RNE / RTZ / RTP / RTN).  `_visit_function` /
   `_visit_context` save / set / restore `fenv` only when the active

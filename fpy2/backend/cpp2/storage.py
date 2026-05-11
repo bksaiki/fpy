@@ -12,8 +12,9 @@ The module also exposes:
   representable in a target :class:`Format`?  Used by
   :mod:`.ops` to validate operand formats against op-table
   signatures.
-- :func:`scalar_abstract` / :func:`scalar_fits_in` — ladder-level
-  containment helpers keyed off :class:`CppScalar`.
+- :func:`scalar_fits_in` — ladder-level containment between two
+  :class:`CppScalar`s.  Used by the cast helper to reject lossy
+  implicit conversions.
 - :func:`scalar_sup` — smallest ladder scalar subsuming every
   input.  Used by :meth:`_visit_compare` to pick the common type
   for a chained comparison.
