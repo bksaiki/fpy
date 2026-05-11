@@ -312,7 +312,7 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
 
-def _to_abstract(f: AbstractableFormatBound) -> AbstractFormat | None:
+def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | None:
     """
     Lifts an abstractable :class:`FormatBound` to an
     :class:`AbstractFormat`.  Returns ``None`` for variants that the

@@ -336,6 +336,28 @@ class _ArraySizeInferInstance(DefaultVisitor):
         assert isinstance(ty, ListSize)
         return ty.elt
 
+    def _visit_list_set(self, e: ListSet, ctx: None):
+        # ``ListSet(value, [i1, …, iN], expr)`` — produce the bound for
+        # the resulting list/tuple by walking ``len(indices)`` ListSize
+        # layers and unifying the inserted expr's bound with the leaf
+        # element bound at that depth.  This mirrors
+        # :func:`_list_set_widen` in ``format_infer``.
+        target_ty = self._visit_expr(e.value, ctx)
+
+        def recur(indices: tuple[Expr, ...], target_ty: ArraySizeBound) -> ArraySizeBound:
+            if len(indices) == 0:
+                ty = self._visit_expr(e.expr, ctx)
+                return self._unify(target_ty, ty)
+            self._visit_expr(indices[0], ctx)
+            assert isinstance(target_ty, ListSize), (
+                f'expected ListSize at depth {len(e.indices) - len(indices)} '
+                f'of ListSet, got {target_ty!r}'
+            )
+            elt_ty = recur(indices[1:], target_ty.elt)
+            return ListSize(elt_ty, target_ty.size)
+
+        return recur(e.indices, target_ty)
+
     def _visit_list_slice(self, e: ListSlice, ctx: None):
         ty = self._visit_expr(e.value, ctx)
         assert isinstance(ty, ListSize)
