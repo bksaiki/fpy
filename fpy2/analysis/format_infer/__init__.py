@@ -5,6 +5,8 @@ from .analysis import (
     FormatBound,
     FormatInfer,
     ListFormat,
+    PreAnalyses,
+    PreAnalysisCache,
     SetFormat,
     TupleFormat,
 )
@@ -17,6 +19,8 @@ __all__ = [
     'FormatBound',
     'FormatInfer',
     'ListFormat',
+    'PreAnalyses',
+    'PreAnalysisCache',
     'SetFormat',
     'TupleFormat',
 ]
