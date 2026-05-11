@@ -257,39 +257,37 @@ def _default_arg_types(func: Function) -> list[Type]:
     return [_instantiate_type(ty) for ty in ty_info.arg_types]
 
 
-class _CalleeCollector(Visitor):
-    """Pre-order walk for ``Call`` nodes — collects each call's
-    :class:`Function` value (``Call.fn``) without compiling
-    anything."""
+def _direct_callees(func: Function) -> list[Function]:
+    """All :class:`Function` values reached by a :class:`Call` node
+    inside *func*'s body, in source order (duplicates preserved).
+    Walks every ``Ast``-typed slot recursively — works on the live
+    AST without needing a fully-spelled visitor."""
+    out: list[Function] = []
 
-    def __init__(self):
-        self.callees: list[Function] = []
+    def walk(node):
+        if isinstance(node, Call) and isinstance(node.fn, Function):
+            out.append(node.fn)
+        if isinstance(node, Ast):
+            for slot in node.__slots__:
+                walk(getattr(node, slot, None))
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item)
 
-    def _visit_call(self, e: Call, ctx):
-        if isinstance(e.fn, Function):
-            self.callees.append(e.fn)
-        # Recurse into the call's args so nested calls show up.
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
-        for _, v in e.kwargs:
-            self._visit_expr(v, ctx)
-        return None
+    walk(func.ast.body)
+    return out
 
 
 def _collect_callees(func: Function) -> list[Function]:
     """Topologically-ordered (callee-before-caller) list of every
     :class:`Function` transitively reachable from *func* via
-    :class:`Call`.  Direct calls come first, then their callees, etc.
-    ``func`` itself is not included."""
+    :class:`Call`.  ``func`` itself is not included."""
     out: list[Function] = []
     queue: list[Function] = []
     enqueued: set[str] = set()
 
     def _enqueue(f: Function):
-        # Walk the AST once and harvest direct callees.
-        collector = _CalleeCollector()
-        collector._visit_block(f.ast.body, None)
-        for callee in collector.callees:
+        for callee in _direct_callees(f):
             if callee.name in enqueued:
                 continue
             enqueued.add(callee.name)
