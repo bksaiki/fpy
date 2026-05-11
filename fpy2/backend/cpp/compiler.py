@@ -18,15 +18,17 @@ from ...analysis import (
     ContextUse,
     DefineUse,
     FormatInfer,
-    TypeInfer,
 )
 from ...analysis.context_use import ContextUseAnalysis
-from ...analysis.format_infer import FormatAnalysis
-from ...ast.fpyast import Ast, Call, FuncDef
+from ...analysis.format_infer import FormatAnalysis, PreAnalysisCache
+from ...ast.fpyast import Call, FuncDef
 from ...function import Function
-from ...number import Context, FP64
+from ...number import Context
+from ...number.context.ieee754 import IEEEContext
+from ...number.context.mp_fixed import MPFixedContext
+from ...number.context.mpb_fixed import MPBFixedContext
 from ...transform import Monomorphize
-from ...types import BoolType, ContextType, ListType, RealType, TupleType, Type, VarType
+from ...types import Type
 from ..backend import Backend, CompileError
 
 from .emitter import CppEmitError, _CppEmitter
@@ -106,7 +108,18 @@ class CppCompiler(Backend):
         func: Function,
         ctx: Context | None,
         arg_types: Collection[Type | None] | None,
+        *,
+        pre_cache: PreAnalysisCache,
     ) -> CppPipelineResult:
+        """Monomorphize *func*, run pre-analyses, then run
+        :class:`FormatInfer` and :class:`StorageInfer` for the
+        top-level instantiation.
+
+        The pre-analysis cache is shared with sub-analyses created
+        by :class:`FormatInfer` when walking into :class:`Call`
+        targets — each :class:`FuncDef` is structurally analyzed at
+        most once across the whole call graph.
+        """
         ast = func.ast
         if arg_types is None:
             arg_types = [None for _ in func.args]
@@ -125,6 +138,7 @@ class CppCompiler(Backend):
             def_use=def_use,
             ctx_use=ctx_use,
             array_size=array_size,
+            pre_cache=pre_cache,
         )
 
         # Per-SSA-def storage assignment.  Defs joined by phi edges or
@@ -156,149 +170,235 @@ class CppCompiler(Backend):
         """
         Compile *func* to a C++ source-code string.
 
+        Cross-function calls are template-specialized: each unique
+        ``(callee FuncDef, outer rounding context)`` pair produces
+        one C++ definition with a mangled name.  Specializations are
+        emitted before their callers so the result is a self-contained
+        sequence of definitions.
+
         Args:
             func: The :class:`Function` to compile.
             ctx: Optional rounding context to monomorphize against.
             arg_types: Optional per-argument types to monomorphize against.
 
         Returns:
-            The compiled C++ source.  When *func* invokes other
-            FPy functions, each callee is emitted in topological
-            order above *func* so the result is a self-contained
-            sequence of definitions.
+            The compiled C++ source.
         """
         if not isinstance(func, Function):
             raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
 
-        # Compile transitive callees first so each is defined before
-        # any user.  Callees are monomorphized at ``FP64`` with their
-        # declared parameter types instantiated the same way the
-        # infra harness does for top-level functions — symbolic Real
-        # / Var slots collapse to ``RealType(FP64)``.
-        defs: list[str] = []
-        seen: set[str] = set()
-        for callee in _collect_callees(func):
-            if callee.name in seen:
-                continue
-            seen.add(callee.name)
-            try:
-                callee_arg_types = _default_arg_types(callee)
-            except _UninstantiableType as e:
-                raise CppCompileError(
-                    f'cannot derive arg types for callee `{callee.name}`: {e}'
-                )
-            defs.append(self._compile_single(callee, FP64, callee_arg_types))
+        # Shared structural-analysis cache.  Every :class:`FuncDef`
+        # encountered in the call graph gets def-use / type-infer /
+        # context-use / array-size run exactly once.
+        pre_cache = PreAnalysisCache()
+        top_result = self._run_pipeline(
+            func, ctx, arg_types, pre_cache=pre_cache,
+        )
 
-        defs.append(self._compile_single(func, ctx, arg_types))
-        return '\n\n'.join(defs)
+        # Walk the FormatAnalysis call graph in post-order so each
+        # specialization is emitted before everyone that calls it.
+        specs: dict[tuple, _Specialization] = {}
+        emit_order: list[tuple] = []
+        top_call_names = self._discover_specializations(
+            top_result.format_info, specs, emit_order,
+        )
 
-    def _compile_single(
+        out: list[str] = [
+            self._emit_specialization(specs[k]) for k in emit_order
+        ]
+        out.append(self._emit_top_level(func.name, top_result, top_call_names))
+        return '\n\n'.join(out)
+
+    # ------------------------------------------------------------------
+    # Call-graph walk
+
+    def _discover_specializations(
         self,
-        func: Function,
-        ctx: Context | None,
-        arg_types: Collection[Type | None] | None,
+        format_info: FormatAnalysis,
+        specs: dict[tuple, '_Specialization'],
+        emit_order: list[tuple],
+    ) -> dict[Call, str]:
+        """Walk *format_info*'s ``by_call`` recursively.  For each
+        :class:`Call` whose ``fn`` is a known :class:`Function`,
+        materialize (or look up) the specialization for the
+        ``(callee FuncDef, outer rounding context)`` pair.
+
+        Returns a ``Call → mangled name`` mapping covering every Call
+        in *format_info*'s function body.  Newly-discovered
+        specializations append their key to *emit_order* after their
+        own sub-calls finish — so the resulting order is
+        callee-before-caller.
+        """
+        call_names: dict[Call, str] = {}
+        for call_node, sub_fa in format_info.by_call.items():
+            seed_key = _param_seeds_fingerprint(sub_fa.param_seeds)
+            key = (
+                id(sub_fa.func),
+                _ctx_fingerprint(sub_fa.outer_ctx),
+                seed_key,
+            )
+            if key not in specs:
+                inner_call_names = self._discover_specializations(
+                    sub_fa, specs, emit_order,
+                )
+                try:
+                    storage = StorageInfer.infer(
+                        sub_fa.type_info.def_use,
+                        sub_fa.by_def,
+                    )
+                except StorageSelectionError as e:
+                    raise CppCompileError(
+                        f'storage selection failed for callee '
+                        f'`{sub_fa.func.name}`: {e}'
+                    ) from e
+                mangled = _mangle_with_seeds(
+                    sub_fa.func.name,
+                    sub_fa.outer_ctx,
+                    seed_key,
+                    specs,
+                )
+                specs[key] = _Specialization(
+                    func=sub_fa.func,
+                    name=mangled,
+                    format_info=sub_fa,
+                    storage=storage,
+                    call_names=inner_call_names,
+                )
+                emit_order.append(key)
+            call_names[call_node] = specs[key].name
+        return call_names
+
+    # ------------------------------------------------------------------
+    # Emission
+
+    def _emit_specialization(self, spec: '_Specialization') -> str:
+        emitter = _CppEmitter(
+            ast=spec.func,
+            storage=spec.storage,
+            def_use=spec.format_info.type_info.def_use,
+            format_info=spec.format_info,
+            ctx_use=spec.format_info.ctx_use,
+            func_name_override=spec.name,
+            call_names=spec.call_names,
+        )
+        try:
+            return emitter.emit()
+        except CppEmitError as e:
+            raise CppCompileError(
+                f'compilation failed for `{spec.func.name}` '
+                f'(specialization `{spec.name}`): {e}'
+            ) from e
+
+    def _emit_top_level(
+        self,
+        name: str,
+        result: CppPipelineResult,
+        call_names: dict[Call, str],
     ) -> str:
-        """Single-function compile — runs the pipeline and the emitter
-        without touching callees.  Used by :meth:`compile` to emit
-        each transitive callee independently."""
-        result = self._run_pipeline(func, ctx, arg_types)
         emitter = _CppEmitter(
             ast=result.ast,
             storage=result.storage,
             def_use=result.format_info.type_info.def_use,
             format_info=result.format_info,
             ctx_use=result.ctx_use,
+            call_names=call_names,
         )
         try:
             return emitter.emit()
         except CppEmitError as e:
             raise CppCompileError(
-                f'compilation failed for `{func.name}`: {e}'
+                f'compilation failed for `{name}`: {e}'
             ) from e
 
 
 # ---------------------------------------------------------------------
-# Cross-function call support.
-#
-# When a function ``f`` invokes another FPy function ``g`` via a
-# :class:`Call` node, the C++ output needs ``g``'s definition above
-# ``f``'s.  We walk the AST for ``Call`` nodes, recursively collecting
-# the callees in pre-order — duplicates are filtered at the caller side
-# so the first occurrence in topological order wins.
+# Specialization machinery
 
 
-class _UninstantiableType(Exception):
-    """A callee parameter has a type the C++ backend can't
-    instantiate (e.g., function or context types)."""
+@dataclass
+class _Specialization:
+    """A single C++ definition emitted for a
+    ``(callee FuncDef, outer rounding context)`` pair.
+
+    The ``func`` AST is shared across instantiations (the cpp backend
+    does not monomorphize callees — formats and storage are derived
+    from the per-instantiation :class:`FormatAnalysis` instead).  The
+    ``call_names`` map gives each :class:`Call` in this body the
+    mangled name of *its* specialization.
+    """
+    func: FuncDef
+    name: str
+    format_info: FormatAnalysis
+    storage: StorageAnalysis
+    call_names: dict[Call, str]
 
 
-def _instantiate_type(ty: Type) -> Type:
-    """Mirror of ``tests/infra/backend/cpp.py``'s ``_inst_type``:
-    collapse symbolic ``VarType`` / ``RealType`` to ``RealType(FP64)``
-    and recurse through aggregates.  Bool / Context types pass through
-    unchanged.  Anything else is :class:`_UninstantiableType`."""
-    match ty:
-        case BoolType() | ContextType():
-            return ty
-        case VarType() | RealType():
-            return RealType(FP64)
-        case TupleType():
-            return TupleType(*[_instantiate_type(elt) for elt in ty.elts])
-        case ListType():
-            return ListType(_instantiate_type(ty.elt))
-        case _:
-            raise _UninstantiableType(ty.format())
+def _ctx_fingerprint(ctx: Context | None) -> str:
+    """Stable, human-readable identifier for a rounding context.
+    Used as part of the specialization key and the C++ mangled name."""
+    if ctx is None:
+        return 'any'
+    if isinstance(ctx, IEEEContext):
+        rm = ctx.rm.name.lower()
+        return f'fp{ctx.nbits}_{rm}'
+    if isinstance(ctx, MPFixedContext):
+        return 'mpfixed'
+    if isinstance(ctx, MPBFixedContext):
+        return 'mpbfixed'
+    # Fallback: hash the string repr to keep the name finite and
+    # the key hashable without knowing every Context subclass.
+    digest = hash(str(ctx)) & 0xFFFFFFFF
+    return f'ctx{digest:08x}'
 
 
-def _default_arg_types(func: Function) -> list[Type]:
-    """Default per-arg types for a callee: run :class:`TypeInfer`
-    over its body, then instantiate symbolic slots to ``FP64``."""
-    ty_info = TypeInfer.check(func.ast)
-    return [_instantiate_type(ty) for ty in ty_info.arg_types]
+def _mangle(name: str, ctx: Context | None) -> str:
+    """C++ name for a callee instantiated at *ctx*.  The double
+    underscore matches a common templating convention and keeps the
+    fingerprint visually separated from the user-chosen base name."""
+    return f'{name}__{_ctx_fingerprint(ctx)}'
 
 
-def _direct_callees(func: Function) -> list[Function]:
-    """All :class:`Function` values reached by a :class:`Call` node
-    inside *func*'s body, in source order (duplicates preserved).
-    Walks every ``Ast``-typed slot recursively — works on the live
-    AST without needing a fully-spelled visitor."""
-    out: list[Function] = []
+def _param_seeds_fingerprint(seeds) -> str:
+    """Stable string identifying a tuple of parameter format seeds.
 
-    def walk(node):
-        if isinstance(node, Call) and isinstance(node.fn, Function):
-            out.append(node.fn)
-        if isinstance(node, Ast):
-            for slot in node.__slots__:
-                walk(getattr(node, slot, None))
-        elif isinstance(node, (list, tuple)):
-            for item in node:
-                walk(item)
+    Two specializations of the same callee that differ only in their
+    parameter seeds (e.g. one called with FP32 args, the other with
+    FP64 args, both under the same outer context) must map to
+    different specializations.  The fingerprint becomes part of the
+    cache key and — when ambiguous — part of the mangled name.
 
-    walk(func.ast.body)
-    return out
+    ``None`` (no seeds supplied) yields ``"none"``; otherwise each
+    seed is rendered via :func:`repr` and joined.  ``repr`` is
+    sufficient because :class:`FormatBound` instances are
+    ``dataclass(frozen=True)`` and have deterministic reprs.
+    """
+    if seeds is None:
+        return 'none'
+    return '|'.join(repr(s) for s in seeds)
 
 
-def _collect_callees(func: Function) -> list[Function]:
-    """Topologically-ordered (callee-before-caller) list of every
-    :class:`Function` transitively reachable from *func* via
-    :class:`Call`.  ``func`` itself is not included."""
-    out: list[Function] = []
-    queue: list[Function] = []
-    enqueued: set[str] = set()
+def _mangle_with_seeds(
+    name: str,
+    ctx: Context | None,
+    seed_key: str,
+    specs: dict,
+) -> str:
+    """C++ name for a specialization.  Starts with the ctx-only
+    mangle; if that name collides with an existing specialization of
+    the same function at a different seed, falls back to a longer
+    name that incorporates a seed-digest suffix.
 
-    def _enqueue(f: Function):
-        for callee in _direct_callees(f):
-            if callee.name in enqueued:
-                continue
-            enqueued.add(callee.name)
-            queue.append(callee)
-
-    _enqueue(func)
-    while queue:
-        f = queue.pop(0)
-        out.append(f)
-        _enqueue(f)
-    # Reverse so leaf callees emit first: each function comes before
-    # everyone that calls it.
-    out.reverse()
-    return out
+    Most callees have a unique signature per ctx (parameter formats
+    match the outer ctx), so the common case lands on the simple
+    ``name__ctx`` form.  The longer form only fires when the corpus
+    actually instantiates the same callee at the same outer ctx
+    with different parameter shapes."""
+    base = _mangle(name, ctx)
+    # Detect collision: any existing spec for the same function and
+    # ctx but a different seed_key needs a distinguishing suffix.
+    for (fid, ctx_key, sk), spec in specs.items():
+        if spec.func.name == name and ctx_key == _ctx_fingerprint(ctx):
+            if sk != seed_key:
+                digest = hash(seed_key) & 0xFFFFFFFF
+                return f'{base}_{digest:08x}'
+    return base

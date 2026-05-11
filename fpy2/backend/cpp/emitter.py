@@ -130,12 +130,29 @@ class _CppEmitter(Visitor):
         def_use: DefineUseAnalysis,
         format_info: FormatAnalysis,
         ctx_use: ContextUseAnalysis,
+        *,
+        func_name_override: str | None = None,
+        call_names: dict | None = None,
     ):
         self.ast = ast
         self.storage = storage
         self.def_use = def_use
         self.format_info = format_info
         self.ctx_use = ctx_use
+        # Optional C++ name to emit at the function-signature site
+        # — used by the compiler to differentiate specializations of
+        # the same callee at distinct rounding contexts (template-
+        # style monomorphization).  When ``None``, the AST's declared
+        # name is used.
+        self._func_name_override = func_name_override
+        # Mapping from each :class:`Call` AST node inside this
+        # function to the mangled C++ name of its target.  The
+        # compiler builds this map by walking ``format_info.by_call``
+        # and dispensing a stable mangled name per
+        # ``(callee FuncDef, outer_ctx)`` pair.  Falls back to the
+        # callee's declared name when a Call isn't in the map (e.g.
+        # foreign function values).
+        self._call_names: dict = call_names or {}
         self.writer = _IndentedWriter()
         self._tmp_counter = 0
         self.op_table: ScalarOpTable = make_op_table()
@@ -267,7 +284,8 @@ class _CppEmitter(Visitor):
                 raise CppEmitError(f'unsupported arg pattern: {arg.name!r}')
             storage = self._storage_for_arg(arg)
             arg_strs.append(f'{storage.format()} {arg.name}')
-        sig = f'{ret_str} {func.name}({", ".join(arg_strs)})'
+        emitted_name = self._func_name_override or func.name
+        sig = f'{ret_str} {emitted_name}({", ".join(arg_strs)})'
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
@@ -376,6 +394,22 @@ class _CppEmitter(Visitor):
         rhs = self._visit_expr(stmt.expr, ctx)
         self.writer.add_line(f'return {rhs};')
 
+    def _resolve_scope_ctx(self, scope: ContextScope) -> Context | None:
+        """Concrete :class:`Context` for *scope*, substituting
+        :attr:`FormatAnalysis.outer_ctx` for symbolic scopes.
+
+        Specializations of a callee are emitted without first
+        monomorphizing the AST, so :class:`ContextUse` leaves the
+        function-level scope's ctx as a symbolic ``NamedId``.  The
+        per-instantiation ``outer_ctx`` recorded by
+        :class:`FormatInfer` is the concrete context the caller
+        pinned at the call site — we substitute it in wherever the
+        emitter would otherwise see a symbolic scope.
+        """
+        if isinstance(scope.ctx, Context):
+            return scope.ctx
+        return self.format_info.outer_ctx
+
     def _resolve_used_ctx(self, site: ContextScopeSite) -> Context | None:
         """Pull the scope's resolved context, *but only if some
         primitive op actually dispatches under it*.
@@ -386,20 +420,21 @@ class _CppEmitter(Visitor):
         uses don't need a supported context.
 
         When uses exist, the scope's context must be statically
-        resolvable (a concrete :class:`Context`); symbolic context
-        variables are rejected here, with the error pointing at the
-        ``with`` site rather than at the op that consumed it.
+        resolvable (a concrete :class:`Context` or a symbolic one
+        the caller has pinned via ``outer_ctx``); a remaining
+        symbolic ctx is rejected here, with the error pointing at
+        the ``with`` site rather than at the op that consumed it.
         """
         scope = self._scope_by_site.get(site)
         if scope is None or not self.ctx_use.uses.get(scope):
             return None
-        rctx = scope.ctx
-        if not isinstance(rctx, Context):
+        resolved = self._resolve_scope_ctx(scope)
+        if resolved is None:
             raise CppEmitError(
                 'context expression must be a statically-resolvable '
-                f'Context value; got symbolic `{rctx}`'
+                f'Context value; got symbolic `{scope.ctx}`'
             )
-        return rctx
+        return resolved
 
     def _entry_rm(self, site: ContextScopeSite) -> RM | None:
         """The rounding mode the C++ caller is contractually
@@ -413,11 +448,14 @@ class _CppEmitter(Visitor):
         emit an explicit ``fesetround`` to recover certainty.
         """
         scope = self._scope_by_site.get(site)
-        if scope is None or not isinstance(scope.ctx, EFloatContext):
+        if scope is None:
             return None
-        if scope.ctx.rm not in _FE_RM_MACRO:
+        resolved = self._resolve_scope_ctx(scope)
+        if not isinstance(resolved, EFloatContext):
             return None
-        return scope.ctx.rm
+        if resolved.rm not in _FE_RM_MACRO:
+            return None
+        return resolved.rm
 
     def _validate_context_rm(self, rctx: Context) -> CppScalar:
         """Validate *rctx* and return its scalar storage type.
@@ -607,12 +645,13 @@ class _CppEmitter(Visitor):
             raise CppEmitError(
                 f'no context scope registered for {type(e).__name__}'
             ) from err
-        if not isinstance(scope.ctx, Context):
+        resolved = self._resolve_scope_ctx(scope)
+        if resolved is None:
             raise CppEmitError(
                 f'cannot dispatch {type(e).__name__} under symbolic '
                 f'context `{scope.ctx}`'
             )
-        return scope.ctx
+        return resolved
 
     def _scalar_for_ctx(self, ctx: Context) -> CppScalar:
         """Resolve a context to its C++ scalar storage type."""
@@ -1195,26 +1234,24 @@ class _CppEmitter(Visitor):
         self._unsupported('RoundAt')
 
     def _visit_call(self, e, ctx) -> str:
-        # FPy ``Call(args, fn=Function(...), ...)`` lowers to a
-        # plain C++ ``func(arg1, ..., argN)``.  The callee is
-        # compiled independently by :class:`CppCompiler.compile` and
-        # placed in the same translation unit; here we just emit
-        # the call expression.
-        #
-        # No implicit casts at the call boundary — the callee's
-        # parameters are monomorphized at ``FP64`` (matching the
-        # infra harness's default), and FPy programs are expected
-        # to round explicitly when the call site's types differ.
-        # An unsafe-cast at the call site can be added later as a
-        # safety check if it proves useful.
-        if not e.kwargs:
-            args = ', '.join(self._visit_expr(a, ctx) for a in e.args)
-        else:
+        # FPy ``Call(args, fn=Function(...), ...)`` lowers to a plain
+        # C++ ``func(arg1, ..., argN)``.  The target's emitted name
+        # is determined by the compiler's per-instantiation mangling:
+        # at ``compile`` time we walk the FormatAnalysis call graph
+        # and dispense a stable mangled name per
+        # ``(callee FuncDef, outer_ctx)``, recorded in
+        # :attr:`_call_names`.  Two call sites that instantiate the
+        # same callee at the same context share an emitted name; two
+        # that instantiate at distinct contexts get distinct
+        # specializations.
+        if e.kwargs:
             raise CppEmitError(
                 f'unsupported call: kwargs are not supported '
                 f'(call to `{e.func}`)'
             )
-        return f'{e.func}({args})'
+        args = ', '.join(self._visit_expr(a, ctx) for a in e.args)
+        target = self._call_names.get(e, str(e.func))
+        return f'{target}({args})'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
         # ``(a, b, c)`` → ``std::make_tuple(a, b, c)``.  Type deduction

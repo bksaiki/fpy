@@ -554,6 +554,29 @@ class FormatAnalysis:
     func: FuncDef
     """The function whose body was analyzed."""
 
+    outer_ctx: Context | None
+    """
+    The rounding context this instantiation was pinned to.
+
+    The caller-supplied value flows in as ``outer_ctx`` to
+    :meth:`FormatInfer.analyze`; for sub-analyses recorded in
+    :attr:`by_call`, it is the active rounding context at the call
+    site that invoked the callee.  ``None`` when the function was
+    analyzed standalone with no substitution.
+    """
+
+    param_seeds: list['FormatBound'] | None
+    """
+    Per-parameter format bounds the caller pinned this instantiation
+    to (one per :class:`Argument` in source order).
+
+    For sub-analyses recorded in :attr:`by_call`, this is the format
+    of each call-site argument expression.  ``None`` when the
+    function was analyzed standalone — parameter formats then come
+    from the declared type, with :attr:`outer_ctx` optionally pinning
+    free ``Real`` slots.
+    """
+
     type_info: TypeAnalysis
     """Underlying basic-type analysis (bool, real, list, …)."""
 
@@ -626,6 +649,7 @@ class _FormatInferInstance(Visitor):
         pre: PreAnalyses,
         pre_cache: PreAnalysisCache,
         outer_ctx: Context | None,
+        param_seeds: list['FormatBound'] | None,
         loop_iter_limit: int,
     ):
         self.func = func
@@ -644,6 +668,17 @@ class _FormatInferInstance(Visitor):
         # stay symbolic and the analysis degrades to ``REAL_FORMAT``
         # for affected ops (the legacy behaviour).
         self._outer_ctx = outer_ctx
+        # Caller-supplied initial format bounds for the function's
+        # parameters, one per :class:`Argument` in source order.
+        # When provided, these become the seed values for each
+        # parameter's SSA def — bypassing the declared type.  This
+        # is how a callee's parameter formats track the caller's
+        # call-site arg formats (a callee invoked with ``FP64`` args
+        # under an ``FP32`` outer scope sees ``a: FP64, b: FP64``,
+        # not ``a: FP32, b: FP32`` — so a subsequent FP32-rounded
+        # multiplication of those doubles correctly fails as lossy).
+        # ``None`` falls back to the declared-type seeding.
+        self._param_seeds = param_seeds
         self._loop_iter_limit = loop_iter_limit
         # When True, joins forced inside a saturated loop fixpoint widen
         # distinct scalar Formats to ``REAL_FORMAT`` instead of going through
@@ -700,9 +735,10 @@ class _FormatInferInstance(Visitor):
         """
         Format of a rounded operation's result.
 
-        Real-valued operations are rounded to the active context's format.
-        Operations that return any other type (bool, list, context, …) are
-        not numerical computations — their format is derived from the type.
+        Real-valued operations are rounded to the active context's
+        format.  Operations that return any other type (bool, list,
+        context, …) are not numerical computations — their format
+        is derived from the declared type.
         """
         ret_ty = self.type_info.by_expr[e]
         if isinstance(ret_ty, RealType):
@@ -930,8 +966,20 @@ class _FormatInferInstance(Visitor):
         return self._op_bound(e)
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> FormatBound:
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
+        arg_fmts = [self._visit_expr(arg, ctx) for arg in e.args]
+        if isinstance(e, Zip):
+            # ``zip(xs1, ..., xsN)`` yields a list of N-tuples whose
+            # element formats are taken directly from the input lists'
+            # element formats — *not* from the active rounding context.
+            # This matches the runtime semantics: zip is a structural
+            # rearrangement and never rounds.
+            elts: list[FormatBound] = []
+            for fmt in arg_fmts:
+                if isinstance(fmt, ListFormat):
+                    elts.append(fmt.elt)
+                else:
+                    elts.append(REAL_FORMAT)
+            return ListFormat(TupleFormat(tuple(elts)))
         return self._op_bound(e)
 
     # Function calls: conservatively the top format of the return type
@@ -975,12 +1023,21 @@ class _FormatInferInstance(Visitor):
         if not isinstance(fn, Function):
             return None
         callee_outer = self._resolve_active_ctx(e)
+        # Seed the callee's parameter formats from the actual
+        # argument expressions at this call site.  This is what
+        # gives the callee the right signature: a callee invoked
+        # with ``FP64`` arguments under an ``FP32`` outer scope
+        # gets ``a: FP64, b: FP64, → FP32`` — and any FP32-rounded
+        # operation on those doubles will trip the op-table's
+        # lossy-implicit-cast guard at emission time.
+        param_seeds = [self.by_expr.get(arg) for arg in e.args]
         pre = self._pre_cache.get(fn.ast)
         return _FormatInferInstance(
             fn.ast,
             pre=pre,
             pre_cache=self._pre_cache,
             outer_ctx=callee_outer,
+            param_seeds=param_seeds,
             loop_iter_limit=self._loop_iter_limit,
         ).analyze()
 
@@ -1215,15 +1272,29 @@ class _FormatInferInstance(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _visit_function(self, func: FuncDef, ctx: None):
-        # Arguments and free variables get formats derived from their
-        # declared types.  When ``self._outer_ctx`` is set, free
-        # :class:`Real` slots in those types are pinned to that
-        # context — this is what makes a callee analyzed at a
-        # caller's site see concrete operand formats instead of
-        # ``REAL_FORMAT`` everywhere.
-        for arg in func.args:
-            if isinstance(arg.name, NamedId):
-                d = self.def_use.find_def_from_site(arg.name, arg)
+        # Parameter and free-variable defs are seeded with format
+        # bounds.  Three sources, in priority order:
+        #
+        # 1. ``self._param_seeds``: caller-supplied formats for each
+        #    argument — used when we're analyzing a callee at a
+        #    specific call site.  The seeds reflect the *actual*
+        #    arg expressions' formats, not the callee's declared
+        #    types.
+        # 2. ``self._outer_ctx``: when no per-argument seed is
+        #    available, pin free ``Real`` slots in the declared
+        #    type to the outer context.  Useful for standalone
+        #    analyses where the caller wants to pretend the function
+        #    is being run under a particular ctx without faking up
+        #    every operand format.
+        # 3. Fallback: declared type, untouched — yields
+        #    ``REAL_FORMAT`` for free ``Real`` slots.
+        for i, arg in enumerate(func.args):
+            if not isinstance(arg.name, NamedId):
+                continue
+            d = self.def_use.find_def_from_site(arg.name, arg)
+            if self._param_seeds is not None and i < len(self._param_seeds):
+                self._set_def_bound(d, self._param_seeds[i])
+            else:
                 self._set_def_bound(d, _bound_of_type(self._instantiate(self.type_info.by_def[d])))
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
@@ -1240,6 +1311,8 @@ class _FormatInferInstance(Visitor):
         self._visit_function(self.func, None)
         return FormatAnalysis(
             func=self.func,
+            outer_ctx=self._outer_ctx,
+            param_seeds=self._param_seeds,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
             by_def=self.by_def,
@@ -1331,6 +1404,7 @@ class FormatInfer:
         array_size: ArraySizeAnalysis | None = None,
         pre_cache: PreAnalysisCache | None = None,
         outer_ctx: Context | None = None,
+        param_seeds: list[FormatBound] | None = None,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
     ) -> FormatAnalysis:
         """
@@ -1374,9 +1448,15 @@ class FormatInfer:
                 Rounding context to pin the function's outermost scope
                 to.  Substituted into any symbolic context
                 :class:`ContextUse` produced for the function-level
-                scope and into free :class:`Real` slots in parameter
-                types.  Recursive sub-analyses receive their caller's
+                scope.  Recursive sub-analyses receive their caller's
                 active context here automatically.
+            param_seeds:
+                Optional per-parameter format bounds (one per
+                :class:`Argument`).  When supplied, these override the
+                declared parameter types — used by sub-analyses to
+                seed callee parameters from the caller's call-site
+                argument formats.  ``None`` falls back to
+                declared-type seeding.
             loop_iter_limit:
                 Number of loop body+join iterations to run before
                 forcing joins of distinct scalar Formats to widen to
@@ -1411,6 +1491,7 @@ class FormatInfer:
             pre=pre,
             pre_cache=pre_cache,
             outer_ctx=outer_ctx,
+            param_seeds=param_seeds,
             loop_iter_limit=loop_iter_limit,
         )
         return inst.analyze()
