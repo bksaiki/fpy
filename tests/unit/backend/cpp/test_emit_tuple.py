@@ -1,5 +1,5 @@
 """
-Phase 4f tests for the cpp2 emitter — tuple literals.
+Phase 4f tests for the cpp emitter — tuple literals.
 
 FPy tuples are accessed via tuple-binding destructuring (handled in a
 later phase together with ``IndexedAssign``), not via ``t[i]``
@@ -8,7 +8,7 @@ subscripting — so this phase only covers tuple *construction*.
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType, TupleType
 
 
@@ -21,7 +21,7 @@ class TestTupleExpr:
             with fp.FP64:
                 return (x + 1, y - 1)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -38,7 +38,7 @@ class TestTupleExpr:
             with fp.FP64:
                 return p
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64))],
         )
@@ -53,7 +53,7 @@ class TestTupleExpr:
             with fp.FP64:
                 return (1.5, True)
 
-        out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[])
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
         assert 'std::tuple<' in out
         assert 'bool' in out
         assert 'std::make_tuple(' in out
@@ -76,15 +76,15 @@ class TestTupleDestructure:
                 a, b = p
                 return a + b
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64))],
         )
         # The rhs binds to a temp once, then each NamedId is extracted
         # with ``std::get<i>``.
-        assert 'auto __cpp2_tmp1 = p;' in out
-        assert 'double a = std::get<0>(__cpp2_tmp1);' in out
-        assert 'double b = std::get<1>(__cpp2_tmp1);' in out
+        assert 'auto __cpp_tmp1 = p;' in out
+        assert 'double a = std::get<0>(__cpp_tmp1);' in out
+        assert 'double b = std::get<1>(__cpp_tmp1);' in out
         assert 'return (a + b);' in out
 
     def test_assign_with_underscore(self):
@@ -96,12 +96,12 @@ class TestTupleDestructure:
                 _, b = p
                 return b
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64))],
         )
         assert 'std::get<0>' not in out
-        assert 'double b = std::get<1>(__cpp2_tmp1);' in out
+        assert 'double b = std::get<1>(__cpp_tmp1);' in out
 
     def test_nested_destructure(self):
         """Nested tuple bindings recurse via fresh temps."""
@@ -114,14 +114,14 @@ class TestTupleDestructure:
 
         inner = TupleType(RealType(fp.FP64), RealType(fp.FP64))
         outer = TupleType(inner, RealType(fp.FP64))
-        out = Cpp2Compiler().compile(f, ctx=fp.FP64, arg_types=[outer])
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[outer])
         # Outer temp binds the rhs; a fresh inner temp captures the
         # nested tuple slot.
-        assert 'auto __cpp2_tmp1 = p;' in out
-        assert 'auto __cpp2_tmp2 = std::get<0>(__cpp2_tmp1);' in out
-        assert 'double a = std::get<0>(__cpp2_tmp2);' in out
-        assert 'double b = std::get<1>(__cpp2_tmp2);' in out
-        assert 'double c = std::get<1>(__cpp2_tmp1);' in out
+        assert 'auto __cpp_tmp1 = p;' in out
+        assert 'auto __cpp_tmp2 = std::get<0>(__cpp_tmp1);' in out
+        assert 'double a = std::get<0>(__cpp_tmp2);' in out
+        assert 'double b = std::get<1>(__cpp_tmp2);' in out
+        assert 'double c = std::get<1>(__cpp_tmp1);' in out
 
     def test_for_over_list_of_tuples(self):
         @fp.fpy
@@ -133,13 +133,13 @@ class TestTupleDestructure:
                 return acc
 
         from fpy2.types import ListType
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(TupleType(RealType(fp.FP64), RealType(fp.FP64)))],
         )
-        assert 'for (auto __cpp2_tmp1 : xs) {' in out
-        assert '        double a = std::get<0>(__cpp2_tmp1);' in out
-        assert '        double b = std::get<1>(__cpp2_tmp1);' in out
+        assert 'for (auto __cpp_tmp1 : xs) {' in out
+        assert '        double a = std::get<0>(__cpp_tmp1);' in out
+        assert '        double b = std::get<1>(__cpp_tmp1);' in out
         assert 'acc = (acc + (a * b));' in out
 
     def test_comp_tuple_target(self):
@@ -150,14 +150,14 @@ class TestTupleDestructure:
                 return ys[0]
 
         from fpy2.types import ListType
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(TupleType(RealType(fp.FP64), RealType(fp.FP64)))],
         )
         # Comprehension iterates a tuple-typed temp, destructures, then
         # ``push_back``s the element expression.
-        assert 'for (auto __cpp2_tmp2 : xs) {' in out
-        assert '        double a = std::get<0>(__cpp2_tmp2);' in out
-        assert '        double b = std::get<1>(__cpp2_tmp2);' in out
+        assert 'for (auto __cpp_tmp2 : xs) {' in out
+        assert '        double a = std::get<0>(__cpp_tmp2);' in out
+        assert '        double b = std::get<1>(__cpp_tmp2);' in out
         assert '.push_back((a + b));' in out
 

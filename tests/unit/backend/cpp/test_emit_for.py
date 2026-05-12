@@ -1,14 +1,14 @@
 """
-Phase 3e tests for the cpp2 emitter — ``for`` loops over ``range(...)``.
+Phase 3e tests for the cpp emitter — ``for`` loops over ``range(...)``.
 """
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
 
 
-def _compile(cc: Cpp2Compiler, func, *, arg_ctx=None) -> str:
+def _compile(cc: CppCompiler, func, *, arg_ctx=None) -> str:
     arg_ctx = arg_ctx or fp.FP64
     arg_types = [RealType(arg_ctx) for _ in func.args]
     return cc.compile(func, ctx=arg_ctx, arg_types=arg_types)
@@ -28,7 +28,7 @@ class TestForRange:
                     acc = acc + x
                 return acc
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         # ``i`` is single-writer; ``acc``'s loop phi has is_intro=False
         # (acc was assigned before the loop), so the pre-loop assign
         # declares and the body reassigns.
@@ -47,7 +47,7 @@ class TestForRange:
                     acc = acc + x
                 return acc
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         assert 'for (int64_t i = 2; i < 8; ++i) {' in out
 
     def test_for_range3(self):
@@ -61,7 +61,7 @@ class TestForRange:
                     acc = acc + x
                 return acc
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         assert 'for (int64_t i = 0; i < 12; i += 3) {' in out
 
     def test_two_loops_share_independent_counters(self):
@@ -78,7 +78,7 @@ class TestForRange:
                     acc = acc - x
                 return acc
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         assert 'for (int64_t i = 2; i < 8; ++i) {' in out
         assert 'for (int64_t j = 0; j < 12; j += 3) {' in out
 
@@ -95,7 +95,7 @@ class TestForRange:
                         acc = acc + x
                 return acc
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         # Inner loop sits inside the outer loop's body, both folded
         # into their own headers.
         assert (
@@ -115,7 +115,7 @@ class TestForRange:
                 return acc
 
         from fpy2.types import ListType
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )

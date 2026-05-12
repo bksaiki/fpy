@@ -1,14 +1,14 @@
 """
-Phase 3d tests for the cpp2 emitter — ``while`` loops.
+Phase 3d tests for the cpp emitter — ``while`` loops.
 """
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
 
 
-def _compile(cc: Cpp2Compiler, func, *, arg_ctx=None) -> str:
+def _compile(cc: CppCompiler, func, *, arg_ctx=None) -> str:
     arg_ctx = arg_ctx or fp.FP64
     arg_types = [RealType(arg_ctx) for _ in func.args]
     return cc.compile(func, ctx=arg_ctx, arg_types=arg_types)
@@ -30,7 +30,7 @@ class TestWhileStmt:
                     y = y - 1
                 return y
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         assert out == (
             'double f(double x) {\n'
             '    double y = x;\n'
@@ -55,7 +55,7 @@ class TestWhileStmt:
                     i = i - 1
                 return acc
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         assert 'double acc = 0;' in out
         assert 'double i = x;' in out
         assert 'while ((i > static_cast<double>(0))) {' in out
@@ -76,7 +76,7 @@ class TestWhileStmt:
                     a = a - 1
                 return a
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         # The inner while is properly nested under the outer one.
         assert (
             'while ((a > static_cast<double>(0))) {\n'

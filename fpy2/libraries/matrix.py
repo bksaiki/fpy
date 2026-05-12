@@ -35,7 +35,7 @@ def identity(n: int) -> list[list[fp.Real]]:
     :param n: Matrix size.
     :return: Identity matrix.
     """
-    result = fp.empty(n, n)
+    result = zeros(n, n)
     for i in range(n):
         result[i][i] = fp.round(1)
     return result

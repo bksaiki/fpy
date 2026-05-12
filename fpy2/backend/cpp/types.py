@@ -1,5 +1,13 @@
 """
-C++ backend: types
+cpp backend: C++ storage types.
+
+A *storage type* is the C++ type used to hold a value at runtime.  It
+is distinct from the *rounding format* (per :mod:`format_infer`) — the
+two are related but not equal: storage shapes the variable's
+declaration, rounding shapes which arithmetic the result respects.
+
+The ladder mirrors :mod:`fpy2.backend.cpp.types` but storage selection
+is driven by :class:`FormatInfer` rather than concrete contexts.
 """
 
 import enum
@@ -11,15 +19,7 @@ from ...utils import default_repr, enum_repr
 
 @enum_repr
 class CppScalar(enum.Enum):
-    """
-    C++ types.
-
-    Each type represents either
-
-    t ::= bool | real R
-
-    where R is a concrete rounding context.
-    """
+    """Concrete C++ scalar storage types."""
 
     BOOL = 0
     F32 = 1
@@ -39,7 +39,7 @@ class CppScalar(enum.Enum):
     def is_float(self) -> bool:
         return self in FLOAT_TYPES
 
-    def format(self):
+    def format(self) -> str:
         match self:
             case CppScalar.BOOL:
                 return 'bool'
@@ -64,8 +64,10 @@ class CppScalar(enum.Enum):
             case CppScalar.S64:
                 return 'int64_t'
 
+
 @default_repr
 class CppList:
+    """``std::vector<T>``."""
     elt: 'CppType'
 
     def __init__(self, elt: 'CppType'):
@@ -74,18 +76,16 @@ class CppList:
     def __eq__(self, other):
         return isinstance(other, CppList) and self.elt == other.elt
 
-    def format(self):
+    def __hash__(self):
+        return hash((CppList, self.elt))
+
+    def format(self) -> str:
         return f'std::vector<{self.elt.format()}>'
 
-    def dim(self) -> int:
-        match self.elt:
-            case CppList():
-                return self.elt.dim() + 1
-            case _:
-                return 1
 
 @default_repr
 class CppTuple:
+    """``std::tuple<T1, …, Tn>``."""
     elts: tuple['CppType', ...]
 
     def __init__(self, elts: Iterable['CppType']):
@@ -94,28 +94,19 @@ class CppTuple:
     def __eq__(self, other):
         return isinstance(other, CppTuple) and self.elts == other.elts
 
-    def format(self):
+    def __hash__(self):
+        return hash((CppTuple, self.elts))
+
+    def format(self) -> str:
         elts = ', '.join(elt.format() for elt in self.elts)
         return f'std::tuple<{elts}>'
 
 
 CppType: TypeAlias = CppScalar | CppList | CppTuple
+"""All C++ storage types."""
 
 
-FLOAT_TYPES = [
-    CppScalar.F32,
-    CppScalar.F64
-]
-
-INT_TYPES = [
-    CppScalar.S8,
-    CppScalar.S16,
-    CppScalar.S32,
-    CppScalar.S64,
-    CppScalar.U8,
-    CppScalar.U16,
-    CppScalar.U32,
-    CppScalar.U64
-]
-
-ALL_SCALARS = [CppScalar.BOOL] + FLOAT_TYPES + INT_TYPES
+FLOAT_TYPES = [CppScalar.F32, CppScalar.F64]
+UNSIGNED_INT_TYPES = [CppScalar.U8, CppScalar.U16, CppScalar.U32, CppScalar.U64]
+SIGNED_INT_TYPES = [CppScalar.S8, CppScalar.S16, CppScalar.S32, CppScalar.S64]
+INT_TYPES = SIGNED_INT_TYPES + UNSIGNED_INT_TYPES

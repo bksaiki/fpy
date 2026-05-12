@@ -1,7 +1,7 @@
 """
-Phase 6 tests for the cpp2 emitter — translation-unit preamble.
+Phase 6 tests for the cpp emitter — translation-unit preamble.
 
-``Cpp2Compiler.compile`` returns just a function definition.  For
+``CppCompiler.compile`` returns just a function definition.  For
 end-to-end compilation the caller pulls ``headers()`` / ``helpers()``
 explicitly (or ``prelude()`` for both at once) and concatenates the
 result with each compiled function.
@@ -9,7 +9,7 @@ result with each compiled function.
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
 
 
@@ -17,12 +17,12 @@ class TestHeaders:
     """Header set covers everything the emitter actually uses."""
 
     def test_headers_returns_a_list(self):
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         headers = cc.headers()
         assert isinstance(headers, list)
 
     def test_headers_include_required_set(self):
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         headers = cc.headers()
         # Each entry is a full ``#include`` line.
         for required in (
@@ -43,7 +43,7 @@ class TestHeaders:
 
     def test_headers_returns_a_fresh_list(self):
         """Mutating the returned list shouldn't affect future calls."""
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         h1 = cc.headers()
         h1.append('#include <bogus>')
         h2 = cc.headers()
@@ -54,7 +54,7 @@ class TestHelpers:
     """Runtime helpers — currently empty but the slot exists."""
 
     def test_helpers_returns_string(self):
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         assert isinstance(cc.helpers(), str)
 
 
@@ -62,12 +62,12 @@ class TestPrelude:
     """``prelude`` = headers + helpers concatenated."""
 
     def test_prelude_starts_with_includes(self):
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         pre = cc.prelude()
         assert pre.startswith('#include')
 
     def test_prelude_contains_each_header(self):
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         pre = cc.prelude()
         for required in ('<cassert>', '<cfenv>', '<cmath>',
                          '<cstdint>', '<vector>', '<tuple>'):
@@ -84,7 +84,7 @@ class TestCompileStillFunctionOnly:
             with fp.FP64:
                 return x + y
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -102,7 +102,7 @@ class TestEndToEndUnit:
             with fp.FP64:
                 return x + y
 
-        cc = Cpp2Compiler()
+        cc = CppCompiler()
         body = cc.compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],

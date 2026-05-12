@@ -1,5 +1,5 @@
 """
-Phase 5c tests for the cpp2 emitter — ``Round``, ``RoundExact``, ``Cast``.
+Phase 5c tests for the cpp emitter — ``Round``, ``RoundExact``, ``Cast``.
 
 - ``Round(arg)`` is a plain ``static_cast<target>(arg)``; the cast's
   rounding mode comes from Phase 5b's ``fesetround`` boundary.
@@ -11,7 +11,7 @@ Phase 5c tests for the cpp2 emitter — ``Round``, ``RoundExact``, ``Cast``.
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
 
 
@@ -25,7 +25,7 @@ class TestRound:
             with fp.FP32:
                 return fp.round(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP32,
             arg_types=[RealType(fp.FP64)],
         )
@@ -38,7 +38,7 @@ class TestRound:
             with fp.FP64:
                 return fp.round(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64)],
         )
@@ -56,18 +56,18 @@ class TestRoundExact:
             with fp.FP32:
                 return fp.round_exact(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP32,
             arg_types=[RealType(fp.FP64)],
         )
         # Cast bound to a temp.
-        assert 'float __cpp2_tmp1 = static_cast<float>(x);' in out
+        assert 'float __cpp_tmp1 = static_cast<float>(x);' in out
         # FP comparison includes the NaN guard.
         assert (
-            'assert(x == __cpp2_tmp1 || '
-            '(std::isnan(x) && std::isnan(__cpp2_tmp1)));'
+            'assert(x == __cpp_tmp1 || '
+            '(std::isnan(x) && std::isnan(__cpp_tmp1)));'
         ) in out
-        assert 'return __cpp2_tmp1;' in out
+        assert 'return __cpp_tmp1;' in out
 
     def test_int_round_exact_skips_nan_guard(self):
         """Integer operand pairs don't need ``std::isnan`` — int
@@ -78,14 +78,14 @@ class TestRoundExact:
             with fp.SINT8:
                 return fp.round_exact(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.SINT8,
             arg_types=[RealType(fp.INTEGER)],
         )
-        assert 'int8_t __cpp2_tmp1 = static_cast<int8_t>(x);' in out
+        assert 'int8_t __cpp_tmp1 = static_cast<int8_t>(x);' in out
         # No std::isnan call.
         assert 'std::isnan' not in out
-        assert 'assert(x == __cpp2_tmp1);' in out
+        assert 'assert(x == __cpp_tmp1);' in out
 
     def test_round_exact_same_type_is_noop(self):
         """Casting to the same type is guaranteed lossless — no
@@ -96,7 +96,7 @@ class TestRoundExact:
             with fp.FP64:
                 return fp.round_exact(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64)],
         )
@@ -114,7 +114,7 @@ class TestCast:
             with fp.FP64:
                 return fp.cast(x)
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64)],
         )

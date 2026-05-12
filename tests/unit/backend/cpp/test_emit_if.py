@@ -1,14 +1,14 @@
 """
-Phase 3c tests for the cpp2 emitter — ``if`` / ``if1`` statements.
+Phase 3c tests for the cpp emitter — ``if`` / ``if1`` statements.
 """
 
 import fpy2 as fp
 
-from fpy2.backend.cpp2 import Cpp2Compiler
+from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
 
 
-def _compile(cc: Cpp2Compiler, func, *, arg_ctx=None) -> str:
+def _compile(cc: CppCompiler, func, *, arg_ctx=None) -> str:
     arg_ctx = arg_ctx or fp.FP64
     arg_types = [RealType(arg_ctx) for _ in func.args]
     return cc.compile(func, ctx=arg_ctx, arg_types=arg_types)
@@ -29,7 +29,7 @@ class TestIfStmt:
                     y = x
                 return y
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         assert out == (
             'double f(double x) {\n'
             '    double y{};\n'
@@ -55,7 +55,7 @@ class TestIfStmt:
                     y = -x
                 return y
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         assert out == (
             'double f(double x) {\n'
             '    double y = x;\n'
@@ -81,7 +81,7 @@ class TestIfStmt:
                     z = y
                 return z
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         assert out == (
             'double f(double x, double y) {\n'
             '    double z{};\n'
@@ -114,7 +114,7 @@ class TestIfStmt:
                     y = a
                 return y
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         # Hoist is anchored to the if, after the unrelated ``a`` decl.
         assert out == (
             'double f(double x) {\n'
@@ -149,7 +149,7 @@ class TestIfStmt:
                 return y + a
 
         from fpy2.types import BoolType
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             g, ctx=fp.FP64,
             arg_types=[BoolType(), BoolType(), RealType(fp.FP64)],
         )
@@ -179,7 +179,7 @@ class TestIfStmt:
                     y = x
                 return y
 
-        out = _compile(Cpp2Compiler(), f)
+        out = _compile(CppCompiler(), f)
         # ``y`` is hoisted because both branches write it.
         assert 'double y{};' in out
         # ``t`` declares-on-assign inside the if-branch.

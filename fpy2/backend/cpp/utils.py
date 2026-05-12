@@ -1,9 +1,37 @@
 """
-C++ backend: utilities
+cpp backend: utilities — headers and runtime helpers.
+
+The compiler's :meth:`CppCompiler.compile` returns just a function
+definition (so single-function tests can use exact-string equality).
+Callers that want a complete translation unit pull
+:meth:`CppCompiler.headers` and :meth:`CppCompiler.helpers`
+explicitly and concatenate them — same shape as the legacy
+``cpp/`` backend.
+
+Header coverage tracks what the emitter actually uses:
+
+- ``<cassert>``: ``assert(...)`` from ``RoundExact``.
+- ``<cfenv>``: ``std::fegetround`` / ``std::fesetround`` and the
+  ``FE_*`` rounding-mode macros.
+- ``<cmath>``: every ``std::fabs`` / ``std::sqrt`` / ``std::sin`` /
+  ``std::isnan`` / etc. dispatched through the op table.
+- ``<cstddef>``: ``size_t`` for vector indexing.
+- ``<cstdint>``: fixed-width ``int8_t`` … ``uint64_t``.
+- ``<numeric>``: ``std::accumulate`` for ``Sum``.
+- ``<vector>``: ``std::vector<T>`` for FPy lists.
+- ``<tuple>``: ``std::tuple`` / ``std::make_tuple`` / ``std::get`` for
+  tuples and tuple-binding destructuring.
+
+Helpers is currently empty — cpp doesn't yet need any custom
+runtime support beyond what ``<cmath>`` / ``std::vector`` already
+give us.  The slot exists so future additions (e.g., an RAII
+``fenv`` guard to fix the function-level fesetround leak, or
+bounds-checked subscript helpers for strict slice semantics) have a
+home.
 """
 
 
-CPP_HEADERS = [
+CPP_HEADERS: tuple[str, ...] = (
     '#include <cassert>',
     '#include <cfenv>',
     '#include <cmath>',
@@ -12,17 +40,6 @@ CPP_HEADERS = [
     '#include <numeric>',
     '#include <vector>',
     '#include <tuple>',
-]
+)
 
-CPP_HELPERS = """
-template <typename T>
-static size_t size(const T&, size_t) {
-    assert(false && "cannot compute tensor size of a scalar");
-    return 0;
-}
-
-template <typename T>
-static size_t size(const std::vector<T>& vec, size_t n) {
-    return (n == 0) ? vec.size() : size(vec[0], n);
-}
-"""
+CPP_HELPERS: str = ''

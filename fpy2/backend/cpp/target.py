@@ -1,43 +1,27 @@
 """
-cpp2 backend: operation type tables.
+cpp backend: default target description.
 
-Each primitive operation is parameterized by *argument C++ types*
-(:class:`CppScalar`) and an *active rounding context*
-(:class:`Context`).  The split mirrors what emission actually needs:
+A "target description" tells the cpp emitter which primitive ops it
+can dispatch and which C++ surface to emit for each one.  This module
+populates the abstract :class:`ScalarOpTable` from
+:mod:`fpy2.backend.cpp.ops` with the default set: ``<cmath>``
+functions over IEEE-754 FP32 / FP64 (one signature per supported
+``fesetround`` rounding mode), basic arithmetic over IEEE-754 floats
+and every native integer width on the storage ladder, and a handful
+of cross-domain hooks (``std::abs`` for ints, ``std::ilogb`` to
+extract an integer exponent from a float).
 
-- A signature's input slots are the concrete C++ scalar types the
-  generated code feeds the operator.  ``int8_t + int8_t`` is one
-  signature, ``float + float`` is another.
-- The output slot is the active rounding context.  Its C++ type
-  (``choose_storage(out_ctx.format())``) determines the result's
-  storage; its rounding mode is enforced separately by the
-  ``fesetround`` boundary emitted around ``with`` blocks.
-
-At an op site the emitter consults:
-
-- The **active rounding context** from
-  :class:`ContextUseAnalysis.find_scope_from_use` — must equal the
-  signature's ``out_ctx``.
-- Each operand's **C++ storage type** from
-  :class:`StorageAnalysis` — must equal the signature's input
-  slot.  On mismatch the emitter falls back to the
-  all-active-context signature and inserts an explicit
-  ``static_cast`` per operand.
-
-This mirrors :mod:`fpy2.backend.cpp.ops` in shape, but the output
-slot carries a full :class:`Context` (so RM-specific signatures are
-distinct) rather than a bare :class:`CppScalar`.
+Callers obtain a populated table via :func:`make_op_table`.  The
+emitter consumes it as an opaque :class:`ScalarOpTable`, so future
+targets can swap in a different table without changing the emitter.
 """
 
 from __future__ import annotations
 
-import dataclasses
-from typing import TypeAlias
-
 from ...ast.fpyast import (
     Abs, Acos, Acosh, Add, Asin, Asinh, Atan, Atan2, Atanh, Cbrt,
     Ceil, Copysign, Cos, Cosh, Div, Erf, Erfc, Exp, Exp2, Expm1,
-    Expr, Fdim, Fma, Floor, Fmod, Hypot, Lgamma, Log, Log10, Log1p,
+    Fdim, Fma, Floor, Fmod, Hypot, Lgamma, Log, Log10, Log1p,
     Log2, Logb, Mul, NearbyInt, Neg, Pow, Remainder, RoundInt,
     Sin, Sinh, Sqrt, Sub, Tan, Tanh, Tgamma, Trunc,
 )
@@ -50,103 +34,22 @@ from ...number import (
 from ...number.context.context import Context
 from ...number.context.ieee754 import IEEEContext
 
+from .ops import (
+    BinaryCppOp, BinaryOpTable,
+    ScalarOpTable,
+    TernaryCppOp, TernaryOpTable,
+    UnaryCppOp, UnaryOpTable,
+)
 from .storage import choose_storage_scalar
 from .types import CppScalar
 
 
-@dataclasses.dataclass(frozen=True)
-class UnaryCppOp:
-    """A single supported C++ signature for a unary FPy op,
-    parameterized by an argument C++ type and an active rounding
-    context for the output."""
-    name: str
-    is_func: bool
-    arg_ty: CppScalar
-    out_ctx: Context
-
-    def matches(self, arg_ty: CppScalar, active_ctx: Context) -> bool:
-        return self.out_ctx == active_ctx and self.arg_ty == arg_ty
-
-    def format(self, arg: str) -> str:
-        return f'{self.name}({arg})' if self.is_func else f'({self.name}{arg})'
-
-
-@dataclasses.dataclass(frozen=True)
-class BinaryCppOp:
-    """A single supported C++ signature for a binary FPy op,
-    parameterized by per-operand C++ types and an active rounding
-    context for the output."""
-    name: str
-    is_infix: bool
-    in1_ty: CppScalar
-    in2_ty: CppScalar
-    out_ctx: Context
-
-    def matches(
-        self,
-        in1_ty: CppScalar,
-        in2_ty: CppScalar,
-        active_ctx: Context,
-    ) -> bool:
-        return (
-            self.out_ctx == active_ctx
-            and self.in1_ty == in1_ty
-            and self.in2_ty == in2_ty
-        )
-
-    def format(self, lhs: str, rhs: str) -> str:
-        if self.is_infix:
-            return f'({lhs} {self.name} {rhs})'
-        return f'{self.name}({lhs}, {rhs})'
-
-
-@dataclasses.dataclass(frozen=True)
-class TernaryCppOp:
-    """A single supported C++ signature for a ternary FPy op
-    (e.g., ``Fma``).  Same parameterization as the binary case."""
-    name: str
-    in1_ty: CppScalar
-    in2_ty: CppScalar
-    in3_ty: CppScalar
-    out_ctx: Context
-
-    def matches(
-        self,
-        in1_ty: CppScalar,
-        in2_ty: CppScalar,
-        in3_ty: CppScalar,
-        active_ctx: Context,
-    ) -> bool:
-        return (
-            self.out_ctx == active_ctx
-            and self.in1_ty == in1_ty
-            and self.in2_ty == in2_ty
-            and self.in3_ty == in3_ty
-        )
-
-    def format(self, a: str, b: str, c: str) -> str:
-        return f'{self.name}({a}, {b}, {c})'
-
-
-UnaryOpTable: TypeAlias = dict[type[Expr], list[UnaryCppOp]]
-BinaryOpTable: TypeAlias = dict[type[Expr], list[BinaryCppOp]]
-TernaryOpTable: TypeAlias = dict[type[Expr], list[TernaryCppOp]]
-
-
-@dataclasses.dataclass
-class ScalarOpTable:
-    """Per-op-kind tables of supported C++ signatures."""
-    unary: UnaryOpTable
-    binary: BinaryOpTable
-    ternary: TernaryOpTable
-
-
 # ---------------------------------------------------------------------
-# Default tables.
+# Native context inventory.
 #
 # We enumerate same-context signatures (input C++ types taken from
 # ``choose_storage_scalar(ctx.format())``) for every native context
-# the cpp2 backend supports.  FP bases pair with each
+# the cpp backend supports.  FP bases pair with each
 # ``fesetround``-supported rounding mode (RNE/RTZ/RTP/RTN) so context
 # equality at the dispatch site can match the active RM exactly.
 
@@ -154,7 +57,7 @@ _FP_RMS = (RM.RNE, RM.RTZ, RM.RTP, RM.RTN)
 
 
 def _fp_ctxs() -> list[Context]:
-    """All FP32 / FP64 contexts the cpp2 backend dispatches against
+    """All FP32 / FP64 contexts the cpp backend dispatches against
     — one per supported rounding mode."""
     return [
         IEEEContext(es, nbits, rm)
@@ -164,7 +67,7 @@ def _fp_ctxs() -> list[Context]:
 
 
 def _int_ctxs() -> list[Context]:
-    """Integer contexts the cpp2 backend dispatches against.
+    """Integer contexts the cpp backend dispatches against.
     ``INTEGER`` is the unbounded fallback — kept for backward compat
     with programs that don't pin a width."""
     return [
@@ -183,6 +86,10 @@ def _ty_of(ctx: Context) -> CppScalar:
     its inputs (and output) carry."""
     return choose_storage_scalar(ctx.format())
 
+
+# ---------------------------------------------------------------------
+# Per-arity factory helpers — generate signature sets parameterized
+# by the contexts above.
 
 def _fp_unary(name: str) -> list[UnaryCppOp]:
     """Same-context FP-only unary signatures for one ``<cmath>``
@@ -213,6 +120,9 @@ def _fp_ternary(name: str) -> list[TernaryCppOp]:
         for c in _fp_ctxs()
     ]
 
+
+# ---------------------------------------------------------------------
+# Op → C++ name mappings.
 
 # ``<cmath>`` unary functions defined for FP types only.  Each entry
 # pairs an FPy AST node with its C++ name; signatures cover both FP32
@@ -261,6 +171,9 @@ _TERNARY_CMATH = (
 )
 
 
+# ---------------------------------------------------------------------
+# Per-arity table builders.
+
 def _make_unary_table() -> UnaryOpTable:
     fp = _fp_ctxs()
     ints = _int_ctxs()
@@ -279,6 +192,22 @@ def _make_unary_table() -> UnaryOpTable:
     }
     for op_cls, name in _UNARY_CMATH:
         table[op_cls] = _fp_unary(name)
+
+    # ``logb`` under an integer output context lowers to
+    # ``std::ilogb`` plus an explicit widening cast to the output's
+    # storage.  ``std::ilogb`` returns C ``int`` (≥ 16 bits, usually
+    # 32) — wider than any realistic binary exponent for the FP
+    # inputs the cpp backend supports, so casting to the output's
+    # storage type is value-preserving in practice.
+    table[Logb] = table[Logb] + [
+        UnaryCppOp(
+            'std::ilogb', is_func=True,
+            arg_ty=_ty_of(fp_ctx), out_ctx=int_ctx,
+            cast_out=True,
+        )
+        for fp_ctx in fp
+        for int_ctx in ints
+    ]
     return table
 
 
@@ -305,8 +234,11 @@ def _make_ternary_table() -> TernaryOpTable:
     return {op_cls: _fp_ternary(name) for op_cls, name in _TERNARY_CMATH}
 
 
+# ---------------------------------------------------------------------
+# Public entry point.
+
 def make_op_table() -> ScalarOpTable:
-    """Build the default cpp2 op table."""
+    """Build the cpp backend's default :class:`ScalarOpTable`."""
     return ScalarOpTable(
         unary=_make_unary_table(),
         binary=_make_binary_table(),

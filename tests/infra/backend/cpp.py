@@ -162,22 +162,46 @@ def _test_unit_tests(
     ignore: list[str],
     *,
     no_cc: bool = False
-):
-    compiler = fp.CppCompiler(unsafe_finitize_int=True, unsafe_cast_int=True)
+) -> list[tuple[str, str, str]]:
+    """Compile each non-ignored function in *funcs* through the cpp
+    backend (and, when ``no_cc`` is False, through ``cc``).  Returns
+    a list of ``(group, name, error)`` tuples describing the
+    failures; an empty list means everything compiled.  Failures
+    are also printed inline for human-friendly output.
+
+    Continues past failures so a single run reports every
+    regression, but does *not* mask them — the caller is expected
+    to aggregate the returned list and raise / exit non-zero when
+    it's non-empty.
+    """
+    compiler = fp.CppCompiler(unsafe_cast_int=True)
+    failures: list[tuple[str, str, str]] = []
     for func in funcs:
         if func.name in ignore:
             continue
 
-        # compile function to C++ file
-        cpp_path = _compile(output_dir, prefix, compiler, func)
+        try:
+            cpp_path = _compile(output_dir, prefix, compiler, func)
+        except fp.backend.CppCompileError as e:
+            print(f'  FAILED `{func.name}`: {e}')
+            failures.append((prefix, func.name, str(e)))
+            continue
 
         # try to compile with C++ compiler
         if not no_cc:
             _compile_obj(cpp_path)
+    if failures:
+        print(f'\n{len(failures)} failures in `{prefix}`:')
+        for _, name, msg in failures:
+            print(f'  - {name}: {msg}')
+    return failures
 
-def _test_unit(output_dir: Path, no_cc: bool = False):
-    _test_unit_tests(output_dir, 'unit_tests', all_unit_tests(), _test_ignore, no_cc=no_cc)
-    _test_unit_tests(output_dir, 'unit_examples', all_example_tests(), _example_ignore, no_cc=no_cc)
+
+def _test_unit(output_dir: Path, no_cc: bool = False) -> list[tuple[str, str, str]]:
+    failures: list[tuple[str, str, str]] = []
+    failures += _test_unit_tests(output_dir, 'unit_tests', all_unit_tests(), _test_ignore, no_cc=no_cc)
+    failures += _test_unit_tests(output_dir, 'unit_examples', all_example_tests(), _example_ignore, no_cc=no_cc)
+    return failures
 
 ###########################################################
 # Libraries
@@ -206,47 +230,89 @@ _library_ignore = [
     # matrix
 ]
 
-def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
-    compiler = fp.CppCompiler(unsafe_finitize_int=True, unsafe_cast_int=True)
+def _test_library(
+    output_dir: Path, prefix: str, mod: ModuleType,
+    ignore: list[str], no_cc: bool = False,
+) -> list[tuple[str, str, str]]:
+    """Compile a library module's non-ignored functions into one
+    translation unit.  Returns ``(group, name, error)`` tuples for
+    every function that failed to register with the unit.  Empty
+    list = clean run.
+    """
+    compiler = fp.CppCompiler(unsafe_cast_int=True)
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
+    group = f'library_{prefix}'
+    failures: list[tuple[str, str, str]] = []
+    # One translation unit per library — shares the specialization
+    # cache so a callee referenced from multiple library functions
+    # is emitted exactly once (no ODR redefinitions).
+    unit = compiler.unit()
+    for func in mod.__dict__.values():
+        if isinstance(func, fp.Function) and func.name not in ignore:
+            ty_info = fp.analysis.TypeInfer.check(func.ast)
+            arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
+            try:
+                unit.add(func, ctx=fp.FP64, arg_types=arg_types)
+            except fp.backend.CppCompileError as e:
+                print(f'  FAILED `{func.name}`: {e}')
+                failures.append((group, func.name, str(e)))
+
     with open(cpp_path, 'w') as f:
         print('\n'.join(compiler.headers()), file=f)
         print(compiler.helpers(), file=f)
-        for func in mod.__dict__.values():
-            if isinstance(func, fp.Function) and func.name not in ignore:
-                # substitute context variables with `FP64`
-                ty_info = fp.analysis.TypeInfer.check(func.ast)
-                arg_types = [ _inst_type(ty) for ty in ty_info.arg_types ]
+        print(unit.render(), file=f)
+        print(file=f)
 
-                # compile
-                s = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
-                print(s, file=f)
-                print(file=f)
+    if failures:
+        print(f'\n{len(failures)} failures in `{group}`:')
+        for _, name, msg in failures:
+            print(f'  - {name}: {msg}')
 
     if not no_cc:
         _compile_obj(cpp_path)
+    return failures
 
 
-def _test_libraries(output_dir: Path, no_cc: bool = False):
+def _test_libraries(output_dir: Path, no_cc: bool = False) -> list[tuple[str, str, str]]:
+    failures: list[tuple[str, str, str]] = []
     for mod in _modules:
         name = mod.__name__.split('.')[-1]
-        _test_library(output_dir, name, mod, _library_ignore, no_cc=no_cc)
+        failures += _test_library(output_dir, name, mod, _library_ignore, no_cc=no_cc)
+    return failures
 
 ###########################################################
 # Main tester
 
+class CppInfraFailure(AssertionError):
+    """One or more non-ignored functions failed to compile through
+    the cpp backend.  Raised at the end of :func:`test_compile_cpp`
+    so CI surfaces regressions reliably (failures aren't swallowed
+    by per-function ``try/except`` blocks)."""
+
+
 def test_compile_cpp(delete: bool = True, no_cc: bool = False):
     dir_str = tempfile.mkdtemp(prefix='tmp_fpy_cpp')
     output_dir = Path(dir_str)
-    # with tempfile.TemporaryDirectory(prefix='tmp_fpy_cpp', delete=delete) as dir_str:
 
     print(f"Running C++ tests with output under `{output_dir}`")
-    _test_unit(output_dir, no_cc=no_cc)
-    _test_libraries(output_dir, no_cc=no_cc)
+    failures: list[tuple[str, str, str]] = []
+    failures += _test_unit(output_dir, no_cc=no_cc)
+    failures += _test_libraries(output_dir, no_cc=no_cc)
 
     if delete:
         shutil.rmtree(output_dir)
+
+    if failures:
+        # Print a single consolidated summary so the failing names
+        # are easy to find in CI logs.
+        print(f'\n=== cpp infra: {len(failures)} compile failure(s) ===')
+        for group, name, msg in failures:
+            print(f'  [{group}] {name}: {msg}')
+        raise CppInfraFailure(
+            f'{len(failures)} cpp-backend compile failure(s); '
+            f'see output above for details'
+        )
 
 
 if __name__ == '__main__':

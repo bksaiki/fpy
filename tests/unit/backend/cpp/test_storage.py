@@ -1,5 +1,5 @@
 """
-Tests for cpp2 storage-type selection (Phase 1 of the backend-cpp plan).
+Tests for cpp storage-type selection (Phase 1 of the backend-cpp plan).
 """
 
 import fpy2 as fp
@@ -7,13 +7,13 @@ import pytest
 
 from fractions import Fraction
 from fpy2.analysis.format_infer import ListFormat, SetFormat, TupleFormat
-from fpy2.backend.cpp2.storage import (
+from fpy2.backend.cpp.storage import (
     StorageSelectionError,
     aggregate_storage,
     choose_storage,
     choose_storage_scalar,
 )
-from fpy2.backend.cpp2.types import CppList, CppScalar, CppTuple
+from fpy2.backend.cpp.types import CppList, CppScalar, CppTuple
 from fpy2.number.context.real import REAL_FORMAT
 
 

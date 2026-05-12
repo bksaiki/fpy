@@ -1,9 +1,9 @@
 """
-Phase 5b tests for the cpp2 emitter — context boundaries.
+Phase 5b tests for the cpp emitter — context boundaries.
 
 The active rounding context is taken from the
 :class:`ContextUseAnalysis` scope at every ``FuncDef`` /
-``ContextStmt`` site.  cpp2 only compiles programs whose contexts
+``ContextStmt`` site.  cpp only compiles programs whose contexts
 are statically resolvable; symbolic context variables are rejected.
 
 For float contexts the rounding mode must be one of the four
@@ -15,7 +15,7 @@ already truncates toward zero, so no runtime support is needed.
 import fpy2 as fp
 import pytest
 
-from fpy2.backend.cpp2 import Cpp2Compiler, Cpp2CompileError
+from fpy2.backend.cpp import CppCompiler, CppCompileError
 from fpy2.types import RealType
 
 
@@ -38,7 +38,7 @@ class TestStaticResolution:
         def f() -> bool:
             return True
 
-        out = Cpp2Compiler().compile(f)
+        out = CppCompiler().compile(f)
         assert 'fesetround' not in out
 
     def test_concrete_with_block_resolves(self):
@@ -47,7 +47,7 @@ class TestStaticResolution:
             with fp.FP64:
                 return x + y
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -58,7 +58,7 @@ class TestStaticResolution:
         """When every op lives inside an inner ``with``, the
         function-level scope has no uses and isn't validated — so
         the outer (function-level) context can be anything,
-        including a context the cpp2 backend doesn't natively
+        including a context the cpp backend doesn't natively
         support."""
 
         @fp.fpy(ctx=_RNA_64)              # RNA is unsupported by fesetround,
@@ -67,7 +67,7 @@ class TestStaticResolution:
                 return x + x               # is inside ``with fp.FP64:``.
 
         # No error: compilation succeeds.
-        out = Cpp2Compiler().compile(f, arg_types=[RealType(fp.FP64)])
+        out = CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])
         assert 'return (x + x);' in out
 
     def test_with_block_scope_unused_compiles(self):
@@ -83,7 +83,7 @@ class TestStaticResolution:
                 return xs[n]               # under the outer scope.
 
         from fpy2.types import ListType
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
@@ -100,7 +100,7 @@ class TestDefaultRmIsImplicit:
             with fp.FP64:
                 return x + y
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -108,14 +108,17 @@ class TestDefaultRmIsImplicit:
 
     def test_integer_context_no_fesetround(self):
         """``with INTEGER:`` doesn't emit fesetround — integer
-        arithmetic doesn't consult ``fenv``."""
+        arithmetic doesn't consult ``fenv``.  Requires
+        ``unsafe_cast_int=True`` because ``INTEGER`` is unbounded
+        and the cpp backend has no arbitrary-precision integer
+        type; this test specifically exercises the opt-in path."""
 
         @fp.fpy
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
             with fp.INTEGER:
                 return x + y
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler(unsafe_cast_int=True).compile(
             f, ctx=fp.INTEGER,
             arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
         )
@@ -138,7 +141,7 @@ class TestNonDefaultRmEmitsFesetround:
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
             return x + y
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         assert 'fesetround' not in out
@@ -155,7 +158,7 @@ class TestNonDefaultRmEmitsFesetround:
                 b = a + 1
             return a + b
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         # Inner switches RTZ→RNE — one save / set / restore pair.
@@ -174,7 +177,7 @@ class TestNonDefaultRmEmitsFesetround:
             with _RTZ_64:
                 return x + y
 
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         # No fesetround anywhere — caller is contracted to deliver
@@ -196,7 +199,7 @@ class TestNonDefaultRmEmitsFesetround:
                 return xs[0] + xs[1]
 
         from fpy2.types import ListType
-        out = Cpp2Compiler().compile(
+        out = CppCompiler().compile(
             f, arg_types=[ListType(RealType(fp.FP64))],
         )
         # Inner RTZ block must emit fesetround — outer is unknown.
@@ -217,10 +220,10 @@ class TestRejection:
             return x + y
 
         with pytest.raises(
-            Cpp2CompileError,
+            CppCompileError,
             match='not supported by ``fesetround``',
         ):
-            Cpp2Compiler().compile(
+            CppCompiler().compile(
                 f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
             )
 
@@ -234,9 +237,43 @@ class TestRejection:
             return x + y
 
         with pytest.raises(
-            Cpp2CompileError,
+            CppCompileError,
             match='must use RTZ rounding mode',
         ):
-            Cpp2Compiler().compile(
+            CppCompiler(unsafe_cast_int=True).compile(
                 f, arg_types=[RealType(bad_int), RealType(bad_int)],
             )
+
+    def test_unbounded_integer_rejected_by_default(self):
+        """Rounding under ``fp.INTEGER`` (unbounded ``MPFixedContext``)
+        is rejected by default — C++ has no arbitrary-precision
+        integer type, so any such rounding silently truncates to
+        ``int64_t``.  The caller must opt in with
+        ``CppCompiler(unsafe_cast_int=True)``."""
+
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        with pytest.raises(
+            CppCompileError,
+            match=r'unbounded integer context.*unsafe_cast_int',
+        ):
+            CppCompiler().compile(
+                f, arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
+            )
+
+    def test_unbounded_integer_allowed_with_flag(self):
+        """The same program compiles when the unsafe-cast flag is
+        passed — equivalent to the legacy ``CppCompiler(unsafe_cast_int=True)``
+        behavior."""
+
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
+        )
+        assert 'int64_t f(int64_t x, int64_t y)' in out
+        assert 'return (x + y);' in out

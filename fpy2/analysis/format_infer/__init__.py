@@ -4,7 +4,10 @@ from .analysis import (
     FormatAnalysis,
     FormatBound,
     FormatInfer,
+    FunctionFormat,
     ListFormat,
+    PreAnalyses,
+    PreAnalysisCache,
     SetFormat,
     TupleFormat,
 )
@@ -16,7 +19,10 @@ __all__ = [
     'FormatAnalysis',
     'FormatBound',
     'FormatInfer',
+    'FunctionFormat',
     'ListFormat',
+    'PreAnalyses',
+    'PreAnalysisCache',
     'SetFormat',
     'TupleFormat',
 ]

@@ -1,5 +1,5 @@
 """
-cpp2 backend: storage-type inference.
+cpp backend: storage-type inference.
 
 Assigns each SSA def to a C++ variable: the variable's identifier and
 its storage type.  The emitter consumes the result directly — every
@@ -116,7 +116,7 @@ def _is_in_place_assign(d: AssignDef) -> bool:
     The FPy interpreter mutates the underlying list in place
     (``interpret/byte.py:_visit_indexed_assign``).  SSA gives the
     post-mutation name its own AssignDef anyway so value-tracking
-    analyses can reason about it, but for the cpp2 backend the new
+    analyses can reason about it, but for the cpp backend the new
     def must share storage with its ``prev`` — no copy, no widening,
     no rename.
     """
@@ -125,7 +125,7 @@ def _is_in_place_assign(d: AssignDef) -> bool:
 
 class StorageInfer:
     """
-    Storage-type inference for the cpp2 emitter.
+    Storage-type inference for the cpp emitter.
 
     Assigns one C++ variable (identifier + storage type) per SSA def,
     coalescing only across phi edges.  See module docstring for the
