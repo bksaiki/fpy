@@ -1153,7 +1153,7 @@ class _CppEmitter(Visitor):
         # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
         ty: CppType = result_ty
         # Peel down to the innermost element type so we know what
-        # default value to seed with.
+        # default value to use at the leaf.
         peeled: list[CppType] = []
         while isinstance(ty, CppList):
             peeled.append(ty)

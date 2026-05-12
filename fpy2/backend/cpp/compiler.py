@@ -11,7 +11,7 @@ Phase notes live in ``docs/todos/backend-cpp.md``.
 """
 
 from dataclasses import dataclass
-from typing import Collection
+from typing import Collection, NamedTuple
 
 from ...analysis import (
     ArraySizeInfer,
@@ -194,30 +194,19 @@ class CppCompiler(Backend):
         Returns:
             The compiled C++ source.
         """
-        if not isinstance(func, Function):
-            raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
+        unit = self.unit()
+        unit.add(func, ctx=ctx, arg_types=arg_types)
+        return unit.render()
 
-        # Shared structural-analysis cache.  Every :class:`FuncDef`
-        # encountered in the call graph gets def-use / type-infer /
-        # context-use / array-size run exactly once.
-        pre_cache = PreAnalysisCache()
-        top_result = self._run_pipeline(
-            func, ctx, arg_types, pre_cache=pre_cache,
-        )
-
-        # Walk the FormatAnalysis call graph in post-order so each
-        # specialization is emitted before everyone that calls it.
-        specs: dict[tuple, _Specialization] = {}
-        emit_order: list[tuple] = []
-        top_call_names = self._discover_specializations(
-            top_result.format_info, specs, emit_order,
-        )
-
-        out: list[str] = [
-            self._emit_specialization(specs[k]) for k in emit_order
-        ]
-        out.append(self._emit_top_level(func.name, top_result, top_call_names))
-        return '\n\n'.join(out)
+    def unit(self) -> 'CppTranslationUnit':
+        """Begin a new translation-unit build.  Each :class:`Function`
+        :meth:`CppTranslationUnit.add`-ed to the result shares a
+        single specialization cache, so a callee invoked from
+        multiple top-level functions appears exactly once in the
+        emitted source — avoiding the ODR violations that a naive
+        per-function :meth:`compile` loop would produce when writing
+        many functions into the same ``.cpp`` file."""
+        return CppTranslationUnit(self)
 
     # ------------------------------------------------------------------
     # Call-graph walk
@@ -225,13 +214,14 @@ class CppCompiler(Backend):
     def _discover_specializations(
         self,
         format_info: FormatAnalysis,
-        specs: dict[tuple, '_Specialization'],
-        emit_order: list[tuple],
+        specs: dict['_SpecKey', '_Specialization'],
+        emit_order: list['_SpecKey'],
     ) -> dict[Call, str]:
         """Walk *format_info*'s ``by_call`` recursively.  For each
         :class:`Call` whose ``fn`` is a known :class:`Function`,
         materialize (or look up) the specialization for the
-        ``(callee FuncDef, outer rounding context)`` pair.
+        ``(callee FuncDef, outer rounding context, param formats)``
+        triple.
 
         Returns a ``Call → mangled name`` mapping covering every Call
         in *format_info*'s function body.  Newly-discovered
@@ -242,11 +232,10 @@ class CppCompiler(Backend):
         call_names: dict[Call, str] = {}
         for call_node, sub_fa in format_info.by_call.items():
             sig = sub_fa.fn_fmt
-            seed_key = _param_seeds_fingerprint(sig.arg_fmts)
-            key = (
-                id(sub_fa.func),
-                _ctx_fingerprint(sig.ctx),
-                seed_key,
+            key = _SpecKey(
+                func_id=id(sub_fa.func),
+                ctx_fp=_ctx_fingerprint(sig.ctx),
+                params_fp=_param_fingerprint(sig.arg_fmts),
             )
             if key not in specs:
                 inner_call_names = self._discover_specializations(
@@ -262,11 +251,8 @@ class CppCompiler(Backend):
                         f'storage selection failed for callee '
                         f'`{sub_fa.func.name}`: {e}'
                     ) from e
-                mangled = _mangle_with_seeds(
-                    sub_fa.func.name,
-                    sig.ctx,
-                    seed_key,
-                    specs,
+                mangled = _mangle_with_params(
+                    sub_fa.func.name, key, specs,
                 )
                 specs[key] = _Specialization(
                     func=sub_fa.func,
@@ -325,10 +311,123 @@ class CppCompiler(Backend):
 
 
 # ---------------------------------------------------------------------
+# Translation-unit builder
+
+
+class CppTranslationUnit:
+    """Accumulator for a single C++ translation unit.
+
+    Holds a shared :class:`PreAnalysisCache` and specialization
+    table across multiple :meth:`add` calls so that a callee
+    referenced from several top-level functions is emitted exactly
+    once.  Naive looping ``CppCompiler.compile(...)`` over each
+    function and concatenating the outputs would emit a fresh copy
+    of every transitive callee per call and produce ODR
+    redefinition errors when the C++ compiler links the unit.
+
+    Typical use::
+
+        unit = compiler.unit()
+        for func in module_funcs:
+            try:
+                unit.add(func, ctx=fp.FP64, arg_types=arg_types)
+            except CppCompileError as e:
+                report(func.name, e)
+        f.write(unit.render())
+
+    Per-:meth:`add` failures are isolated — the exception unwinds
+    only that call's contribution.  Successful adds accumulate.
+    """
+
+    _compiler: CppCompiler
+    _pre_cache: PreAnalysisCache
+    _specs: dict[_SpecKey, _Specialization]
+    _emit_order: list[_SpecKey]
+    _top_levels: list[_TopLevel]
+
+    def __init__(self, compiler: CppCompiler):
+        self._compiler = compiler
+        self._pre_cache = PreAnalysisCache()
+        self._specs = {}
+        self._emit_order = []
+        self._top_levels = []
+
+    def add(
+        self,
+        func: Function,
+        *,
+        ctx: Context | None = None,
+        arg_types: Collection[Type | None] | None = None,
+    ) -> None:
+        """Register a top-level function for this translation unit.
+        Equivalent to one :meth:`CppCompiler.compile` call's worth
+        of pipeline + specialization discovery, but the resulting
+        specializations are merged into the unit's shared table
+        instead of being re-emitted independently."""
+        if not isinstance(func, Function):
+            raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
+        top_result = self._compiler._run_pipeline(
+            func, ctx, arg_types, pre_cache=self._pre_cache,
+        )
+        top_call_names = self._compiler._discover_specializations(
+            top_result.format_info, self._specs, self._emit_order,
+        )
+        self._top_levels.append(_TopLevel(func.name, top_result, top_call_names))
+
+    def render(self) -> str:
+        """Return the unit's C++ source: every discovered
+        specialization in callee-before-caller order, followed by
+        each successfully :meth:`add`-ed top-level function in
+        registration order."""
+        out: list[str] = [
+            self._compiler._emit_specialization(self._specs[k])
+            for k in self._emit_order
+        ]
+        for top in self._top_levels:
+            out.append(
+                self._compiler._emit_top_level(
+                    top.name, top.result, top.call_names,
+                )
+            )
+        return '\n\n'.join(out)
+
+
+# ---------------------------------------------------------------------
 # Specialization machinery
 
 
-@dataclass
+class _SpecKey(NamedTuple):
+    """Identity of a :class:`_Specialization` in the unit's table.
+
+    Two call sites that share all three components reuse a single
+    specialization (and therefore a single C++ definition); any
+    difference forces a fresh specialization with a distinct
+    mangled name.
+    """
+    func_id: int
+    """``id(callee FuncDef)`` — distinguishes specializations by
+    AST identity rather than by name, so two FPy functions that
+    happen to share a name (e.g. across modules) don't collide."""
+    ctx_fp: str
+    """Fingerprint of the incoming rounding context (see
+    :func:`_ctx_fingerprint`)."""
+    params_fp: str
+    """Fingerprint of the per-parameter format tuple (see
+    :func:`_param_fingerprint`).  Two specializations under the
+    same context but with different parameter formats — e.g.
+    invoked with FP32 args vs. FP64 args — get distinct keys."""
+
+
+class _TopLevel(NamedTuple):
+    """A top-level function registered with a translation unit —
+    rendered after all its specializations and under its declared
+    name (not a mangled one)."""
+    name: str
+    result: CppPipelineResult
+    call_names: dict[Call, str]
+
+
+@dataclass(frozen=True)
 class _Specialization:
     """A single C++ definition emitted for a
     ``(callee FuncDef, outer rounding context)`` pair.
@@ -364,51 +463,45 @@ def _ctx_fingerprint(ctx: Context | None) -> str:
     return f'ctx{digest:08x}'
 
 
-def _mangle(name: str, ctx: Context | None) -> str:
-    """C++ name for a callee instantiated at *ctx*.  The double
-    underscore matches a common templating convention and keeps the
-    fingerprint visually separated from the user-chosen base name."""
-    return f'{name}__{_ctx_fingerprint(ctx)}'
+def _param_fingerprint(param_fmts) -> str:
+    """Stable string identifying a tuple of per-parameter formats.
 
+    Two specializations of the same callee that differ only in
+    their parameter formats (e.g. one called with FP32 args, the
+    other with FP64 args, both under the same outer context) must
+    map to different specializations.  The fingerprint becomes
+    part of the cache key and — when ambiguous — part of the
+    mangled name.
 
-def _param_seeds_fingerprint(seeds) -> str:
-    """Stable string identifying a tuple of parameter format seeds.
-
-    Two specializations of the same callee that differ only in their
-    parameter seeds (e.g. one called with FP32 args, the other with
-    FP64 args, both under the same outer context) must map to
-    different specializations.  The fingerprint becomes part of the
-    cache key and — when ambiguous — part of the mangled name.
-
-    Each seed is rendered via :func:`repr` and joined.  ``repr`` is
-    sufficient because :class:`FormatBound` instances are
+    Each format is rendered via :func:`repr` and joined.  ``repr``
+    is sufficient because :class:`FormatBound` instances are
     ``dataclass(frozen=True)`` and have deterministic reprs.
     """
-    return '|'.join(repr(s) for s in seeds)
+    return '|'.join(repr(f) for f in param_fmts)
 
 
-def _mangle_with_seeds(
+def _mangle_with_params(
     name: str,
-    ctx: Context | None,
-    seed_key: str,
-    specs: dict,
+    key: _SpecKey,
+    specs: dict[_SpecKey, _Specialization],
 ) -> str:
     """C++ name for a specialization.  Starts with the ctx-only
-    mangle; if that name collides with an existing specialization of
-    the same function at a different seed, falls back to a longer
-    name that incorporates a seed-digest suffix.
+    mangle; if that name collides with an existing specialization
+    of the same function at a different parameter-fingerprint,
+    falls back to a longer name that incorporates a digest suffix.
 
     Most callees have a unique signature per ctx (parameter formats
     match the outer ctx), so the common case lands on the simple
     ``name__ctx`` form.  The longer form only fires when the corpus
     actually instantiates the same callee at the same outer ctx
     with different parameter shapes."""
-    base = _mangle(name, ctx)
+    base = f'{name}__{key.ctx_fp}'
     # Detect collision: any existing spec for the same function and
-    # ctx but a different seed_key needs a distinguishing suffix.
-    for (fid, ctx_key, sk), spec in specs.items():
-        if spec.func.name == name and ctx_key == _ctx_fingerprint(ctx):
-            if sk != seed_key:
-                digest = hash(seed_key) & 0xFFFFFFFF
+    # ctx but a different parameter fingerprint needs a
+    # distinguishing suffix.
+    for other_key, spec in specs.items():
+        if spec.func.name == name and other_key.ctx_fp == key.ctx_fp:
+            if other_key.params_fp != key.params_fp:
+                digest = hash(key.params_fp) & 0xFFFFFFFF
                 return f'{base}_{digest:08x}'
     return base

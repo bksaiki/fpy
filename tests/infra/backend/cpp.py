@@ -220,23 +220,25 @@ def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[s
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     failures: list[tuple[str, str]] = []
+    # One translation unit per library — shares the specialization
+    # cache so a callee referenced from multiple library functions
+    # is emitted exactly once (no ODR redefinitions).
+    unit = compiler.unit()
+    for func in mod.__dict__.values():
+        if isinstance(func, fp.Function) and func.name not in ignore:
+            ty_info = fp.analysis.TypeInfer.check(func.ast)
+            arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
+            try:
+                unit.add(func, ctx=fp.FP64, arg_types=arg_types)
+            except fp.backend.CppCompileError as e:
+                print(f'  FAILED `{func.name}`: {e}')
+                failures.append((func.name, str(e)))
+
     with open(cpp_path, 'w') as f:
         print('\n'.join(compiler.headers()), file=f)
         print(compiler.helpers(), file=f)
-        for func in mod.__dict__.values():
-            if isinstance(func, fp.Function) and func.name not in ignore:
-                # substitute context variables with `FP64`
-                ty_info = fp.analysis.TypeInfer.check(func.ast)
-                arg_types = [ _inst_type(ty) for ty in ty_info.arg_types ]
-
-                try:
-                    s = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
-                except fp.backend.CppCompileError as e:
-                    print(f'  FAILED `{func.name}`: {e}')
-                    failures.append((func.name, str(e)))
-                    continue
-                print(s, file=f)
-                print(file=f)
+        print(unit.render(), file=f)
+        print(file=f)
 
     if failures:
         print(f'\n{len(failures)} failures in `library_{prefix}`:')
