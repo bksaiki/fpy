@@ -58,17 +58,31 @@ from .types import CppScalar
 class UnaryCppOp:
     """A single supported C++ signature for a unary FPy op,
     parameterized by an argument C++ type and an active rounding
-    context for the output."""
+    context for the output.
+
+    When ``cast_out`` is ``True`` the emitted call is wrapped in a
+    ``static_cast`` to the output context's storage type — used by
+    ops whose underlying C++ primitive returns a *narrower* /
+    differently-typed value than the output storage demands (e.g.
+    ``std::ilogb`` returns ``int`` but the output context might map
+    to ``int64_t``).  The cast is sound by precondition: such
+    primitives are paired with op variants that guarantee the
+    returned value fits in the destination width."""
     name: str
     is_func: bool
     arg_ty: CppScalar
     out_ctx: Context
+    cast_out: bool = False
 
     def matches(self, arg_ty: CppScalar, active_ctx: Context) -> bool:
         return self.out_ctx == active_ctx and self.arg_ty == arg_ty
 
     def format(self, arg: str) -> str:
-        return f'{self.name}({arg})' if self.is_func else f'({self.name}{arg})'
+        call = f'{self.name}({arg})' if self.is_func else f'({self.name}{arg})'
+        if self.cast_out:
+            out_ty = choose_storage_scalar(self.out_ctx.format())
+            return f'static_cast<{out_ty.format()}>({call})'
+        return call
 
 
 @dataclasses.dataclass(frozen=True)
@@ -279,6 +293,22 @@ def _make_unary_table() -> UnaryOpTable:
     }
     for op_cls, name in _UNARY_CMATH:
         table[op_cls] = _fp_unary(name)
+
+    # ``logb`` under an integer output context lowers to
+    # ``std::ilogb`` plus an explicit widening cast to the output's
+    # storage.  ``std::ilogb`` returns C ``int`` (≥ 16 bits, usually
+    # 32) — wider than any realistic binary exponent for the FP
+    # inputs the cpp backend supports, so casting to the output's
+    # storage type is value-preserving in practice.
+    table[Logb] = table[Logb] + [
+        UnaryCppOp(
+            'std::ilogb', is_func=True,
+            arg_ty=_ty_of(fp_ctx), out_ctx=int_ctx,
+            cast_out=True,
+        )
+        for fp_ctx in fp
+        for int_ctx in ints
+    ]
     return table
 
 
