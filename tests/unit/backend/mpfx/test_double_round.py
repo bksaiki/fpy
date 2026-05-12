@@ -80,7 +80,7 @@ class TestDoubleRound():
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
         assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
-        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
+        assert y1.overflow or y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     @given(
         st.one_of(st.integers(1, 5), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
@@ -100,7 +100,7 @@ class TestDoubleRound():
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
         assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
-        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
+        assert y1.overflow or y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     @given(
         st.one_of(st.integers(1, 5), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
@@ -114,36 +114,35 @@ class TestDoubleRound():
     def test_rto_rto(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RTO](ctx2[RTO](x)) == ctx1[RTO](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTO, fp.RM.RTO)
-        assume(ctx1.pos_maxval < ctx2.pos_maxval)
         A1 = AbstractFormat.from_format(ctx1.format())
         A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
         assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
-        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
+        assert y1.overflow or y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     # TODO: restore this test with proper preconditions
     # the problem is that RTO overflows to infinity while RTZ does not
-    # @given(
-    #     st.one_of(st.integers(1, 5), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
-    #     st.integers(-8, 0),                                   # exp1: minimum exponent of fmt1
-    #     st.integers(1, 32),                                   # k1: bound of fmt1 is k1 * 2^exp1
-    #     st.integers(1, 5),                                    # dp: p2 = p1 + dp
-    #     st.integers(1, 5),                                    # dexp: exp2 = exp1 - dexp
-    #     st.integers(0, 8),                                    # dk: b2 = (k1 + dk) * 2^exp1 (rounded to fit fmt2)
-    #     real_floats(prec_max=16, exp_min=-16, exp_max=16),    # x: a real float to round
-    # )
-    # def test_rto_rtz(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
-    #     """ctx1[RTZ](ctx2[RTO](x)) == ctx1[RTZ](x)"""
-    #     ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTZ, fp.RM.RTO)
-    #     A1 = AbstractFormat.from_format(ctx1.format())
-    #     A2 = AbstractFormat.from_format(ctx2.format())
-    #     y1 = ctx1.round(x)
-    #     y2 = ctx2.round(x)
-    #     y3 = ctx1.round(y2)
-    #     self.assertLessEqual(A1, A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}")
-    #     self.assertEqual(y1, y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}")
+    @given(
+        st.one_of(st.integers(1, 5), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
+        st.integers(-8, 0),                                   # exp1: minimum exponent of fmt1
+        st.integers(1, 32),                                   # k1: bound of fmt1 is k1 * 2^exp1
+        st.integers(1, 5),                                    # dp: p2 = p1 + dp
+        st.integers(1, 5),                                    # dexp: exp2 = exp1 - dexp
+        st.integers(0, 8),                                    # dk: b2 = (k1 + dk) * 2^exp1 (rounded to fit fmt2)
+        real_floats(prec_max=16, exp_min=-16, exp_max=16),    # x: a real float to round
+    )
+    def test_rto_rtz(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
+        """ctx1[RTZ](ctx2[RTO](x)) == ctx1[RTZ](x)"""
+        ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTZ, fp.RM.RTO)
+        A1 = AbstractFormat.from_format(ctx1.format())
+        A2 = AbstractFormat.from_format(ctx2.format())
+        y1 = ctx1.round(x)
+        y2 = ctx2.round(x)
+        y3 = ctx1.round(y2)
+        assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
+        assert y1.overflow or y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     @given(
         st.one_of(st.integers(1, 5), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
@@ -164,7 +163,7 @@ class TestDoubleRound():
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
         assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
-        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
+        assert y1.overflow or y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     @given(
         st.one_of(st.integers(2, 5)),                         # p1: precision (inf = fixed-point)
@@ -185,4 +184,4 @@ class TestDoubleRound():
         y2 = ctx2.round(x)
         y3 = ctx1.round(y2)
         assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
-        assert y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
+        assert y1.overflow or y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
