@@ -187,6 +187,44 @@ class ListFormat:
     elt: 'FormatBound'
 
 
+@dataclass(frozen=True)
+class FunctionFormat:
+    """Format-level signature of a function instantiation — mirrors
+    :class:`fpy2.types.FunctionType`.
+
+    Captures the function's interface: the active rounding context
+    it runs under, a per-parameter format bound, and the format
+    bound for its return value.
+
+    Two roles:
+
+    - **Input** to :meth:`FormatInfer.analyze` — the caller pins
+      ``ctx`` and ``arg_fmts`` to instantiate the function at a
+      particular signature.  The ``ret_fmt`` slot is treated as
+      expected-but-unverified and is overwritten by whatever the
+      body analysis derives.
+    - **Output** recorded on :attr:`FormatAnalysis.fn_fmt` — all
+      three fields populated, describing the function as analyzed.
+    """
+
+    ctx: 'Context | None'
+    """Incoming rounding context (mirrors :attr:`FunctionType.ctx`).
+    Pins the function's outermost scope when :class:`ContextUse`
+    produced a symbolic context variable there.  ``None`` means no
+    substitution — symbolic scopes stay symbolic."""
+
+    arg_fmts: tuple['FormatBound', ...]
+    """Per-parameter format bound, in source order (mirrors
+    :attr:`FunctionType.arg_types`).  One entry per
+    :class:`Argument`.  These bounds become the initial format for
+    each parameter SSA def at the start of the analysis; bypasses
+    the declared parameter types."""
+
+    ret_fmt: 'FormatBound'
+    """Format bound for the function's return value (mirrors
+    :attr:`FunctionType.return_type`)."""
+
+
 ScalarFormatBound: TypeAlias = None | SetFormat | Format
 AbstractableFormatBound: TypeAlias = SetFormat | AbstractableFormat
 FormatBound: TypeAlias = None | SetFormat | Format | TupleFormat | ListFormat
@@ -238,8 +276,9 @@ def _instantiate_real_at_ctx(ty: Type, ctx: Context) -> Type:
     """Replace every free :class:`Real` slot in *ty* with
     ``RealType(ctx)``.  Aggregate shapes (tuple, list) are preserved;
     non-numeric leaves (bool, context) pass through unchanged.  Used
-    when seeding parameter formats so a callee analyzed at a caller's
-    active context sees concrete inputs instead of ``REAL_FORMAT``
+    to derive a concrete parameter format from a declared type when
+    a callee is analyzed under a caller's active context, so the
+    callee body sees concrete inputs instead of ``REAL_FORMAT``
     everywhere.
 
     A :class:`RealType` with an *already-concrete* ``ctx`` keeps its
@@ -261,39 +300,14 @@ def _instantiate_real_at_ctx(ty: Type, ctx: Context) -> Type:
             return ty
 
 
-def _return_bound_of(sub: FormatAnalysis) -> FormatBound:
-    """Join the formats of every :class:`ReturnStmt` expression in
-    *sub*'s function.  Functions in the FPy corpus typically have one
-    return; the join handles branchy control flow where each branch
-    returns a different expression."""
-    rets: list[FormatBound] = []
-
-    def walk(node):
-        if isinstance(node, ReturnStmt):
-            rets.append(sub.by_expr.get(node.expr))
-        if isinstance(node, Ast):
-            for slot in node.__slots__:
-                walk(getattr(node, slot, None))
-        elif isinstance(node, (list, tuple)):
-            for item in node:
-                walk(item)
-
-    walk(sub.func.body)
-    if not rets:
-        # No reachable return — function returns ``None``.  Fall back
-        # to the declared type bound.
-        return _bound_of_type(sub.type_info.return_type)
-    out = rets[0]
-    for bound in rets[1:]:
-        out = _join_bounds(out, bound, widen=False)
-    return out
 
 
 def _bound_of_type(ty: Type) -> FormatBound:
     """
     Derives the most precise :data:`FormatBound` we can from a static
-    type alone — used to seed argument bindings, free variables, and
-    other places where no expression-level format is yet available.
+    type alone — used to derive initial format bounds for argument
+    bindings, free variables, and other places where no
+    expression-level format is yet available.
 
     For scalar real values, the result depends on whether the type
     carries a concrete rounding context (``RealType.ctx``):
@@ -516,10 +530,10 @@ class PreAnalysisCache:
     ) -> PreAnalyses:
         """Return the pre-analyses for *func*, computing them on the
         first request.  Pre-supplied analyses (via the keyword args)
-        seed the cache for *func* if it hasn't been computed yet —
-        used by the public :meth:`FormatInfer.analyze` to thread
-        externally-computed analyses in.  Subsequent lookups ignore
-        the keyword args."""
+        populate the cache for *func* if it hasn't been computed
+        yet — used by the public :meth:`FormatInfer.analyze` to
+        thread externally-computed analyses in.  Subsequent lookups
+        ignore the keyword args."""
         key = id(func)
         cached = self._table.get(key)
         if cached is not None:
@@ -554,27 +568,20 @@ class FormatAnalysis:
     func: FuncDef
     """The function whose body was analyzed."""
 
-    outer_ctx: Context | None
+    fn_fmt: FunctionFormat
     """
-    The rounding context this instantiation was pinned to.
+    The format-level signature of this instantiation (mirror of the
+    function's :class:`FunctionType`).
 
-    The caller-supplied value flows in as ``outer_ctx`` to
-    :meth:`FormatInfer.analyze`; for sub-analyses recorded in
-    :attr:`by_call`, it is the active rounding context at the call
-    site that invoked the callee.  ``None`` when the function was
-    analyzed standalone with no substitution.
-    """
-
-    param_seeds: list['FormatBound'] | None
-    """
-    Per-parameter format bounds the caller pinned this instantiation
-    to (one per :class:`Argument` in source order).
-
-    For sub-analyses recorded in :attr:`by_call`, this is the format
-    of each call-site argument expression.  ``None`` when the
-    function was analyzed standalone — parameter formats then come
-    from the declared type, with :attr:`outer_ctx` optionally pinning
-    free ``Real`` slots.
+    For top-level analyses, ``fn_fmt.ctx`` and
+    ``fn_fmt.arg_fmts`` reflect whatever the caller
+    pinned (or sensible defaults derived from the declared types).
+    For sub-analyses recorded in :attr:`by_call`, they reflect the
+    active rounding context at the call site and the formats of
+    the call-site argument expressions, respectively.  In every
+    case ``fn_fmt.ret_fmt`` is the joined bound
+    across the function's :class:`ReturnStmt` expressions, as
+    derived by this analysis.
     """
 
     type_info: TypeAnalysis
@@ -625,6 +632,7 @@ class FormatAnalysis:
 #####################################################################
 # Internal analysis visitor
 
+
 class _FormatInferInstance(Visitor):
     """
     Single-use visitor that performs format inference.
@@ -643,13 +651,18 @@ class _FormatInferInstance(Visitor):
     by_expr: dict[Expr, FormatBound]
     by_call: dict[Call, FormatAnalysis]
 
+    _pre_cache: PreAnalysisCache
+    _fn_fmt: FunctionFormat | None
+    _return_fmt: FormatBound | None
+    _loop_iter_limit: int
+    _widen: bool
+
     def __init__(
         self,
         func: FuncDef,
         pre: PreAnalyses,
         pre_cache: PreAnalysisCache,
-        outer_ctx: Context | None,
-        param_seeds: list['FormatBound'] | None,
+        fn_fmt: FunctionFormat | None,
         loop_iter_limit: int,
     ):
         self.func = func
@@ -660,25 +673,24 @@ class _FormatInferInstance(Visitor):
         self.by_expr = {}
         self.by_call = {}
         self._pre_cache = pre_cache
-        # The rounding context the caller pinned this instantiation
-        # to (typically the active context at the call site that
-        # invoked us).  Substituted into the function-level scope
-        # whenever :class:`ContextUse` recorded a symbolic ``NamedId``
-        # there.  ``None`` means "no substitution" — symbolic scopes
-        # stay symbolic and the analysis degrades to ``REAL_FORMAT``
-        # for affected ops (the legacy behaviour).
-        self._outer_ctx = outer_ctx
-        # Caller-supplied initial format bounds for the function's
-        # parameters, one per :class:`Argument` in source order.
-        # When provided, these become the seed values for each
-        # parameter's SSA def — bypassing the declared type.  This
-        # is how a callee's parameter formats track the caller's
-        # call-site arg formats (a callee invoked with ``FP64`` args
-        # under an ``FP32`` outer scope sees ``a: FP64, b: FP64``,
-        # not ``a: FP32, b: FP32`` — so a subsequent FP32-rounded
-        # multiplication of those doubles correctly fails as lossy).
-        # ``None`` falls back to the declared-type seeding.
-        self._param_seeds = param_seeds
+        # The instantiation signature the caller pinned.  ``None``
+        # means "no substitution" — the function is analyzed
+        # standalone, with declared parameter types and any symbolic
+        # function-level scope degrading to ``REAL_FORMAT`` at
+        # affected op sites.  Read by :meth:`_visit_function` to
+        # initialize parameter formats and by
+        # :meth:`_resolve_active_ctx` for scope substitution.
+        self._fn_fmt = fn_fmt
+        # Running join of every :class:`ReturnStmt` format the body
+        # walk has seen so far.  :meth:`_visit_return` folds each
+        # new return into this slot; :meth:`_visit_function` reads
+        # it after the body walk.  ``None`` doubles as both the
+        # "no returns visited yet" sentinel and the legitimate
+        # bound for void/bool returns — they coincide operationally
+        # since :class:`TypeInfer` already guarantees every return
+        # has the same static type, so the analysis can't see a
+        # mix of bool and non-bool returns in a single function.
+        self._return_fmt = None
         self._loop_iter_limit = loop_iter_limit
         # When True, joins forced inside a saturated loop fixpoint widen
         # distinct scalar Formats to ``REAL_FORMAT`` instead of going through
@@ -686,6 +698,12 @@ class _FormatInferInstance(Visitor):
         # chains under arithmetic).  Saved/restored around each loop so that
         # nested loops manage their own state.
         self._widen: bool = False
+
+    @property
+    def _outer_ctx(self) -> Context | None:
+        """Convenience: incoming rounding context, or ``None`` if no
+        ``fn_fmt`` was supplied."""
+        return self._fn_fmt.ctx if self._fn_fmt is not None else None
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1000,7 +1018,7 @@ class _FormatInferInstance(Visitor):
         sub = self._analyze_callee(e)
         if sub is not None:
             self.by_call[e] = sub
-            return _return_bound_of(sub)
+            return sub.fn_fmt.ret_fmt
         return _bound_of_type(self.type_info.by_expr[e])
 
     def _analyze_callee(self, e: Call) -> 'FormatAnalysis | None':
@@ -1023,21 +1041,28 @@ class _FormatInferInstance(Visitor):
         if not isinstance(fn, Function):
             return None
         callee_outer = self._resolve_active_ctx(e)
-        # Seed the callee's parameter formats from the actual
-        # argument expressions at this call site.  This is what
-        # gives the callee the right signature: a callee invoked
-        # with ``FP64`` arguments under an ``FP32`` outer scope
-        # gets ``a: FP64, b: FP64, → FP32`` — and any FP32-rounded
-        # operation on those doubles will trip the op-table's
-        # lossy-implicit-cast guard at emission time.
-        param_seeds = [self.by_expr.get(arg) for arg in e.args]
+        # Build the callee's instantiation signature from this call
+        # site: the active rounding context, plus one format per
+        # parameter taken straight from the call-site argument
+        # expression.  This is what gives the callee the right
+        # signature: a callee invoked with ``FP64`` arguments under
+        # an ``FP32`` outer scope gets ``a: FP64, b: FP64, → FP32``
+        # — and any FP32-rounded operation on those doubles will
+        # trip the op-table's lossy-implicit-cast guard at emission
+        # time.  The ``ret_fmt`` slot is a placeholder; the
+        # sub-analysis will compute the real value from the body.
+        arg_fmts = tuple(self.by_expr.get(arg) for arg in e.args)
+        callee_signature = FunctionFormat(
+            ctx=callee_outer,
+            arg_fmts=arg_fmts,
+            ret_fmt=REAL_FORMAT,
+        )
         pre = self._pre_cache.get(fn.ast)
         return _FormatInferInstance(
             fn.ast,
             pre=pre,
             pre_cache=self._pre_cache,
-            outer_ctx=callee_outer,
-            param_seeds=param_seeds,
+            fn_fmt=callee_signature,
             loop_iter_limit=self._loop_iter_limit,
         ).analyze()
 
@@ -1262,7 +1287,16 @@ class _FormatInferInstance(Visitor):
         self._visit_expr(stmt.expr, ctx)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None):
-        self._visit_expr(stmt.expr, ctx)
+        # Fold each return's format into the running join here, as
+        # the body walk encounters it — saves a second AST
+        # traversal at function-end.  The first ``ReturnStmt`` sets
+        # ``_return_fmt`` directly; subsequent ones join with
+        # whatever's been seen so far.
+        fmt = self._visit_expr(stmt.expr, ctx)
+        if self._return_fmt is None:
+            self._return_fmt = fmt
+        else:
+            self._return_fmt = self._join(self._return_fmt, fmt)
 
     def _visit_pass(self, stmt: PassStmt, ctx: None):
         pass
@@ -1271,48 +1305,85 @@ class _FormatInferInstance(Visitor):
         for stmt in block.stmts:
             self._visit_statement(stmt, ctx)
 
-    def _visit_function(self, func: FuncDef, ctx: None):
-        # Parameter and free-variable defs are seeded with format
-        # bounds.  Three sources, in priority order:
-        #
-        # 1. ``self._param_seeds``: caller-supplied formats for each
-        #    argument — used when we're analyzing a callee at a
-        #    specific call site.  The seeds reflect the *actual*
-        #    arg expressions' formats, not the callee's declared
-        #    types.
-        # 2. ``self._outer_ctx``: when no per-argument seed is
-        #    available, pin free ``Real`` slots in the declared
-        #    type to the outer context.  Useful for standalone
-        #    analyses where the caller wants to pretend the function
-        #    is being run under a particular ctx without faking up
-        #    every operand format.
-        # 3. Fallback: declared type, untouched — yields
-        #    ``REAL_FORMAT`` for free ``Real`` slots.
+    def _visit_function(self, func: FuncDef, ctx: None) -> FunctionFormat:
+        """Initialize parameter / free-variable formats, visit the
+        body, then return the :class:`FunctionFormat` describing this
+        instantiation.
+
+        Initial parameter formats come from three sources, in
+        priority order:
+
+        1. ``self._fn_fmt.arg_fmts``: caller-supplied per-parameter
+           formats — used when we're analyzing a callee at a
+           specific call site, so the body sees the *caller's actual
+           argument formats* rather than the declared parameter
+           types.
+        2. ``self._fn_fmt.ctx``: when no caller-supplied format is
+           available, pin free ``Real`` slots in the declared type
+           to the outer context.  Useful for standalone analyses
+           that want to pretend the function is being run under a
+           particular ctx without faking up every operand format.
+        3. Fallback: declared type, untouched — yields
+           ``REAL_FORMAT`` for free ``Real`` slots.
+
+        After the body is visited, the returned :class:`FunctionFormat`
+        echoes the caller's ``ctx``, reads ``arg_fmts`` back from
+        the parameter defs (so it reflects what the body actually
+        saw), and exposes ``ret_fmt`` as the running join of every
+        :class:`ReturnStmt` expression's bound that
+        :meth:`_visit_return` accumulated during the walk.
+        """
+        fn_fmt = self._fn_fmt
+        outer_ctx = fn_fmt.ctx if fn_fmt is not None else None
+        params = fn_fmt.arg_fmts if fn_fmt is not None else None
+
+        def param_from_type(ty: Type) -> FormatBound:
+            if outer_ctx is not None:
+                ty = _instantiate_real_at_ctx(ty, outer_ctx)
+            return _bound_of_type(ty)
+
+        # Parameter defs
         for i, arg in enumerate(func.args):
             if not isinstance(arg.name, NamedId):
                 continue
             d = self.def_use.find_def_from_site(arg.name, arg)
-            if self._param_seeds is not None and i < len(self._param_seeds):
-                self._set_def_bound(d, self._param_seeds[i])
+            if params is not None and i < len(params):
+                self._set_def_bound(d, params[i])
             else:
-                self._set_def_bound(d, _bound_of_type(self._instantiate(self.type_info.by_def[d])))
+                self._set_def_bound(d, param_from_type(self.type_info.by_def[d]))
+        # Free-variable defs (captured from an outer scope)
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            self._set_def_bound(d, _bound_of_type(self._instantiate(self.type_info.by_def[d])))
-        self._visit_block(func.body, ctx)
+            self._set_def_bound(d, param_from_type(self.type_info.by_def[d]))
 
-    def _instantiate(self, ty: Type) -> Type:
-        """Apply :attr:`_outer_ctx` to free ``Real`` slots in *ty*."""
-        if self._outer_ctx is None:
-            return ty
-        return _instantiate_real_at_ctx(ty, self._outer_ctx)
+        # Walk the body — populates ``by_def`` / ``by_expr`` / ``by_call``.
+        self._visit_block(func.body, ctx)
+        assert isinstance(self._return_fmt, FormatBound), 'expected at least one ReturnStmt in function body'
+
+        # Build this instantiation's signature.  ``arg_fmts`` is the
+        # initial format each parameter held entering the body
+        # (caller-supplied or declared-type fallback); ``ret_fmt``
+        # is the running join of every ``ReturnStmt`` expression's
+        # format accumulated during the walk.
+        arg_fmts: list[FormatBound] = []
+        for arg in func.args:
+            if isinstance(arg.name, NamedId):
+                d = self.def_use.find_def_from_site(arg.name, arg)
+                arg_fmts.append(self.by_def.get(d))
+            else:
+                arg_fmts.append(None)
+        return FunctionFormat(
+            ctx=outer_ctx,
+            arg_fmts=tuple(arg_fmts),
+            ret_fmt=self._return_fmt,
+        )
+
 
     def analyze(self) -> FormatAnalysis:
-        self._visit_function(self.func, None)
+        fn_fmt = self._visit_function(self.func, None)
         return FormatAnalysis(
             func=self.func,
-            outer_ctx=self._outer_ctx,
-            param_seeds=self._param_seeds,
+            fn_fmt=fn_fmt,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
             by_def=self.by_def,
@@ -1403,8 +1474,7 @@ class FormatInfer:
         ctx_use: ContextUseAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,
         pre_cache: PreAnalysisCache | None = None,
-        outer_ctx: Context | None = None,
-        param_seeds: list[FormatBound] | None = None,
+        fn_fmt: FunctionFormat | None = None,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
     ) -> FormatAnalysis:
         """
@@ -1438,25 +1508,25 @@ class FormatInfer:
                 the exact-arithmetic lattice (``+``/``-``/``*`` under
                 :data:`REAL`) which has infinite ascending chains.
             pre_cache:
-                Optional :class:`PreAnalysisCache` to seed sub-analyses
-                with.  Useful when a caller wants to amortize structural
-                analysis across multiple independent :meth:`analyze`
-                invocations on a shared corpus.  When ``None``, a
-                fresh cache is allocated for this call (and its
-                recursive descents).
-            outer_ctx:
-                Rounding context to pin the function's outermost scope
-                to.  Substituted into any symbolic context
-                :class:`ContextUse` produced for the function-level
-                scope.  Recursive sub-analyses receive their caller's
-                active context here automatically.
-            param_seeds:
-                Optional per-parameter format bounds (one per
-                :class:`Argument`).  When supplied, these override the
-                declared parameter types — used by sub-analyses to
-                seed callee parameters from the caller's call-site
-                argument formats.  ``None`` falls back to
-                declared-type seeding.
+                Optional :class:`PreAnalysisCache` shared with
+                sub-analyses.  Useful when a caller wants to
+                amortize structural analysis across multiple
+                independent :meth:`analyze` invocations on a
+                shared corpus.  When ``None``, a fresh cache is
+                allocated for this call (and its recursive
+                descents).
+            fn_fmt:
+                Format-level signature to instantiate the function
+                at.  Supplies the incoming rounding context (used
+                to pin the function's outermost scope when
+                symbolic) and a per-parameter initial format (used
+                to bypass the declared parameter types — typically
+                derived from the caller's call-site argument
+                formats).  The ``ret_fmt`` slot is treated as
+                expected and overwritten in the result.  ``None``
+                falls back to the legacy behaviour: symbolic outer
+                scopes degrade to ``REAL_FORMAT`` and parameter
+                formats come from the declared types.
             loop_iter_limit:
                 Number of loop body+join iterations to run before
                 forcing joins of distinct scalar Formats to widen to
@@ -1490,8 +1560,7 @@ class FormatInfer:
             func,
             pre=pre,
             pre_cache=pre_cache,
-            outer_ctx=outer_ctx,
-            param_seeds=param_seeds,
+            fn_fmt=fn_fmt,
             loop_iter_limit=loop_iter_limit,
         )
         return inst.analyze()

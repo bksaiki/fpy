@@ -395,20 +395,20 @@ class _CppEmitter(Visitor):
         self.writer.add_line(f'return {rhs};')
 
     def _resolve_scope_ctx(self, scope: ContextScope) -> Context | None:
-        """Concrete :class:`Context` for *scope*, substituting
-        :attr:`FormatAnalysis.outer_ctx` for symbolic scopes.
+        """Concrete :class:`Context` for *scope*, substituting the
+        per-instantiation incoming context for symbolic scopes.
 
         Specializations of a callee are emitted without first
         monomorphizing the AST, so :class:`ContextUse` leaves the
         function-level scope's ctx as a symbolic ``NamedId``.  The
-        per-instantiation ``outer_ctx`` recorded by
-        :class:`FormatInfer` is the concrete context the caller
-        pinned at the call site — we substitute it in wherever the
-        emitter would otherwise see a symbolic scope.
+        ``ctx`` field of :attr:`FormatAnalysis.fn_fmt` is
+        the concrete context the caller pinned at the call site —
+        we substitute it in wherever the emitter would otherwise
+        see a symbolic scope.
         """
         if isinstance(scope.ctx, Context):
             return scope.ctx
-        return self.format_info.outer_ctx
+        return self.format_info.fn_fmt.ctx
 
     def _resolve_used_ctx(self, site: ContextScopeSite) -> Context | None:
         """Pull the scope's resolved context, *but only if some

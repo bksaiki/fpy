@@ -231,10 +231,11 @@ class CppCompiler(Backend):
         """
         call_names: dict[Call, str] = {}
         for call_node, sub_fa in format_info.by_call.items():
-            seed_key = _param_seeds_fingerprint(sub_fa.param_seeds)
+            sig = sub_fa.fn_fmt
+            seed_key = _param_seeds_fingerprint(sig.arg_fmts)
             key = (
                 id(sub_fa.func),
-                _ctx_fingerprint(sub_fa.outer_ctx),
+                _ctx_fingerprint(sig.ctx),
                 seed_key,
             )
             if key not in specs:
@@ -253,7 +254,7 @@ class CppCompiler(Backend):
                     ) from e
                 mangled = _mangle_with_seeds(
                     sub_fa.func.name,
-                    sub_fa.outer_ctx,
+                    sig.ctx,
                     seed_key,
                     specs,
                 )
@@ -367,13 +368,10 @@ def _param_seeds_fingerprint(seeds) -> str:
     different specializations.  The fingerprint becomes part of the
     cache key and — when ambiguous — part of the mangled name.
 
-    ``None`` (no seeds supplied) yields ``"none"``; otherwise each
-    seed is rendered via :func:`repr` and joined.  ``repr`` is
+    Each seed is rendered via :func:`repr` and joined.  ``repr`` is
     sufficient because :class:`FormatBound` instances are
     ``dataclass(frozen=True)`` and have deterministic reprs.
     """
-    if seeds is None:
-        return 'none'
     return '|'.join(repr(s) for s in seeds)
 
 
