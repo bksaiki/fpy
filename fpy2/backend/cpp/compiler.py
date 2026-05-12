@@ -156,25 +156,60 @@ def _mangle_with_params(
     specs: dict[_SpecKey, _Specialization],
 ) -> str:
     """C++ name for a specialization.  Starts with the ctx-only
-    mangle; if that name collides with an existing specialization
-    of the same function at a different parameter-fingerprint,
-    falls back to a longer name that incorporates a digest suffix.
+    mangle; appends a disambiguating digest suffix when an existing
+    spec would otherwise collide on the emitted C++ name.
 
-    Most callees have a unique signature per ctx (parameter formats
-    match the outer ctx), so the common case lands on the simple
-    ``name__ctx`` form.  The longer form only fires when the corpus
-    actually instantiates the same callee at the same outer ctx
-    with different parameter shapes."""
+    Two distinct ways the base name ``{source name}__{ctx_fp}`` can
+    collide within a single translation unit:
+
+    1. **Different FuncDef, same source name.**  Two FPy functions
+       in different modules share a ``.name`` (e.g.
+       ``fpy2.libraries.vector.zeros`` and
+       ``fpy2.libraries.matrix.zeros``).  Collision detection here
+       must compare by :attr:`_SpecKey.func_id` (AST identity) —
+       comparing by ``spec.func.name`` alone would treat the two
+       as the same callee and emit duplicate C++ definitions.
+    2. **Same FuncDef, different parameter formats.**  The corpus
+       invokes the same callee at the same outer ctx with
+       differently-shaped operands.
+
+    The new spec receives the suffix; specs already in the table
+    keep their existing (shorter) names.  Common case — every
+    ``(name, ctx_fp)`` corresponds to exactly one
+    ``(func_id, params_fp)`` — lands on the bare ``name__ctx_fp``
+    form.
+    """
     base = f'{name}__{key.ctx_fp}'
-    # Detect collision: any existing spec for the same function and
-    # ctx but a different parameter fingerprint needs a
-    # distinguishing suffix.
+    needs_func_disambig = False
+    needs_params_disambig = False
     for other_key, spec in specs.items():
-        if spec.func.name == name and other_key.ctx_fp == key.ctx_fp:
-            if other_key.params_fp != key.params_fp:
-                digest = hash(key.params_fp) & 0xFFFFFFFF
-                return f'{base}_{digest:08x}'
-    return base
+        if other_key == key:
+            continue
+        # Look for specs whose generated base name would clash.
+        # ``spec.func.name`` is the source name the base mangle is
+        # built from — a clash requires both that and ``ctx_fp`` to
+        # match.
+        if spec.func.name != name:
+            continue
+        if other_key.ctx_fp != key.ctx_fp:
+            continue
+        # Same source name + same ctx_fp.  Decide *why* it would
+        # collide: different FuncDef (cross-module name reuse) vs.
+        # same FuncDef with different parameter shapes.
+        if other_key.func_id != key.func_id:
+            needs_func_disambig = True
+        elif other_key.params_fp != key.params_fp:
+            needs_params_disambig = True
+    suffix = ''
+    if needs_func_disambig:
+        # Short digest of ``func_id`` keeps the name finite and
+        # makes the cross-module disambiguation visible in the
+        # emitted source.  ``id()`` isn't stable across runs but is
+        # unique within a process, which is all this needs.
+        suffix += f'_f{hash(key.func_id) & 0xFFFF:04x}'
+    if needs_params_disambig:
+        suffix += f'_p{hash(key.params_fp) & 0xFFFFFFFF:08x}'
+    return base + suffix
 
 # ---------------------------------------------------------------------
 # Compiler
