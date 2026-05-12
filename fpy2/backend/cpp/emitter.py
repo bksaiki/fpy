@@ -53,7 +53,8 @@ from ...ast.visitor import Visitor
 from ...number import EFloatContext, MPFixedContext, MPBFixedContext, RM
 from ...number.context.context import Context
 
-from .ops import ScalarOpTable, make_op_table
+from .ops import ScalarOpTable
+from .target import make_op_table
 from .storage import (
     StorageSelectionError, choose_storage, scalar_fits_in, scalar_sup,
 )

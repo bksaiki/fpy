@@ -124,7 +124,7 @@ class TestCmathTableShape:
 
     def test_unary_table_has_transcendentals(self):
         from fpy2.ast.fpyast import Sqrt, Sin, Exp, Log, Erf, Cbrt
-        from fpy2.backend.cpp.ops import make_op_table
+        from fpy2.backend.cpp.target import make_op_table
         t = make_op_table()
         for op in (Sqrt, Sin, Exp, Log, Erf, Cbrt):
             assert op in t.unary
@@ -132,7 +132,7 @@ class TestCmathTableShape:
 
     def test_binary_table_has_pow_etc(self):
         from fpy2.ast.fpyast import Pow, Atan2, Hypot, Copysign
-        from fpy2.backend.cpp.ops import make_op_table
+        from fpy2.backend.cpp.target import make_op_table
         t = make_op_table()
         for op in (Pow, Atan2, Hypot, Copysign):
             assert op in t.binary
@@ -140,7 +140,7 @@ class TestCmathTableShape:
 
     def test_ternary_table_has_fma(self):
         from fpy2.ast.fpyast import Fma
-        from fpy2.backend.cpp.ops import make_op_table
+        from fpy2.backend.cpp.target import make_op_table
         t = make_op_table()
         assert Fma in t.ternary
         assert any(s.out_ctx == fp.FP64 for s in t.ternary[Fma])

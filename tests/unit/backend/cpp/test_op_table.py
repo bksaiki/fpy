@@ -15,7 +15,7 @@ import fpy2 as fp
 import pytest
 
 from fpy2.backend.cpp import CppCompiler, CppCompileError
-from fpy2.backend.cpp.ops import make_op_table
+from fpy2.backend.cpp.target import make_op_table
 from fpy2.backend.cpp.types import CppScalar
 from fpy2.types import RealType
 
