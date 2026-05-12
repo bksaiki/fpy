@@ -142,8 +142,8 @@ class TestDoubleRound():
     #     y1 = ctx1.round(x)
     #     y2 = ctx2.round(x)
     #     y3 = ctx1.round(y2)
-    #     self.assertLessEqual(A1, A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}")
-    #     self.assertEqual(y1, y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}")
+    #     assert A1 <= A2, f"Failed: A1={A1}, A2={A2}, x={float(x)}"
+    #     assert y1.isinf or y1 == y3, f"Failed: y1={float(y1)}, y2={float(y2)}, y3={float(y3)}, x={float(x)}"
 
     @given(
         st.one_of(st.integers(1, 5), st.just(float('inf'))),  # p1: precision (inf = fixed-point)
