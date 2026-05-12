@@ -163,7 +163,7 @@ def _test_unit_tests(
     *,
     no_cc: bool = False
 ):
-    compiler = fp.CppCompiler()
+    compiler = fp.CppCompiler(unsafe_cast_int=True)
     failures: list[tuple[str, str]] = []
     for func in funcs:
         if func.name in ignore:
@@ -216,7 +216,7 @@ _library_ignore = [
 ]
 
 def _test_library(output_dir: Path, prefix: str, mod: ModuleType, ignore: list[str], no_cc: bool = False):
-    compiler = fp.CppCompiler()
+    compiler = fp.CppCompiler(unsafe_cast_int=True)
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     failures: list[tuple[str, str]] = []

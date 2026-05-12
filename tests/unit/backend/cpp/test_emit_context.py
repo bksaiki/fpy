@@ -108,14 +108,17 @@ class TestDefaultRmIsImplicit:
 
     def test_integer_context_no_fesetround(self):
         """``with INTEGER:`` doesn't emit fesetround — integer
-        arithmetic doesn't consult ``fenv``."""
+        arithmetic doesn't consult ``fenv``.  Requires
+        ``unsafe_cast_int=True`` because ``INTEGER`` is unbounded
+        and the cpp backend has no arbitrary-precision integer
+        type; this test specifically exercises the opt-in path."""
 
         @fp.fpy
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
             with fp.INTEGER:
                 return x + y
 
-        out = CppCompiler().compile(
+        out = CppCompiler(unsafe_cast_int=True).compile(
             f, ctx=fp.INTEGER,
             arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
         )
@@ -237,6 +240,40 @@ class TestRejection:
             CppCompileError,
             match='must use RTZ rounding mode',
         ):
-            CppCompiler().compile(
+            CppCompiler(unsafe_cast_int=True).compile(
                 f, arg_types=[RealType(bad_int), RealType(bad_int)],
             )
+
+    def test_unbounded_integer_rejected_by_default(self):
+        """Rounding under ``fp.INTEGER`` (unbounded ``MPFixedContext``)
+        is rejected by default — C++ has no arbitrary-precision
+        integer type, so any such rounding silently truncates to
+        ``int64_t``.  The caller must opt in with
+        ``CppCompiler(unsafe_cast_int=True)``."""
+
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        with pytest.raises(
+            CppCompileError,
+            match=r'unbounded integer context.*unsafe_cast_int',
+        ):
+            CppCompiler().compile(
+                f, arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
+            )
+
+    def test_unbounded_integer_allowed_with_flag(self):
+        """The same program compiles when the unsafe-cast flag is
+        passed — equivalent to the legacy ``CppCompiler(unsafe_cast_int=True)``
+        behavior."""
+
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
+        )
+        assert 'int64_t f(int64_t x, int64_t y)' in out
+        assert 'return (x + y);' in out

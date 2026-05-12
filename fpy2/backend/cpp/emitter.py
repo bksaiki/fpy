@@ -133,6 +133,7 @@ class _CppEmitter(Visitor):
         *,
         func_name_override: str | None = None,
         call_names: dict | None = None,
+        unsafe_cast_int: bool = False,
     ):
         self.ast = ast
         self.storage = storage
@@ -153,6 +154,11 @@ class _CppEmitter(Visitor):
         # callee's declared name when a Call isn't in the map (e.g.
         # foreign function values).
         self._call_names: dict = call_names or {}
+        # When True, allow rounded arithmetic to dispatch under an
+        # unbounded-integer context (truncating silently to
+        # ``int64_t``).  Forwarded from
+        # :attr:`CppCompiler.unsafe_cast_int`; defaults to ``False``.
+        self._unsafe_cast_int = unsafe_cast_int
         self.writer = _IndentedWriter()
         self._tmp_counter = 0
         self.op_table: ScalarOpTable = make_op_table()
@@ -491,6 +497,24 @@ class _CppEmitter(Visitor):
                     f'integer context `{rctx}` must use RTZ rounding mode '
                     '(C++ integer arithmetic rounds toward zero); got '
                     f'{rctx.rm}'
+                )
+            # Reject unbounded integer contexts unless the caller has
+            # opted into the unsafe cast.  C++ has no
+            # arbitrary-precision integer type, so any rounded
+            # arithmetic landing in storage ``int64_t`` via the
+            # unbounded-integer fallback may silently overflow.
+            # ``MPFixedContext`` reports unboundedness via
+            # ``nmin == -1`` (the lower-exponent bound).
+            if (
+                isinstance(rctx, MPFixedContext)
+                and rctx.nmin == -1
+                and not self._unsafe_cast_int
+            ):
+                raise CppEmitError(
+                    f'rounding under unbounded integer context `{rctx}` '
+                    'has no sound C++ analogue (no arbitrary-precision '
+                    'integer type).  Pass `unsafe_cast_int=True` to '
+                    '`CppCompiler` to allow truncation to int64_t.'
                 )
         else:
             raise CppEmitError(

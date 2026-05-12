@@ -69,10 +69,20 @@ class CppCompiler(Backend):
 
     The pipeline runs all pre-analyses and assigns each SSA def to a
     C++ variable; the emitter then walks the AST and produces source.
+
+    Args:
+        unsafe_cast_int:
+            When ``True``, allow rounded arithmetic under an
+            unbounded-integer context (``MPFixedContext(nmin=-1)``
+            / ``fpy2.INTEGER``); the compiler compiles these by emitting
+            casts to the widest built-in integer type (currently ``int64_t``) and
+            assuming no overflow occurs.
     """
 
-    def __init__(self):
-        pass
+    _unsafe_cast_int: bool
+
+    def __init__(self, *, unsafe_cast_int: bool = False):
+        self._unsafe_cast_int = unsafe_cast_int
 
     # ------------------------------------------------------------------
     # Translation-unit preamble
@@ -281,6 +291,7 @@ class CppCompiler(Backend):
             ctx_use=spec.format_info.ctx_use,
             func_name_override=spec.name,
             call_names=spec.call_names,
+            unsafe_cast_int=self._unsafe_cast_int,
         )
         try:
             return emitter.emit()
@@ -303,6 +314,7 @@ class CppCompiler(Backend):
             format_info=result.format_info,
             ctx_use=result.ctx_use,
             call_names=call_names,
+            unsafe_cast_int=self._unsafe_cast_int,
         )
         try:
             return emitter.emit()

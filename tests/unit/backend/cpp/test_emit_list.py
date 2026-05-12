@@ -82,7 +82,12 @@ class TestLen:
             with fp.FP64:
                 return xs[n]
 
-        out = _compile_list_arg(f)
+        # ``with INTEGER:`` rounds into the unbounded integer
+        # context — opt in to the unsafe cast.
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(RealType(fp.FP64))],
+        )
         # ``len`` lowers to ``size()`` cast to the inferred integer type.
         assert 'static_cast<int64_t>(xs.size())' in out
 
@@ -107,7 +112,9 @@ class TestListComp:
     def test_range_iterable(self):
         """``range(...)`` in a comprehension expands to a counter loop.
         Stay in the integer context so the body's arithmetic doesn't
-        trigger a lossy int64 → double cast under the strict policy."""
+        trigger a lossy int64 → double cast under the strict policy.
+        Requires ``unsafe_cast_int=True`` because the comprehension
+        body rounds into the unbounded ``INTEGER`` context."""
 
         @fp.fpy
         def f() -> fp.Real:
@@ -116,7 +123,9 @@ class TestListComp:
             with fp.FP64:
                 return sq[0]
 
-        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, ctx=fp.FP64, arg_types=[],
+        )
         assert 'for (int64_t i = 0; i < 5; ++i) {' in out
         assert '.push_back((i * i));' in out
 
