@@ -62,6 +62,123 @@ class CppPipelineResult:
     ctx_use: ContextUseAnalysis
     storage: StorageAnalysis
 
+# ---------------------------------------------------------------------
+# Specialization machinery
+
+
+class _SpecKey(NamedTuple):
+    """Identity of a :class:`_Specialization` in the unit's table.
+
+    Two call sites that share all three components reuse a single
+    specialization (and therefore a single C++ definition); any
+    difference forces a fresh specialization with a distinct
+    mangled name.
+    """
+    func_id: int
+    """``id(callee FuncDef)`` — distinguishes specializations by
+    AST identity rather than by name, so two FPy functions that
+    happen to share a name (e.g. across modules) don't collide."""
+    ctx_fp: str
+    """Fingerprint of the incoming rounding context (see
+    :func:`_ctx_fingerprint`)."""
+    params_fp: str
+    """Fingerprint of the per-parameter format tuple (see
+    :func:`_param_fingerprint`).  Two specializations under the
+    same context but with different parameter formats — e.g.
+    invoked with FP32 args vs. FP64 args — get distinct keys."""
+
+
+class _TopLevel(NamedTuple):
+    """A top-level function registered with a translation unit —
+    rendered after all its specializations and under its declared
+    name (not a mangled one)."""
+    name: str
+    result: CppPipelineResult
+    call_names: dict[Call, str]
+
+
+@dataclass(frozen=True)
+class _Specialization:
+    """A single C++ definition emitted for a
+    ``(callee FuncDef, outer rounding context)`` pair.
+
+    The ``func`` AST is shared across instantiations (the cpp backend
+    does not monomorphize callees — formats and storage are derived
+    from the per-instantiation :class:`FormatAnalysis` instead).  The
+    ``call_names`` map gives each :class:`Call` in this body the
+    mangled name of *its* specialization.
+    """
+    func: FuncDef
+    name: str
+    format_info: FormatAnalysis
+    storage: StorageAnalysis
+    call_names: dict[Call, str]
+
+
+def _ctx_fingerprint(ctx: Context | None) -> str:
+    """Stable, human-readable identifier for a rounding context.
+    Used as part of the specialization key and the C++ mangled name."""
+    if ctx is None:
+        return 'any'
+    if isinstance(ctx, IEEEContext):
+        rm = ctx.rm.name.lower()
+        return f'fp{ctx.nbits}_{rm}'
+    if isinstance(ctx, MPFixedContext):
+        return 'mpfixed'
+    if isinstance(ctx, MPBFixedContext):
+        return 'mpbfixed'
+    # Fallback: hash the string repr to keep the name finite and
+    # the key hashable without knowing every Context subclass.
+    digest = hash(str(ctx)) & 0xFFFFFFFF
+    return f'ctx{digest:08x}'
+
+
+def _param_fingerprint(param_fmts) -> str:
+    """Stable string identifying a tuple of per-parameter formats.
+
+    Two specializations of the same callee that differ only in
+    their parameter formats (e.g. one called with FP32 args, the
+    other with FP64 args, both under the same outer context) must
+    map to different specializations.  The fingerprint becomes
+    part of the cache key and — when ambiguous — part of the
+    mangled name.
+
+    Each format is rendered via :func:`repr` and joined.  ``repr``
+    is sufficient because :class:`FormatBound` instances are
+    ``dataclass(frozen=True)`` and have deterministic reprs.
+    """
+    return '|'.join(repr(f) for f in param_fmts)
+
+
+def _mangle_with_params(
+    name: str,
+    key: _SpecKey,
+    specs: dict[_SpecKey, _Specialization],
+) -> str:
+    """C++ name for a specialization.  Starts with the ctx-only
+    mangle; if that name collides with an existing specialization
+    of the same function at a different parameter-fingerprint,
+    falls back to a longer name that incorporates a digest suffix.
+
+    Most callees have a unique signature per ctx (parameter formats
+    match the outer ctx), so the common case lands on the simple
+    ``name__ctx`` form.  The longer form only fires when the corpus
+    actually instantiates the same callee at the same outer ctx
+    with different parameter shapes."""
+    base = f'{name}__{key.ctx_fp}'
+    # Detect collision: any existing spec for the same function and
+    # ctx but a different parameter fingerprint needs a
+    # distinguishing suffix.
+    for other_key, spec in specs.items():
+        if spec.func.name == name and other_key.ctx_fp == key.ctx_fp:
+            if other_key.params_fp != key.params_fp:
+                digest = hash(key.params_fp) & 0xFFFFFFFF
+                return f'{base}_{digest:08x}'
+    return base
+
+# ---------------------------------------------------------------------
+# Compiler
+
 
 class CppCompiler(Backend):
     """
@@ -390,118 +507,3 @@ class CppTranslationUnit:
                 )
             )
         return '\n\n'.join(out)
-
-
-# ---------------------------------------------------------------------
-# Specialization machinery
-
-
-class _SpecKey(NamedTuple):
-    """Identity of a :class:`_Specialization` in the unit's table.
-
-    Two call sites that share all three components reuse a single
-    specialization (and therefore a single C++ definition); any
-    difference forces a fresh specialization with a distinct
-    mangled name.
-    """
-    func_id: int
-    """``id(callee FuncDef)`` — distinguishes specializations by
-    AST identity rather than by name, so two FPy functions that
-    happen to share a name (e.g. across modules) don't collide."""
-    ctx_fp: str
-    """Fingerprint of the incoming rounding context (see
-    :func:`_ctx_fingerprint`)."""
-    params_fp: str
-    """Fingerprint of the per-parameter format tuple (see
-    :func:`_param_fingerprint`).  Two specializations under the
-    same context but with different parameter formats — e.g.
-    invoked with FP32 args vs. FP64 args — get distinct keys."""
-
-
-class _TopLevel(NamedTuple):
-    """A top-level function registered with a translation unit —
-    rendered after all its specializations and under its declared
-    name (not a mangled one)."""
-    name: str
-    result: CppPipelineResult
-    call_names: dict[Call, str]
-
-
-@dataclass(frozen=True)
-class _Specialization:
-    """A single C++ definition emitted for a
-    ``(callee FuncDef, outer rounding context)`` pair.
-
-    The ``func`` AST is shared across instantiations (the cpp backend
-    does not monomorphize callees — formats and storage are derived
-    from the per-instantiation :class:`FormatAnalysis` instead).  The
-    ``call_names`` map gives each :class:`Call` in this body the
-    mangled name of *its* specialization.
-    """
-    func: FuncDef
-    name: str
-    format_info: FormatAnalysis
-    storage: StorageAnalysis
-    call_names: dict[Call, str]
-
-
-def _ctx_fingerprint(ctx: Context | None) -> str:
-    """Stable, human-readable identifier for a rounding context.
-    Used as part of the specialization key and the C++ mangled name."""
-    if ctx is None:
-        return 'any'
-    if isinstance(ctx, IEEEContext):
-        rm = ctx.rm.name.lower()
-        return f'fp{ctx.nbits}_{rm}'
-    if isinstance(ctx, MPFixedContext):
-        return 'mpfixed'
-    if isinstance(ctx, MPBFixedContext):
-        return 'mpbfixed'
-    # Fallback: hash the string repr to keep the name finite and
-    # the key hashable without knowing every Context subclass.
-    digest = hash(str(ctx)) & 0xFFFFFFFF
-    return f'ctx{digest:08x}'
-
-
-def _param_fingerprint(param_fmts) -> str:
-    """Stable string identifying a tuple of per-parameter formats.
-
-    Two specializations of the same callee that differ only in
-    their parameter formats (e.g. one called with FP32 args, the
-    other with FP64 args, both under the same outer context) must
-    map to different specializations.  The fingerprint becomes
-    part of the cache key and — when ambiguous — part of the
-    mangled name.
-
-    Each format is rendered via :func:`repr` and joined.  ``repr``
-    is sufficient because :class:`FormatBound` instances are
-    ``dataclass(frozen=True)`` and have deterministic reprs.
-    """
-    return '|'.join(repr(f) for f in param_fmts)
-
-
-def _mangle_with_params(
-    name: str,
-    key: _SpecKey,
-    specs: dict[_SpecKey, _Specialization],
-) -> str:
-    """C++ name for a specialization.  Starts with the ctx-only
-    mangle; if that name collides with an existing specialization
-    of the same function at a different parameter-fingerprint,
-    falls back to a longer name that incorporates a digest suffix.
-
-    Most callees have a unique signature per ctx (parameter formats
-    match the outer ctx), so the common case lands on the simple
-    ``name__ctx`` form.  The longer form only fires when the corpus
-    actually instantiates the same callee at the same outer ctx
-    with different parameter shapes."""
-    base = f'{name}__{key.ctx_fp}'
-    # Detect collision: any existing spec for the same function and
-    # ctx but a different parameter fingerprint needs a
-    # distinguishing suffix.
-    for other_key, spec in specs.items():
-        if spec.func.name == name and other_key.ctx_fp == key.ctx_fp:
-            if other_key.params_fp != key.params_fp:
-                digest = hash(key.params_fp) & 0xFFFFFFFF
-                return f'{base}_{digest:08x}'
-    return base

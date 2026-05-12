@@ -858,14 +858,19 @@ class _CppEmitter(Visitor):
         ``isfinite`` / ``isnormal`` / ``signbit``.  These take a float
         and return ``bool`` — they sit outside the op-table because
         the output isn't a rounding context."""
-        name = {
-            IsFinite: 'std::isfinite',
-            IsInf: 'std::isinf',
-            IsNan: 'std::isnan',
-            IsNormal: 'std::isnormal',
-            Signbit: 'std::signbit',
-        }[type(e)]
-        return f'{name}({arg})'
+        match e:
+            case IsFinite():
+                return f'std::isfinite({arg})'
+            case IsInf():
+                return f'std::isinf({arg})'
+            case IsNan():
+                return f'std::isnan({arg})'
+            case IsNormal():
+                return f'std::isnormal({arg})'
+            case Signbit():
+                return f'std::signbit({arg})'
+            case _:
+                raise CppEmitError(f'unsupported FP predicate: {type(e).__name__}')
 
     def _emit_range(self, e: 'Range1 | Range2 | Range3', ctx) -> str:
         """``range(...)`` as an expression — materialise a vector via
@@ -1466,12 +1471,12 @@ class _CppEmitter(Visitor):
             ift = self._maybe_cast(ift, ift_ty, out_ty)
             iff = self._maybe_cast(iff, iff_ty, out_ty)
         else:
-            ift_ty = self._storage_for_expr(e.ift)
-            iff_ty = self._storage_for_expr(e.iff)
-            if ift_ty != out_ty or iff_ty != out_ty:
+            ift_ty_ = self._storage_for_expr(e.ift)
+            iff_ty_ = self._storage_for_expr(e.iff)
+            if ift_ty_ != out_ty or iff_ty_ != out_ty:
                 raise CppEmitError(
                     f'IfExpr branches have incompatible non-scalar '
-                    f'storages: ift=`{ift_ty!r}`, iff=`{iff_ty!r}`, '
+                    f'storages: ift=`{ift_ty_!r}`, iff=`{iff_ty_!r}`, '
                     f'expected `{out_ty!r}`'
                 )
         return f'({cond} ? {ift} : {iff})'
