@@ -10,6 +10,8 @@ surface as :class:`CppCompileError`.
 Phase notes live in ``docs/todos/backend-cpp.md``.
 """
 
+import hashlib
+
 from dataclasses import dataclass
 from typing import Collection, NamedTuple
 
@@ -74,10 +76,14 @@ class _SpecKey(NamedTuple):
     difference forces a fresh specialization with a distinct
     mangled name.
     """
-    func_id: int
-    """``id(callee FuncDef)`` — distinguishes specializations by
-    AST identity rather than by name, so two FPy functions that
-    happen to share a name (e.g. across modules) don't collide."""
+    func_fp: str
+    """Run-stable short digest of the callee :class:`FuncDef`
+    (see :func:`_func_fingerprint`).  Distinguishes specializations
+    by AST identity rather than by source name, so two FPy
+    functions that happen to share a name (e.g. across modules)
+    don't collide.  Derived from the function's source location
+    when available, so the resulting C++ mangled names are
+    reproducible across runs."""
     ctx_fp: str
     """Fingerprint of the incoming rounding context (see
     :func:`_ctx_fingerprint`)."""
@@ -127,10 +133,38 @@ def _ctx_fingerprint(ctx: Context | None) -> str:
         return 'mpfixed'
     if isinstance(ctx, MPBFixedContext):
         return 'mpbfixed'
-    # Fallback: hash the string repr to keep the name finite and
-    # the key hashable without knowing every Context subclass.
-    digest = hash(str(ctx)) & 0xFFFFFFFF
-    return f'ctx{digest:08x}'
+    # Fallback: deterministic digest of the string repr keeps the
+    # name finite without enumerating every Context subclass, and
+    # stays the same across runs (Python's built-in ``hash`` for
+    # strings randomizes per process).
+    digest = hashlib.sha1(str(ctx).encode()).hexdigest()[:8]
+    return f'ctx{digest}'
+
+
+def _func_fingerprint(func: FuncDef) -> str:
+    """Run-stable short identifier for *func*.
+
+    Prefers source location (filename + start line) so the same
+    program produces the same mangled name across runs and
+    processes.  Falls back to ``(name, id())`` when no location is
+    available — only synthesized ASTs from transforms typically
+    lack one, and those are re-derived per compile so within a
+    single run the fingerprint is still uniquely identifying.
+
+    Uses :mod:`hashlib` rather than Python's built-in :func:`hash`,
+    because the latter randomizes its seed per process by default
+    (``PYTHONHASHSEED``) — which would make emitted C++ names
+    differ across runs of the same input.
+    """
+    loc = func.loc
+    if loc is not None:
+        material = f'loc:{loc.source}:{loc.start_line}'
+    else:
+        # No source position to anchor to — fall back to identity,
+        # which is at least process-stable.  Include the name so
+        # the digest is correlated with the function for debugging.
+        material = f'anon:{func.name}:{id(func)}'
+    return hashlib.sha1(material.encode()).hexdigest()[:8]
 
 
 def _param_fingerprint(param_fmts) -> str:
@@ -166,9 +200,10 @@ def _mangle_with_params(
        in different modules share a ``.name`` (e.g.
        ``fpy2.libraries.vector.zeros`` and
        ``fpy2.libraries.matrix.zeros``).  Collision detection here
-       must compare by :attr:`_SpecKey.func_id` (AST identity) —
-       comparing by ``spec.func.name`` alone would treat the two
-       as the same callee and emit duplicate C++ definitions.
+       must compare by :attr:`_SpecKey.func_fp` (a stable digest of
+       the callee's source location) — comparing by
+       ``spec.func.name`` alone would treat the two as the same
+       callee and emit duplicate C++ definitions.
     2. **Same FuncDef, different parameter formats.**  The corpus
        invokes the same callee at the same outer ctx with
        differently-shaped operands.
@@ -176,8 +211,11 @@ def _mangle_with_params(
     The new spec receives the suffix; specs already in the table
     keep their existing (shorter) names.  Common case — every
     ``(name, ctx_fp)`` corresponds to exactly one
-    ``(func_id, params_fp)`` — lands on the bare ``name__ctx_fp``
-    form.
+    ``(func_fp, params_fp)`` — lands on the bare ``name__ctx_fp``
+    form.  Disambiguating suffixes are derived from
+    :func:`_func_fingerprint` and :func:`_param_fingerprint`, both
+    of which produce run-stable digests, so emitted names are
+    reproducible across runs.
     """
     base = f'{name}__{key.ctx_fp}'
     needs_func_disambig = False
@@ -196,19 +234,23 @@ def _mangle_with_params(
         # Same source name + same ctx_fp.  Decide *why* it would
         # collide: different FuncDef (cross-module name reuse) vs.
         # same FuncDef with different parameter shapes.
-        if other_key.func_id != key.func_id:
+        if other_key.func_fp != key.func_fp:
             needs_func_disambig = True
         elif other_key.params_fp != key.params_fp:
             needs_params_disambig = True
     suffix = ''
     if needs_func_disambig:
-        # Short digest of ``func_id`` keeps the name finite and
-        # makes the cross-module disambiguation visible in the
-        # emitted source.  ``id()`` isn't stable across runs but is
-        # unique within a process, which is all this needs.
-        suffix += f'_f{hash(key.func_id) & 0xFFFF:04x}'
+        # The ``func_fp`` is already a stable short digest derived
+        # from the callee's source location — embed it directly,
+        # truncated to keep names finite.
+        suffix += f'_f{key.func_fp[:4]}'
     if needs_params_disambig:
-        suffix += f'_p{hash(key.params_fp) & 0xFFFFFFFF:08x}'
+        # ``params_fp`` is a long, deterministic string; hash to a
+        # short hex digest.  ``hash()`` of a string isn't
+        # cross-process-stable in general (Python's hash randomizes
+        # by default), so use a deterministic digest instead.
+        digest = hashlib.sha1(key.params_fp.encode()).hexdigest()[:8]
+        suffix += f'_p{digest}'
     return base + suffix
 
 # ---------------------------------------------------------------------
@@ -385,7 +427,7 @@ class CppCompiler(Backend):
         for call_node, sub_fa in format_info.by_call.items():
             sig = sub_fa.fn_fmt
             key = _SpecKey(
-                func_id=id(sub_fa.func),
+                func_fp=_func_fingerprint(sub_fa.func),
                 ctx_fp=_ctx_fingerprint(sig.ctx),
                 params_fp=_param_fingerprint(sig.arg_fmts),
             )
