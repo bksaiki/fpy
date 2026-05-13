@@ -1,5 +1,29 @@
 # Version History
 
+## [0.1.5] - 2026-05-13
+### Features:
+  - Analyses
+    - added context-use analysis
+    - added format inference
+  - Backend:
+    - new C++ compiler
+  - Number:
+    - added `Format` type represent number formats
+  - Misc:
+    - added usage guide
+    - added AGENTS.md / CLAUDE.md for agents
+
+### Changes:
+  - Analyses:
+    - `IndexedAssign` treated as a functional update by default
+    - cleanup array size inference
+
+### Fixes:
+  - Number:
+    - flipped stochastic rounding direction
+  - Language:
+    - slices must have correct bounds
+
 ## [0.1.4] - 2026-04-06
 ### Features:
  - Numbers:
