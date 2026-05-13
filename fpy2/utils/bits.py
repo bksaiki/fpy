@@ -31,3 +31,12 @@ def bits_to_float(i: int) -> float:
         raise ValueError(f'Expected i={i} on [0, 2 ** 64)')
     return struct.unpack('@d', i.to_bytes(8, byteorder='little'))[0]
 
+def trailing_zeros(x: int) -> int:
+    """Return the number of trailing zeros in the binary representation of `x`."""
+    if x < 0:
+        raise ValueError(f'Expected non-negative integer x={x}')
+    elif x == 0:
+        # there's no leading 1 bit, so we can say there are 0 trailing zeros
+        return 0
+    else:
+        return (x & -x).bit_length() - 1

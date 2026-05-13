@@ -18,6 +18,7 @@ from ...utils import (
     float_to_bits,
     is_dyadic,
     is_power_of_two,
+    trailing_zeros,
     Ordering,
     FP64_M,
     FP64_EXPMIN,
@@ -173,9 +174,15 @@ class RealFloat(numbers.Rational):
         fn = get_current_str_converter()
         return fn(self)
 
-    def __hash__(self): # type: ignore
-        # Complex has __hash__ = None, so mypy thinks there's a type mismatch.
-        return hash((self._s, self._exp, self._c))
+    def __hash__(self): # type: ignore[override]
+        # we want numerically equivalent values to have the same hash
+        if self._c == 0:
+            # all zeros are numerically equivalent, even if they have different signs and exponents
+            return hash(())
+        else:
+            # normalize by shifting off trailing zeros to ensure that values with different
+            tzc = trailing_zeros(self._c)
+            return hash((self._s, self._exp + tzc, self._c >> tzc))
 
     def __eq__(self, other):
         if not isinstance(other, RealFloat | int | float | Fraction):
