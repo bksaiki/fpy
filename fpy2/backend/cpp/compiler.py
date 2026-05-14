@@ -33,7 +33,7 @@ from ...transform import Monomorphize
 from ...types import Type
 from ..backend import Backend, CompileError
 
-from .emitter import CppEmitError, _CppEmitter
+from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
 from .utils import CPP_HEADERS, CPP_HELPERS
@@ -463,7 +463,7 @@ class CppCompiler(Backend):
     # Emission
 
     def _emit_specialization(self, spec: '_Specialization') -> str:
-        emitter = _CppEmitter(
+        emitter = CppEmitter(
             ast=spec.func,
             storage=spec.storage,
             def_use=spec.format_info.type_info.def_use,
@@ -487,7 +487,7 @@ class CppCompiler(Backend):
         result: CppPipelineResult,
         call_names: dict[Call, str],
     ) -> str:
-        emitter = _CppEmitter(
+        emitter = CppEmitter(
             ast=result.ast,
             storage=result.storage,
             def_use=result.format_info.type_info.def_use,

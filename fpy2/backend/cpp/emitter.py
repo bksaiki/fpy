@@ -40,7 +40,7 @@ from ...analysis import (
     DefineUseAnalysis, FormatAnalysis
 )
 from ...ast.fpyast import (
-    And, Argument, Assign, AssertStmt, BinaryOp, BoolVal, Cast, Compare,
+    And, Argument, Assign, AssertStmt, Ast, BinaryOp, BoolVal, Cast, Compare,
     ContextStmt, Decnum, Digits, Dim, EffectStmt, Empty, Enumerate, Expr,
     ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign, Integer,
     IsFinite, IsInf, IsNan, IsNormal, Len, ListComp, ListExpr, ListRef,
@@ -110,11 +110,29 @@ class _IndentedWriter:
 
 
 class CppEmitError(Exception):
-    """Raised for unsupported AST shapes during emission."""
-    pass
+    """Raised for unsupported AST shapes during emission.
+
+    Optionally carries an ``at`` :class:`Ast` node — the
+    source-location of that node is prepended to the error message
+    when present, so error output points at the offending FPy
+    construct instead of leaving the user to guess.
+
+    The wrapping :class:`CppCompileError` in :mod:`compiler` builds
+    its message from ``str(e)`` of the underlying :class:`CppEmitError`,
+    so the location prefix flows through untouched.
+    """
+
+    def __init__(self, msg: str, *, at: 'Ast | None' = None):
+        self.msg = msg
+        self.at = at
+        loc = at.loc if at is not None else None
+        if loc is not None:
+            super().__init__(f'{loc.format()}: {msg}')
+        else:
+            super().__init__(msg)
 
 
-class _CppEmitter(Visitor):
+class CppEmitter(Visitor):
     """Single-use visitor that produces a C++ source string."""
 
     ast: FuncDef
@@ -254,7 +272,8 @@ class _CppEmitter(Visitor):
                 self._destructure(elt, sub_tmp, site)
             else:
                 raise CppEmitError(
-                    f'unsupported tuple-binding element {elt!r}'
+                    f'unsupported tuple-binding element {elt!r}',
+                    at=binding,
                 )
 
     def _storage_for_expr(self, e: Expr) -> CppType:
@@ -268,7 +287,8 @@ class _CppEmitter(Visitor):
             return choose_storage(fmt)
         except StorageSelectionError as err:
             raise CppEmitError(
-                f'cannot pick storage for {type(e).__name__}: {err}'
+                f'cannot pick storage for {type(e).__name__}: {err}',
+                at=e,
             ) from err
 
     # ------------------------------------------------------------------
@@ -288,7 +308,9 @@ class _CppEmitter(Visitor):
         arg_strs: list[str] = []
         for arg in func.args:
             if not isinstance(arg.name, NamedId):
-                raise CppEmitError(f'unsupported arg pattern: {arg.name!r}')
+                raise CppEmitError(
+                    f'unsupported arg pattern: {arg.name!r}', at=arg,
+                )
             storage = self._storage_for_arg(arg)
             arg_strs.append(f'{storage.format()} {arg.name}')
         emitted_name = self._func_name_override or func.name
@@ -316,7 +338,7 @@ class _CppEmitter(Visitor):
         # unconditionally.
         self._current_rm = self._entry_rm(func)
         func_ctx = self._resolve_used_ctx(func)
-        if func_ctx is None or self._validate_context_rm(func_ctx).is_integer():
+        if func_ctx is None or self._validate_context_rm(func_ctx, at=func).is_integer():
             self._visit_block(func.body, None)
         else:
             assert isinstance(func_ctx, EFloatContext)
@@ -363,7 +385,7 @@ class _CppEmitter(Visitor):
         try:
             return choose_storage(fmt)
         except StorageSelectionError as e:
-            raise CppEmitError(f'return type: {e}') from e
+            raise CppEmitError(f'return type: {e}', at=ret) from e
 
     # ------------------------------------------------------------------
     # Statement visitors
@@ -394,7 +416,8 @@ class _CppEmitter(Visitor):
             self._destructure(stmt.target, tmp, stmt)
         else:
             raise CppEmitError(
-                f'unsupported assignment target {stmt.target!r}'
+                f'unsupported assignment target {stmt.target!r}',
+                at=stmt,
             )
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
@@ -439,7 +462,8 @@ class _CppEmitter(Visitor):
         if resolved is None:
             raise CppEmitError(
                 'context expression must be a statically-resolvable '
-                f'Context value; got symbolic `{scope.ctx}`'
+                f'Context value; got symbolic `{scope.ctx}`',
+                at=site,
             )
         return resolved
 
@@ -464,7 +488,9 @@ class _CppEmitter(Visitor):
             return None
         return resolved.rm
 
-    def _validate_context_rm(self, rctx: Context) -> CppScalar:
+    def _validate_context_rm(
+        self, rctx: Context, at: Ast | None = None,
+    ) -> CppScalar:
         """Validate *rctx* and return its scalar storage type.
 
         - Float storage (F32 / F64): rounding mode must be one of
@@ -473,23 +499,29 @@ class _CppEmitter(Visitor):
           arithmetic rounds toward zero, and other modes would need
           per-operation emulation.
         - Anything else (bool, list, tuple) is out of scope.
+
+        *at* is an optional AST node to anchor error locations
+        to — typically the function or ``with`` statement that
+        introduced the context.
         """
         try:
             storage = choose_storage(rctx.format())
         except StorageSelectionError as e:
             raise CppEmitError(
-                f'unsupported context `{rctx}`: {e}'
+                f'unsupported context `{rctx}`: {e}', at=at,
             ) from e
         if not isinstance(storage, CppScalar):
             raise CppEmitError(
-                f'unsupported context storage `{storage!r}` for `{rctx}`'
+                f'unsupported context storage `{storage!r}` for `{rctx}`',
+                at=at,
             )
         if storage.is_float():
             assert isinstance(rctx, EFloatContext)
             if rctx.rm not in _FE_RM_MACRO:
                 raise CppEmitError(
                     f'rounding mode {rctx.rm} for context `{rctx}` is not '
-                    'supported by ``fesetround`` (need RNE, RTZ, RTP, or RTN)'
+                    'supported by ``fesetround`` (need RNE, RTZ, RTP, or RTN)',
+                    at=at,
                 )
         elif storage.is_integer():
             assert isinstance(rctx, MPFixedContext | MPBFixedContext)
@@ -497,7 +529,8 @@ class _CppEmitter(Visitor):
                 raise CppEmitError(
                     f'integer context `{rctx}` must use RTZ rounding mode '
                     '(C++ integer arithmetic rounds toward zero); got '
-                    f'{rctx.rm}'
+                    f'{rctx.rm}',
+                    at=at,
                 )
             # Reject unbounded integer contexts unless the caller has
             # opted into the unsafe cast.  C++ has no
@@ -515,11 +548,13 @@ class _CppEmitter(Visitor):
                     f'rounding under unbounded integer context `{rctx}` '
                     'has no sound C++ analogue (no arbitrary-precision '
                     'integer type).  Pass `unsafe_cast_int=True` to '
-                    '`CppCompiler` to allow truncation to int64_t.'
+                    '`CppCompiler` to allow truncation to int64_t.',
+                    at=at,
                 )
         else:
             raise CppEmitError(
-                f'unsupported context storage `{storage!r}` for `{rctx}`'
+                f'unsupported context storage `{storage!r}` for `{rctx}`',
+                at=at,
             )
         return storage
 
@@ -561,10 +596,11 @@ class _CppEmitter(Visitor):
         # ``fesetround`` save / set / restore around the body.
         if not isinstance(stmt.target, UnderscoreId):
             raise CppEmitError(
-                'binding the active context to a name is not yet supported'
+                'binding the active context to a name is not yet supported',
+                at=stmt,
             )
         rctx = self._resolve_used_ctx(stmt)
-        if rctx is None or self._validate_context_rm(rctx).is_integer():
+        if rctx is None or self._validate_context_rm(rctx, at=stmt).is_integer():
             # No op uses this scope, or the scope is integer (no
             # ``fenv`` to manage either way).  Just descend.
             self._visit_block(stmt.body, ctx)
@@ -617,11 +653,15 @@ class _CppEmitter(Visitor):
         ty = self._storage_for_expr(e)
         if not isinstance(ty, CppScalar):
             raise CppEmitError(
-                f'expected scalar storage for {type(e).__name__}, got {ty!r}'
+                f'expected scalar storage for {type(e).__name__}, got {ty!r}',
+                at=e,
             )
         return ty
 
-    def _maybe_cast(self, arg: str, arg_ty: CppScalar, target_ty: CppScalar) -> str:
+    def _maybe_cast(
+        self, arg: str, arg_ty: CppScalar, target_ty: CppScalar,
+        *, at: Ast | None = None,
+    ) -> str:
         """Emit *arg* in *target_ty* form, rejecting unsafe casts.
 
         Used by op-dispatch / comparison cast-to-active paths where
@@ -644,7 +684,8 @@ class _CppEmitter(Visitor):
                 f'`{target_ty.format()}`: conversion is lossy.  '
                 f'Wrap the operand in ``fp.round(...)`` to make the '
                 f'rounding explicit, or use a context whose format '
-                f'contains the operand.'
+                f'contains the operand.',
+                at=at,
             )
         return self._explicit_cast(arg, target_ty)
 
@@ -668,27 +709,32 @@ class _CppEmitter(Visitor):
             scope = self.ctx_use.find_scope_from_use(e)
         except KeyError as err:
             raise CppEmitError(
-                f'no context scope registered for {type(e).__name__}'
+                f'no context scope registered for {type(e).__name__}',
+                at=e,
             ) from err
         resolved = self._resolve_scope_ctx(scope)
         if resolved is None:
             raise CppEmitError(
                 f'cannot dispatch {type(e).__name__} under symbolic '
-                f'context `{scope.ctx}`'
+                f'context `{scope.ctx}`',
+                at=e,
             )
         return resolved
 
-    def _scalar_for_ctx(self, ctx: Context) -> CppScalar:
+    def _scalar_for_ctx(
+        self, ctx: Context, at: Ast | None = None,
+    ) -> CppScalar:
         """Resolve a context to its C++ scalar storage type."""
         try:
             storage = choose_storage(ctx.format())
         except StorageSelectionError as e:
             raise CppEmitError(
-                f'unsupported context `{ctx}`: {e}'
+                f'unsupported context `{ctx}`: {e}', at=at,
             ) from e
         if not isinstance(storage, CppScalar):
             raise CppEmitError(
-                f'context `{ctx}` resolves to non-scalar storage `{storage!r}`'
+                f'context `{ctx}` resolves to non-scalar storage `{storage!r}`',
+                at=at,
             )
         return storage
 
@@ -704,7 +750,8 @@ class _CppEmitter(Visitor):
         sigs = self.op_table.unary.get(type(e))
         if sigs is None:
             raise CppEmitError(
-                f'no signatures for unary op: {type(e).__name__}'
+                f'no signatures for unary op: {type(e).__name__}',
+                at=e,
             )
         active = self._active_ctx_for(e)
         arg_storage = self._scalar_storage_for_expr(e.arg)
@@ -714,13 +761,14 @@ class _CppEmitter(Visitor):
                 return sig.format(arg)
         # Cast-to-active fallback: pick the all-active signature and
         # cast the operand into the active context's storage.
-        target = self._scalar_for_ctx(active)
+        target = self._scalar_for_ctx(active, at=e)
         for sig in sigs:
             if sig.arg_ty == target and sig.out_ctx == active:
-                return sig.format(self._maybe_cast(arg, arg_storage, target))
+                return sig.format(self._maybe_cast(arg, arg_storage, target, at=e))
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '
-            f'context `{active}`: arg type `{arg_storage.format()}`'
+            f'context `{active}`: arg type `{arg_storage.format()}`',
+            at=e,
         )
 
     def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
@@ -735,7 +783,8 @@ class _CppEmitter(Visitor):
         sigs = self.op_table.binary.get(type(e))
         if sigs is None:
             raise CppEmitError(
-                f'no signatures for binary op: {type(e).__name__}'
+                f'no signatures for binary op: {type(e).__name__}',
+                at=e,
             )
         active = self._active_ctx_for(e)
         lhs_storage = self._scalar_storage_for_expr(e.first)
@@ -746,19 +795,20 @@ class _CppEmitter(Visitor):
                 return sig.format(lhs, rhs)
         # Cast-to-active fallback: pick the all-active signature and
         # cast both operands into the active context's storage.
-        target = self._scalar_for_ctx(active)
+        target = self._scalar_for_ctx(active, at=e)
         for sig in sigs:
             if (sig.in1_ty == target
                     and sig.in2_ty == target
                     and sig.out_ctx == active):
                 return sig.format(
-                    self._maybe_cast(lhs, lhs_storage, target),
-                    self._maybe_cast(rhs, rhs_storage, target),
+                    self._maybe_cast(lhs, lhs_storage, target, at=e),
+                    self._maybe_cast(rhs, rhs_storage, target, at=e),
                 )
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '
             f'context `{active}`: lhs `{lhs_storage.format()}`, '
-            f'rhs `{rhs_storage.format()}`'
+            f'rhs `{rhs_storage.format()}`',
+            at=e,
         )
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
@@ -807,7 +857,9 @@ class _CppEmitter(Visitor):
             )
         if isinstance(e, Enumerate):
             return self._emit_enumerate(e, arg)
-        raise CppEmitError(f'unsupported unary op: {type(e).__name__}')
+        raise CppEmitError(
+            f'unsupported unary op: {type(e).__name__}', at=e,
+        )
 
     def _emit_enumerate(self, e: Enumerate, src_str: str) -> str:
         """``enumerate(xs)`` builds a ``std::vector<std::tuple<I, T>>``
@@ -821,7 +873,7 @@ class _CppEmitter(Visitor):
                 and len(result_ty.elt.elts) == 2):
             raise CppEmitError(
                 'expected list[(int, T)] for enumerate result, '
-                f'got {result_ty!r}'
+                f'got {result_ty!r}', at=e,
             )
         idx_ty = result_ty.elt.elts[0]
 
@@ -870,7 +922,9 @@ class _CppEmitter(Visitor):
             case Signbit():
                 return f'std::signbit({arg})'
             case _:
-                raise CppEmitError(f'unsupported FP predicate: {type(e).__name__}')
+                raise CppEmitError(
+                    f'unsupported FP predicate: {type(e).__name__}', at=e,
+                )
 
     def _emit_range(self, e: 'Range1 | Range2 | Range3', ctx) -> str:
         """``range(...)`` as an expression — materialise a vector via
@@ -884,7 +938,8 @@ class _CppEmitter(Visitor):
                 and result_ty.elt.is_integer()):
             raise CppEmitError(
                 f'range(...) expected integer-list result, '
-                f'got `{result_ty!r}`'
+                f'got `{result_ty!r}`',
+                at=e,
             )
         int_ty = result_ty.elt.format()
         tmp = self._fresh_temp()
@@ -953,11 +1008,14 @@ class _CppEmitter(Visitor):
         if not isinstance(e.second, Integer):
             raise CppEmitError(
                 'size(xs, d) requires a constant integer dimension; '
-                f'got `{type(e.second).__name__}`'
+                f'got `{type(e.second).__name__}`',
+                at=e,
             )
         d = e.second.val
         if d < 0:
-            raise CppEmitError(f'size(xs, d) needs d >= 0, got {d}')
+            raise CppEmitError(
+                f'size(xs, d) needs d >= 0, got {d}', at=e,
+            )
         xs_ty = self._storage_for_expr(e.first)
         # Walk d list layers; the d-th call is on a value of the
         # appropriate vector type.
@@ -966,13 +1024,15 @@ class _CppEmitter(Visitor):
             if not isinstance(cur_ty, CppList):
                 raise CppEmitError(
                     f'size(xs, {d}): xs is not deep enough '
-                    f'(type `{xs_ty!r}`)'
+                    f'(type `{xs_ty!r}`)',
+                    at=e,
                 )
             cur_ty = cur_ty.elt
         if not isinstance(cur_ty, CppList):
             raise CppEmitError(
                 f'size(xs, {d}): not a list at depth {d} '
-                f'(type `{xs_ty!r}`)'
+                f'(type `{xs_ty!r}`)',
+                at=e,
             )
         xs = self._visit_expr(e.first, ctx)
         access = xs + ''.join(['[0]'] * d)
@@ -985,8 +1045,10 @@ class _CppEmitter(Visitor):
     # (``Assert`` / ``Effect`` / ``Pass``) raise a clean error
     # pointing at the node kind.
 
-    def _unsupported(self, kind: str):
-        raise CppEmitError(f'cpp emitter does not handle {kind}')
+    def _unsupported(self, kind: str, at: Ast | None = None):
+        raise CppEmitError(
+            f'cpp emitter does not handle {kind}', at=at,
+        )
 
     def _visit_bool(self, e: BoolVal, ctx) -> str:
         return 'true' if e.val else 'false'
@@ -1014,13 +1076,13 @@ class _CppEmitter(Visitor):
         return '(' + ' && '.join(clauses) + ')'
 
     def _visit_foreign(self, e, ctx):
-        self._unsupported('ForeignVal')
+        self._unsupported('ForeignVal', at=e)
 
     def _visit_attribute(self, e, ctx):
-        self._unsupported('Attribute')
+        self._unsupported('Attribute', at=e)
 
     def _visit_nullaryop(self, e, ctx):
-        self._unsupported('NullaryOp')
+        self._unsupported('NullaryOp', at=e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx) -> str:
         if isinstance(e, Range3):
@@ -1047,7 +1109,7 @@ class _CppEmitter(Visitor):
         sigs = self.op_table.ternary.get(type(e))
         if sigs is None:
             raise CppEmitError(
-                f'no signatures for ternary op: {type(e).__name__}'
+                f'no signatures for ternary op: {type(e).__name__}', at=e,
             )
         active = self._active_ctx_for(e)
         in_storages = [self._scalar_storage_for_expr(a) for a in e.args]
@@ -1056,21 +1118,22 @@ class _CppEmitter(Visitor):
             if sig.matches(in_storages[0], in_storages[1], in_storages[2], active):
                 return sig.format(a1, a2, a3)
         # Cast-to-active fallback.
-        target = self._scalar_for_ctx(active)
+        target = self._scalar_for_ctx(active, at=e)
         for sig in sigs:
             if (sig.in1_ty == target
                     and sig.in2_ty == target
                     and sig.in3_ty == target
                     and sig.out_ctx == active):
                 return sig.format(
-                    self._maybe_cast(a1, in_storages[0], target),
-                    self._maybe_cast(a2, in_storages[1], target),
-                    self._maybe_cast(a3, in_storages[2], target),
+                    self._maybe_cast(a1, in_storages[0], target, at=e),
+                    self._maybe_cast(a2, in_storages[1], target, at=e),
+                    self._maybe_cast(a3, in_storages[2], target, at=e),
                 )
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '
             f'context `{active}`: '
-            f'{[s.format() for s in in_storages]}'
+            f'{[s.format() for s in in_storages]}',
+            at=e,
         )
 
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
@@ -1082,7 +1145,9 @@ class _CppEmitter(Visitor):
             return self._emit_min_max(e, ctx)
         if isinstance(e, Empty):
             return self._emit_empty(e, ctx)
-        raise CppEmitError(f'unsupported nary op: {type(e).__name__}')
+        raise CppEmitError(
+            f'unsupported nary op: {type(e).__name__}', at=e,
+        )
 
     def _emit_bool_chain(self, e: 'And | Or', ctx) -> str:
         """Reduce an ``And`` / ``Or`` to a fully-parenthesised chain
@@ -1108,14 +1173,15 @@ class _CppEmitter(Visitor):
         pairwise calls have a single deduced template type."""
         if not e.args:
             raise CppEmitError(
-                f'{type(e).__name__} requires at least one argument'
+                f'{type(e).__name__} requires at least one argument',
+                at=e,
             )
         active = self._active_ctx_for(e)
-        target = self._scalar_for_ctx(active)
+        target = self._scalar_for_ctx(active, at=e)
         args = [self._visit_expr(a, ctx) for a in e.args]
         arg_storages = [self._scalar_storage_for_expr(a) for a in e.args]
         casted = [
-            self._maybe_cast(a, s, target)
+            self._maybe_cast(a, s, target, at=e)
             for a, s in zip(args, arg_storages)
         ]
         if target.is_float():
@@ -1153,7 +1219,8 @@ class _CppEmitter(Visitor):
             raise CppEmitError(
                 f'empty(...) shape mismatch: result type `{result_ty!r}` '
                 f'has depth {_list_depth(result_ty)}, but {len(dim_strs)} '
-                f'dimensions were given'
+                f'dimensions were given',
+                at=e,
             )
         # Build from the inside out: innermost is ``T()``-default,
         # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
@@ -1180,7 +1247,8 @@ class _CppEmitter(Visitor):
         if not (isinstance(result_ty, CppList)
                 and isinstance(result_ty.elt, CppTuple)):
             raise CppEmitError(
-                f'expected list[tuple[...]] for zip result, got {result_ty!r}'
+                f'expected list[tuple[...]] for zip result, got {result_ty!r}',
+                at=e,
             )
 
         srcs: list[str] = []
@@ -1215,7 +1283,7 @@ class _CppEmitter(Visitor):
         # temp → ``assert(arg == tmp || (NaN-aware equality))``.
         if not isinstance(e, (Round, RoundExact)):
             raise CppEmitError(
-                f'unsupported round op: {type(e).__name__}'
+                f'unsupported round op: {type(e).__name__}', at=e,
             )
         arg = self._visit_expr(e.arg, ctx)
         # The argument's storage is only used to short-circuit
@@ -1227,7 +1295,7 @@ class _CppEmitter(Visitor):
         except CppEmitError:
             arg_ty = None
         active = self._active_ctx_for(e)
-        target_ty = self._scalar_for_ctx(active)
+        target_ty = self._scalar_for_ctx(active, at=e)
 
         if isinstance(e, Round):
             # The user explicitly asked to round into the active
@@ -1261,7 +1329,7 @@ class _CppEmitter(Visitor):
         return tmp
 
     def _visit_round_at(self, e, ctx):
-        self._unsupported('RoundAt')
+        self._unsupported('RoundAt', at=e)
 
     def _visit_call(self, e, ctx) -> str:
         # FPy ``Call(args, fn=Function(...), ...)`` lowers to a plain
@@ -1277,7 +1345,8 @@ class _CppEmitter(Visitor):
         if e.kwargs:
             raise CppEmitError(
                 f'unsupported call: kwargs are not supported '
-                f'(call to `{e.func}`)'
+                f'(call to `{e.func}`)',
+                at=e,
             )
         args = ', '.join(self._visit_expr(a, ctx) for a in e.args)
         target = self._call_names.get(e, str(e.func))
@@ -1367,7 +1436,8 @@ class _CppEmitter(Visitor):
             if isinstance(iterable, (Range1, Range2, Range3)):
                 raise CppEmitError(
                     'tuple-binding comprehension target requires a '
-                    'non-range iterable'
+                    'non-range iterable',
+                    at=comp_site,
                 )
             tmp = self._fresh_temp()
             iter_str = self._visit_expr(iterable, ctx)
@@ -1377,7 +1447,8 @@ class _CppEmitter(Visitor):
             return
         else:
             raise CppEmitError(
-                f'unsupported comprehension target {target!r}'
+                f'unsupported comprehension target {target!r}',
+                at=comp_site,
             )
 
         match iterable:
@@ -1453,7 +1524,7 @@ class _CppEmitter(Visitor):
         # which the cpp pipeline does not run — C++ mutates vector
         # elements directly via ``IndexedAssign``.  Reaching this
         # visitor would be a pipeline bug.
-        self._unsupported('ListSet')
+        self._unsupported('ListSet', at=e)
 
     def _visit_if_expr(self, e, ctx) -> str:
         # ``cond ? ift : iff`` — both branches must share a C++ type,
@@ -1468,8 +1539,8 @@ class _CppEmitter(Visitor):
         if isinstance(out_ty, CppScalar):
             ift_ty = self._scalar_storage_for_expr(e.ift)
             iff_ty = self._scalar_storage_for_expr(e.iff)
-            ift = self._maybe_cast(ift, ift_ty, out_ty)
-            iff = self._maybe_cast(iff, iff_ty, out_ty)
+            ift = self._maybe_cast(ift, ift_ty, out_ty, at=e)
+            iff = self._maybe_cast(iff, iff_ty, out_ty, at=e)
         else:
             ift_ty_ = self._storage_for_expr(e.ift)
             iff_ty_ = self._storage_for_expr(e.iff)
@@ -1477,7 +1548,8 @@ class _CppEmitter(Visitor):
                 raise CppEmitError(
                     f'IfExpr branches have incompatible non-scalar '
                     f'storages: ift=`{ift_ty_!r}`, iff=`{iff_ty_!r}`, '
-                    f'expected `{out_ty!r}`'
+                    f'expected `{out_ty!r}`',
+                    at=e,
                 )
         return f'({cond} ? {ift} : {iff})'
 
@@ -1534,7 +1606,8 @@ class _CppEmitter(Visitor):
             self._emit_for_tuple_target(stmt, ctx)
         else:
             raise CppEmitError(
-                f'unsupported for-loop target {stmt.target!r}'
+                f'unsupported for-loop target {stmt.target!r}',
+                at=stmt,
             )
 
     def _emit_for_underscore_target(self, stmt: ForStmt, ctx):
@@ -1625,7 +1698,8 @@ class _CppEmitter(Visitor):
         # binding's named SSA defs at the top of the loop body.
         if isinstance(stmt.iterable, (Range1, Range2, Range3)):
             raise CppEmitError(
-                'tuple-binding for-loop target requires a non-range iterable'
+                'tuple-binding for-loop target requires a non-range iterable',
+                at=stmt,
             )
         iter_str = self._visit_expr(stmt.iterable, ctx)
         tmp = self._fresh_temp()
