@@ -282,6 +282,61 @@ def _test_libraries(output_dir: Path, no_cc: bool = False) -> list[tuple[str, st
     return failures
 
 ###########################################################
+# Targeted regression tests
+#
+# Hand-picked FPy programs that exercise a specific cpp-backend
+# feature or guard against a known regression.  Add a new entry
+# here when fixing a bug whose minimal reproducer doesn't naturally
+# belong in the upstream corpus.  Each entry compiles via the same
+# pipeline + ``cc`` invocation the unit-test corpus uses; a
+# compilation failure surfaces as a test failure.
+
+
+@fp.fpy
+def _regression_quant_dot_real_widen(
+    xs: list[fp.Real], ys: list[fp.Real],
+) -> fp.Real:
+    """Quantize two FP64 lists into SINT8 elements, compute their
+    elementwise products under ``with fp.REAL:`` (the cpp backend
+    proves the exact ``int8 * int8`` product fits in ``int16_t``
+    losslessly), then accumulate into FP32.  Pins:
+
+    - ``[fp.round(...) for ... in xs]`` under SINT8 lowers to a
+      ``static_cast<int8_t>`` push-back loop.
+    - ``[xq * yq for ... in zip(...)]`` under REAL invokes the
+      lossless-widening dispatch in
+      :meth:`fpy2.backend.cpp.emitter.CppEmitter._try_widen_binary`:
+      the ``Mul`` widens both operands to ``int16_t``.
+    - ``sum(prods)`` under FP32 lowers to ``std::accumulate`` with
+      a ``float`` accumulator, taking advantage of the lossless
+      ``int16 → float`` implicit conversion.
+    """
+    with fp.SINT8:
+        xqs = [fp.round(x) for x in xs]
+        yqs = [fp.round(y) for y in ys]
+    with fp.REAL:
+        prods = [xq * yq for xq, yq in zip(xqs, yqs)]
+    with fp.FP32:
+        return sum(prods)
+
+
+_regression_funcs: list[fp.Function] = [
+    _regression_quant_dot_real_widen,
+]
+
+
+def _test_regressions(
+    output_dir: Path, no_cc: bool = False,
+) -> list[tuple[str, str, str]]:
+    """Compile each regression function as a one-function
+    translation unit, identical to the corpus path.  Failures are
+    accumulated and returned for the top-level harness to surface."""
+    return _test_unit_tests(
+        output_dir, 'regressions', _regression_funcs, ignore=[],
+        no_cc=no_cc,
+    )
+
+###########################################################
 # Main tester
 
 class CppInfraFailure(AssertionError):
@@ -299,6 +354,7 @@ def test_compile_cpp(delete: bool = True, no_cc: bool = False):
     failures: list[tuple[str, str, str]] = []
     failures += _test_unit(output_dir, no_cc=no_cc)
     failures += _test_libraries(output_dir, no_cc=no_cc)
+    failures += _test_regressions(output_dir, no_cc=no_cc)
 
     if delete:
         shutil.rmtree(output_dir)

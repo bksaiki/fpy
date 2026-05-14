@@ -50,7 +50,7 @@ from ...ast.fpyast import (
     WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
-from ...number import EFloatContext, MPFixedContext, MPBFixedContext, RM
+from ...number import EFloatContext, MPFixedContext, MPBFixedContext, REAL, RM
 from ...number.context.context import Context
 
 from .ops import ScalarOpTable
@@ -338,7 +338,19 @@ class CppEmitter(Visitor):
         # unconditionally.
         self._current_rm = self._entry_rm(func)
         func_ctx = self._resolve_used_ctx(func)
-        if func_ctx is None or self._validate_context_rm(func_ctx, at=func).is_integer():
+        # ``REAL`` is unrepresentable in C++; it never sets an fenv
+        # mode.  Ops inside a REAL scope succeed only via the
+        # emitter's lossless-widening dispatch (see
+        # :meth:`_try_widen_binary` and friends) — if widening is
+        # unavailable the op-level error fires with a precise
+        # location.  Validation here would fail prematurely, so we
+        # treat REAL like an integer scope: descend without fenv
+        # bookkeeping.
+        if (
+            func_ctx is None
+            or func_ctx is REAL
+            or self._validate_context_rm(func_ctx, at=func).is_integer()
+        ):
             self._visit_block(func.body, None)
         else:
             assert isinstance(func_ctx, EFloatContext)
@@ -600,9 +612,17 @@ class CppEmitter(Visitor):
                 at=stmt,
             )
         rctx = self._resolve_used_ctx(stmt)
-        if rctx is None or self._validate_context_rm(rctx, at=stmt).is_integer():
-            # No op uses this scope, or the scope is integer (no
-            # ``fenv`` to manage either way).  Just descend.
+        # ``REAL`` doesn't correspond to any C++ rounding mode — see
+        # the same comment in :meth:`_visit_function`.  Treat it as
+        # a pass-through; per-op widening dispatch handles the body.
+        if (
+            rctx is None
+            or rctx is REAL
+            or self._validate_context_rm(rctx, at=stmt).is_integer()
+        ):
+            # No op uses this scope, the scope is REAL (no fenv
+            # mode), or the scope is integer (no ``fenv`` to manage
+            # either way).  Just descend.
             self._visit_block(stmt.body, ctx)
             return
         # Float context: validation above guarantees an
@@ -741,11 +761,24 @@ class CppEmitter(Visitor):
     def _dispatch_unary(self, e: UnaryOp, arg: str) -> str:
         """Dispatch a unary op via the op table.
 
-        Picks a signature whose ``out_ctx`` matches the active
-        rounding context.  Direct match is preferred (operand's C++
-        storage type equals the signature's ``arg_ty``); on
-        mismatch we fall back to the all-active-context signature
-        and explicit-cast the operand to that context's storage.
+        Three signature-selection paths, tried in order:
+
+        1. **Direct match.**  Operand's C++ storage type and the
+           active rounding context both equal a signature's input
+           slots — no casts needed.
+        2. **Cast-to-active.**  No direct match, but the active ctx
+           has a same-type signature whose input width contains the
+           operand losslessly; cast the operand to that width and
+           emit.  Skipped when the active ctx has no C++ storage
+           (e.g. ``REAL``).
+        3. **Lossless widening.**  Used when (1) and (2) don't fire
+           — typically because the active ctx is ``REAL`` or the
+           operand can't safely cast into the active ctx.  Selects a
+           signature whose output width matches the result-storage
+           format inference chose for *e*, on the soundness premise
+           that the wider C++ op produces the exact mathematical
+           result and rounds to itself.  Soundness is gated by
+           :meth:`_maybe_cast` rejecting any lossy operand widening.
         """
         sigs = self.op_table.unary.get(type(e))
         if sigs is None:
@@ -756,29 +789,84 @@ class CppEmitter(Visitor):
         active = self._active_ctx_for(e)
         arg_storage = self._scalar_storage_for_expr(e.arg)
 
+        # (1) Direct match.
         for sig in sigs:
             if sig.matches(arg_storage, active):
                 return sig.format(arg)
-        # Cast-to-active fallback: pick the all-active signature and
-        # cast the operand into the active context's storage.
-        target = self._scalar_for_ctx(active, at=e)
-        for sig in sigs:
-            if sig.arg_ty == target and sig.out_ctx == active:
-                return sig.format(self._maybe_cast(arg, arg_storage, target, at=e))
+
+        # (2) Cast-to-active fallback: pick the all-active signature
+        # and cast the operand into the active context's storage.
+        # Skipped silently when the active context has no concrete
+        # storage (e.g. ``REAL``) — falls through to widening.
+        try:
+            target = self._scalar_for_ctx(active, at=e)
+        except CppEmitError:
+            target = None
+        if target is not None:
+            for sig in sigs:
+                if sig.arg_ty == target and sig.out_ctx == active:
+                    return sig.format(
+                        self._maybe_cast(arg, arg_storage, target, at=e)
+                    )
+
+        # (3) Lossless-widening fallback.
+        widened = self._try_widen_unary(e, sigs, arg, arg_storage)
+        if widened is not None:
+            return widened
+
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '
             f'context `{active}`: arg type `{arg_storage.format()}`',
             at=e,
         )
 
+    def _try_widen_unary(
+        self,
+        e: UnaryOp,
+        sigs: list,
+        arg: str,
+        arg_storage: CppScalar,
+    ) -> str | None:
+        """Pick a unary signature whose output storage matches the
+        result storage format inference chose for *e*, and emit the
+        op with the operand lossless-cast to that width.  ``None``
+        when no such signature exists or operand widening would be
+        lossy — the caller raises in that case.
+        """
+        try:
+            result_ty = self._storage_for_expr(e)
+        except CppEmitError:
+            return None
+        if not isinstance(result_ty, CppScalar):
+            return None
+        for sig in sigs:
+            try:
+                sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
+            except CppEmitError:
+                continue
+            if sig_out_ty != result_ty or sig.arg_ty != result_ty:
+                continue
+            try:
+                cast = self._maybe_cast(arg, arg_storage, result_ty, at=e)
+            except CppEmitError:
+                # This widening would lose precision — try the next
+                # signature instead of failing outright; another
+                # signature with the same output width might exist
+                # via a different ctx (in practice there's one, but
+                # the loop stays defensive).
+                continue
+            return sig.format(cast)
+        return None
+
     def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
         """Dispatch a binary op via the op table.
 
-        Picks a signature whose ``out_ctx`` matches the active
-        rounding context.  Direct match is preferred (operand C++
-        storage types equal the signature's ``in*_ty``); on
-        mismatch we fall back to the all-active-context signature
-        and explicit-cast both operands to that context's storage.
+        Same three-phase selection as :meth:`_dispatch_unary`:
+        direct match, cast-to-active, lossless-widening.  The
+        widening fallback is the path that supports ``with fp.REAL:``
+        ops on bounded-format operands: format inference picks a
+        concrete wider result storage that contains the exact
+        mathematical result, and we dispatch under that.
         """
         sigs = self.op_table.binary.get(type(e))
         if sigs is None:
@@ -790,26 +878,72 @@ class CppEmitter(Visitor):
         lhs_storage = self._scalar_storage_for_expr(e.first)
         rhs_storage = self._scalar_storage_for_expr(e.second)
 
+        # (1) Direct match.
         for sig in sigs:
             if sig.matches(lhs_storage, rhs_storage, active):
                 return sig.format(lhs, rhs)
-        # Cast-to-active fallback: pick the all-active signature and
-        # cast both operands into the active context's storage.
-        target = self._scalar_for_ctx(active, at=e)
-        for sig in sigs:
-            if (sig.in1_ty == target
-                    and sig.in2_ty == target
-                    and sig.out_ctx == active):
-                return sig.format(
-                    self._maybe_cast(lhs, lhs_storage, target, at=e),
-                    self._maybe_cast(rhs, rhs_storage, target, at=e),
-                )
+
+        # (2) Cast-to-active fallback.
+        try:
+            target = self._scalar_for_ctx(active, at=e)
+        except CppEmitError:
+            target = None
+        if target is not None:
+            for sig in sigs:
+                if (sig.in1_ty == target
+                        and sig.in2_ty == target
+                        and sig.out_ctx == active):
+                    return sig.format(
+                        self._maybe_cast(lhs, lhs_storage, target, at=e),
+                        self._maybe_cast(rhs, rhs_storage, target, at=e),
+                    )
+
+        # (3) Lossless-widening fallback.
+        widened = self._try_widen_binary(
+            e, sigs, lhs, lhs_storage, rhs, rhs_storage,
+        )
+        if widened is not None:
+            return widened
+
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '
             f'context `{active}`: lhs `{lhs_storage.format()}`, '
             f'rhs `{rhs_storage.format()}`',
             at=e,
         )
+
+    def _try_widen_binary(
+        self,
+        e: BinaryOp,
+        sigs: list,
+        lhs: str,
+        lhs_storage: CppScalar,
+        rhs: str,
+        rhs_storage: CppScalar,
+    ) -> str | None:
+        """Binary analogue of :meth:`_try_widen_unary`."""
+        try:
+            result_ty = self._storage_for_expr(e)
+        except CppEmitError:
+            return None
+        if not isinstance(result_ty, CppScalar):
+            return None
+        for sig in sigs:
+            try:
+                sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
+            except CppEmitError:
+                continue
+            if (sig_out_ty != result_ty
+                    or sig.in1_ty != result_ty
+                    or sig.in2_ty != result_ty):
+                continue
+            try:
+                cast_lhs = self._maybe_cast(lhs, lhs_storage, result_ty, at=e)
+                cast_rhs = self._maybe_cast(rhs, rhs_storage, result_ty, at=e)
+            except CppEmitError:
+                continue
+            return sig.format(cast_lhs, cast_rhs)
+        return None
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
         arg = self._visit_expr(e.arg, ctx)
@@ -1101,10 +1235,8 @@ class CppEmitter(Visitor):
     ) -> str:
         """Dispatch a ternary op via the op table.
 
-        Same shape as :meth:`_dispatch_binary` — direct match if
-        every operand's C++ storage equals the signature's input
-        slots; otherwise the all-active-context signature with
-        explicit casts on each operand.
+        Same three-phase selection as :meth:`_dispatch_binary`:
+        direct match, cast-to-active, lossless-widening.
         """
         sigs = self.op_table.ternary.get(type(e))
         if sigs is None:
@@ -1113,28 +1245,75 @@ class CppEmitter(Visitor):
             )
         active = self._active_ctx_for(e)
         in_storages = [self._scalar_storage_for_expr(a) for a in e.args]
+        args = [a1, a2, a3]
 
+        # (1) Direct match.
         for sig in sigs:
             if sig.matches(in_storages[0], in_storages[1], in_storages[2], active):
                 return sig.format(a1, a2, a3)
-        # Cast-to-active fallback.
-        target = self._scalar_for_ctx(active, at=e)
-        for sig in sigs:
-            if (sig.in1_ty == target
-                    and sig.in2_ty == target
-                    and sig.in3_ty == target
-                    and sig.out_ctx == active):
-                return sig.format(
-                    self._maybe_cast(a1, in_storages[0], target, at=e),
-                    self._maybe_cast(a2, in_storages[1], target, at=e),
-                    self._maybe_cast(a3, in_storages[2], target, at=e),
-                )
+
+        # (2) Cast-to-active fallback.
+        try:
+            target = self._scalar_for_ctx(active, at=e)
+        except CppEmitError:
+            target = None
+        if target is not None:
+            for sig in sigs:
+                if (sig.in1_ty == target
+                        and sig.in2_ty == target
+                        and sig.in3_ty == target
+                        and sig.out_ctx == active):
+                    return sig.format(
+                        self._maybe_cast(a1, in_storages[0], target, at=e),
+                        self._maybe_cast(a2, in_storages[1], target, at=e),
+                        self._maybe_cast(a3, in_storages[2], target, at=e),
+                    )
+
+        # (3) Lossless-widening fallback.
+        widened = self._try_widen_ternary(e, sigs, args, in_storages)
+        if widened is not None:
+            return widened
+
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '
             f'context `{active}`: '
             f'{[s.format() for s in in_storages]}',
             at=e,
         )
+
+    def _try_widen_ternary(
+        self,
+        e: TernaryOp,
+        sigs: list,
+        args: list[str],
+        in_storages: list[CppScalar],
+    ) -> str | None:
+        """Ternary analogue of :meth:`_try_widen_unary`."""
+        try:
+            result_ty = self._storage_for_expr(e)
+        except CppEmitError:
+            return None
+        if not isinstance(result_ty, CppScalar):
+            return None
+        for sig in sigs:
+            try:
+                sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
+            except CppEmitError:
+                continue
+            if (sig_out_ty != result_ty
+                    or sig.in1_ty != result_ty
+                    or sig.in2_ty != result_ty
+                    or sig.in3_ty != result_ty):
+                continue
+            try:
+                casts = [
+                    self._maybe_cast(a, s, result_ty, at=e)
+                    for a, s in zip(args, in_storages)
+                ]
+            except CppEmitError:
+                continue
+            return sig.format(*casts)
+        return None
 
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
         if isinstance(e, Zip):

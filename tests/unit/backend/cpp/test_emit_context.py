@@ -277,3 +277,93 @@ class TestRejection:
         )
         assert 'int64_t f(int64_t x, int64_t y)' in out
         assert 'return (x + y);' in out
+
+
+class TestRealScopeLosslessWidening:
+    """``with fp.REAL:`` has no native C++ rounding mode.  Per-op
+    dispatch instead looks for a *wider* C++ type that contains the
+    exact mathematical result of the operation — emitting the op in
+    that wider type makes the C++ rounding observationally identical
+    to REAL rounding (i.e. a no-op).  When no such widening exists,
+    the compiler rejects."""
+
+    def test_sint8_mul_widens_to_int16(self):
+        """Exact product of two ``SINT8`` operands fits in
+        ``int16_t``; the REAL scope lowers to a widened ``*``."""
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.SINT8:
+                xq = fp.round(x)
+                yq = fp.round(y)
+            with fp.REAL:
+                return xq * yq
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[RealType(fp.FP32), RealType(fp.FP32)],
+        )
+        assert 'int16_t f(float x, float y)' in out
+        assert (
+            'return (static_cast<int16_t>(xq) * static_cast<int16_t>(yq));'
+        ) in out
+        # No fesetround for the REAL scope.
+        assert 'fesetround' not in out
+
+    def test_sint8_add_widens_to_int16(self):
+        """Same widening shape for addition."""
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.SINT8:
+                xq = fp.round(x)
+                yq = fp.round(y)
+            with fp.REAL:
+                return xq + yq
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[RealType(fp.FP32), RealType(fp.FP32)],
+        )
+        assert (
+            'return (static_cast<int16_t>(xq) + static_cast<int16_t>(yq));'
+        ) in out
+
+    def test_fp64_mul_rejected(self):
+        """Exact ``double * double`` would need ~106 mantissa bits;
+        no ladder entry contains that, so REAL rejects."""
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.REAL:
+                return x * y
+
+        with pytest.raises(
+            CppCompileError,
+            match='no storage type on the ladder contains',
+        ):
+            CppCompiler().compile(
+                f, ctx=fp.FP64,
+                arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
+            )
+
+    def test_real_div_rejected(self):
+        """Integer division under REAL is non-dyadic — no exact
+        format, no widening."""
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.SINT8:
+                xq = fp.round(x)
+                yq = fp.round(y)
+            with fp.REAL:
+                return xq / yq
+
+        with pytest.raises(
+            CppCompileError,
+            match='cannot store an unconstrained real value',
+        ):
+            CppCompiler().compile(
+                f, ctx=fp.FP64,
+                arg_types=[RealType(fp.FP32), RealType(fp.FP32)],
+            )
