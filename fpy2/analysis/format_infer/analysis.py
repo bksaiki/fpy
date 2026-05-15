@@ -891,9 +891,9 @@ class _FormatInferInstance(Visitor):
             return None
         scope_fmt = resolved.format()
         if isinstance(exact, SetFormat):
-            # Phase B will compute ``{C.round(v) for v in exact.values}``
-            # for the general case.  For now keep the fits-only fast
-            # path; non-fitting SetFormats fall back to ``_op_bound``.
+            # TODO: we can round each value in the set individually
+            # to produce a precise image even when some values exceed the scope
+            # It is unclear how this affects the overal algorithm.
             return (
                 exact
                 if _all_representable_in(exact.values, scope_fmt)
