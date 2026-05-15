@@ -20,3 +20,4 @@ from .split_loop import SplitLoop, SplitLoopStrategy
 from .subst_var import SubstVar
 from .while_bundling import WhileBundling
 from .while_unroll import WhileUnroll
+from .zip_elim import ZipElim
