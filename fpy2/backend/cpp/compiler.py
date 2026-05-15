@@ -29,7 +29,7 @@ from ...number import Context
 from ...number.context.ieee754 import IEEEContext
 from ...number.context.mp_fixed import MPFixedContext
 from ...number.context.mpb_fixed import MPBFixedContext
-from ...transform import Monomorphize
+from ...transform import Monomorphize, ZipElim
 from ...types import Type
 from ..backend import Backend, CompileError
 
@@ -266,17 +266,30 @@ class CppCompiler(Backend):
 
     Args:
         unsafe_cast_int:
-            When ``True``, allow rounded arithmetic under an
-            unbounded-integer context (``MPFixedContext(nmin=-1)``
-            / ``fpy2.INTEGER``); the compiler compiles these by emitting
-            casts to the widest built-in integer type (currently ``int64_t``) and
-            assuming no overflow occurs.
+            When ``True`` (default), allow rounded arithmetic under
+            an unbounded-integer context (``MPFixedContext(nmin=-1)``
+            / ``fpy2.INTEGER``); the compiler compiles these by
+            emitting casts to the widest built-in integer type
+            (currently ``int64_t``) and assuming no overflow occurs.
+            Set ``False`` to reject such programs at compile time.
+        optimize:
+            When ``True`` (default), apply optimizing program
+            transformations (currently :class:`fpy2.transform.ZipElim`)
+            to each :class:`FuncDef` before the rest of the pipeline
+            runs.  The pipeline is sound either way, but the
+            optimized form skips materializing intermediate
+            ``std::vector<std::tuple<...>>``s for ``zip`` iterables.
+            Set ``False`` to compile the surface AST verbatim.
     """
 
     _unsafe_cast_int: bool
+    _optimize: bool
 
-    def __init__(self, *, unsafe_cast_int: bool = False):
+    def __init__(
+        self, *, unsafe_cast_int: bool = True, optimize: bool = True,
+    ):
         self._unsafe_cast_int = unsafe_cast_int
+        self._optimize = optimize
 
     # ------------------------------------------------------------------
     # Translation-unit preamble
@@ -329,6 +342,12 @@ class CppCompiler(Backend):
             arg_types = [None for _ in func.args]
         if ast.ctx is not None:
             ctx = None
+
+        # Optional pre-pipeline transforms.  Applied before
+        # monomorphization since they only rewrite the surface AST
+        # and don't depend on type information.
+        if self._optimize:
+            ast = ZipElim.apply(ast)
 
         # apply monomorphization to get concrete types
         ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)

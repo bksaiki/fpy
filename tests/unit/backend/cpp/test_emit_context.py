@@ -244,12 +244,13 @@ class TestRejection:
                 f, arg_types=[RealType(bad_int), RealType(bad_int)],
             )
 
-    def test_unbounded_integer_rejected_by_default(self):
+    def test_unbounded_integer_rejected_when_flag_off(self):
         """Rounding under ``fp.INTEGER`` (unbounded ``MPFixedContext``)
-        is rejected by default — C++ has no arbitrary-precision
-        integer type, so any such rounding silently truncates to
-        ``int64_t``.  The caller must opt in with
-        ``CppCompiler(unsafe_cast_int=True)``."""
+        is rejected when ``unsafe_cast_int=False`` — C++ has no
+        arbitrary-precision integer type, so any such rounding
+        silently truncates to ``int64_t``.  The default
+        (``unsafe_cast_int=True``) allows it; this test pins the
+        opt-out path."""
 
         @fp.fpy(ctx=fp.INTEGER)
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -259,20 +260,19 @@ class TestRejection:
             CppCompileError,
             match=r'unbounded integer context.*unsafe_cast_int',
         ):
-            CppCompiler().compile(
+            CppCompiler(unsafe_cast_int=False).compile(
                 f, arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
             )
 
-    def test_unbounded_integer_allowed_with_flag(self):
-        """The same program compiles when the unsafe-cast flag is
-        passed — equivalent to the legacy ``CppCompiler(unsafe_cast_int=True)``
-        behavior."""
+    def test_unbounded_integer_allowed_by_default(self):
+        """The same program compiles under the default settings —
+        ``unsafe_cast_int=True`` is the default."""
 
         @fp.fpy(ctx=fp.INTEGER)
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
             return x + y
 
-        out = CppCompiler(unsafe_cast_int=True).compile(
+        out = CppCompiler().compile(
             f, arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
         )
         assert 'int64_t f(int64_t x, int64_t y)' in out

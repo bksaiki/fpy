@@ -285,6 +285,47 @@ A short README in the package directory pointing at this file and
 listing the public surface (`CppCompiler.compile` / `headers` /
 `helpers` / `prelude`, exception types).
 
+### Whole-call-graph optimization pass
+
+`CppCompiler(optimize=True)` currently applies `ZipElim` (and any
+future optimizing transforms wired into `_run_pipeline`) only to
+the top-level `FuncDef` of each `compile` / `add` call.  Callees
+reached transitively via `FormatInfer`'s `by_call` walk still see
+their original AST — so e.g. a `for ... in zip(...)` inside a
+library helper continues to lower to a `std::vector<std::tuple<...>>`
+even when the top-level was optimized.
+
+Proposed shape:
+
+1. Before `_run_pipeline` runs, construct a call graph rooted at the
+   top-level `Function`.  Walk every `Call` in the body, look up its
+   target via the existing `Function` linkage, and recurse — keyed
+   by `FuncDef` identity so each callee is visited once.  The
+   existing `_discover_specializations` does part of this walk
+   *after* `FormatInfer`; we want the structural walk *before*.
+2. Apply the optimizing transforms (`ZipElim`, …) to each FuncDef
+   in the graph, producing a `FuncDef → FuncDef` rewrite map.
+3. Thread the rewrite map through the pipeline so `FormatInfer`
+   (and downstream consumers that look up callee ASTs) see the
+   rewritten version.  The cleanest plumbing point is probably the
+   `fn.ast` access in `_FormatInferInstance._visit_call`
+   ([format_infer/analysis.py:1060](fpy2/analysis/format_infer/analysis.py))
+   — substitute via the map before handing to the sub-analysis.
+4. The `PreAnalysisCache` is keyed by `FuncDef`; the rewritten
+   FuncDefs become its new keys.  As long as the rewrite is
+   deterministic (same input → same output identity), the cache
+   semantics carry over.
+
+Open questions:
+
+- Whether the rewrite should be eager (apply once up-front, mutate
+  the map) or lazy (rewrite-on-demand during the walk).  Eager is
+  simpler; lazy avoids work for unreachable callees but those are
+  rare in practice.
+- Whether to expose the rewrite map externally for debugging /
+  caching across multiple `compile` calls within the same
+  `CppTranslationUnit` build.
+
 ## Out of scope (for the first pass)
 
 - Linking against an external multi-precision library (mpfr, etc.).
