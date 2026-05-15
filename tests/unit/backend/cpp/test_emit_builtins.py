@@ -71,9 +71,13 @@ class TestEnumerate:
 
 
 class TestZip:
-    """``zip(xs, ys, ...)`` builds a ``std::vector<std::tuple<...>>``."""
+    """``zip(xs, ys, ...)`` lowers to a ``std::vector<std::tuple<...>>``
+    by default when optimizations are disabled.  With the default
+    ``optimize=True``, :class:`ZipElim` rewrites the pattern to a
+    plain indexed loop instead — see :meth:`test_zip_optimized_skips_tuple_vector`.
+    """
 
-    def test_zip_two_args(self):
+    def test_zip_two_args_unoptimized(self):
         @fp.fpy
         def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -82,7 +86,7 @@ class TestZip:
                     acc = acc + x * y
                 return acc
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, ctx=fp.FP64,
             arg_types=[
                 ListType(RealType(fp.FP64)),
@@ -101,7 +105,7 @@ class TestZip:
         assert 'double x = std::get<0>' in out
         assert 'double y = std::get<1>' in out
 
-    def test_zip_three_args(self):
+    def test_zip_three_args_unoptimized(self):
         @fp.fpy
         def f(
             xs: list[fp.Real], ys: list[fp.Real], zs: list[fp.Real]
@@ -112,7 +116,7 @@ class TestZip:
                     acc = acc + x * y * z
                 return acc
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))] * 3,
         )
@@ -121,3 +125,28 @@ class TestZip:
         assert 'auto __cpp_tmp1 = xs;' in out
         assert 'auto __cpp_tmp2 = ys;' in out
         assert 'auto __cpp_tmp3 = zs;' in out
+
+    def test_zip_optimized_skips_tuple_vector(self):
+        """Default ``CppCompiler()`` has ``optimize=True``, so
+        :class:`ZipElim` runs first and ``for ... in zip(...)``
+        lowers to a plain indexed loop — no intermediate
+        ``std::vector<std::tuple<...>>``."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for x, y in zip(xs, ys):
+                    acc = acc + x * y
+                return acc
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(RealType(fp.FP64))] * 2,
+        )
+        # No tuple-vector machinery at all.
+        assert 'std::tuple' not in out
+        assert 'std::make_tuple' not in out
+        # The two sources are bound to plain ``std::vector<double>``
+        # temps and indexed directly.
+        assert 'std::vector<double> _src' in out
