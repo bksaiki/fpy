@@ -61,13 +61,15 @@ defeats this transform's guard.
 
 import dataclasses
 
+from typing import Any
+
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast.fpyast import (
     Assign, Expr, ForStmt, FuncDef, Len, ListComp, ListRef, NamedId,
     Range1, Stmt, StmtBlock, TupleBinding, UnderscoreId, Var, Zip,
 )
 from ..ast.visitor import DefaultTransformVisitor
-from ..utils import Gensym
+from ..utils import Gensym, Id
 
 
 @dataclasses.dataclass
@@ -84,7 +86,7 @@ class _Ctx:
         return _Ctx(stmts=[])
 
 
-def _is_zip_tuple_binding(target, iterable) -> bool:
+def _is_zip_tuple_binding(target: Id | TupleBinding, iterable: Expr) -> bool:
     """Predicate for the for-loop / comp fast path.
 
     Fires iff *iterable* is a :class:`Zip`, *target* is a
@@ -123,7 +125,7 @@ class _SubstNames(DefaultTransformVisitor):
         # restores after recursing.
         self._subst = dict(subst)
 
-    def _visit_var(self, e: Var, ctx):
+    def _visit_var(self, e: Var, ctx: Any):
         # The substitution targets are ``NamedId``s; FPy's parser
         # synthesizes a ``Var`` whose ``.name`` is the same
         # ``NamedId`` object.  Equality is structural (``NamedId``
@@ -133,7 +135,7 @@ class _SubstNames(DefaultTransformVisitor):
             return replacement
         return super()._visit_var(e, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: Any):
         # A target NamedId inside this comp shadows any outer
         # substitution for the same name.  Save the shadowed entries,
         # disable them, recurse, then restore.
@@ -180,7 +182,7 @@ class _ZipElimInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # Block walk with stmt → stmts expansion
 
-    def _visit_block(self, block: StmtBlock, ctx):
+    def _visit_block(self, block: StmtBlock, ctx: Any):
         # Local _Ctx so each block has its own preamble buffer; the
         # outer caller's ctx (if any) is irrelevant — preambles
         # always belong to the block introducing them.
@@ -263,33 +265,33 @@ class _ZipElimInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # List comprehensions
 
-    def _visit_list_comp(self, e: ListComp, ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: Any):
         # Walk the comp's (target, iterable) pairs, rewriting any
         # zip-tuple-binding stage whose zip arguments are all
         # ``Var``s.  Non-matching stages are passed through.  The
         # ``elt`` expression has substitutions applied for every
         # rewritten stage.
-        new_targets: list = []
+        new_targets: list[Id | TupleBinding] = []
         new_iterables: list[Expr] = []
         subst: dict[NamedId, Expr] = {}
 
         for target, iterable in zip(e.targets, e.iterables):
-            iterable = self._visit_expr(iterable, ctx)
+            new_iter = self._visit_expr(iterable, ctx)
             if (
-                _is_zip_tuple_binding(target, iterable)
-                and self._all_var_args(iterable)
+                _is_zip_tuple_binding(target, new_iter)
+                and isinstance(new_iter, Zip)
+                and isinstance(target, TupleBinding)
+                and all(isinstance(a, Var) for a in new_iter.args)
             ):
                 idx = self.gensym.fresh('_i')
-                assert isinstance(iterable, Zip)
-                assert isinstance(target, TupleBinding)
                 # Build a substitution for each named binding slot:
                 # ``name -> arg[idx]``.  Underscore slots contribute
                 # no substitution.
-                for elt, arg in zip(target.elts, iterable.args):
-                    match elt:
+                for binding, arg in zip(target.elts, new_iter.args):
+                    match binding:
                         case NamedId():
                             assert isinstance(arg, Var)
-                            subst[elt] = ListRef(
+                            subst[binding] = ListRef(
                                 Var(arg.name, None),
                                 Var(idx, None),
                                 None,
@@ -299,13 +301,13 @@ class _ZipElimInstance(DefaultTransformVisitor):
                         case _:
                             raise RuntimeError(
                                 f'unexpected binding element in zip '
-                                f'target: {elt!r}'
+                                f'target: {binding!r}'
                             )
                 # New target/iterable: ``_i in range(len(arg0))``.
-                assert isinstance(iterable.args[0], Var)
+                assert isinstance(new_iter.args[0], Var)
                 len_expr = Len(
                     Var(NamedId('len'), None),
-                    Var(iterable.args[0].name, None),
+                    Var(new_iter.args[0].name, None),
                     None,
                 )
                 new_targets.append(idx)
@@ -314,18 +316,14 @@ class _ZipElimInstance(DefaultTransformVisitor):
                 )
             else:
                 new_targets.append(self._visit_binding(target, ctx))
-                new_iterables.append(iterable)
+                new_iterables.append(new_iter)
 
         # Substitute names in ``elt`` after walking it normally
         # (so nested zip patterns inside the elt are also rewritten).
-        elt = self._visit_expr(e.elt, ctx)
+        new_elt = self._visit_expr(e.elt, ctx)
         if subst:
-            elt = _SubstNames(subst)._visit_expr(elt, ctx)
-        return ListComp(new_targets, new_iterables, elt, e.loc)
-
-    @staticmethod
-    def _all_var_args(zip_expr: Zip) -> bool:
-        return all(isinstance(a, Var) for a in zip_expr.args)
+            new_elt = _SubstNames(subst)._visit_expr(new_elt, ctx)
+        return ListComp(new_targets, new_iterables, new_elt, e.loc)
 
 
 class ZipElim:
