@@ -118,10 +118,12 @@ Format inference rules
 - **Inline conditionals** (``IfExpr``): ``join(then_fmt, else_fmt)``.
 """
 
+import operator
+
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
-from typing import Callable, Iterable, TypeAlias
+from typing import Any, Callable, Iterable, TypeAlias
 
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
@@ -393,6 +395,59 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
         return AbstractFormat.from_format(f)
     else:
         return _setformat_to_abstract(f)
+
+def _exact_binop(
+    lhs: 'FormatBound',
+    rhs: 'FormatBound',
+    op: Callable[[Any, Any], Any],
+) -> 'SetFormat | AbstractFormat | None':
+    """Compute the exact unrounded result of an arithmetic binary op.
+
+    *op* is applied either pointwise to a pair of :class:`SetFormat`
+    operands (over their :class:`Fraction` values) or directly to
+    operands lifted to :class:`AbstractFormat`.  Both paths produce
+    a sound, non-rounded result.  Returns ``None`` when either
+    operand isn't abstractable (e.g. ``None``, ``TupleFormat``,
+    non-dyadic ``SetFormat``).
+
+    Used by :meth:`_FormatInferInstance._visit_binaryop` to compute
+    the candidate ``F`` that :meth:`_bound_if_fits` then checks
+    against the active scope.
+    """
+    if not (
+        isinstance(lhs, AbstractableFormatBound)
+        and isinstance(rhs, AbstractableFormatBound)
+    ):
+        return None
+    if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
+        return SetFormat(frozenset(
+            op(va, vb) for va in lhs.values for vb in rhs.values
+        ))
+    af_a = _to_abstract(lhs)
+    af_b = _to_abstract(rhs)
+    if af_a is None or af_b is None:
+        return None
+    return op(af_a, af_b)
+
+
+def _exact_unop(
+    arg: 'FormatBound',
+    op: Callable[[Any], Any],
+) -> 'SetFormat | AbstractFormat | None':
+    """Unary analogue of :func:`_exact_binop` — apply *op* either
+    pointwise to a :class:`SetFormat`'s values or directly to a
+    lifted :class:`AbstractFormat`.  Returns ``None`` when *arg* is
+    not abstractable.
+    """
+    if not isinstance(arg, AbstractableFormatBound):
+        return None
+    if isinstance(arg, SetFormat):
+        return SetFormat(frozenset(op(v) for v in arg.values))
+    af = _to_abstract(arg)
+    if af is None:
+        return None
+    return op(af)
+
 
 def _join_bounds(
     s1: FormatBound,
@@ -775,6 +830,43 @@ class _FormatInferInstance(Visitor):
         """
         return self.ctx_use.find_scope_from_use(e).ctx is REAL
 
+    def _bound_if_fits(
+        self,
+        e: ContextUseSite,
+        exact: SetFormat | AbstractFormat | None,
+    ) -> FormatBound | None:
+        """If *exact* — the statically-known unrounded result of *e* —
+        is representable under *e*'s active scope format, return it
+        as the inferred bound.  Returns ``None`` otherwise.
+
+        This generalizes the legacy REAL-only fast path: under any
+        concrete scope ``C`` whose format ``C.F`` contains *exact*'s
+        value set, ``round_C(exact) = exact``, so the rounded format
+        equals the unrounded one.  :data:`REAL` is the case where
+        ``C.F`` trivially contains every value.
+
+        Symbolic (unresolved) scopes return ``None`` — we can't safely
+        claim round-is-identity without knowing the concrete context.
+        """
+        if exact is None:
+            return None
+        resolved = self._resolve_active_ctx(e)
+        if resolved is None:
+            return None
+        if resolved is REAL:
+            return exact if isinstance(exact, SetFormat) else exact.format()
+        scope_fmt = resolved.format()
+        if isinstance(exact, SetFormat):
+            return (
+                exact
+                if _all_representable_in(exact.values, scope_fmt)
+                else None
+            )
+        if not isinstance(scope_fmt, AbstractableFormat):
+            return None
+        scope_af = AbstractFormat.from_format(scope_fmt)
+        return exact.format() if exact <= scope_af else None
+
     def _visit_binding(
         self,
         site: DefSite,
@@ -863,19 +955,19 @@ class _FormatInferInstance(Visitor):
                 assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
                 return self._sum_bound(e, arg_fmt)
             case Abs():
-                # abs: preserves precision under exact arithmetic, otherwise rounds to the scope's format
-                if self._is_real_scope(e) and isinstance(arg_fmt, AbstractableFormatBound):
-                    if isinstance(arg_fmt, SetFormat):
-                        return SetFormat(frozenset(abs(v) for v in arg_fmt.values))
-                    else:
-                        return abs(AbstractFormat.from_format(arg_fmt)).format()
+                # abs: precision-preserving.  Use the unrounded result
+                # whenever the active scope's format contains it; see
+                # :meth:`_bound_if_fits`.
+                fitted = self._bound_if_fits(e, _exact_unop(arg_fmt, abs))
+                if fitted is not None:
+                    return fitted
             case Neg():
-                # negation: preserves precision under exact arithmetic, otherwise rounds to the scope's format
-                if self._is_real_scope(e) and isinstance(arg_fmt, AbstractableFormatBound):
-                    if isinstance(arg_fmt, SetFormat):
-                        return SetFormat(frozenset(-v for v in arg_fmt.values))
-                    else:
-                        return (-AbstractFormat.from_format(arg_fmt)).format()
+                # negation: precision-preserving (same logic as Abs).
+                fitted = self._bound_if_fits(
+                    e, _exact_unop(arg_fmt, operator.neg),
+                )
+                if fitted is not None:
+                    return fitted
 
         return self._op_bound(e)
 
@@ -939,39 +1031,27 @@ class _FormatInferInstance(Visitor):
                 # range(...) -> result is a list of integers.
                 return ListFormat(_INTEGER_FORMAT)
             case Add():
-                # exact addition: precise under exact arithmetic with
-                # abstractable operands, otherwise rounds to the scope's format.
-                if (self._is_real_scope(e)
-                        and isinstance(lhs, AbstractableFormatBound)
-                        and isinstance(rhs, AbstractableFormatBound)):
-                    if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
-                        return SetFormat(frozenset(va + vb for va in lhs.values for vb in rhs.values))
-                    af_a = _to_abstract(lhs)
-                    af_b = _to_abstract(rhs)
-                    if af_a is not None and af_b is not None:
-                        return (af_a + af_b).format()
+                # Exact addition.  Use the unrounded result whenever
+                # the active scope's format contains it; see
+                # :meth:`_bound_if_fits`.  Subsumes the legacy REAL-only
+                # fast path (REAL_FORMAT contains everything).
+                fitted = self._bound_if_fits(
+                    e, _exact_binop(lhs, rhs, operator.add),
+                )
+                if fitted is not None:
+                    return fitted
             case Sub():
-                # exact subtraction: same dispatch shape as Add.
-                if (self._is_real_scope(e)
-                        and isinstance(lhs, AbstractableFormatBound)
-                        and isinstance(rhs, AbstractableFormatBound)):
-                    if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
-                        return SetFormat(frozenset(va - vb for va in lhs.values for vb in rhs.values))
-                    af_a = _to_abstract(lhs)
-                    af_b = _to_abstract(rhs)
-                    if af_a is not None and af_b is not None:
-                        return (af_a - af_b).format()
+                fitted = self._bound_if_fits(
+                    e, _exact_binop(lhs, rhs, operator.sub),
+                )
+                if fitted is not None:
+                    return fitted
             case Mul():
-                # exact multiplication: same dispatch shape as Add.
-                if (self._is_real_scope(e)
-                        and isinstance(lhs, AbstractableFormatBound)
-                        and isinstance(rhs, AbstractableFormatBound)):
-                    if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
-                        return SetFormat(frozenset(va * vb for va in lhs.values for vb in rhs.values))
-                    af_a = _to_abstract(lhs)
-                    af_b = _to_abstract(rhs)
-                    if af_a is not None and af_b is not None:
-                        return (af_a * af_b).format()
+                fitted = self._bound_if_fits(
+                    e, _exact_binop(lhs, rhs, operator.mul),
+                )
+                if fitted is not None:
+                    return fitted
 
         return self._op_bound(e)
 
