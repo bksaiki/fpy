@@ -472,6 +472,14 @@ def _join_bounds(
         case None, None:
             return None
         case SetFormat(values=a), SetFormat(values=b):
+            # Widening: SetFormat unions form a lattice of unbounded
+            # height (each loop iteration can add a fresh value), so a
+            # naive phi-join over them never converges.  When the
+            # caller signals it's running a saturated loop fixpoint,
+            # collapse to ``REAL_FORMAT`` so the next iteration falls
+            # back to the abstract path and reaches a fixed point.
+            if widen:
+                return REAL_FORMAT
             return SetFormat(a | b)
         case SetFormat(values=vals), Format() as fmt:
             return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
@@ -954,6 +962,25 @@ class _FormatInferInstance(Visitor):
             case Sum():
                 assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
                 return self._sum_bound(e, arg_fmt)
+            case Round() | RoundExact() | Cast():
+                # Identity-when-fits.  ``Round`` / ``RoundExact`` round
+                # the argument to the active scope; ``Cast`` asserts
+                # the argument already fits.  When the argument's
+                # inferred format is contained in the scope's format,
+                # every one of these operations is the identity at the
+                # value level — so the result's tight format equals
+                # the argument's, not the scope's.  Falls back to
+                # :meth:`_op_bound` (the scope format) otherwise.
+                if isinstance(arg_fmt, SetFormat):
+                    fitted = self._bound_if_fits(e, arg_fmt)
+                elif isinstance(arg_fmt, AbstractableFormat):
+                    fitted = self._bound_if_fits(
+                        e, AbstractFormat.from_format(arg_fmt),
+                    )
+                else:
+                    fitted = None
+                if fitted is not None:
+                    return fitted
             case Abs():
                 # abs: precision-preserving.  Use the unrounded result
                 # whenever the active scope's format contains it; see
@@ -977,39 +1004,49 @@ class _FormatInferInstance(Visitor):
         Format of ``Sum(xs)`` — reduce-by-pairwise-addition with rounding
         under the active context at each step.
 
-        - **Non-REAL scope**: each pairwise add rounds to the scope's
-          format, so the accumulator equals the scope's format
-          throughout.  Falls back to :meth:`_op_bound`.
-        - **REAL scope**: no rounding.  Simulate ``n - 1`` exact
-          additions through :class:`AbstractFormat` to produce a precise
-          containing format.  Requires the list size to be statically
-          known via :class:`ArraySizeAnalysis`; otherwise falls back to
-          ``REAL_FORMAT`` via :meth:`_op_bound`.
+        Strategy: simulate ``n - 1`` exact pairwise additions through
+        :class:`AbstractFormat`.  The simulated accumulator's
+        representable set is a superset of every intermediate partial
+        sum's value set (this matters for signed reductions, where
+        intermediate magnitudes can exceed the final result).  If the
+        simulated accumulator fits under the active scope's format,
+        every per-step ``round_C`` is the identity, so the precise
+        format is sound to report — regardless of whether the scope
+        is :data:`REAL` or a concrete rounding context.  Otherwise
+        the result widens to the scope's format via :meth:`_op_bound`.
+
+        Requires the list size to be statically known via
+        :class:`ArraySizeAnalysis`; otherwise falls back to
+        :meth:`_op_bound`.
 
         The branches below are ordered so that the trivial cases
         (``n == 0`` and ``n == 1``) are decided before any
-        abstractability check on the element format — those cases
-        produce a precise bound independent of whether the elements
-        could be lifted to :class:`AbstractFormat`.
+        abstractability check on the element format.
         """
         n = self._known_iter_count(e.arg)
-        if not self._is_real_scope(e) or n is None:
+        if n is None:
             return self._op_bound(e)
 
-        # ``sum([])`` is conventionally 0 — independent of what the
-        # (absent) elements would have looked like.
+        # ``sum([])`` is conventionally 0 — fits trivially in any scope.
         if n == 0:
             return SetFormat(frozenset((Fraction(0),)))
 
         elt_fmt = arg_fmt.elt
-        # Single-element reduction: no addition occurs, the lone element
-        # passes through with its existing format.  Independent of
-        # abstractability.
+        # Single-element reduction: ``sum([x])`` evaluates to
+        # ``round_C(x)``.  Tighten to ``elt_fmt`` when it fits under
+        # the scope; otherwise the round may not be the identity.
         if n == 1:
-            return elt_fmt
+            if isinstance(elt_fmt, SetFormat):
+                fitted = self._bound_if_fits(e, elt_fmt)
+            elif isinstance(elt_fmt, AbstractableFormat):
+                fitted = self._bound_if_fits(e, AbstractFormat.from_format(elt_fmt))
+            else:
+                fitted = None
+            return fitted if fitted is not None else self._op_bound(e)
 
         # ``n >= 2``: simulate ``n - 1`` pairwise additions through
-        # AbstractFormat.  Requires the element to be abstractable.
+        # AbstractFormat, then check the final accumulator against the
+        # scope.  Requires the element to be abstractable.
         if not isinstance(elt_fmt, AbstractableFormatBound):
             return self._op_bound(e)
         af_elt = _to_abstract(elt_fmt)
@@ -1018,7 +1055,8 @@ class _FormatInferInstance(Visitor):
         af_acc = af_elt
         for _ in range(n - 1):
             af_acc = af_acc + af_elt
-        return af_acc.format()
+        fitted = self._bound_if_fits(e, af_acc)
+        return fitted if fitted is not None else self._op_bound(e)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> FormatBound:
         lhs = self._visit_expr(e.first, ctx)
