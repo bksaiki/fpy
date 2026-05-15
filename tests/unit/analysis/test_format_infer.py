@@ -1145,14 +1145,31 @@ class TestFormatInfer:
             f'got {block_acc_bounds}'
         )
 
-        # 2. acc must reach FP32 — every write is inside ``with fp.FP32``,
-        #    so the FP32 round dominates regardless of the outer loop's
-        #    symbolic iteration count.
+        # 2. acc must reach a bound contained in FP32 — every write is
+        #    inside ``with fp.FP32``, so the FP32 round dominates
+        #    regardless of the outer loop's symbolic iteration count.
+        #    Note: the analysis may return a *strict subset* of FP32
+        #    (e.g., narrower subnormal range) when it can prove the
+        #    accumulated magnitudes never reach FP32's full range —
+        #    this is sound (image of the rounded result is contained
+        #    in FP32) and strictly more precise than widening to FP32.
+        from fpy2.analysis.format_infer.format import (
+            AbstractFormat,
+            AbstractableFormat,
+        )
+        fp32_af = AbstractFormat.from_format(fp.FP32.format())
         acc_bounds = [
             b for d, b in info.by_def.items() if d.name.base == 'acc'
         ]
-        assert fp.FP32.format() in acc_bounds, (
-            f'expected FP32 among acc bounds, got {acc_bounds}'
+        def _contained_in_fp32(b):
+            if b == fp.FP32.format():
+                return True
+            if isinstance(b, AbstractableFormat):
+                return AbstractFormat.from_format(b) <= fp32_af
+            return False
+        assert any(_contained_in_fp32(b) for b in acc_bounds), (
+            f'expected acc to reach a Format contained in FP32, '
+            f'got {acc_bounds}'
         )
 
         # 3. ys is the rounded list — its element format is MX_E4M3.
