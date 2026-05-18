@@ -2,50 +2,64 @@
 Eliminate unnecessary rounding from expressions whose unrounded
 format is contained in the active rounding context.
 
-For a rounded arithmetic op ``f(x_1, ..., x_n)`` (``Add``, ``Sub``,
+For a rounded arithmetic op ``g(e_1, ..., e_n)`` (``Add``, ``Sub``,
 ``Mul``, ``Abs``, ``Neg``) under active context ``C``, the runtime
 semantics insert an implicit ``round_C`` around the result.  When
-format inference proves ``format(f(...)) ⊆ C.F``, that round is the
+format inference proves ``format(g(...)) ⊆ C.F``, that round is the
 identity — the value is unchanged whether or not it fires.  This
-transform makes that fact structural by hoisting the operation into
-a ``with fp.REAL:`` preamble, binding it to a fresh name, and
-threading the name back into the original expression site.
+transform makes that fact structural by computing ``g`` under
+``with fp.REAL:`` and binding the result to a fresh name that
+replaces the original expression site.
 
 For explicit ``Round`` / ``RoundExact`` / ``Cast`` nodes, the same
 notion produces a different rewrite: when the argument's bound
 already fits in the target context, the whole node collapses to
 its argument (the round was a no-op at runtime).
 
-Rewrite shape:
+Rewrite shape — per-op hoisting with unconditional operand binding:
 
 .. code-block:: python
 
    # Before
    with fp.FP64:
-       a = (1.0 + 2.0) * 3.0    # whole RHS fits FP64 exactly
+       a = g(e_1, ..., e_n)     # g's round is identity
 
    # After
    with fp.FP64:
+       t_1 = e_1                # original-context evaluation
+       ...
+       t_n = e_n                # of each operand
        with fp.REAL:
-           _t0 = (1.0 + 2.0) * 3.0
-       a = _t0
+           _t = g(t_1, ..., t_n)
+       a = _t
 
-Greedy at the *outermost* fitting subtree: if a parent op is
-eliminable, the whole subtree hoists as one unit (children are not
-separately considered).  Only when the parent isn't eliminable do
-we recurse and consider its children individually.
+Each operand is bound to a temp under the *current* context
+before being passed into the REAL block.  The bind preserves
+every round inside the operand at its original scope — explicit
+``Round`` / ``Cast`` nodes, implicit rounds on nested arithmetic
+ops, eliminable or non-eliminable, all fire as originally
+written.  The REAL block then consumes only ``Var`` references,
+so it can never accidentally re-evaluate a subexpression at the
+wrong context.
 
-Soundness pitfall the implementation guards against:
+Operands that are already ``Var`` references are passed through
+without binding — a copy ``_t = v`` has no rounds to preserve
+and just adds a redundant alias.  This is the only case-split;
+every other operand kind is bound unconditionally for safety.
 
-If the hoisted subtree contains an explicit ``Round`` / ``RoundExact``
-/ ``Cast`` node whose round is *not* itself the identity, moving the
-subtree under ``with fp.REAL:`` silently turns that round into a
-no-op — changing the value of the program.  The transform therefore
-hoists only when every explicit round node inside the subtree is
-also eliminable.  In practice, eliminable round nodes are collapsed
-to their argument *at their own site* by the same pass, so a hoisted
-subtree never contains an explicit round node — the check is the
-belt-and-suspenders that documents the invariant.
+Trade-off: the unconditional bind produces redundant copies for
+literals and already-clean subtrees.  ``CopyPropagate`` and
+``DeadCodeEliminate`` (both available in :mod:`fpy2.transform`)
+clean these up downstream — the local rewrite stays simple at
+the cost of slack in the intermediate AST.
+
+Suppressed positions: hoisting needs a statement-level preamble
+slot, so it is disabled inside ``ListComp`` element / iterable
+expressions and inside ``IfExpr`` branches (the latter would
+evaluate operands unconditionally, changing exception semantics
+under contexts that can raise).  ``Round`` / ``Cast`` collapse
+still applies inside these positions — it's a pure node-level
+rewrite that needs no preamble slot.
 
 Run after :class:`fpy2.transform.Monomorphize` (so format inference
 resolves to concrete contexts) and before any pass that depends on
@@ -63,14 +77,15 @@ from ..analysis import (
     DefineUseAnalysis, SyntaxCheck,
 )
 from ..analysis.format_infer import (
-    FormatAnalysis, FormatInfer, exact_binop, exact_unop, round_is_identity,
+    AbstractFormat, AbstractableFormat, FormatAnalysis, FormatInfer, SetFormat,
+    exact_binop, exact_unop, round_is_identity,
 )
 from ..ast.fpyast import (
     Abs, Add, Assign, Cast, ContextStmt, Expr, ForeignVal, FuncDef, IfExpr,
-    ListComp, Mul, Neg, Round, RoundExact, Stmt, StmtBlock, Sub, UnaryOp,
+    ListComp, Mul, Neg, Round, RoundExact, Stmt, StmtBlock, Sub,
     UnderscoreId, Var,
 )
-from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
+from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL
 from ..number.context.context import Context
 from ..utils import Gensym
@@ -180,7 +195,18 @@ class _RoundElimInstance(DefaultTransformVisitor):
                 arg = self.format_info.by_expr.get(e.arg)
                 return exact_unop(arg, unop)
             case Round() | RoundExact() | Cast():
-                return self.format_info.by_expr.get(e.arg)
+                # The unrounded "value" of an explicit round node is
+                # the argument itself.  Stored bounds may be a
+                # ``Format`` (e.g., ``IEEEFormat`` when the arg's
+                # post-round bound widened to the scope's format);
+                # lift to ``AbstractFormat`` so the result fits
+                # ``round_is_identity``'s expected input shape.
+                arg_fmt = self.format_info.by_expr.get(e.arg)
+                if isinstance(arg_fmt, SetFormat):
+                    return arg_fmt
+                if isinstance(arg_fmt, AbstractableFormat):
+                    return AbstractFormat.from_format(arg_fmt)
+                return None
             case _:
                 return None
 
@@ -204,21 +230,6 @@ class _RoundElimInstance(DefaultTransformVisitor):
             return False
         return round_is_identity(self._unrounded_format(e), ctx)
 
-    def _safe_to_hoist(self, e: Expr) -> bool:
-        """Whether *e*'s subtree can be moved under ``with fp.REAL:``
-        without changing semantics.  All explicit
-        ``Round`` / ``RoundExact`` / ``Cast`` nodes in the subtree
-        must already be eliminable at their original scope — moving
-        them under REAL would silently drop a real rounding step
-        otherwise.  In practice this is a redundant check because
-        eliminable round nodes are collapsed *at their own site* by
-        the same pass before any enclosing arithmetic op decides to
-        hoist; non-eliminable ones remain and trip the check.
-        """
-        finder = _NonEliminableRoundFinder(self._is_eliminable)
-        finder.scan(e)
-        return not finder.found
-
     # ------------------------------------------------------------------
     # Block walk — the ``_Ctx``-accumulator pattern from ``ZipElim``.
 
@@ -237,12 +248,12 @@ class _RoundElimInstance(DefaultTransformVisitor):
     # The decision logic lives in ``_visit_expr``.  At each node:
     #
     #  - Eliminable ``Round`` / ``RoundExact`` / ``Cast`` → replace
-    #    with the (recursively-rewritten) argument.  No statement-
-    #    level hoist needed.
-    #  - Eliminable arithmetic op AND every inner round-node is also
-    #    eliminable AND we're at a statement-level expression
-    #    position (``ctx`` is a ``_Ctx``) → hoist the whole subtree
-    #    into a ``with fp.REAL: _tN = e`` preamble, return ``Var(_tN)``.
+    #    with the (recursively-rewritten) argument.  Pure node-level
+    #    rewrite, no preamble required, works at any expression
+    #    position (including inside ListComp / IfExpr branches).
+    #  - Eliminable arithmetic op AND we're at a statement-level
+    #    expression position (``ctx`` is a ``_Ctx``) → per-op hoist
+    #    (see :meth:`_hoist`).
     #  - Anything else → recurse via the base visitor (children may
     #    still be individually eliminable).
 
@@ -263,32 +274,92 @@ class _RoundElimInstance(DefaultTransformVisitor):
             isinstance(ctx, _Ctx)
             and isinstance(e, (Add, Sub, Mul, Abs, Neg))
             and self._is_eliminable(e)
-            and self._safe_to_hoist(e)
         ):
             return self._hoist(e, ctx)
         return super()._visit_expr(e, ctx)
 
-    def _hoist(self, e: Expr, ctx: _Ctx) -> Expr:
-        """Mint ``_tN``, emit ``with fp.REAL: _tN = e`` into *ctx*'s
-        preamble buffer, return ``Var(_tN)`` for the original
-        expression site.
+    def _operands(self, e: Expr) -> list[Expr]:
+        """Return *e*'s direct operands (left-to-right) for the
+        rounded ops the hoist handles.  Used to enumerate the
+        positions :meth:`_hoist` may need to bind to temps."""
+        match e:
+            case Add() | Sub() | Mul():
+                return [e.first, e.second]
+            case Abs() | Neg():
+                return [e.arg]
+            case _:
+                raise RuntimeError(
+                    f'_operands called on non-rounded-arithmetic op: {e!r}'
+                )
 
-        The hoisted subtree *e* is not separately rewritten — it
-        now lives under REAL, where no round-elim applies (REAL is
-        the trivial identity, so :meth:`_is_eliminable` returns
-        False for every op inside).  Idempotence falls out of
-        that: a re-run of the transform sees only ``Var`` references
-        at the previously-hoisted sites and nothing to hoist inside
-        the REAL blocks.
+    def _rebuild(self, e: Expr, operands: list[Expr]) -> Expr:
+        """Reconstruct an arithmetic op *e* with new *operands*.
+        Mirrors the inverse of :meth:`_operands`."""
+        match e:
+            case Add() | Sub() | Mul():
+                return type(e)(operands[0], operands[1], e.loc)
+            case Abs() | Neg():
+                return type(e)(operands[0], e.loc)
+            case _:
+                raise RuntimeError(
+                    f'_rebuild called on non-rounded-arithmetic op: {e!r}'
+                )
+
+    def _hoist(self, e: Expr, ctx: _Ctx) -> Expr:
+        """Per-op hoist: compute *e* under ``with fp.REAL:`` and
+        return ``Var(_tN)`` for the original expression site.
+
+        Each operand is visited with the same *ctx* so nested
+        eliminable ops hoist at their own level — the result is a
+        ``Var`` that we can plug directly into our reconstructed
+        op.  Operands that survive the visit as non-``Var``
+        expressions (literals, non-eliminable ops, ``Round`` nodes
+        that weren't collapsed) are bound to a temp under the
+        *current* context before being passed into the REAL block.
+        The bind preserves every round inside the operand at its
+        original scope: explicit ``Round`` / ``Cast`` nodes,
+        implicit rounds on non-eliminable arithmetic, all fire as
+        originally written.
+
+        The REAL block consumes only ``Var`` references — it can
+        never accidentally re-evaluate a subexpression at the wrong
+        context.  Idempotence falls out: a second pass sees only
+        ``Var``-argumented ops under REAL (and bare assigns under
+        the original context), none of which trigger another hoist.
+
+        Trade-off: the unconditional bind produces redundant
+        ``_t = literal`` lines and per-op REAL blocks for nested
+        eliminations.  :class:`fpy2.transform.CopyPropagate` and
+        :class:`fpy2.transform.DeadCodeEliminate` (both in
+        :mod:`fpy2.transform`) clean these up downstream — the
+        local rewrite stays simple at the cost of slack in the
+        intermediate AST.
         """
-        name = self.gensym.fresh('_t')
-        assign = Assign(name, None, e, None)
-        block = StmtBlock([assign])
+        new_operands: list[Expr] = []
+        for operand in self._operands(e):
+            new_operand = self._visit_expr(operand, ctx)
+            if isinstance(new_operand, Var):
+                # Bind would be a pure copy — no rounds to preserve
+                # inside a name lookup.  Use the ``Var`` directly.
+                new_operands.append(new_operand)
+                continue
+            # Bind under the current context.  Anything not a
+            # ``Var`` is conservatively assumed to contain a round
+            # (literal, non-eliminable op, ``Round`` node, …);
+            # binding fires those rounds at their original scope
+            # before the REAL block sees the value.
+            t_op = self.gensym.fresh('_t')
+            ctx.stmts.append(Assign(t_op, None, new_operand, None))
+            new_operands.append(Var(t_op, None))
+
+        rebuilt = self._rebuild(e, new_operands)
+        result_name = self.gensym.fresh('_t')
+        block = StmtBlock([Assign(result_name, None, rebuilt, None)])
         wrapped = ContextStmt(
             UnderscoreId(), ForeignVal(REAL, None), block, None,
         )
         ctx.stmts.append(wrapped)
-        return Var(name, None)
+        return Var(result_name, None)
 
     # ------------------------------------------------------------------
     # Sentinel-ctx propagation for nested expression positions where
@@ -317,39 +388,6 @@ class _RoundElimInstance(DefaultTransformVisitor):
         iff = self._visit_expr(e.iff, None)
         return IfExpr(cond, ift, iff, e.loc)
 
-
-class _NonEliminableRoundFinder(DefaultVisitor):
-    """Scan a subtree for an explicit ``Round`` / ``RoundExact`` /
-    ``Cast`` node whose round is *not* the identity at its original
-    scope.  Early-exits via the :attr:`found` flag — the scan stops
-    descending once any such node is hit."""
-
-    found: bool
-
-    def __init__(self, is_eliminable: Callable[[Expr], bool]):
-        super().__init__()
-        self.is_eliminable = is_eliminable
-        self.found = False
-
-    def scan(self, e: Expr) -> None:
-        self._visit_expr(e, None)
-
-    def _visit_expr(self, e: Expr, ctx: Any) -> None:
-        if self.found:
-            return
-        super()._visit_expr(e, ctx)
-
-    def _visit_round(self, e: Round | RoundExact, ctx: Any) -> None:
-        if not self.is_eliminable(e):
-            self.found = True
-            return
-        super()._visit_round(e, ctx)
-
-    def _visit_unaryop(self, e: UnaryOp, ctx: Any) -> None:
-        if isinstance(e, Cast) and not self.is_eliminable(e):
-            self.found = True
-            return
-        super()._visit_unaryop(e, ctx)
 
 
 class RoundElim:
