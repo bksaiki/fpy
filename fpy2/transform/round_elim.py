@@ -48,10 +48,14 @@ and just adds a redundant alias.  This is the only case-split;
 every other operand kind is bound unconditionally for safety.
 
 Trade-off: the unconditional bind produces redundant copies for
-literals and already-clean subtrees.  ``CopyPropagate`` and
-``DeadCodeEliminate`` (both available in :mod:`fpy2.transform`)
-clean these up downstream — the local rewrite stays simple at
-the cost of slack in the intermediate AST.
+literals and already-clean subtrees.  The recommended cleanup
+chain is :class:`fpy2.transform.ConstPropagate` then
+:class:`fpy2.transform.CopyPropagate` then
+:class:`fpy2.transform.DeadCodeEliminate` — the first inlines
+literal-bound temps (``_t = 1`` → uses of ``_t`` become ``1``),
+the second collapses any remaining Var→Var copies, and the
+third removes the now-unused assigns.  The local rewrite stays
+simple at the cost of slack in the intermediate AST.
 
 Suppressed positions: hoisting needs a statement-level preamble
 slot, so it is disabled inside ``ListComp`` element / iterable
@@ -212,13 +216,26 @@ class _RoundElimInstance(DefaultTransformVisitor):
 
     def _is_eliminable(self, e: Expr) -> bool:
         """True when the implicit round on *e* is the identity under
-        its active scope — meaning the round produces no value
-        change and can be skipped.
+        its active scope AND the unrounded format is *strictly
+        tighter* than the scope's format — meaning the round
+        produces no value change *and* moving the op to REAL gives
+        downstream consumers a more precise bound than the scope
+        provides.
 
         Only meaningful for rounded ops (arithmetic + explicit
         ``Round`` / ``RoundExact`` / ``Cast``); other expressions
         don't carry a context-driven round, so the question is
-        ill-posed and the answer is ``False``."""
+        ill-posed and the answer is ``False``.
+
+        The "strictly tighter" guard is the subtle one: under an
+        unbounded scope (e.g. ``fp.INTEGER`` / ``MPFixedContext``),
+        ``round_is_identity`` is vacuously true for any value, but
+        the unrounded format is *also* unbounded — hoisting yields
+        no narrowing and can break downstream consumers whose
+        storage selection can't pick a finite type for a saturated
+        format (e.g. the cpp emitter's lossless-widening dispatch).
+        Skipping these saves both pointless rewrites and the
+        cascading storage failures."""
         if not isinstance(
             e, (Add, Sub, Mul, Abs, Neg, Round, RoundExact, Cast),
         ):
@@ -228,7 +245,26 @@ class _RoundElimInstance(DefaultTransformVisitor):
             # No round to eliminate (REAL is the trivial identity)
             # or unresolvable symbolic scope.  Either way: skip.
             return False
-        return round_is_identity(self._unrounded_format(e), ctx)
+        unrounded = self._unrounded_format(e)
+        if not round_is_identity(unrounded, ctx):
+            return False
+        # Strictly-tighter guard.
+        if isinstance(unrounded, SetFormat):
+            # SetFormat is always a strict refinement over any Format
+            # — a finite value-set vs. a continuous range.  Always
+            # worth hoisting.
+            return True
+        # AbstractFormat case: tighter iff strictly contained in the
+        # scope's lifted AF.  Both equal → no benefit, skip.
+        scope_fmt = ctx.format()
+        if not isinstance(scope_fmt, AbstractableFormat):
+            # Scope isn't lifted-comparable; conservative skip.
+            return False
+        scope_af = AbstractFormat.from_format(scope_fmt)
+        # ``a < b`` ≡ ``a <= b and a != b`` for AbstractFormat
+        # (uses ``__le__`` for the subset check and ``__eq__`` for
+        # parameter-shape equality).
+        return unrounded <= scope_af and unrounded != scope_af
 
     # ------------------------------------------------------------------
     # Block walk — the ``_Ctx``-accumulator pattern from ``ZipElim``.
@@ -329,11 +365,12 @@ class _RoundElimInstance(DefaultTransformVisitor):
 
         Trade-off: the unconditional bind produces redundant
         ``_t = literal`` lines and per-op REAL blocks for nested
-        eliminations.  :class:`fpy2.transform.CopyPropagate` and
-        :class:`fpy2.transform.DeadCodeEliminate` (both in
-        :mod:`fpy2.transform`) clean these up downstream — the
-        local rewrite stays simple at the cost of slack in the
-        intermediate AST.
+        eliminations.  The recommended cleanup chain —
+        :class:`fpy2.transform.ConstPropagate` then
+        :class:`fpy2.transform.CopyPropagate` then
+        :class:`fpy2.transform.DeadCodeEliminate` — collapses
+        them; the local rewrite stays simple at the cost of slack
+        in the intermediate AST.
         """
         new_operands: list[Expr] = []
         for operand in self._operands(e):

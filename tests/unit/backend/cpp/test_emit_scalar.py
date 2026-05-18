@@ -18,7 +18,10 @@ from fpy2.types import RealType
 
 @pytest.fixture
 def cc():
-    return CppCompiler()
+    # These tests assert specific bare-emitter output; opt out of
+    # optimization so transforms like ``RoundElim`` don't reshape
+    # the strings.
+    return CppCompiler(optimize=False)
 
 
 def _compile(cc: CppCompiler, func, *, arg_ctx=None) -> str:

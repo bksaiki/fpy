@@ -15,7 +15,7 @@ from fpy2.types import RealType
 def _compile(func, *, arg_ctx=None) -> str:
     arg_ctx = arg_ctx or fp.FP64
     arg_types = [RealType(arg_ctx) for _ in func.args]
-    return CppCompiler().compile(func, ctx=arg_ctx, arg_types=arg_types)
+    return CppCompiler(optimize=False).compile(func, ctx=arg_ctx, arg_types=arg_types)
 
 
 class TestPhiWebRenaming:

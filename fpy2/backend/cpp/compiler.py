@@ -29,7 +29,7 @@ from ...number import Context
 from ...number.context.ieee754 import IEEEContext
 from ...number.context.mp_fixed import MPFixedContext
 from ...number.context.mpb_fixed import MPBFixedContext
-from ...transform import Monomorphize, ZipElim
+from ...transform import Monomorphize, RoundElim, ZipElim
 from ...types import Type
 from ..backend import Backend, CompileError
 
@@ -274,12 +274,20 @@ class CppCompiler(Backend):
             Set ``False`` to reject such programs at compile time.
         optimize:
             When ``True`` (default), apply optimizing program
-            transformations (currently :class:`fpy2.transform.ZipElim`)
-            to each :class:`FuncDef` before the rest of the pipeline
-            runs.  The pipeline is sound either way, but the
-            optimized form skips materializing intermediate
-            ``std::vector<std::tuple<...>>``s for ``zip`` iterables.
-            Set ``False`` to compile the surface AST verbatim.
+            transformations to each :class:`FuncDef` before the rest
+            of the pipeline runs:
+
+            - :class:`fpy2.transform.ZipElim` (pre-monomorphize):
+              skips materializing intermediate
+              ``std::vector<std::tuple<...>>``s for ``zip`` iterables.
+            - :class:`fpy2.transform.RoundElim` (post-monomorphize):
+              hoists eliminable rounded operations into
+              ``with fp.REAL:`` blocks so the cpp emitter's
+              lossless-widening dispatch can pick tighter storage
+              for them.
+
+            The pipeline is sound either way.  Set ``False`` to
+            compile the surface AST verbatim.
     """
 
     _unsafe_cast_int: bool
@@ -343,14 +351,21 @@ class CppCompiler(Backend):
         if ast.ctx is not None:
             ctx = None
 
-        # Optional pre-pipeline transforms.  Applied before
-        # monomorphization since they only rewrite the surface AST
-        # and don't depend on type information.
+        # Optional pre-monomorphize transforms.  These rewrite the
+        # surface AST without needing type information, so they're
+        # cheapest to run first.
         if self._optimize:
             ast = ZipElim.apply(ast)
 
         # apply monomorphization to get concrete types
         ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
+
+        # Optional post-monomorphize transforms.  ``RoundElim`` uses
+        # format inference to decide which rounded ops can be moved
+        # to ``with fp.REAL:``; the analysis needs the concrete
+        # types Monomorphize just installed.
+        if self._optimize:
+            ast = RoundElim.apply(ast)
 
         # run program analyses to get the information the emitter needs
         def_use = DefineUse.analyze(ast)

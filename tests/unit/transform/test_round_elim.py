@@ -461,3 +461,111 @@ class TestProperties:
             pass
         else:
             assert False, "expected TypeError"
+
+
+# ----------------------------------------------------------------------
+# Regression: paths the property tests don't exercise hard
+
+
+class TestRegression:
+    """Coverage for paths the per-feature tests don't reach: the
+    cleanup-chain advertised in the module docstring, hoists under
+    nested ``with`` blocks, and the strict-tighter guard against
+    unbounded contexts (``fp.INTEGER``).
+    """
+
+    def test_cleanup_chain_collapses_redundant_binds(self):
+        """RoundElim intentionally leaves redundant operand binds
+        (``_t = literal`` lines) that the documented downstream
+        cleanup chain — :class:`ConstPropagate` then
+        :class:`CopyPropagate` then :class:`DeadCodeEliminate` — is
+        expected to collapse.
+
+        ``ConstPropagate`` is the load-bearing piece: it inlines
+        literal-bound temps (``_t = 1`` → uses of ``_t`` become
+        ``1``) so they become dead.  ``CopyPropagate`` handles
+        Var→Var copies (also created by the per-op bind scheme).
+        ``DeadCodeEliminate`` removes the resulting unused
+        assigns.  Without ``ConstPropagate`` the literal binds
+        stay live and DCE can't remove them.
+
+        This test pins that contract: the post-cleanup AST has
+        fewer fresh temps than the post-RoundElim AST."""
+
+        from fpy2.transform import (
+            ConstPropagate, CopyPropagate, DeadCodeEliminate,
+        )
+
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return (1.0 + 2.0) * 3.0
+
+        after_elim = RoundElim.apply(f.ast)
+        # The verbose intermediate form has several `_t` temps (per
+        # operand + per op result).
+        elim_temps = _count_fresh_temp_assigns(after_elim)
+        assert elim_temps > 1, (
+            f'expected RoundElim to produce multiple temps for the '
+            f'verbose form, got {elim_temps}'
+        )
+
+        # Run the documented cleanup chain.
+        after = ConstPropagate.apply(after_elim)
+        after = CopyPropagate.apply(after)
+        after = DeadCodeEliminate.apply(after)
+        cleaned_temps = _count_fresh_temp_assigns(after)
+        # Cleanup should reduce the count.  We don't pin the exact
+        # number — that depends on the cleanup passes' specifics
+        # and would couple this test to their implementations.
+        assert cleaned_temps < elim_temps, (
+            f'expected cleanup chain to reduce temp count from '
+            f'{elim_temps}; got {cleaned_temps}'
+        )
+        # Semantic equivalence preserved through the full chain.
+        assert _eval(after, f) == f()
+
+    def test_hoist_inside_nested_with_blocks(self):
+        """Hoist should fire correctly inside an inner ``with`` block.
+        The active scope at the eliminable op is the innermost
+        ``with``; ``_resolved_ctx`` and ``_unrounded_format`` must
+        consult that scope, not the outer one."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:                 # outer scope
+                with fp.FP64:             # inner scope — Add is here
+                    a = 1.0 + 2.0         # eliminable: SetFormat({3}) ⊆ FP64
+                return a + a              # outer Add under FP32 — Real-typed
+                                          # operands → NOT eliminable, stays
+
+        out = RoundElim.apply(f.ast)
+        # Inner Add hoisted under REAL.
+        assert Add in _arith_op_types_under_real(out)
+        # Outer Add NOT hoisted — semantic preservation under FP32 round.
+        # (Tested via interpreter; we don't assert structural shape on
+        # the outer since the inner hoist may have introduced new
+        # statements that the structural predicates pick up.)
+        # The function's value with `x` unused: ``a + a == 6`` rounded
+        # through FP32 == 6.  Interpreter agrees.
+        assert _eval(out, f, 0.0) == f(0.0)
+
+    def test_unbounded_context_no_hoist(self):
+        """Strictly-tighter guard: under ``fp.INTEGER`` (an unbounded
+        ``MPFixedContext``), the unrounded format of ``x + 1`` equals
+        the scope's format — both are saturated except for ``exp=0``.
+        ``round_is_identity`` is vacuously true, but hoisting yields
+        no narrowing and breaks downstream storage selection (the cpp
+        emitter's lossless-widening dispatch can't pick a finite type
+        for a saturated ``AbstractFormat``).  The guard should reject
+        this hoist."""
+
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        out = RoundElim.apply(f.ast)
+        # No REAL block introduced.
+        assert _count_real_blocks(out) == _count_real_blocks(f.ast)
+        # Add stays in its original (INTEGER) position.
+        assert out.is_equiv(f.ast)

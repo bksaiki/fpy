@@ -38,7 +38,7 @@ class TestStaticResolution:
         def f() -> bool:
             return True
 
-        out = CppCompiler().compile(f)
+        out = CppCompiler(optimize=False).compile(f)
         assert 'fesetround' not in out
 
     def test_concrete_with_block_resolves(self):
@@ -47,7 +47,7 @@ class TestStaticResolution:
             with fp.FP64:
                 return x + y
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -67,7 +67,7 @@ class TestStaticResolution:
                 return x + x               # is inside ``with fp.FP64:``.
 
         # No error: compilation succeeds.
-        out = CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])
+        out = CppCompiler(optimize=False).compile(f, arg_types=[RealType(fp.FP64)])
         assert 'return (x + x);' in out
 
     def test_with_block_scope_unused_compiles(self):
@@ -83,7 +83,7 @@ class TestStaticResolution:
                 return xs[n]               # under the outer scope.
 
         from fpy2.types import ListType
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
@@ -100,7 +100,7 @@ class TestDefaultRmIsImplicit:
             with fp.FP64:
                 return x + y
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
@@ -141,7 +141,7 @@ class TestNonDefaultRmEmitsFesetround:
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
             return x + y
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         assert 'fesetround' not in out
@@ -158,7 +158,7 @@ class TestNonDefaultRmEmitsFesetround:
                 b = a + 1
             return a + b
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         # Inner switches RTZ→RNE — one save / set / restore pair.
@@ -177,7 +177,7 @@ class TestNonDefaultRmEmitsFesetround:
             with _RTZ_64:
                 return x + y
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         # No fesetround anywhere — caller is contracted to deliver
@@ -199,7 +199,7 @@ class TestNonDefaultRmEmitsFesetround:
                 return xs[0] + xs[1]
 
         from fpy2.types import ListType
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, arg_types=[ListType(RealType(fp.FP64))],
         )
         # Inner RTZ block must emit fesetround — outer is unknown.
@@ -223,12 +223,20 @@ class TestRejection:
             CppCompileError,
             match='not supported by ``fesetround``',
         ):
-            CppCompiler().compile(
+            CppCompiler(optimize=False).compile(
                 f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
             )
 
     def test_integer_non_rtz_rejected(self):
-        """Integer contexts must use RTZ."""
+        """Integer contexts must use RTZ.
+
+        Pinned with ``optimize=False`` — ``RoundElim`` would
+        otherwise hoist the integer-add out of the bad-RM scope
+        (the unrounded sum of two ints is an int and fits the
+        scope, so the round is identity), sidestepping the
+        rejection.  The rejection mechanism is what this test
+        exercises, so we keep it visible by opting out of
+        optimization."""
 
         bad_int = fp.MPFixedContext(-1, fp.RM.RNE)
 
@@ -240,7 +248,9 @@ class TestRejection:
             CppCompileError,
             match='must use RTZ rounding mode',
         ):
-            CppCompiler(unsafe_cast_int=True).compile(
+            CppCompiler(
+                unsafe_cast_int=True, optimize=False,
+            ).compile(
                 f, arg_types=[RealType(bad_int), RealType(bad_int)],
             )
 
@@ -250,7 +260,12 @@ class TestRejection:
         arbitrary-precision integer type, so any such rounding
         silently truncates to ``int64_t``.  The default
         (``unsafe_cast_int=True``) allows it; this test pins the
-        opt-out path."""
+        opt-out path.
+
+        Pinned with ``optimize=False`` for the same reason as
+        :meth:`test_integer_non_rtz_rejected` — ``RoundElim``
+        would otherwise eliminate the (identity) integer round
+        and sidestep the rejection."""
 
         @fp.fpy(ctx=fp.INTEGER)
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -260,7 +275,9 @@ class TestRejection:
             CppCompileError,
             match=r'unbounded integer context.*unsafe_cast_int',
         ):
-            CppCompiler(unsafe_cast_int=False).compile(
+            CppCompiler(
+                unsafe_cast_int=False, optimize=False,
+            ).compile(
                 f, arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
             )
 
@@ -272,7 +289,7 @@ class TestRejection:
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
             return x + y
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, arg_types=[RealType(fp.INTEGER), RealType(fp.INTEGER)],
         )
         assert 'int64_t f(int64_t x, int64_t y)' in out
@@ -299,7 +316,7 @@ class TestRealScopeLosslessWidening:
             with fp.REAL:
                 return xq * yq
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP32), RealType(fp.FP32)],
         )
@@ -321,7 +338,7 @@ class TestRealScopeLosslessWidening:
             with fp.REAL:
                 return xq + yq
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP32), RealType(fp.FP32)],
         )
@@ -342,7 +359,7 @@ class TestRealScopeLosslessWidening:
             CppCompileError,
             match='no storage type on the ladder contains',
         ):
-            CppCompiler().compile(
+            CppCompiler(optimize=False).compile(
                 f, ctx=fp.FP64,
                 arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
             )
@@ -363,7 +380,7 @@ class TestRealScopeLosslessWidening:
             CppCompileError,
             match='cannot store an unconstrained real value',
         ):
-            CppCompiler().compile(
+            CppCompiler(optimize=False).compile(
                 f, ctx=fp.FP64,
                 arg_types=[RealType(fp.FP32), RealType(fp.FP32)],
             )
