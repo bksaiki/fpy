@@ -74,7 +74,7 @@ hoisted operations.
 import dataclasses
 import operator
 
-from typing import Any, Callable
+from typing import Any
 
 from ..analysis import (
     ContextUse, ContextUseAnalysis, ContextUseSite, DefineUse,
@@ -109,20 +109,6 @@ class _Ctx:
     def default() -> '_Ctx':
         return _Ctx(stmts=[])
 
-
-# Operator dispatch for the arithmetic ops we handle.  The unrounded
-# value-set of an op is computed by `exact_binop` / `exact_unop` on
-# the children's stored (post-round) bounds.
-_BINOPS: dict[type, Callable[[Any, Any], Any]] = {
-    Add: operator.add,
-    Sub: operator.sub,
-    Mul: operator.mul,
-}
-
-_UNOPS: dict[type, Callable[[Any], Any]] = {
-    Abs: abs,
-    Neg: operator.neg,
-}
 
 
 class _RoundElimInstance(DefaultTransformVisitor):
@@ -171,12 +157,14 @@ class _RoundElimInstance(DefaultTransformVisitor):
         ineligible (we can't claim the round is identity without
         a concrete target).
 
-        *e* must be a :data:`ContextUseSite` (op-typed expression);
-        only op nodes have context scopes registered."""
-        try:
-            scope = self.ctx_use.find_scope_from_use(e)
-        except KeyError:
-            return None
+        *e* must be a :data:`ContextUseSite` (op-typed expression)
+        that's been seen by :class:`ContextUseAnalysis`.  We don't
+        catch ``KeyError`` here: a node that should have a scope
+        but doesn't indicates a bug elsewhere (the node was
+        constructed without going through scope analysis), and
+        failing loudly is more useful than silently treating it
+        as ineligible."""
+        scope = self.ctx_use.find_scope_from_use(e)
         if isinstance(scope.ctx, Context):
             return scope.ctx
         return self.outer_ctx
@@ -189,21 +177,44 @@ class _RoundElimInstance(DefaultTransformVisitor):
         primitive.  For ``Round`` / ``RoundExact`` / ``Cast``, the
         unrounded value *is* the argument."""
         match e:
-            case Add() | Sub() | Mul():
-                binop = _BINOPS[type(e)]
-                lhs = self.format_info.by_expr.get(e.first)
-                rhs = self.format_info.by_expr.get(e.second)
-                return exact_binop(lhs, rhs, binop)
-            case Abs() | Neg():
-                unop = _UNOPS[type(e)]
-                arg = self.format_info.by_expr.get(e.arg)
-                return exact_unop(arg, unop)
+            case Add():
+                return exact_binop(
+                    self.format_info.by_expr.get(e.first),
+                    self.format_info.by_expr.get(e.second),
+                    operator.add,
+                )
+            case Sub():
+                return exact_binop(
+                    self.format_info.by_expr.get(e.first),
+                    self.format_info.by_expr.get(e.second),
+                    operator.sub,
+                )
+            case Mul():
+                return exact_binop(
+                    self.format_info.by_expr.get(e.first),
+                    self.format_info.by_expr.get(e.second),
+                    operator.mul,
+                )
+            case Abs():
+                return exact_unop(
+                    self.format_info.by_expr.get(e.arg), abs,
+                )
+            case Neg():
+                return exact_unop(
+                    self.format_info.by_expr.get(e.arg), operator.neg,
+                )
             case Round() | RoundExact() | Cast():
                 # The unrounded "value" of an explicit round node is
-                # the argument itself.  Stored bounds may be a
-                # ``Format`` (e.g., ``IEEEFormat`` when the arg's
-                # post-round bound widened to the scope's format);
-                # lift to ``AbstractFormat`` so the result fits
+                # the argument itself — the argument's post-round
+                # bound is the right input here because the explicit
+                # Round operates on whatever the arg evaluates to.
+                # ``round_is_identity(arg's bound, this Round's
+                # target ctx)`` then answers exactly "is this Round
+                # the identity over the value the arg produces?".
+                # Stored bounds may be a ``Format`` (e.g.,
+                # ``IEEEFormat`` when the arg's post-round bound
+                # widened to the scope's format); lift to
+                # ``AbstractFormat`` so the result fits
                 # ``round_is_identity``'s expected input shape.
                 arg_fmt = self.format_info.by_expr.get(e.arg)
                 if isinstance(arg_fmt, SetFormat):
@@ -372,6 +383,10 @@ class _RoundElimInstance(DefaultTransformVisitor):
         them; the local rewrite stays simple at the cost of slack
         in the intermediate AST.
         """
+        # Inherit *e*'s location for hoist-introduced nodes so
+        # downstream errors that reference the temps point back at
+        # the original source position.
+        loc = e.loc
         new_operands: list[Expr] = []
         for operand in self._operands(e):
             new_operand = self._visit_expr(operand, ctx)
@@ -386,17 +401,17 @@ class _RoundElimInstance(DefaultTransformVisitor):
             # binding fires those rounds at their original scope
             # before the REAL block sees the value.
             t_op = self.gensym.fresh('_t')
-            ctx.stmts.append(Assign(t_op, None, new_operand, None))
-            new_operands.append(Var(t_op, None))
+            ctx.stmts.append(Assign(t_op, None, new_operand, loc))
+            new_operands.append(Var(t_op, loc))
 
         rebuilt = self._rebuild(e, new_operands)
         result_name = self.gensym.fresh('_t')
-        block = StmtBlock([Assign(result_name, None, rebuilt, None)])
+        block = StmtBlock([Assign(result_name, None, rebuilt, loc)])
         wrapped = ContextStmt(
-            UnderscoreId(), ForeignVal(REAL, None), block, None,
+            UnderscoreId(), ForeignVal(REAL, loc), block, loc,
         )
         ctx.stmts.append(wrapped)
-        return Var(result_name, None)
+        return Var(result_name, loc)
 
     # ------------------------------------------------------------------
     # Sentinel-ctx propagation for nested expression positions where

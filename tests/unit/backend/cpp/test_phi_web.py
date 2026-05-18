@@ -4,6 +4,11 @@ Tests for the per-SSA-def renaming via phi-web equivalence classes.
 The cpp emitter is free to map distinct SSA defs of the same source
 name to distinct C++ variables.  Only defs joined by a phi node share
 storage.  These tests pin that behavior.
+
+The helper compiler uses ``optimize=False`` so the assertions track
+the bare emitter's per-def renaming policy rather than whatever
+shape optimizing transforms like :class:`fpy2.transform.RoundElim`
+might leave behind.
 """
 
 import fpy2 as fp

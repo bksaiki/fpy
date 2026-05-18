@@ -10,6 +10,14 @@ For float contexts the rounding mode must be one of the four
 ``fesetround``-supported modes (RNE / RTZ / RTP / RTN).  For integer
 contexts the rounding mode must be RTZ — C++ integer arithmetic
 already truncates toward zero, so no runtime support is needed.
+
+Tests in this module assert specific bare-emitter output and the
+rejection-mechanism behavior — both surfaces that optimizing
+transforms can legally rewrite around.  Each ``CppCompiler``
+construction passes ``optimize=False`` to keep the assertions
+stable against transforms like :class:`fpy2.transform.RoundElim`
+that would otherwise reshape the generated C++ or sidestep
+rejection paths.
 """
 
 import fpy2 as fp

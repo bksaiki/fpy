@@ -1,5 +1,9 @@
 """
 Phase 3c tests for the cpp emitter — ``if`` / ``if1`` statements.
+
+Each ``CppCompiler`` construction passes ``optimize=False`` to
+keep the bare-emitter output strings stable against optimizing
+transforms (notably :class:`fpy2.transform.RoundElim`).
 """
 
 import fpy2 as fp
