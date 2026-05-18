@@ -159,6 +159,9 @@ __all__ = [
     'SetFormat',
     'TupleFormat',
     'ListFormat',
+    'exact_binop',
+    'exact_unop',
+    'round_is_identity',
 ]
 
 
@@ -396,7 +399,7 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
     else:
         return _setformat_to_abstract(f)
 
-def _exact_binop(
+def exact_binop(
     lhs: 'FormatBound',
     rhs: 'FormatBound',
     op: Callable[[Any, Any], Any],
@@ -412,7 +415,10 @@ def _exact_binop(
 
     Used by :meth:`_FormatInferInstance._visit_binaryop` to compute
     the candidate ``F`` that :meth:`_bound_if_fits` then checks
-    against the active scope.
+    against the active scope.  Also part of the public API
+    consumed by downstream transforms (e.g.,
+    :class:`fpy2.transform.RoundElim`) that need the unrounded
+    image of a rounded operation.
     """
     if not (
         isinstance(lhs, AbstractableFormatBound)
@@ -430,11 +436,11 @@ def _exact_binop(
     return op(af_a, af_b)
 
 
-def _exact_unop(
+def exact_unop(
     arg: 'FormatBound',
     op: Callable[[Any], Any],
 ) -> 'SetFormat | AbstractFormat | None':
-    """Unary analogue of :func:`_exact_binop` — apply *op* either
+    """Unary analogue of :func:`exact_binop` — apply *op* either
     pointwise to a :class:`SetFormat`'s values or directly to a
     lifted :class:`AbstractFormat`.  Returns ``None`` when *arg* is
     not abstractable.
@@ -447,6 +453,41 @@ def _exact_unop(
     if af is None:
         return None
     return op(af)
+
+
+def round_is_identity(
+    unrounded: 'SetFormat | AbstractFormat | None',
+    ctx: Context | None,
+) -> bool:
+    """Decide whether ``round_{ctx}(unrounded) == unrounded`` — i.e.,
+    every value representable in *unrounded* is also representable
+    in *ctx*'s format, so the round leaves the value-set unchanged.
+
+    *unrounded* is the unrounded value-set, typically the result of
+    :func:`exact_binop` / :func:`exact_unop` (or, for explicit
+    ``Round``/``RoundExact``/``Cast`` nodes, the argument's inferred
+    bound).  *ctx* is the concrete rounding context whose
+    round-identity behavior we care about.
+
+    Returns ``True`` when *ctx* is :data:`REAL` (the trivial identity
+    context) and *unrounded* is non-``None``.  Returns ``False`` when
+    *ctx* is ``None`` (symbolic / unresolved scope — we can't claim
+    identity without a concrete target) or *unrounded* is ``None``.
+
+    Used by :meth:`_FormatInferInstance._bound_if_fits` internally and
+    exposed publicly for transforms that key off the same identity
+    notion (e.g., :class:`fpy2.transform.RoundElim`).
+    """
+    if unrounded is None or ctx is None:
+        return False
+    if ctx is REAL:
+        return True
+    ctx_fmt = ctx.format()
+    if isinstance(unrounded, SetFormat):
+        return _all_representable_in(unrounded.values, ctx_fmt)
+    if not isinstance(ctx_fmt, AbstractableFormat):
+        return False
+    return unrounded <= AbstractFormat.from_format(ctx_fmt)
 
 
 def _join_bounds(
@@ -889,24 +930,25 @@ class _FormatInferInstance(Visitor):
         # intent as the widen-to-REAL branches in ``_join_bounds``.
         if self._widen:
             return None
+        # Identity-round fast path: when ``round_C(F) == F``, the
+        # rounded image equals *exact* itself.  Both the SetFormat
+        # fits-everywhere case and the AbstractFormat
+        # ``F ⊆ scope_af`` case collapse into this single check —
+        # single-sourced via :func:`round_is_identity` so external
+        # consumers (e.g. ``RoundElim``) see the same notion.
+        if round_is_identity(exact, resolved):
+            return exact if isinstance(exact, SetFormat) else exact.format()
         scope_fmt = resolved.format()
         if isinstance(exact, SetFormat):
             # TODO: we can round each value in the set individually
             # to produce a precise image even when some values exceed the scope
             # It is unclear how this affects the overal algorithm.
-            return (
-                exact
-                if _all_representable_in(exact.values, scope_fmt)
-                else None
-            )
+            return None
         if not isinstance(scope_fmt, AbstractableFormat):
             return None
-
         scope_af = AbstractFormat.from_format(scope_fmt)
         if scope_af <= exact:
             return scope_fmt
-        if exact <= scope_af:
-            return exact.format()
 
         # Mixed-overlap branch.  Tighten prec/exp unconditionally —
         # both are sound under any rounding mode.  Tighten bounds
@@ -1045,13 +1087,13 @@ class _FormatInferInstance(Visitor):
                 # abs: precision-preserving.  Use the unrounded result
                 # whenever the active scope's format contains it; see
                 # :meth:`_bound_if_fits`.
-                fitted = self._bound_if_fits(e, _exact_unop(arg_fmt, abs))
+                fitted = self._bound_if_fits(e, exact_unop(arg_fmt, abs))
                 if fitted is not None:
                     return fitted
             case Neg():
                 # negation: precision-preserving (same logic as Abs).
                 fitted = self._bound_if_fits(
-                    e, _exact_unop(arg_fmt, operator.neg),
+                    e, exact_unop(arg_fmt, operator.neg),
                 )
                 if fitted is not None:
                     return fitted
@@ -1134,19 +1176,19 @@ class _FormatInferInstance(Visitor):
                 # :meth:`_bound_if_fits`.  Subsumes the legacy REAL-only
                 # fast path (REAL_FORMAT contains everything).
                 fitted = self._bound_if_fits(
-                    e, _exact_binop(lhs, rhs, operator.add),
+                    e, exact_binop(lhs, rhs, operator.add),
                 )
                 if fitted is not None:
                     return fitted
             case Sub():
                 fitted = self._bound_if_fits(
-                    e, _exact_binop(lhs, rhs, operator.sub),
+                    e, exact_binop(lhs, rhs, operator.sub),
                 )
                 if fitted is not None:
                     return fitted
             case Mul():
                 fitted = self._bound_if_fits(
-                    e, _exact_binop(lhs, rhs, operator.mul),
+                    e, exact_binop(lhs, rhs, operator.mul),
                 )
                 if fitted is not None:
                     return fitted

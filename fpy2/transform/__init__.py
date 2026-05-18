@@ -15,6 +15,7 @@ from .if_bundling import IfBundling
 from .lift_context import LiftContext
 from .monomorphize import Monomorphize
 from .rename_target import RenameTarget
+from .round_elim import RoundElim
 from .simplify_if import SimplifyIf
 from .split_loop import SplitLoop, SplitLoopStrategy
 from .subst_var import SubstVar
