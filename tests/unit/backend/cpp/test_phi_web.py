@@ -4,6 +4,11 @@ Tests for the per-SSA-def renaming via phi-web equivalence classes.
 The cpp emitter is free to map distinct SSA defs of the same source
 name to distinct C++ variables.  Only defs joined by a phi node share
 storage.  These tests pin that behavior.
+
+The helper compiler uses ``optimize=False`` so the assertions track
+the bare emitter's per-def renaming policy rather than whatever
+shape optimizing transforms like :class:`fpy2.transform.RoundElim`
+might leave behind.
 """
 
 import fpy2 as fp
@@ -15,7 +20,7 @@ from fpy2.types import RealType
 def _compile(func, *, arg_ctx=None) -> str:
     arg_ctx = arg_ctx or fp.FP64
     arg_types = [RealType(arg_ctx) for _ in func.args]
-    return CppCompiler().compile(func, ctx=arg_ctx, arg_types=arg_types)
+    return CppCompiler(optimize=False).compile(func, ctx=arg_ctx, arg_types=arg_types)
 
 
 class TestPhiWebRenaming:

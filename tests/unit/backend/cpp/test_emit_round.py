@@ -121,3 +121,68 @@ class TestCast:
         assert 'static_cast' not in out
         assert 'assert' not in out
         assert 'return x;' in out
+
+
+class TestRoundElimIntegration:
+    """End-to-end checks that the ``optimize=True`` pipeline runs
+    :class:`fpy2.transform.RoundElim` and the emitter consumes its
+    output correctly.
+
+    The cases here aren't ones that *require* RoundElim to compile —
+    they compile under ``optimize=False`` too, just less tightly.
+    What the tests pin is the measurable cpp-level *difference*
+    between the two modes, which is the contract callers care about
+    when they flip the flag."""
+
+    def test_round_exact_of_fitting_constant_collapses(self):
+        """``fp.round_exact(1.0)`` under FP32: ``1.0`` is exactly
+        FP32-representable, so the round is the identity.  Without
+        optimization the emitter still produces the full
+        assertion-protected cast (``static_cast<float>(1)`` bound
+        to a temp + NaN-aware equality check).  With RoundElim the
+        ``RoundExact`` node collapses to its argument and the
+        whole pattern disappears."""
+
+        @fp.fpy
+        def f():
+            with fp.FP32:
+                return fp.round_exact(1.0)
+
+        no_opt = CppCompiler(optimize=False).compile(
+            f, ctx=fp.FP64, arg_types=[],
+        )
+        with_opt = CppCompiler(optimize=True).compile(
+            f, ctx=fp.FP64, arg_types=[],
+        )
+
+        # Without RoundElim: the round_exact's assertion + cast
+        # machinery is present.
+        assert 'static_cast<float>' in no_opt
+        assert 'assert(' in no_opt
+
+        # With RoundElim: collapsed to a bare ``return 1;`` (no
+        # cast, no assertion).
+        assert 'static_cast' not in with_opt
+        assert 'assert(' not in with_opt
+        assert 'return 1;' in with_opt
+
+    def test_arith_fits_scope_hoisted_to_real(self):
+        """``(1.0 + 2.0) * 3.0`` under FP64: the unrounded result
+        ``SetFormat({9.0})`` fits FP64 exactly.  RoundElim should
+        hoist the chain into ``with fp.REAL:`` blocks; the emitter
+        then renders the body without ``fesetround`` boundaries
+        on the hoisted ops."""
+
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return (1.0 + 2.0) * 3.0
+
+        with_opt = CppCompiler(optimize=True).compile(
+            f, ctx=fp.FP64, arg_types=[],
+        )
+        # Hoisted: the per-op binds RoundElim emits surface as
+        # ``_t...`` temporaries.  At least one shows up.
+        assert '_t' in with_opt
+        # The final return value is the last hoisted result.
+        assert 'return _t' in with_opt

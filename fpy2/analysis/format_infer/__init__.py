@@ -10,6 +10,9 @@ from .analysis import (
     PreAnalysisCache,
     SetFormat,
     TupleFormat,
+    exact_binop,
+    exact_unop,
+    round_is_identity,
 )
 from .format import AbstractFormat, AbstractableFormat
 
@@ -25,4 +28,7 @@ __all__ = [
     'PreAnalysisCache',
     'SetFormat',
     'TupleFormat',
+    'exact_binop',
+    'exact_unop',
+    'round_is_identity',
 ]

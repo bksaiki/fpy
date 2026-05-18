@@ -522,15 +522,21 @@ class TestFormatInfer:
     def test_loop_widens_to_real_format(self):
         """
         A loop whose body applies exact arithmetic to a phi'd value would
-        produce an infinite ascending chain of AbstractFormats (each
-        iteration widens prec/bounds).  After ``loop_iter_limit`` iterations
-        the analysis switches to widen-mode joins so the fixpoint terminates
-        at ``REAL_FORMAT``.
+        produce an infinite ascending chain of bounds (each iteration
+        adds fresh values to a ``SetFormat`` or widens the
+        ``AbstractFormat`` prec/bounds).  After ``loop_iter_limit``
+        iterations the analysis switches to widen-mode joins so the
+        fixpoint terminates at ``REAL_FORMAT``.
+
+        Probe: ``x`` starts at the non-zero constant ``1`` and doubles
+        each iteration.  The natural ``SetFormat`` join over the
+        per-iteration values grows without bound — widening must kick
+        in to break the chain.
         """
         @fp.fpy
         def f(n: fp.Real) -> fp.Real:
             with fp.FP32:
-                x = fp.round(0)
+                x = fp.round(1)
             while n > 0:
                 with fp.REAL:
                     x = x + x
@@ -603,17 +609,18 @@ class TestFormatInfer:
         nested ``while``/``for``.
 
         The probe: an outer ``while`` whose body diverges (``x = x + x``
-        under REAL) and contains an inner ``while`` whose body merges two
-        Formats that would normally produce a precise containing Format.
-        With a small outer limit, the outer enters widen-mode quickly;
-        because that state propagates inward, the inner loop's phi must
-        also widen to ``REAL_FORMAT`` rather than producing the
-        AbstractFormat-mediated join.
+        under REAL starting from a non-zero constant) and contains an
+        inner ``while`` whose body merges two distinct constants that
+        would normally produce a stable ``SetFormat``.  With a small
+        outer limit, the outer enters widen-mode quickly; because that
+        state propagates inward, the inner loop's phi must also widen
+        to ``REAL_FORMAT`` rather than settling on the precise
+        ``SetFormat`` join.
         """
         @fp.fpy
         def f(n: fp.Real, m: fp.Real, c: bool) -> fp.Real:
             with fp.FP32:
-                x = fp.round(0)
+                x = fp.round(1)
                 z = fp.round(0)
             while n > 0:
                 with fp.REAL:
@@ -621,10 +628,10 @@ class TestFormatInfer:
                 while m > 0:
                     if c:
                         with fp.FP32:
-                            z = fp.round(0)
+                            z = fp.round(1)
                     else:
                         with fp.FP64:
-                            z = fp.round(0)
+                            z = fp.round(2)
             return x + z
 
         # outer limit small → outer widens, propagates to inner.
@@ -858,11 +865,17 @@ class TestFormatInfer:
         mx_e4m3 = fp.MX_E4M3.format()
         assert sums[-1].representable_in(mx_e4m3.maxval()._real)
 
-    def test_sum_under_concrete_ctx_returns_scope_format(self):
+    def test_sum_under_concrete_ctx_tightens_when_fits(self):
         """
-        Under a concrete non-REAL context, every pairwise add rounds to
-        the scope's format, so ``sum(ys)`` reports the scope's format
-        (the default ``_op_bound`` rule).
+        Under a concrete non-REAL scope, ``sum(ys)`` reports a tight
+        format whenever the simulated unrounded accumulator is
+        contained in the scope's format — every per-step ``round_C``
+        is then the identity, so the precise format is sound.
+
+        Here the four MX_E4M3 elements summed produce a format with
+        precision and range comfortably inside FP32, so the analysis
+        is free to report the tight bound rather than widening to
+        FP32 itself.
         """
         @fp.fpy
         def f() -> fp.Real:
@@ -874,8 +887,23 @@ class TestFormatInfer:
 
         info = self._run(f)
         sums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Sum']
-        assert sums and sums[-1] == fp.FP32.format(), (
-            f'expected Sum to report FP32 (scope format), got {sums}'
+        assert sums, 'expected at least one Sum bound'
+        bound = sums[-1]
+        # Tightening fired: the bound is strictly narrower than FP32.
+        assert bound != fp.FP32.format(), (
+            f'expected tight bound narrower than FP32, got the scope format'
+        )
+        # Soundness: the tight bound is contained in FP32 — every
+        # value representable under *bound* is also representable
+        # under FP32, so the implicit round-to-FP32 is the identity.
+        from fpy2.analysis.format_infer.format import (
+            AbstractFormat, AbstractableFormat,
+        )
+        assert isinstance(bound, AbstractableFormat), (
+            f'expected an abstractable format, got {bound!r}'
+        )
+        assert AbstractFormat.from_format(bound) <= AbstractFormat.from_format(
+            fp.FP32.format()
         )
 
     def test_sum_unknown_size_falls_back(self):
@@ -1117,14 +1145,31 @@ class TestFormatInfer:
             f'got {block_acc_bounds}'
         )
 
-        # 2. acc must reach FP32 — every write is inside ``with fp.FP32``,
-        #    so the FP32 round dominates regardless of the outer loop's
-        #    symbolic iteration count.
+        # 2. acc must reach a bound contained in FP32 — every write is
+        #    inside ``with fp.FP32``, so the FP32 round dominates
+        #    regardless of the outer loop's symbolic iteration count.
+        #    Note: the analysis may return a *strict subset* of FP32
+        #    (e.g., narrower subnormal range) when it can prove the
+        #    accumulated magnitudes never reach FP32's full range —
+        #    this is sound (image of the rounded result is contained
+        #    in FP32) and strictly more precise than widening to FP32.
+        from fpy2.analysis.format_infer.format import (
+            AbstractFormat,
+            AbstractableFormat,
+        )
+        fp32_af = AbstractFormat.from_format(fp.FP32.format())
         acc_bounds = [
             b for d, b in info.by_def.items() if d.name.base == 'acc'
         ]
-        assert fp.FP32.format() in acc_bounds, (
-            f'expected FP32 among acc bounds, got {acc_bounds}'
+        def _contained_in_fp32(b):
+            if b == fp.FP32.format():
+                return True
+            if isinstance(b, AbstractableFormat):
+                return AbstractFormat.from_format(b) <= fp32_af
+            return False
+        assert any(_contained_in_fp32(b) for b in acc_bounds), (
+            f'expected acc to reach a Format contained in FP32, '
+            f'got {acc_bounds}'
         )
 
         # 3. ys is the rounded list — its element format is MX_E4M3.

@@ -414,19 +414,22 @@ class CppEmitter(Visitor):
             self._visit_statement(stmt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx):
-        rhs = self._visit_expr(stmt.expr, ctx)
         match stmt.target:
             case NamedId():
                 # ``StorageInfer`` maps this Assign's SSA def to a
                 # C++ variable and tells us whether to declare (a
                 # single-writer class) or just reassign into a
                 # hoisted decl (multi-writer class).
+                target_def = self.def_use.find_def_from_site(stmt.target, stmt)
+                target_storage = self.storage.storage_of(target_def)
+                rhs = self._emit_assign_rhs(stmt.expr, target_storage, ctx)
                 self._emit_bind(stmt.target, stmt, rhs)
             case TupleBinding():
                 # ``(a, b) = expr``: bind the rhs to a tuple-valued
                 # temp once, then destructure.  Each NamedId in the
                 # binding has its own SSA def registered at the
                 # Assign statement.
+                rhs = self._visit_expr(stmt.expr, ctx)
                 tmp = self._fresh_temp()
                 self.writer.add_line(f'auto {tmp} = {rhs};')
                 self._destructure(stmt.target, tmp, stmt)
@@ -435,6 +438,58 @@ class CppEmitter(Visitor):
                     f'unsupported assignment target {stmt.target!r}',
                     at=stmt,
                 )
+
+    def _emit_assign_rhs(
+        self, expr: Expr, target_ty: CppType, ctx,
+    ) -> str:
+        """Emit an assignment's RHS, coercing a list-literal wrapper to
+        the target's storage when they disagree.
+
+        Why this matters: ``_storage_for_expr`` picks the list's wrapper
+        from format inference (the tight per-expression join), but
+        :class:`StorageInfer` may have widened the variable's storage
+        beyond that — e.g. when a subsequent ``x[i] = y`` (IndexedAssign)
+        joins the def with a wider value.  Emitting
+        ``vector<wide> x = vector<narrow>{...}`` is a hard C++ type
+        error, and per-element narrowing inside the literal also
+        triggers ``-Wnarrowing`` when the element expressions were
+        emitted at the wider type (e.g. ``Round`` lowers to a
+        ``static_cast`` into the active context's scalar).  Using the
+        target's storage for the wrapper keeps the literal consistent
+        with the variable's declared type.
+        """
+        if isinstance(expr, ListExpr) and isinstance(target_ty, CppList):
+            return self._emit_list_expr_at(expr, target_ty, ctx)
+        return self._visit_expr(expr, ctx)
+
+    def _emit_list_expr_at(
+        self, e: ListExpr, wrapper_ty: CppList, ctx,
+    ) -> str:
+        """Emit ``[a, b, c]`` as ``wrapper_ty{a, b, c}``, casting each
+        element to ``wrapper_ty.elt`` when the per-element emitted
+        storage disagrees.  Mirrors :meth:`_visit_list_expr` but with
+        an externally-supplied wrapper type."""
+        elt_target = wrapper_ty.elt
+        parts: list[str] = []
+        for elt in e.elts:
+            elt_str = self._visit_expr(elt, ctx)
+            if isinstance(elt_target, CppScalar):
+                # Cast when the element's per-expression storage
+                # differs from the wrapper's element type.  Defensive
+                # ``try`` mirrors ``_storage_for_expr``'s exception
+                # contract — non-storable formats (e.g., symbolic
+                # REAL_FORMAT) just skip the cast.
+                try:
+                    elt_storage = self._storage_for_expr(elt)
+                except CppEmitError:
+                    elt_storage = None
+                if (
+                    isinstance(elt_storage, CppScalar)
+                    and elt_storage != elt_target
+                ):
+                    elt_str = self._explicit_cast(elt_str, elt_target)
+            parts.append(elt_str)
+        return f'{wrapper_ty.format()}{{{", ".join(parts)}}}'
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         rhs = self._visit_expr(stmt.expr, ctx)

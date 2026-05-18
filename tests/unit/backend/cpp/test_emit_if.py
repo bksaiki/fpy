@@ -1,5 +1,9 @@
 """
 Phase 3c tests for the cpp emitter — ``if`` / ``if1`` statements.
+
+Each ``CppCompiler`` construction passes ``optimize=False`` to
+keep the bare-emitter output strings stable against optimizing
+transforms (notably :class:`fpy2.transform.RoundElim`).
 """
 
 import fpy2 as fp
@@ -29,7 +33,7 @@ class TestIfStmt:
                     y = x
                 return y
 
-        out = _compile(CppCompiler(), f)
+        out = _compile(CppCompiler(optimize=False), f)
         assert out == (
             'double f(double x) {\n'
             '    double y{};\n'
@@ -55,7 +59,7 @@ class TestIfStmt:
                     y = -x
                 return y
 
-        out = _compile(CppCompiler(), f)
+        out = _compile(CppCompiler(optimize=False), f)
         assert out == (
             'double f(double x) {\n'
             '    double y = x;\n'
@@ -81,7 +85,7 @@ class TestIfStmt:
                     z = y
                 return z
 
-        out = _compile(CppCompiler(), f)
+        out = _compile(CppCompiler(optimize=False), f)
         assert out == (
             'double f(double x, double y) {\n'
             '    double z{};\n'
@@ -114,7 +118,7 @@ class TestIfStmt:
                     y = a
                 return y
 
-        out = _compile(CppCompiler(), f)
+        out = _compile(CppCompiler(optimize=False), f)
         # Hoist is anchored to the if, after the unrelated ``a`` decl.
         assert out == (
             'double f(double x) {\n'
@@ -149,7 +153,7 @@ class TestIfStmt:
                 return y + a
 
         from fpy2.types import BoolType
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             g, ctx=fp.FP64,
             arg_types=[BoolType(), BoolType(), RealType(fp.FP64)],
         )
@@ -179,7 +183,7 @@ class TestIfStmt:
                     y = x
                 return y
 
-        out = _compile(CppCompiler(), f)
+        out = _compile(CppCompiler(optimize=False), f)
         # ``y`` is hoisted because both branches write it.
         assert 'double y{};' in out
         # ``t`` declares-on-assign inside the if-branch.
