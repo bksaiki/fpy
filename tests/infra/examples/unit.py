@@ -754,16 +754,15 @@ def test_return5(x: fp.Real) -> fp.Real:
         return y
 
 @fp.fpy
-def test_return6() -> fp.Real:
-    # Return from inside a nested ``with`` block; the outer block
-    # falls through to a trailing return.  Exercises the
-    # context-stack interaction with multi-return.
+def test_return6(x: fp.Real, y: fp.Real) -> tuple[fp.Real, fp.Real]:
+    # Multiple returns of tuples — exercises the cross-path unify
+    # for ``TupleType`` in type / context inference (each path
+    # produces a ``TupleType`` and the unify recurses element-wise).
     with fp.FP64:
-        x = 1
-        with fp.FP32:
-            if x > 0:
-                return fp.round(x)
-        return x
+        if x > y:
+            return x, y
+        else:
+            return y, x
 
 def test_meta(n):
     @fp.fpy
