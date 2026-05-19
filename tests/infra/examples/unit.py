@@ -691,6 +691,79 @@ def test_pass1():
     pass
     return True
 
+# ---------------------------------------------------------------------
+# Multiple-return programs.
+#
+# FPy used to require exactly one return statement per function (a
+# restriction inherited from the FPCore backend, which can't express
+# multiple-exit control flow).  These programs exercise the relaxed
+# rule: the interpreter and cpp backends accept them; the fpc backend
+# rejects them with a backend-specific error.  Programs that the fpc
+# backend can't compile are listed in
+# ``tests/infra/backend/fpc.py::_ignore``.
+
+@fp.fpy
+def test_return1(x: fp.Real, y: fp.Real) -> fp.Real:
+    # Canonical multi-return: if/else, both branches return.
+    with fp.FP64:
+        if x > y:
+            return x
+        else:
+            return y
+
+@fp.fpy
+def test_return2(x: fp.Real) -> fp.Real:
+    # Early return via an if1 (no else); fall through to a trailing
+    # return.  Both reachable paths end in a return.
+    with fp.FP64:
+        if x > 0:
+            return x
+        return -x
+
+@fp.fpy
+def test_return3(x: fp.Real, y: fp.Real) -> fp.Real:
+    # Nested if/else; three distinct return statements across the
+    # branches.
+    with fp.FP64:
+        if x > 0:
+            if y > 0:
+                return x + y
+            else:
+                return x
+        else:
+            return y
+
+@fp.fpy
+def test_return4(xs: list[fp.Real]) -> fp.Real:
+    # Return from inside a for-loop body — early-exit pattern.
+    with fp.FP64:
+        for x in xs:
+            if x > 0:
+                return x
+        return 0
+
+@fp.fpy
+def test_return5(x: fp.Real) -> fp.Real:
+    # Return from inside a while-loop body — early-exit pattern.
+    with fp.FP64:
+        y = x
+        while y > 1:
+            if y < 2:
+                return y
+            y = y - 1
+        return y
+
+@fp.fpy
+def test_return6(x: fp.Real, y: fp.Real) -> tuple[fp.Real, fp.Real]:
+    # Multiple returns of tuples — exercises the cross-path unify
+    # for ``TupleType`` in type / context inference (each path
+    # produces a ``TupleType`` and the unify recurses element-wise).
+    with fp.FP64:
+        if x > y:
+            return x, y
+        else:
+            return y, x
+
 def test_meta(n):
     @fp.fpy
     def test_meta_inner(x):

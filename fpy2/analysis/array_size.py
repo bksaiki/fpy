@@ -492,8 +492,16 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None):
         ret_size = self._visit_expr(stmt.expr, ctx)
-        if isinstance(ret_size, ListSize):
+        if not isinstance(ret_size, ListSize):
+            return
+        # Multiple returns: unify the list-size bound across paths.
+        # First-seen seeds; subsequent unify against the running
+        # value (taking the meet on the size — concrete iff all paths
+        # agree, else ``None``).
+        if self.ret_size is None:
             self.ret_size = ret_size
+        else:
+            self.ret_size = self._unify(self.ret_size, ret_size)
 
     def _visit_expr(self, expr: Expr, ctx: None) -> ArraySizeBound:
         ty = super()._visit_expr(expr, ctx)

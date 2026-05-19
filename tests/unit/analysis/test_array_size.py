@@ -667,3 +667,54 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         assert info.ret_size is None
+
+    # ------------------------------------------------------------------
+    # Multi-return: ``_visit_return`` unifies the list-size bound
+    # across every reachable return site.
+
+    def test_ret_size_multi_return_equal_sizes(self):
+        """Two return paths producing lists of the same concrete
+        size: the unified ``ret_size`` keeps the concrete size."""
+
+        @fp.fpy
+        def f(c: bool) -> list[fp.Real]:
+            if c:
+                return [1.0, 2.0, 3.0]
+            else:
+                return [4.0, 5.0, 6.0]
+
+        info = self._run(f)
+        assert isinstance(info.ret_size, ListSize)
+        assert info.ret_size.size == 3
+
+    def test_ret_size_multi_return_unequal_sizes(self):
+        """Two return paths producing lists of *different* concrete
+        sizes: the unified ``ret_size`` widens the size dimension to
+        ``None`` (size unknown at the join point) while keeping the
+        ``ListSize`` shape."""
+
+        @fp.fpy
+        def f(c: bool) -> list[fp.Real]:
+            if c:
+                return [1.0, 2.0]
+            else:
+                return [1.0, 2.0, 3.0]
+
+        info = self._run(f)
+        assert isinstance(info.ret_size, ListSize)
+        assert info.ret_size.size is None
+
+    def test_ret_size_early_return_unifies_with_trailing(self):
+        """Early-return pattern (``if c: return [..]; return [..]``).
+        Both paths produce same-size lists; ``ret_size`` reflects
+        the join."""
+
+        @fp.fpy
+        def f(c: bool) -> list[fp.Real]:
+            if c:
+                return [1.0, 2.0]
+            return [3.0, 4.0]
+
+        info = self._run(f)
+        assert isinstance(info.ret_size, ListSize)
+        assert info.ret_size.size == 2

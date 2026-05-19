@@ -720,7 +720,14 @@ class ContextTypeInferInstance(Visitor):
         return ctx
 
     def _visit_return(self, stmt: ReturnStmt, ctx: ContextParam):
-        self.ret_ty = self._visit_expr(stmt.expr, ctx)
+        # Multiple returns: unify the context type across all return
+        # paths.  First-seen seeds; subsequent unify against the
+        # running value.
+        ty = self._visit_expr(stmt.expr, ctx)
+        if self.ret_ty is None:
+            self.ret_ty = ty
+        else:
+            self.ret_ty = self._unify(self.ret_ty, ty)
         return ctx
 
     def _visit_pass(self, stmt: PassStmt, ctx: ContextParam):

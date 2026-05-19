@@ -675,7 +675,17 @@ class _TypeInferInstance(Visitor):
         self._visit_expr(stmt.expr, None)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: None):
-        self.ret_type = self._visit_expr(stmt.expr, None)
+        # Multiple returns: the function's return type is the
+        # unification of every return path's type.  The first
+        # encountered return seeds ``ret_type``; subsequent ones
+        # unify against the existing value, surfacing a
+        # ``TypeInferError`` if the paths disagree on a structural
+        # type.
+        ty = self._visit_expr(stmt.expr, None)
+        if self.ret_type is None:
+            self.ret_type = ty
+        else:
+            self.ret_type = self._unify(self.ret_type, ty)
 
     def _visit_pass(self, stmt: PassStmt, ctx: None):
         pass
