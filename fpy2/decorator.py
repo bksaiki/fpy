@@ -209,7 +209,16 @@ def _apply_fpy_decorator(
         # add metadata
         ast._meta = FuncMeta(free_vars, ctx, spec, meta or {}, env)
         # reachability analysis
-        Reachability.analyze(ast, check=True)
+        # Multiple return statements are allowed: they're well-defined
+        # for the interpreter and the cpp backend, and the fpc backend
+        # rejects them at compile time with a backend-specific error.
+        # We still require every statement to be reachable and every
+        # path to end in a return.
+        Reachability.analyze(
+            ast,
+            check_all_reachable=True,
+            check_no_fallthrough=True,
+        )
 
     # wrap the AST in a Function
     return Function(ast, None)

@@ -156,14 +156,20 @@ class Reachability:
     """
 
     @staticmethod
-    def analyze(func: FuncDef, check: bool = False):
-        # run the analysis
+    def analyze(
+        func: FuncDef,
+        *,
+        check_all_reachable: bool = False,
+        check_no_fallthrough: bool = False,
+        check_single_exit: bool = False,
+    ):
+        """Run the analysis.  Each ``check_*`` flag opts into one of
+        the three optional assertions documented on the class."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
         analysis = _ReachabilityInstance(func).analyze()
 
-        if check:
-            # optionally check that all statements are reachable
+        if check_all_reachable:
             unreachable: list[Stmt] = []
             for stmt, is_reachable in analysis.has_entry.items():
                 if not is_reachable:
@@ -176,13 +182,10 @@ class Reachability:
                     for stmt in unreachable)
                 raise ReachabilityError('\n  '.join(fmt_str))
 
-            # optionally check that every path through the program ends
-            # at a return statement
-            if analysis.has_fallthrough:
-                raise ReachabilityError(f'in `{func.name}`: not all paths have a return statement')
+        if check_no_fallthrough and analysis.has_fallthrough:
+            raise ReachabilityError(f'in `{func.name}`: not all paths have a return statement')
 
-            # optionally check that there is exactly one return statement
-            if len(analysis.ret_stmts) != 1:
-                raise ReachabilityError(f'`{func.name}` must have a single return statement')
+        if check_single_exit and len(analysis.ret_stmts) != 1:
+            raise ReachabilityError(f'`{func.name}` must have a single return statement')
 
         return analysis
