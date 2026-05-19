@@ -211,12 +211,6 @@ class _FormatterInstance(Visitor):
         stop = '' if e.stop is None else self._visit_expr(e.stop, ctx)
         return f'{value}[{start}:{stop}]'
 
-    def _visit_list_set(self, e: ListSet, ctx: _Ctx):
-        array = self._visit_expr(e.value, ctx)
-        slices = [self._visit_expr(slice, ctx) for slice in e.indices]
-        value = self._visit_expr(e.expr, ctx)
-        return f'tuple_set({array}, [{", ".join(slices)}], {value})'
-
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
         cond = self._visit_expr(e.cond, ctx)
         ift = self._visit_expr(e.ift, ctx)

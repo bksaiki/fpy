@@ -1330,15 +1330,6 @@ class _FormatInferInstance(Visitor):
         # Slice of a list has the same format as the list itself.
         return value_fmt
 
-    def _visit_list_set(self, e: ListSet, ctx: None) -> FormatBound:
-        # Functional update: the result is a new list with the inserted
-        # element joined into the original element format at depth len(indices).
-        value_fmt = self._visit_expr(e.value, ctx)
-        for s in e.indices:
-            self._visit_expr(s, ctx)
-        insert_fmt = self._visit_expr(e.expr, ctx)
-        return _list_set_widen(value_fmt, len(e.indices), insert_fmt, widen=self._widen)
-
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> FormatBound:
         self._visit_expr(e.cond, ctx)
         then_fmt = self._visit_expr(e.ift, ctx)

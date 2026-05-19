@@ -541,21 +541,6 @@ class _TypeInferInstance(Visitor):
         # same type as value_ty
         return value_ty
 
-    def _visit_list_set(self, e: ListSet, ctx: None) -> Type:
-        arr_ty = self._visit_expr(e.value, None)
-
-        iter_ty = arr_ty
-        for s in e.indices:
-            ty = self._visit_expr(s, None)
-            elt_ty = self._fresh_type_var()
-            self._unify(arr_ty, ListType(elt_ty))
-            self._unify(ty, RealType(None))
-            iter_ty = elt_ty
-
-        val_ty = self._visit_expr(e.expr, None)
-        self._unify(val_ty, iter_ty)
-        return arr_ty
-
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> Type:
         # type check condition
         cond_ty = self._visit_expr(e.cond, None)

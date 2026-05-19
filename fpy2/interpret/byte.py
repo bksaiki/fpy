@@ -780,15 +780,6 @@ class BytecodeCompiler(Visitor):
             func=helper, args=[arr, start, stop], keywords=[], **attrs
         )
 
-    def _visit_list_set(self, e: ListSet, ctx: None):
-        value = self._visit_expr(e.value, ctx)
-        idxs = [self._visit_expr(idx, ctx) for idx in e.indices]
-        expr = self._visit_expr(e.expr, ctx)
-        attrs = self._location_to_attributes(e.loc)
-
-        func = pyast.Name(id='__fpy_list_set', ctx=pyast.Load(), **attrs)
-        return pyast.Call(func=func, args=[value] + idxs + [expr], keywords=[], **attrs)
-
     def _visit_if_expr(self, e: IfExpr, ctx: None):
         cond = self._visit_expr(e.cond, ctx)
         ift = self._visit_expr(e.ift, ctx)

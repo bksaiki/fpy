@@ -429,9 +429,6 @@ class _FormatInfernce(Visitor):
         assert isinstance(ty, ListFormatType)
         return ty
 
-    def _visit_list_set(self, e: ListSet, ctx: Context):
-        raise NotImplementedError
-
     def _visit_if_expr(self, e: IfExpr, ctx: Context):
         self._visit_expr(e.cond, ctx)
         ift_ty = self._visit_expr(e.ift, ctx)

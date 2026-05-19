@@ -189,12 +189,6 @@ class SyntaxCheckInstance(Visitor):
         if e.stop is not None:
             self._visit_expr(e.stop, ctx)
 
-    def _visit_list_set(self, e: ListSet, ctx: _Ctx):
-        self._visit_expr(e.value, ctx)
-        for s in e.indices:
-            self._visit_expr(s, ctx)
-        self._visit_expr(e.expr, ctx)
-
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
         self._visit_expr(e.cond, ctx)
         self._visit_expr(e.ift, ctx)

@@ -7,7 +7,7 @@ from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..number import Context
-from ..transform import ConstFold, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
+from ..transform import ConstFold, ForBundling, ForUnpack, IfBundling, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend, CompileError
@@ -711,12 +711,6 @@ class _FPCoreCompileInstance(Visitor):
         )
         return fpc.Let(let_bindings, tensor_expr)
 
-    def _visit_list_set(self, e: ListSet, ctx: None) -> fpc.Expr:
-        return self._functional_list_update(
-            self._visit_expr(e.value, ctx),
-            [self._visit_expr(idx, ctx) for idx in e.indices],
-            self._visit_expr(e.expr, ctx),
-        )
 
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> fpc.Expr:
@@ -1113,7 +1107,6 @@ class FPCoreCompiler(Backend):
 
         # normalization passes
         ast = ConstFold.apply(func.ast, enable_op=False)
-        ast = FuncUpdate.apply(ast)
         ast = ForUnpack.apply(ast)
         ast = ForBundling.apply(ast)
         ast = WhileBundling.apply(ast)

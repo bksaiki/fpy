@@ -1786,13 +1786,6 @@ class CppEmitter(Visitor):
             f'{arr_tmp}.begin() + {start}, '
             f'{arr_tmp}.begin() + {stop})'
         )
-    def _visit_list_set(self, e, ctx):
-        # ``ListSet`` is only produced by the ``FuncUpdate`` transform,
-        # which the cpp pipeline does not run — C++ mutates vector
-        # elements directly via ``IndexedAssign``.  Reaching this
-        # visitor would be a pipeline bug.
-        self._unsupported('ListSet', at=e)
-
     def _visit_if_expr(self, e, ctx) -> str:
         # ``cond ? ift : iff`` — both branches must share a C++ type,
         # so when their storages differ we cast each to the IfExpr's
