@@ -375,31 +375,26 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'{storage.format()} {name}{{}};')
 
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
-        """Pull the type of the function's return expression from the
-        format analysis.  Walks the body and any directly-nested
-        ``with`` blocks; the AST shape FPy guarantees is that every
-        path either falls off the end (rejected upstream) or hits a
-        single ``Return`` whose expression's bound is the function's
-        return type."""
+        """Pull the storage type for the function's return value from
+        the format analysis.
 
-        def find_return(block: StmtBlock) -> ReturnStmt | None:
-            for stmt in block.stmts:
-                if isinstance(stmt, ReturnStmt):
-                    return stmt
-                if isinstance(stmt, ContextStmt):
-                    nested = find_return(stmt.body)
-                    if nested is not None:
-                        return nested
-            return None
+        ``format_info.fn_fmt.ret_fmt`` is the running join of every
+        ``ReturnStmt`` expression's bound (see
+        :meth:`FormatAnalysis._visit_return`); using it directly
+        means multiple-return programs select a storage class wide
+        enough to hold every path's value.
 
-        ret = find_return(func.body)
-        if ret is None:
-            return None
-        fmt = self.format_info.by_expr.get(ret.expr)
+        A ``None`` bound is *not* a missing-return marker — it's the
+        format inference convention for non-numeric return values
+        (bool, e.g. a ``Compare`` result).  ``choose_storage(None)``
+        correctly maps that to ``CppScalar.BOOL``.  FPy's
+        reachability check rejects truly missing-return programs at
+        decoration time, so we don't distinguish that case here."""
+        fmt = self.format_info.fn_fmt.ret_fmt
         try:
             return choose_storage(fmt)
         except StorageSelectionError as e:
-            raise CppEmitError(f'return type: {e}', at=ret) from e
+            raise CppEmitError(f'return type: {e}', at=func) from e
 
     # ------------------------------------------------------------------
     # Statement visitors
