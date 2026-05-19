@@ -28,6 +28,14 @@ _ignore = [
     'example_static_context1',
     'example_static_context2',
     'keep_p_1',
+
+    # multiple return statements (FPCore is single-exit by design)
+    'test_return1',
+    'test_return2',
+    'test_return3',
+    'test_return4',
+    'test_return5',
+    'test_return6',
 ]
 
 def test_compile_fpc():

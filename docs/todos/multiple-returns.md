@@ -66,6 +66,34 @@ all returns).  Two-line change.
 user understands the connection to the backend.  Optionally
 mention the workaround (use the FPy interpreter instead).
 
+### Phase 5a — fix the syntax check's path-termination tracking
+
+A hidden coupling surfaced when adding examples: ``SyntaxCheck``
+tracks "variable defined along all paths" by intersecting envs
+across branches.  After a ``ReturnStmt`` it returns ``_Env()``
+(empty), which under intersection makes *every* variable
+"undefined" downstream.  Under the old single-return rule this
+never mattered (the return was always the last statement, so
+nothing followed).  With early returns, e.g.
+
+.. code-block:: python
+
+   if x > 0:
+       return x
+   return -x
+
+intersecting ``{x: True}`` with ``_Env()`` produces ``{x: False}``
+and the trailing ``return -x`` is flagged with
+``variable 'x' not defined along all paths``.
+
+Fix: add a terminated sentinel to ``_Env`` (e.g., a
+``terminated: bool`` flag).  ``_visit_return`` returns a
+terminated env.  ``_Env.merge`` treats a terminated env as "this
+path doesn't reach the merge point" — the result is the other
+env unchanged.  When both branches terminate, the result is also
+terminated; the surrounding context handles "nothing follows"
+the same way it handled the single-return case.
+
 ### Phase 5 — tests
 
 Per-path coverage of the new behavior:
@@ -84,6 +112,15 @@ Per-path coverage of the new behavior:
   program compiles cleanly through the cpp backend.
 - fpc backend test — pin the new error message for a
   multiple-return input.
+- ``tests/infra/examples/unit.py`` — add canonical example
+  programs exercising the new control-flow shapes (early
+  return, if/else returns, returns inside loops, returns inside
+  ``with`` blocks).  These get auto-collected into the unit-test
+  corpus and run through every infra backend, so they exercise
+  the cpp pipeline end-to-end and surface the new fpc error on
+  the fpc side.  Add the ones we expect to *fail* on fpc to
+  ``tests/infra/backend/fpc.py::_ignore`` (or rely on the
+  precise error message in a dedicated fpc test).
 
 ## Out of scope
 

@@ -1034,7 +1034,16 @@ class _FPCoreCompileInstance(Visitor):
 
         for stmt in reversed(stmts):
             if isinstance(stmt, ReturnStmt):
-                raise FPCoreCompileError('return statements must be at the end of blocks')
+                # FPCore is functional — every construct produces a
+                # single expression value, so multiple-exit control
+                # flow has no natural lowering.  FPy allows multiple
+                # ``return`` statements for the interpreter and cpp
+                # backends; the FPCore backend specifically rejects
+                # them.  Use the FPy interpreter, or rewrite to a
+                # single tail return, if you need this program.
+                raise FPCoreCompileError(
+                    'FPCore does not support multiple return statements'
+                )
             e = self._visit_statement(stmt, e)
 
         return e

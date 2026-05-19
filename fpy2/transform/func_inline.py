@@ -5,7 +5,10 @@ Function inlining.
 from dataclasses import dataclass
 from typing import Iterable
 
-from ..analysis import AssignDef, DefineUse, DefineUseAnalysis, ReachingDefs, SyntaxCheck
+from ..analysis import (
+    AssignDef, DefineUse, DefineUseAnalysis, Reachability, ReachingDefs,
+    SyntaxCheck,
+)
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..env import ForeignEnv
@@ -81,7 +84,20 @@ class _FuncInline(DefaultTransformVisitor):
         else:
             ast = e.fn.ast
 
-        # ASSUME: single return statement at the end of the function body
+        # ASSUME: single return statement at the end of the function body.
+        # Inlining works by replacing the trailing return with an
+        # assignment to a fresh temp (see ``_replace_ret``); a callee
+        # with multiple returns would leave non-trailing returns in
+        # the inlined block, which would prematurely exit the
+        # *caller*.  Reject explicitly with a clear error.
+        ret_check = Reachability.analyze(ast)
+        if len(ret_check.ret_stmts) != 1:
+            raise RuntimeError(
+                f'cannot inline function `{e.fn.name}`: multiple return '
+                f'statements are not supported by FuncInline (only the '
+                f'trailing return is rewritten; earlier returns would '
+                f'exit the caller)'
+            )
 
         # first, rename all variables in the function body
         reachability = ReachingDefs.analyze(ast)

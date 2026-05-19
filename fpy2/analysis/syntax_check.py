@@ -13,14 +13,29 @@ class FPySyntaxError(Exception):
 
 
 class _Env:
-    """Bound variables in the current scope."""
-    env: dict[NamedId, bool]
+    """Bound variables in the current scope.
 
-    def __init__(self, env: dict[NamedId, bool] | None = None):
+    The ``terminated`` flag marks an env produced by a control-flow
+    path that returns (or otherwise can't reach the surrounding
+    merge point).  Terminated envs are *absorbing* in :meth:`merge`
+    — merging with a terminated env yields the other env unchanged,
+    because the terminated path contributes no constraints to "what
+    must be defined" downstream.
+    """
+    env: dict[NamedId, bool]
+    terminated: bool
+
+    def __init__(
+        self,
+        env: dict[NamedId, bool] | None = None,
+        *,
+        terminated: bool = False,
+    ):
         if env is None:
             self.env = {}
         else:
             self.env = env.copy()
+        self.terminated = terminated
 
     def __contains__(self, key):
         return key in self.env
@@ -29,11 +44,20 @@ class _Env:
         return self.env[key]
 
     def extend(self, var: NamedId):
-        copy = _Env(self.env)
+        copy = _Env(self.env, terminated=self.terminated)
         copy.env[var] = True
         return copy
 
     def merge(self, other: Self):
+        # Terminated paths don't reach the merge point.  If one
+        # side terminates, the other is the only path; if both
+        # terminate, the merge point itself is unreachable.
+        if self.terminated and other.terminated:
+            return _Env(terminated=True)
+        if self.terminated:
+            return _Env(other.env)
+        if other.terminated:
+            return _Env(self.env)
         copy = _Env()
         for key in self.env.keys() | other.env.keys():
             copy.env[key] = self.env.get(key, False) and other.env.get(key, False)
@@ -273,7 +297,10 @@ class SyntaxCheckInstance(Visitor):
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _Ctx):
         self._visit_expr(stmt.expr, ctx)
-        return _Env()
+        # The control-flow path doesn't continue past a return —
+        # mark the resulting env terminated so sibling-branch
+        # merges drop it cleanly (see :meth:`_Env.merge`).
+        return _Env(terminated=True)
 
     def _visit_pass(self, stmt: PassStmt, ctx: _Ctx):
         return ctx.env
