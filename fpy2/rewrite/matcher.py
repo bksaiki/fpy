@@ -250,14 +250,6 @@ class _MatcherInst(Visitor):
             case _:
                 raise _MatchFailure(f'matching {pat} against {e}')
 
-    def _visit_list_set(self, e: ListSet, pat: ListSet):
-        if len(e.indices) != len(pat.indices):
-            raise _MatchFailure(f'matching {pat} against {e}')
-        self._visit_expr(e.value, pat.value)
-        for s1, s2 in zip(e.indices, pat.indices):
-            self._visit_expr(s1, s2)
-        self._visit_expr(e.expr, pat.expr)
-
     def _visit_list_comp(self, e: ListComp, pat: ListComp):
         if len(e.iterables) != len(pat.iterables):
             raise _MatchFailure(f'matching {pat} against {e}')

@@ -167,23 +167,23 @@ class SplitLoop:
     """
     Split loop transformation.
 
-    This transformation rewrites a single `for` loop:
-    ```
-    for x1, ..., xk in xs:
-        BODY[x1, ..., xk ]
-    ```
-    into a nested loop:
-    ```
-    t1 = xs
-    t2 = factor
-    with Z:
-        n = len(t1)
-        assert n % t2 == 0
-    for i in range(0, n, t2):
-        with Z:
-            slice = t1[i:i+t2]
-        for x1, ..., xk in slice:
+    This transformation rewrites a single ``for`` loop::
+
+        for x1, ..., xk in xs:
             BODY[x1, ..., xk]
+
+    into a nested loop::
+
+        t1 = xs
+        t2 = factor
+        with Z:
+            n = len(t1)
+            assert n % t2 == 0
+        for i in range(0, n, t2):
+            with Z:
+                slice = t1[i:i+t2]
+            for x1, ..., xk in slice:
+                BODY[x1, ..., xk]
     """
 
     @staticmethod

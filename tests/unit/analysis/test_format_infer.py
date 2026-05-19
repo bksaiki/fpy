@@ -13,7 +13,6 @@ from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import IndexedAssign
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
-from fpy2.transform import FuncUpdate
 
 
 class TestFormatInfer:
@@ -1244,41 +1243,14 @@ class TestFormatInfer:
         assert SetFormat(frozenset((Fraction(42),))) in literal_shapes
 
     # ------------------------------------------------------------------
-    # ListSet (functional update) semantics
-
-    def test_list_set_widens_element_format(self):
-        """
-        ``set(xs, i, val)`` (a functional update produced from ``xs[i] = val``
-        by :class:`FuncUpdate`) must widen the result's element format to
-        include *val*'s format.  Otherwise the analysis can keep reporting
-        the original ``SetFormat`` even after the list has been updated with
-        a value the set cannot represent.
-        """
-        @fp.fpy
-        def f(x: fp.Real) -> list[fp.Real]:
-            xs = [1.0, 2.0]
-            xs[0] = x
-            return xs
-
-        # FuncUpdate rewrites ``xs[0] = x`` to ``xs = ListSet(xs, (0,), x)``.
-        ast = FuncUpdate.apply(f.ast)
-        info = FormatInfer.analyze(ast)
-
-        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
-        # The pre-update binding has a precise SetFormat element;
-        # the post-update binding must widen to REAL_FORMAT (x's format).
-        assert ListFormat(REAL_FORMAT) in xs_bounds, (
-            f"expected post-update xs to be ListFormat(REAL_FORMAT), got {xs_bounds}"
-        )
+    # Functional-update (``IndexedAssign``) semantics
 
     def test_indexed_assign_widens_format_at_fresh_def(self):
         """
-        ``xs[i] = x`` (raw ``IndexedAssign``, no ``FuncUpdate`` applied)
-        creates a *fresh* SSA def of ``xs`` (per ``reaching_defs``'s
-        treatment of indexed assignment as ``xs = update(xs, [i], x)``).
-        The new def's format must be widened to match the inserted value's
-        format — i.e., the same semantics as the post-FuncUpdate
-        ``ListSet`` path tested above.
+        ``xs[i] = x`` creates a *fresh* SSA def of ``xs`` (per
+        ``reaching_defs``'s treatment of indexed assignment as
+        ``xs = update(xs, [i], x)``).  The new def's format must be
+        widened to match the inserted value's format.
         """
         @fp.fpy
         def f(x: fp.Real) -> list[fp.Real]:
@@ -1286,7 +1258,6 @@ class TestFormatInfer:
             xs[0] = x
             return xs
 
-        # NOTE: no FuncUpdate applied — IndexedAssign survives in the AST.
         info = FormatInfer.analyze(f.ast)
 
         # Two distinct defs for xs: the original Assign-sited binding and
@@ -1312,21 +1283,12 @@ class TestFormatInfer:
         assert isinstance(pre_bound.elt, SetFormat)
 
         # Post-mutation (the fresh def at the IndexedAssign): the element
-        # format must widen to REAL_FORMAT (the format of x), matching the
-        # ListSet-path semantics asserted in
-        # ``test_list_set_widens_element_format`` above.
+        # format must widen to REAL_FORMAT (the format of x).
         post_bound = info.by_def[idx_defs[0]]
         assert post_bound == ListFormat(REAL_FORMAT), (
             f"expected fresh IndexedAssign-sited xs def to widen to "
             f"ListFormat(REAL_FORMAT), got {post_bound}"
         )
-
-        # Sanity: the IndexedAssign and post-FuncUpdate ListSet paths agree.
-        funcupdate_info = FormatInfer.analyze(FuncUpdate.apply(f.ast))
-        funcupdate_xs = [
-            b for d, b in funcupdate_info.by_def.items() if d.name.base == 'xs'
-        ]
-        assert ListFormat(REAL_FORMAT) in funcupdate_xs
 
     def test_list_set_widen_helper_leaf(self):
         """``_list_set_widen`` at depth 0 is just a join."""

@@ -10,7 +10,6 @@ from .for_bundling import ForBundling
 from .for_unpack import ForUnpack
 from .for_unroll import ForUnroll, ForUnrollStrategy
 from .func_inline import FuncInline
-from .func_update import FuncUpdate
 from .if_bundling import IfBundling
 from .lift_context import LiftContext
 from .monomorphize import Monomorphize

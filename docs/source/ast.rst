@@ -43,7 +43,15 @@ The AST can be formatted to a string representation using the :py:class:`fpy2.as
 Analyses
 ---------------------------
 
+.. autoclass:: fpy2.analysis.ArraySizeInfer
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.analysis.ContextInfer
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.analysis.ContextUse
    :members:
    :show-inheritance:
 
@@ -51,7 +59,15 @@ Analyses
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.analysis.FormatInfer
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.analysis.LiveVars
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.analysis.PartialEval
    :members:
    :show-inheritance:
 
@@ -63,6 +79,10 @@ Analyses
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.analysis.ReachingDefs
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.analysis.SyntaxCheck
    :members:
    :show-inheritance:
@@ -71,10 +91,10 @@ Analyses
    :members:
    :show-inheritance:
 
-Tranformations
+Transformations
 ---------------------------
 
-.. automodule:: fpy2.transform.ConstFold
+.. autoclass:: fpy2.transform.ConstFold
    :members:
    :show-inheritance:
 
@@ -82,7 +102,7 @@ Tranformations
    :members:
    :show-inheritance:
 
-.. automodule:: fpy2.transform.CopyPropagate
+.. autoclass:: fpy2.transform.CopyPropagate
    :members:
    :show-inheritance:
 
@@ -98,7 +118,11 @@ Tranformations
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.transform.FuncUpdate
+.. autoclass:: fpy2.transform.ForUnroll
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.FuncInline
    :members:
    :show-inheritance:
 
@@ -106,11 +130,27 @@ Tranformations
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.transform.LiftContext
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.Monomorphize
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.transform.RenameTarget
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.transform.RoundElim
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.transform.SimplifyIf
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.SplitLoop
    :members:
    :show-inheritance:
 
@@ -119,5 +159,13 @@ Tranformations
    :show-inheritance:
 
 .. autoclass:: fpy2.transform.WhileBundling
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.WhileUnroll
+   :members:
+   :show-inheritance:
+
+.. autoclass:: fpy2.transform.ZipElim
    :members:
    :show-inheritance:

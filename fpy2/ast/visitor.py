@@ -26,7 +26,6 @@ _expr_dispatch: dict[type[Expr], str] = {
     ListComp: "_visit_list_comp",
     ListRef: "_visit_list_ref",
     ListSlice: "_visit_list_slice",
-    ListSet: "_visit_list_set",
     IfExpr: "_visit_if_expr",
     Attribute: "_visit_attribute",
 
@@ -142,10 +141,6 @@ class Visitor(ABC):
 
     @abstractmethod
     def _visit_list_slice(self, e: ListSlice, ctx: Any) -> Any:
-        ...
-
-    @abstractmethod
-    def _visit_list_set(self, e: ListSet, ctx: Any) -> Any:
         ...
 
     @abstractmethod
@@ -319,12 +314,6 @@ class DefaultVisitor(Visitor):
         if e.stop is not None:
             self._visit_expr(e.stop, ctx)
 
-    def _visit_list_set(self, e: ListSet, ctx: Any):
-        self._visit_expr(e.value, ctx)
-        for s in e.indices:
-            self._visit_expr(s, ctx)
-        self._visit_expr(e.expr, ctx)
-
     def _visit_list_comp(self, e: ListComp, ctx: Any):
         for iterable in e.iterables:
             self._visit_expr(iterable, ctx)
@@ -479,12 +468,6 @@ class DefaultTransformVisitor(Visitor):
         start = None if e.start is None else self._visit_expr(e.start, ctx)
         stop = None if e.stop is None else self._visit_expr(e.stop, ctx)
         return ListSlice(value, start, stop, e.loc)
-
-    def _visit_list_set(self, e: ListSet, ctx: Any):
-        array = self._visit_expr(e.value, ctx)
-        slices = [self._visit_expr(s, ctx) for s in e.indices]
-        value = self._visit_expr(e.expr, ctx)
-        return ListSet(array, slices, value, e.loc)
 
     def _visit_list_comp(self, e: ListComp, ctx: Any):
         targets = [self._visit_binding(target, ctx) for target in e.targets]

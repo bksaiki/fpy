@@ -111,13 +111,6 @@ class LiveVarsInstance(Visitor):
             live |= self._visit_expr(e.stop, ctx)
         return live
 
-    def _visit_list_set(self, e: ListSet, ctx: None) -> _LiveSet:
-        live = self._visit_expr(e.value, ctx)
-        for s in e.indices:
-            live |= self._visit_expr(s, ctx)
-        live |= self._visit_expr(e.expr, ctx)
-        return live
-
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> _LiveSet:
         cond_live = self._visit_expr(e.cond, ctx)
         ift_live = self._visit_expr(e.ift, ctx)

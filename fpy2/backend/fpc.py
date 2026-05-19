@@ -7,7 +7,7 @@ from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..number import Context
-from ..transform import ConstFold, ForBundling, ForUnpack, FuncUpdate, IfBundling, WhileBundling
+from ..transform import ConstFold, ForBundling, ForUnpack, IfBundling, WhileBundling
 from ..utils import Gensym
 
 from .backend import Backend, CompileError
@@ -668,50 +668,48 @@ class _FPCoreCompileInstance(Visitor):
         if_expr = fpc.If(cond_expr, ift_expr, iff_expr)
         return fpc.Tensor(tensor_dims, if_expr)
 
-    def _visit_list_set(self, e: ListSet, ctx: None) -> fpc.Expr:
-        # general case:
-        # 
-        #   (let ([t <tuple>] [i0 <index>] ... [v <value>]))
-        #     (tensor ([k (size t 0)])
-        #       (if (= k i)
-        #           (let ([t (ref t i0)])
-        #             <recurse with i1, ...>)
-        #           (ref t i0)
-        #
-        # where <recurse with i1, ...> is
-        #
-        #   (tensor ([k (size t 0)])
-        #     (if (= k i1)
-        #         (let ([t (ref t i1)])
-        #           <recurse with i2, ...>)
-        #         (ref t i1)
-        #
-        # and <recurse with iN> is
-        #
-        #   (tensor ([k (size t 0)])
-        #     (if (= k iN) v (ref t iN))
-        #
+    def _functional_list_update(
+        self,
+        value: fpc.Expr,
+        indices: list[fpc.Expr],
+        val: fpc.Expr,
+    ) -> fpc.Expr:
+        """Build an FPCore ``tensor`` expression that produces *value*
+        with the element at ``[i1, …, iN]`` replaced by *val*.  General
+        shape:
 
-        # generate temporary variables
+        .. code-block:: scheme
+
+           (let ([t <value>] [i0 <i0>] ... [v <val>])
+             (tensor ([k (size t 0)])
+               (if (= k i0)
+                   (let ([t (ref t i0)])
+                     <recurse with i1, ...>)
+                   (ref t i0)
+
+        where ``<recurse with i1, ...>`` continues the same pattern for
+        subsequent indices and the innermost recursion substitutes ``v``
+        at position ``iN``.
+
+        Used by :meth:`_visit_indexed_assign` to lower
+        ``xs[i1]…[iN] = v`` into a functional update.  Arguments are
+        already-lowered FPCore expressions.
+        """
         tuple_id = str(self.gensym.fresh('t'))
-        idx_ids = [str(self.gensym.fresh('i')) for _ in e.indices]
+        idx_ids = [str(self.gensym.fresh('i')) for _ in indices]
         iter_id = str(self.gensym.fresh('k'))
         val_id = str(self.gensym.fresh('v'))
 
-        # compile each component
-        tuple_expr = self._visit_expr(e.value, ctx)
-        idx_exprs = [self._visit_expr(idx, ctx) for idx in e.indices]
-        val_expr = self._visit_expr(e.expr, ctx)
-
-        # create initial let binding
-        let_bindings = [(tuple_id, tuple_expr)]
-        for idx_id, idx_expr in zip(idx_ids, idx_exprs):
+        let_bindings: list[tuple[str, fpc.Expr]] = [(tuple_id, value)]
+        for idx_id, idx_expr in zip(idx_ids, indices):
             let_bindings.append((idx_id, idx_expr))
-        let_bindings.append((val_id, val_expr))
+        let_bindings.append((val_id, val))
 
-        # recursively generate tensor expressions
-        tensor_expr = self._generate_tuple_set(tuple_id, iter_id, idx_ids, val_id)
+        tensor_expr = self._generate_tuple_set(
+            tuple_id, iter_id, idx_ids, val_id,
+        )
         return fpc.Let(let_bindings, tensor_expr)
+
 
 
     def _visit_list_comp(self, e: ListComp, ctx: None) -> fpc.Expr:
@@ -819,7 +817,18 @@ class _FPCoreCompileInstance(Visitor):
                 raise RuntimeError('unreachable', stmt.binding)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
-        raise FPCoreCompileError(f'cannot compile to FPCore: {type(stmt).__name__}')
+        # ``xs[i1]…[iN] = v`` lowers to the FPCore ``tensor`` form
+        # produced by :meth:`_functional_list_update`, with
+        # ``Var(stmt.var)`` as the list being updated.  The result
+        # is rebound to ``stmt.var`` via a ``let`` whose body is
+        # the rest of the program — a functional encoding of the
+        # imperative in-place update.
+        update = self._functional_list_update(
+            fpc.Var(str(stmt.var)),
+            [self._visit_expr(idx, None) for idx in stmt.indices],
+            self._visit_expr(stmt.expr, None),
+        )
+        return fpc.Let([(str(stmt.var), update)], ctx)
 
     def _visit_if1(self, stmt: If1Stmt, ret: fpc.Expr):
         # check that only one variable is mutated in the loop
@@ -1094,7 +1103,6 @@ class FPCoreCompiler(Backend):
 
         # normalization passes
         ast = ConstFold.apply(func.ast, enable_op=False)
-        ast = FuncUpdate.apply(ast)
         ast = ForUnpack.apply(ast)
         ast = ForBundling.apply(ast)
         ast = WhileBundling.apply(ast)

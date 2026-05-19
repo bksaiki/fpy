@@ -577,16 +577,6 @@ class ContextTypeInferInstance(Visitor):
             self._visit_expr(e.stop, ctx)
         return ty
 
-    def _visit_list_set(self, e: ListSet, ctx: ContextParam):
-        #      C, Γ |- e: list T       C, Γ |- i_1,...,i_n : real C
-        # -----------------------------------------------
-        #        C, Γ |- set(e, (i_1,...,i_n), v) : list T
-        ty = self._visit_expr(e.value, ctx)
-        for s in e.indices:
-            self._visit_expr(s, ctx)
-        self._visit_expr(e.expr, ctx)
-        return ty
-
     def _visit_if_expr(self, e: IfExpr, ctx: ContextParam):
         #     C, Γ |- cond: bool       C, Γ |- ift: T       C, Γ |- iff: T
         # -------------------------------------------------------
