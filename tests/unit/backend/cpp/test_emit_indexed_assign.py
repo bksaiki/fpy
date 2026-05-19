@@ -1,13 +1,11 @@
 """
 Phase 4e tests for the cpp emitter — ``IndexedAssign`` (``xs[i] = e``).
 
-The pipeline runs ``FuncUpdate`` first, rewriting every
-``IndexedAssign`` into ``Assign(xs, ListSet(xs, [i], e))``.  Per the
-FPy interpreter (``interpret/byte.py``), ``xs[i] = e`` is *in-place*
-mutation — no fresh vector.  ``StorageInfer`` recovers that by
-detecting the canonical FuncUpdate shape and unioning the new SSA
-def with its ``prev``: they share a storage class and a C++ name,
-so the emitter produces a direct subscript-store.
+Per the FPy interpreter (``interpret/byte.py``), ``xs[i] = e`` is
+*in-place* mutation — no fresh vector.  ``StorageInfer`` recovers
+that by unioning the new SSA def the ``IndexedAssign`` introduces
+with its ``prev``: they share a storage class and a C++ name, so
+the emitter produces a direct subscript-store.
 """
 
 import fpy2 as fp

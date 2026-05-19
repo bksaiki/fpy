@@ -560,13 +560,13 @@ def _list_set_widen(
     """
     Widen a list format for a functional update at *depth* levels of nesting.
 
-    A ``ListSet`` expression ``set(xs, i1, …, iN, val)`` produces a new list
-    in which ``xs[i1]…[iN]`` is replaced by *val*.  The result's format is the
-    join of the original format with *insert_fmt* at the leaf level after
+    An ``IndexedAssign`` ``xs[i1]…[iN] = val`` produces a new list in which
+    ``xs[i1]…[iN]`` is replaced by *val*.  The result's format is the join
+    of the original format with *insert_fmt* at the leaf level after
     peeling *depth* layers of :class:`ListFormat` (one per index).
 
     *widen* propagates to the leaf-level :func:`_join_bounds` call so that
-    ListSet expressions inside a saturated loop iteration also widen.
+    indexed assignments inside a saturated loop iteration also widen.
     """
     if depth == 0:
         return _join_bounds(value_fmt, insert_fmt, widen=widen)
@@ -1347,8 +1347,8 @@ class _FormatInferInstance(Visitor):
         # ``xs[i1]…[iN] = expr`` is treated as ``xs = update(xs, …, expr)``
         # — a fresh SSA def of ``xs`` (per ``reaching_defs``).  The new
         # def's format is the original element format widened with the
-        # inserted value's format at depth ``len(indices)``, matching the
-        # semantics of ``ListSet`` (see :func:`_list_set_widen`).
+        # inserted value's format at depth ``len(indices)``; see
+        # :func:`_list_set_widen` for the recursive widening rule.
         d_use = self.def_use.find_def_from_use(stmt)
         value_fmt = self._bound_of_def(d_use)
         for s in stmt.indices:

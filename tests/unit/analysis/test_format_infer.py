@@ -13,7 +13,6 @@ from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import IndexedAssign
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
-from fpy2.transform import FuncUpdate
 
 
 class TestFormatInfer:
@@ -1259,7 +1258,6 @@ class TestFormatInfer:
             xs[0] = x
             return xs
 
-        # NOTE: no FuncUpdate applied — IndexedAssign survives in the AST.
         info = FormatInfer.analyze(f.ast)
 
         # Two distinct defs for xs: the original Assign-sited binding and
@@ -1285,21 +1283,12 @@ class TestFormatInfer:
         assert isinstance(pre_bound.elt, SetFormat)
 
         # Post-mutation (the fresh def at the IndexedAssign): the element
-        # format must widen to REAL_FORMAT (the format of x), matching the
-        # ListSet-path semantics asserted in
-        # ``test_list_set_widens_element_format`` above.
+        # format must widen to REAL_FORMAT (the format of x).
         post_bound = info.by_def[idx_defs[0]]
         assert post_bound == ListFormat(REAL_FORMAT), (
             f"expected fresh IndexedAssign-sited xs def to widen to "
             f"ListFormat(REAL_FORMAT), got {post_bound}"
         )
-
-        # Sanity: the IndexedAssign and post-FuncUpdate ListSet paths agree.
-        funcupdate_info = FormatInfer.analyze(FuncUpdate.apply(f.ast))
-        funcupdate_xs = [
-            b for d, b in funcupdate_info.by_def.items() if d.name.base == 'xs'
-        ]
-        assert ListFormat(REAL_FORMAT) in funcupdate_xs
 
     def test_list_set_widen_helper_leaf(self):
         """``_list_set_widen`` at depth 0 is just a join."""

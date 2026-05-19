@@ -691,10 +691,9 @@ class _FPCoreCompileInstance(Visitor):
         subsequent indices and the innermost recursion substitutes ``v``
         at position ``iN``.
 
-        Used by both :meth:`_visit_list_set` (the legacy path via the
-        ``FuncUpdate`` transform) and :meth:`_visit_indexed_assign`
-        (the direct lowering).  Arguments are already-lowered FPCore
-        expressions.
+        Used by :meth:`_visit_indexed_assign` to lower
+        ``xs[i1]…[iN] = v`` into a functional update.  Arguments are
+        already-lowered FPCore expressions.
         """
         tuple_id = str(self.gensym.fresh('t'))
         idx_ids = [str(self.gensym.fresh('i')) for _ in indices]
@@ -818,15 +817,12 @@ class _FPCoreCompileInstance(Visitor):
                 raise RuntimeError('unreachable', stmt.binding)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: fpc.Expr):
-        # ``xs[i1]…[iN] = v`` lowers to the same FPCore ``tensor``
-        # form as the corresponding :class:`ListSet` expression (see
-        # :meth:`_functional_list_update`), with ``Var(stmt.var)`` as
-        # the list being updated, and the resulting expression
-        # bound back to ``stmt.var`` via a ``let`` whose body is
-        # the rest of the program.  Equivalent in shape to what
-        # ``_visit_assign(Assign(stmt.var, ListSet(Var(stmt.var), …)))``
-        # would produce — the same lowering, just without the
-        # intermediate ``ListSet`` node.
+        # ``xs[i1]…[iN] = v`` lowers to the FPCore ``tensor`` form
+        # produced by :meth:`_functional_list_update`, with
+        # ``Var(stmt.var)`` as the list being updated.  The result
+        # is rebound to ``stmt.var`` via a ``let`` whose body is
+        # the rest of the program — a functional encoding of the
+        # imperative in-place update.
         update = self._functional_list_update(
             fpc.Var(str(stmt.var)),
             [self._visit_expr(idx, None) for idx in stmt.indices],
