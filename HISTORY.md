@@ -1,5 +1,15 @@
 # Version History
 
+## [0.1.6] - 2026-05-26
+### Features:
+  - AST:
+    - remove `ListSet` AST node
+  - Language:
+    - support multiple return statements
+  - Transforms:
+    - add zip elimination
+    - add rounding elimination
+
 ## [0.1.5] - 2026-05-13
 ### Features:
   - Analyses
