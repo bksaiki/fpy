@@ -4,6 +4,26 @@ Unit tests for function inlining
 
 import fpy2 as fp
 
+from fpy2.ast import Call
+from fpy2.ast.visitor import DefaultVisitor
+from fpy2.function import Function
+
+
+def _count_fpy_calls(ast) -> int:
+    """Number of remaining calls to user-defined FPy functions."""
+    n = 0
+
+    class _C(DefaultVisitor):
+        def _visit_call(self, e, ctx):
+            nonlocal n
+            if isinstance(e.fn, Function):
+                n += 1
+            super()._visit_call(e, ctx)
+
+    _C()._visit_function(ast, None)
+    return n
+
+
 class TestFuncInline():
 
     def assertASTEquiv(self, f: fp.ast.FuncDef, g: fp.ast.FuncDef, msg: str = ''):
@@ -78,3 +98,29 @@ class TestFuncInline():
         h = fp.transform.ConstFold.apply(h, enable_op=False)
         e = fp.transform.ConstFold.apply(expect.ast, enable_op=False)
         self.assertASTEquiv(h, e, 'inlining failed')
+
+    def test_recursive_bottom_up(self):
+        """`recursive=True` flattens a multi-level call graph with a
+        shared callee, leaving no user-function calls and preserving
+        the computed value."""
+
+        @fp.fpy
+        def c(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def b(x: fp.Real) -> fp.Real:
+            return c(x) * 2
+
+        @fp.fpy
+        def a(x: fp.Real) -> fp.Real:
+            # `c` is shared: reached via `b` and directly.
+            return b(x) + c(x)
+
+        inlined = fp.transform.FuncInline.apply(a.ast, recursive=True)
+        # everything user-defined is inlined away
+        assert _count_fpy_calls(inlined) == 0
+        # value is preserved
+        inlined_fn = Function(inlined, None)
+        for xv in (0.0, 1.5, -3.25, 10.0):
+            assert a(xv) == inlined_fn(xv)

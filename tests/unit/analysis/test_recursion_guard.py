@@ -13,10 +13,11 @@ import pytest
 import fpy2 as fp
 
 from fpy2.analysis import (
-    CallGraphError, ContextInfer, ContextInferError, FormatInfer,
+    CallGraphError, ContextInfer, ContextInferError, FormatInfer, Purity,
     TypeInfer, TypeInferError,
 )
 from fpy2.ast import DefaultVisitor
+from fpy2.transform import FuncInline
 
 
 def _first_call(func):
@@ -103,3 +104,30 @@ class TestFormatInferGuard:
 
         # no exception
         FormatInfer.analyze(f.ast)
+
+
+class TestPurityGuard:
+    def test_recursion_raises_call_graph_error(self):
+        m = _make_self_cycle()
+        # Purity returns a bool; a structural cycle is an error, not a
+        # purity verdict — CallGraphError propagates.
+        with pytest.raises(CallGraphError):
+            Purity.analyze(m.ast)
+
+    def test_acyclic_multi_function_still_analyzes(self):
+        @fp.fpy
+        def g(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return g(x) * 2
+
+        assert Purity.analyze(f.ast) is True
+
+
+class TestFuncInlineGuard:
+    def test_recursion_raises_call_graph_error(self):
+        m = _make_self_cycle()
+        with pytest.raises(CallGraphError):
+            FuncInline.apply(m.ast)

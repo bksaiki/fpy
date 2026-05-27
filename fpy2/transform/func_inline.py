@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from ..analysis import (
-    AssignDef, DefineUse, DefineUseAnalysis, Reachability, ReachingDefs,
-    SyntaxCheck,
+    AssignDef, CallGraph, DefineUse, DefineUseAnalysis, Reachability,
+    ReachingDefs, SyntaxCheck,
 )
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
@@ -46,6 +46,7 @@ class _FuncInline(DefaultTransformVisitor):
     func: FuncDef
     def_use: DefineUseAnalysis
     funcs: set[FuncDef] | None
+    inlined: dict[FuncDef, FuncDef]
     recursive: bool
 
     gensym: Gensym
@@ -57,12 +58,21 @@ class _FuncInline(DefaultTransformVisitor):
         func: FuncDef,
         def_use: DefineUseAnalysis,
         funcs: set[FuncDef] | None,
+        inlined: dict[FuncDef, FuncDef] | None = None,
         recursive: bool = True
     ):
         self.func = func
         self.def_use = def_use
         self.funcs = funcs
+        # Cache of fully-inlined callee bodies, keyed by callee
+        # ``FuncDef``.  ``_visit_call`` reuses a cached body across call
+        # sites instead of re-inlining the whole callee subtree each
+        # time.  ``FuncInline.apply`` may pre-populate it in leaves-first
+        # order (so every lookup is a hit); otherwise it fills lazily on
+        # first use.  Either way it is never re-built per call site.
+        self.inlined = {} if inlined is None else inlined
         self.recursive = recursive
+
         self.gensym = Gensym(self.def_use.names())
         self.free_vars = set(func.free_vars)
         self.env = func.env.copy()
@@ -75,10 +85,17 @@ class _FuncInline(DefaultTransformVisitor):
             # not a candidate for inlining
             return super()._visit_call(e, ctx)
 
-        # recursively inline the callee function body
-        # ASSUME: no recursive calls, i.e. the callee function does not call itself directly or indirectly
+        # Inline the callee body.  Acyclicity is guaranteed by the
+        # `CallGraph` guard in `FuncInline.apply`, so this terminates.
         if self.recursive:
-            ast = FuncInline.apply(e.fn.ast, recursive=True)
+            if e.fn.ast in self.inlined:
+                # cached
+                ast = self.inlined[e.fn.ast]
+            else:
+                # first time we see this callee, inline it and cache the result
+                ast = FuncInline.apply(e.fn.ast, recursive=True)
+                self.inlined[e.fn.ast] = ast
+
             def_use = DefineUse.analyze(ast)
             self.gensym.reserve(*def_use.names())
         else:
@@ -184,17 +201,38 @@ class FuncInline:
     ) -> FuncDef:
         """
         Applies function inlining to `func` returning the transformed function.
+
+        Raises `CallGraphError` if the call graph reachable from `func`
+        contains a cycle (FPy forbids recursion; inlining a recursive
+        call would not terminate).
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
-        if def_use is None:
-            def_use = DefineUse.analyze(func)
+
+        # Recursion guard — see the method docstring.  Also gives us
+        # the leaves-first order for the bottom-up path below.
+        cg = CallGraph.analyze(func)
 
         if funcs is not None:
             funcs = set(funcs)
 
-        inst = _FuncInline(func, def_use, funcs, recursive=recursive)
-        func = inst.apply()
+        if recursive and funcs is None:
+            # Bottom-up: inline each reachable function exactly once in
+            # leaves-first order, reusing cached results, instead of
+            # re-inlining the whole callee subtree at every call site.
+            inlined: dict[FuncDef, FuncDef] = {}
+            for fdef in cg.order:
+                fdef_du = DefineUse.analyze(fdef)
+                inlined[fdef] = _FuncInline(
+                    fdef, fdef_du, None, recursive=True, inlined=inlined,
+                ).apply()
+            result = inlined[func]
+        else:
+            # One-level inlining, or selective inlining via `funcs`:
+            # keep the per-call-site strategy.
+            if def_use is None:
+                def_use = DefineUse.analyze(func)
+            result = _FuncInline(func, def_use, funcs, recursive=recursive).apply()
 
-        SyntaxCheck.check(func, ignore_unknown=True)
-        return func
+        SyntaxCheck.check(result, ignore_unknown=True)
+        return result
