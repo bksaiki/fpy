@@ -121,6 +121,6 @@ class TestFuncInline():
         # everything user-defined is inlined away
         assert _count_fpy_calls(inlined) == 0
         # value is preserved
-        inlined_fn = Function(inlined, None)
+        inlined_fn = Function(inlined)
         for xv in (0.0, 1.5, -3.25, 10.0):
             assert a(xv) == inlined_fn(xv)

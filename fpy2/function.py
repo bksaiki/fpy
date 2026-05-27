@@ -10,7 +10,6 @@ from .number import Context
 
 # avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:
-    from .types import FunctionType
     from .interpret import Interpreter
 
 P = ParamSpec('P')
@@ -33,18 +32,15 @@ class Function(Generic[P, R]):
     """
 
     ast: fpyast.FuncDef
-    sig: Optional['FunctionType']
     runtime: Optional['Interpreter']
 
     def __init__(
         self,
         ast: fpyast.FuncDef,
-        sig: Optional['FunctionType'],
         *,
         runtime: Optional['Interpreter'] = None,
     ):
         self.ast = ast
-        self.sig = sig
         self.runtime = runtime
 
     def __repr__(self):
@@ -93,17 +89,17 @@ class Function(Generic[P, R]):
         if not isinstance(core, FPCore):
             raise TypeError(f'expected FPCore, got {core}')
         ir = fpcore_to_fpy(core, env=env, default_name=default_name, ignore_unknown=ignore_unknown)
-        return Function(ir, None)
+        return Function(ir)
 
     def with_rt(self, rt: 'Interpreter'):
         if not isinstance(rt, Interpreter):
             raise TypeError(f'expected \'BaseInterpreter\', got {rt}')
-        return Function(self.ast, self.sig, runtime=rt)
+        return Function(self.ast, runtime=rt)
 
     def with_ast(self, ast: fpyast.FuncDef):
         if not isinstance(ast, fpyast.FuncDef):
             raise TypeError(f'expected \'FuncDef\', got {ast}')
-        return Function(ast, self.sig, runtime=self.runtime)
+        return Function(ast, runtime=self.runtime)
 
 ###########################################################
 # Default function call

@@ -221,7 +221,7 @@ def _apply_fpy_decorator(
         )
 
     # wrap the AST in a Function
-    return Function(ast, None)
+    return Function(ast)
 
 def _is_valid_context(ctx: Context | str | tuple):
     match ctx:

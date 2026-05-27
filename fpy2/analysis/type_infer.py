@@ -163,15 +163,27 @@ class _TypeInferInstance(Visitor):
 
     func: FuncDef
     def_use: DefineUseAnalysis
+    sigs: dict[FuncDef, 'FunctionType']
     by_def: dict[Definition, Type]
     by_expr: dict[Expr, Type]
     ret_type: Type | None
     tvars: Unionfind[Type]
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(
+        self,
+        func: FuncDef,
+        def_use: DefineUseAnalysis,
+        sigs: dict[FuncDef, 'FunctionType'] | None = None,
+    ):
         self.func = func
         self.def_use = def_use
+        # Generalized signatures of already-checked callees, keyed by
+        # ``FuncDef``.  `TypeInfer.check` pre-fills this in leaves-first
+        # call-graph order, so a call's `_visit_call` is a lookup rather
+        # than a recursive re-check.  Empty/partial caches fall back to
+        # lazy checking (see `_visit_call`).
+        self.sigs = {} if sigs is None else sigs
         self.by_def = {}
         self.by_expr = {}
         self.ret_type = None
@@ -444,18 +456,16 @@ class _TypeInferInstance(Visitor):
 
                 return fn_ty.return_type
             case Function():
-                # calling a function
-
-                # type check the function and instantiate
-                if e.fn.sig is None:
-                    # type checking not run.  Recursion can't loop here:
-                    # `TypeInfer.check` runs a `CallGraph` acyclicity
-                    # guard at its entry.
-                    fn_info = TypeInfer.check(e.fn.ast)
-                    fn_ty = fn_info.fn_type
-                else:
-                    fn_ty = e.fn.sig
-                fn_ty = cast(FunctionType, self._instantiate(fn_ty))
+                # calling a function: look up the callee's generalized
+                # signature and instantiate it at this site.  `check`
+                # pre-fills `sigs` in leaves-first call-graph order, so
+                # this is normally a hit; the miss branch lazily checks
+                # a callee that wasn't walked (and can't loop — `check`
+                # runs a `CallGraph` acyclicity guard at its entry).
+                callee = e.fn.ast
+                if callee not in self.sigs:
+                    self.sigs[callee] = TypeInfer.check(callee).fn_type
+                fn_ty = cast(FunctionType, self._instantiate(self.sigs[callee]))
 
                 # check arity
                 if len(fn_ty.arg_types) != len(e.args):
@@ -811,19 +821,29 @@ class TypeInfer:
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
 
-        # Guard against recursion: FPy forbids it, and the lazy callee
-        # analysis in `_visit_call` would otherwise recurse forever on a
-        # cyclic call graph.  `CallGraph` raises on any cycle reachable
-        # from `func`, so this fires before the body is walked.
+        # Build the call graph: this guards against recursion (FPy
+        # forbids it; `CallGraph` raises on any reachable cycle) and
+        # gives the leaves-first order to check callees before callers.
         try:
-            CallGraph.analyze(func)
+            cg = CallGraph.analyze(func)
         except CallGraphError as e:
             raise TypeInferError(str(e)) from e
 
-        if def_use is None:
-            def_use = DefineUse.analyze(func)
-        inst = _TypeInferInstance(func, def_use)
-        return inst.analyze()
+        # Walk callees-before-callers, caching each generalized
+        # signature so `_visit_call` reuses it instead of re-checking
+        # the callee at every call site.  The root is last in the
+        # order, so its full analysis is what we return.
+        sigs: dict[FuncDef, FunctionType] = {}
+        result: TypeAnalysis | None = None
+        for fdef in cg.order:
+            fdef_du = def_use if fdef is func and def_use is not None \
+                else DefineUse.analyze(fdef)
+            analysis = _TypeInferInstance(fdef, fdef_du, sigs).analyze()
+            sigs[fdef] = analysis.fn_type
+            if fdef is func:
+                result = analysis
+        assert result is not None  # func is always in cg.order
+        return result
 
     @staticmethod
     def infer_primitive(prim: Primitive) -> FunctionType:
