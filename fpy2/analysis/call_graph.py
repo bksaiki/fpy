@@ -81,6 +81,71 @@ class CallGraphAnalysis:
         """Direct callers of *func*."""
         return self.callers[func]
 
+    def format(self) -> str:
+        """An indented-tree rendering rooted at :attr:`root`, callees
+        nested under their callers.  A function reached from more than
+        one caller is expanded once; later occurrences are marked
+        ``(*)`` and not re-expanded (keeping shared subtrees compact —
+        and the output finite even if a cycle ever slipped through)."""
+        lines: list[str] = []
+        revisited = self._format_node(self.root, '', '', True, lines, set())
+        if revisited:
+            lines.append('')
+            lines.append('(*) = callees shown above')
+        return '\n'.join(lines)
+
+    def _format_node(
+        self,
+        func: FuncDef,
+        prefix: str,
+        connector: str,
+        is_root: bool,
+        lines: list[str],
+        seen: set[FuncDef],
+    ) -> bool:
+        """Append the subtree rooted at *func* to *lines*.  Returns
+        whether any node in the subtree was a revisit, so
+        :meth:`format` knows whether to print the ``(*)`` legend."""
+        revisit = func in seen
+        marker = ' (*)' if revisit else ''
+        lines.append(f'{prefix}{connector}{func.name}{marker}')
+        if revisit:
+            return True
+        seen.add(func)
+
+        # Children continue the vertical line unless this node was the
+        # last of its siblings (``└─``), in which case the column is
+        # blank below it.  The root's children start at column zero.
+        child_prefix = '' if is_root else prefix + (
+            '   ' if connector == '└─ ' else '│  '
+        )
+        any_revisit = False
+        callees = self.callees[func]
+        for i, callee in enumerate(callees):
+            last = i == len(callees) - 1
+            child_connector = '└─ ' if last else '├─ '
+            if self._format_node(
+                callee, child_prefix, child_connector, False, lines, seen,
+            ):
+                any_revisit = True
+        return any_revisit
+
+    def dot(self) -> str:
+        """A Graphviz ``digraph`` rendering, pipe-able to ``dot``.
+
+        Nodes are given stable ids (``n0``, ``n1``, … in leaves-first
+        order) with the function name as the label, so two distinct
+        functions that happen to share a name stay distinct."""
+        ids = {func: f'n{i}' for i, func in enumerate(self.order)}
+        lines = ['digraph call_graph {']
+        for func in self.order:
+            lines.append(f'  {ids[func]} [label="{func.name}"];')
+        for func in self.order:
+            for callee in self.callees[func]:
+                lines.append(f'  {ids[func]} -> {ids[callee]};')
+        lines.append('}')
+        return '\n'.join(lines)
+
     def __iter__(self):
         """Iterate functions leaves-first (callees before callers)."""
         return iter(self.order)

@@ -166,6 +166,91 @@ class TestLeavesFirst:
         assert order[-1] is a.ast
 
 
+class TestFormat:
+    """``format()`` renders an indented tree rooted at the entry."""
+
+    def test_single_node(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        assert _cg(f).format() == 'f'
+
+    def test_chain(self):
+        @fp.fpy
+        def c(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def b(x: fp.Real) -> fp.Real:
+            return c(x) * 2
+
+        @fp.fpy
+        def a(x: fp.Real) -> fp.Real:
+            return b(x) - 1
+
+        assert _cg(a).format() == 'a\n└─ b\n   └─ c'
+
+    def test_diamond_marks_revisit_and_legend(self):
+        @fp.fpy
+        def d(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def b(x: fp.Real) -> fp.Real:
+            return d(x) * 2
+
+        @fp.fpy
+        def c(x: fp.Real) -> fp.Real:
+            return d(x) - 2
+
+        @fp.fpy
+        def a(x: fp.Real) -> fp.Real:
+            return b(x) + c(x)
+
+        assert _cg(a).format() == (
+            'a\n'
+            '├─ b\n'
+            '│  └─ d\n'
+            '└─ c\n'
+            '   └─ d (*)\n'
+            '\n'
+            '(*) = callees shown above'
+        )
+
+
+class TestDot:
+    """``dot()`` renders a Graphviz digraph with collision-safe ids."""
+
+    def test_diamond(self):
+        @fp.fpy
+        def d(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def b(x: fp.Real) -> fp.Real:
+            return d(x) * 2
+
+        @fp.fpy
+        def c(x: fp.Real) -> fp.Real:
+            return d(x) - 2
+
+        @fp.fpy
+        def a(x: fp.Real) -> fp.Real:
+            return b(x) + c(x)
+
+        out = _cg(a).dot()
+        assert out.startswith('digraph call_graph {')
+        assert out.rstrip().endswith('}')
+        # one node declaration per function
+        assert out.count('[label=') == 4
+        # one edge per (deduplicated) call-graph edge: a->b, a->c, b->d, c->d
+        assert out.count(' -> ') == 4
+        # labels are the function names
+        for name in ('a', 'b', 'c', 'd'):
+            assert f'[label="{name}"]' in out
+
+
 class TestExternalLeaves:
     """Primitives / builtins / context constructors are not nodes."""
 
