@@ -118,6 +118,28 @@ class TestStructure:
         assert cg.callees_of(outer.ast) == [inner.ast]
         assert len(cg.call_sites[outer.ast]) == 2
 
+    def test_nested_call_in_kwarg_value_discovered(self):
+        # ``DefaultVisitor._visit_call`` only walks positional args; the
+        # collector must also descend into keyword-argument values, or a
+        # callee reached only through a kwarg is missed entirely.
+        @fp.fpy
+        def leaf(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def mid(x: fp.Real) -> fp.Real:
+            return x * 2
+
+        @fp.fpy
+        def top(x: fp.Real) -> fp.Real:
+            # `leaf` is reachable ONLY through the kwarg value.
+            return mid(x=leaf(x))
+
+        cg = _cg(top)
+        assert cg.nodes == {top.ast, mid.ast, leaf.ast}
+        assert cg.callees_of(top.ast) == [mid.ast, leaf.ast]
+        assert len(cg.call_sites[top.ast]) == 2
+
 
 class TestLeavesFirst:
     """The ``order`` field / iteration is callee-before-caller."""

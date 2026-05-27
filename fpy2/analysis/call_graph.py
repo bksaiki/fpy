@@ -45,7 +45,13 @@ class _CallCollector(DefaultVisitor):
 
     def _visit_call(self, e: Call, ctx: None):
         self.calls.append(e)
+        # ``DefaultVisitor._visit_call`` only walks positional args, so
+        # visit keyword-argument values explicitly — a call nested in a
+        # kwarg value (and any cycle through it) would otherwise be
+        # missed from the graph and the acyclicity guard.
         super()._visit_call(e, ctx)
+        for _, kwarg in e.kwargs:
+            self._visit_expr(kwarg, ctx)
 
     def collect(self, func: FuncDef) -> list[Call]:
         self.calls = []
