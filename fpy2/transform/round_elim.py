@@ -11,7 +11,7 @@ transform makes that fact structural by computing ``g`` under
 ``with fp.REAL:`` and binding the result to a fresh name that
 replaces the original expression site.
 
-For explicit ``Round`` / ``RoundExact`` / ``Cast`` nodes, the same
+For explicit ``Round`` / ``Cast`` nodes, the same
 notion produces a different rewrite: when the argument's bound
 already fits in the target context, the whole node collapses to
 its argument (the round was a no-op at runtime).
@@ -86,7 +86,7 @@ from ..analysis.format_infer import (
 )
 from ..ast.fpyast import (
     Abs, Add, Assign, Cast, ContextStmt, Expr, ForeignVal, FuncDef, IfExpr,
-    ListComp, Mul, Neg, Round, RoundExact, Stmt, StmtBlock, Sub,
+    ListComp, Mul, Neg, Round, Stmt, StmtBlock, Sub,
     UnderscoreId, Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
@@ -174,7 +174,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
         ``None`` for ops we don't handle.  Pulls the children's
         stored (post-round) bounds from :attr:`format_info.by_expr`
         and applies the corresponding ``exact_binop`` / ``exact_unop``
-        primitive.  For ``Round`` / ``RoundExact`` / ``Cast``, the
+        primitive.  For ``Round`` / ``Cast``, the
         unrounded value *is* the argument."""
         match e:
             case Add():
@@ -203,7 +203,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
                 return exact_unop(
                     self.format_info.by_expr.get(e.arg), operator.neg,
                 )
-            case Round() | RoundExact() | Cast():
+            case Round() | Cast():
                 # The unrounded "value" of an explicit round node is
                 # the argument itself — the argument's post-round
                 # bound is the right input here because the explicit
@@ -234,7 +234,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
         provides.
 
         Only meaningful for rounded ops (arithmetic + explicit
-        ``Round`` / ``RoundExact`` / ``Cast``); other expressions
+        ``Round`` / ``Cast``); other expressions
         don't carry a context-driven round, so the question is
         ill-posed and the answer is ``False``.
 
@@ -248,7 +248,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
         Skipping these saves both pointless rewrites and the
         cascading storage failures."""
         if not isinstance(
-            e, (Add, Sub, Mul, Abs, Neg, Round, RoundExact, Cast),
+            e, (Add, Sub, Mul, Abs, Neg, Round, Cast),
         ):
             return False
         ctx = self._resolved_ctx(e)
@@ -294,7 +294,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
     #
     # The decision logic lives in ``_visit_expr``.  At each node:
     #
-    #  - Eliminable ``Round`` / ``RoundExact`` / ``Cast`` → replace
+    #  - Eliminable ``Round`` / ``Cast`` → replace
     #    with the (recursively-rewritten) argument.  Pure node-level
     #    rewrite, no preamble required, works at any expression
     #    position (including inside ListComp / IfExpr branches).
@@ -305,10 +305,10 @@ class _RoundElimInstance(DefaultTransformVisitor):
     #    still be individually eliminable).
 
     def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
-        # Round / RoundExact / Cast collapse: works regardless of
+        # Round / Cast collapse: works regardless of
         # ctx since it's a pure node-level rewrite (no preamble).
         if (
-            isinstance(e, (Round, RoundExact, Cast))
+            isinstance(e, (Round, Cast))
             and self._is_eliminable(e)
         ):
             return self._visit_expr(e.arg, ctx)
@@ -446,8 +446,8 @@ class RoundElim:
     """Rewrite expressions whose implicit rounding to the active
     context is provably an identity.  Arithmetic ops
     (``Add``/``Sub``/``Mul``/``Abs``/``Neg``) hoist into
-    ``with fp.REAL:`` preambles; explicit ``Round`` / ``RoundExact``
-    / ``Cast`` nodes collapse to their argument.
+    ``with fp.REAL:`` preambles; explicit ``Round`` / ``Cast``
+    nodes collapse to their argument.
 
     See the module docstring for the rewrite shape, the
     greedy-outermost policy, and the soundness invariants.

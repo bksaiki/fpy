@@ -25,8 +25,8 @@ Currently supported:
   inserts explicit ``static_cast`` conversions.
 - Rounding-context boundaries: ``with`` blocks emit save / set /
   restore around ``fesetround`` when the active mode changes;
-  ``Round`` / ``RoundExact`` / ``Cast`` lower as
-  ``static_cast`` (with a NaN-aware assertion for ``RoundExact``).
+  ``Round`` / ``Cast`` lower as
+  ``static_cast`` (with a NaN-aware assertion for ``Cast``).
 
 Anything else raises :class:`CppEmitError`, which the public
 ``CppCompiler`` re-wraps as :class:`CppCompileError`.
@@ -45,7 +45,7 @@ from ...ast.fpyast import (
     ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign, Integer,
     IsFinite, IsInf, IsNan, IsNormal, Len, ListComp, ListExpr, ListRef,
     ListSlice, Max, Min, NamedId, NaryOp, Not, Or, Range1, Range2, Range3,
-    Rational, ReturnStmt, Round, RoundExact, Signbit, Size, StmtBlock, Sum,
+    Rational, ReturnStmt, Round, Signbit, Size, StmtBlock, Sum,
     TernaryOp, TupleBinding, TupleExpr, UnaryOp, UnderscoreId, Var,
     WhileStmt, Zip,
 )
@@ -747,7 +747,7 @@ class CppEmitter(Visitor):
         should either narrow the active context or wrap the operand
         in ``fp.round(...)`` to acknowledge the precision change.
 
-        For user-explicit casts (``Round`` / ``RoundExact``, vector
+        For user-explicit casts (``Round`` / ``Cast``, vector
         subscript), use :meth:`_explicit_cast` instead — that path
         never refuses."""
         if arg_ty == target_ty:
@@ -767,7 +767,7 @@ class CppEmitter(Visitor):
         """Emit ``static_cast<target>(arg)`` unconditionally.
 
         Used at sites where the cast is part of the FPy semantics
-        the user wrote — ``Round`` / ``RoundExact`` lower to a cast,
+        the user wrote — ``Round`` / ``Cast`` lower to a cast,
         ``xs[i]`` needs ``static_cast<size_t>(i)``.  These callers
         accept that the conversion may be lossy."""
         return f'static_cast<{target_ty.format()}>({arg})'
@@ -1003,13 +1003,12 @@ class CppEmitter(Visitor):
         arg = self._visit_expr(e.arg, ctx)
         match e:
             case Cast():
-                # ``Cast`` is an analysis-only annotation: it asserts
-                # the argument's value is contained in the active
-                # context's format.  At the C++ level it's the
-                # identity — no generated code, no ``static_cast``
-                # (the explicit-cast policy is enforced by the
-                # op-table dispatch, not by ``Cast`` itself).
-                return arg
+                # ``Cast(arg)`` rounds ``arg`` into the active context
+                # and asserts the round was lossless (it's an error to
+                # cast a value the target format can't hold exactly).
+                # Lowered as ``static_cast`` → bind to a temp →
+                # ``assert(arg == tmp || (NaN-aware equality))``.
+                return self._emit_exact_cast(e, arg)
             case Not():
                 # Logical negation — operand is bool, result is bool.
                 # No rounding context involved.
@@ -1529,63 +1528,63 @@ class CppEmitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
         return result
-    def _visit_round(self, e, ctx) -> str:
-        # ``Round(arg)`` rounds ``arg`` to the active rounding
-        # context — emitted as a plain ``static_cast`` (the cast's
-        # rounding mode is the active ``fesetround`` mode set by
-        # Phase 5b at the surrounding ``with`` boundary).
-        #
-        # ``RoundExact(arg)`` is the same cast plus a runtime
-        # assertion that the cast was lossless: cast → bind to a
-        # temp → ``assert(arg == tmp || (NaN-aware equality))``.
-        arg = self._visit_expr(e.arg, ctx)
-        # The argument's storage is only used to short-circuit
-        # same-type casts.  Non-dyadic numeric literals
-        # (e.g., ``fp.round(3.14159265359)``) have a SetFormat with
-        # no representable storage — that's fine, we always cast.
+    def _scalar_cast_types(self, e):
+        """Source/target scalar storage for a round-like node ``e``.
+
+        The argument's storage is only used to short-circuit
+        same-type casts.  Non-dyadic numeric literals
+        (e.g., ``fp.round(3.14159265359)``) have a SetFormat with
+        no representable storage — that's fine, we always cast."""
         try:
             arg_ty = self._scalar_storage_for_expr(e.arg)
         except CppEmitError:
             arg_ty = None
         active = self._active_ctx_for(e)
         target_ty = self._scalar_for_ctx(active, at=e)
+        return arg_ty, target_ty
 
-        match e:
-            case Round():
-                # The user explicitly asked to round into the active
-                # context — emit the cast even when lossy.  Same-type
-                # short-circuits to a no-op.
-                if arg_ty == target_ty:
-                    return arg
-                return self._explicit_cast(arg, target_ty)
-            case RoundExact():
-                # Same-type is a guaranteed no-op, no assert.
-                if arg_ty == target_ty:
-                    return arg
-                # Bind the rounded value to a temp so the assertion
-                # can name it without re-evaluating the source.
-                tmp = self._fresh_temp()
-                self.writer.add_line(
-                    f'{target_ty.format()} {tmp} = '
-                    f'{self._explicit_cast(arg, target_ty)};'
-                )
-                # NaN-aware comparison: ``NaN == NaN`` is false in
-                # C++, so FP operands need an extra ``isnan`` guard
-                # to avoid false asserts when both sides round to
-                # NaN.  Skipped for purely integer operand pairs.
-                if target_ty.is_float() or (arg_ty is not None and arg_ty.is_float()):
-                    check = (
-                        f'{arg} == {tmp} || '
-                        f'(std::isnan({arg}) && std::isnan({tmp}))'
-                    )
-                else:
-                    check = f'{arg} == {tmp}'
-                self.writer.add_line(f'assert({check});')
-                return tmp
-            case _:
-                raise CppEmitError(
-                    f'unsupported round op: {type(e).__name__}', at=e,
-                )
+    def _emit_exact_cast(self, e, arg: str) -> str:
+        # ``Cast(arg)`` is a ``static_cast`` plus a runtime assertion
+        # that the cast was lossless: cast → bind to a temp →
+        # ``assert(arg == tmp || (NaN-aware equality))``.
+        arg_ty, target_ty = self._scalar_cast_types(e)
+        # Same-type is a guaranteed no-op, no assert.
+        if arg_ty == target_ty:
+            return arg
+        # Bind the rounded value to a temp so the assertion
+        # can name it without re-evaluating the source.
+        tmp = self._fresh_temp()
+        self.writer.add_line(
+            f'{target_ty.format()} {tmp} = '
+            f'{self._explicit_cast(arg, target_ty)};'
+        )
+        # NaN-aware comparison: ``NaN == NaN`` is false in
+        # C++, so FP operands need an extra ``isnan`` guard
+        # to avoid false asserts when both sides round to
+        # NaN.  Skipped for purely integer operand pairs.
+        if target_ty.is_float() or (arg_ty is not None and arg_ty.is_float()):
+            check = (
+                f'{arg} == {tmp} || '
+                f'(std::isnan({arg}) && std::isnan({tmp}))'
+            )
+        else:
+            check = f'{arg} == {tmp}'
+        self.writer.add_line(f'assert({check});')
+        return tmp
+
+    def _visit_round(self, e, ctx) -> str:
+        # ``Round(arg)`` rounds ``arg`` to the active rounding
+        # context — emitted as a plain ``static_cast`` (the cast's
+        # rounding mode is the active ``fesetround`` mode set by
+        # Phase 5b at the surrounding ``with`` boundary).  The user
+        # explicitly asked to round into the active context, so the
+        # cast is emitted even when lossy.  Same-type short-circuits
+        # to a no-op.
+        arg = self._visit_expr(e.arg, ctx)
+        arg_ty, target_ty = self._scalar_cast_types(e)
+        if arg_ty == target_ty:
+            return arg
+        return self._explicit_cast(arg, target_ty)
 
     def _visit_round_at(self, e, ctx):
         self._unsupported('RoundAt', at=e)

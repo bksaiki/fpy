@@ -1,12 +1,13 @@
 """
-Phase 5c tests for the cpp emitter — ``Round``, ``RoundExact``, ``Cast``.
+Phase 5c tests for the cpp emitter — ``Round`` and ``Cast``.
 
 - ``Round(arg)`` is a plain ``static_cast<target>(arg)``; the cast's
   rounding mode comes from Phase 5b's ``fesetround`` boundary.
-- ``RoundExact(arg)`` adds a runtime assertion that the round-trip
-  preserves the value; FP operands get a NaN-aware equality check.
-- ``Cast(arg)`` is a pure analysis annotation — emitted as the
-  identity (no ``static_cast``).
+- ``Cast(arg)`` (the node ``fp.cast`` and ``fp.round_exact`` both
+  parse to) is the same cast plus a runtime assertion that the
+  round-trip preserves the value; FP operands get a NaN-aware
+  equality check.  Casting to the same type is a guaranteed no-op,
+  so no cast and no assertion are emitted.
 """
 
 import fpy2 as fp
@@ -48,7 +49,8 @@ class TestRound:
 
 
 class TestRoundExact:
-    """Round + assert that the cast was lossless."""
+    """``fp.round_exact`` (which parses to a ``Cast`` node):
+    round + assert that the cast was lossless."""
 
     def test_fp_round_exact_uses_nan_aware_compare(self):
         @fp.fpy
@@ -106,9 +108,10 @@ class TestRoundExact:
 
 
 class TestCast:
-    """``Cast`` is the identity — no generated code."""
+    """``Cast`` rounds and asserts the result is exact — same
+    emission as ``round_exact`` (they parse to the same node)."""
 
-    def test_cast_emits_identity(self):
+    def test_cast_same_type_emits_identity(self):
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -118,9 +121,28 @@ class TestCast:
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64)],
         )
+        # Same-type cast is a guaranteed no-op.
         assert 'static_cast' not in out
         assert 'assert' not in out
         assert 'return x;' in out
+
+    def test_cast_cross_type_emits_assert(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                return fp.cast(x)
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP32,
+            arg_types=[RealType(fp.FP64)],
+        )
+        # Lossy-capable cast → cast bound to a temp + NaN-aware assert.
+        assert 'float __cpp_tmp1 = static_cast<float>(x);' in out
+        assert (
+            'assert(x == __cpp_tmp1 || '
+            '(std::isnan(x) && std::isnan(__cpp_tmp1)));'
+        ) in out
+        assert 'return __cpp_tmp1;' in out
 
 
 class TestRoundElimIntegration:
@@ -140,7 +162,7 @@ class TestRoundElimIntegration:
         optimization the emitter still produces the full
         assertion-protected cast (``static_cast<float>(1)`` bound
         to a temp + NaN-aware equality check).  With RoundElim the
-        ``RoundExact`` node collapses to its argument and the
+        ``Cast`` node collapses to its argument and the
         whole pattern disappears."""
 
         @fp.fpy

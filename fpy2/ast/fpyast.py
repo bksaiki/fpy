@@ -168,7 +168,6 @@ __all__ = [
 
     # Rounding operator
     'Round',
-    'RoundExact',
     'RoundAt',
     'Cast',
 
@@ -1090,16 +1089,12 @@ class And(NaryOp):
 class Round(NamedUnaryOp):
     """FPy node: inter-format rounding"""
 
-class RoundExact(NamedUnaryOp):
-    """FPy node: inter-format rounding"""
-    __slots__ = ()
-
 class RoundAt(NamedBinaryOp):
     """FPy node: inter-format rounding with absolute position"""
     __slots__ = ()
 
 class Cast(NamedUnaryOp):
-    """FPy node: identity operation that checks if argument is contained in current rounding context"""
+    """FPy node: round to the current context, asserting the result is exact"""
     __slots__ = ()
 
 # Tensor operators
