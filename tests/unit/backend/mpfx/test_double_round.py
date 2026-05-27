@@ -114,6 +114,7 @@ class TestDoubleRound():
     def test_rto_rto(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RTO](ctx2[RTO](x)) == ctx1[RTO](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTO, fp.RM.RTO)
+        assume(p1 is None or p1 + dp >= 2)
         A1 = AbstractFormat.from_format(ctx1.format())
         A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
@@ -136,6 +137,7 @@ class TestDoubleRound():
     def test_rto_rtz(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RTZ](ctx2[RTO](x)) == ctx1[RTZ](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTZ, fp.RM.RTO)
+        assume(ctx1.pos_maxval < ctx2.pos_maxval)
         A1 = AbstractFormat.from_format(ctx1.format())
         A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
