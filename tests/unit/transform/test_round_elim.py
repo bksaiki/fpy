@@ -8,7 +8,7 @@ tests assert three kinds of properties:
 
 1. **Structural shape** of the rewritten AST.  Counts of
    ``with fp.REAL:`` blocks, presence/absence of ``Round`` /
-   ``RoundExact`` / ``Cast`` nodes, presence/absence of arithmetic
+   ``Cast`` nodes, presence/absence of arithmetic
    ops under the original (non-REAL) context.
 2. **Negative checks**: unchanged inputs (REAL scope, ops that
    don't fit) compare via ``is_equiv`` against the original AST.
@@ -21,7 +21,7 @@ import fpy2 as fp
 
 from fpy2.ast.fpyast import (
     Abs, Add, Assign, BinaryOp, Cast, ContextStmt, ForeignVal, Mul, Neg, Round,
-    RoundExact, Sub, UnaryOp,
+    Sub, UnaryOp,
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL
@@ -33,7 +33,7 @@ from fpy2.transform import RoundElim
 
 
 _ROUNDED_ARITH = (Add, Sub, Mul, Abs, Neg)
-_ROUND_NODES = (Round, RoundExact, Cast)
+_ROUND_NODES = (Round, Cast)
 
 
 def _count_real_blocks(ast: fp.ast.FuncDef) -> int:
@@ -211,7 +211,7 @@ class TestArithmeticHoist:
 
 
 # ----------------------------------------------------------------------
-# Round / RoundExact / Cast collapse
+# Round / Cast collapse
 
 
 class TestRoundNodeCollapse:
@@ -258,7 +258,8 @@ class TestRoundNodeCollapse:
         assert _eval(out, f) == f()
 
     def test_round_exact_collapses_when_arg_fits(self):
-        """``fp.round_exact`` is identity-when-fits just like Round."""
+        """``fp.round_exact`` parses to a ``Cast`` node and is
+        identity-when-fits just like Round."""
 
         @fp.fpy
         def f():
@@ -266,7 +267,7 @@ class TestRoundNodeCollapse:
                 return fp.round_exact(1.0)
 
         out = RoundElim.apply(f.ast)
-        assert not _has_node(out, RoundExact)
+        assert not _has_node(out, Cast)
         assert _eval(out, f) == f()
 
 

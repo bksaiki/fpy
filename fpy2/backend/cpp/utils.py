@@ -10,7 +10,7 @@ explicitly and concatenate them — same shape as the legacy
 
 Header coverage tracks what the emitter actually uses:
 
-- ``<cassert>``: ``assert(...)`` from ``RoundExact``.
+- ``<cassert>``: ``assert(...)`` from ``Cast``.
 - ``<cfenv>``: ``std::fegetround`` / ``std::fesetround`` and the
   ``FE_*`` rounding-mode macros.
 - ``<cmath>``: every ``std::fabs`` / ``std::sqrt`` / ``std::sin`` /

@@ -465,7 +465,7 @@ def round_is_identity(
 
     *unrounded* is the unrounded value-set, typically the result of
     :func:`exact_binop` / :func:`exact_unop` (or, for explicit
-    ``Round``/``RoundExact``/``Cast`` nodes, the argument's inferred
+    ``Round``/``Cast`` nodes, the argument's inferred
     bound).  *ctx* is the concrete rounding context whose
     round-identity behavior we care about.
 
@@ -1064,10 +1064,10 @@ class _FormatInferInstance(Visitor):
             case Sum():
                 assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
                 return self._sum_bound(e, arg_fmt)
-            case Round() | RoundExact() | Cast():
-                # Identity-when-fits.  ``Round`` / ``RoundExact`` round
-                # the argument to the active scope; ``Cast`` asserts
-                # the argument already fits.  When the argument's
+            case Round() | Cast():
+                # Identity-when-fits.  ``Round`` rounds the argument to
+                # the active scope; ``Cast`` rounds and asserts the
+                # result is exact.  When the argument's
                 # inferred format is contained in the scope's format,
                 # every one of these operations is the identity at the
                 # value level — so the result's tight format equals

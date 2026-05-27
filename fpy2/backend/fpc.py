@@ -272,7 +272,7 @@ class _FPCoreCompileInstance(Visitor):
         args = [self._visit_expr(c, ctx) for c in e.args]
         return fpc.UnknownOperator(*args, name=name)
 
-    def _visit_round(self, e: Round | RoundExact, ctx: None) -> fpc.Expr:
+    def _visit_round(self, e: Round, ctx: None) -> fpc.Expr:
         # round expression
         match e.arg:
             case Decnum():

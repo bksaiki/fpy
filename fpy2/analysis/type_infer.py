@@ -79,7 +79,6 @@ _unary_table: dict[type[UnaryOp], FunctionType] = {
     Signbit: _Predicate,
     Not: _Bool1ary,
     Round: _Real1ary,
-    RoundExact: _Real1ary,
     Cast: _Real1ary,
     Logb: _Real1ary
 }

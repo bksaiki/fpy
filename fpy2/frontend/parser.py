@@ -69,7 +69,7 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     isnormal: IsNormal,
     signbit: Signbit,
     round: Round,
-    round_exact: RoundExact,
+    round_exact: Cast,
     cast: Cast,
     len: Len,
     dim: Dim,

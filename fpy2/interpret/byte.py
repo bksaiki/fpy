@@ -380,7 +380,6 @@ _UNARY_TABLE: dict[type[UnaryOp], object] = {
     IsNormal: ops.isnormal,
     Signbit: ops.signbit,
     Round: ops.round,
-    RoundExact: ops.round_exact,
     Cast: ops.cast,
     Logb: ops.logb,
     # rounding context

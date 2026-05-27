@@ -30,7 +30,6 @@ _expr_dispatch: dict[type[Expr], str] = {
     Attribute: "_visit_attribute",
 
     Round: "_visit_round",
-    RoundExact: "_visit_round",
     RoundAt: "_visit_round_at",
     Cast: "_visit_unaryop",
 }
@@ -109,7 +108,7 @@ class Visitor(ABC):
     def _visit_naryop(self, e: NaryOp, ctx: Any) -> Any:
         ...
 
-    def _visit_round(self, e: Round | RoundExact, ctx: Any) -> Any:
+    def _visit_round(self, e: Round, ctx: Any) -> Any:
         return self._visit_unaryop(e, ctx)
 
     def _visit_round_at(self, e: RoundAt, ctx: Any) -> Any:

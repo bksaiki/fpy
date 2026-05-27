@@ -449,7 +449,7 @@ class _MPFXBackendInstance(Visitor):
             case _:
                 raise MPFXCompileError(self.func, f'Unsupported nary operation to compile: {e}')
 
-    def _visit_round(self, e: Round | RoundExact, ctx: CompileCtx):
+    def _visit_round(self, e: Round, ctx: CompileCtx):
         if isinstance(e.arg, RealVal):
             # special case: rounded literal
             ty = self._expr_type(e)
