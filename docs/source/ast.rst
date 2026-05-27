@@ -47,6 +47,10 @@ Analyses
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.analysis.CallGraph
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.analysis.ContextInfer
    :members:
    :show-inheritance:

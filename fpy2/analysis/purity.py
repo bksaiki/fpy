@@ -7,6 +7,7 @@ from ..function import Function
 from ..number import Context
 from ..primitive import Primitive
 
+from .call_graph import CallGraph
 from .define_use import AssignDef, DefineUse, DefineUseAnalysis
 
 class _ImpureError(Exception):
@@ -87,6 +88,10 @@ class Purity:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
+        # Guard against recursion: `_visit_call` recurses into callees,
+        # which would loop forever on a cyclic call graph.  `CallGraph`
+        # raises `CallGraphError` on any cycle reachable from `func`.
+        CallGraph.analyze(func)
         if def_use is None:
             def_use = DefineUse.analyze(func)
         return _Purity(func, def_use).apply()
