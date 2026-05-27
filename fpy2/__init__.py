@@ -45,7 +45,6 @@ from .backend import (
     Backend,
     CppCompiler,
     FPCoreCompiler,
-    MPFXCompiler,
 )
 
 # runner

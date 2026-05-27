@@ -1,11 +1,12 @@
 """
-The recursion guard shared by ``TypeInfer`` and ``ContextInfer``.
+The recursion guard shared by the call-graph-walking analyses and
+transforms (``TypeInfer``, ``FormatInfer``, ``Purity``, ``FuncInline``).
 
-FPy forbids recursion, so both analyses run a :class:`CallGraph`
-acyclicity check at their entry point before lazily descending into
-callees.  The parser rejects forward references, so a cycle can't be
-built through ``@fp.fpy`` decoration; we patch a ``Call.fn`` to close
-one (the case that matters for programmatically-built ASTs).
+FPy forbids recursion, so each runs a :class:`CallGraph` acyclicity
+check at its entry point before lazily descending into callees.  The
+parser rejects forward references, so a cycle can't be built through
+``@fp.fpy`` decoration; we patch a ``Call.fn`` to close one (the case
+that matters for programmatically-built ASTs).
 """
 
 import pytest
@@ -13,8 +14,7 @@ import pytest
 import fpy2 as fp
 
 from fpy2.analysis import (
-    CallGraphError, ContextInfer, ContextInferError, FormatInfer, Purity,
-    TypeInfer, TypeInferError,
+    CallGraphError, FormatInfer, Purity, TypeInfer, TypeInferError,
 )
 from fpy2.ast import DefaultVisitor
 from fpy2.transform import FuncInline
@@ -64,25 +64,6 @@ class TestTypeInferGuard:
 
         # no exception
         TypeInfer.check(f.ast)
-
-
-class TestContextInferGuard:
-    def test_recursion_raises_context_infer_error(self):
-        m = _make_self_cycle()
-        with pytest.raises(ContextInferError):
-            ContextInfer.infer(m.ast)
-
-    def test_acyclic_multi_function_still_infers(self):
-        @fp.fpy
-        def g(x: fp.Real) -> fp.Real:
-            return x + 1
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            return g(x) * 2
-
-        # no exception
-        ContextInfer.infer(f.ast)
 
 
 class TestFormatInferGuard:

@@ -21,7 +21,6 @@ def _run_tests():
     test_reaching_defs()
     test_define_use()
     test_tcheck()
-    test_context_infer()
     test_partial_eval()
     test_context_use()
     test_array_size_infer()

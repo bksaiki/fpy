@@ -6,7 +6,7 @@ import fpy2 as fp
 
 from hypothesis import assume, given, strategies as st
 
-from fpy2.backend.mpfx import AbstractFormat
+from fpy2.analysis.format_infer import AbstractFormat
 
 from ...generators import real_floats
 
