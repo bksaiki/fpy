@@ -444,18 +444,11 @@ class _TypeInferInstance(Visitor):
 
                 return fn_ty.return_type
             case Function():
-                # calling a function
-
-                # type check the function and instantiate
-                if e.fn.sig is None:
-                    # type checking not run.  Recursion can't loop here:
-                    # `TypeInfer.check` runs a `CallGraph` acyclicity
-                    # guard at its entry.
-                    fn_info = TypeInfer.check(e.fn.ast)
-                    fn_ty = fn_info.fn_type
-                else:
-                    fn_ty = e.fn.sig
-                fn_ty = cast(FunctionType, self._instantiate(fn_ty))
+                # calling a function: type check it and instantiate.
+                # Recursion can't loop here: `TypeInfer.check` runs a
+                # `CallGraph` acyclicity guard at its entry.
+                fn_info = TypeInfer.check(e.fn.ast)
+                fn_ty = cast(FunctionType, self._instantiate(fn_info.fn_type))
 
                 # check arity
                 if len(fn_ty.arg_types) != len(e.args):
