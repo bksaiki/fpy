@@ -1254,10 +1254,10 @@ class RealFloat(numbers.Rational):
                             kept._exp += 1
                             carry = True
 
-                        # possibly need to recompute tiny_post
-                        if tiny_pre:
-                            assert emin is not None
-                            tiny_post = self._tiny_post(kept, emin, n, rm)
+                # possibly need to recompute tiny_post
+                if tiny_pre:
+                    assert emin is not None
+                    tiny_post = self._tiny_post(kept, emin, n, rm)
 
         # set flags
         kept._flags = Flags(tiny_pre=tiny_pre, tiny_post=tiny_post, inexact=inexact, carry=carry)
