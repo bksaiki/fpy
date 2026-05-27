@@ -10,6 +10,7 @@ from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind
 
 from ..types import *
+from .call_graph import CallGraph, CallGraphError
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
 #####################################################################
@@ -447,8 +448,9 @@ class _TypeInferInstance(Visitor):
 
                 # type check the function and instantiate
                 if e.fn.sig is None:
-                    # type checking not run
-                    # TODO: guard against recursion
+                    # type checking not run.  Recursion can't loop here:
+                    # `TypeInfer.check` runs a `CallGraph` acyclicity
+                    # guard at its entry.
                     fn_info = TypeInfer.check(e.fn.ast)
                     fn_ty = fn_info.fn_type
                 else:
@@ -808,6 +810,15 @@ class TypeInfer:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got {func}')
+
+        # Guard against recursion: FPy forbids it, and the lazy callee
+        # analysis in `_visit_call` would otherwise recurse forever on a
+        # cyclic call graph.  `CallGraph` raises on any cycle reachable
+        # from `func`, so this fires before the body is walked.
+        try:
+            CallGraph.analyze(func)
+        except CallGraphError as e:
+            raise TypeInferError(str(e)) from e
 
         if def_use is None:
             def_use = DefineUse.analyze(func)

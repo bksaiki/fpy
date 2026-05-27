@@ -14,6 +14,7 @@ from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind
 
 from ..types import *
+from .call_graph import CallGraph, CallGraphError
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 from .type_infer import TypeInfer, TypeAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo
@@ -495,8 +496,9 @@ class ContextTypeInferInstance(Visitor):
 
                 return fn_ty.return_type
             case Function():
-                # calling a function
-                # TODO: guard against recursion
+                # calling a function.  Recursion can't loop here:
+                # `ContextInfer.infer` runs a `CallGraph` acyclicity
+                # guard at its entry.
                 from ..transform import ConstFold, Monomorphize
 
                 # get argument types
@@ -964,6 +966,15 @@ class ContextInfer:
             raise TypeError(f'expected a \'FuncDef\', got {func}')
         if not isinstance(unsafe_cast_int, bool):
             raise TypeError(f'expected a \'bool\' for unsafe_cast_int, got {unsafe_cast_int}')
+
+        # Guard against recursion: FPy forbids it, and the lazy callee
+        # analysis in `_visit_call` would otherwise recurse forever on a
+        # cyclic call graph.  `CallGraph` raises on any cycle reachable
+        # from `func`, so this fires before the body is walked.
+        try:
+            CallGraph.analyze(func)
+        except CallGraphError as e:
+            raise ContextInferError(str(e)) from e
 
         if def_use is None:
             def_use = DefineUse.analyze(func)

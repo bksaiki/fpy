@@ -146,6 +146,7 @@ from ...types import (
 )
 
 from ..array_size import ArraySizeAnalysis, ArraySizeInfer, ListSize
+from ..call_graph import CallGraph, CallGraphError
 from ..context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextUseSite
 from ..define_use import DefineUse, DefineUseAnalysis
 from ..reaching_defs import PhiDef, Definition, DefSite
@@ -1252,10 +1253,11 @@ class _FormatInferInstance(Visitor):
         scopes inside the callee resolve correctly and parameter
         formats get pinned.
 
-        Recursion assumes no cycles in the call graph (a separate
-        analysis is expected to enforce that pre-condition).  Returns
-        ``None`` when the callee isn't a concrete :class:`Function`
-        — the caller falls back to a static type bound.
+        Recursion assumes no cycles in the call graph — enforced by
+        the :class:`CallGraph` acyclicity check at the public
+        :meth:`FormatInfer.analyze` entry.  Returns ``None`` when the
+        callee isn't a concrete :class:`Function` — the caller falls
+        back to a static type bound.
         """
         fn = e.fn
         if not isinstance(fn, Function):
@@ -1702,9 +1704,10 @@ class FormatInfer:
         :class:`FormatInfer` itself re-runs per instantiation so each
         callee sees the caller's active rounding context.
 
-        The call graph is assumed to be acyclic; recursion (direct
-        or mutual) is not handled here and is expected to be ruled
-        out by a separate analysis.
+        The call graph must be acyclic; recursion (direct or mutual)
+        is not handled by the per-call-site sub-analysis.  A
+        :class:`CallGraph` acyclicity check runs at this entry and
+        raises :class:`CallGraphError` if a cycle is reachable.
 
         Args:
             func:        The :class:`FuncDef` AST node to analyse.
@@ -1752,9 +1755,19 @@ class FormatInfer:
 
         Raises:
             TypeError: If *func* is not a :class:`FuncDef`.
+            CallGraphError: If the call graph reachable from *func*
+                contains a cycle (FPy forbids recursion).
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got {type(func)}")
+
+        # Guard against recursion: the per-call-site sub-analysis in
+        # `_analyze_callee` would otherwise diverge on a cyclic call
+        # graph.  `CallGraph` raises on any cycle reachable from `func`.
+        # The recursive descents go through `_FormatInferInstance`
+        # directly, not this public entry, so the check runs exactly
+        # once per top-level analysis — before any instance is built.
+        CallGraph.analyze(func)
 
         if pre_cache is None:
             pre_cache = PreAnalysisCache()
