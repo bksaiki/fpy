@@ -97,6 +97,86 @@ _GRAY = 1   # on the current DFS stack (in progress)
 _BLACK = 2  # fully visited
 
 
+class _CallGraphInstance:
+    """Builds the call graph via a three-color DFS, accumulating the
+    edge maps and a leaves-first (post-order) traversal order."""
+
+    func: FuncDef
+    nodes: set[FuncDef]
+    callees: dict[FuncDef, list[FuncDef]]
+    callers: dict[FuncDef, list[FuncDef]]
+    call_sites: dict[FuncDef, list[Call]]
+    order: list[FuncDef]
+
+    def __init__(self, func: FuncDef):
+        self.func = func
+        self.nodes = set()
+        self.callees = {}
+        self.callers = {}
+        self.call_sites = {}
+        self.order = []
+        # DFS bookkeeping.
+        self._color: dict[FuncDef, int] = {}
+        self._stack: list[FuncDef] = []
+        # Memoized per-body call collection (a callee reached from
+        # multiple sites is only scanned once).
+        self._body_calls: dict[FuncDef, list[Call]] = {}
+
+    def _calls_in(self, fdef: FuncDef) -> list[Call]:
+        if fdef not in self._body_calls:
+            self._body_calls[fdef] = _CallCollector().collect(fdef)
+        return self._body_calls[fdef]
+
+    def _visit(self, fdef: FuncDef):
+        self._color[fdef] = _GRAY
+        self._stack.append(fdef)
+        self.nodes.add(fdef)
+        self.callees.setdefault(fdef, [])
+        self.callers.setdefault(fdef, [])
+        self.call_sites.setdefault(fdef, [])
+
+        seen: set[FuncDef] = set()
+        for call in self._calls_in(fdef):
+            fn = call.fn
+            if not isinstance(fn, Function):
+                # primitive / builtin / context constructor /
+                # unresolved — an external leaf, not a graph node.
+                continue
+            callee = fn.ast
+            self.call_sites[fdef].append(call)
+            if callee in seen:
+                continue
+            seen.add(callee)
+            self.callees[fdef].append(callee)
+            self.callers.setdefault(callee, []).append(fdef)
+
+            c = self._color.get(callee)
+            if c == _GRAY:
+                cycle = self._stack[self._stack.index(callee):] + [callee]
+                path = ' -> '.join(f.name for f in cycle)
+                raise CallGraphError(
+                    f'recursion is not supported in FPy, but the call '
+                    f'graph contains a cycle: {path}'
+                )
+            elif c is None:
+                self._visit(callee)
+
+        self._stack.pop()
+        self._color[fdef] = _BLACK
+        self.order.append(fdef)
+
+    def analyze(self) -> CallGraphAnalysis:
+        self._visit(self.func)
+        return CallGraphAnalysis(
+            root=self.func,
+            nodes=self.nodes,
+            callees=self.callees,
+            callers=self.callers,
+            call_sites=self.call_sites,
+            order=self.order,
+        )
+
+
 class CallGraph:
     """Call graph analysis.
 
@@ -109,69 +189,4 @@ class CallGraph:
         """Build the call graph rooted at *func*."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
-
-        nodes: set[FuncDef] = set()
-        callees: dict[FuncDef, list[FuncDef]] = {}
-        callers: dict[FuncDef, list[FuncDef]] = {}
-        call_sites: dict[FuncDef, list[Call]] = {}
-        order: list[FuncDef] = []
-
-        color: dict[FuncDef, int] = {}
-        stack: list[FuncDef] = []
-        # Memoized per-body call collection (a callee reached from
-        # multiple sites is only scanned once).
-        body_calls: dict[FuncDef, list[Call]] = {}
-
-        def calls_in(fdef: FuncDef) -> list[Call]:
-            if fdef not in body_calls:
-                body_calls[fdef] = _CallCollector().collect(fdef)
-            return body_calls[fdef]
-
-        def visit(fdef: FuncDef):
-            color[fdef] = _GRAY
-            stack.append(fdef)
-            nodes.add(fdef)
-            callees.setdefault(fdef, [])
-            callers.setdefault(fdef, [])
-            call_sites.setdefault(fdef, [])
-
-            seen: set[FuncDef] = set()
-            for call in calls_in(fdef):
-                fn = call.fn
-                if not isinstance(fn, Function):
-                    # primitive / builtin / context constructor /
-                    # unresolved — an external leaf, not a graph node.
-                    continue
-                callee = fn.ast
-                call_sites[fdef].append(call)
-                if callee in seen:
-                    continue
-                seen.add(callee)
-                callees[fdef].append(callee)
-                callers.setdefault(callee, []).append(fdef)
-
-                c = color.get(callee)
-                if c == _GRAY:
-                    cycle = stack[stack.index(callee):] + [callee]
-                    path = ' -> '.join(f.name for f in cycle)
-                    raise CallGraphError(
-                        f'recursion is not supported in FPy, but the call '
-                        f'graph contains a cycle: {path}'
-                    )
-                elif c is None:
-                    visit(callee)
-
-            stack.pop()
-            color[fdef] = _BLACK
-            order.append(fdef)
-
-        visit(func)
-
-        return CallGraphAnalysis(
-            root=func,
-            nodes=nodes,
-            callees=callees,
-            callers=callers,
-            call_sites=call_sites,
-            order=order,
-        )
+        return _CallGraphInstance(func).analyze()
