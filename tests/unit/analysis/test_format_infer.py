@@ -56,9 +56,7 @@ class TestFormatInfer:
         def f(x: fp.Real) -> fp.Real:
             return x
 
-        mono_ast = Monomorphize.apply_by_arg(
-            f.ast, None, [RealType(fp.FP32)]
-        )
+        mono_ast = Monomorphize.apply(f.ast, None, [RealType(fp.FP32)])
         info = FormatInfer.analyze(mono_ast)
         x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
         assert fp.FP32.format() in x_bounds, (
@@ -77,9 +75,7 @@ class TestFormatInfer:
         def f(xs: list[fp.Real]) -> fp.Real:
             return xs[0]
 
-        mono_ast = Monomorphize.apply_by_arg(
-            f.ast, None, [ListType(RealType(fp.FP32))]
-        )
+        mono_ast = Monomorphize.apply(f.ast, None, [ListType(RealType(fp.FP32))])
         info = FormatInfer.analyze(mono_ast)
         xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
         assert ListFormat(fp.FP32.format()) in xs_bounds, (
