@@ -1613,9 +1613,7 @@ class FormatInfer:
     Format inference for FPy functions.
 
     This analysis bounds the number format for each expression and variable
-    definition in an FPy program.  It is an **alternative** to
-    :class:`ContextInfer`: rather than threading context information through a
-    Hindley-Milner style type system, it uses two simpler pre-analyses
+    definition in an FPy program.  It uses two pre-analyses
     (:class:`TypeInfer` and :class:`ContextUse`) and then performs a single
     forward pass over the AST.
 

@@ -9,7 +9,6 @@ from .array_size import (
     TupleSize,
 )
 from .call_graph import CallGraph, CallGraphAnalysis, CallGraphError
-from .context_infer import ContextInfer, ContextAnalysis, ContextInferError
 from .context_use import (
     ContextUse, ContextUseAnalysis,
     ContextScope, ContextScopeSite, ContextUseSite

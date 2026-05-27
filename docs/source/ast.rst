@@ -51,10 +51,6 @@ Analyses
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.analysis.ContextInfer
-   :members:
-   :show-inheritance:
-
 .. autoclass:: fpy2.analysis.ContextUse
    :members:
    :show-inheritance:
