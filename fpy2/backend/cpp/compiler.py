@@ -358,7 +358,7 @@ class CppCompiler(Backend):
             ast = ZipElim.apply(ast)
 
         # apply monomorphization to get concrete types
-        ast = Monomorphize.apply_by_arg(ast, ctx, arg_types)
+        ast = Monomorphize.apply(ast, ctx, arg_types)
 
         # Optional post-monomorphize transforms.  ``RoundElim`` uses
         # format inference to decide which rounded ops can be moved

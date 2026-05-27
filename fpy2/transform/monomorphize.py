@@ -128,47 +128,25 @@ class Monomorphize:
     @staticmethod
     def apply(
         func: FuncDef,
-        ctx: Context | None,
-        subst: dict[NamedId, Type],
-        *,
-        ty_info: TypeAnalysis | None = None
-    ) -> FuncDef:
-        if not isinstance(func, FuncDef):
-            raise TypeError(f'Expected \'FuncDef\', got {func}')
-
-        if ty_info is None:
-            ty_info = TypeInfer.check(func)
-
-        free_vars = ty_info.fn_type.free_type_vars()
-        for key in subst:
-            if key not in free_vars:
-                raise ValueError(f'Unbound type variable `{key}` in {func.name} : {ty_info.fn_type.format()}')
-
-        if (
-            isinstance(ctx, Context)
-            and isinstance(ty_info.fn_type.ctx, Context)
-            and not ctx.is_equiv(ty_info.fn_type.ctx)
-        ):
-            raise ValueError(f'Conflicting context info: cannot override {ty_info.fn_type.ctx} with {ctx}')
-
-        fn_type = ty_info.fn_type.subst_type(subst)
-        assert isinstance(fn_type, FunctionType)
-        return _MonomorphizeVisitor(func, ctx, fn_type.arg_types).apply()
-
-    @staticmethod
-    def apply_by_arg(
-        func: FuncDef,
-        ctx: Context | None,
-        arg_types: Collection[Type | None],
+        ctx: Context | None = None,
+        args: Collection[Type | None] | None = None,
         *,
         ty_info: TypeAnalysis | None = None
     ):
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got `{func}`')
-        if not isinstance(arg_types, Collection):
-            raise TypeError(f'Expected \'Collection\', got `{arg_types}`')
-        if len(func.args) != len(arg_types):
-            raise ValueError(f'Expected {len(func.args)} types, got {len(arg_types)}')
+        if ctx is not None and not isinstance(ctx, Context):
+            raise TypeError(f'Expected \'Context\', got `{ctx}`')
+        if args is not None:
+            if not isinstance(args, Collection):
+                raise TypeError(f'Expected \'Collection\', got `{args}`')
+            if len(func.args) != len(args):
+                raise ValueError(f'Expected {len(func.args)} types, got {len(args)}')
+
+        if args is None:
+            arg_types: list[Type | None] = [ None ] * len(func.args)
+        else:
+            arg_types = list(args)
 
         if ty_info is None:
             ty_info = TypeInfer.check(func)
