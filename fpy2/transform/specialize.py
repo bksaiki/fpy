@@ -2,43 +2,157 @@
 Module-level specialization.
 
 Expands a :class:`~fpy2.Module` into a new ``Module`` where every function is
-fully monomorphized at a specific calling context.  Each
-``(FuncDef, calling-ctx)`` pair becomes one entry; cross-function calls are
-rewired to the appropriate spec.
+fully monomorphized at a specific ``(FuncDef, calling-ctx, argument-formats)``
+spec.  Each unique spec becomes one entry; cross-function calls are rewired
+to the appropriate spec.
 
-First-cut design: **context-only** key (no per-argument format keying — to be
-added later as a strategy option).  Public entries with no ``ctx`` spec pass
-through (their bodies and their transitively-reached callees stay
-polymorphic); the same ``(FuncDef, None)`` spec is reused across all such
-publics.
+**v2 — arg-types in the key.** The spec key extends v1's
+``(FuncDef, ctx)`` with a fingerprint of the per-argument ``Type``\\s the
+spec is monomorphized at.  This closes the public-level dedup gap of v1:
+two registrations of the same function at the same outer ctx but with
+different user-provided ``arg_types`` now produce distinct specs (v1
+silently collapsed them onto the first registration).
+
+Trivial arg types (``None`` or ``RealType(None)`` — i.e., no shape or ctx
+info pinned) fingerprint to the empty string, so polymorphic callees pass
+through unchanged.  Scalar **per-argument context** at *callee* call sites
+is intentionally not part of the key: the outer calling context already
+flows through the callee's body — the callee at FP32 vs. FP64 is a
+distinct spec via the ``ctx`` field — so finer per-arg ctx differentiation
+adds no semantic content.  (Storage-level per-arg-format differentiation
+is a cpp-emission concern handled by cpp's own pipeline, not by
+``Specialize``.)
 """
 
 import hashlib
 
 from typing import NamedTuple
 
-from ..analysis.format_infer import FormatInfer
+from ..analysis.format_infer import (
+    FormatBound,
+    FormatInfer,
+    ListFormat,
+    TupleFormat,
+)
 from ..ast import Call, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
 from ..module import Module
 from ..number import Context
+from ..types import ListType, RealType, TupleType, Type
 from .monomorphize import Monomorphize
 
 
 class _SpecKey(NamedTuple):
-    """A specialization is identified by the original ``FuncDef`` and the
-    calling (outer) context it is monomorphized at."""
+    """A specialization is identified by the original ``FuncDef``, the
+    calling (outer) context, and a stable fingerprint of the per-argument
+    types it is monomorphized at."""
     fdef: FuncDef
     ctx: Context | None
+    arg_types_fp: str   # '' when no arg_types are pinned
+
+
+# ----------------------------------------------------------------------
+# FormatBound -> Type conversion (for Monomorphize input).
+
+
+def _bound_to_type(bound: FormatBound) -> Type | None:
+    """Best-effort conversion of a ``FormatBound`` to a :class:`Type` for
+    use as a ``Monomorphize`` argument override.
+
+    Returns ``None`` when the bound carries no useful structural
+    information (Monomorphize then leaves the parameter's annotated type
+    alone).  Scalar ``Format`` / ``SetFormat`` bounds become
+    ``RealType(None)`` — they pin "this argument is a scalar real" without
+    yet recovering the underlying ``Context`` (deferred).
+    """
+    if bound is None:
+        return None
+    if isinstance(bound, TupleFormat):
+        # If any element couldn't be converted, bail on the whole arg.
+        elt_types: list[Type] = []
+        for e in bound.elts:
+            t = _bound_to_type(e)
+            if t is None:
+                return None
+            elt_types.append(t)
+        return TupleType(*elt_types)
+    if isinstance(bound, ListFormat):
+        elt_type = _bound_to_type(bound.elt)
+        if elt_type is None:
+            return None
+        return ListType(elt_type)
+    # Scalar bound (concrete ``Format`` or ``SetFormat``).
+    return RealType(None)
+
+
+def _arg_fmts_to_arg_types(
+    arg_fmts: tuple[FormatBound, ...] | None,
+) -> tuple[Type | None, ...] | None:
+    """Convert a per-argument ``FormatBound`` tuple to a per-argument
+    ``Type | None`` tuple consumable by :class:`Monomorphize`."""
+    if arg_fmts is None:
+        return None
+    return tuple(_bound_to_type(b) for b in arg_fmts)
+
+
+# ----------------------------------------------------------------------
+# Spec-key fingerprints.
+
+
+def _ctx_fingerprint(ctx: Context) -> str:
+    """A short, stable, identifier-safe fingerprint for a context.  Used
+    in mangled private-spec names *and* in the spec key.  Matches cpp's
+    ``_ctx_fingerprint`` in shape (SHA-1 of ``str(ctx)`` truncated to 8
+    hex chars) so the two layers can eventually share a mangling scheme."""
+    return hashlib.sha1(str(ctx).encode()).hexdigest()[:8]
+
+
+def _is_trivial_type(t: Type | None) -> bool:
+    """A type that conveys no specialization information: ``None`` (no
+    override) or ``RealType(None)`` (just "scalar real")."""
+    return t is None or (isinstance(t, RealType) and t.ctx is None)
+
+
+def _arg_types_fingerprint(
+    arg_types: tuple[Type | None, ...] | None,
+) -> str:
+    """A short fingerprint of a per-argument types tuple.  Returns an
+    empty string when *arg_types* is ``None`` or every entry is "trivial"
+    (no shape or context info pinned) — so polymorphic specs pass through
+    unchanged.  Otherwise, distinct ``Type.format()`` strings dedupe to one
+    spec via BLAKE2."""
+    if arg_types is None or all(_is_trivial_type(t) for t in arg_types):
+        return ''
+    parts = [t.format() if t is not None else 'X' for t in arg_types]
+    raw = '|'.join(parts)
+    return hashlib.sha1(raw.encode()).hexdigest()[:8]
+
+
+def _mangle_private(
+    name: str, ctx: Context | None, arg_types_fp: str,
+) -> str:
+    """Build a stable name for a private spec.  Includes the ctx
+    fingerprint (when present) and the arg-types fingerprint (when
+    non-empty), so two specs of the same function with different
+    ``(ctx, arg_types)`` produce distinguishable names."""
+    parts = [name]
+    if ctx is not None:
+        parts.append(_ctx_fingerprint(ctx))
+    if arg_types_fp:
+        parts.append(arg_types_fp)
+    return '__'.join(parts)
+
+
+# ----------------------------------------------------------------------
+# Per-call-site rebinder (same shape as v1).
 
 
 class _RebindCallSites(DefaultTransformVisitor):
     """Rebuild a function body, swapping each ``Call.fn`` per a
-    *per-call-site* map (``Call → Function``).  Used by :class:`Specialize`:
-    within one specialized caller, the same callee can be invoked at
-    different specs from different sites, so the rebind is keyed on the
-    ``Call`` node itself rather than on the original callee ``Function``."""
+    *per-call-site* map (``Call → Function``).  Within one specialized
+    caller, the same callee can be invoked at different specs from
+    different sites, so the rebind is keyed on the ``Call`` node itself."""
 
     def __init__(self, mapping: dict[Call, Function]):
         self._mapping = mapping
@@ -53,31 +167,21 @@ class _RebindCallSites(DefaultTransformVisitor):
         return self._visit_function(func, None)
 
 
-def _ctx_fingerprint(ctx: Context) -> str:
-    """A short, stable, identifier-safe fingerprint for a context, used in
-    mangled private-spec names.  An 8-hex-character BLAKE2 digest of
-    ``repr(ctx)`` — long enough to be collision-free in practice, short
-    enough to keep names readable."""
-    return hashlib.blake2b(repr(ctx).encode('utf-8'), digest_size=4).hexdigest()
-
-
-def _mangle_private(name: str, ctx: Context | None) -> str:
-    return name if ctx is None else f'{name}__{_ctx_fingerprint(ctx)}'
+# ----------------------------------------------------------------------
+# The pass.
 
 
 class Specialize:
-    """Module → Module pass that expands public entries into a flat set of
-    fully-monomorphized specializations.
+    """Module → Module pass that expands public entries into a flat set
+    of fully-monomorphized specializations.
 
-    Each ``(FuncDef, calling-context)`` pair becomes one function in the
-    output module; cross-function calls in the output reference the
-    appropriate spec.  Public entries' user-given names are preserved
-    (they become the FuncDef name of their specialization), while
-    transitively-reached private specs get a stable mangled name
-    (``original_name__<ctx-fingerprint>``).
+    Each ``(FuncDef, calling-ctx, arg-types-fingerprint)`` triple becomes
+    one entry; cross-function calls are rewired to the appropriate spec.
+    Public entries' user-given names are preserved; transitively-reached
+    private specs get a stable mangled name combining the original name
+    with the ctx and arg-types fingerprints.
 
-    Raises ``CallGraphError`` if the input has a cyclic call graph (FPy
-    forbids recursion).
+    Raises :class:`CallGraphError` if the input has a cyclic call graph.
     """
 
     @staticmethod
@@ -85,24 +189,33 @@ class Specialize:
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
 
-        # --- 1. Enumerate specs.  Start with each public entry; walk callees
-        #        by querying `FormatInfer.by_call` for the calling ctx.
+        # --- 1. Enumerate specs.  Start with each public entry; walk
+        #        callees via `FormatInfer.by_call` (which gives the
+        #        calling ctx *and* per-argument formats per call site).
         monos: dict[_SpecKey, FuncDef] = {}
         call_targets: dict[_SpecKey, dict[Call, _SpecKey]] = {}
         callees_of: dict[_SpecKey, list[_SpecKey]] = {}
         orig_func: dict[_SpecKey, Function] = {}
-        # Public roots may carry an `arg_types` override; callees never do.
-        arg_types_for: dict[_SpecKey, tuple | None] = {}
+        # The arg_types tuple used to monomorphize each spec.  For public
+        # roots this is the user-supplied ``entry.arg_types``; for callees
+        # it is derived from ``sub_fa.fn_fmt.arg_fmts`` via
+        # ``_bound_to_type``.
+        arg_types_for: dict[_SpecKey, tuple[Type | None, ...] | None] = {}
 
-        public_keys: list[tuple[str, _SpecKey]] = []  # (entry_name, spec) per public entry
+        public_keys: list[tuple[str, _SpecKey]] = []   # (entry_name, key) per public
 
         worklist: list[_SpecKey] = []
         for entry in module:
-            key = _SpecKey(entry.func.ast, entry.ctx)
+            atypes = entry.arg_types
+            key = _SpecKey(
+                fdef=entry.func.ast,
+                ctx=entry.ctx,
+                arg_types_fp=_arg_types_fingerprint(atypes),
+            )
             public_keys.append((entry.name, key))
             if key not in orig_func:
                 orig_func[key] = entry.func
-                arg_types_for[key] = entry.arg_types
+                arg_types_for[key] = atypes
                 worklist.append(key)
 
         seen: set[_SpecKey] = set(worklist)
@@ -112,8 +225,10 @@ class Specialize:
             mono = Monomorphize.apply(key.fdef, key.ctx, atypes)
             monos[key] = mono
 
-            # FormatInfer gives, for each top-level Call in `mono`, the
-            # sub-analysis whose `fn_fmt.ctx` is the callee's calling context.
+            # FormatInfer gives, for each Function-targeted Call in
+            # ``mono``, the sub-analysis whose ``fn_fmt`` describes the
+            # callee at that call site — both its calling ctx and the
+            # per-argument format bounds.
             fa = FormatInfer.analyze(mono)
             site_map: dict[Call, _SpecKey] = {}
             local_callees: list[_SpecKey] = []
@@ -122,10 +237,14 @@ class Specialize:
                 callee_fn = call.fn
                 assert isinstance(callee_fn, Function)  # FormatInfer only records these
                 callee_ctx_raw = sub_fa.fn_fmt.ctx
-                # Only concrete `Context`s count; symbolic (NamedId) or None
-                # collapse to the polymorphic spec.
+                # Only concrete ``Context``s count; symbolic / None collapse.
                 callee_ctx = callee_ctx_raw if isinstance(callee_ctx_raw, Context) else None
-                callee_key = _SpecKey(callee_fn.ast, callee_ctx)
+                callee_arg_types = _arg_fmts_to_arg_types(sub_fa.fn_fmt.arg_fmts)
+                callee_key = _SpecKey(
+                    fdef=callee_fn.ast,
+                    ctx=callee_ctx,
+                    arg_types_fp=_arg_types_fingerprint(callee_arg_types),
+                )
 
                 site_map[call] = callee_key
                 if callee_key not in local_seen:
@@ -134,7 +253,7 @@ class Specialize:
                 if callee_key not in seen:
                     seen.add(callee_key)
                     orig_func.setdefault(callee_key, callee_fn)
-                    arg_types_for.setdefault(callee_key, None)
+                    arg_types_for.setdefault(callee_key, callee_arg_types)
                     worklist.append(callee_key)
 
             call_targets[key] = site_map
@@ -155,8 +274,9 @@ class Specialize:
         for k in monos:
             _post_order(k)
 
-        # --- 3. Decide names.  Publics: the first registering entry's name
-        #        (no mangling).  Privates: original name + ctx fingerprint.
+        # --- 3. Decide names.  Publics: first registering entry's name
+        #        (no mangling).  Privates: original name + ctx + arg_types
+        #        fingerprints.
         spec_to_public_name: dict[_SpecKey, str] = {}
         for entry_name, k in public_keys:
             spec_to_public_name.setdefault(k, entry_name)
@@ -166,10 +286,13 @@ class Specialize:
             if k in spec_to_public_name:
                 names[k] = spec_to_public_name[k]
             else:
-                names[k] = _mangle_private(orig_func[k].name, k.ctx)
+                names[k] = _mangle_private(
+                    orig_func[k].name, k.ctx, k.arg_types_fp,
+                )
 
-        # --- 4. Build new `Function`s in leaves-first order, rewiring each
-        #        spec body's `Call.fn` to the already-built callee specs.
+        # --- 4. Build new ``Function``s in leaves-first order, rewiring
+        #        each spec's body to point at the already-built callee
+        #        specs (per-call-site).
         new_funcs: dict[_SpecKey, Function] = {}
         for k in order:
             site_to_func = {
@@ -181,9 +304,8 @@ class Specialize:
             new_funcs[k] = orig_func[k].with_ast(rewired)
 
         # --- 5. Assemble the output module.  Each public entry is re-added
-        #        with its original user-given name; private specs are reached
-        #        through the rewired call references and surface via the
-        #        module's lazy private derivation.
+        #        with its original name; private specs surface through the
+        #        module's lazy private derivation via rewired call refs.
         out = Module(module.name)
         for entry_name, k in public_keys:
             out.add(new_funcs[k], name=entry_name)

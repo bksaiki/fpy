@@ -475,6 +475,24 @@ class TestSpecialize:
         }
         assert len(s.private()) == 2     # one specialized inner + one specialized leaf
 
+    def test_same_ctx_different_arg_types_yields_distinct_specs(self):
+        # v2 behavior: two registrations of the same function at the same
+        # outer ctx but with different user-supplied `arg_types` produce
+        # distinct specs (v1 would have collapsed them onto the first).
+        @fp.fpy
+        def adder(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        m = Module()
+        m.add(adder, name='a32', ctx=fp.FP32, arg_types=[RealType(fp.FP32), RealType(fp.FP32)])
+        m.add(adder, name='a64', ctx=fp.FP32, arg_types=[RealType(fp.FP64), RealType(fp.FP64)])
+
+        s = m.specialized()
+        a32 = s.get('a32').func
+        a64 = s.get('a64').func
+        assert a32 is not a64                       # distinct Functions
+        assert a32.ast is not a64.ast               # distinct FuncDefs
+
     def test_public_names_preserved_privates_mangled(self):
         leaf, inner, outer = self._polymorphic_funcs()
         m = Module()

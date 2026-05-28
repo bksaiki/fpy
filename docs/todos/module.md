@@ -257,21 +257,35 @@ working cpp path, avoids re-monomorphization.
    shorthand. Public entries' user-given names are preserved; private specs
    get a `name__<8hex>` fingerprint of the ctx.
 
-   *v1 design choices:*
-   - **ctx-only key** `(FuncDef, ctx)`. Per-arg-format keying (the cpp
-     `_discover_specializations` shape) is deferred; can be added as a
-     `Specialize.apply(module, key=...)` strategy in v2.
-   - **Per-call contexts via `FormatInfer.by_call`** — `sub_fa.fn_fmt.ctx`
-     gives the callee's calling context at each call site. Heavier than a
-     custom context walker, but a known-correct path the cpp pipeline
-     already uses.
-   - **`Monomorphize.apply(fdef, ctx, arg_types)`** per spec for the actual
-     body specialization.
-   - **`_RebindCallSites` visitor** — a per-`Call`-identity variant of
-     `_RebindCalls`, since within one specialized caller the same callee
-     can be invoked at different specs from different sites (rare but
-     correct to support).
-   - **Mangling**: `hashlib.blake2b(repr(ctx), digest_size=4).hexdigest()`.
+   *v2 — what landed:* the spec key is `(FuncDef, ctx, arg_types_fp)` where
+   `arg_types_fp` is a stable fingerprint of the per-argument `Type`s.
+   Trivial arg types (`None` or `RealType(None)` — no info pinned)
+   fingerprint to the empty string, so polymorphic specs pass through
+   unchanged. The dimension v2 added over v1: **two public registrations
+   of the same function at the same outer ctx but with different
+   user-supplied `arg_types` now produce distinct specs** (v1 silently
+   collapsed onto the first registration).
+
+   *Why no per-arg-ctx differentiation at callees:* the outer ctx already
+   flows through the callee's body — `helper` invoked under an FP32
+   caller computes at FP32 throughout; under an FP64 caller, at FP64.
+   Those *are* distinct specs by the only behavior dimension that
+   matters semantically, captured by the `ctx` field. Storage-level
+   per-arg-format differentiation is a cpp-emission concern handled by
+   cpp's own pipeline, not by `Specialize`. So at callees,
+   `arg_types_fp` is fingerprinted from `_arg_fmts_to_arg_types`'d
+   `sub_fa.fn_fmt.arg_fmts`, and since scalar `Format → RealType(None)`
+   is trivial, it correctly collapses to ''.
+
+   *Other design pieces (unchanged from the v1 cut):*
+   - Per-call contexts come from `FormatInfer.by_call` —
+     `sub_fa.fn_fmt.ctx` and `sub_fa.fn_fmt.arg_fmts`.
+   - `Monomorphize.apply(fdef, ctx, arg_types)` per spec.
+   - A `_RebindCallSites` visitor keyed on `Call` identity (so two call
+     sites to the same callee at different specs in one caller resolve
+     correctly).
+   - Mangling: `name__<ctx_fp>__<arg_types_fp>` with each section
+     dropped when empty.
 
    *Shape note (greedy-feel output, no model change):* the **pre-specialization**
    `Module` keeps the lazy/derived model — auto-consistent under `map`-style
@@ -279,9 +293,7 @@ working cpp path, avoids re-monomorphization.
    every spec is `add`-ed explicitly — the "greedy/flat" feel comes from how
    the output is built, not from changing the underlying design.
 
-   *Future / deferred for v2+:*
-   - Format-aware specialization (`(FuncDef, ctx, param_formats)`), matching
-     cpp's current key — accept a `key=` callable.
+   *Future / deferred:*
    - Have `CppTranslationUnit` detect a pre-specialized input and skip its
      own walk (currently it just re-discovers each unique FuncDef → one spec,
      which is a wasted pass but correct).
