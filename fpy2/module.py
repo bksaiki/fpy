@@ -120,12 +120,10 @@ class ModuleCallGraph:
         callees are expanded once; later occurrences are marked ``(*)``."""
         lines: list[str] = []
         seen: set[Function] = set()
-        revisited = False
         for i, pub in enumerate(self.publics):
             if i > 0:
                 lines.append('')
-            if self._format_node(pub, '', '', True, lines, seen):
-                revisited = True
+            self._format_node(pub, '', '', True, lines, seen)
         return '\n'.join(lines)
 
     def _format_node(
@@ -136,14 +134,13 @@ class ModuleCallGraph:
         is_root: bool,
         lines: list[str],
         seen: set[Function],
-    ) -> bool:
+    ) -> None:
         revisit = func in seen
         marker = ' (*)' if revisit else ''
         lines.append(f'{prefix}{connector}{func.name}{marker}')
         if revisit:
-            return True
+            return
         seen.add(func)
-        any_revisit = False
         callees = self.callees[func]
         child_prefix = '' if is_root else prefix + (
             '   ' if connector == '└─ ' else '│  '
@@ -151,11 +148,9 @@ class ModuleCallGraph:
         for i, callee in enumerate(callees):
             last = i == len(callees) - 1
             child_connector = '└─ ' if last else '├─ '
-            if self._format_node(
+            self._format_node(
                 callee, child_prefix, child_connector, False, lines, seen,
-            ):
-                any_revisit = True
-        return any_revisit
+            )
 
     def dot(self) -> str:
         """A Graphviz ``digraph`` rendering of the whole module.  Public

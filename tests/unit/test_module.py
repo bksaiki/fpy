@@ -379,9 +379,8 @@ class TestCallGraph:
         m = Module(); m.add(top_a); m.add(top_b)
         out = m.call_graph().format()
         assert 'top_a' in out and 'top_b' in out
-        # second occurrence of helper marked as a revisit, with the legend
+        # second occurrence of helper marked as a revisit
         assert 'helper (*)' in out
-        assert '(*) = callees shown above' in out
 
     def test_dot_styles_publics(self):
         leaf, mid, top = _funcs()

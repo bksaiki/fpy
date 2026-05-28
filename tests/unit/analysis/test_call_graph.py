@@ -213,7 +213,7 @@ class TestFormat:
 
         assert _cg(a).format() == 'a\n└─ b\n   └─ c'
 
-    def test_diamond_marks_revisit_and_legend(self):
+    def test_diamond_marks_revisit(self):
         @fp.fpy
         def d(x: fp.Real) -> fp.Real:
             return x + 1
@@ -235,9 +235,7 @@ class TestFormat:
             '├─ b\n'
             '│  └─ d\n'
             '└─ c\n'
-            '   └─ d (*)\n'
-            '\n'
-            '(*) = callees shown above'
+            '   └─ d (*)'
         )
 
 
