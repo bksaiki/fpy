@@ -40,6 +40,9 @@ from .interpret import (
     get_default_interpreter,
 )
 
+# module
+from .module import Module, ModuleEntry
+
 # compiler
 from .backend import (
     Backend,
