@@ -244,24 +244,34 @@ def _test_library(
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     group = f'library_{prefix}'
     failures: list[tuple[str, str, str]] = []
-    # One translation unit per library — shares the specialization
-    # cache so a callee referenced from multiple library functions
-    # is emitted exactly once (no ODR redefinitions).
-    unit = compiler.unit()
+    # One module per library — sharing it with `compile_module` gives
+    # cross-function specialization dedup so a callee referenced from
+    # multiple library functions is emitted exactly once.  Validate
+    # each candidate by compiling it in isolation first; survivors go
+    # into the combined module that we emit.
+    accepted: list[tuple[fp.Function, list]] = []
     for func in mod.__dict__.values():
         if isinstance(func, fp.Function) and func.name not in ignore:
             ty_info = fp.analysis.TypeInfer.check(func.ast)
             arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
+            probe = fp.Module()
+            probe.add(func, ctx=fp.FP64, arg_types=arg_types)
             try:
-                unit.add(func, ctx=fp.FP64, arg_types=arg_types)
+                compiler.compile_module(probe)
             except fp.backend.CppCompileError as e:
                 print(f'  FAILED `{func.name}`: {e}')
                 failures.append((group, func.name, str(e)))
+                continue
+            accepted.append((func, arg_types))
+
+    combined = fp.Module()
+    for func, arg_types in accepted:
+        combined.add(func, ctx=fp.FP64, arg_types=arg_types)
 
     with open(cpp_path, 'w') as f:
         print('\n'.join(compiler.headers()), file=f)
         print(compiler.helpers(), file=f)
-        print(unit.render(), file=f)
+        print(compiler.compile_module(combined), file=f)
         print(file=f)
 
     if failures:

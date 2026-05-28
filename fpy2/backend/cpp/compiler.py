@@ -159,16 +159,6 @@ class CppCompiler(Backend):
         m.add(func, ctx=ctx, arg_types=arg_types)
         return self.compile_module(m)
 
-    def unit(self) -> 'CppTranslationUnit':
-        """Begin a new translation-unit build.  Each :class:`Function`
-        :meth:`CppTranslationUnit.add`-ed to the result shares a
-        single specialization cache, so a callee invoked from
-        multiple top-level functions appears exactly once in the
-        emitted source — avoiding the ODR violations that a naive
-        per-function :meth:`compile` loop would produce when writing
-        many functions into the same ``.cpp`` file."""
-        return CppTranslationUnit(self)
-
     def compile_module(self, module: Module) -> str:
         """Compile a :class:`~fpy2.Module` to a single C++ translation unit.
 
@@ -198,9 +188,9 @@ class CppCompiler(Backend):
 
         # 4. Codegen: one C++ definition per spec, leaves-first.
         cg = specialized.call_graph()
-        return '\n\n'.join(self._emit_spec(f) for f in cg.order)
+        return '\n\n'.join(self._compile_function(f) for f in cg.order)
 
-    def _emit_spec(self, func: Function) -> str:
+    def _compile_function(self, func: Function) -> str:
         """Emit one C++ function definition for a fully-specialized
         :class:`Function`.  ``func.ast.name`` is the final emitted name
         (set by :class:`Specialize` — public entries keep their user-given
@@ -251,40 +241,3 @@ class CppCompiler(Backend):
     # ------------------------------------------------------------------
     # Call-graph walk
 
-# ---------------------------------------------------------------------
-# Translation-unit builder
-
-
-class CppTranslationUnit:
-    """Accumulator for a single C++ translation unit.
-
-    A thin wrapper over :class:`~fpy2.Module`: each :meth:`add` registers
-    a public entry, and :meth:`render` calls
-    :meth:`CppCompiler.compile_module` to specialize and emit the whole
-    translation unit at once.  Cross-add callee dedup and ODR-safety come
-    from the module's specialization pass.
-    """
-
-    _compiler: CppCompiler
-    _module: Module
-
-    def __init__(self, compiler: CppCompiler):
-        self._compiler = compiler
-        self._module = Module()
-
-    def add(
-        self,
-        func: Function,
-        *,
-        ctx: Context | None = None,
-        arg_types: Collection[Type | None] | None = None,
-    ) -> None:
-        """Register a top-level function for this translation unit."""
-        if not isinstance(func, Function):
-            raise TypeError(f'Expected `Function`, got {type(func)} for {func}')
-        self._module.add(func, ctx=ctx, arg_types=arg_types)
-
-    def render(self) -> str:
-        """Return the unit's C++ source: every spec discovered from the
-        registered top-level functions, in callee-before-caller order."""
-        return self._compiler.compile_module(self._module)

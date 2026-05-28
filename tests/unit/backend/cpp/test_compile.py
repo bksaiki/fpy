@@ -89,10 +89,10 @@ class TestSpecializationNameCollisions:
             return matrix.zeros(n, n)
 
         cc = CppCompiler(unsafe_cast_int=True)
-        unit = cc.unit()
-        unit.add(call_vec, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
-        unit.add(call_mat, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
-        out = unit.render()
+        m = fp.Module()
+        m.add(call_vec, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
+        m.add(call_mat, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
+        out = cc.compile_module(m)
 
         # After the ``Specialize`` integration, callee names are
         # mangled as ``zeros__<ctx_sha1>__<args_sha1>``.  Two distinct
