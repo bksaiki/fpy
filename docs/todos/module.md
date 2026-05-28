@@ -266,16 +266,16 @@ working cpp path, avoids re-monomorphization.
    user-supplied `arg_types` now produce distinct specs** (v1 silently
    collapsed onto the first registration).
 
-   *Why no per-arg-ctx differentiation at callees:* the outer ctx already
-   flows through the callee's body — `helper` invoked under an FP32
-   caller computes at FP32 throughout; under an FP64 caller, at FP64.
-   Those *are* distinct specs by the only behavior dimension that
-   matters semantically, captured by the `ctx` field. Storage-level
-   per-arg-format differentiation is a cpp-emission concern handled by
-   cpp's own pipeline, not by `Specialize`. So at callees,
-   `arg_types_fp` is fingerprinted from `_arg_fmts_to_arg_types`'d
-   `sub_fa.fn_fmt.arg_fmts`, and since scalar `Format → RealType(None)`
-   is trivial, it correctly collapses to ''.
+   *Callees specialize on arg format too.* The callee key reads
+   `sub_fa.fn_fmt.arg_fmts` from `FormatInfer.by_call`, converts each
+   `FormatBound` to a `Type` via `_bound_to_type` (with a best-effort
+   `Format → Context` recovery against the canonical contexts —
+   `FP32`/`FP64`/`INTEGER`/…), and fingerprints that into the key. Two
+   callers invoking the same callee at the same outer ctx but with
+   arguments of different format produce distinct callee specs. Unknown
+   formats (custom user contexts) fall back to `RealType(None)` and
+   trivialize gracefully — those specs degrade to v1-style ctx-only
+   keying for that arg.
 
    *Other design pieces (unchanged from the v1 cut):*
    - Per-call contexts come from `FormatInfer.by_call` —

@@ -476,9 +476,9 @@ class TestSpecialize:
         assert len(s.private()) == 2     # one specialized inner + one specialized leaf
 
     def test_same_ctx_different_arg_types_yields_distinct_specs(self):
-        # v2 behavior: two registrations of the same function at the same
-        # outer ctx but with different user-supplied `arg_types` produce
-        # distinct specs (v1 would have collapsed them onto the first).
+        # v2 behavior at the *public* level: two registrations of the same
+        # function at the same outer ctx but with different user-supplied
+        # `arg_types` produce distinct specs (v1 would have collapsed them).
         @fp.fpy
         def adder(x: fp.Real, y: fp.Real) -> fp.Real:
             return x + y
@@ -492,6 +492,34 @@ class TestSpecialize:
         a64 = s.get('a64').func
         assert a32 is not a64                       # distinct Functions
         assert a32.ast is not a64.ast               # distinct FuncDefs
+
+    def test_callee_specialized_per_arg_format_at_same_outer_ctx(self):
+        # v2 behavior at the *callee* level: a callee invoked at the same
+        # outer ctx but with arguments of different format from different
+        # publics gets distinct specs (v1 would have collapsed them).
+        @fp.fpy
+        def helper(x: fp.Real) -> fp.Real:
+            return x + x
+
+        @fp.fpy
+        def caller(x: fp.Real) -> fp.Real:
+            return helper(x)
+
+        m = Module()
+        # Same outer ctx (FP64), but arg comes in at different formats.
+        m.add(caller, name='c32', ctx=fp.FP64, arg_types=[RealType(fp.FP32)])
+        m.add(caller, name='c64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+
+        s = m.specialized()
+        helper_specs = [f for f in s.private() if f.name.startswith('helper__')]
+        assert len(helper_specs) == 2                # one per arg format
+        assert helper_specs[0] is not helper_specs[1]
+        # the two specs share the ctx fingerprint and differ in the
+        # arg_types fingerprint (form: ``helper__<ctx_fp>__<args_fp>``)
+        ctx_fps = {f.name.split('__')[1] for f in helper_specs}
+        arg_fps = {f.name.split('__')[2] for f in helper_specs}
+        assert len(ctx_fps) == 1                     # same outer ctx
+        assert len(arg_fps) == 2                     # different arg formats
 
     def test_public_names_preserved_privates_mangled(self):
         leaf, inner, outer = self._polymorphic_funcs()

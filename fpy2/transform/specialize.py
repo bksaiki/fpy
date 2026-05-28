@@ -6,22 +6,30 @@ fully monomorphized at a specific ``(FuncDef, calling-ctx, argument-formats)``
 spec.  Each unique spec becomes one entry; cross-function calls are rewired
 to the appropriate spec.
 
-**v2 — arg-types in the key.** The spec key extends v1's
-``(FuncDef, ctx)`` with a fingerprint of the per-argument ``Type``\\s the
-spec is monomorphized at.  This closes the public-level dedup gap of v1:
-two registrations of the same function at the same outer ctx but with
-different user-provided ``arg_types`` now produce distinct specs (v1
-silently collapsed them onto the first registration).
+**v2 — arg formats in the key.** The spec key extends v1's
+``(FuncDef, ctx)`` with a fingerprint of the per-argument
+:class:`FormatBound`\\s — the natural domain produced by
+:class:`FormatInfer`.
 
-Trivial arg types (``None`` or ``RealType(None)`` — i.e., no shape or ctx
-info pinned) fingerprint to the empty string, so polymorphic callees pass
-through unchanged.  Scalar **per-argument context** at *callee* call sites
-is intentionally not part of the key: the outer calling context already
-flows through the callee's body — the callee at FP32 vs. FP64 is a
-distinct spec via the ``ctx`` field — so finer per-arg ctx differentiation
-adds no semantic content.  (Storage-level per-arg-format differentiation
-is a cpp-emission concern handled by cpp's own pipeline, not by
-``Specialize``.)
+- **Public** entries convert their user-supplied ``arg_types`` to
+  ``FormatBound``\\s via :func:`_type_to_fmt` (``RealType(ctx) →
+  ctx.format()``, aggregates recurse).
+- **Callee** entries use their ``sub_fa.fn_fmt.arg_fmts`` directly.
+
+The fingerprint hashes the tuple representation; trivial bounds
+(``None`` for non-numeric args, ``REAL_FORMAT`` for the polymorphic
+top) fingerprint to the empty string, so polymorphic specs pass
+through unchanged.
+
+Per-spec monomorphization is ctx-only (``Monomorphize.apply(fdef,
+ctx, None)``): callees do not receive per-argument type overrides
+beyond the outer ctx, so two callee specs that differ only in arg
+format share an identical FuncDef body.  They are still distinct
+specs (distinct keys, names, and ``Function`` objects) — the
+differentiation lives in the key, not the body.  This keeps the
+output module's bodies free of per-arg ctx annotations baked in by
+``Specialize``, leaving any such pinning to the consuming backend if
+it wants it.
 """
 
 import hashlib
@@ -39,61 +47,42 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
 from ..module import Module
 from ..number import Context
-from ..types import ListType, RealType, TupleType, Type
+from ..number.context.real import REAL_FORMAT
+from ..types import BoolType, ListType, RealType, TupleType, Type
 from .monomorphize import Monomorphize
 
 
 class _SpecKey(NamedTuple):
     """A specialization is identified by the original ``FuncDef``, the
     calling (outer) context, and a stable fingerprint of the per-argument
-    types it is monomorphized at."""
+    :class:`FormatBound`\\s."""
     fdef: FuncDef
     ctx: Context | None
-    arg_types_fp: str   # '' when no arg_types are pinned
+    arg_fmts_fp: str   # '' when no arg formats are pinned
 
 
 # ----------------------------------------------------------------------
-# FormatBound -> Type conversion (for Monomorphize input).
+# Type -> FormatBound conversion (for public keying).
 
 
-def _bound_to_type(bound: FormatBound) -> Type | None:
-    """Best-effort conversion of a ``FormatBound`` to a :class:`Type` for
-    use as a ``Monomorphize`` argument override.
+def _type_to_fmt(t: Type | None) -> FormatBound:
+    """Convert a :class:`Type` to a :class:`FormatBound` for spec keying.
 
-    Returns ``None`` when the bound carries no useful structural
-    information (Monomorphize then leaves the parameter's annotated type
-    alone).  Scalar ``Format`` / ``SetFormat`` bounds become
-    ``RealType(None)`` — they pin "this argument is a scalar real" without
-    yet recovering the underlying ``Context`` (deferred).
-    """
-    if bound is None:
+    ``RealType(ctx)`` → ``ctx.format()`` (a ``Format``).  Aggregates
+    recurse (``TupleType`` → ``TupleFormat``, ``ListType`` →
+    ``ListFormat``).  Non-numeric and ctx-less types yield ``None`` —
+    no specialization info to key on."""
+    if t is None or isinstance(t, BoolType):
         return None
-    if isinstance(bound, TupleFormat):
-        # If any element couldn't be converted, bail on the whole arg.
-        elt_types: list[Type] = []
-        for e in bound.elts:
-            t = _bound_to_type(e)
-            if t is None:
-                return None
-            elt_types.append(t)
-        return TupleType(*elt_types)
-    if isinstance(bound, ListFormat):
-        elt_type = _bound_to_type(bound.elt)
-        if elt_type is None:
+    if isinstance(t, RealType):
+        if t.ctx is None or not isinstance(t.ctx, Context):
             return None
-        return ListType(elt_type)
-    # Scalar bound (concrete ``Format`` or ``SetFormat``).
-    return RealType(None)
-
-
-def _arg_fmts_to_arg_types(
-    arg_fmts: tuple[FormatBound, ...] | None,
-) -> tuple[Type | None, ...] | None:
-    """Convert a per-argument ``FormatBound`` tuple to a per-argument
-    ``Type | None`` tuple consumable by :class:`Monomorphize`."""
-    if arg_fmts is None:
-        return None
-    return tuple(_bound_to_type(b) for b in arg_fmts)
+        return t.ctx.format()
+    if isinstance(t, TupleType):
+        return TupleFormat(tuple(_type_to_fmt(e) for e in t.elts))
+    if isinstance(t, ListType):
+        return ListFormat(_type_to_fmt(t.elt))
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -108,39 +97,40 @@ def _ctx_fingerprint(ctx: Context) -> str:
     return hashlib.sha1(str(ctx).encode()).hexdigest()[:8]
 
 
-def _is_trivial_type(t: Type | None) -> bool:
-    """A type that conveys no specialization information: ``None`` (no
-    override) or ``RealType(None)`` (just "scalar real")."""
-    return t is None or (isinstance(t, RealType) and t.ctx is None)
+def _is_trivial_fmt(f: FormatBound) -> bool:
+    """A :class:`FormatBound` that conveys no specialization information:
+    ``None`` (non-numeric) or ``REAL_FORMAT`` (the polymorphic scalar
+    top)."""
+    return f is None or f is REAL_FORMAT or f == REAL_FORMAT
 
 
-def _arg_types_fingerprint(
-    arg_types: tuple[Type | None, ...] | None,
+def _arg_fmts_fingerprint(
+    arg_fmts: tuple[FormatBound, ...] | None,
 ) -> str:
-    """A short fingerprint of a per-argument types tuple.  Returns an
-    empty string when *arg_types* is ``None`` or every entry is "trivial"
-    (no shape or context info pinned) — so polymorphic specs pass through
-    unchanged.  Otherwise, distinct ``Type.format()`` strings dedupe to one
-    spec via BLAKE2."""
-    if arg_types is None or all(_is_trivial_type(t) for t in arg_types):
+    """A short fingerprint of a per-argument :class:`FormatBound` tuple.
+    Returns ``''`` when *arg_fmts* is ``None`` or every entry is trivial
+    — so polymorphic specs pass through unchanged.  Otherwise distinct
+    bound reprs dedupe to one spec via SHA-1 (matching cpp's mangling
+    shape)."""
+    if arg_fmts is None or all(_is_trivial_fmt(f) for f in arg_fmts):
         return ''
-    parts = [t.format() if t is not None else 'X' for t in arg_types]
+    parts = [repr(f) if f is not None else 'X' for f in arg_fmts]
     raw = '|'.join(parts)
     return hashlib.sha1(raw.encode()).hexdigest()[:8]
 
 
 def _mangle_private(
-    name: str, ctx: Context | None, arg_types_fp: str,
+    name: str, ctx: Context | None, arg_fmts_fp: str,
 ) -> str:
     """Build a stable name for a private spec.  Includes the ctx
-    fingerprint (when present) and the arg-types fingerprint (when
+    fingerprint (when present) and the arg-format fingerprint (when
     non-empty), so two specs of the same function with different
-    ``(ctx, arg_types)`` produce distinguishable names."""
+    ``(ctx, arg_fmts)`` produce distinguishable names."""
     parts = [name]
     if ctx is not None:
         parts.append(_ctx_fingerprint(ctx))
-    if arg_types_fp:
-        parts.append(arg_types_fp)
+    if arg_fmts_fp:
+        parts.append(arg_fmts_fp)
     return '__'.join(parts)
 
 
@@ -198,8 +188,8 @@ class Specialize:
         orig_func: dict[_SpecKey, Function] = {}
         # The arg_types tuple used to monomorphize each spec.  For public
         # roots this is the user-supplied ``entry.arg_types``; for callees
-        # it is derived from ``sub_fa.fn_fmt.arg_fmts`` via
-        # ``_bound_to_type``.
+        # it is ``None`` (callees are monomorphized at the outer ctx only;
+        # arg formats live in the spec key, not in the body).
         arg_types_for: dict[_SpecKey, tuple[Type | None, ...] | None] = {}
 
         public_keys: list[tuple[str, _SpecKey]] = []   # (entry_name, key) per public
@@ -207,10 +197,16 @@ class Specialize:
         worklist: list[_SpecKey] = []
         for entry in module:
             atypes = entry.arg_types
+            # Derive arg_fmts from the user-supplied arg_types so the key
+            # lives in FormatBound space (matching what callees produce).
+            pub_arg_fmts = (
+                tuple(_type_to_fmt(t) for t in atypes)
+                if atypes is not None else None
+            )
             key = _SpecKey(
                 fdef=entry.func.ast,
                 ctx=entry.ctx,
-                arg_types_fp=_arg_types_fingerprint(atypes),
+                arg_fmts_fp=_arg_fmts_fingerprint(pub_arg_fmts),
             )
             public_keys.append((entry.name, key))
             if key not in orig_func:
@@ -227,8 +223,8 @@ class Specialize:
 
             # FormatInfer gives, for each Function-targeted Call in
             # ``mono``, the sub-analysis whose ``fn_fmt`` describes the
-            # callee at that call site — both its calling ctx and the
-            # per-argument format bounds.
+            # callee at that call site — calling ctx + per-argument
+            # format bounds.  Both feed the callee's spec identity.
             fa = FormatInfer.analyze(mono)
             site_map: dict[Call, _SpecKey] = {}
             local_callees: list[_SpecKey] = []
@@ -239,11 +235,11 @@ class Specialize:
                 callee_ctx_raw = sub_fa.fn_fmt.ctx
                 # Only concrete ``Context``s count; symbolic / None collapse.
                 callee_ctx = callee_ctx_raw if isinstance(callee_ctx_raw, Context) else None
-                callee_arg_types = _arg_fmts_to_arg_types(sub_fa.fn_fmt.arg_fmts)
+                callee_arg_fmts = sub_fa.fn_fmt.arg_fmts
                 callee_key = _SpecKey(
                     fdef=callee_fn.ast,
                     ctx=callee_ctx,
-                    arg_types_fp=_arg_types_fingerprint(callee_arg_types),
+                    arg_fmts_fp=_arg_fmts_fingerprint(callee_arg_fmts),
                 )
 
                 site_map[call] = callee_key
@@ -252,8 +248,10 @@ class Specialize:
                     local_callees.append(callee_key)
                 if callee_key not in seen:
                     seen.add(callee_key)
-                    orig_func.setdefault(callee_key, callee_fn)
-                    arg_types_for.setdefault(callee_key, callee_arg_types)
+                    orig_func[callee_key] = callee_fn
+                    # Monomorphize the callee with the outer ctx only —
+                    # arg formats live in the spec key, not in the body.
+                    arg_types_for[callee_key] = None
                     worklist.append(callee_key)
 
             call_targets[key] = site_map
@@ -287,7 +285,7 @@ class Specialize:
                 names[k] = spec_to_public_name[k]
             else:
                 names[k] = _mangle_private(
-                    orig_func[k].name, k.ctx, k.arg_types_fp,
+                    orig_func[k].name, k.ctx, k.arg_fmts_fp,
                 )
 
         # --- 4. Build new ``Function``s in leaves-first order, rewiring
