@@ -24,13 +24,14 @@ from ...analysis import (
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.format_infer import FormatAnalysis, PreAnalysisCache
 from ...ast.fpyast import Call, FuncDef
+from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...number.context.ieee754 import IEEEContext
 from ...number.context.mp_fixed import MPFixedContext
 from ...number.context.mpb_fixed import MPBFixedContext
-from ...transform import Monomorphize, RoundElim, ZipElim
+from ...transform import Monomorphize, RoundElim, Specialize, ZipElim
 from ...types import Type
 from ..backend import Backend, CompileError
 
@@ -258,6 +259,23 @@ def _mangle_with_params(
 # Compiler
 
 
+def _collect_call_names(ast: FuncDef) -> dict[Call, str]:
+    """Build a ``Call → emit-name`` map for every Function-targeted Call in
+    *ast*'s body.  After :class:`Specialize`, each such ``Call.fn`` points at
+    the target spec's :class:`Function`, so the emit name is just
+    ``call.fn.ast.name``."""
+    out: dict[Call, str] = {}
+
+    class _Collector(DefaultVisitor):
+        def _visit_call(self, e: Call, ctx):
+            if isinstance(e.fn, Function):
+                out[e] = e.fn.ast.name
+            super()._visit_call(e, ctx)
+
+    _Collector()._visit_function(ast, None)
+    return out
+
+
 class CppCompiler(Backend):
     """
     Format-inference-driven C++ compiler.
@@ -440,16 +458,81 @@ class CppCompiler(Backend):
     def compile_module(self, module: Module) -> str:
         """Compile a :class:`~fpy2.Module` to a single C++ translation unit.
 
-        Each public entry is added to a shared :class:`CppTranslationUnit` with
-        its monomorphization spec; the unit pulls in transitively-called
-        functions and deduplicates specializations, so the result is a
-        self-contained, ODR-safe source string."""
+        Pipeline (Pass 1 of the ``Specialize`` integration):
+          1. **Pre-spec optimizations** (`ZipElim`) on every function in the
+             module via ``map`` — applies to private callees too, which the
+             old per-top-level pipeline did not optimize.
+          2. **Specialize** the module: each ``(FuncDef, ctx, arg_fmts)`` becomes
+             one entry; cross-function calls rewire to the appropriate spec.
+          3. **Post-spec optimizations** (`RoundElim`) on each spec —
+             monomorphic format inference is now available.
+          4. **Per-spec codegen**, leaves-first, one C++ definition per entry.
+        """
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
-        unit = self.unit()
-        for entry in module:
-            unit.add(entry.func, ctx=entry.ctx, arg_types=entry.arg_types)
-        return unit.render()
+
+        # 1. Pre-spec opts (polymorphic-friendly).
+        if self._optimize:
+            module = module.map(lambda _m, fd: ZipElim.apply(fd))
+
+        # 2. Specialize -> flat module of monomorphic specs.
+        specialized = Specialize.apply(module)
+
+        # 3. Post-spec opts (require monomorphic format info).
+        if self._optimize:
+            specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
+
+        # 4. Codegen: one C++ definition per spec, leaves-first.
+        cg = specialized.call_graph()
+        return '\n\n'.join(self._emit_spec(f) for f in cg.order)
+
+    def _emit_spec(self, func: Function) -> str:
+        """Emit one C++ function definition for a fully-specialized
+        :class:`Function`.  ``func.ast.name`` is the final emitted name
+        (set by :class:`Specialize` — public entries keep their user-given
+        name, private specs get a mangled one)."""
+        ast = func.ast
+
+        # Per-spec analyses.
+        def_use = DefineUse.analyze(ast)
+        ctx_use = ContextUse.analyze(ast, def_use=def_use)
+        array_size = ArraySizeInfer.analyze(ast)
+        format_info = FormatInfer.analyze(
+            ast,
+            def_use=def_use,
+            ctx_use=ctx_use,
+            array_size=array_size,
+        )
+
+        # Per-spec storage selection.
+        try:
+            storage = StorageInfer.infer(
+                format_info.type_info.def_use, format_info.by_def,
+            )
+        except StorageSelectionError as e:
+            raise CppCompileError(
+                f'storage selection failed for `{func.name}`: {e}'
+            ) from e
+
+        # Call.fn → emitted name.  ``Specialize`` rewired each Call.fn at
+        # the source so call.fn.ast.name is the target spec's emit name.
+        call_names = _collect_call_names(ast)
+
+        emitter = CppEmitter(
+            ast=ast,
+            storage=storage,
+            def_use=def_use,
+            format_info=format_info,
+            ctx_use=ctx_use,
+            call_names=call_names,
+            unsafe_cast_int=self._unsafe_cast_int,
+        )
+        try:
+            return emitter.emit()
+        except CppEmitError as e:
+            raise CppCompileError(
+                f'compilation failed for `{func.name}`: {e}'
+            ) from e
 
     # ------------------------------------------------------------------
     # Call-graph walk

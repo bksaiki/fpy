@@ -21,15 +21,14 @@ The fingerprint hashes the tuple representation; trivial bounds
 top) fingerprint to the empty string, so polymorphic specs pass
 through unchanged.
 
-Per-spec monomorphization is ctx-only (``Monomorphize.apply(fdef,
-ctx, None)``): callees do not receive per-argument type overrides
-beyond the outer ctx, so two callee specs that differ only in arg
-format share an identical FuncDef body.  They are still distinct
-specs (distinct keys, names, and ``Function`` objects) — the
-differentiation lives in the key, not the body.  This keeps the
-output module's bodies free of per-arg ctx annotations baked in by
-``Specialize``, leaving any such pinning to the consuming backend if
-it wants it.
+Callee monomorphization uses ``arg_types`` derived from the call-site
+``arg_fmts`` via :func:`_bound_to_type` (with best-effort
+``Format → Context`` recovery against the canonical contexts).  The
+key still lives in pure ``FormatBound`` space; the ``Type``-form
+conversion is *only* to feed ``Monomorphize`` — which expects
+``Type``\\s — so the resulting FuncDef has per-arg ctx annotations.
+Backends (notably cpp's storage selection) rely on those annotations
+to pick concrete representations.
 """
 
 import hashlib
@@ -40,6 +39,7 @@ from ..analysis.format_infer import (
     FormatBound,
     FormatInfer,
     ListFormat,
+    SetFormat,
     TupleFormat,
 )
 from ..ast import Call, FuncDef
@@ -47,9 +47,88 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
 from ..module import Module
 from ..number import Context
+from ..number.context.format import Format
 from ..number.context.real import REAL_FORMAT
 from ..types import BoolType, ListType, RealType, TupleType, Type
 from .monomorphize import Monomorphize
+
+
+# ----------------------------------------------------------------------
+# Format -> Context recovery + FormatBound -> Type conversion (used only
+# to feed `Monomorphize` at callees — the spec key does *not* go through
+# this conversion).
+
+
+_FORMAT_TO_CTX: dict[Format, Context] | None = None
+
+
+def _format_to_ctx(fmt: Format) -> Context | None:
+    """Best-effort recovery of a canonical :class:`Context` from a
+    :class:`Format`.  Returns ``None`` for formats outside the canonical
+    registry — the caller falls back to ``RealType(None)``."""
+    global _FORMAT_TO_CTX
+    if _FORMAT_TO_CTX is None:
+        from ..libraries.base import (
+            FP16, FP32, FP64, FP128, FP256, BF16, TF32, INTEGER,
+            SINT8, SINT16, SINT32, SINT64,
+            UINT8, UINT16, UINT32, UINT64,
+            S1E5M2, S1E4M3,
+            MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
+            MX_E8M0, MX_INT8,
+            FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
+        )
+        canonical = (
+            FP16, FP32, FP64, FP128, FP256, BF16, TF32, INTEGER,
+            SINT8, SINT16, SINT32, SINT64,
+            UINT8, UINT16, UINT32, UINT64,
+            S1E5M2, S1E4M3,
+            MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
+            MX_E8M0, MX_INT8,
+            FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
+        )
+        _FORMAT_TO_CTX = {}
+        for ctx in canonical:
+            _FORMAT_TO_CTX.setdefault(ctx.format(), ctx)
+    return _FORMAT_TO_CTX.get(fmt)
+
+
+def _bound_to_type(bound: FormatBound) -> Type | None:
+    """Convert a :class:`FormatBound` to a :class:`Type` for use as a
+    ``Monomorphize`` argument override.
+
+    Scalar ``Format`` bounds attempt ``Format → Context`` recovery via
+    :func:`_format_to_ctx` and become ``RealType(<recovered ctx>)`` on
+    success (fallback ``RealType(None)`` otherwise).  ``SetFormat`` and
+    ``None`` collapse to ``RealType(None)`` / ``None``.
+    """
+    if bound is None:
+        return None
+    if isinstance(bound, TupleFormat):
+        elt_types: list[Type] = []
+        for e in bound.elts:
+            t = _bound_to_type(e)
+            if t is None:
+                return None
+            elt_types.append(t)
+        return TupleType(*elt_types)
+    if isinstance(bound, ListFormat):
+        elt_type = _bound_to_type(bound.elt)
+        if elt_type is None:
+            return None
+        return ListType(elt_type)
+    if isinstance(bound, SetFormat):
+        return RealType(None)
+    assert isinstance(bound, Format), f'unexpected FormatBound: {type(bound)}'
+    return RealType(_format_to_ctx(bound))
+
+
+def _arg_fmts_to_arg_types(
+    arg_fmts: tuple[FormatBound, ...] | None,
+) -> tuple[Type | None, ...] | None:
+    """Per-argument ``FormatBound → Type`` for ``Monomorphize``."""
+    if arg_fmts is None:
+        return None
+    return tuple(_bound_to_type(b) for b in arg_fmts)
 
 
 class _SpecKey(NamedTuple):
@@ -188,8 +267,9 @@ class Specialize:
         orig_func: dict[_SpecKey, Function] = {}
         # The arg_types tuple used to monomorphize each spec.  For public
         # roots this is the user-supplied ``entry.arg_types``; for callees
-        # it is ``None`` (callees are monomorphized at the outer ctx only;
-        # arg formats live in the spec key, not in the body).
+        # it is derived from ``sub_fa.fn_fmt.arg_fmts`` via
+        # ``_arg_fmts_to_arg_types`` so the body's arg annotations get
+        # per-arg ctx pinning (needed by cpp's storage selection).
         arg_types_for: dict[_SpecKey, tuple[Type | None, ...] | None] = {}
 
         public_keys: list[tuple[str, _SpecKey]] = []   # (entry_name, key) per public
@@ -249,9 +329,13 @@ class Specialize:
                 if callee_key not in seen:
                     seen.add(callee_key)
                     orig_func[callee_key] = callee_fn
-                    # Monomorphize the callee with the outer ctx only —
-                    # arg formats live in the spec key, not in the body.
-                    arg_types_for[callee_key] = None
+                    # ``Monomorphize`` takes Types; convert the arg_fmts
+                    # here (and only here — the key already lives in
+                    # FormatBound space) so the body's arg annotations
+                    # get per-arg ctx pinning that backends need.
+                    arg_types_for[callee_key] = _arg_fmts_to_arg_types(
+                        callee_arg_fmts,
+                    )
                     worklist.append(callee_key)
 
             call_targets[key] = site_map
