@@ -248,11 +248,44 @@ working cpp path, avoids re-monomorphization.
    - The base `Backend.compile_module` stub from phase 3 was reverted —
      `compile_module` is implemented per backend with no abstract declaration
      (matches how `compile` is also per-backend with no base method).
-5. **(Future) Structured specialization**: backend-agnostic expansion of a
-   module into a deduplicated set of monomorphized specializations using
-   `CallGraph` order — generalizing what
-   `CppTranslationUnit._discover_specializations` does today, so other backends
-   inherit it. Deferred.
+5. **[DONE — v1] Structured specialization**: `Module → Module` pass that
+   expands public entries' `(ctx, arg_types)` specs into a flat set of
+   fully-monomorphized functions. Each `(FuncDef, calling-ctx)` pair becomes
+   one entry; cross-function calls in the output are rewired to the
+   appropriate spec. Lives in `fpy2/transform/specialize.py` as a `Specialize`
+   class with `apply(module) -> Module`; `Module.specialized()` is a thin
+   shorthand. Public entries' user-given names are preserved; private specs
+   get a `name__<8hex>` fingerprint of the ctx.
+
+   *v1 design choices:*
+   - **ctx-only key** `(FuncDef, ctx)`. Per-arg-format keying (the cpp
+     `_discover_specializations` shape) is deferred; can be added as a
+     `Specialize.apply(module, key=...)` strategy in v2.
+   - **Per-call contexts via `FormatInfer.by_call`** — `sub_fa.fn_fmt.ctx`
+     gives the callee's calling context at each call site. Heavier than a
+     custom context walker, but a known-correct path the cpp pipeline
+     already uses.
+   - **`Monomorphize.apply(fdef, ctx, arg_types)`** per spec for the actual
+     body specialization.
+   - **`_RebindCallSites` visitor** — a per-`Call`-identity variant of
+     `_RebindCalls`, since within one specialized caller the same callee
+     can be invoked at different specs from different sites (rare but
+     correct to support).
+   - **Mangling**: `hashlib.blake2b(repr(ctx), digest_size=4).hexdigest()`.
+
+   *Shape note (greedy-feel output, no model change):* the **pre-specialization**
+   `Module` keeps the lazy/derived model — auto-consistent under `map`-style
+   rewrites. The **post-specialization output** is a regular `Module` where
+   every spec is `add`-ed explicitly — the "greedy/flat" feel comes from how
+   the output is built, not from changing the underlying design.
+
+   *Future / deferred for v2+:*
+   - Format-aware specialization (`(FuncDef, ctx, param_formats)`), matching
+     cpp's current key — accept a `key=` callable.
+   - Have `CppTranslationUnit` detect a pre-specialized input and skip its
+     own walk (currently it just re-discovers each unique FuncDef → one spec,
+     which is a wasted pass but correct).
+   - Per-backend name-mangling hook for callers who want a particular scheme.
 
 ## Open decisions
 

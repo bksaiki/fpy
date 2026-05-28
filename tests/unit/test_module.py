@@ -414,3 +414,142 @@ class TestCallGraph:
         mod = Module(); mod.add(m_)
         with pytest.raises(CallGraphError):
             mod.call_graph()
+
+
+class TestSpecialize:
+    def _polymorphic_funcs(self):
+        """A polymorphic chain — outer -> inner -> leaf, all constant-free
+        (so fpc accepts the specialized output too)."""
+        @fp.fpy
+        def leaf(x: fp.Real) -> fp.Real:
+            return x + x
+
+        @fp.fpy
+        def inner(x: fp.Real) -> fp.Real:
+            return leaf(x)
+
+        @fp.fpy
+        def outer(x: fp.Real) -> fp.Real:
+            return inner(x)
+
+        return leaf, inner, outer
+
+    def test_distinct_ctx_yields_distinct_specs(self):
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+
+        s = m.specialized()
+        f32 = s.get('outer_fp32').func
+        f64 = s.get('outer_fp64').func
+        assert f32 is not f64                 # different specs
+        assert f32.ast is not f64.ast         # different FuncDefs
+
+    def test_callees_specialized_per_ctx(self):
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+
+        s = m.specialized()
+        # Two distinct private spec functions for `inner` and two for `leaf`
+        priv_names = sorted(f.name for f in s.private())
+        assert sum(n.startswith('inner__') for n in priv_names) == 2
+        assert sum(n.startswith('leaf__') for n in priv_names) == 2
+        # Each private name is unique
+        assert len(priv_names) == len(set(priv_names))
+
+    def test_shared_ctx_dedups_to_one_spec(self):
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer, name='a', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        m.add(outer, name='b', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+
+        s = m.specialized()
+        # Same (FuncDef, ctx) → one specialized Function shared under two names
+        assert s.get('a').func is s.get('b').func
+        # callees too
+        assert {f.name for f in s.private()} == {
+            n for n in (f.name for f in s.private())
+        }
+        assert len(s.private()) == 2     # one specialized inner + one specialized leaf
+
+    def test_public_names_preserved_privates_mangled(self):
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+
+        s = m.specialized()
+        # public's FuncDef name == user entry name
+        assert s.get('outer_fp32').func.name == 'outer_fp32'
+        # privates use the mangled `original__<hash>` form
+        for f in s.private():
+            assert '__' in f.name
+
+    def test_cross_function_calls_route_to_specialized_callees(self):
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+
+        s = m.specialized()
+        # outer_fp32's only callee must be the FP32 inner spec, not the FP64 one
+        outer32 = s.get('outer_fp32').func
+        callees = _fpy_callees(outer32)
+        assert len(callees) == 1
+        assert '__' in callees[0].name           # specialized name
+        # and it lives in the FP32 chain (transitively reaches the FP32 leaf)
+        cg = s.call_graph()
+        fp32_funcs = {outer32, *cg.callees_of(outer32)}
+        for f in list(fp32_funcs):
+            fp32_funcs.update(cg.callees_of(f))
+        outer64 = s.get('outer_fp64').func
+        fp64_funcs = {outer64, *cg.callees_of(outer64)}
+        for f in list(fp64_funcs):
+            fp64_funcs.update(cg.callees_of(f))
+        # the two chains are entirely disjoint
+        assert fp32_funcs.isdisjoint(fp64_funcs)
+
+    def test_polymorphic_passthrough(self):
+        # ctx=None publics specialize to a single shared spec
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer)
+        s = m.specialized()
+        # one public, one inner spec, one leaf spec — all with original names
+        assert [f.name for f in s.public()] == ['outer']
+        assert {f.name for f in s.private()} == {'inner', 'leaf'}
+
+    def test_specialized_compiles_through_fpc(self):
+        # fpc gets per-context dedup for free
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+        s = m.specialized()
+        out = FPCoreCompiler().compile_module(s)
+        assert sorted(out.keys()) == ['outer_fp32', 'outer_fp64']
+        assert all(isinstance(v, fpc.FPCore) for v in out.values())
+
+    def test_specialized_compiles_through_cpp(self):
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+        s = m.specialized()
+        out = CppCompiler().compile_module(s)
+        assert 'outer_fp32' in out and 'outer_fp64' in out
+
+    def test_composes_with_map(self):
+        leaf, inner, outer = self._polymorphic_funcs()
+        m = Module()
+        m.add(outer, ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        # specialize, then apply a transform to every spec
+        s = m.specialized().map(lambda mod, fd: fd)
+        assert 'outer' in s
+
+    def test_rejects_non_module(self):
+        from fpy2.transform import Specialize
+        with pytest.raises(TypeError):
+            Specialize.apply(object())  # type: ignore[arg-type]

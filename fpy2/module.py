@@ -286,6 +286,15 @@ class Module:
         private functions."""
         return self.public() + self._derive().private
 
+    def specialized(self) -> 'Module':
+        """Expand this module into a fully-monomorphized form: one entry per
+        ``(FuncDef, calling-context)`` instantiation reached from a public
+        entry, with cross-function calls rewired to the appropriate spec.
+
+        Thin shorthand for :class:`fpy2.transform.Specialize`."""
+        from .transform.specialize import Specialize
+        return Specialize.apply(self)
+
     def call_graph(self) -> ModuleCallGraph:
         """The whole-module call graph: every public entry plus its
         transitively-called private functions, with edges keyed on
