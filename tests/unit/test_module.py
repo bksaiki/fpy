@@ -8,7 +8,7 @@ import titanfp.fpbench.fpcast as fpc
 
 import fpy2 as fp
 
-from fpy2 import Backend, CppCompiler, FPCoreCompiler, Module
+from fpy2 import CppCompiler, FPCoreCompiler, Module
 from fpy2.types import RealType
 
 
@@ -258,10 +258,6 @@ def _fpc_funcs():
 
 
 class TestCompileModule:
-    def test_base_backend_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            Backend().compile_module(Module())
-
     def test_cpp_matches_manual_unit(self):
         leaf, mid, top = _funcs()
         m = Module()
@@ -312,3 +308,110 @@ class TestCompileModule:
     def test_fpc_rejects_non_module(self):
         with pytest.raises(TypeError):
             FPCoreCompiler().compile_module(object())  # type: ignore[arg-type]
+
+
+class TestCallGraph:
+    def test_returns_module_call_graph(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        cg = m.call_graph()
+        from fpy2 import ModuleCallGraph
+        assert isinstance(cg, ModuleCallGraph)
+
+    def test_publics_and_privates(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        cg = m.call_graph()
+        assert cg.publics == [top]
+        assert {f.name for f in cg.privates} == {'mid', 'leaf'}
+
+    def test_callees_callers(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        cg = m.call_graph()
+        assert cg.callees_of(top) == [mid, leaf]
+        assert cg.callees_of(leaf) == []
+        # leaf is called by mid (via the chain) and by top (directly)
+        assert set(cg.callers_of(leaf)) == {mid, top}
+        # top has no callers in the module
+        assert cg.callers_of(top) == []
+
+    def test_is_public(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        cg = m.call_graph()
+        assert cg.is_public(top) is True
+        assert cg.is_public(mid) is False
+        assert cg.is_public(leaf) is False
+
+    def test_iteration_leaves_first(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        cg = m.call_graph()
+        order = list(cg)
+        assert order.index(leaf) < order.index(mid)
+        assert order.index(mid) < order.index(top)
+        assert len(cg) == 3
+
+    def test_contains(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        cg = m.call_graph()
+        assert top in cg and mid in cg and leaf in cg
+
+    def test_format_multi_root_shared_callee_marked(self):
+        # two publics, both calling shared `helper -> leaf`
+        @fp.fpy
+        def leaf(x: fp.Real) -> fp.Real: return x + 1
+        @fp.fpy
+        def helper(x: fp.Real) -> fp.Real: return leaf(x) * 2
+        @fp.fpy
+        def top_a(x: fp.Real) -> fp.Real: return helper(x)
+        @fp.fpy
+        def top_b(x: fp.Real) -> fp.Real: return helper(x)
+
+        m = Module(); m.add(top_a); m.add(top_b)
+        out = m.call_graph().format()
+        assert 'top_a' in out and 'top_b' in out
+        # second occurrence of helper marked as a revisit, with the legend
+        assert 'helper (*)' in out
+        assert '(*) = callees shown above' in out
+
+    def test_dot_styles_publics(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        out = m.call_graph().dot()
+        assert out.startswith('digraph module_call_graph {')
+        # publics are bold; privates are not
+        assert 'label="top", style=bold' in out
+        assert 'label="mid"' in out and 'label="mid", style=bold' not in out
+        # one edge per (caller, callee) pair
+        assert out.count(' -> ') == 3   # top->mid, top->leaf, mid->leaf
+
+    def test_call_graph_catches_cycle(self):
+        from fpy2.analysis import CallGraphError
+        from fpy2.ast.visitor import DefaultVisitor
+
+        @fp.fpy
+        def leaf(x: fp.Real) -> fp.Real: return x + 1
+        @fp.fpy
+        def m_(x: fp.Real) -> fp.Real: return leaf(x)
+
+        # Patch m_'s only call to form a self-cycle m_ -> m_.
+        calls = []
+        class _C(DefaultVisitor):
+            def _visit_call(self, e, ctx):
+                calls.append(e); super()._visit_call(e, ctx)
+        _C()._visit_function(m_.ast, None)
+        calls[0].fn = m_
+
+        mod = Module(); mod.add(m_)
+        with pytest.raises(CallGraphError):
+            mod.call_graph()

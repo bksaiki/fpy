@@ -56,6 +56,122 @@ class _Derived:
     """all functions (public + private) in global leaves-first order"""
     fdef_to_func: dict[FuncDef, Function]
     """every reachable ``FuncDef`` to its ``Function`` wrapper"""
+    callees: dict[Function, list[Function]]
+    """direct callees per function, source-order, deduped"""
+    callers: dict[Function, list[Function]]
+    """direct callers per function, discovery-order, deduped"""
+
+
+@dataclass
+class ModuleCallGraph:
+    """A whole-module call graph.
+
+    Like :class:`~fpy2.analysis.CallGraphAnalysis` but **multi-rooted** (the
+    module's public entries) and keyed on :class:`~fpy2.function.Function` (so
+    a module's actual wrappers are first-class).  Public-vs-private is baked
+    in so callers can ask both "what does this function call?" and "is this
+    function exported?" against the same object.
+    """
+
+    publics: list[Function]
+    """the registered functions (deduped by identity)"""
+    privates: list[Function]
+    """internal callees reached only through the public entries"""
+    callees: dict[Function, list[Function]]
+    """direct callees per function"""
+    callers: dict[Function, list[Function]]
+    """direct callers per function"""
+    order: list[Function]
+    """all functions, leaves-first (callees before callers)"""
+
+    def __post_init__(self):
+        # cached for ``is_public`` — Function is identity-hashable
+        self._publics: set[Function] = set(self.publics)
+
+    # --- queries ---
+
+    def is_public(self, func: Function) -> bool:
+        return func in self._publics
+
+    def functions(self) -> list[Function]:
+        """All functions in the graph (public + private)."""
+        return self.publics + self.privates
+
+    def callees_of(self, func: Function) -> list[Function]:
+        return self.callees[func]
+
+    def callers_of(self, func: Function) -> list[Function]:
+        return self.callers[func]
+
+    def __iter__(self):
+        """Iterate functions leaves-first (callees before callers)."""
+        return iter(self.order)
+
+    def __len__(self) -> int:
+        return len(self.order)
+
+    def __contains__(self, func: object) -> bool:
+        return func in self.callees
+
+    # --- rendering ---
+
+    def format(self) -> str:
+        """An indented-tree rendering, one tree per public entry.  Shared
+        callees are expanded once; later occurrences are marked ``(*)``."""
+        lines: list[str] = []
+        seen: set[Function] = set()
+        revisited = False
+        for i, pub in enumerate(self.publics):
+            if i > 0:
+                lines.append('')
+            if self._format_node(pub, '', '', True, lines, seen):
+                revisited = True
+        return '\n'.join(lines)
+
+    def _format_node(
+        self,
+        func: Function,
+        prefix: str,
+        connector: str,
+        is_root: bool,
+        lines: list[str],
+        seen: set[Function],
+    ) -> bool:
+        revisit = func in seen
+        marker = ' (*)' if revisit else ''
+        lines.append(f'{prefix}{connector}{func.name}{marker}')
+        if revisit:
+            return True
+        seen.add(func)
+        any_revisit = False
+        callees = self.callees[func]
+        child_prefix = '' if is_root else prefix + (
+            '   ' if connector == '└─ ' else '│  '
+        )
+        for i, callee in enumerate(callees):
+            last = i == len(callees) - 1
+            child_connector = '└─ ' if last else '├─ '
+            if self._format_node(
+                callee, child_prefix, child_connector, False, lines, seen,
+            ):
+                any_revisit = True
+        return any_revisit
+
+    def dot(self) -> str:
+        """A Graphviz ``digraph`` rendering of the whole module.  Public
+        entries are styled bold to distinguish them from private callees."""
+        ids = {func: f'n{i}' for i, func in enumerate(self.order)}
+        lines = ['digraph module_call_graph {']
+        for func in self.order:
+            attrs = f'label="{func.name}"'
+            if func in self._publics:
+                attrs += ', style=bold'
+            lines.append(f'  {ids[func]} [{attrs}];')
+        for func in self.order:
+            for callee in self.callees[func]:
+                lines.append(f'  {ids[func]} -> {ids[callee]};')
+        lines.append('}')
+        return '\n'.join(lines)
 
 
 @dataclass
@@ -175,6 +291,20 @@ class Module:
         private functions."""
         return self.public() + self._derive().private
 
+    def call_graph(self) -> ModuleCallGraph:
+        """The whole-module call graph: every public entry plus its
+        transitively-called private functions, with edges keyed on
+        :class:`Function`.  Raises :class:`CallGraphError` if any reachable
+        sub-graph contains a cycle."""
+        d = self._derive()
+        return ModuleCallGraph(
+            publics=self.public(),
+            privates=d.private,
+            callees=d.callees,
+            callers=d.callers,
+            order=d.order,
+        )
+
     def _derive(self) -> _Derived:
         if self._derived is None:
             self._derived = self._compute_derived()
@@ -191,16 +321,36 @@ class Module:
         fdef_to_func: dict[FuncDef, Function] = {}
         order: list[Function] = []
         seen: set[FuncDef] = set()
+        callees: dict[Function, list[Function]] = {}
+        callers: dict[Function, list[Function]] = {}
 
         for f in public:
             fdef_to_func[f.ast] = f
             cg = CallGraph.analyze(f.ast)
+            # Populate the FuncDef -> Function map for every node reachable
+            # from this root, so we can translate edges below.
             for calls in cg.call_sites.values():
                 for call in calls:
                     callee = call.fn
                     # CallGraph only records call sites with `Function` targets.
                     assert isinstance(callee, Function)
                     fdef_to_func[callee.ast] = callee
+
+            # Translate this root's edges into Function-keyed module edges.
+            # A given FuncDef's callees list is the same regardless of which
+            # root's CallGraph produced it, so we skip if already merged.
+            for caller_fd, callee_fds in cg.callees.items():
+                caller_fn = fdef_to_func[caller_fd]
+                if caller_fn in callees:
+                    continue
+                cees = [fdef_to_func[ce] for ce in callee_fds]
+                callees[caller_fn] = cees
+                callers.setdefault(caller_fn, [])
+                for cee in cees:
+                    callers.setdefault(cee, [])
+                    if caller_fn not in callers[cee]:
+                        callers[cee].append(caller_fn)
+
             # leaves-first within each root; merging across roots with a shared
             # `seen` keeps the union globally leaves-first (callee before caller)
             # and analyzes a shared callee once.
@@ -211,7 +361,13 @@ class Module:
                 order.append(fdef_to_func[fdef])
 
         private = [f for f in order if f.ast not in public_fdefs]
-        return _Derived(private=private, order=order, fdef_to_func=fdef_to_func)
+        return _Derived(
+            private=private,
+            order=order,
+            fdef_to_func=fdef_to_func,
+            callees=callees,
+            callers=callers,
+        )
 
     # ------------------------------------------------------------------
     # Per-function passes

@@ -41,7 +41,7 @@ from .interpret import (
 )
 
 # module
-from .module import Module, ModuleEntry
+from .module import Module, ModuleCallGraph, ModuleEntry
 
 # compiler
 from .backend import (

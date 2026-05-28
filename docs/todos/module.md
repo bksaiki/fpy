@@ -228,8 +228,26 @@ working cpp path, avoids re-monomorphization.
      entries reference the transformed callees, which cpp auto-includes).
    - Decision 3 resolved: **fpc ignores `arg_types`** (not expressible in
      FPCore) while honoring `ctx`, so one module stays portable across backends.
-4. **`call_graph()`** convenience + whole-module acyclicity check (reuses
-   `CallGraph`).
+4. **[DONE] `call_graph()` accessor — `ModuleCallGraph`**: rather than
+   shoehorning the multi-root union into a single-rooted `CallGraphAnalysis`,
+   added a dedicated `ModuleCallGraph` dataclass — keyed on `Function` (the
+   wrappers the module actually holds), with public-vs-private baked in. It
+   carries the merged `callees` / `callers` / global leaves-first `order`,
+   plus `is_public`, `callees_of`, `callers_of`, iteration, `__contains__`,
+   `format()` (a forest — one indented tree per public entry, shared callees
+   marked `(*)` across both trees), and `dot()` (publics styled `style=bold`).
+   `Module.call_graph()` returns it; backed by the same memoized derivation
+   that drives `public()`/`private()`. Acyclicity is enforced for free — per-root
+   `CallGraph.analyze` already raises during the derivation. Exported as
+   `fp.ModuleCallGraph`.
+
+   *Notes from phase 4:*
+   - Per-root `CallGraph.callees` lists for the same `FuncDef` are identical
+     across roots (the function's body doesn't change), so merging is just
+     "first writer wins" per `FuncDef`.
+   - The base `Backend.compile_module` stub from phase 3 was reverted —
+     `compile_module` is implemented per backend with no abstract declaration
+     (matches how `compile` is also per-backend with no base method).
 5. **(Future) Structured specialization**: backend-agnostic expansion of a
    module into a deduplicated set of monomorphized specializations using
    `CallGraph` order — generalizing what
