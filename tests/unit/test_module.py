@@ -4,9 +4,11 @@ Unit tests for `Module` — phase 1 (registration + lazy public/private).
 
 import pytest
 
+import titanfp.fpbench.fpcast as fpc
+
 import fpy2 as fp
 
-from fpy2 import Module
+from fpy2 import Backend, CppCompiler, FPCoreCompiler, Module
 from fpy2.types import RealType
 
 
@@ -240,3 +242,73 @@ class TestMap:
         assert _fpy_callees(new_top) == []
         for xv in (0.0, 1.5, -3.25, 10.0):
             assert top(xv) == new_top(xv)
+
+
+def _fpc_funcs():
+    """Constant-free functions (FPCore rejects bare unrounded constants)."""
+    @fp.fpy
+    def helper(x: fp.Real) -> fp.Real:
+        return x + x
+
+    @fp.fpy
+    def entry(x: fp.Real) -> fp.Real:
+        return helper(x)
+
+    return helper, entry
+
+
+class TestCompileModule:
+    def test_base_backend_not_implemented(self):
+        with pytest.raises(NotImplementedError):
+            Backend().compile_module(Module())
+
+    def test_cpp_matches_manual_unit(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top, ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+
+        through = CppCompiler().compile_module(m)
+        unit = CppCompiler().unit()
+        unit.add(top, ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+        assert through == unit.render()
+
+    def test_cpp_includes_private_callees(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top, ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+        out = CppCompiler().compile_module(m)
+        # the entry and its (specialized) callees are all emitted
+        assert 'top' in out and 'mid' in out and 'leaf' in out
+
+    def test_cpp_rejects_non_module(self):
+        with pytest.raises(TypeError):
+            CppCompiler().compile_module(object())  # type: ignore[arg-type]
+
+    def test_cpp_compiles_mapped_module(self):
+        # map + compile compose: a mapped module still compiles
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top, ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+        m2 = m.map(lambda mod, fd: fp.transform.FuncInline.apply(fd))
+        out = CppCompiler().compile_module(m2)
+        assert 'top' in out
+
+    def test_fpc_returns_fpcore_per_entry(self):
+        helper, entry = _fpc_funcs()
+        m = Module()
+        m.add(entry)
+        m.add(helper, name='helper_pub')
+        out = FPCoreCompiler().compile_module(m)
+        assert sorted(out.keys()) == ['entry', 'helper_pub']
+        assert all(isinstance(v, fpc.FPCore) for v in out.values())
+
+    def test_fpc_ignores_arg_types(self):
+        helper, entry = _fpc_funcs()
+        m = Module()
+        m.add(entry, arg_types=[RealType(fp.FP64)])  # fpc can't express this
+        out = FPCoreCompiler().compile_module(m)
+        assert isinstance(out['entry'], fpc.FPCore)
+
+    def test_fpc_rejects_non_module(self):
+        with pytest.raises(TypeError):
+            FPCoreCompiler().compile_module(object())  # type: ignore[arg-type]

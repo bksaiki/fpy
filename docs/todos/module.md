@@ -215,10 +215,19 @@ working cpp path, avoids re-monomorphization.
      that auto-includes callees (cpp) will pull in the *transformed* privates.
      Phase 3 `compile_module` therefore just iterates the public `_entries`
      (with their specs); it does not need to register privates.
-3. **Compiler integration**: `CppCompiler.compile_module` (leave `compile`
-   as-is; `compile_module` reuses `unit()`), `FPCoreCompiler.compile_module`.
-   Tests: a 2-function module compiles to the same cpp source as manual
-   `unit.add` calls; fpc module -> dict of FPCores.
+3. **[DONE] Compiler integration**: `CppCompiler.compile_module(module) -> str`
+   (reuses `unit()`; `compile` left as-is), `FPCoreCompiler.compile_module(module)
+   -> dict[str, FPCore]`, and a base `Backend.compile_module` stub
+   (`NotImplementedError`; backend-specific return type). Both validate the
+   argument is a `Module`. `Module` is referenced via a `TYPE_CHECKING` import +
+   a local runtime import (avoids any backend<->module import-order issue).
+
+   *Notes learned in phase 3:*
+   - cpp `compile_module` output is byte-identical to a manual `unit.add` loop.
+   - **`map` + compile compose**: a mapped module compiles fine (its public
+     entries reference the transformed callees, which cpp auto-includes).
+   - Decision 3 resolved: **fpc ignores `arg_types`** (not expressible in
+     FPCore) while honoring `ctx`, so one module stays portable across backends.
 4. **`call_graph()`** convenience + whole-module acyclicity check (reuses
    `CallGraph`).
 5. **(Future) Structured specialization**: backend-agnostic expansion of a
@@ -229,22 +238,23 @@ working cpp path, avoids re-monomorphization.
 
 ## Open decisions
 
-1. **Public/private tracking — eager vs lazy.** Lazy/derived (recommended):
-   store only public entries; compute the private set from the call graph on
-   demand (memoized, invalidated on `add`). Eager: snapshot the call chain at
-   `add` time — simpler to query, but can go stale when a pass rewrites the
-   graph.
-2. **Monomorphization timing** — lazy spec (recommended) vs. eager-on-register.
-3. **fpc + `arg_types`** — ignore, or reject at registration since fpc can't
-   honor it?
+1. **[RESOLVED] Public/private tracking — lazy/derived.** Store only public
+   entries; compute the private set from the call graph on demand (memoized,
+   invalidated on `add`). Stays fresh when a pass rewrites the graph.
+2. **[RESOLVED] Monomorphization timing — lazy spec.** The entry stores the
+   `(ctx, arg_types)` spec; the compiler applies it at `compile_module` time
+   (no eager monomorphization in the module).
+3. **[RESOLVED] fpc + `arg_types`** — **ignore** it (FPCore can't express
+   per-arg monomorphization); `ctx` is still honored. Keeps a module portable
+   across backends rather than rejecting at compile time.
 4. **[RESOLVED] `map` granularity** — a plain `Callable[[Module, FuncDef],
    FuncDef]` (the module + the function). Passing the module lets a pass consult
    the surrounding program; existing single-arg transforms compose via a thin
    `lambda m, fd: T.apply(fd)`.
-5. **`map` call-graph rewiring** — how to rebind callers' `Call.fn` to
-   transformed callees (transform leaves-first and thread a
-   `old Function -> new Function` map, rebuilding `Call` nodes). This is the
-   crux of phase 2; needs its own design once we get there.
+5. **[RESOLVED] `map` call-graph rewiring** — transform leaves-first; before
+   transforming each function, rebind its `Call.fn` to already-transformed
+   callees via an `old Function -> new Function` map (the `_RebindCalls`
+   visitor). Implemented in phase 2.
 
 (Resolved: **callee inclusion** — the module owns it. Public = registered;
 private = derived call-chain functions. Earlier draft left this to the

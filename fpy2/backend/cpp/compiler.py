@@ -25,6 +25,7 @@ from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.format_infer import FormatAnalysis, PreAnalysisCache
 from ...ast.fpyast import Call, FuncDef
 from ...function import Function
+from ...module import Module
 from ...number import Context
 from ...number.context.ieee754 import IEEEContext
 from ...number.context.mp_fixed import MPFixedContext
@@ -435,6 +436,20 @@ class CppCompiler(Backend):
         per-function :meth:`compile` loop would produce when writing
         many functions into the same ``.cpp`` file."""
         return CppTranslationUnit(self)
+
+    def compile_module(self, module: Module) -> str:
+        """Compile a :class:`~fpy2.Module` to a single C++ translation unit.
+
+        Each public entry is added to a shared :class:`CppTranslationUnit` with
+        its monomorphization spec; the unit pulls in transitively-called
+        functions and deduplicates specializations, so the result is a
+        self-contained, ODR-safe source string."""
+        if not isinstance(module, Module):
+            raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
+        unit = self.unit()
+        for entry in module:
+            unit.add(entry.func, ctx=entry.ctx, arg_types=entry.arg_types)
+        return unit.render()
 
     # ------------------------------------------------------------------
     # Call-graph walk

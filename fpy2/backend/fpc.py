@@ -6,6 +6,7 @@ from ..analysis import DefineUse, DefineUseAnalysis
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
+from ..module import Module
 from ..number import Context
 from ..transform import ConstFold, ForBundling, ForUnpack, IfBundling, WhileBundling
 from ..utils import Gensym
@@ -1119,3 +1120,15 @@ class FPCoreCompiler(Backend):
         # compile
         def_use = DefineUse.analyze(ast)
         return _FPCoreCompileInstance(ast, def_use, self.unsafe_int_cast).compile()
+
+    def compile_module(self, module: Module) -> dict[str, fpc.FPCore]:
+        """Compile a :class:`~fpy2.Module` to one :class:`FPCore` per public
+        entry, keyed by export name.
+
+        FPCore has no whole-program unit, so each public entry is compiled
+        independently (callees are inlined by FPCore semantics).  An entry's
+        ``ctx`` is honored; its ``arg_types`` cannot be expressed in FPCore and
+        is ignored."""
+        if not isinstance(module, Module):
+            raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
+        return {entry.name: self.compile(entry.func, entry.ctx) for entry in module}
