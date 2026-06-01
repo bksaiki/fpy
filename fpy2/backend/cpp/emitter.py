@@ -863,10 +863,16 @@ class CppEmitter(Visitor):
                         self._maybe_cast(arg, arg_storage, target, at=e)
                     )
 
-        # (3) Lossless-widening fallback.
-        widened = self._try_widen_unary(e, sigs, arg, arg_storage)
-        if widened is not None:
-            return widened
+        # (3) Lossless-widening fallback — only sound when the active
+        # context is ``REAL``.  The wider C++ op then produces the exact
+        # mathematical result of the operand-typed op and rounds to
+        # itself; under any other active context the wider op rounds
+        # differently than the active ctx demands.  See
+        # :meth:`_try_widen_unary`.
+        if active is REAL:
+            widened = self._try_widen_unary(e, sigs, arg, arg_storage)
+            if widened is not None:
+                return widened
 
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '
@@ -952,12 +958,15 @@ class CppEmitter(Visitor):
                         self._maybe_cast(rhs, rhs_storage, target, at=e),
                     )
 
-        # (3) Lossless-widening fallback.
-        widened = self._try_widen_binary(
-            e, sigs, lhs, lhs_storage, rhs, rhs_storage,
-        )
-        if widened is not None:
-            return widened
+        # (3) Lossless-widening fallback — only sound when the active
+        # context is ``REAL``.  See :meth:`_try_widen_binary` and the
+        # corresponding note in :meth:`_dispatch_unary`.
+        if active is REAL:
+            widened = self._try_widen_binary(
+                e, sigs, lhs, lhs_storage, rhs, rhs_storage,
+            )
+            if widened is not None:
+                return widened
 
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '
@@ -1344,10 +1353,13 @@ class CppEmitter(Visitor):
                         self._maybe_cast(a3, in_storages[2], target, at=e),
                     )
 
-        # (3) Lossless-widening fallback.
-        widened = self._try_widen_ternary(e, sigs, args, in_storages)
-        if widened is not None:
-            return widened
+        # (3) Lossless-widening fallback — only sound when the active
+        # context is ``REAL``.  See :meth:`_try_widen_ternary` and the
+        # corresponding note in :meth:`_dispatch_unary`.
+        if active is REAL:
+            widened = self._try_widen_ternary(e, sigs, args, in_storages)
+            if widened is not None:
+                return widened
 
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under '

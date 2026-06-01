@@ -89,35 +89,29 @@ class TestSpecializationNameCollisions:
             return matrix.zeros(n, n)
 
         cc = CppCompiler(unsafe_cast_int=True)
-        unit = cc.unit()
-        unit.add(call_vec, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
-        unit.add(call_mat, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
-        out = unit.render()
+        m = fp.Module()
+        m.add(call_vec, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
+        m.add(call_mat, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
+        out = cc.compile_module(m)
 
-        # One ``zeros`` specialization keeps the clean
-        # ``zeros__fp64_rne`` name (the one registered first via
-        # ``call_vec``'s call-graph walk).  The other gets a
-        # ``_f<4-hex-char>`` suffix.  Match definitions by
+        # After the ``Specialize`` integration, callee names are
+        # mangled as ``zeros__<ctx_sha1>__<args_sha1>``.  Two distinct
+        # FuncDefs sharing the source name must produce two distinct
+        # mangled names (otherwise the C++ compiler rejects the unit
+        # with an ODR redefinition error).  Match definitions by
         # ``<name>(`` rather than ``<ret> <name>(`` since the two
-        # specializations have different return types and the
-        # storage ladder might tighten any literal-only result to
-        # an unexpected scalar.
-        clean_pat = re.compile(r'\bzeros__fp64_rne\(')
-        disambig_pat = re.compile(r'\bzeros__fp64_rne_f[0-9a-f]{4}\(')
-        # Each name appears exactly twice: once at its definition
-        # site and once at its call site inside the wrapper.
-        assert len(clean_pat.findall(out)) == 2, (
-            f'expected `zeros__fp64_rne(...)` to appear at one '
-            f'definition + one call site:\n{out}'
+        # specializations have different return types.
+        zeros_pat = re.compile(r'\bzeros__[0-9a-f]{8}__[0-9a-f]{8}\(')
+        occurrences = zeros_pat.findall(out)
+        # Each distinct spec appears exactly twice (one definition
+        # site + one call site).  Two specs → four occurrences total
+        # across two distinct names.
+        assert len(occurrences) == 4, (
+            f'expected 4 mangled `zeros__<ctx>__<args>(` occurrences '
+            f'(2 specs * (def + call)):\n{out}'
         )
-        assert len(disambig_pat.findall(out)) == 2, (
-            f'expected disambiguated `zeros__fp64_rne_f<digest>(...)` '
-            f'to appear at one definition + one call site:\n{out}'
-        )
-        # The disambiguated suffix is consistent across the two
-        # references (definition + call site agree).
-        disambig_names = set(disambig_pat.findall(out))
-        assert len(disambig_names) == 1, (
-            f'expected a single disambiguated name across def + '
-            f'call, got {disambig_names!r}'
+        distinct_names = set(occurrences)
+        assert len(distinct_names) == 2, (
+            f'expected 2 distinct mangled names for the two `zeros` '
+            f'specs, got {distinct_names!r}'
         )

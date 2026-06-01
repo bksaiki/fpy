@@ -12,4 +12,3 @@ class Backend:
     """
     Base class for FPy backends.
     """
-    pass

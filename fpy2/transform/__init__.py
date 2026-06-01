@@ -16,6 +16,7 @@ from .monomorphize import Monomorphize
 from .rename_target import RenameTarget
 from .round_elim import RoundElim
 from .simplify_if import SimplifyIf
+from .specialize import Specialize
 from .split_loop import SplitLoop, SplitLoopStrategy
 from .subst_var import SubstVar
 from .while_bundling import WhileBundling

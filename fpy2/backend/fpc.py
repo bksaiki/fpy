@@ -6,6 +6,7 @@ from ..analysis import DefineUse, DefineUseAnalysis
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
+from ..module import Module, ModuleEntry
 from ..number import Context
 from ..transform import ConstFold, ForBundling, ForUnpack, IfBundling, WhileBundling
 from ..utils import Gensym
@@ -1098,8 +1099,26 @@ class _FPCoreCompileInstance(Visitor):
     def _visit_statement(self, stmt: Stmt, ctx: fpc.Expr) -> fpc.Expr:
         return super()._visit_statement(stmt, ctx)
 
+def _apply_fpc_passes(fd: FuncDef) -> FuncDef:
+    """Normalization pipeline shared by every function the FPCore backend
+    sees: shape-only, idempotent, and safe to apply across callees too."""
+    fd = ConstFold.apply(fd, enable_op=False)
+    fd = ForUnpack.apply(fd)
+    fd = ForBundling.apply(fd)
+    fd = WhileBundling.apply(fd)
+    fd = IfBundling.apply(fd)
+    return fd
+
+
 class FPCoreCompiler(Backend):
-    """Compiler from FPy to FPCore"""
+    """Compiler from FPy to FPCore.
+
+    Mirrors the cpp backend's Module-driven structure: ``compile_module``
+    is the canonical entry point, and ``compile`` is a thin wrapper around
+    a one-entry module.  Unlike cpp, fpc does **not** specialize — FPCore
+    references callees by name (``UnknownOperator``) rather than inlining
+    or per-call-site monomorphization.
+    """
 
     unsafe_int_cast: bool
     """any unrounded integer is automatically compiled under an integer context"""
@@ -1107,15 +1126,39 @@ class FPCoreCompiler(Backend):
     def __init__(self, *, unsafe_int_cast: bool = False):
         self.unsafe_int_cast = unsafe_int_cast
 
-    def compile(self, func: Function, ctx: Context | None = None) -> fpc.FPCore:
-        # TODO: handle ctx
+    def compile_module(self, module: Module) -> dict[str, fpc.FPCore]:
+        """Compile a :class:`~fpy2.Module` to one :class:`FPCore` per public
+        entry, keyed by export name.
 
-        # normalization passes
-        ast = ConstFold.apply(func.ast, enable_op=False)
-        ast = ForUnpack.apply(ast)
-        ast = ForBundling.apply(ast)
-        ast = WhileBundling.apply(ast)
-        ast = IfBundling.apply(ast)
-        # compile
+        Normalization passes (``ConstFold``, ``ForUnpack``, ``ForBundling``,
+        ``WhileBundling``, ``IfBundling``) run on **every** function in the
+        module via :meth:`Module.map`, so cross-function calls keep referring
+        to consistently-normalized callees.  No specialization is performed:
+        FPCore semantics reference callees by name.  An entry's ``ctx`` is
+        currently a no-op (TODO); ``arg_types`` cannot be expressed in
+        FPCore and is ignored.
+        """
+        if not isinstance(module, Module):
+            raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
+
+        # Module-level normalization — applies to publics and callees alike.
+        module = module.map(lambda _m, fd: _apply_fpc_passes(fd))
+
+        return {entry.name: self._emit_entry(entry) for entry in module}
+
+    def compile(self, func: Function, ctx: Context | None = None) -> fpc.FPCore:
+        """Compile a single :class:`Function` to an :class:`FPCore`.  Thin
+        wrapper that builds a one-entry module and routes through
+        :meth:`compile_module` — so single-function and module paths share
+        one pipeline."""
+        m = Module()
+        m.add(func, ctx=ctx)
+        return self.compile_module(m)[func.name]
+
+    def _emit_entry(self, entry: ModuleEntry) -> fpc.FPCore:
+        """Emit one FPCore from a (post-pass) public entry."""
+        ast = entry.func.ast
         def_use = DefineUse.analyze(ast)
-        return _FPCoreCompileInstance(ast, def_use, self.unsafe_int_cast).compile()
+        return _FPCoreCompileInstance(
+            ast, def_use, self.unsafe_int_cast,
+        ).compile()
