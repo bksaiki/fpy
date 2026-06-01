@@ -101,8 +101,11 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             case _, None:
                 fn_ctx = func.ctx
             case Context(), Context():
-                if not func.ctx.is_equiv(self.ctx):
-                    raise RuntimeError(f'Cannot merge different contexts `{func.ctx}` and `{self.ctx}`')
+                # A pinned function ctx overrides the caller's ctx —
+                # ``@fp.fpy(ctx=fp.INTEGER)`` means "this function
+                # operates in INTEGER regardless of the caller's
+                # active context", so the caller-supplied ``ctx`` is
+                # ignored here even if it differs from ``func.ctx``.
                 fn_ctx = func.ctx
             case FPCoreContext(), _:
                 fn_ctx = self.ctx

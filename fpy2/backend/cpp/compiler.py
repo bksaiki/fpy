@@ -180,7 +180,17 @@ class CppCompiler(Backend):
             module = module.map(lambda _m, fd: ZipElim.apply(fd))
 
         # 2. Specialize -> flat module of monomorphic specs.
-        specialized = Specialize.apply(module)
+        #
+        # ``Monomorphize`` raises a bare ``RuntimeError`` when the
+        # caller-supplied ``ctx`` / ``arg_types`` conflict with a function's
+        # pinned annotation (e.g. asking for FP64 on an INTEGER-only
+        # function).  Translate to ``CppCompileError`` so callers iterating
+        # over candidate functions (e.g. the library probe in
+        # ``tests/infra/backend/cpp.py``) can catch it cleanly.
+        try:
+            specialized = Specialize.apply(module)
+        except RuntimeError as e:
+            raise CppCompileError(f'specialization failed: {e}') from e
 
         # 3. Post-spec opts (require monomorphic format info).
         if self._optimize:
