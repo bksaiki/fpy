@@ -6,11 +6,18 @@ optionally with a monomorphization spec (a rounding context and/or per-argument
 types).  The functions reachable from the public entries through their call
 chains are *private* (internal).
 
-Private functions are **not stored** — they are derived on demand from the
-call graph (:class:`~fpy2.analysis.CallGraph`).  Because functions reference
-their callees by live ``Call.fn`` object references, the private set is always
-derivable from the public entries, and stays consistent as passes rewrite the
-program.
+Private functions are **stored eagerly**: at registration time, ``add`` walks
+the new public's call graph (:class:`~fpy2.analysis.CallGraph`) and appends
+every transitively-reachable :class:`Function` to the private set.  The
+module thereafter commits to a membership snapshot — ``public()``,
+``private()``, and ``functions()`` are reads against stored state, not the
+AST.
+
+The stored membership is current as of the last ``add`` (or the most
+recent ``_rescan``).  Callers who edit Function ASTs outside the module
+API should call :meth:`Module._rescan` to reconcile the private set with
+the new AST shape.  :meth:`Module.map` doesn't need it: it builds a
+fresh module via ``add``, which discovers from the transformed AST.
 """
 
 from dataclasses import dataclass
@@ -49,11 +56,11 @@ class _RebindCalls(DefaultTransformVisitor):
 
 @dataclass
 class _Derived:
-    """Memoized derivation over the module's public entries."""
-    private: list[Function]
-    """internal functions, leaves-first"""
+    """Memoized derivation of structural views (callees, callers, order)
+    from the publics' ASTs.  Membership (`public` / `private` lists) is
+    stored directly on :class:`Module` and not duplicated here."""
     order: list[Function]
-    """all functions (public + private) in global leaves-first order"""
+    """all reached functions in global leaves-first order"""
     fdef_to_func: dict[FuncDef, Function]
     """every reachable ``FuncDef`` to its ``Function`` wrapper"""
     callees: dict[Function, list[Function]]
@@ -186,19 +193,42 @@ class ModuleEntry:
 class Module:
     """A collection of functions for compilation.
 
-    The stored state is the ordered list of *public* entries.  Public-vs-private
-    classification and the all-functions view are derived from the call graph on
-    demand (memoized; invalidated whenever a function is added)."""
+    The stored state is:
+
+    - ``_entries``: the ordered list of public *registrations* (one per
+      ``add`` call; the same :class:`Function` may appear under multiple
+      names).
+    - ``_publics`` / ``_privates``: the deduplicated public and private
+      function membership.  Both are populated eagerly by ``add``: each
+      call walks the new public's call graph and appends every reachable
+      private :class:`Function`.
+
+    Structural views (callees, callers, leaves-first order) are still
+    derived from the publics' ASTs on demand (:meth:`_derive`, memoized
+    and invalidated whenever ``add`` mutates the module).
+
+    Callers who edit Function ASTs outside the module API should call
+    :meth:`_rescan` to reconcile the private set with the new AST
+    shape.  ``map`` doesn't need it — it builds a fresh module via
+    ``add``."""
 
     name: str | None
     _entries: list[ModuleEntry]
     _by_name: dict[str, ModuleEntry]
-    _derived: _Derived | None  # memoized; invalidated on `add`
+    _publics: list[Function]
+    _publics_set: set[Function]
+    _privates: list[Function]
+    _privates_set: set[Function]
+    _derived: _Derived | None  # memoized structural view; invalidated on `add`
 
     def __init__(self, name: str | None = None):
         self.name = name
         self._entries = []
         self._by_name = {}
+        self._publics = []
+        self._publics_set = set()
+        self._privates = []
+        self._privates_set = set()
         self._derived = None
 
     # ------------------------------------------------------------------
@@ -242,7 +272,48 @@ class Module:
         entry = ModuleEntry(func=func, name=name, ctx=ctx, arg_types=arg_types)
         self._entries.append(entry)
         self._by_name[name] = entry
-        self._derived = None  # invalidate the derived views
+
+        # First registration of this Function: record as public and
+        # walk its call graph to eagerly discover privates.  Subsequent
+        # registrations of the same Function (different export names)
+        # share the membership work already done.  If this Function was
+        # previously discovered as a private — through another public's
+        # call chain — promote it to public.
+        if func not in self._publics_set:
+            self._publics.append(func)
+            self._publics_set.add(func)
+            if func in self._privates_set:
+                self._privates_set.discard(func)
+                self._privates = [f for f in self._privates if f is not func]
+            self._discover_privates(func)
+
+        self._derived = None  # invalidate the derived structural view
+
+    def _discover_privates(self, func: Function) -> None:
+        """Walk *func*'s call graph and append every newly-reachable
+        :class:`Function` to ``_privates``, in leaves-first order.
+        Skips functions already registered as publics or privates."""
+        cg = CallGraph.analyze(func.ast)
+        # Recover ``Function`` wrappers for every reachable ``FuncDef``
+        # from the ``Call.fn`` references at each call site.
+        fdef_to_func: dict[FuncDef, Function] = {func.ast: func}
+        for calls in cg.call_sites.values():
+            for call in calls:
+                callee = call.fn
+                # CallGraph only records sites whose target is a Function.
+                assert isinstance(callee, Function)
+                fdef_to_func[callee.ast] = callee
+        # ``cg.order`` is leaves-first; walking it preserves that order
+        # in ``_privates``.  Skip the root (``func`` itself).
+        for fdef in cg.order:
+            if fdef is func.ast:
+                continue
+            callee_fn = fdef_to_func[fdef]
+            if (callee_fn in self._publics_set
+                    or callee_fn in self._privates_set):
+                continue
+            self._privates.append(callee_fn)
+            self._privates_set.add(callee_fn)
 
     # ------------------------------------------------------------------
     # Lookup / iteration over the public entries (stored)
@@ -268,23 +339,19 @@ class Module:
     def public(self) -> list[Function]:
         """The registered functions, deduplicated by identity, in
         registration order."""
-        seen: set[int] = set()
-        out: list[Function] = []
-        for entry in self._entries:
-            if id(entry.func) not in seen:
-                seen.add(id(entry.func))
-                out.append(entry.func)
-        return out
+        return self._publics[:]
 
     def private(self) -> list[Function]:
-        """The internal functions, reached only through the call chains of the
-        public entries (derived from the call graph), in leaves-first order."""
-        return self._derive().private
+        """The internal functions, discovered through the call chains of
+        the public entries at registration time.  Order is registration
+        / discovery order — not necessarily leaves-first.  For a
+        leaves-first walk, use :meth:`call_graph`."""
+        return self._privates[:]
 
     def functions(self) -> list[Function]:
-        """All functions in the module: public entries followed by the derived
-        private functions."""
-        return self.public() + self._derive().private
+        """All functions in the module: public entries followed by the
+        discovered private functions."""
+        return self._publics + self._privates
 
     def specialized(self) -> 'Module':
         """Expand this module into a fully-monomorphized form: one entry per
@@ -302,8 +369,8 @@ class Module:
         sub-graph contains a cycle."""
         d = self._derive()
         return ModuleCallGraph(
-            publics=self.public(),
-            privates=d.private,
+            publics=self._publics[:],
+            privates=self._privates[:],
             callees=d.callees,
             callers=d.callers,
             order=d.order,
@@ -315,9 +382,6 @@ class Module:
         return self._derived
 
     def _compute_derived(self) -> _Derived:
-        public = self.public()
-        public_fdefs = {f.ast for f in public}
-
         # Map every reachable ``FuncDef`` to its ``Function`` wrapper.  The
         # public roots are the registered functions; each callee's wrapper is
         # recovered from the ``Call.fn`` at its call sites (``CallGraph`` is
@@ -328,7 +392,7 @@ class Module:
         callees: dict[Function, list[Function]] = {}
         callers: dict[Function, list[Function]] = {}
 
-        for f in public:
+        for f in self._publics:
             fdef_to_func[f.ast] = f
             cg = CallGraph.analyze(f.ast)
             # Populate the FuncDef -> Function map for every node reachable
@@ -364,14 +428,48 @@ class Module:
                 seen.add(fdef)
                 order.append(fdef_to_func[fdef])
 
-        private = [f for f in order if f.ast not in public_fdefs]
         return _Derived(
-            private=private,
             order=order,
             fdef_to_func=fdef_to_func,
             callees=callees,
             callers=callers,
         )
+
+    # ------------------------------------------------------------------
+    # External-mutation reconciliation
+
+    def _rescan(self) -> None:
+        """Reconcile the private set with the publics' ASTs.
+
+        Discovers callees reached from publics that aren't currently
+        stored, and drops privates that are no longer reachable.  Use
+        after editing Function ASTs outside the module API.  ``map``
+        doesn't need this — it builds a fresh module via ``add``, which
+        discovers from the transformed AST.
+
+        After this returns, ``private()`` is in leaves-first order
+        (matching the per-public CallGraph walk order)."""
+        new_privates: list[Function] = []
+        seen: set[Function] = set(self._publics_set)
+        for f in self._publics:
+            cg = CallGraph.analyze(f.ast)
+            fdef_to_func: dict[FuncDef, Function] = {f.ast: f}
+            for calls in cg.call_sites.values():
+                for call in calls:
+                    callee = call.fn
+                    assert isinstance(callee, Function)
+                    fdef_to_func[callee.ast] = callee
+            for fdef in cg.order:
+                if fdef is f.ast:
+                    continue
+                fn = fdef_to_func[fdef]
+                if fn in seen:
+                    continue
+                seen.add(fn)
+                new_privates.append(fn)
+        self._privates = new_privates
+        self._privates_set = set(new_privates)
+        self._derived = None
 
     # ------------------------------------------------------------------
     # Per-function passes
@@ -391,7 +489,8 @@ class Module:
         resolving correctly (and a transform like ``FuncInline`` inlines the
         transformed callee bodies).  The new module re-registers the
         transformed public entries with their original names and
-        monomorphization specs; the private functions re-derive from them.
+        monomorphization specs; the private functions get re-discovered by
+        each ``add`` from the transformed call graph.
         """
         derived = self._derive()
         old_to_new: dict[Function, Function] = {}

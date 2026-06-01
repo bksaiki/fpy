@@ -250,7 +250,14 @@ class Specialize:
     private specs get a stable mangled name combining the original name
     with the ctx and arg-types fingerprints.
 
-    Raises :class:`CallGraphError` if the input has a cyclic call graph.
+    The output is assembled by registering only the public specs with
+    :meth:`Module.add`; private specs surface through ``add``'s eager
+    call-graph discovery (they're reachable from the publics' rewired
+    ``Call.fn`` references).
+
+    Cyclic input call graphs surface at :meth:`Module.add` time on the
+    input module, before this pass runs.  Any cycle introduced by
+    specialization itself would surface at the output ``add`` call.
     """
 
     @staticmethod
@@ -386,8 +393,9 @@ class Specialize:
             new_funcs[k] = orig_func[k].with_ast(rewired)
 
         # --- 5. Assemble the output module.  Each public entry is re-added
-        #        with its original name; private specs surface through the
-        #        module's lazy private derivation via rewired call refs.
+        #        with its original name; private specs are picked up
+        #        automatically by ``add``'s eager call-graph discovery,
+        #        which walks the rewired ``Call.fn`` references.
         out = Module(module.name)
         for entry_name, k in public_keys:
             out.add(new_funcs[k], name=entry_name)

@@ -147,6 +147,72 @@ class TestPublicPrivate:
         assert {f.name for f in m.functions()} == {'top', 'mid', 'leaf'}
 
 
+class TestRescan:
+    """``_rescan`` reconciles the stored private set with the publics'
+    ASTs after external mutation."""
+
+    def test_rescan_is_noop_for_freshly_built_module(self):
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        before = m.private()
+        m._rescan()
+        assert m.private() == before
+
+    def test_rescan_picks_up_new_callee(self):
+        """Splicing a call to an unregistered function into a public's
+        body — after rescan, that callee shows up as a private."""
+        from fpy2.ast.fpyast import Call
+        from fpy2.ast.visitor import DefaultVisitor
+
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        assert 'stranger' not in {f.name for f in m.private()}
+
+        @fp.fpy
+        def stranger(x: fp.Real) -> fp.Real: return x
+
+        first_call: list[Call] = []
+        class _Find(DefaultVisitor):
+            def _visit_call(self, e, ctx):
+                if not first_call:
+                    first_call.append(e)
+                super()._visit_call(e, ctx)
+        _Find()._visit_function(top.ast, None)
+        first_call[0].fn = stranger
+
+        m._rescan()
+        assert 'stranger' in {f.name for f in m.private()}
+
+    def test_rescan_drops_orphan_private(self):
+        """A private no longer reached from any public is dropped on
+        rescan."""
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        # Force a stale private: pretend an unrelated function was stored.
+        @fp.fpy
+        def ghost(x: fp.Real) -> fp.Real: return x
+        m._privates.append(ghost)
+        m._privates_set.add(ghost)
+        assert ghost in m.private()
+
+        m._rescan()
+        assert ghost not in m.private()
+
+    def test_map_result_is_consistent_without_rescan(self):
+        """``map`` builds a fresh module via ``add`` — its result is
+        already consistent and ``_rescan`` is a no-op."""
+        leaf, mid, top = _funcs()
+        m = Module()
+        m.add(top)
+        m2 = m.map(lambda _mod, fd: fd)
+        before = m2.private()
+        m2._rescan()
+        assert m2.private() == before
+
+
 def _fpy_callees(func):
     """Callee `Function`s referenced in a function's body."""
     from fpy2.ast.visitor import DefaultVisitor
@@ -416,9 +482,11 @@ class TestCallGraph:
         _C()._visit_function(m_.ast, None)
         calls[0].fn = m_
 
-        mod = Module(); mod.add(m_)
+        # Eager private discovery walks the call graph at add() time,
+        # so the cycle surfaces here rather than at call_graph().
+        mod = Module()
         with pytest.raises(CallGraphError):
-            mod.call_graph()
+            mod.add(m_)
 
 
 class TestSpecialize:
