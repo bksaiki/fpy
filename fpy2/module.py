@@ -287,7 +287,7 @@ class Module:
                 self._privates = [f for f in self._privates if f is not func]
             self._discover_privates(func)
 
-        self._derived = None  # invalidate the derived structural view
+        self._derived = None
 
     def _discover_privates(self, func: Function) -> None:
         """Walk *func*'s call graph and append every newly-reachable
@@ -316,7 +316,7 @@ class Module:
             self._privates_set.add(callee_fn)
 
     # ------------------------------------------------------------------
-    # Lookup / iteration over the public entries (stored)
+    # Lookup / iteration over the public entries
 
     def __iter__(self) -> Iterator[ModuleEntry]:
         """Iterate the public entries in registration order."""
@@ -334,7 +334,7 @@ class Module:
         return self._by_name[name]
 
     # ------------------------------------------------------------------
-    # Derived views (public stored, private/all computed lazily)
+    # Membership and structural views
 
     def public(self) -> list[Function]:
         """The registered functions, deduplicated by identity, in

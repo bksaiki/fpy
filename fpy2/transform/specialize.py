@@ -6,29 +6,20 @@ fully monomorphized at a specific ``(FuncDef, calling-ctx, argument-formats)``
 spec.  Each unique spec becomes one entry; cross-function calls are rewired
 to the appropriate spec.
 
-**v2 — arg formats in the key.** The spec key extends v1's
-``(FuncDef, ctx)`` with a fingerprint of the per-argument
-:class:`FormatBound`\\s — the natural domain produced by
-:class:`FormatInfer`.
+The spec key is ``(FuncDef, calling-ctx, fingerprint of per-argument
+FormatBounds)`` — the natural domain produced by :class:`FormatInfer`.
+Public entries convert their user-supplied ``arg_types`` to
+:class:`FormatBound`\\s via :func:`_type_to_fmt`; callees take their
+``arg_fmts`` directly from FormatInfer's per-call-site analysis.  Trivial
+bounds (``None`` for non-numeric args, ``REAL_FORMAT`` for the polymorphic
+top) fingerprint to the empty string, so polymorphic specs pass through
+unchanged.
 
-- **Public** entries convert their user-supplied ``arg_types`` to
-  ``FormatBound``\\s via :func:`_type_to_fmt` (``RealType(ctx) →
-  ctx.format()``, aggregates recurse).
-- **Callee** entries use their ``sub_fa.fn_fmt.arg_fmts`` directly.
-
-The fingerprint hashes the tuple representation; trivial bounds
-(``None`` for non-numeric args, ``REAL_FORMAT`` for the polymorphic
-top) fingerprint to the empty string, so polymorphic specs pass
-through unchanged.
-
-Callee monomorphization uses ``arg_types`` derived from the call-site
-``arg_fmts`` via :func:`_bound_to_type` (with best-effort
-``Format → Context`` recovery against the canonical contexts).  The
-key still lives in pure ``FormatBound`` space; the ``Type``-form
-conversion is *only* to feed ``Monomorphize`` — which expects
-``Type``\\s — so the resulting FuncDef has per-arg ctx annotations.
-Backends (notably cpp's storage selection) rely on those annotations
-to pick concrete representations.
+Callee monomorphization converts ``arg_fmts`` back to ``Type``\\s via
+:func:`_bound_to_type` only to feed :class:`Monomorphize` — the key itself
+lives in pure :class:`FormatBound` space.  Backends (notably cpp's storage
+selection) rely on the resulting per-arg ctx annotations to pick concrete
+representations.
 """
 
 import hashlib

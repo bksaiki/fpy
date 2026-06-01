@@ -6,8 +6,6 @@ def-use, context-use, array-size, format inference, storage
 inference) on a :class:`Function` and hands the result to
 :class:`_CppEmitter`, which produces a C++ source string.  Errors
 surface as :class:`CppCompileError`.
-
-Phase notes live in ``docs/todos/backend-cpp.md``.
 """
 
 from typing import Collection
@@ -138,22 +136,15 @@ class CppCompiler(Backend):
         ctx: Context | None = None,
         arg_types: Collection[Type | None] | None = None,
     ) -> str:
-        """
-        Compile *func* to a C++ source-code string.
+        """Compile *func* to a C++ source-code string.
 
-        Cross-function calls are template-specialized: each unique
-        ``(callee FuncDef, outer rounding context)`` pair produces
-        one C++ definition with a mangled name.  Specializations are
-        emitted before their callers so the result is a self-contained
-        sequence of definitions.
+        Thin wrapper around :meth:`compile_module` over a one-entry module,
+        so the single-function and module paths share one pipeline.
 
         Args:
             func: The :class:`Function` to compile.
             ctx: Optional rounding context to monomorphize against.
             arg_types: Optional per-argument types to monomorphize against.
-
-        Returns:
-            The compiled C++ source.
         """
         m = Module()
         m.add(func, ctx=ctx, arg_types=arg_types)
@@ -162,41 +153,33 @@ class CppCompiler(Backend):
     def compile_module(self, module: Module) -> str:
         """Compile a :class:`~fpy2.Module` to a single C++ translation unit.
 
-        Pipeline (Pass 1 of the ``Specialize`` integration):
-          1. **Pre-spec optimizations** (`ZipElim`) on every function in the
-             module via ``map`` — applies to private callees too, which the
-             old per-top-level pipeline did not optimize.
-          2. **Specialize** the module: each ``(FuncDef, ctx, arg_fmts)`` becomes
-             one entry; cross-function calls rewire to the appropriate spec.
-          3. **Post-spec optimizations** (`RoundElim`) on each spec —
+        Pipeline:
+          1. **Pre-spec optimizations** (``ZipElim``) on every function in
+             the module via ``map``.
+          2. **Specialize** the module: each ``(FuncDef, ctx, arg_fmts)``
+             becomes one entry; cross-function calls rewire to the
+             appropriate spec.
+          3. **Post-spec optimizations** (``RoundElim``) on each spec —
              monomorphic format inference is now available.
           4. **Per-spec codegen**, leaves-first, one C++ definition per entry.
         """
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
 
-        # 1. Pre-spec opts (polymorphic-friendly).
         if self._optimize:
             module = module.map(lambda _m, fd: ZipElim.apply(fd))
 
-        # 2. Specialize -> flat module of monomorphic specs.
-        #
-        # ``Monomorphize`` raises a bare ``RuntimeError`` when the
-        # caller-supplied ``ctx`` / ``arg_types`` conflict with a function's
-        # pinned annotation (e.g. asking for FP64 on an INTEGER-only
-        # function).  Translate to ``CppCompileError`` so callers iterating
-        # over candidate functions (e.g. the library probe in
-        # ``tests/infra/backend/cpp.py``) can catch it cleanly.
+        # Translate ``Monomorphize``'s bare ``RuntimeError`` (e.g. arg-type
+        # mismatches) into ``CppCompileError`` so callers iterating over
+        # candidate functions can catch a uniform error type.
         try:
             specialized = Specialize.apply(module)
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
 
-        # 3. Post-spec opts (require monomorphic format info).
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
 
-        # 4. Codegen: one C++ definition per spec, leaves-first.
         cg = specialized.call_graph()
         return '\n\n'.join(self._compile_function(f) for f in cg.order)
 

@@ -1,5 +1,5 @@
 """
-Unit tests for `Module` — phase 1 (registration + lazy public/private).
+Unit tests for `Module`.
 """
 
 import pytest
