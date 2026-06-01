@@ -543,9 +543,8 @@ class TestSpecialize:
         # Same (FuncDef, ctx) → one specialized Function shared under two names
         assert s.get('a').func is s.get('b').func
         # callees too
-        assert {f.name for f in s.private()} == {
-            n for n in (f.name for f in s.private())
-        }
+        priv_names = [f.name for f in s.private()]
+        assert len(priv_names) == len(set(priv_names))
         assert len(s.private()) == 2     # one specialized inner + one specialized leaf
 
     def test_same_ctx_different_arg_types_yields_distinct_specs(self):
