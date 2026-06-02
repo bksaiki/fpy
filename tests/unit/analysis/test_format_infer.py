@@ -1225,6 +1225,54 @@ class TestFormatInfer:
         assert _join_bounds(s, REAL_FORMAT) == REAL_FORMAT
         assert _join_bounds(REAL_FORMAT, s) == REAL_FORMAT
 
+    def test_join_set_with_format_widens(self):
+        """Under ``widen=True``, ``SetFormat ⊔ Format`` collapses to
+        ``REAL_FORMAT`` regardless of representability.
+
+        Regression: the widening flag must propagate through every join
+        case used inside the loop fixpoint, not just ``Format ⊔ Format``.
+        A loop phi joining a ``SetFormat`` (e.g. an integer-literal init
+        like ``s = 0``) with the body's growing ``MPBFloatFormat`` used to
+        ignore ``widen`` and silently re-pick the (still-growing) Format,
+        preventing convergence.
+        """
+        fmt = fp.FP32.format()
+        s = SetFormat(frozenset((Fraction(0),)))
+        assert _join_bounds(s, fmt, widen=True) == REAL_FORMAT
+        assert _join_bounds(fmt, s, widen=True) == REAL_FORMAT
+
+    def test_loop_with_set_init_and_real_body_terminates(self):
+        """A loop whose phi joins a ``SetFormat`` (the pre-loop literal
+        ``0``) with a ``Format`` that grows under ``with fp.REAL:`` must
+        terminate via widening — not loop forever in the fixpoint.
+
+        Regression for the hang on::
+
+            sum = 0
+            with fp.REAL:
+                for ai, bi in zip(a, b):
+                    sum += ai * bi
+
+        Before the fix, the phi join hit the ``SetFormat × Format``
+        branch (since ``sum = 0`` produces a SetFormat init), which
+        ignored the widen flag and silently returned the body's
+        unbounded MPBFloatFormat, causing ``_fixpoint`` to never
+        converge.
+        """
+        @fp.fpy
+        def foo(a: list[fp.Real], b: list[fp.Real]) -> fp.Real:
+            s = 0
+            with fp.REAL:
+                for ai, bi in zip(a, b):
+                    s += ai * bi
+            return fp.round(s)
+
+        info = FormatInfer.analyze(foo.ast, loop_iter_limit=2)
+        s_bounds = [b for d, b in info.by_def.items() if d.name.base == 's']
+        assert REAL_FORMAT in s_bounds, (
+            f"expected REAL_FORMAT among s bounds with widening, got {s_bounds}"
+        )
+
     def test_literal_produces_set_shape(self):
         """A numeric literal expression has a singleton ``SetFormat``."""
         @fp.fpy

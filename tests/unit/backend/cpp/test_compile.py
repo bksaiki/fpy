@@ -57,6 +57,36 @@ class TestCppCompilerStub:
         with pytest.raises(TypeError, match='Function'):
             compiler.compile('not a function')  # type: ignore[arg-type]
 
+    def test_real_accumulator_loop_terminates(self):
+        """A loop that accumulates into a literal-initialized scalar
+        under ``with fp.REAL:`` must surface a finite ``CppCompileError``
+        (the REAL phi can't be assigned finite storage), not hang the
+        format-inference fixpoint.
+
+        Regression for the hang where the phi join's widen flag was
+        ignored in the ``SetFormat × Format`` branch — see
+        ``test_format_infer.test_loop_with_set_init_and_real_body_terminates``.
+        """
+        from fpy2.types import ListType, RealType
+
+        @fp.fpy
+        def foo(a: list[fp.Real], b: list[fp.Real]) -> fp.Real:
+            s = 0
+            with fp.REAL:
+                for ai, bi in zip(a, b):
+                    s += ai * bi
+            return fp.round(s)
+
+        compiler = CppCompiler()
+        with pytest.raises(CppCompileError, match='cannot pick storage'):
+            compiler.compile(
+                foo, ctx=fp.FP64,
+                arg_types=[
+                    ListType(RealType(fp.FP64)),
+                    ListType(RealType(fp.FP64)),
+                ],
+            )
+
 
 class TestSpecializationNameCollisions:
     """Distinct :class:`FuncDef`s that share a source name (e.g.

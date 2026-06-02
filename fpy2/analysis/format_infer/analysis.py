@@ -524,8 +524,12 @@ def _join_bounds(
                 return REAL_FORMAT
             return SetFormat(a | b)
         case SetFormat(values=vals), Format() as fmt:
+            if widen:
+                return REAL_FORMAT
             return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
         case Format() as fmt, SetFormat(values=vals):
+            if widen:
+                return REAL_FORMAT
             return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
         case Format(), Format():
             if s1 == s2:

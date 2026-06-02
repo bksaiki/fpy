@@ -1,5 +1,6 @@
 import fpy2 as fp
 import math
+import pytest
 
 from fractions import Fraction
 from hypothesis import assume, given, strategies as st
@@ -213,6 +214,28 @@ class TestRealFloatArithmetic():
     def test_add_mixed(self, a: float, b: int | float | Fraction):
         actual = fp.RealFloat.from_float(a) + b
         assert isinstance(actual, fp.RealFloat)
+
+    def test_add_inf_does_not_require_float_conversion(self):
+        """``RealFloat + inf`` returns ``inf`` directly without trying to
+        convert ``self`` to a Python float.  Regression: previously the
+        code did ``float(self) + other`` even when ``other`` was inf or
+        nan, raising ``ValueError`` for any RealFloat large enough to
+        overflow ``float`` (e.g. the abstract REAL bounds produced by
+        format inference during loop fixpoints).
+        """
+        huge = fp.RealFloat(s=False, exp=2000, c=1)  # well past float max
+        with pytest.raises(ValueError, match='not representable'):
+            float(huge)  # establishes the precondition
+        assert huge + float('inf') == float('inf')
+        assert huge + float('-inf') == float('-inf')
+        assert math.isnan(huge + float('nan'))
+
+    def test_sub_inf_does_not_require_float_conversion(self):
+        """Same as :meth:`test_add_inf_does_not_require_float_conversion`,
+        via ``__sub__`` (which delegates to ``__add__(-other)``)."""
+        huge = fp.RealFloat(s=False, exp=2000, c=1)
+        assert huge - float('inf') == float('-inf')
+        assert huge - float('-inf') == float('inf')
 
     @given(
         st.floats(allow_infinity=False, allow_nan=False),
