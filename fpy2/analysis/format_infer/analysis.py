@@ -524,12 +524,8 @@ def _join_bounds(
                 return REAL_FORMAT
             return SetFormat(a | b)
         case SetFormat(values=vals), Format() as fmt:
-            if widen:
-                return REAL_FORMAT
             return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
         case Format() as fmt, SetFormat(values=vals):
-            if widen:
-                return REAL_FORMAT
             return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
         case Format(), Format():
             if s1 == s2:
@@ -924,17 +920,20 @@ class _FormatInferInstance(Visitor):
         resolved = self._resolve_active_ctx(e)
         if resolved is None:
             return None
-        if resolved is REAL:
-            return exact if isinstance(exact, SetFormat) else exact.format()
         # Under loop-fixpoint widening, fall back to the coarse scope
-        # format.  The intersection-image branch below can produce
-        # intermediate formats that change by one prec bit per
-        # iteration as the unrounded chain grows, which prevents the
-        # fixpoint from converging.  Skipping the intersection during
-        # widening forces the body to settle at scope_fmt — same
-        # intent as the widen-to-REAL branches in ``_join_bounds``.
+        # format.  Both the REAL identity shortcut and the
+        # intersection-image branch below can produce intermediate
+        # formats that change every iteration as the unrounded chain
+        # grows (under REAL the exact format itself widens; under a
+        # bounded scope the intersection's prec/exp tightens by one
+        # bit), preventing the fixpoint from converging.  Returning
+        # ``None`` here forces the caller to settle at the scope
+        # format via :meth:`_op_bound` — same intent as the
+        # widen-to-REAL branches in :func:`_join_bounds`.
         if self._widen:
             return None
+        if resolved is REAL:
+            return exact if isinstance(exact, SetFormat) else exact.format()
         # Identity-round fast path: when ``round_C(F) == F``, the
         # rounded image equals *exact* itself.  Both the SetFormat
         # fits-everywhere case and the AbstractFormat

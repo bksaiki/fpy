@@ -1225,25 +1225,9 @@ class TestFormatInfer:
         assert _join_bounds(s, REAL_FORMAT) == REAL_FORMAT
         assert _join_bounds(REAL_FORMAT, s) == REAL_FORMAT
 
-    def test_join_set_with_format_widens(self):
-        """Under ``widen=True``, ``SetFormat ⊔ Format`` collapses to
-        ``REAL_FORMAT`` regardless of representability.
-
-        Regression: the widening flag must propagate through every join
-        case used inside the loop fixpoint, not just ``Format ⊔ Format``.
-        A loop phi joining a ``SetFormat`` (e.g. an integer-literal init
-        like ``s = 0``) with the body's growing ``MPBFloatFormat`` used to
-        ignore ``widen`` and silently re-pick the (still-growing) Format,
-        preventing convergence.
-        """
-        fmt = fp.FP32.format()
-        s = SetFormat(frozenset((Fraction(0),)))
-        assert _join_bounds(s, fmt, widen=True) == REAL_FORMAT
-        assert _join_bounds(fmt, s, widen=True) == REAL_FORMAT
-
-    def test_loop_with_set_init_and_real_body_terminates(self):
-        """A loop whose phi joins a ``SetFormat`` (the pre-loop literal
-        ``0``) with a ``Format`` that grows under ``with fp.REAL:`` must
+    def test_loop_under_real_with_set_init_terminates(self):
+        """A loop whose body performs exact arithmetic ``with fp.REAL:``
+        starting from a ``SetFormat`` literal init (``s = 0``) must
         terminate via widening — not loop forever in the fixpoint.
 
         Regression for the hang on::
@@ -1253,11 +1237,13 @@ class TestFormatInfer:
                 for ai, bi in zip(a, b):
                     sum += ai * bi
 
-        Before the fix, the phi join hit the ``SetFormat × Format``
-        branch (since ``sum = 0`` produces a SetFormat init), which
-        ignored the widen flag and silently returned the body's
-        unbounded MPBFloatFormat, causing ``_fixpoint`` to never
-        converge.
+        Before the fix, :meth:`_bound_if_fits` short-circuited under
+        ``REAL`` scope (returning the exact format) before honoring
+        ``self._widen``.  The exact format grew by one precision bit
+        per iteration, so the phi never stabilized and the fixpoint
+        ran forever.  The fix moves the widen check ahead of the REAL
+        shortcut so widening forces the body to settle at the scope's
+        ``REAL_FORMAT``.
         """
         @fp.fpy
         def foo(a: list[fp.Real], b: list[fp.Real]) -> fp.Real:
@@ -1271,6 +1257,40 @@ class TestFormatInfer:
         s_bounds = [b for d, b in info.by_def.items() if d.name.base == 's']
         assert REAL_FORMAT in s_bounds, (
             f"expected REAL_FORMAT among s bounds with widening, got {s_bounds}"
+        )
+
+    def test_loop_under_integer_with_set_init_keeps_scope_format(self):
+        """A loop accumulating integers under ``with fp.INTEGER:`` from
+        a ``SetFormat`` literal init must converge to ``INTEGER``'s
+        ``MPFixedFormat`` at widen time — *not* widen to ``REAL_FORMAT``.
+
+        Companion to :meth:`test_loop_under_real_with_set_init_terminates`:
+        an earlier attempt to make the REAL case converge widened the
+        ``SetFormat × Format`` join branch indiscriminately, breaking
+        bounded-scope loops (``test_while*_rounded`` and
+        ``test_for*_rounded`` in the cpp infra suite).  This test pins
+        the correct behavior: at widen-mode the body settles at the
+        scope's bounded format, and the phi join recovers that format
+        rather than collapsing to ``REAL``.
+        """
+        @fp.fpy
+        def f():
+            with fp.INTEGER:
+                x = fp.round(0)
+            while x < 5:
+                with fp.INTEGER:
+                    x += 1
+            return x
+
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
+        x_bounds = {b for d, b in info.by_def.items() if d.name.base == 'x'}
+        int_fmt = fp.INTEGER.format()
+        assert int_fmt in x_bounds, (
+            f'expected INTEGER MPFixedFormat among x bounds, got {x_bounds}'
+        )
+        assert REAL_FORMAT not in x_bounds, (
+            f'integer-bounded loop should not widen to REAL_FORMAT, '
+            f'got {x_bounds}'
         )
 
     def test_literal_produces_set_shape(self):
