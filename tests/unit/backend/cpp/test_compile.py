@@ -58,12 +58,9 @@ class TestCppCompilerStub:
             compiler.compile('not a function')  # type: ignore[arg-type]
 
     def test_zip_elim_preserves_tuple_unpack(self):
-        """With ``optimize=True``, ``ZipElim`` rewrites
-        ``for a, b in zip(x, x): a1, a2 = a`` into
-        ``a = _src[_i]; a1, a2 = a``.  The tuple-unpack must still
-        type-check after the rewrite — regression for a missing
-        union-find resolve in ``TypeInfer._visit_binding`` that left
-        ``a``'s type as an unresolved ``VarType`` and failed unpacking.
+        """``ZipElim`` rewrites ``for a, b in zip(x, x): a1, a2 = a``
+        into ``a = _src[_i]; a1, a2 = a``.  The tuple-unpack must still
+        type-check against ``a``'s union-find resolved shape.
         """
         from fpy2.types import ListType, RealType, TupleType
 
@@ -84,13 +81,9 @@ class TestCppCompilerStub:
 
     def test_real_accumulator_loop_terminates(self):
         """A loop that accumulates into a literal-initialized scalar
-        under ``with fp.REAL:`` must surface a finite ``CppCompileError``
-        (the REAL phi can't be assigned finite storage), not hang the
+        under ``with fp.REAL:`` must surface a ``CppCompileError`` (the
+        REAL phi can't be assigned finite storage) rather than hang the
         format-inference fixpoint.
-
-        Regression for the hang where the phi join's widen flag was
-        ignored in the ``SetFormat × Format`` branch — see
-        ``test_format_infer.test_loop_with_set_init_and_real_body_terminates``.
         """
         from fpy2.types import ListType, RealType
 

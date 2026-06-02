@@ -920,16 +920,12 @@ class _FormatInferInstance(Visitor):
         resolved = self._resolve_active_ctx(e)
         if resolved is None:
             return None
-        # Under loop-fixpoint widening, fall back to the coarse scope
-        # format.  Both the REAL identity shortcut and the
-        # intersection-image branch below can produce intermediate
-        # formats that change every iteration as the unrounded chain
-        # grows (under REAL the exact format itself widens; under a
-        # bounded scope the intersection's prec/exp tightens by one
-        # bit), preventing the fixpoint from converging.  Returning
-        # ``None`` here forces the caller to settle at the scope
-        # format via :meth:`_op_bound` — same intent as the
-        # widen-to-REAL branches in :func:`_join_bounds`.
+        # Under loop-fixpoint widening, bail to the scope format via
+        # :meth:`_op_bound`.  Both the REAL identity shortcut and the
+        # intersection branch below grow the inferred format every
+        # iteration as the unrounded chain grows, which prevents
+        # convergence — same intent as the widen-to-REAL branches in
+        # :func:`_join_bounds`.
         if self._widen:
             return None
         if resolved is REAL:

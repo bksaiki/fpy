@@ -63,17 +63,10 @@ class TestCrossFunction:
 
 class TestBinding:
     def test_unpack_through_list_ref(self):
-        """Unpacking a list element directly — ``a = xs[i]; a1, a2 = a``
-        — must resolve ``a``'s type through the union-find before
-        checking the tuple shape.
-
-        Regression: ``_visit_list_ref`` returns a fresh ``VarType``
-        that ``_unify`` links to the list's element type.  Without
-        resolving in ``_visit_binding``, the tuple-binding case saw a
-        ``VarType`` (not a ``TupleType``) and raised ``cannot unpack``.
-        Triggered through the cpp ``optimize=True`` path: ``ZipElim``
-        rewrites ``for a, b in zip(xs, xs): ...`` into ``a = _src[_i]``,
-        then ``a1, a2 = a`` failed to type-check.
+        """Unpacking a list element via ``a = xs[i]; a1, a2 = a`` must
+        resolve ``a``'s type through the union-find before checking the
+        tuple shape, since ``_visit_list_ref`` returns a fresh ``VarType``
+        that only later unifies with the list's element type.
         """
         @fp.fpy
         def bar(x: list[tuple[fp.Real, fp.Real]]) -> fp.Real:
@@ -83,7 +76,7 @@ class TestBinding:
 
         from fpy2.transform.zip_elim import ZipElim
         rewritten = ZipElim.apply(bar.ast)
-        info = TypeInfer.check(rewritten)  # raised before the fix
+        info = TypeInfer.check(rewritten)
         assert isinstance(info.fn_type.return_type, fp.types.RealType)
 
 

@@ -502,10 +502,8 @@ class _TypeInferInstance(Visitor):
 
     def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, ty: Type):
         # ``ty`` may be a ``VarType`` whose union-find representative is a
-        # concrete shape (e.g. produced by ``_visit_list_ref`` returning a
-        # fresh tvar that ``_unify`` later linked to a ``TupleType``).
-        # Resolve before pattern-matching so tuple unpacking sees the
-        # concrete shape rather than the placeholder.
+        # concrete shape; resolve so tuple unpacking sees the shape rather
+        # than the placeholder.
         ty = self._resolve_type(ty)
         match binding:
             case NamedId():

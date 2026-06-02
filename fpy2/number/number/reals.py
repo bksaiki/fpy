@@ -245,11 +245,10 @@ class RealFloat(numbers.Rational):
                 other = RealFloat.from_int(other)
             case float():
                 if math.isnan(other) or math.isinf(other):
-                    # ``self`` is always finite; nan / +/-inf absorb a finite
-                    # addend.  Returning ``other`` directly avoids converting
-                    # ``self`` to a Python float, which raises for RealFloats
-                    # too large to fit (e.g. those produced by abstract REAL
-                    # arithmetic in :mod:`fpy2.analysis.format_infer`).
+                    # ``self`` is always finite; nan / +/-inf absorb the
+                    # addend.  Return ``other`` directly — converting
+                    # ``self`` to a Python float would raise for any
+                    # ``RealFloat`` outside ``float``'s representable range.
                     return other
                 else:
                     other = RealFloat.from_float(other)

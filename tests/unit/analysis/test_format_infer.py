@@ -1226,24 +1226,11 @@ class TestFormatInfer:
         assert _join_bounds(REAL_FORMAT, s) == REAL_FORMAT
 
     def test_loop_under_real_with_set_init_terminates(self):
-        """A loop whose body performs exact arithmetic ``with fp.REAL:``
-        starting from a ``SetFormat`` literal init (``s = 0``) must
-        terminate via widening — not loop forever in the fixpoint.
-
-        Regression for the hang on::
-
-            sum = 0
-            with fp.REAL:
-                for ai, bi in zip(a, b):
-                    sum += ai * bi
-
-        Before the fix, :meth:`_bound_if_fits` short-circuited under
-        ``REAL`` scope (returning the exact format) before honoring
-        ``self._widen``.  The exact format grew by one precision bit
-        per iteration, so the phi never stabilized and the fixpoint
-        ran forever.  The fix moves the widen check ahead of the REAL
-        shortcut so widening forces the body to settle at the scope's
-        ``REAL_FORMAT``.
+        """A loop body that performs exact arithmetic ``with fp.REAL:``
+        starting from a ``SetFormat`` literal init must terminate via
+        widening rather than loop forever.  The exact format grows one
+        precision bit per iteration, so without the widen short-circuit
+        in :meth:`_bound_if_fits` the phi never stabilizes.
         """
         @fp.fpy
         def foo(a: list[fp.Real], b: list[fp.Real]) -> fp.Real:
@@ -1256,22 +1243,13 @@ class TestFormatInfer:
         info = FormatInfer.analyze(foo.ast, loop_iter_limit=2)
         s_bounds = [b for d, b in info.by_def.items() if d.name.base == 's']
         assert REAL_FORMAT in s_bounds, (
-            f"expected REAL_FORMAT among s bounds with widening, got {s_bounds}"
+            f'expected REAL_FORMAT among s bounds with widening, got {s_bounds}'
         )
 
     def test_loop_under_integer_with_set_init_keeps_scope_format(self):
         """A loop accumulating integers under ``with fp.INTEGER:`` from
         a ``SetFormat`` literal init must converge to ``INTEGER``'s
-        ``MPFixedFormat`` at widen time — *not* widen to ``REAL_FORMAT``.
-
-        Companion to :meth:`test_loop_under_real_with_set_init_terminates`:
-        an earlier attempt to make the REAL case converge widened the
-        ``SetFormat × Format`` join branch indiscriminately, breaking
-        bounded-scope loops (``test_while*_rounded`` and
-        ``test_for*_rounded`` in the cpp infra suite).  This test pins
-        the correct behavior: at widen-mode the body settles at the
-        scope's bounded format, and the phi join recovers that format
-        rather than collapsing to ``REAL``.
+        ``MPFixedFormat`` at widen time, not collapse to ``REAL_FORMAT``.
         """
         @fp.fpy
         def f():
