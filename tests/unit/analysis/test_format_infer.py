@@ -1225,6 +1225,52 @@ class TestFormatInfer:
         assert _join_bounds(s, REAL_FORMAT) == REAL_FORMAT
         assert _join_bounds(REAL_FORMAT, s) == REAL_FORMAT
 
+    def test_loop_under_real_with_set_init_terminates(self):
+        """A loop body that performs exact arithmetic ``with fp.REAL:``
+        starting from a ``SetFormat`` literal init must terminate via
+        widening rather than loop forever.  The exact format grows one
+        precision bit per iteration, so without the widen short-circuit
+        in :meth:`_bound_if_fits` the phi never stabilizes.
+        """
+        @fp.fpy
+        def foo(a: list[fp.Real], b: list[fp.Real]) -> fp.Real:
+            s = 0
+            with fp.REAL:
+                for ai, bi in zip(a, b):
+                    s += ai * bi
+            return fp.round(s)
+
+        info = FormatInfer.analyze(foo.ast, loop_iter_limit=2)
+        s_bounds = [b for d, b in info.by_def.items() if d.name.base == 's']
+        assert REAL_FORMAT in s_bounds, (
+            f'expected REAL_FORMAT among s bounds with widening, got {s_bounds}'
+        )
+
+    def test_loop_under_integer_with_set_init_keeps_scope_format(self):
+        """A loop accumulating integers under ``with fp.INTEGER:`` from
+        a ``SetFormat`` literal init must converge to ``INTEGER``'s
+        ``MPFixedFormat`` at widen time, not collapse to ``REAL_FORMAT``.
+        """
+        @fp.fpy
+        def f():
+            with fp.INTEGER:
+                x = fp.round(0)
+            while x < 5:
+                with fp.INTEGER:
+                    x += 1
+            return x
+
+        info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
+        x_bounds = {b for d, b in info.by_def.items() if d.name.base == 'x'}
+        int_fmt = fp.INTEGER.format()
+        assert int_fmt in x_bounds, (
+            f'expected INTEGER MPFixedFormat among x bounds, got {x_bounds}'
+        )
+        assert REAL_FORMAT not in x_bounds, (
+            f'integer-bounded loop should not widen to REAL_FORMAT, '
+            f'got {x_bounds}'
+        )
+
     def test_literal_produces_set_shape(self):
         """A numeric literal expression has a singleton ``SetFormat``."""
         @fp.fpy

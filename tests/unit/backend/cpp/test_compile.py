@@ -57,6 +57,54 @@ class TestCppCompilerStub:
         with pytest.raises(TypeError, match='Function'):
             compiler.compile('not a function')  # type: ignore[arg-type]
 
+    def test_zip_elim_preserves_tuple_unpack(self):
+        """``ZipElim`` rewrites ``for a, b in zip(x, x): a1, a2 = a``
+        into ``a = _src[_i]; a1, a2 = a``.  The tuple-unpack must still
+        type-check against ``a``'s union-find resolved shape.
+        """
+        from fpy2.types import ListType, RealType, TupleType
+
+        @fp.fpy
+        def bar(x: list[tuple[fp.Real, fp.Real]]) -> fp.Real:
+            for a, b in zip(x, x):
+                a1, a2 = a
+            return 0
+
+        compiler = CppCompiler(optimize=True)
+        out = compiler.compile(
+            bar, ctx=fp.FP64,
+            arg_types=[ListType(TupleType(
+                RealType(fp.FP64), RealType(fp.FP64),
+            ))],
+        )
+        assert 'std::vector<std::tuple<double, double>>' in out
+
+    def test_real_accumulator_loop_terminates(self):
+        """A loop that accumulates into a literal-initialized scalar
+        under ``with fp.REAL:`` must surface a ``CppCompileError`` (the
+        REAL phi can't be assigned finite storage) rather than hang the
+        format-inference fixpoint.
+        """
+        from fpy2.types import ListType, RealType
+
+        @fp.fpy
+        def foo(a: list[fp.Real], b: list[fp.Real]) -> fp.Real:
+            s = 0
+            with fp.REAL:
+                for ai, bi in zip(a, b):
+                    s += ai * bi
+            return fp.round(s)
+
+        compiler = CppCompiler()
+        with pytest.raises(CppCompileError, match='cannot pick storage'):
+            compiler.compile(
+                foo, ctx=fp.FP64,
+                arg_types=[
+                    ListType(RealType(fp.FP64)),
+                    ListType(RealType(fp.FP64)),
+                ],
+            )
+
 
 class TestSpecializationNameCollisions:
     """Distinct :class:`FuncDef`s that share a source name (e.g.

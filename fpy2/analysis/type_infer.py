@@ -501,6 +501,10 @@ class _TypeInferInstance(Visitor):
             return ty
 
     def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, ty: Type):
+        # ``ty`` may be a ``VarType`` whose union-find representative is a
+        # concrete shape; resolve so tuple unpacking sees the shape rather
+        # than the placeholder.
+        ty = self._resolve_type(ty)
         match binding:
             case NamedId():
                 d = self.def_use.find_def_from_site(binding, site)

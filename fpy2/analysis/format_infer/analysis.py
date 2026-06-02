@@ -920,17 +920,16 @@ class _FormatInferInstance(Visitor):
         resolved = self._resolve_active_ctx(e)
         if resolved is None:
             return None
-        if resolved is REAL:
-            return exact if isinstance(exact, SetFormat) else exact.format()
-        # Under loop-fixpoint widening, fall back to the coarse scope
-        # format.  The intersection-image branch below can produce
-        # intermediate formats that change by one prec bit per
-        # iteration as the unrounded chain grows, which prevents the
-        # fixpoint from converging.  Skipping the intersection during
-        # widening forces the body to settle at scope_fmt — same
-        # intent as the widen-to-REAL branches in ``_join_bounds``.
+        # Under loop-fixpoint widening, bail to the scope format via
+        # :meth:`_op_bound`.  Both the REAL identity shortcut and the
+        # intersection branch below grow the inferred format every
+        # iteration as the unrounded chain grows, which prevents
+        # convergence — same intent as the widen-to-REAL branches in
+        # :func:`_join_bounds`.
         if self._widen:
             return None
+        if resolved is REAL:
+            return exact if isinstance(exact, SetFormat) else exact.format()
         # Identity-round fast path: when ``round_C(F) == F``, the
         # rounded image equals *exact* itself.  Both the SetFormat
         # fits-everywhere case and the AbstractFormat

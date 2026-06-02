@@ -245,8 +245,11 @@ class RealFloat(numbers.Rational):
                 other = RealFloat.from_int(other)
             case float():
                 if math.isnan(other) or math.isinf(other):
-                    # Convert self to float and perform float arithmetic
-                    return float(self) + other
+                    # ``self`` is always finite; nan / +/-inf absorb the
+                    # addend.  Return ``other`` directly — converting
+                    # ``self`` to a Python float would raise for any
+                    # ``RealFloat`` outside ``float``'s representable range.
+                    return other
                 else:
                     other = RealFloat.from_float(other)
             case Fraction():
