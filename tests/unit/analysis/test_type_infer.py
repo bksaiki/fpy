@@ -61,6 +61,32 @@ class TestCrossFunction:
         assert isinstance(info.fn_type.return_type, fp.types.RealType)
 
 
+class TestBinding:
+    def test_unpack_through_list_ref(self):
+        """Unpacking a list element directly — ``a = xs[i]; a1, a2 = a``
+        — must resolve ``a``'s type through the union-find before
+        checking the tuple shape.
+
+        Regression: ``_visit_list_ref`` returns a fresh ``VarType``
+        that ``_unify`` links to the list's element type.  Without
+        resolving in ``_visit_binding``, the tuple-binding case saw a
+        ``VarType`` (not a ``TupleType``) and raised ``cannot unpack``.
+        Triggered through the cpp ``optimize=True`` path: ``ZipElim``
+        rewrites ``for a, b in zip(xs, xs): ...`` into ``a = _src[_i]``,
+        then ``a1, a2 = a`` failed to type-check.
+        """
+        @fp.fpy
+        def bar(x: list[tuple[fp.Real, fp.Real]]) -> fp.Real:
+            for a, b in zip(x, x):
+                a1, a2 = a
+            return 0
+
+        from fpy2.transform.zip_elim import ZipElim
+        rewritten = ZipElim.apply(bar.ast)
+        info = TypeInfer.check(rewritten)  # raised before the fix
+        assert isinstance(info.fn_type.return_type, fp.types.RealType)
+
+
 class TestCheckedOnce:
     def test_each_function_checked_once(self, monkeypatch):
         """A shared callee in a diamond is checked once, not once per
