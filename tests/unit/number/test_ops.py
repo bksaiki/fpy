@@ -91,6 +91,22 @@ class TestOps():
         op = _cvt_to_frac(fp.neg(a))
         self.assertEqualOrNan(op, -af, f'Failed negation: {a} ({af})')
 
+    def test_neg_preserves_signed_zero(self):
+        """``neg(+0)`` produces ``-0`` and vice versa, in every float
+        context.  The IEEE-754 negation is bit-exact on the sign — the
+        rounded result must carry it through, not collapse to ``+0``.
+        """
+        from fpy2.number import Float
+        pos_zero = Float.from_float(0.0)
+        neg_zero = fp.neg(pos_zero, ctx=fp.FP32)
+        assert neg_zero.is_zero() and neg_zero.s, (
+            f'expected -0.0, got {neg_zero!r}'
+        )
+        re_pos = fp.neg(neg_zero, ctx=fp.FP32)
+        assert re_pos.is_zero() and not re_pos.s, (
+            f'expected +0.0, got {re_pos!r}'
+        )
+
     @given(number())
     def test_abs(self, a):
         af = _cvt_to_frac(a)
