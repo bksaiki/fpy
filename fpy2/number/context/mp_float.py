@@ -198,9 +198,9 @@ class MPFloatContext(Context):
             else:
                 x = x._real
 
-        # step 2. shortcut for exact zero values
+        # step 2. shortcut for exact zero values (preserve signed zero)
         if x.is_zero():
-            return Float(ctx=self)
+            return Float(s=x.s, ctx=self)
 
         # step 3. round value based on rounding parameters
         xr = x.round(self.pmax, n, self.rm, self.num_randbits, rng=self.rng, exact=exact)
