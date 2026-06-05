@@ -1,5 +1,30 @@
 # Version History
 
+## [0.1.7] - 2026-05-26
+### Features:
+  - AST:
+    - remove `RoundExact` AST node
+  - Analyses:
+    - add call graph analysis
+    - add `Module` abstraction
+
+### Fixes:
+  - Analyses:
+    - `FormatAnalysis`
+      - fix addition/multiplication with zero formats
+      - fix widening
+    - `TypeInfer`
+      - fix type checking when unpacking tuples
+  - Backend:
+    - C++ compiler: fix widening types
+  - Number:
+    - `RealFloat`: fix `__add__` with special values
+    - `MPFloatContext`, `MPSFloatContext`, and `MPBFloatContext`: fix `round()` for -0
+
+### Removed:
+  - MPFX prototype compiler
+  - context inference pass
+
 ## [0.1.6] - 2026-05-26
 ### Features:
   - AST:
