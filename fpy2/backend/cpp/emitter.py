@@ -53,7 +53,11 @@ from ...ast.visitor import Visitor
 from ...number import EFloatContext, MPFixedContext, MPBFixedContext, REAL, RM
 from ...number.context.context import Context
 
-from .ops import ScalarOpTable
+from ...analysis.format_infer import (
+    AbstractFormat, AbstractableFormat, SetFormat, round_is_identity,
+)
+
+from .ops import BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp
 from .target import make_op_table
 from .storage import (
     StorageSelectionError, choose_storage, scalar_fits_in, scalar_sup,
@@ -880,18 +884,37 @@ class CppEmitter(Visitor):
             at=e,
         )
 
+    def _result_fits_ctx(self, e: Expr, ctx: Context) -> bool:
+        """Is rounding the inferred result format of *e* under *ctx* an
+        identity?  True iff the exact unrounded result of *e* (recorded
+        in ``format_info.by_expr``) is representable in ``ctx.format()``
+        — so the C++ op performed under *ctx* yields exactly the value
+        format inference predicted."""
+        fmt = self.format_info.by_expr.get(e)
+        if isinstance(fmt, SetFormat):
+            return round_is_identity(fmt, ctx)
+        if isinstance(fmt, AbstractableFormat):
+            return round_is_identity(AbstractFormat.from_format(fmt), ctx)
+        return False
+
     def _try_widen_unary(
         self,
         e: UnaryOp,
-        sigs: list,
+        sigs: list[UnaryCppOp],
         arg: str,
         arg_storage: CppScalar,
     ) -> str | None:
-        """Pick a unary signature whose output storage matches the
-        result storage format inference chose for *e*, and emit the
-        op with the operand lossless-cast to that width.  ``None``
-        when no such signature exists or operand widening would be
-        lossy — the caller raises in that case.
+        """Pick a unary signature whose output context contains the
+        exact unrounded result of *e* (so the op-under-sig is identity)
+        and whose input slot losslessly receives ``arg_storage``.  The
+        sig's output is then losslessly cast down to ``result_ty``;
+        that cast is sound because the runtime value lies in
+        ``format_info.by_expr[e]`` which by storage selection fits in
+        ``result_ty``.  ``None`` if no such signature exists.
+
+        Two-pass to prefer narrower signatures: first sigs whose output
+        already equals ``result_ty`` (no downcast), then sigs whose
+        output is wider (downcast inserted).
         """
         try:
             result_ty = self._storage_for_expr(e)
@@ -899,23 +922,32 @@ class CppEmitter(Visitor):
             return None
         if not isinstance(result_ty, CppScalar):
             return None
-        for sig in sigs:
+
+        def _try(sig: UnaryCppOp, *, exact_out: bool) -> str | None:
             try:
                 sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
             except CppEmitError:
-                continue
-            if sig_out_ty != result_ty or sig.arg_ty != result_ty:
-                continue
+                return None
+            if exact_out and sig_out_ty is not result_ty:
+                return None
+            if not scalar_fits_in(arg_storage, sig.arg_ty):
+                return None
+            if not self._result_fits_ctx(e, sig.out_ctx):
+                return None
             try:
-                cast = self._maybe_cast(arg, arg_storage, result_ty, at=e)
+                cast = self._maybe_cast(arg, arg_storage, sig.arg_ty, at=e)
             except CppEmitError:
-                # This widening would lose precision — try the next
-                # signature instead of failing outright; another
-                # signature with the same output width might exist
-                # via a different ctx (in practice there's one, but
-                # the loop stays defensive).
-                continue
-            return sig.format(cast)
+                return None
+            out = sig.format(cast)
+            if sig_out_ty is not result_ty:
+                out = f'static_cast<{result_ty.format()}>({out})'
+            return out
+
+        for exact_out in (True, False):
+            for sig in sigs:
+                emitted = _try(sig, exact_out=exact_out)
+                if emitted is not None:
+                    return emitted
         return None
 
     def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
@@ -978,7 +1010,7 @@ class CppEmitter(Visitor):
     def _try_widen_binary(
         self,
         e: BinaryOp,
-        sigs: list,
+        sigs: list[BinaryCppOp],
         lhs: str,
         lhs_storage: CppScalar,
         rhs: str,
@@ -991,21 +1023,35 @@ class CppEmitter(Visitor):
             return None
         if not isinstance(result_ty, CppScalar):
             return None
-        for sig in sigs:
+
+        def _try(sig: BinaryCppOp, *, exact_out: bool) -> str | None:
             try:
                 sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
             except CppEmitError:
-                continue
-            if (sig_out_ty != result_ty
-                    or sig.in1_ty != result_ty
-                    or sig.in2_ty != result_ty):
-                continue
+                return None
+            if exact_out and sig_out_ty is not result_ty:
+                return None
+            if not scalar_fits_in(lhs_storage, sig.in1_ty):
+                return None
+            if not scalar_fits_in(rhs_storage, sig.in2_ty):
+                return None
+            if not self._result_fits_ctx(e, sig.out_ctx):
+                return None
             try:
-                cast_lhs = self._maybe_cast(lhs, lhs_storage, result_ty, at=e)
-                cast_rhs = self._maybe_cast(rhs, rhs_storage, result_ty, at=e)
+                cast_lhs = self._maybe_cast(lhs, lhs_storage, sig.in1_ty, at=e)
+                cast_rhs = self._maybe_cast(rhs, rhs_storage, sig.in2_ty, at=e)
             except CppEmitError:
-                continue
-            return sig.format(cast_lhs, cast_rhs)
+                return None
+            out = sig.format(cast_lhs, cast_rhs)
+            if sig_out_ty is not result_ty:
+                out = f'static_cast<{result_ty.format()}>({out})'
+            return out
+
+        for exact_out in (True, False):
+            for sig in sigs:
+                emitted = _try(sig, exact_out=exact_out)
+                if emitted is not None:
+                    return emitted
         return None
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
@@ -1371,7 +1417,7 @@ class CppEmitter(Visitor):
     def _try_widen_ternary(
         self,
         e: TernaryOp,
-        sigs: list,
+        sigs: list[TernaryCppOp],
         args: list[str],
         in_storages: list[CppScalar],
     ) -> str | None:
@@ -1382,24 +1428,36 @@ class CppEmitter(Visitor):
             return None
         if not isinstance(result_ty, CppScalar):
             return None
-        for sig in sigs:
+
+        def _try(sig: TernaryCppOp, *, exact_out: bool) -> str | None:
             try:
                 sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
             except CppEmitError:
-                continue
-            if (sig_out_ty != result_ty
-                    or sig.in1_ty != result_ty
-                    or sig.in2_ty != result_ty
-                    or sig.in3_ty != result_ty):
-                continue
+                return None
+            if exact_out and sig_out_ty is not result_ty:
+                return None
+            sig_in_tys = (sig.in1_ty, sig.in2_ty, sig.in3_ty)
+            if not all(scalar_fits_in(s, t) for s, t in zip(in_storages, sig_in_tys)):
+                return None
+            if not self._result_fits_ctx(e, sig.out_ctx):
+                return None
             try:
                 casts = [
-                    self._maybe_cast(a, s, result_ty, at=e)
-                    for a, s in zip(args, in_storages)
+                    self._maybe_cast(a, s, t, at=e)
+                    for a, s, t in zip(args, in_storages, sig_in_tys)
                 ]
             except CppEmitError:
-                continue
-            return sig.format(*casts)
+                return None
+            out = sig.format(*casts)
+            if sig_out_ty is not result_ty:
+                out = f'static_cast<{result_ty.format()}>({out})'
+            return out
+
+        for exact_out in (True, False):
+            for sig in sigs:
+                emitted = _try(sig, exact_out=exact_out)
+                if emitted is not None:
+                    return emitted
         return None
 
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
