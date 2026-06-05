@@ -134,7 +134,11 @@ class AbstractFormat:
             # normalize the largest bound with the desired quantum
             # its precision is the required precision
             max_bound = max_bound.normalize(n=exp - 1)
-            prec = max_bound.p
+            # ``bit_length()`` is 0 for an exactly-zero ``max_bound``
+            # (both pos and neg bounds are 0).  Clamp to the minimum
+            # positive precision; the resulting format represents only
+            # ``{0}``, but ``prec`` itself must be valid.
+            prec = max(max_bound.p, 1)
 
         return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
@@ -171,9 +175,10 @@ class AbstractFormat:
             max_bound = max(pos_bound, abs(neg_bound))
 
             # normalize the largest bound with the desired quantum
-            # its precision is the required precision
+            # its precision is the required precision; clamp to >=1
+            # so an exactly-zero difference still has valid ``prec``.
             max_bound = max_bound.normalize(n=exp - 1)
-            prec = max_bound.p
+            prec = max(max_bound.p, 1)
 
         return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 
@@ -187,10 +192,11 @@ class AbstractFormat:
         """
         if not isinstance(other, AbstractFormat):
             raise TypeError(f'Expected \'AbstractFormat\', got {other}')
-        # precision: p1 + p2
+        # precision: p1 + p2 (clamped to >=1 so an exactly-zero
+        # product still has valid ``prec``)
         # exponent: e1 + e2
         # bounds: b1 * b2
-        prec = self.effective_prec() + other.effective_prec()
+        prec = max(self.effective_prec() + other.effective_prec(), 1)
         exp = self.exp + other.exp
         pos_bound = max(self.pos_bound * other.pos_bound, self.neg_bound * other.neg_bound)
         neg_bound = max(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
