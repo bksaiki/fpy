@@ -1246,6 +1246,47 @@ class TestFormatInfer:
             f'expected REAL_FORMAT among s bounds with widening, got {s_bounds}'
         )
 
+    def test_exact_binop_mul_by_zero_set_stays_set(self):
+        """``Mul(loose_format, SetFormat({0}))`` short-circuits to
+        ``SetFormat({0})`` rather than producing a degenerate
+        zero-bounded ``AbstractFormat`` whose subsequent ``add``/``sub``
+        drives ``prec`` to 0.
+        """
+        from fpy2.analysis.format_infer.analysis import exact_binop
+        import operator
+        fp32_fmt = fp.FP32.format()
+        zero = SetFormat(frozenset((Fraction(0),)))
+        assert exact_binop(fp32_fmt, zero, operator.mul) == zero
+        assert exact_binop(zero, fp32_fmt, operator.mul) == zero
+
+    def test_exact_binop_add_zero_set_is_identity(self):
+        """``Add(F, SetFormat({0}))`` and ``Sub(F, SetFormat({0}))``
+        return ``F`` (lifted to ``AbstractFormat`` when ``F`` is a
+        ``Format``), not a recomputed bound.
+        """
+        from fpy2.analysis.format_infer.analysis import exact_binop
+        from fpy2.analysis.format_infer.format import AbstractFormat
+        import operator
+        fp32_fmt = fp.FP32.format()
+        zero = SetFormat(frozenset((Fraction(0),)))
+        af_fp32 = AbstractFormat.from_format(fp32_fmt)
+        assert exact_binop(fp32_fmt, zero, operator.add) == af_fp32
+        assert exact_binop(zero, fp32_fmt, operator.add) == af_fp32
+        assert exact_binop(fp32_fmt, zero, operator.sub) == af_fp32
+
+    def test_format_infer_arith_with_zero_round_does_not_crash(self):
+        """Format inference on ``round(0.01) * round(0.0) + round(0.0)``
+        under FP32 must complete without raising ``prec must be
+        positive`` from the abstract-format arithmetic.
+        """
+        @fp.fpy(ctx=fp.FP32)
+        def foo():
+            return fp.round(0.01) * fp.round(0.0) + fp.round(0.0)
+
+        info = FormatInfer.analyze(foo.ast)
+        ret_fmts = list(info.by_expr.values())
+        assert ret_fmts, 'expected non-empty by_expr'
+
     def test_loop_under_integer_with_set_init_keeps_scope_format(self):
         """A loop accumulating integers under ``with fp.INTEGER:`` from
         a ``SetFormat`` literal init must converge to ``INTEGER``'s

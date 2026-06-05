@@ -312,6 +312,31 @@ class TestRealScopeLosslessWidening:
     to REAL rounding (i.e. a no-op).  When no such widening exists,
     the compiler rejects."""
 
+    def test_mixed_storage_widens_through_wider_ctx(self):
+        """``with fp.REAL:`` over mixed-storage operands.
+
+        ``round(0.01)`` infers to an ``FP32`` bound (storage
+        ``float``) and ``round(0.0)`` infers to ``SetFormat({0})``
+        (storage ``uint8_t``).  The exact product is ``{0}`` so the
+        result also stores as ``uint8_t``, but the multiplication
+        itself can't run at ``uint8_t`` width (``float`` doesn't
+        losslessly downcast to ``uint8_t``).  The widening picks the
+        ``(float, float) → float under FP32`` sig, upcasts the
+        ``uint8_t`` operand to ``float``, then downcasts the product
+        back to ``uint8_t`` — sound because ``{0}`` fits losslessly.
+        """
+        @fp.fpy(ctx=fp.FP32)
+        def f() -> fp.Real:
+            return fp.round(0.01) * fp.round(0.0) + fp.round(0.0)
+
+        out = CppCompiler().compile(f, ctx=fp.FP32)
+        # Result format is ``SetFormat({0})`` → ``uint8_t`` storage.
+        assert 'uint8_t f(' in out
+        # The widening upcasts the zero operand to ``float`` for the
+        # multiplication, then casts the product back to ``uint8_t``.
+        assert 'static_cast<float>(' in out
+        assert 'static_cast<uint8_t>(' in out
+
     def test_sint8_mul_widens_to_int16(self):
         """Exact product of two ``SINT8`` operands fits in
         ``int16_t``; the REAL scope lowers to a widened ``*``."""

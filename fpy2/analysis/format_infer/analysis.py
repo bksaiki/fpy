@@ -400,6 +400,14 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
     else:
         return _setformat_to_abstract(f)
 
+_ZERO_SET: 'SetFormat' = SetFormat(frozenset((Fraction(0),)))
+
+
+def _is_zero_set(f: 'FormatBound') -> bool:
+    """``f`` is the precise singleton ``{0}``."""
+    return isinstance(f, SetFormat) and f.values == _ZERO_SET.values
+
+
 def exact_binop(
     lhs: 'FormatBound',
     rhs: 'FormatBound',
@@ -413,6 +421,13 @@ def exact_binop(
     a sound, non-rounded result.  Returns ``None`` when either
     operand isn't abstractable (e.g. ``None``, ``TupleFormat``,
     non-dyadic ``SetFormat``).
+
+    When one operand is the precise zero singleton ``SetFormat({0})``,
+    the abstract path would produce a zero-bounded ``AbstractFormat``
+    that loses the singleton precision and can drive subsequent
+    ``prec`` computations to ``0``.  Short-circuit through the
+    algebraic identities (``0 * x = 0``, ``0 + x = x``, ``x - 0 = x``)
+    so the precise format survives.
 
     Used by :meth:`_FormatInferInstance._visit_binaryop` to compute
     the candidate ``F`` that :meth:`_bound_if_fits` then checks
@@ -430,6 +445,17 @@ def exact_binop(
         return SetFormat(frozenset(
             op(va, vb) for va in lhs.values for vb in rhs.values
         ))
+    lhs_zero = _is_zero_set(lhs)
+    rhs_zero = _is_zero_set(rhs)
+    if op is operator.mul and (lhs_zero or rhs_zero):
+        return _ZERO_SET
+    if op is operator.add:
+        if lhs_zero:
+            return rhs if isinstance(rhs, SetFormat) else _to_abstract(rhs)
+        if rhs_zero:
+            return lhs if isinstance(lhs, SetFormat) else _to_abstract(lhs)
+    if op is operator.sub and rhs_zero:
+        return lhs if isinstance(lhs, SetFormat) else _to_abstract(lhs)
     af_a = _to_abstract(lhs)
     af_b = _to_abstract(rhs)
     if af_a is None or af_b is None:
