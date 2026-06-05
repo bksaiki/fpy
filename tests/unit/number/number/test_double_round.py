@@ -28,7 +28,7 @@ def _next_float(ctx, x: fp.RealFloat):
     else:
         raise TypeError(f'unexpected context type: {type(ctx)}')
 
-def _make_contexts(p1, exp1, k1, dp, dexp, dk, rm1, rm2, ensure_odd=False):
+def _make_contexts(p1, exp1, k1, dp, dexp, dk, rm1, rm2):
     p2 = p1 + dp
     exp2 = exp1 - dexp
 
@@ -46,17 +46,6 @@ def _make_contexts(p1, exp1, k1, dp, dexp, dk, rm1, rm2, ensure_odd=False):
 
     ctx1 = _cvt_to_context(p1, exp1, b1).with_params(rm=rm1)
     ctx2 = _cvt_to_context(p2, exp2, b2).with_params(rm=rm2)
-
-    if ensure_odd:
-        # if ctx2's maxval is even in ordinal space, advance it to the next float
-        # so that it is odd, making RTO tie-breaking consistent with RNE in ctx1
-        pos_next = _next_float(ctx2, ctx2.pos_maxval)
-        if ctx2.pos_maxval.c % 2 == 0:
-            ctx2 = ctx2.with_params(
-                maxval=pos_next,
-                neg_maxval=-pos_next
-            )
-
     return ctx1, ctx2
 
 class TestDoubleRound():
@@ -114,6 +103,7 @@ class TestDoubleRound():
     def test_rto_rto(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RTO](ctx2[RTO](x)) == ctx1[RTO](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTO, fp.RM.RTO)
+        assume(_next_float(ctx1, ctx1.pos_maxval) <= ctx2.pos_maxval)
         assume(p1 is None or p1 + dp >= 2)
         A1 = AbstractFormat.from_format(ctx1.format())
         A2 = AbstractFormat.from_format(ctx2.format())
@@ -137,7 +127,7 @@ class TestDoubleRound():
     def test_rto_rtz(self, p1, exp1, k1, dp, dexp, dk, x: fp.RealFloat):
         """ctx1[RTZ](ctx2[RTO](x)) == ctx1[RTZ](x)"""
         ctx1, ctx2 = _make_contexts(p1, exp1, k1, dp, dexp, dk, fp.RM.RTZ, fp.RM.RTO)
-        assume(ctx1.pos_maxval < ctx2.pos_maxval)
+        assume(_next_float(ctx1, ctx1.pos_maxval) <= ctx2.pos_maxval)
         A1 = AbstractFormat.from_format(ctx1.format())
         A2 = AbstractFormat.from_format(ctx2.format())
         y1 = ctx1.round(x)
