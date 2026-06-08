@@ -68,6 +68,7 @@ from fpy2.ast.fpyast import (
     ContextTypeAnn,
     Cos,
     Div,
+    Enumerate,
     Exp,
     Expr,
     ForeignVal,
@@ -106,6 +107,7 @@ from fpy2.ast.fpyast import (
     TypeAnn,
     Var,
     WhileStmt,
+    Zip,
 )
 from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType, Type
 from fpy2.env import ForeignEnv
@@ -183,8 +185,13 @@ BOOL_TAGS: frozenset[str] = frozenset({
 })
 """All production tags supported by :func:`bool_expr`."""
 
-LIST_TAGS: frozenset[str] = frozenset({'literal', 'var', 'range'})
-"""All production tags supported by :func:`list_expr`."""
+LIST_TAGS: frozenset[str] = frozenset({
+    'literal', 'var', 'range', 'zip', 'enumerate',
+})
+"""All production tags supported by :func:`list_expr`. ``zip`` and
+``enumerate`` only fire when the element type is a ``TupleType`` of the
+appropriate shape (``zip``: arity ≥ 1; ``enumerate``: arity 2 with the
+first element ``RealType``)."""
 
 TUPLE_TAGS: frozenset[str] = frozenset({'literal', 'var'})
 """All production tags supported by :func:`tuple_expr`."""
@@ -462,6 +469,50 @@ def _list_expr(
         productions.append(small_int.map(lambda n: Range1(range_sym, n, None)))
         productions.append(st.tuples(small_int, small_int).map(
             lambda ab: Range2(range_sym, ab[0], ab[1], None)
+        ))
+
+    if 'zip' in use and depth > 0 and isinstance(elt_type, TupleType) and elt_type.elts:
+        # zip(xs1, ..., xsN) : list[tuple[t1, ..., tN]] where xsi: list[ti].
+        # Skip the 0-arg edge case (``zip()`` is syntactically rejected by
+        # the parser and semantically degenerate).
+        #
+        # FPy's ``zip`` is strict on length mismatch (unlike Python's default
+        # zip — see ``ValueError: zip() argument N is shorter than ...``),
+        # so we force every arg to be a ``ListExpr`` literal of a shared
+        # length drawn in [1, 4]. This sidesteps the question of whether
+        # arbitrary list-producers (range, var, recursive list_expr) end up
+        # the same length at runtime.
+        zip_sym = _func_sym('zip')
+        elt_strats = [
+            expr(
+                sub_t, env, max(0, depth - 1),
+                range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+            )
+            for sub_t in elt_type.elts
+        ]
+
+        def _zip_of_len(n: int, _strats=elt_strats):
+            sub_lists = [
+                st.lists(s, min_size=n, max_size=n).map(lambda xs: ListExpr(xs, None))
+                for s in _strats
+            ]
+            return st.tuples(*sub_lists).map(
+                lambda xs: Zip(zip_sym, list(xs), None)
+            )
+
+        productions.append(st.integers(1, 4).flatmap(_zip_of_len))
+
+    if ('enumerate' in use and depth > 0 and isinstance(elt_type, TupleType)
+            and len(elt_type.elts) == 2 and isinstance(elt_type.elts[0], RealType)):
+        # enumerate(xs : list[t]) : list[tuple[real, t]] — index first.
+        _, val_t = elt_type.elts
+        enum_sym = _func_sym('enumerate')
+        sub_list = _list_expr(
+            val_t, env, depth - 1,
+            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+        )
+        productions.append(sub_list.map(
+            lambda xs: Enumerate(enum_sym, xs, None)
         ))
 
     if not productions:

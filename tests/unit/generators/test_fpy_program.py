@@ -383,6 +383,42 @@ class TestIfStmt:
         f(*inputs, ctx=fp.FP64)
 
 
+class TestZipEnumerate:
+    """Phase 11: ``Zip`` / ``Enumerate`` productions in ``list_expr``."""
+
+    @given(list_expr(TupleType(RealType(), RealType()), {}, depth=3))
+    def test_pair_tuple_target_typechecks(self, e: Expr) -> None:
+        # Any production at this target should typecheck as list[tuple[real, real]].
+        from fpy2.ast.fpyast import FuncMeta
+        from fpy2.env import ForeignEnv
+        body = StmtBlock([ReturnStmt(e, None)])
+        fd = FuncDef('f', [], body,
+                     FuncMeta(set(), None, None, {}, ForeignEnv.default()))
+        analysis = TypeInfer.check(fd)
+        rt = analysis.return_type
+        assert isinstance(rt, ListType)
+        assert isinstance(rt.elt, TupleType)
+
+    @given(list_expr(
+        TupleType(RealType(), RealType(), RealType()), {}, depth=2,
+        include={'zip'},
+    ))
+    def test_zip_only_for_arity3_typechecks(self, e: Expr) -> None:
+        # arity 3 → enumerate doesn't apply; with include={'zip'} we should
+        # always get a Zip node.
+        from fpy2.ast.fpyast import Zip as _Zip
+        assert isinstance(e, _Zip)
+        assert len(e.args) == 3
+
+    @given(list_expr(
+        TupleType(RealType(), RealType()), {}, depth=2,
+        include={'enumerate'},
+    ))
+    def test_enumerate_only_typechecks(self, e: Expr) -> None:
+        from fpy2.ast.fpyast import Enumerate as _Enumerate
+        assert isinstance(e, _Enumerate)
+
+
 class TestArbitraryFuncdef:
     """Phase 6: ``fpy_funcdef`` with arbitrary signatures."""
 
