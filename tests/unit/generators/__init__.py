@@ -22,7 +22,9 @@ from .number import real_floats, floats
 
 from .fpy_program import (
     TypeEnv,
+    expr,
     real_expr,
+    bool_expr,
     fpy_real_funcdef,
     fpy_real_function,
 )
