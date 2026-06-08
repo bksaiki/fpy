@@ -10,15 +10,16 @@ Phase 7 scope:
 - ``Round`` (tag ``'round'``) is in the real-expression pool.
 - Function bodies are ``StmtBlock``s of ``Assign`` + ``ContextStmt``
   (``with CTX: ...``) + ``IfStmt`` / ``If1Stmt`` branches + ``ForStmt``
-  loops + a terminating ``ReturnStmt``. ``Assign``s inside a ``with``
-  body leak out to the enclosing scope (matching FPy semantics);
-  ``Assign``s inside ``if``/``else`` branches and ``for`` bodies are
-  *not* propagated to the outer scope by the generator (a deliberate
-  simplification — sound merging would require per-branch env
-  intersection). For-loop targets are scoped strictly to the loop body —
-  referencing them after the loop is a hard error in FPy. A single
-  local-name counter is shared across the entire body to avoid
-  collisions even across branches.
+  loops + ``WhileStmt`` loops + a terminating ``ReturnStmt``.
+  ``Assign``s inside a ``with`` body leak out to the enclosing scope
+  (matching FPy semantics); ``Assign``s inside ``if``/``else`` branches
+  and ``for``/``while`` bodies are *not* propagated to the outer scope
+  by the generator (a deliberate simplification). For-loop targets are
+  scoped strictly to the loop body. ``WhileStmt`` is emitted as a
+  fixed counter-driven template (``c = 0; while c < N: <body>; c = c + 1``)
+  to guarantee termination — the body is fuzzed but the cond/init/increment
+  are not. A single local-name counter is shared across the entire body
+  to avoid collisions even across branches.
 - Real ops: arithmetic (``Add`` / ``Sub`` / ``Mul`` / ``Div`` / ``Neg`` /
   ``Abs``), named unary math (``Sqrt`` / ``Sin`` / ``Cos`` / ``Log`` /
   ``Exp``), ``IfExpr``, and ``Len`` (list[real] → real).
@@ -104,6 +105,7 @@ from fpy2.ast.fpyast import (
     TupleTypeAnn,
     TypeAnn,
     Var,
+    WhileStmt,
 )
 from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType, Type
 from fpy2.env import ForeignEnv
@@ -134,10 +136,15 @@ _DEFAULT_RANGE_ARG_MAX = 8
 
 def _var_of_type(
     env: TypeEnv,
-    target_cls: type[Type],
+    target_type: Type,
 ) -> st.SearchStrategy[Expr] | None:
-    """Strategy for a ``Var`` of the given type class, or ``None`` if env has none."""
-    names = sorted((n for n, t in env.items() if isinstance(t, target_cls)), key=str)
+    """Strategy for a ``Var`` of exactly ``target_type``, or ``None`` if env has none.
+
+    Compares by value (``Type.__eq__``), so ``list[real]`` and ``list[bool]``
+    are distinguished — important now that compound-typed locals are
+    allowed.
+    """
+    names = sorted((n for n, t in env.items() if t == target_type), key=str)
     if not names:
         return None
     return st.sampled_from(names).map(lambda n: Var(n, None))
@@ -176,10 +183,10 @@ BOOL_TAGS: frozenset[str] = frozenset({
 })
 """All production tags supported by :func:`bool_expr`."""
 
-LIST_TAGS: frozenset[str] = frozenset({'literal', 'range'})
+LIST_TAGS: frozenset[str] = frozenset({'literal', 'var', 'range'})
 """All production tags supported by :func:`list_expr`."""
 
-TUPLE_TAGS: frozenset[str] = frozenset({'literal'})
+TUPLE_TAGS: frozenset[str] = frozenset({'literal', 'var'})
 """All production tags supported by :func:`tuple_expr`."""
 
 CONTEXT_TAGS: frozenset[str] = frozenset({'literal'})
@@ -247,7 +254,7 @@ def _real_expr(
     if 'literal' in use:
         leaves.append(_real_literal_strategy())
     if 'var' in use:
-        var_strat = _var_of_type(env, RealType)
+        var_strat = _var_of_type(env, RealType())
         if var_strat is not None:
             leaves.append(var_strat)
 
@@ -356,7 +363,7 @@ def _bool_expr(
     if 'literal' in use:
         leaves.append(_bool_literal_strategy())
     if 'var' in use:
-        var_strat = _var_of_type(env, BoolType)
+        var_strat = _var_of_type(env, BoolType())
         if var_strat is not None:
             leaves.append(var_strat)
 
@@ -438,6 +445,11 @@ def _list_expr(
             elt_strat, min_size=_LIST_LITERAL_LEN[0], max_size=_LIST_LITERAL_LEN[1],
         ).map(lambda xs: ListExpr(xs, None)))
 
+    if 'var' in use:
+        var_strat = _var_of_type(env, ListType(elt_type))
+        if var_strat is not None:
+            productions.append(var_strat)
+
     if 'range' in use and depth > 0 and isinstance(elt_type, RealType):
         # Range1/Range2 always produce list[real]; only enable them when the
         # element target matches. The interpreter rejects non-integer arguments
@@ -471,11 +483,25 @@ def _tuple_expr(
 ) -> st.SearchStrategy[Expr]:
     """Strategy for a ``tuple[*elt_types]`` expression under ``env``.
 
-    See :data:`TUPLE_TAGS` for the supported ``include`` values. Currently
-    the only production is the ``literal`` constructor — the ``include``
-    knob is here for API symmetry and future extensions.
+    See :data:`TUPLE_TAGS` for the supported ``include`` values.
     """
-    _resolve_include(include, TUPLE_TAGS)  # validation only
+    use = _resolve_include(include, TUPLE_TAGS)
+
+    productions: list[st.SearchStrategy[Expr]] = []
+
+    if 'var' in use:
+        var_strat = _var_of_type(env, TupleType(*elt_types))
+        if var_strat is not None:
+            productions.append(var_strat)
+
+    if 'literal' not in use:
+        if not productions:
+            raise ValueError(
+                'tuple_expr produces nothing under the given include set; '
+                'include "literal" (always available) or "var" (with a '
+                'matching-type binding in env)'
+            )
+        return st.one_of(*productions)
 
     sub_depth = max(0, depth - 1)
     elt_strats = [
@@ -487,8 +513,12 @@ def _tuple_expr(
     ]
     if not elt_strats:
         # tuple[] — degenerate case; emit an empty TupleExpr.
-        return st.just(TupleExpr([], None))
-    return st.tuples(*elt_strats).map(lambda elts: TupleExpr(list(elts), None))
+        productions.append(st.just(TupleExpr([], None)))
+    else:
+        productions.append(
+            st.tuples(*elt_strats).map(lambda elts: TupleExpr(list(elts), None))
+        )
+    return st.one_of(*productions)
 
 
 # ---------------------------------------------------------------------------
@@ -653,10 +683,11 @@ def context_expr(
 # Statement blocks
 # ---------------------------------------------------------------------------
 
-# Scalar types eligible for ``Assign`` locals in phase 4. List/tuple locals
-# require a finer-grained ``_var_of_type`` lookup that tracks element types,
-# so they're held back until that's in place.
-_SCALAR_TYPES: list[Type] = [RealType(), BoolType()]
+# Default type strategy for ``Assign`` locals: scalars + small compound
+# types (depth-1 lists/tuples of scalars). Callers can override via
+# ``_stmt_block(..., local_types=<strategy>)`` to narrow or widen.
+def _default_local_types() -> st.SearchStrategy[Type]:
+    return arbitrary_type(max_depth=1)
 
 
 @st.composite
@@ -669,7 +700,9 @@ def _stmt_block(
     max_contexts: int = 0,
     max_ifs: int = 0,
     max_loops: int = 0,
+    max_whiles: int = 0,
     local_prefix: str = 't',
+    local_types: st.SearchStrategy[Type] | None = None,
     *,
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
     range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
@@ -679,7 +712,10 @@ def _stmt_block(
     Before the terminating return, the block contains:
 
     - up to ``max_assigns`` ``Assign`` statements (introducing fresh
-      ``{local_prefix}{i}`` locals of a scalar type);
+      ``{local_prefix}{i}`` locals); the local's type is drawn from
+      ``local_types``, which defaults to :func:`arbitrary_type` at depth 1
+      (scalars plus depth-1 lists/tuples). Pass ``st.just(RealType())``
+      etc. to narrow.
     - up to ``max_contexts`` ``ContextStmt`` (``with CTX:``) blocks; locals
       inside a ``with`` body leak out to the enclosing scope (FPy semantics);
     - up to ``max_ifs`` ``IfStmt`` / ``If1Stmt`` branches; locals inside
@@ -691,12 +727,19 @@ def _stmt_block(
       body-local ``Assign``s are scoped strictly to the loop body and do
       **not** leak after the loop (FPy rejects post-loop references to
       the loop target).
+    - up to ``max_whiles`` ``WhileStmt`` loops. To guarantee termination,
+      each ``while`` is a fixed structural template: ``c = 0; while c < N:
+      <body>; c = c + 1`` (the counter is fresh, the bound is a small
+      integer literal). The counter binding leaks out (matching FPy
+      semantics); body-locals do not.
 
     A single local-name counter is shared across the entire body (including
     every nested ``with``/``if``/``for`` body), so names never collide.
     ``depth`` bounds the rhs expression depth; nested sub-bodies use
     ``depth - 1``.
     """
+    if local_types is None:
+        local_types = _default_local_types()
     counter = [0]
 
     def fresh_local() -> NamedId:
@@ -715,6 +758,7 @@ def _stmt_block(
         ctx_budget: int,
         if_budget: int,
         loop_budget: int,
+        while_budget: int,
         min_n: int = 0,
     ) -> list[Stmt]:
         """Returns a list of statements; mutates ``env_local`` for new top-level bindings."""
@@ -728,6 +772,8 @@ def _stmt_block(
                 kinds.append('if')
             if loop_budget > 0 and sub_depth > 0:
                 kinds.append('for')
+            if while_budget > 0 and sub_depth > 0:
+                kinds.append('while')
             kind = draw(st.sampled_from(kinds))
 
             if kind == 'context':
@@ -736,7 +782,7 @@ def _stmt_block(
                 inner_stmts = gen_stmts(
                     inner_env, sub_depth - 1,
                     max(1, max_n // 2),
-                    ctx_budget - 1, if_budget, loop_budget,
+                    ctx_budget - 1, if_budget, loop_budget, while_budget,
                     min_n=1,  # avoid an empty `with`-body
                 )
                 # ``Assign``s inside `with` leak out per FPy lexical scoping.
@@ -760,7 +806,7 @@ def _stmt_block(
                 ift_stmts = gen_stmts(
                     ift_env, sub_depth - 1,
                     max(1, max_n // 2),
-                    ctx_budget, if_budget - 1, loop_budget,
+                    ctx_budget, if_budget - 1, loop_budget, while_budget,
                     min_n=1,
                 )
                 if two_armed:
@@ -768,7 +814,7 @@ def _stmt_block(
                     iff_stmts = gen_stmts(
                         iff_env, sub_depth - 1,
                         max(1, max_n // 2),
-                        ctx_budget, if_budget - 1, loop_budget,
+                        ctx_budget, if_budget - 1, loop_budget, while_budget,
                         min_n=1,
                     )
                     stmts.append(IfStmt(
@@ -789,7 +835,7 @@ def _stmt_block(
                 loop_stmts = gen_stmts(
                     loop_env, sub_depth - 1,
                     max(1, max_n // 2),
-                    ctx_budget, if_budget, loop_budget - 1,
+                    ctx_budget, if_budget, loop_budget - 1, while_budget,
                     min_n=1,
                 )
                 # Loop var and body-locals are scoped to the body — do NOT
@@ -800,9 +846,39 @@ def _stmt_block(
                 ))
                 loop_budget -= 1
 
+            elif kind == 'while':
+                # Counter-driven template: guarantees termination.
+                # Bound capped at 4 iterations to keep tests fast.
+                bound = draw(st.integers(0, 4))
+                counter = fresh_local()
+                # Pre-init the counter (leaks into env_local).
+                stmts.append(Assign(counter, None, Integer(0, None), None))
+                env_local[counter] = RealType()
+                # Generate the body in a fresh env copy so body-locals
+                # don't leak (matches our `for` treatment).
+                body_env = dict(env_local)
+                body_stmts = gen_stmts(
+                    body_env, sub_depth - 1,
+                    max(1, max_n // 2),
+                    ctx_budget, if_budget, loop_budget, while_budget - 1,
+                    min_n=0,  # empty body is fine; counter still terminates
+                )
+                # Append the increment (last statement in body).
+                inc = Assign(
+                    counter, None,
+                    Add(Var(counter, None), Integer(1, None), None), None,
+                )
+                cond = Compare(
+                    [CompareOp.LT],
+                    [Var(counter, None), Integer(bound, None)],
+                    None,
+                )
+                stmts.append(WhileStmt(cond, StmtBlock(body_stmts + [inc]), None))
+                while_budget -= 1
+
             else:  # 'assign'
                 name = fresh_local()
-                local_type = draw(st.sampled_from(_SCALAR_TYPES))
+                local_type = draw(local_types)
                 rhs = draw(expr(local_type, env_local, sub_depth, **kw_expr))
                 stmts.append(Assign(name, None, rhs, None))
                 env_local[name] = local_type
@@ -810,7 +886,10 @@ def _stmt_block(
         return stmts
 
     env = dict(env)
-    body_stmts = gen_stmts(env, depth, max_assigns, max_contexts, max_ifs, max_loops)
+    body_stmts = gen_stmts(
+        env, depth, max_assigns,
+        max_contexts, max_ifs, max_loops, max_whiles,
+    )
     ret_expr = draw(expr(return_type, env, depth, **kw_expr))
     return StmtBlock(body_stmts + [ReturnStmt(ret_expr, None)])
 
@@ -823,7 +902,9 @@ def stmt_block(
     max_contexts: int = 0,
     max_ifs: int = 0,
     max_loops: int = 0,
+    max_whiles: int = 0,
     local_prefix: str = 't',
+    local_types: st.SearchStrategy[Type] | None = None,
     *,
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
     range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
@@ -831,7 +912,8 @@ def stmt_block(
     """Public wrapper around the statement-block strategy."""
     return _stmt_block(
         env, return_type, depth,
-        max_assigns, max_contexts, max_ifs, max_loops, local_prefix,
+        max_assigns, max_contexts, max_ifs, max_loops, max_whiles,
+        local_prefix, local_types,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     )
 
@@ -931,6 +1013,7 @@ def fpy_funcdef(
     max_contexts: st.SearchStrategy[int] | None = None,
     max_ifs: st.SearchStrategy[int] | None = None,
     max_loops: st.SearchStrategy[int] | None = None,
+    max_whiles: st.SearchStrategy[int] | None = None,
     *,
     name: str = 'f',
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
@@ -940,8 +1023,9 @@ def fpy_funcdef(
 
     ``arg_types`` and ``return_type`` may be any types accepted by :func:`expr`.
     The body is a sequence of ``Assign`` / ``ContextStmt`` / ``IfStmt`` /
-    ``If1Stmt`` / ``ForStmt`` statements followed by a ``ReturnStmt`` of type
-    ``return_type``. See :func:`stmt_block` for ``max_*`` semantics.
+    ``If1Stmt`` / ``ForStmt`` / ``WhileStmt`` statements followed by a
+    ``ReturnStmt`` of type ``return_type``. See :func:`stmt_block` for
+    ``max_*`` semantics.
     """
     if max_depth is None:
         max_depth = st.integers(0, 3)
@@ -953,18 +1037,22 @@ def fpy_funcdef(
         max_ifs = st.integers(0, 2)
     if max_loops is None:
         max_loops = st.integers(0, 2)
+    if max_whiles is None:
+        max_whiles = st.integers(0, 2)
 
     depth = draw(max_depth)
     k = draw(max_assigns)
     c = draw(max_contexts)
     i = draw(max_ifs)
     l = draw(max_loops)
+    w = draw(max_whiles)
 
     arg_names = _make_arg_names(len(arg_types))
     env: TypeEnv = dict(zip(arg_names, arg_types))
     body = draw(_stmt_block(
         env, return_type, depth,
-        max_assigns=k, max_contexts=c, max_ifs=i, max_loops=l,
+        max_assigns=k, max_contexts=c, max_ifs=i,
+        max_loops=l, max_whiles=w,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ))
     return _make_funcdef(name, arg_names, arg_types, body)
@@ -978,6 +1066,7 @@ def fpy_function(
     max_contexts: st.SearchStrategy[int] | None = None,
     max_ifs: st.SearchStrategy[int] | None = None,
     max_loops: st.SearchStrategy[int] | None = None,
+    max_whiles: st.SearchStrategy[int] | None = None,
     *,
     name: str = 'f',
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
@@ -987,7 +1076,8 @@ def fpy_function(
     return fpy_funcdef(
         arg_types, return_type,
         max_depth=max_depth, max_assigns=max_assigns,
-        max_contexts=max_contexts, max_ifs=max_ifs, max_loops=max_loops,
+        max_contexts=max_contexts, max_ifs=max_ifs,
+        max_loops=max_loops, max_whiles=max_whiles,
         name=name,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ).map(fp.Function)
@@ -1006,6 +1096,7 @@ def fpy_real_funcdef(
     max_contexts: st.SearchStrategy[int] | None = None,
     max_ifs: st.SearchStrategy[int] | None = None,
     max_loops: st.SearchStrategy[int] | None = None,
+    max_whiles: st.SearchStrategy[int] | None = None,
     *,
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
     range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
@@ -1022,7 +1113,8 @@ def fpy_real_funcdef(
     return draw(fpy_funcdef(
         arg_types, RealType(),
         max_depth=max_depth, max_assigns=max_assigns,
-        max_contexts=max_contexts, max_ifs=max_ifs, max_loops=max_loops,
+        max_contexts=max_contexts, max_ifs=max_ifs,
+        max_loops=max_loops, max_whiles=max_whiles,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ))
 
@@ -1034,6 +1126,7 @@ def fpy_real_function(
     max_contexts: st.SearchStrategy[int] | None = None,
     max_ifs: st.SearchStrategy[int] | None = None,
     max_loops: st.SearchStrategy[int] | None = None,
+    max_whiles: st.SearchStrategy[int] | None = None,
     *,
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
     range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
@@ -1041,6 +1134,7 @@ def fpy_real_function(
     """Same as :func:`fpy_real_funcdef` but wraps the AST in :class:`fp.Function`."""
     return fpy_real_funcdef(
         num_args=num_args, max_depth=max_depth, max_assigns=max_assigns,
-        max_contexts=max_contexts, max_ifs=max_ifs, max_loops=max_loops,
+        max_contexts=max_contexts, max_ifs=max_ifs,
+        max_loops=max_loops, max_whiles=max_whiles,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ).map(fp.Function)

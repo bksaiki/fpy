@@ -16,7 +16,7 @@ from fpy2.ast.fpyast import (
     StmtBlock, TupleExpr,
 )
 from fpy2.env import ForeignEnv
-from fpy2.types import BoolType, ListType, RealType, TupleType
+from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType  # noqa: F401
 
 from . import (
     BOOL_TAGS,
@@ -197,6 +197,68 @@ class TestAssignsAreVisible:
         assert isinstance(analysis.return_type, RealType)
 
 
+class TestCompoundLocals:
+    """Phase 9: ``Assign`` locals can have compound types (list/tuple)."""
+
+    @given(stmt_block(
+        {}, RealType(), depth=2,
+        max_assigns=3, max_contexts=0, max_ifs=0, max_loops=0,
+        local_types=st.just(ListType(RealType())),  # pin every local to list[real]
+    ))
+    def test_pinned_list_real_locals_typecheck(self, block) -> None:
+        from fpy2.ast.fpyast import Assign, FuncMeta
+        from fpy2.env import ForeignEnv
+        # Every Assign in the body should bind a list[real] local.
+        assign_count = 0
+        for s in block.stmts:
+            if isinstance(s, Assign):
+                assign_count += 1
+        # Wrap and type-check.
+        fd = FuncDef('f', [], block,
+                     FuncMeta(set(), None, None, {}, ForeignEnv.default()))
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, RealType)
+        # Defines list[real] entries — verify via analysis.by_def
+        list_real_defs = [
+            t for t in analysis.by_def.values()
+            if isinstance(t, ListType) and isinstance(t.elt, RealType)
+        ]
+        assert len(list_real_defs) >= assign_count, (
+            f'expected {assign_count} list[real] defs, got {len(list_real_defs)}'
+        )
+
+    @given(stmt_block(
+        {}, RealType(), depth=2,
+        max_assigns=2,
+        local_types=st.just(TupleType(RealType(), BoolType())),
+    ))
+    def test_pinned_tuple_locals_typecheck(self, block) -> None:
+        from fpy2.ast.fpyast import FuncMeta
+        from fpy2.env import ForeignEnv
+        fd = FuncDef('f', [], block,
+                     FuncMeta(set(), None, None, {}, ForeignEnv.default()))
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, RealType)
+
+    @given(
+        fpy_real_function(
+            num_args=st.integers(0, 2),
+            max_depth=st.integers(0, 2),
+            max_assigns=st.integers(1, 3),
+        ),
+        st.data(),
+    )
+    @settings(max_examples=80, deadline=None)
+    def test_default_locals_run(self, f: fp.Function, data: st.DataObject) -> None:
+        # Smoke test: with the new default ``arbitrary_type(max_depth=1)``
+        # local_types, the body can include compound locals — still runs.
+        inputs = [
+            data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
+            for _ in range(len(f.args))
+        ]
+        f(*inputs, ctx=fp.FP64)
+
+
 class TestForStmt:
     """Phase 8: ``ForStmt`` (``for i in range(N): ...``) in bodies."""
 
@@ -231,8 +293,44 @@ class TestForStmt:
         f(*inputs, ctx=fp.FP64)
 
 
+class TestWhileStmt:
+    """Phase 10: ``WhileStmt`` (counter-driven template) in bodies."""
+
+    @given(fpy_real_funcdef(
+        num_args=st.integers(0, 2),
+        max_depth=st.integers(1, 2),
+        max_assigns=st.just(1),
+        max_contexts=st.just(0),
+        max_ifs=st.just(0),
+        max_loops=st.just(0),
+        max_whiles=st.just(2),
+    ))
+    @settings(max_examples=80, deadline=None)
+    def test_with_whiles_typechecks(self, fd: FuncDef) -> None:
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, RealType)
+
+    @given(
+        fpy_real_function(
+            num_args=st.integers(0, 2),
+            max_depth=st.integers(1, 2),
+            max_assigns=st.just(1),
+            max_contexts=st.just(0),
+            max_ifs=st.just(0),
+            max_loops=st.just(0),
+            max_whiles=st.just(2),
+        ),
+        st.data(),
+    )
+    @settings(max_examples=80, deadline=None)
+    def test_with_whiles_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
+                  for _ in range(len(f.args))]
+        f(*inputs, ctx=fp.FP64)
+
+
 class TestAllControlFlow:
-    """Phase 8: every statement kind enabled simultaneously."""
+    """Phase 10: every statement kind enabled simultaneously."""
 
     @given(
         fpy_real_function(
@@ -242,6 +340,7 @@ class TestAllControlFlow:
             max_contexts=st.just(1),
             max_ifs=st.just(1),
             max_loops=st.just(1),
+            max_whiles=st.just(1),
         ),
         st.data(),
     )
