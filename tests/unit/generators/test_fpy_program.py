@@ -197,6 +197,61 @@ class TestAssignsAreVisible:
         assert isinstance(analysis.return_type, RealType)
 
 
+class TestForStmt:
+    """Phase 8: ``ForStmt`` (``for i in range(N): ...``) in bodies."""
+
+    @given(fpy_real_funcdef(
+        num_args=st.integers(0, 2),
+        max_depth=st.integers(1, 2),
+        max_assigns=st.just(1),
+        max_contexts=st.just(0),
+        max_ifs=st.just(0),
+        max_loops=st.just(2),
+    ))
+    @settings(max_examples=80, deadline=None)
+    def test_with_loops_typechecks(self, fd: FuncDef) -> None:
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, RealType)
+
+    @given(
+        fpy_real_function(
+            num_args=st.integers(0, 2),
+            max_depth=st.integers(1, 2),
+            max_assigns=st.just(1),
+            max_contexts=st.just(0),
+            max_ifs=st.just(0),
+            max_loops=st.just(2),
+        ),
+        st.data(),
+    )
+    @settings(max_examples=80, deadline=None)
+    def test_with_loops_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
+                  for _ in range(len(f.args))]
+        f(*inputs, ctx=fp.FP64)
+
+
+class TestAllControlFlow:
+    """Phase 8: every statement kind enabled simultaneously."""
+
+    @given(
+        fpy_real_function(
+            num_args=st.integers(0, 2),
+            max_depth=st.integers(0, 2),
+            max_assigns=st.just(1),
+            max_contexts=st.just(1),
+            max_ifs=st.just(1),
+            max_loops=st.just(1),
+        ),
+        st.data(),
+    )
+    @settings(max_examples=80, deadline=None)
+    def test_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
+                  for _ in range(len(f.args))]
+        f(*inputs, ctx=fp.FP64)
+
+
 class TestIfStmt:
     """Phase 7: ``IfStmt`` / ``If1Stmt`` inside generated function bodies."""
 
