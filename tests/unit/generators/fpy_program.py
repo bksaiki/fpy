@@ -1,21 +1,21 @@
 """
 Type-directed Hypothesis generators for FPy programs.
 
-Phase 6 scope:
+Phase 7 scope:
 - Five expression target types: ``RealType``, ``BoolType``, ``ListType``,
   ``TupleType``, ``ContextType``, dispatched through :func:`expr`.
-- :func:`fpy_funcdef` accepts an arbitrary signature ``(arg_types, return_type)``
-  — parameters and return can be any supported type, not only ``real``.
-- :func:`arbitrary_type` generates random type signatures for fuzzing the
-  generator across the type lattice; :func:`value_for_type` generates
-  runtime inputs of a requested type, so the runtime smoke test can call
-  generated functions with any signature.
+- :func:`fpy_funcdef` accepts an arbitrary signature ``(arg_types, return_type)``.
+- :func:`arbitrary_type` / :func:`value_for_type` cover type-lattice fuzzing
+  and runtime input generation.
 - ``Round`` (tag ``'round'``) is in the real-expression pool.
 - Function bodies are ``StmtBlock``s of ``Assign`` + ``ContextStmt``
-  (``with CTX: ...``) + a terminating ``ReturnStmt``. ``Assign``s inside
-  a ``with`` body leak out to the enclosing scope, matching FPy semantics;
-  a single local-name counter is shared across the entire body to avoid
-  collisions.
+  (``with CTX: ...``) + ``IfStmt`` / ``If1Stmt`` branches + a terminating
+  ``ReturnStmt``. ``Assign``s inside a ``with`` body leak out to the
+  enclosing scope (matching FPy semantics); ``Assign``s inside ``if``/
+  ``else`` branches are *not* propagated to the outer scope by the
+  generator (a deliberate simplification — sound merging would require
+  per-branch env intersection). A single local-name counter is shared
+  across the entire body to avoid collisions even across branches.
 - Real ops: arithmetic (``Add`` / ``Sub`` / ``Mul`` / ``Div`` / ``Neg`` /
   ``Abs``), named unary math (``Sqrt`` / ``Sin`` / ``Cos`` / ``Log`` /
   ``Exp``), ``IfExpr``, and ``Len`` (list[real] → real).
@@ -69,7 +69,9 @@ from fpy2.ast.fpyast import (
     ForeignVal,
     FuncDef,
     FuncMeta,
+    If1Stmt,
     IfExpr,
+    IfStmt,
     Integer,
     IsFinite,
     IsInf,
@@ -661,6 +663,7 @@ def _stmt_block(
     depth: int,
     max_assigns: int = 3,
     max_contexts: int = 0,
+    max_ifs: int = 0,
     local_prefix: str = 't',
     *,
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
@@ -668,18 +671,20 @@ def _stmt_block(
 ) -> StmtBlock:
     """Generate a ``StmtBlock`` ending in a ``ReturnStmt``.
 
-    Before the terminating return, the block contains up to ``max_assigns``
-    ``Assign`` statements (introducing fresh ``{local_prefix}{i}`` locals of
-    a scalar type) plus up to ``max_contexts`` nested ``ContextStmt`` (``with``)
-    blocks. Each ``Assign`` extends the surrounding ``env``; ``Assign``s
-    inside a ``with`` body also leak out, matching FPy's lexical scoping.
+    Before the terminating return, the block contains:
 
-    Local names are issued from a single counter shared across the entire
-    body (including nested ``with`` bodies), so names never collide.
+    - up to ``max_assigns`` ``Assign`` statements (introducing fresh
+      ``{local_prefix}{i}`` locals of a scalar type);
+    - up to ``max_contexts`` ``ContextStmt`` (``with CTX:``) blocks; locals
+      inside a ``with`` body leak out to the enclosing scope (FPy semantics);
+    - up to ``max_ifs`` ``IfStmt`` / ``If1Stmt`` branches; locals inside
+      branches do **not** propagate to the outer scope in this generator
+      (deliberate simplification — sound branch-merging would require
+      per-branch env intersection on shared definitions).
 
-    ``depth`` bounds the rhs expression depth; nested ``with`` bodies use
-    ``depth - 1`` to bound nesting. ``range_arg_min`` / ``range_arg_max`` are
-    forwarded to every rhs ``expr(...)`` call.
+    A single local-name counter is shared across the entire body (including
+    every nested ``with``/``if`` body), so names never collide. ``depth``
+    bounds the rhs expression depth; nested sub-bodies use ``depth - 1``.
     """
     counter = [0]
 
@@ -695,25 +700,29 @@ def _stmt_block(
         sub_depth: int,
         max_n: int,
         ctx_budget: int,
+        if_budget: int,
         min_n: int = 0,
     ) -> list[Stmt]:
-        """Returns a list of (``Assign`` | ``ContextStmt``); mutates ``env_local``."""
+        """Returns a list of statements; mutates ``env_local`` for new top-level bindings."""
         n = draw(st.integers(min_n, max(min_n, max_n)))
         stmts: list[Stmt] = []
         for _ in range(n):
-            allow_ctx = ctx_budget > 0 and sub_depth > 0
-            kinds = ['assign'] + (['context'] if allow_ctx else [])
+            kinds = ['assign']
+            if ctx_budget > 0 and sub_depth > 0:
+                kinds.append('context')
+            if if_budget > 0 and sub_depth > 0:
+                kinds.append('if')
             kind = draw(st.sampled_from(kinds))
+
             if kind == 'context':
                 ctx_value_expr = draw(_ctx_expr(env_local, sub_depth))
                 inner_env = dict(env_local)
                 inner_stmts = gen_stmts(
                     inner_env, sub_depth - 1,
-                    max(1, max_n // 2), ctx_budget - 1,
+                    max(1, max_n // 2), ctx_budget - 1, if_budget,
                     min_n=1,  # avoid an empty `with`-body
                 )
-                # ``Assign``s inside `with` leak out (FPy uses lexical scope,
-                # not a new scope per `with`).
+                # ``Assign``s inside `with` leak out per FPy lexical scoping.
                 for k, v in inner_env.items():
                     if k not in env_local:
                         env_local[k] = v
@@ -722,16 +731,45 @@ def _stmt_block(
                     StmtBlock(inner_stmts), None,
                 ))
                 ctx_budget -= 1
-            else:
+
+            elif kind == 'if':
+                cond = draw(_bool_expr(env_local, sub_depth, **kw_expr))
+                two_armed = draw(st.booleans())
+                # Each branch sees a copy of env; new bindings stay inside
+                # the branch and don't propagate to the outer scope. The
+                # shared name counter still prevents collisions across
+                # branches and with the outer body.
+                ift_env = dict(env_local)
+                ift_stmts = gen_stmts(
+                    ift_env, sub_depth - 1,
+                    max(1, max_n // 2), ctx_budget, if_budget - 1,
+                    min_n=1,
+                )
+                if two_armed:
+                    iff_env = dict(env_local)
+                    iff_stmts = gen_stmts(
+                        iff_env, sub_depth - 1,
+                        max(1, max_n // 2), ctx_budget, if_budget - 1,
+                        min_n=1,
+                    )
+                    stmts.append(IfStmt(
+                        cond, StmtBlock(ift_stmts), StmtBlock(iff_stmts), None,
+                    ))
+                else:
+                    stmts.append(If1Stmt(cond, StmtBlock(ift_stmts), None))
+                if_budget -= 1
+
+            else:  # 'assign'
                 name = fresh_local()
                 local_type = draw(st.sampled_from(_SCALAR_TYPES))
                 rhs = draw(expr(local_type, env_local, sub_depth, **kw_expr))
                 stmts.append(Assign(name, None, rhs, None))
                 env_local[name] = local_type
+
         return stmts
 
     env = dict(env)
-    body_stmts = gen_stmts(env, depth, max_assigns, max_contexts)
+    body_stmts = gen_stmts(env, depth, max_assigns, max_contexts, max_ifs)
     ret_expr = draw(expr(return_type, env, depth, **kw_expr))
     return StmtBlock(body_stmts + [ReturnStmt(ret_expr, None)])
 
@@ -742,6 +780,7 @@ def stmt_block(
     depth: int,
     max_assigns: int = 3,
     max_contexts: int = 0,
+    max_ifs: int = 0,
     local_prefix: str = 't',
     *,
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
@@ -749,7 +788,8 @@ def stmt_block(
 ) -> st.SearchStrategy[StmtBlock]:
     """Public wrapper around the statement-block strategy."""
     return _stmt_block(
-        env, return_type, depth, max_assigns, max_contexts, local_prefix,
+        env, return_type, depth,
+        max_assigns, max_contexts, max_ifs, local_prefix,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     )
 
@@ -847,6 +887,7 @@ def fpy_funcdef(
     max_depth: st.SearchStrategy[int] | None = None,
     max_assigns: st.SearchStrategy[int] | None = None,
     max_contexts: st.SearchStrategy[int] | None = None,
+    max_ifs: st.SearchStrategy[int] | None = None,
     *,
     name: str = 'f',
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
@@ -855,9 +896,9 @@ def fpy_funcdef(
     """Generate a well-typed FPy function with the given signature.
 
     ``arg_types`` and ``return_type`` may be any types accepted by :func:`expr`.
-    The body is a sequence of ``Assign`` statements (introducing scalar
-    locals ``t0..tM``) and ``ContextStmt`` (``with CTX:``) blocks, followed
-    by a ``ReturnStmt`` whose expression has type ``return_type``.
+    The body is a sequence of ``Assign`` / ``ContextStmt`` / ``IfStmt`` /
+    ``If1Stmt`` statements followed by a ``ReturnStmt`` of type
+    ``return_type``. See :func:`stmt_block` for ``max_*`` semantics.
     """
     if max_depth is None:
         max_depth = st.integers(0, 3)
@@ -865,15 +906,19 @@ def fpy_funcdef(
         max_assigns = st.integers(0, 3)
     if max_contexts is None:
         max_contexts = st.integers(0, 2)
+    if max_ifs is None:
+        max_ifs = st.integers(0, 2)
 
     depth = draw(max_depth)
     k = draw(max_assigns)
     c = draw(max_contexts)
+    i = draw(max_ifs)
 
     arg_names = _make_arg_names(len(arg_types))
     env: TypeEnv = dict(zip(arg_names, arg_types))
     body = draw(_stmt_block(
-        env, return_type, depth, max_assigns=k, max_contexts=c,
+        env, return_type, depth,
+        max_assigns=k, max_contexts=c, max_ifs=i,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ))
     return _make_funcdef(name, arg_names, arg_types, body)
@@ -885,6 +930,7 @@ def fpy_function(
     max_depth: st.SearchStrategy[int] | None = None,
     max_assigns: st.SearchStrategy[int] | None = None,
     max_contexts: st.SearchStrategy[int] | None = None,
+    max_ifs: st.SearchStrategy[int] | None = None,
     *,
     name: str = 'f',
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
@@ -893,7 +939,8 @@ def fpy_function(
     """Same as :func:`fpy_funcdef` but wraps the AST in :class:`fp.Function`."""
     return fpy_funcdef(
         arg_types, return_type,
-        max_depth=max_depth, max_assigns=max_assigns, max_contexts=max_contexts,
+        max_depth=max_depth, max_assigns=max_assigns,
+        max_contexts=max_contexts, max_ifs=max_ifs,
         name=name,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ).map(fp.Function)
@@ -910,6 +957,7 @@ def fpy_real_funcdef(
     max_depth: st.SearchStrategy[int] | None = None,
     max_assigns: st.SearchStrategy[int] | None = None,
     max_contexts: st.SearchStrategy[int] | None = None,
+    max_ifs: st.SearchStrategy[int] | None = None,
     *,
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
     range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
@@ -925,7 +973,8 @@ def fpy_real_funcdef(
     arg_types: tuple[Type, ...] = tuple(RealType() for _ in range(n))
     return draw(fpy_funcdef(
         arg_types, RealType(),
-        max_depth=max_depth, max_assigns=max_assigns, max_contexts=max_contexts,
+        max_depth=max_depth, max_assigns=max_assigns,
+        max_contexts=max_contexts, max_ifs=max_ifs,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ))
 
@@ -935,6 +984,7 @@ def fpy_real_function(
     max_depth: st.SearchStrategy[int] | None = None,
     max_assigns: st.SearchStrategy[int] | None = None,
     max_contexts: st.SearchStrategy[int] | None = None,
+    max_ifs: st.SearchStrategy[int] | None = None,
     *,
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
     range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
@@ -942,6 +992,6 @@ def fpy_real_function(
     """Same as :func:`fpy_real_funcdef` but wraps the AST in :class:`fp.Function`."""
     return fpy_real_funcdef(
         num_args=num_args, max_depth=max_depth, max_assigns=max_assigns,
-        max_contexts=max_contexts,
+        max_contexts=max_contexts, max_ifs=max_ifs,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ).map(fp.Function)
