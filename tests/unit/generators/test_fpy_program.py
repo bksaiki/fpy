@@ -40,20 +40,25 @@ class TestGeneratedTypeChecks:
 
 
 class TestGeneratedRuns:
-    """Generated functions should evaluate under ``fp.REAL`` without crashing."""
+    """Generated functions should evaluate under ``fp.FP64`` without crashing.
+
+    We use FP64 rather than ``fp.REAL`` because ``Div`` is not implemented
+    for real-number arithmetic (no closed-form rational result in general),
+    while FP64 handles div-by-zero by producing ``±inf``.
+    """
 
     @given(
         fpy_real_function(num_args=st.integers(0, 3), max_depth=st.integers(0, 3)),
         st.data(),
     )
     @settings(max_examples=100, deadline=None)
-    def test_runs_under_REAL(self, f: fp.Function, data: st.DataObject) -> None:
+    def test_runs_under_FP64(self, f: fp.Function, data: st.DataObject) -> None:
         n = len(f.args)
         inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
                   for _ in range(n)]
         # Should not raise. We don't check the value — only that the generated
-        # program is executable end-to-end under the real-number context.
-        f(*inputs, ctx=fp.REAL)
+        # program is executable end-to-end.
+        f(*inputs, ctx=fp.FP64)
 
 
 class TestRealExprStrategyDirectly:

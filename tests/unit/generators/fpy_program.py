@@ -6,9 +6,8 @@ Phase 1 scope (deliberately small):
 - One construction shape: a ``FuncDef`` with N real-typed parameters and a
   single ``ReturnStmt`` whose expression has type ``real``.
 - Expression language: ``Integer`` literals, parameter ``Var`` references,
-  and arithmetic ops ``Add`` / ``Sub`` / ``Mul`` / ``Neg`` / ``Abs``.
-  (``Div`` is deferred because division by zero would crash the runtime
-  smoke test; ``Decnum`` and transcendentals are deferred to a later phase.)
+  and arithmetic ops ``Add`` / ``Sub`` / ``Mul`` / ``Div`` / ``Neg`` / ``Abs``.
+  (``Decnum`` and transcendentals are deferred to a later phase.)
 
 The architecture is intentionally type-indexed even though only ``RealType``
 is supported: every recursive helper takes a target ``Type`` and an
@@ -30,6 +29,7 @@ from fpy2.ast.fpyast import (
     Abs,
     Add,
     Argument,
+    Div,
     Expr,
     FuncDef,
     FuncMeta,
@@ -111,6 +111,7 @@ def real_expr(env: TypeEnv, depth: int) -> st.SearchStrategy[Expr]:
         _binop(Add),
         _binop(Sub),
         _binop(Mul),
+        _binop(Div),
         _unop(Neg),
         _unop(Abs),
     ]
