@@ -25,6 +25,7 @@ from . import (
     fpy_real_function,
     list_expr,
     real_expr,
+    stmt_block,
     tuple_expr,
 )
 from .number import real_floats
@@ -147,6 +148,69 @@ class TestTupleExprStrategyDirectly:
         assert isinstance(analysis.return_type, TupleType)
         assert isinstance(analysis.return_type.elts[0], RealType)
         assert isinstance(analysis.return_type.elts[1], BoolType)
+
+
+class TestStmtBlock:
+    """Statement-block generator: ``Assign``* ``ReturnStmt``."""
+
+    @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
+    def test_ends_with_return(self, block) -> None:
+        from fpy2.ast.fpyast import Assign, ReturnStmt
+        assert isinstance(block.stmts[-1], ReturnStmt)
+        # everything before the return is an Assign in this phase
+        for s in block.stmts[:-1]:
+            assert isinstance(s, Assign)
+
+    @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
+    def test_typechecks_when_wrapped(self, block) -> None:
+        from fpy2.ast.fpyast import FuncMeta
+        from fpy2.env import ForeignEnv
+        fd = FuncDef('f', [], block,
+                     FuncMeta(set(), None, None, {}, ForeignEnv.default()))
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, RealType)
+
+
+class TestAssignsAreVisible:
+    """A generated function with locals should still type-check and run.
+
+    ``max_assigns`` is a *cap*, not a floor, so a body with zero locals is
+    a valid draw — we just verify the body always type-checks regardless.
+    """
+
+    @given(fpy_real_funcdef(
+        num_args=st.integers(0, 2),
+        max_depth=st.integers(0, 2),
+        max_assigns=st.just(3),
+    ))
+    def test_typechecks_with_locals_in_scope(self, fd: FuncDef) -> None:
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, RealType)
+
+
+class TestRangeArgKwarg:
+    """``range_arg_min`` / ``range_arg_max`` constrain ``Range1`` / ``Range2`` args."""
+
+    @given(list_expr(
+        RealType(), {}, depth=2,
+        range_arg_min=42, range_arg_max=42,
+    ))
+    def test_pinned_range_arg_only_uses_42(self, e: Expr) -> None:
+        # Walk the generated tree; every Range1/Range2 must carry Integer(42).
+        from fpy2.ast.fpyast import Range1, Range2
+        stack = [e]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, (Range1, Range2)):
+                for arg in node.args:
+                    assert isinstance(arg, Integer) and arg.val == 42, (
+                        f"expected Integer(42), got {arg}"
+                    )
+            for attr in ('args', 'elts'):
+                if hasattr(node, attr):
+                    children = getattr(node, attr)
+                    if isinstance(children, (list, tuple)):
+                        stack.extend(c for c in children if isinstance(c, Expr))
 
 
 class TestTypeDispatch:
