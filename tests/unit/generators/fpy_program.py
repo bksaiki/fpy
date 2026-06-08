@@ -1,20 +1,21 @@
 """
 Type-directed Hypothesis generators for FPy programs.
 
-Phase 5 scope:
+Phase 6 scope:
 - Five expression target types: ``RealType``, ``BoolType``, ``ListType``,
-  ``TupleType``, ``ContextType``, dispatched through a single :func:`expr`
-  entry point.
-- ``Round`` and ``Cast`` are now in the real-expression pool (tag
-  ``'round'`` in :data:`REAL_TAGS`); both target the dynamic rounding
-  context active at the call site.
-- Function bodies are ``StmtBlock``s containing ``Assign`` statements,
-  ``ContextStmt`` (``with CTX: ...``) blocks, and a terminating
-  ``ReturnStmt``. The ``with`` blocks sample contexts from a small
-  predefined pool (see ``_DEFAULT_CONTEXTS``). ``Assign``s inside a
-  ``with`` body leak out to the enclosing scope, matching FPy semantics;
-  a single local-name counter is shared across the whole function body to
-  avoid collisions.
+  ``TupleType``, ``ContextType``, dispatched through :func:`expr`.
+- :func:`fpy_funcdef` accepts an arbitrary signature ``(arg_types, return_type)``
+  — parameters and return can be any supported type, not only ``real``.
+- :func:`arbitrary_type` generates random type signatures for fuzzing the
+  generator across the type lattice; :func:`value_for_type` generates
+  runtime inputs of a requested type, so the runtime smoke test can call
+  generated functions with any signature.
+- ``Round`` (tag ``'round'``) is in the real-expression pool.
+- Function bodies are ``StmtBlock``s of ``Assign`` + ``ContextStmt``
+  (``with CTX: ...``) + a terminating ``ReturnStmt``. ``Assign``s inside
+  a ``with`` body leak out to the enclosing scope, matching FPy semantics;
+  a single local-name counter is shared across the entire body to avoid
+  collisions.
 - Real ops: arithmetic (``Add`` / ``Sub`` / ``Mul`` / ``Div`` / ``Neg`` /
   ``Abs``), named unary math (``Sqrt`` / ``Sin`` / ``Cos`` / ``Log`` /
   ``Exp``), ``IfExpr``, and ``Len`` (list[real] → real).
@@ -55,10 +56,12 @@ from fpy2.ast.fpyast import (
     And,
     Argument,
     Assign,
+    BoolTypeAnn,
     BoolVal,
     Cast,
     Compare,
     ContextStmt,
+    ContextTypeAnn,
     Cos,
     Div,
     Exp,
@@ -73,6 +76,7 @@ from fpy2.ast.fpyast import (
     IsNan,
     Len,
     ListExpr,
+    ListTypeAnn,
     Log,
     Mul,
     Neg,
@@ -91,6 +95,8 @@ from fpy2.ast.fpyast import (
     StmtBlock,
     Sub,
     TupleExpr,
+    TupleTypeAnn,
+    TypeAnn,
     Var,
 )
 from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType, Type
@@ -749,6 +755,68 @@ def stmt_block(
 
 
 # ---------------------------------------------------------------------------
+# Type → TypeAnn / random-type / value-for-type
+# ---------------------------------------------------------------------------
+
+def _type_to_typeann(t: Type) -> TypeAnn:
+    """Map an FPy ``Type`` to its surface-syntax ``TypeAnn``."""
+    if isinstance(t, RealType):
+        return RealTypeAnn(None, None)
+    if isinstance(t, BoolType):
+        return BoolTypeAnn(None)
+    if isinstance(t, TupleType):
+        return TupleTypeAnn([_type_to_typeann(e) for e in t.elts], None)
+    if isinstance(t, ListType):
+        return ListTypeAnn(_type_to_typeann(t.elt), None)
+    if isinstance(t, ContextType):
+        return ContextTypeAnn(None)
+    raise NotImplementedError(f'no TypeAnn for type {t.format()}')
+
+
+def arbitrary_type(
+    max_depth: int = 2,
+    *,
+    scalar_only: bool = False,
+) -> st.SearchStrategy[Type]:
+    """Strategy for an arbitrary FPy ``Type`` up to nesting depth ``max_depth``.
+
+    With ``scalar_only=True``, only ``RealType`` / ``BoolType`` are produced —
+    useful for generating an arg signature whose values are easy to feed
+    into the interpreter.
+    """
+    scalar = st.one_of(st.just(RealType()), st.just(BoolType()))
+    if max_depth <= 0 or scalar_only:
+        return scalar
+    inner = arbitrary_type(max_depth - 1, scalar_only=scalar_only)
+    list_t = inner.map(ListType)
+    tuple_t = st.lists(inner, min_size=1, max_size=3).map(
+        lambda elts: TupleType(*elts)
+    )
+    return st.one_of(scalar, list_t, tuple_t)
+
+
+def value_for_type(t: Type) -> st.SearchStrategy:
+    """Strategy for a Python value of type ``t``, suitable as a function input.
+
+    - ``RealType`` ⇒ a small ``RealFloat``
+    - ``BoolType`` ⇒ a ``bool``
+    - ``TupleType`` ⇒ a ``tuple`` of element values
+    - ``ListType`` ⇒ a ``list`` (length 0–4) of element values
+    """
+    if isinstance(t, RealType):
+        # Import locally to avoid a top-level dep cycle with this module.
+        from .number import real_floats
+        return real_floats(prec_max=8, exp_min=-4, exp_max=4)
+    if isinstance(t, BoolType):
+        return st.booleans()
+    if isinstance(t, TupleType):
+        return st.tuples(*[value_for_type(e) for e in t.elts])
+    if isinstance(t, ListType):
+        return st.lists(value_for_type(t.elt), min_size=0, max_size=4)
+    raise NotImplementedError(f'no value strategy for type {t.format()}')
+
+
+# ---------------------------------------------------------------------------
 # Function definitions
 # ---------------------------------------------------------------------------
 
@@ -756,12 +824,84 @@ def _make_arg_names(n: int) -> list[NamedId]:
     return [NamedId(f'x{i}') for i in range(n)]
 
 
-def _make_funcdef(name: str, arg_names: list[NamedId], body: StmtBlock) -> FuncDef:
-    """Wrap a ``StmtBlock`` body in a ``f(arg_names...: Real) -> ...`` ``FuncDef``."""
-    args = [Argument(n, RealTypeAnn(None, None), None) for n in arg_names]
+def _make_funcdef(
+    name: str,
+    arg_names: list[NamedId],
+    arg_types: tuple[Type, ...],
+    body: StmtBlock,
+) -> FuncDef:
+    """Wrap a ``StmtBlock`` body in a ``def name(arg_names: ...): ...`` ``FuncDef``."""
+    args = [
+        Argument(n, _type_to_typeann(t), None)
+        for n, t in zip(arg_names, arg_types)
+    ]
     meta = FuncMeta(set(), None, None, {}, ForeignEnv.default())
     return FuncDef(name, args, body, meta)
 
+
+@st.composite
+def fpy_funcdef(
+    draw,
+    arg_types: tuple[Type, ...],
+    return_type: Type,
+    max_depth: st.SearchStrategy[int] | None = None,
+    max_assigns: st.SearchStrategy[int] | None = None,
+    max_contexts: st.SearchStrategy[int] | None = None,
+    *,
+    name: str = 'f',
+    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
+    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+) -> FuncDef:
+    """Generate a well-typed FPy function with the given signature.
+
+    ``arg_types`` and ``return_type`` may be any types accepted by :func:`expr`.
+    The body is a sequence of ``Assign`` statements (introducing scalar
+    locals ``t0..tM``) and ``ContextStmt`` (``with CTX:``) blocks, followed
+    by a ``ReturnStmt`` whose expression has type ``return_type``.
+    """
+    if max_depth is None:
+        max_depth = st.integers(0, 3)
+    if max_assigns is None:
+        max_assigns = st.integers(0, 3)
+    if max_contexts is None:
+        max_contexts = st.integers(0, 2)
+
+    depth = draw(max_depth)
+    k = draw(max_assigns)
+    c = draw(max_contexts)
+
+    arg_names = _make_arg_names(len(arg_types))
+    env: TypeEnv = dict(zip(arg_names, arg_types))
+    body = draw(_stmt_block(
+        env, return_type, depth, max_assigns=k, max_contexts=c,
+        range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+    ))
+    return _make_funcdef(name, arg_names, arg_types, body)
+
+
+def fpy_function(
+    arg_types: tuple[Type, ...],
+    return_type: Type,
+    max_depth: st.SearchStrategy[int] | None = None,
+    max_assigns: st.SearchStrategy[int] | None = None,
+    max_contexts: st.SearchStrategy[int] | None = None,
+    *,
+    name: str = 'f',
+    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
+    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+) -> st.SearchStrategy[fp.Function]:
+    """Same as :func:`fpy_funcdef` but wraps the AST in :class:`fp.Function`."""
+    return fpy_funcdef(
+        arg_types, return_type,
+        max_depth=max_depth, max_assigns=max_assigns, max_contexts=max_contexts,
+        name=name,
+        range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+    ).map(fp.Function)
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible real-only wrappers
+# ---------------------------------------------------------------------------
 
 @st.composite
 def fpy_real_funcdef(
@@ -774,38 +914,20 @@ def fpy_real_funcdef(
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
     range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
 ) -> FuncDef:
-    """Generate a well-typed FPy function ``f(x0..xN: Real) -> Real``.
+    """Generate ``f(x0..xN: Real) -> Real``.
 
-    The body is a sequence of ``Assign`` statements (introducing scalar
-    locals ``t0..tM``) and ``ContextStmt`` (``with CTX:``) blocks, followed
-    by a ``ReturnStmt`` of type ``real``. ``max_contexts`` (default 0–2)
-    caps the number of ``with`` blocks in the whole body (across all
-    nesting levels).
-
-    ``range_arg_min`` / ``range_arg_max`` are forwarded to the body's
-    expression strategies (see :func:`expr`).
+    Thin convenience wrapper around :func:`fpy_funcdef` for the
+    common all-real signature.
     """
     if num_args is None:
         num_args = st.integers(0, 3)
-    if max_depth is None:
-        max_depth = st.integers(0, 3)
-    if max_assigns is None:
-        max_assigns = st.integers(0, 3)
-    if max_contexts is None:
-        max_contexts = st.integers(0, 2)
-
     n = draw(num_args)
-    depth = draw(max_depth)
-    k = draw(max_assigns)
-    c = draw(max_contexts)
-
-    arg_names = _make_arg_names(n)
-    env: TypeEnv = {name: RealType() for name in arg_names}
-    body = draw(_stmt_block(
-        env, RealType(), depth, max_assigns=k, max_contexts=c,
+    arg_types: tuple[Type, ...] = tuple(RealType() for _ in range(n))
+    return draw(fpy_funcdef(
+        arg_types, RealType(),
+        max_depth=max_depth, max_assigns=max_assigns, max_contexts=max_contexts,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ))
-    return _make_funcdef('f', arg_names, body)
 
 
 def fpy_real_function(

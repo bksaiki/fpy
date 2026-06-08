@@ -23,15 +23,19 @@ from . import (
     CONTEXT_TAGS,
     LIST_TAGS,
     REAL_TAGS,
+    arbitrary_type,
     bool_expr,
     context_expr,
     expr,
+    fpy_funcdef,
+    fpy_function,
     fpy_real_funcdef,
     fpy_real_function,
     list_expr,
     real_expr,
     stmt_block,
     tuple_expr,
+    value_for_type,
 )
 from .number import real_floats
 
@@ -191,6 +195,51 @@ class TestAssignsAreVisible:
     def test_typechecks_with_locals_in_scope(self, fd: FuncDef) -> None:
         analysis = TypeInfer.check(fd)
         assert isinstance(analysis.return_type, RealType)
+
+
+class TestArbitraryFuncdef:
+    """Phase 6: ``fpy_funcdef`` with arbitrary signatures."""
+
+    @given(
+        st.data(),
+    )
+    @settings(max_examples=60, deadline=None)
+    def test_arbitrary_typed_funcdef_typechecks(self, data: st.DataObject) -> None:
+        # Draw a small random signature (1-3 args, all scalar-only for
+        # easier value generation in the runtime test below).
+        n_args = data.draw(st.integers(1, 3))
+        arg_ts = tuple(
+            data.draw(arbitrary_type(max_depth=1, scalar_only=True))
+            for _ in range(n_args)
+        )
+        ret_t = data.draw(arbitrary_type(max_depth=1, scalar_only=True))
+        fd = data.draw(fpy_funcdef(
+            arg_ts, ret_t,
+            max_depth=st.just(2),
+            max_assigns=st.just(1),
+            max_contexts=st.just(0),
+        ))
+        analysis = TypeInfer.check(fd)
+        assert tuple(analysis.arg_types) == arg_ts
+        assert analysis.return_type == ret_t
+
+    @given(st.data())
+    @settings(max_examples=60, deadline=None)
+    def test_arbitrary_typed_function_runs(self, data: st.DataObject) -> None:
+        n_args = data.draw(st.integers(0, 2))
+        arg_ts = tuple(
+            data.draw(arbitrary_type(max_depth=1, scalar_only=True))
+            for _ in range(n_args)
+        )
+        ret_t = data.draw(arbitrary_type(max_depth=1, scalar_only=True))
+        f = data.draw(fpy_function(
+            arg_ts, ret_t,
+            max_depth=st.just(2),
+            max_assigns=st.just(1),
+            max_contexts=st.just(0),
+        ))
+        inputs = [data.draw(value_for_type(t)) for t in arg_ts]
+        f(*inputs, ctx=fp.FP64)
 
 
 class TestContextExpr:
