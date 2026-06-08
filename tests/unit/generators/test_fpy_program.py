@@ -19,7 +19,12 @@ from fpy2.env import ForeignEnv
 from fpy2.types import BoolType, ListType, RealType, TupleType
 
 from . import (
+    BOOL_TAGS,
+    CONTEXT_TAGS,
+    LIST_TAGS,
+    REAL_TAGS,
     bool_expr,
+    context_expr,
     expr,
     fpy_real_funcdef,
     fpy_real_function,
@@ -186,6 +191,106 @@ class TestAssignsAreVisible:
     def test_typechecks_with_locals_in_scope(self, fd: FuncDef) -> None:
         analysis = TypeInfer.check(fd)
         assert isinstance(analysis.return_type, RealType)
+
+
+class TestContextExpr:
+    """Context-typed expressions: ``ForeignVal(<context>, None)`` literals."""
+
+    @given(context_expr({}, depth=0))
+    def test_yields_foreign_val(self, e: Expr) -> None:
+        from fpy2.ast.fpyast import ForeignVal
+        assert isinstance(e, ForeignVal)
+        import fpy2 as _fp
+        assert isinstance(e.val, _fp.Context)
+
+
+class TestContextStmt:
+    """Generated functions with ``with CTX:`` blocks should typecheck + run."""
+
+    @given(fpy_real_funcdef(
+        num_args=st.integers(0, 2),
+        max_depth=st.integers(0, 2),
+        max_assigns=st.integers(0, 2),
+        max_contexts=st.just(2),
+    ))
+    @settings(max_examples=80, deadline=None)
+    def test_with_contexts_typechecks(self, fd: FuncDef) -> None:
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, RealType)
+
+    @given(
+        fpy_real_function(
+            num_args=st.integers(0, 2),
+            max_depth=st.integers(0, 2),
+            max_assigns=st.integers(0, 2),
+            max_contexts=st.just(2),
+        ),
+        st.data(),
+    )
+    @settings(max_examples=80, deadline=None)
+    def test_with_contexts_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
+                  for _ in range(len(f.args))]
+        f(*inputs, ctx=fp.FP64)
+
+
+class TestIncludeNarrowing:
+    """``include`` filters which productions a helper emits."""
+
+    @given(real_expr({}, depth=3, include={'literal', 'arith'}))
+    def test_real_arith_only(self, e: Expr) -> None:
+        from fpy2.ast.fpyast import (
+            Abs, Add, Div, IfExpr, Len, Mul, Neg, NamedUnaryOp, Sub,
+        )
+        # No IfExpr, no Len, no transcendentals anywhere in the tree.
+        stack = [e]
+        while stack:
+            node = stack.pop()
+            assert not isinstance(node, (IfExpr, Len, NamedUnaryOp)), (
+                f"unexpected production survived include filter: {type(node).__name__}"
+            )
+            for attr in ('args', 'elts'):
+                if hasattr(node, attr):
+                    children = getattr(node, attr)
+                    if isinstance(children, (list, tuple)):
+                        stack.extend(c for c in children if isinstance(c, Expr))
+
+    @given(real_expr({}, depth=0, include={'literal'}))
+    def test_literal_only_leaf(self, e: Expr) -> None:
+        assert isinstance(e, Integer)
+
+    @given(bool_expr({}, depth=3, include={'literal', 'compare'}))
+    def test_bool_compare_only(self, e: Expr) -> None:
+        from fpy2.ast.fpyast import And, Not, Or
+        # No And/Or/Not — only literal leaves and Compare inner.
+        stack = [e]
+        while stack:
+            node = stack.pop()
+            assert not isinstance(node, (Not, And, Or)), (
+                f"unexpected production survived include filter: {type(node).__name__}"
+            )
+            for attr in ('args', 'elts'):
+                if hasattr(node, attr):
+                    children = getattr(node, attr)
+                    if isinstance(children, (list, tuple)):
+                        stack.extend(c for c in children if isinstance(c, Expr))
+
+    def test_unknown_tag_rejected(self) -> None:
+        import pytest as _pytest
+        with _pytest.raises(ValueError, match='unknown production tags'):
+            real_expr({}, depth=2, include={'bogus'})
+
+    def test_empty_include_with_no_leaves_rejected(self) -> None:
+        import pytest as _pytest
+        # No literal, no var in env ⇒ no leaves, no inner ⇒ nothing to produce.
+        with _pytest.raises(ValueError, match='produces nothing'):
+            real_expr({}, depth=0, include=set())
+
+    def test_tag_sets_exposed(self) -> None:
+        # Round-trip: include=all-tags is equivalent to include=None.
+        assert 'arith' in REAL_TAGS
+        assert 'compare' in BOOL_TAGS
+        assert 'range' in LIST_TAGS
 
 
 class TestRangeArgKwarg:
