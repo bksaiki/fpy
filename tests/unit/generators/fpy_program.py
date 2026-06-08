@@ -1,51 +1,48 @@
 """
 Type-directed Hypothesis generators for FPy programs.
 
-Phase 7 scope:
-- Five expression target types: ``RealType``, ``BoolType``, ``ListType``,
-  ``TupleType``, ``ContextType``, dispatched through :func:`expr`.
-- :func:`fpy_funcdef` accepts an arbitrary signature ``(arg_types, return_type)``.
-- :func:`arbitrary_type` / :func:`value_for_type` cover type-lattice fuzzing
-  and runtime input generation.
-- ``Round`` (tag ``'round'``) is in the real-expression pool.
-- Function bodies are ``StmtBlock``s of ``Assign`` + ``ContextStmt``
-  (``with CTX: ...``) + ``IfStmt`` / ``If1Stmt`` branches + ``ForStmt``
-  loops + ``WhileStmt`` loops + a terminating ``ReturnStmt``.
-  ``Assign``s inside a ``with`` body leak out to the enclosing scope
-  (matching FPy semantics); ``Assign``s inside ``if``/``else`` branches
-  and ``for``/``while`` bodies are *not* propagated to the outer scope
-  by the generator (a deliberate simplification). For-loop targets are
-  scoped strictly to the loop body. ``WhileStmt`` is emitted as a
-  fixed counter-driven template (``c = 0; while c < N: <body>; c = c + 1``)
-  to guarantee termination — the body is fuzzed but the cond/init/increment
-  are not. A single local-name counter is shared across the entire body
-  to avoid collisions even across branches.
-- Real ops: arithmetic (``Add`` / ``Sub`` / ``Mul`` / ``Div`` / ``Neg`` /
-  ``Abs``), named unary math (``Sqrt`` / ``Sin`` / ``Cos`` / ``Log`` /
-  ``Exp``), ``IfExpr``, and ``Len`` (list[real] → real).
-- Bool ops: ``BoolVal``, ``Compare``, real classification predicates
-  (``IsFinite`` / ``IsNan`` / ``IsInf`` / ``Signbit`` — ``IsNormal`` is
-  held back; see comment on ``_REAL_PREDICATES``), and ``Not`` / ``And`` /
-  ``Or``.
-- List ops: ``ListExpr`` constructor (1..4 elements of the target element
-  type); ``Range1`` / ``Range2`` for list[real].
-- Tuple ops: ``TupleExpr`` constructor; one sub-expression per declared
-  element type.
+The canonical entry point is :func:`expr` — given a target ``Type`` (real,
+bool, list, tuple, context), an environment, and a depth budget, returns a
+strategy producing a well-typed FPy expression. :func:`stmt_block` and
+:func:`fpy_funcdef` build on top of it to generate full statement blocks
+and function definitions whose declared signature is recoverable from the
+inferred types. Construction is AST-direct (``FuncDef`` nodes are built
+in code and fed to the same passes the ``@fp.fpy`` decorator pipeline
+runs) — the parser is **not** exercised here; the target audience is
+analysis passes and the interpreter.
 
-Deferred to later phases:
-- Control-flow statements (``IfStmt`` / ``ForStmt`` / ``WhileStmt``) — need
-  per-branch ``env`` merging for definitions that survive both branches.
-- List/tuple locals — need a more precise ``_var_of_type`` lookup that
-  matches element types, not just the outer constructor.
+Productions per target type are gated by string tags (see :data:`REAL_TAGS`
+etc.). Pass ``include={...}`` to narrow what a helper emits; tags
+propagate through same-type recursion but not across types. Per-call
+overrides for ``range_arg_min``/``range_arg_max`` bound the integer
+literals used as ``Range1``/``Range2`` arguments.
+
+Function bodies are ``StmtBlock``s of ``Assign`` + ``ContextStmt``
+(``with CTX: ...``) + ``IfStmt`` / ``If1Stmt`` + ``ForStmt`` + ``WhileStmt``
++ a terminating ``ReturnStmt``. Each ``max_*`` cap on :func:`stmt_block` /
+:func:`fpy_funcdef` bounds how many of that statement kind appear in a
+body. Local-name uniqueness is maintained by a single counter shared
+across the entire body (including nested ``with``/``if``/``for``/``while``
+bodies). Scoping rules:
+
+- ``Assign``s in a ``with`` body leak out to the enclosing scope (matches
+  FPy lexical scoping).
+- ``Assign``s in ``if`` branches and in ``for``/``while`` bodies do **not**
+  propagate to the outer scope — a deliberate simplification (sound
+  per-branch merging would require env intersection on shared defs).
+- For-loop targets are body-scoped (FPy rejects post-loop refs).
+- ``WhileStmt`` is emitted as a counter-driven template ``c = 0; while c < N:
+  <body>; c = c + 1`` to guarantee termination; only the body is fuzzed.
+
+Known-deferred surface (see inline comments for the why):
+
+- ``Cast`` — needs per-context exact-representable tracking.
+- ``IsNormal`` — workaround for an FPy ``ops.isnormal`` bug on context-less
+  integer Floats.
 - ``ListRef`` / ``ListSlice`` — need array-size tracking to stay in bounds.
-- ``ListComp``, tuple unpacking — need binding-aware generation.
-- ``Zip`` / ``Enumerate`` / ``Range3`` — straightforward incremental adds.
-- Empty ``ListExpr`` — would need a type annotation to disambiguate the
-  element type at the parser/inference boundary.
-
-Construction is AST-direct (we build ``FuncDef`` nodes and feed them into
-the same passes the ``@fp.fpy`` decorator pipeline runs), so the parser is
-*not* exercised here — the generator targets analyses and the interpreter.
+- ``ListComp``, ``IndexedAssign``, tuple-unpacking ``Assign``.
+- ``Range3`` and ``fp.REAL`` as a ``with``-context (math ops not implemented
+  under REAL).
 """
 
 from typing import TypeAlias
@@ -62,7 +59,6 @@ from fpy2.ast.fpyast import (
     Assign,
     BoolTypeAnn,
     BoolVal,
-    Cast,
     Compare,
     ContextStmt,
     ContextTypeAnn,
@@ -129,9 +125,7 @@ TypeEnv: TypeAlias = dict[NamedId, Type]
 _LITERAL_RANGE = (-1_000, 1_000)
 
 # Default inclusive bounds for ``Integer`` literals used as ``Range1`` /
-# ``Range2`` arguments. Per-call overrides are accepted on the public
-# strategies (``expr`` / ``list_expr`` / etc.); see the module docstring on
-# the planned ``GeneratorConfig`` migration once more knobs accumulate.
+# ``Range2`` arguments. Per-call overrides on the public strategies.
 _DEFAULT_RANGE_ARG_MIN = -5
 _DEFAULT_RANGE_ARG_MAX = 8
 
@@ -167,18 +161,14 @@ def _func_sym(name: str) -> Var:
 # ---------------------------------------------------------------------------
 # Each per-target generator gates its productions by tag membership. Pass
 # ``include={'literal', 'arith'}`` to a helper to narrow what it emits.
-# Tags propagate through *same-type* recursion (a narrowed ``_real_expr``
-# recursing into its own real subexpressions stays narrowed) but **not**
-# across types — ``_real_expr(include={'arith'})`` still calls
-# ``_bool_expr`` with all bool productions enabled. Cross-type narrowing is
-# part of the Phase 5+ config-bag refactor.
+# Tags propagate through same-type recursion but not across types
+# (a narrowed ``_real_expr`` still calls ``_bool_expr`` with bool defaults).
 
 REAL_TAGS: frozenset[str] = frozenset({
     'literal', 'var', 'arith', 'if_expr', 'len', 'named_unary', 'round',
 })
 """All production tags supported by :func:`real_expr`. ``round`` enables
-``Round`` (round to current context). ``Cast`` is deferred — see the
-comment in ``_real_expr`` for why."""
+``Round`` only — ``Cast`` is deferred (see ``_real_expr``)."""
 
 BOOL_TAGS: frozenset[str] = frozenset({
     'literal', 'var', 'compare', 'predicate', 'not', 'and_or',
@@ -200,14 +190,8 @@ CONTEXT_TAGS: frozenset[str] = frozenset({'literal'})
 """All production tags supported by :func:`context_expr`."""
 
 # Concrete rounding contexts the generator can drop into ``with`` blocks.
-# Kept small and varied (one EFloat alongside the IEEE ones).
-#
-# ``fp.REAL`` is intentionally excluded: many ops are not implemented for it
-# (``sqrt`` / ``sin`` / ``log`` / ``div`` raise ``NotImplementedError``
-# because there's no closed-form rational result), so a generated
-# ``with REAL: t = sqrt(0)`` would always crash. The runtime ctx passed to
-# the interpreter for top-level calls is a separate concern — that
-# defaults to FP64 in the test harness.
+# ``fp.REAL`` is excluded — ``sqrt``/``sin``/``log``/``div`` raise under it
+# (no closed-form rational result), so ``with REAL: t = sqrt(0)`` would crash.
 _DEFAULT_CONTEXTS: list = [fp.FP64, fp.FP32, fp.MX_E5M2, fp.MX_E4M3]
 
 
@@ -306,18 +290,11 @@ def _real_expr(
         if 'named_unary' in use:
             inner.extend(_named_unary(cls, name) for cls, name in _REAL_NAMED_UNARY)
         if 'round' in use:
-            # ``Round`` rounds the argument to the current dynamic context.
-            # It type-checks whether or not a ``with`` block is in scope —
-            # the absent-context default is the runtime ctx passed to the
-            # interpreter (``REAL`` by default).
-            #
-            # ``Cast`` is intentionally *not* generated here: it rounds and
-            # then asserts the result is exact, which fails any time the
-            # value isn't already representable in the current context
-            # (e.g. ``cast(9)`` under E5M2 raises ``ValueError`` because 9
-            # has 4 significant bits while E5M2 has 3). Sound ``Cast``
-            # generation would require tracking each context's
-            # exact-representable set per value — out of scope for now.
+            # ``Cast`` is deliberately not generated: it asserts the
+            # rounded value is exact, which fails whenever the value
+            # isn't already representable in the active context (e.g.
+            # ``cast(9)`` under E5M2). Sound generation would need a
+            # per-context exact-representable check per literal.
             round_sym = _func_sym('round')
             inner.append(sub_real.map(lambda x: Round(round_sym, x, None)))
 
@@ -335,11 +312,9 @@ def _real_expr(
 
 _COMPARE_OPS = list(CompareOp)
 
-# TODO: re-enable ``IsNormal`` once ``ops.isnormal`` handles context-less
-# integer Floats. Currently ``isnormal(<int literal>)`` raises ``ValueError``
-# from ``Float.is_normal`` (floats.py:616) because the Float has no context;
-# the other four predicates handle the same input fine. Generator-side fuzz
-# initially surfaced this from a generated function like ``isnormal(735)``.
+# ``IsNormal`` is omitted: ``ops.isnormal`` crashes on context-less integer
+# Floats (e.g. ``isnormal(735)``) via ``Float.is_normal`` (floats.py:616) —
+# the generator surfaced this; restore once that path handles plain integers.
 _REAL_PREDICATES: list[tuple[type[NamedUnaryOp], str]] = [
     (IsFinite, 'isfinite'),
     (IsInf, 'isinf'),
@@ -415,12 +390,8 @@ def _bool_expr(
 # ---------------------------------------------------------------------------
 
 _LIST_LITERAL_LEN = (1, 4)
-"""Inclusive size range for ``ListExpr`` literals.
-
-Min size 1 because an empty ``ListExpr`` has no element to anchor inference
-to the requested element type. (Once we generate type annotations on
-``Assign`` we can lift this.)
-"""
+"""Inclusive size range for ``ListExpr`` literals. Min size 1 — an empty
+``ListExpr`` has no element to anchor inference to the requested elt type."""
 
 
 def _list_expr(
@@ -458,10 +429,8 @@ def _list_expr(
             productions.append(var_strat)
 
     if 'range' in use and depth > 0 and isinstance(elt_type, RealType):
-        # Range1/Range2 always produce list[real]; only enable them when the
-        # element target matches. The interpreter rejects non-integer arguments
-        # to ``range`` (e.g. ``range(log(0)) == range(-inf)`` raises), so we
-        # restrict the arguments to small ``Integer`` literals.
+        # Args restricted to ``Integer`` literals: the interpreter rejects
+        # non-integer ``range`` args (e.g. ``range(log(0)) == range(-inf)``).
         range_sym = _func_sym('range')
         small_int = st.integers(range_arg_min, range_arg_max).map(
             lambda n: Integer(n, None)
@@ -472,16 +441,8 @@ def _list_expr(
         ))
 
     if 'zip' in use and depth > 0 and isinstance(elt_type, TupleType) and elt_type.elts:
-        # zip(xs1, ..., xsN) : list[tuple[t1, ..., tN]] where xsi: list[ti].
-        # Skip the 0-arg edge case (``zip()`` is syntactically rejected by
-        # the parser and semantically degenerate).
-        #
-        # FPy's ``zip`` is strict on length mismatch (unlike Python's default
-        # zip — see ``ValueError: zip() argument N is shorter than ...``),
-        # so we force every arg to be a ``ListExpr`` literal of a shared
-        # length drawn in [1, 4]. This sidesteps the question of whether
-        # arbitrary list-producers (range, var, recursive list_expr) end up
-        # the same length at runtime.
+        # FPy's ``zip`` is length-strict (unlike Python's default), so every
+        # arg is a ``ListExpr`` literal of a shared drawn length.
         zip_sym = _func_sym('zip')
         elt_strats = [
             expr(
@@ -584,22 +545,14 @@ def _ctx_expr(
     range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
     range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
 ) -> st.SearchStrategy[Expr]:
-    """Strategy for an FPy expression of type ``context`` under ``env``.
+    """Strategy for an FPy expression of type ``context``.
 
-    See :data:`CONTEXT_TAGS` for the supported ``include`` values. Currently
-    the only production is a ``ForeignVal`` literal sampled from
-    :data:`_DEFAULT_CONTEXTS`. (``range_arg_*`` are accepted for API
-    symmetry but unused; the kwargs forwarding doesn't propagate into
-    context expressions.)
+    Only production: ``ForeignVal`` of a value from :data:`_DEFAULT_CONTEXTS`.
+    ``env``/``depth``/``range_arg_*`` are accepted for API symmetry.
     """
-    del env, depth, range_arg_min, range_arg_max  # accepted for API symmetry
+    del env, depth, range_arg_min, range_arg_max
     _resolve_include(include, CONTEXT_TAGS)  # validation only
-
-    productions: list[st.SearchStrategy[Expr]] = []
-    productions.append(
-        st.sampled_from(_DEFAULT_CONTEXTS).map(lambda c: ForeignVal(c, None))
-    )
-    return st.one_of(*productions)
+    return st.sampled_from(_DEFAULT_CONTEXTS).map(lambda c: ForeignVal(c, None))
 
 
 # ---------------------------------------------------------------------------
@@ -735,8 +688,7 @@ def context_expr(
 # ---------------------------------------------------------------------------
 
 # Default type strategy for ``Assign`` locals: scalars + small compound
-# types (depth-1 lists/tuples of scalars). Callers can override via
-# ``_stmt_block(..., local_types=<strategy>)`` to narrow or widen.
+# types (depth-1 lists/tuples of scalars). Overridable via ``local_types``.
 def _default_local_types() -> st.SearchStrategy[Type]:
     return arbitrary_type(max_depth=1)
 
@@ -760,34 +712,18 @@ def _stmt_block(
 ) -> StmtBlock:
     """Generate a ``StmtBlock`` ending in a ``ReturnStmt``.
 
-    Before the terminating return, the block contains:
+    Before the return, the block contains up to ``max_assigns`` ``Assign``,
+    ``max_contexts`` ``ContextStmt``, ``max_ifs`` ``IfStmt``/``If1Stmt``,
+    ``max_loops`` ``ForStmt`` (over ``range(small_int)`` with a fresh
+    real-typed loop var), and ``max_whiles`` ``WhileStmt`` (counter-driven
+    template ``c = 0; while c < N: <body>; c = c + 1``).
 
-    - up to ``max_assigns`` ``Assign`` statements (introducing fresh
-      ``{local_prefix}{i}`` locals); the local's type is drawn from
-      ``local_types``, which defaults to :func:`arbitrary_type` at depth 1
-      (scalars plus depth-1 lists/tuples). Pass ``st.just(RealType())``
-      etc. to narrow.
-    - up to ``max_contexts`` ``ContextStmt`` (``with CTX:``) blocks; locals
-      inside a ``with`` body leak out to the enclosing scope (FPy semantics);
-    - up to ``max_ifs`` ``IfStmt`` / ``If1Stmt`` branches; locals inside
-      branches do **not** propagate to the outer scope in this generator
-      (deliberate simplification — sound branch-merging would require
-      per-branch env intersection on shared definitions);
-    - up to ``max_loops`` ``ForStmt`` loops over ``range(small_int)`` (with
-      a fresh ``real``-typed loop variable); the loop variable and any
-      body-local ``Assign``s are scoped strictly to the loop body and do
-      **not** leak after the loop (FPy rejects post-loop references to
-      the loop target).
-    - up to ``max_whiles`` ``WhileStmt`` loops. To guarantee termination,
-      each ``while`` is a fixed structural template: ``c = 0; while c < N:
-      <body>; c = c + 1`` (the counter is fresh, the bound is a small
-      integer literal). The counter binding leaks out (matching FPy
-      semantics); body-locals do not.
-
-    A single local-name counter is shared across the entire body (including
-    every nested ``with``/``if``/``for`` body), so names never collide.
-    ``depth`` bounds the rhs expression depth; nested sub-bodies use
-    ``depth - 1``.
+    Scoping (see module docstring for the rationale): ``with``-body assigns
+    leak out, ``if`` / ``for`` / ``while`` body assigns don't; for-loop
+    targets and while-body locals are body-scoped, while counters leak.
+    Local names are issued from a single counter shared across all nested
+    bodies. ``local_types`` overrides the Assign-local type strategy
+    (defaults to :func:`arbitrary_type` at depth 1).
     """
     if local_types is None:
         local_types = _default_local_types()
@@ -834,9 +770,9 @@ def _stmt_block(
                     inner_env, sub_depth - 1,
                     max(1, max_n // 2),
                     ctx_budget - 1, if_budget, loop_budget, while_budget,
-                    min_n=1,  # avoid an empty `with`-body
+                    min_n=1,
                 )
-                # ``Assign``s inside `with` leak out per FPy lexical scoping.
+                # With-body assigns leak out (FPy lexical scoping).
                 for k, v in inner_env.items():
                     if k not in env_local:
                         env_local[k] = v
@@ -849,10 +785,8 @@ def _stmt_block(
             elif kind == 'if':
                 cond = draw(_bool_expr(env_local, sub_depth, **kw_expr))
                 two_armed = draw(st.booleans())
-                # Each branch sees a copy of env; new bindings stay inside
-                # the branch and don't propagate to the outer scope. The
-                # shared name counter still prevents collisions across
-                # branches and with the outer body.
+                # Branch locals do not propagate out; the shared counter
+                # still prevents cross-branch collisions.
                 ift_env = dict(env_local)
                 ift_stmts = gen_stmts(
                     ift_env, sub_depth - 1,
@@ -876,8 +810,6 @@ def _stmt_block(
                 if_budget -= 1
 
             elif kind == 'for':
-                # Iterate over ``range(small_int)``; loop var is real-typed.
-                # Same range-arg-bound knob as the list-expr generator.
                 bound = draw(st.integers(range_arg_min, range_arg_max))
                 iterable = Range1(range_sym, Integer(bound, None), None)
                 loop_var = fresh_local()
@@ -889,32 +821,25 @@ def _stmt_block(
                     ctx_budget, if_budget, loop_budget - 1, while_budget,
                     min_n=1,
                 )
-                # Loop var and body-locals are scoped to the body — do NOT
-                # propagate to env_local (FPy rejects post-loop references
-                # to the loop target).
+                # Loop var and body locals are body-scoped — don't leak.
                 stmts.append(ForStmt(
                     loop_var, iterable, StmtBlock(loop_stmts), None,
                 ))
                 loop_budget -= 1
 
             elif kind == 'while':
-                # Counter-driven template: guarantees termination.
-                # Bound capped at 4 iterations to keep tests fast.
+                # Counter-driven template guarantees termination.
                 bound = draw(st.integers(0, 4))
                 counter = fresh_local()
-                # Pre-init the counter (leaks into env_local).
                 stmts.append(Assign(counter, None, Integer(0, None), None))
                 env_local[counter] = RealType()
-                # Generate the body in a fresh env copy so body-locals
-                # don't leak (matches our `for` treatment).
                 body_env = dict(env_local)
                 body_stmts = gen_stmts(
                     body_env, sub_depth - 1,
                     max(1, max_n // 2),
                     ctx_budget, if_budget, loop_budget, while_budget - 1,
-                    min_n=0,  # empty body is fine; counter still terminates
+                    min_n=0,
                 )
-                # Append the increment (last statement in body).
                 inc = Assign(
                     counter, None,
                     Add(Var(counter, None), Integer(1, None), None), None,
@@ -1091,19 +1016,13 @@ def fpy_funcdef(
     if max_whiles is None:
         max_whiles = st.integers(0, 2)
 
-    depth = draw(max_depth)
-    k = draw(max_assigns)
-    c = draw(max_contexts)
-    i = draw(max_ifs)
-    l = draw(max_loops)
-    w = draw(max_whiles)
-
     arg_names = _make_arg_names(len(arg_types))
     env: TypeEnv = dict(zip(arg_names, arg_types))
     body = draw(_stmt_block(
-        env, return_type, depth,
-        max_assigns=k, max_contexts=c, max_ifs=i,
-        max_loops=l, max_whiles=w,
+        env, return_type, draw(max_depth),
+        max_assigns=draw(max_assigns), max_contexts=draw(max_contexts),
+        max_ifs=draw(max_ifs), max_loops=draw(max_loops),
+        max_whiles=draw(max_whiles),
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ))
     return _make_funcdef(name, arg_names, arg_types, body)
@@ -1135,7 +1054,7 @@ def fpy_function(
 
 
 # ---------------------------------------------------------------------------
-# Backwards-compatible real-only wrappers
+# All-real-signature convenience wrappers
 # ---------------------------------------------------------------------------
 
 @st.composite

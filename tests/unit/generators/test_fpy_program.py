@@ -16,11 +16,10 @@ from fpy2.ast.fpyast import (
     StmtBlock, TupleExpr,
 )
 from fpy2.env import ForeignEnv
-from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType  # noqa: F401
+from fpy2.types import BoolType, ListType, RealType, TupleType
 
 from . import (
     BOOL_TAGS,
-    CONTEXT_TAGS,
     LIST_TAGS,
     REAL_TAGS,
     arbitrary_type,
@@ -160,15 +159,12 @@ class TestTupleExprStrategyDirectly:
 
 
 class TestStmtBlock:
-    """Statement-block generator: ``Assign``* ``ReturnStmt``."""
+    """Statement-block generator."""
 
     @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
     def test_ends_with_return(self, block) -> None:
-        from fpy2.ast.fpyast import Assign, ReturnStmt
+        from fpy2.ast.fpyast import ReturnStmt
         assert isinstance(block.stmts[-1], ReturnStmt)
-        # everything before the return is an Assign in this phase
-        for s in block.stmts[:-1]:
-            assert isinstance(s, Assign)
 
     @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
     def test_typechecks_when_wrapped(self, block) -> None:
@@ -198,7 +194,7 @@ class TestAssignsAreVisible:
 
 
 class TestCompoundLocals:
-    """Phase 9: ``Assign`` locals can have compound types (list/tuple)."""
+    """``Assign`` locals can have compound types (list/tuple)."""
 
     @given(stmt_block(
         {}, RealType(), depth=2,
@@ -260,7 +256,7 @@ class TestCompoundLocals:
 
 
 class TestForStmt:
-    """Phase 8: ``ForStmt`` (``for i in range(N): ...``) in bodies."""
+    """``ForStmt`` (``for i in range(N): ...``) in bodies."""
 
     @given(fpy_real_funcdef(
         num_args=st.integers(0, 2),
@@ -294,7 +290,7 @@ class TestForStmt:
 
 
 class TestWhileStmt:
-    """Phase 10: ``WhileStmt`` (counter-driven template) in bodies."""
+    """``WhileStmt`` (counter-driven template) in bodies."""
 
     @given(fpy_real_funcdef(
         num_args=st.integers(0, 2),
@@ -330,7 +326,7 @@ class TestWhileStmt:
 
 
 class TestAllControlFlow:
-    """Phase 10: every statement kind enabled simultaneously."""
+    """every statement kind enabled simultaneously."""
 
     @given(
         fpy_real_function(
@@ -352,7 +348,7 @@ class TestAllControlFlow:
 
 
 class TestIfStmt:
-    """Phase 7: ``IfStmt`` / ``If1Stmt`` inside generated function bodies."""
+    """``IfStmt`` / ``If1Stmt`` inside generated function bodies."""
 
     @given(fpy_real_funcdef(
         num_args=st.integers(0, 2),
@@ -384,7 +380,7 @@ class TestIfStmt:
 
 
 class TestZipEnumerate:
-    """Phase 11: ``Zip`` / ``Enumerate`` productions in ``list_expr``."""
+    """``Zip`` / ``Enumerate`` productions in ``list_expr``."""
 
     @given(list_expr(TupleType(RealType(), RealType()), {}, depth=3))
     def test_pair_tuple_target_typechecks(self, e: Expr) -> None:
@@ -420,7 +416,7 @@ class TestZipEnumerate:
 
 
 class TestArbitraryFuncdef:
-    """Phase 6: ``fpy_funcdef`` with arbitrary signatures."""
+    """``fpy_funcdef`` with arbitrary signatures."""
 
     @given(
         st.data(),
@@ -511,7 +507,7 @@ class TestIncludeNarrowing:
     @given(real_expr({}, depth=3, include={'literal', 'arith'}))
     def test_real_arith_only(self, e: Expr) -> None:
         from fpy2.ast.fpyast import (
-            Abs, Add, Div, IfExpr, Len, Mul, Neg, NamedUnaryOp, Sub,
+            IfExpr, Len, NamedUnaryOp,
         )
         # No IfExpr, no Len, no transcendentals anywhere in the tree.
         stack = [e]

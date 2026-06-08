@@ -1,18 +1,26 @@
 """
 Unit tests for format analysis.
+
+``TestFormatInfer`` covers handwritten cases; ``TestFormatInferOnGeneratedPrograms``
+runs property tests driven by the type-directed FPy program generator.
 """
 
 import fpy2 as fp
 import pytest
 
 from fractions import Fraction
-from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
+from hypothesis import given, settings, strategies as st
+
+from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis, TypeInfer
 from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat, TupleFormat
 from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
 from fpy2.analysis.reaching_defs import AssignDef
-from fpy2.ast.fpyast import IndexedAssign
+from fpy2.ast.fpyast import FuncDef, IndexedAssign
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
+from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType
+
+from ..generators import fpy_real_funcdef
 
 
 class TestFormatInfer:
@@ -1407,18 +1415,9 @@ class TestFormatInfer:
 # Property tests driven by the type-directed generator
 # ---------------------------------------------------------------------------
 
-from hypothesis import given, settings, strategies as st  # noqa: E402
-
-from fpy2.analysis import TypeInfer  # noqa: E402
-from fpy2.ast.fpyast import FuncDef  # noqa: E402
-from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType  # noqa: E402
-
-from ..generators import fpy_real_funcdef  # noqa: E402
-
-
-# Generator config used across the property tests. Real-only signature
-# keeps the runtime checks simple; every statement kind is enabled so
-# the analysis sees branches, loops, with-blocks, and compound locals.
+# Generator config used across the property tests. Every statement kind
+# enabled so the analysis sees branches, loops, with-blocks, and compound
+# locals.
 _GEN_KWARGS = dict(
     num_args=st.integers(0, 2),
     max_depth=st.integers(0, 2),
