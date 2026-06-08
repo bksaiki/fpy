@@ -19,3 +19,10 @@ from .context import (
 
 from .round import overflow_modes, rounding_modes
 from .number import real_floats, floats
+
+from .fpy_program import (
+    TypeEnv,
+    real_expr,
+    fpy_real_funcdef,
+    fpy_real_function,
+)
