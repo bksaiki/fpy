@@ -1,21 +1,30 @@
 """
 Type-directed Hypothesis generators for FPy programs.
 
-Phase 2 scope:
-- Two target types: ``RealType`` and ``BoolType``, dispatched through a
-  single :func:`expr` entry point.
+Phase 3 scope:
+- Four target types: ``RealType``, ``BoolType``, ``ListType``, ``TupleType``,
+  dispatched through a single :func:`expr` entry point.
 - One construction shape: a ``FuncDef`` with N real-typed parameters and a
-  single ``ReturnStmt`` whose expression has type ``real``. (Bool sub-terms
-  only appear inside ``IfExpr`` conditions and as the input/output of
-  ``Compare`` / classification predicates — no bool-typed parameters yet.)
-- Real ops: ``Integer`` literals, parameter ``Var`` references, arithmetic
-  (``Add`` / ``Sub`` / ``Mul`` / ``Div`` / ``Neg`` / ``Abs``), a small set
-  of named unary math ops (``Sqrt`` / ``Sin`` / ``Cos`` / ``Log`` / ``Exp``),
-  and ``IfExpr``.
-- Bool ops: ``BoolVal`` literals, ``Compare`` over real subexprs, real
-  classification predicates (``IsFinite`` / ``IsNan`` / ``IsInf`` /
-  ``IsNormal`` / ``Signbit``), and the boolean connectives ``Not`` /
-  ``And`` / ``Or``.
+  single ``ReturnStmt`` whose expression has type ``real``. The list/tuple
+  generators are reachable as direct targets (for testing the dispatcher)
+  and indirectly through ``Len`` in the real-expression path.
+- Real ops: arithmetic (``Add`` / ``Sub`` / ``Mul`` / ``Div`` / ``Neg`` /
+  ``Abs``), named unary math (``Sqrt`` / ``Sin`` / ``Cos`` / ``Log`` /
+  ``Exp``), ``IfExpr``, and ``Len`` (list[real] → real).
+- Bool ops: ``BoolVal``, ``Compare``, real classification predicates
+  (``IsFinite`` / ``IsNan`` / ``IsInf`` / ``IsNormal`` / ``Signbit``), and
+  ``Not`` / ``And`` / ``Or``.
+- List ops: ``ListExpr`` constructor (1..4 elements of the target element
+  type); ``Range1`` / ``Range2`` for list[real].
+- Tuple ops: ``TupleExpr`` constructor; one sub-expression per declared
+  element type.
+
+Deferred to later phases:
+- ``ListRef`` / ``ListSlice`` — need array-size tracking to stay in bounds.
+- ``ListComp``, tuple unpacking — need binding-aware generation / statements.
+- ``Zip`` / ``Enumerate`` / ``Range3`` — straightforward incremental adds.
+- Empty ``ListExpr`` — would need a type annotation to disambiguate the
+  element type at the parser/inference boundary.
 
 Construction is AST-direct (we build ``FuncDef`` nodes and feed them into
 the same passes the ``@fp.fpy`` decorator pipeline runs), so the parser is
@@ -47,12 +56,16 @@ from fpy2.ast.fpyast import (
     IsInf,
     IsNan,
     IsNormal,
+    Len,
+    ListExpr,
     Log,
     Mul,
     Neg,
     NamedUnaryOp,
     Not,
     Or,
+    Range1,
+    Range2,
     RealTypeAnn,
     ReturnStmt,
     Signbit,
@@ -60,9 +73,10 @@ from fpy2.ast.fpyast import (
     Sqrt,
     StmtBlock,
     Sub,
+    TupleExpr,
     Var,
 )
-from fpy2.types import BoolType, RealType, Type
+from fpy2.types import BoolType, ListType, RealType, TupleType, Type
 from fpy2.env import ForeignEnv
 from fpy2.utils import CompareOp, NamedId
 
@@ -149,6 +163,13 @@ def _real_expr(env: TypeEnv, depth: int) -> st.SearchStrategy[Expr]:
         lambda cab: IfExpr(cab[0], cab[1], cab[2], None)
     )
 
+    # Len(list[real]) → real. Other list-elt types would also typecheck, but
+    # list[real] keeps the recursion shape simple; widen later if needed.
+    sub_real_list = _list_expr(RealType(), env, depth - 1)
+    len_strat = sub_real_list.map(
+        lambda xs: Len(_func_sym('len'), xs, None)
+    )
+
     inner: list[st.SearchStrategy[Expr]] = [
         _binop(Add),
         _binop(Sub),
@@ -157,6 +178,7 @@ def _real_expr(env: TypeEnv, depth: int) -> st.SearchStrategy[Expr]:
         _unop(Neg),
         _unop(Abs),
         if_expr,
+        len_strat,
     ]
     inner.extend(_named_unary(cls, name) for cls, name in _REAL_NAMED_UNARY)
     return st.one_of(*leaves, *inner)
@@ -218,6 +240,59 @@ def _bool_expr(env: TypeEnv, depth: int) -> st.SearchStrategy[Expr]:
 
 
 # ---------------------------------------------------------------------------
+# List- and tuple-typed expressions
+# ---------------------------------------------------------------------------
+
+_LIST_LITERAL_LEN = (1, 4)
+"""Inclusive size range for ``ListExpr`` literals.
+
+Min size 1 because an empty ``ListExpr`` has no element to anchor inference
+to the requested element type. (Once we generate type annotations on
+``Assign`` we can lift this.)
+"""
+
+
+def _list_expr(
+    elt_type: Type, env: TypeEnv, depth: int
+) -> st.SearchStrategy[Expr]:
+    """Strategy for a ``list[elt_type]`` expression under ``env``."""
+    elt_strat = expr(elt_type, env, max(0, depth - 1))
+    list_literal = st.lists(
+        elt_strat, min_size=_LIST_LITERAL_LEN[0], max_size=_LIST_LITERAL_LEN[1],
+    ).map(lambda xs: ListExpr(xs, None))
+
+    if depth <= 0:
+        return list_literal
+
+    inner: list[st.SearchStrategy[Expr]] = [list_literal]
+    if isinstance(elt_type, RealType):
+        # Range1/Range2 always produce list[real]; only enable them when the
+        # element target matches.
+        sub_real = _real_expr(env, depth - 1)
+        range_sym = _func_sym('range')
+        inner.append(sub_real.map(lambda n: Range1(range_sym, n, None)))
+        inner.append(st.tuples(sub_real, sub_real).map(
+            lambda ab: Range2(range_sym, ab[0], ab[1], None)
+        ))
+    return st.one_of(*inner)
+
+
+def _tuple_expr(
+    elt_types: tuple[Type, ...], env: TypeEnv, depth: int
+) -> st.SearchStrategy[Expr]:
+    """Strategy for a ``tuple[*elt_types]`` expression under ``env``.
+
+    One sub-expression per declared element type; element types may differ.
+    """
+    sub_depth = max(0, depth - 1)
+    elt_strats = [expr(t, env, sub_depth) for t in elt_types]
+    if not elt_strats:
+        # tuple[] — degenerate case; emit an empty TupleExpr.
+        return st.just(TupleExpr([], None))
+    return st.tuples(*elt_strats).map(lambda elts: TupleExpr(list(elts), None))
+
+
+# ---------------------------------------------------------------------------
 # Type-dispatched expression strategy
 # ---------------------------------------------------------------------------
 
@@ -226,15 +301,20 @@ def expr(target: Type, env: TypeEnv, depth: int) -> st.SearchStrategy[Expr]:
 
     This is the canonical type-directed entry point. ``depth`` bounds the
     nesting depth of compound operations; at ``depth == 0`` only leaves
-    (literals and variable references) are produced.
+    (literals and variable references for scalars, or single-level
+    constructors for compound types) are produced.
 
     Raises :class:`NotImplementedError` for type targets not yet supported
-    (e.g. ``TupleType`` / ``ListType`` / ``ContextType``).
+    (e.g. ``ContextType``, ``FunctionType``).
     """
     if isinstance(target, RealType):
         return _real_expr(env, depth)
     if isinstance(target, BoolType):
         return _bool_expr(env, depth)
+    if isinstance(target, ListType):
+        return _list_expr(target.elt, env, depth)
+    if isinstance(target, TupleType):
+        return _tuple_expr(target.elts, env, depth)
     raise NotImplementedError(f'no generator for target type {target.format()}')
 
 
@@ -246,6 +326,20 @@ def real_expr(env: TypeEnv, depth: int) -> st.SearchStrategy[Expr]:
 def bool_expr(env: TypeEnv, depth: int) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(BoolType(), env, depth)``."""
     return _bool_expr(env, depth)
+
+
+def list_expr(
+    elt_type: Type, env: TypeEnv, depth: int
+) -> st.SearchStrategy[Expr]:
+    """Convenience wrapper for ``expr(ListType(elt_type), env, depth)``."""
+    return _list_expr(elt_type, env, depth)
+
+
+def tuple_expr(
+    elt_types: tuple[Type, ...], env: TypeEnv, depth: int
+) -> st.SearchStrategy[Expr]:
+    """Convenience wrapper for ``expr(TupleType(*elt_types), env, depth)``."""
+    return _tuple_expr(elt_types, env, depth)
 
 
 # ---------------------------------------------------------------------------

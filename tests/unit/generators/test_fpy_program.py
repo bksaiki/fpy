@@ -11,17 +11,29 @@ import fpy2 as fp
 from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis.type_infer import TypeInfer
-from fpy2.ast.fpyast import BoolVal, Expr, FuncDef, Integer
-from fpy2.types import BoolType, RealType
+from fpy2.ast.fpyast import (
+    BoolVal, Expr, FuncDef, FuncMeta, Integer, ListExpr, ReturnStmt,
+    StmtBlock, TupleExpr,
+)
+from fpy2.env import ForeignEnv
+from fpy2.types import BoolType, ListType, RealType, TupleType
 
 from . import (
     bool_expr,
     expr,
     fpy_real_funcdef,
     fpy_real_function,
+    list_expr,
     real_expr,
+    tuple_expr,
 )
 from .number import real_floats
+
+
+def _wrap_as_funcdef(body_expr: Expr) -> FuncDef:
+    body = StmtBlock([ReturnStmt(body_expr, None)])
+    meta = FuncMeta(set(), None, None, {}, ForeignEnv.default())
+    return FuncDef('f', [], body, meta)
 
 
 class TestGeneratedTypeChecks:
@@ -85,18 +97,56 @@ class TestBoolExprStrategyDirectly:
     def test_typechecks_as_bool_inside_if_expr(self, cond: Expr) -> None:
         # Wrap as `return cond if True else 0` — if `cond` doesn't type as
         # bool the surrounding function fails to type-check.
-        from fpy2.ast.fpyast import (
-            FuncMeta, IfExpr, ReturnStmt, StmtBlock,
+        from fpy2.ast.fpyast import IfExpr
+        fd = _wrap_as_funcdef(
+            IfExpr(cond, Integer(1, None), Integer(0, None), None)
         )
-        from fpy2.env import ForeignEnv
-        body = StmtBlock([ReturnStmt(
-            IfExpr(cond, Integer(1, None), Integer(0, None), None),
-            None,
-        )])
-        meta = FuncMeta(set(), None, None, {}, ForeignEnv.default())
-        fd = FuncDef('f', [], body, meta)
         analysis = TypeInfer.check(fd)
         assert isinstance(analysis.return_type, RealType)
+
+
+class TestListExprStrategyDirectly:
+    """Exercise ``list_expr`` and verify produced lists are well-typed."""
+
+    @given(list_expr(RealType(), {}, depth=0))
+    def test_depth0_is_a_list_literal(self, e: Expr) -> None:
+        assert isinstance(e, ListExpr)
+        assert len(e.elts) >= 1
+
+    @given(list_expr(RealType(), {}, depth=3))
+    def test_typechecks_as_list_real(self, e: Expr) -> None:
+        fd = _wrap_as_funcdef(e)
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, ListType)
+        assert isinstance(analysis.return_type.elt, RealType)
+
+    @given(list_expr(BoolType(), {}, depth=2))
+    def test_typechecks_as_list_bool(self, e: Expr) -> None:
+        fd = _wrap_as_funcdef(e)
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, ListType)
+        assert isinstance(analysis.return_type.elt, BoolType)
+
+
+class TestTupleExprStrategyDirectly:
+    """Exercise ``tuple_expr`` and verify produced tuples are well-typed."""
+
+    @given(tuple_expr((RealType(), RealType()), {}, depth=0))
+    def test_pair_of_reals(self, e: Expr) -> None:
+        assert isinstance(e, TupleExpr)
+        assert len(e.elts) == 2
+        fd = _wrap_as_funcdef(e)
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, TupleType)
+        assert all(isinstance(t, RealType) for t in analysis.return_type.elts)
+
+    @given(tuple_expr((RealType(), BoolType()), {}, depth=2))
+    def test_heterogeneous_pair_typechecks(self, e: Expr) -> None:
+        fd = _wrap_as_funcdef(e)
+        analysis = TypeInfer.check(fd)
+        assert isinstance(analysis.return_type, TupleType)
+        assert isinstance(analysis.return_type.elts[0], RealType)
+        assert isinstance(analysis.return_type.elts[1], BoolType)
 
 
 class TestTypeDispatch:
@@ -109,3 +159,12 @@ class TestTypeDispatch:
     @given(expr(BoolType(), {}, depth=0))
     def test_bool_dispatch_yields_bool_leaf(self, e: Expr) -> None:
         assert isinstance(e, BoolVal)
+
+    @given(expr(ListType(RealType()), {}, depth=0))
+    def test_list_dispatch_yields_list_literal(self, e: Expr) -> None:
+        assert isinstance(e, ListExpr)
+
+    @given(expr(TupleType(RealType(), BoolType()), {}, depth=0))
+    def test_tuple_dispatch_yields_tuple_expr(self, e: Expr) -> None:
+        assert isinstance(e, TupleExpr)
+        assert len(e.elts) == 2

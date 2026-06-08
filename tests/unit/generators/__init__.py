@@ -25,6 +25,8 @@ from .fpy_program import (
     expr,
     real_expr,
     bool_expr,
+    list_expr,
+    tuple_expr,
     fpy_real_funcdef,
     fpy_real_function,
 )
