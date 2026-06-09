@@ -93,8 +93,10 @@ class TestRealExprStrategyDirectly:
 
     @given(real_expr({}, depth=0))
     def test_empty_env_leaf_is_a_literal(self, e: Expr) -> None:
-        # No vars in env + depth=0 ⇒ leaves only ⇒ must be a literal node.
-        assert isinstance(e, Integer)
+        # No vars in env + depth=0 ⇒ leaves only ⇒ must be a numeric
+        # literal (Integer / Decnum / Rational).
+        from fpy2.ast.fpyast import RationalVal
+        assert isinstance(e, RationalVal)
 
 
 class TestBoolExprStrategyDirectly:
@@ -655,6 +657,79 @@ class TestGrammarContextList:
         _check()
 
 
+class TestRealNumericLiterals:
+    """``RealProd.INTEGER`` / ``DECNUM`` / ``RATIONAL`` generate the three
+    real-valued literal AST classes the FPy grammar supports."""
+
+    def test_integer_only_emits_only_integer(self) -> None:
+        @given(real_expr({}, depth=0, include=RealProd.INTEGER))
+        @settings(max_examples=20)
+        def _check(e: Expr) -> None:
+            from fpy2.ast.fpyast import Decnum as _Decnum, Rational as _Rational
+            assert isinstance(e, Integer)
+            assert not isinstance(e, (_Decnum, _Rational))
+        _check()
+
+    def test_decnum_only_emits_only_decnum(self) -> None:
+        from fpy2.ast.fpyast import Decnum as _Decnum
+        from fractions import Fraction as _Fraction
+
+        @given(real_expr({}, depth=0, include=RealProd.DECNUM))
+        @settings(max_examples=20)
+        def _check(e: Expr) -> None:
+            assert isinstance(e, _Decnum)
+            # The string must parse back to a valid Fraction.
+            assert isinstance(e.as_rational(), _Fraction)
+        _check()
+
+    def test_rational_only_emits_only_rational(self) -> None:
+        from fpy2.ast.fpyast import Rational as _Rational
+
+        @given(real_expr({}, depth=0, include=RealProd.RATIONAL))
+        @settings(max_examples=20)
+        def _check(e: Expr) -> None:
+            assert isinstance(e, _Rational)
+            assert e.q >= 1
+        _check()
+
+    def test_numeric_literal_alias_covers_all_three(self) -> None:
+        """``RealProd.NUMERIC_LITERAL`` lets the generator pick any of the
+        three forms.  Across enough draws all three should appear."""
+        from fpy2.ast.fpyast import Decnum as _Decnum, Rational as _Rational
+
+        seen: set[type] = set()
+
+        @given(real_expr({}, depth=0, include=RealProd.NUMERIC_LITERAL))
+        @settings(max_examples=80, deadline=None)
+        def _check(e: Expr) -> None:
+            seen.add(type(e))
+
+        _check()
+        assert Integer in seen, f'no Integer literals seen: {seen}'
+        assert _Decnum in seen, f'no Decnum literals seen: {seen}'
+        assert _Rational in seen, f'no Rational literals seen: {seen}'
+
+    def test_default_grammar_only_enables_integer_literal(self) -> None:
+        """``DEFAULT_GRAMMAR.real_prods`` only enables ``INTEGER`` by
+        default; ``DECNUM`` / ``RATIONAL`` are opt-in because their
+        Hypothesis strategies are noticeably slower to draw than plain
+        integers.  Tests that exercise non-integer literal handling
+        narrow ``real_prods`` to include them."""
+        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
+        assert RealProd.INTEGER in DEFAULT_GRAMMAR.real_prods
+        assert RealProd.DECNUM not in DEFAULT_GRAMMAR.real_prods
+        assert RealProd.RATIONAL not in DEFAULT_GRAMMAR.real_prods
+
+    def test_opting_in_via_narrow(self) -> None:
+        """Tests get fractional literals by narrowing ``real_prods``."""
+        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
+        narrowed = DEFAULT_GRAMMAR.narrow(
+            real_prods=DEFAULT_GRAMMAR.real_prods | RealProd.DECNUM | RealProd.RATIONAL,
+        )
+        assert RealProd.DECNUM in narrowed.real_prods
+        assert RealProd.RATIONAL in narrowed.real_prods
+
+
 class TestGrammarStmtProds:
     """``Grammar.stmt_prods`` gates which statement kinds appear in
     bodies, complementing the ``max_*`` budgets (which bound quantity)."""
@@ -786,7 +861,8 @@ class TestTypeDispatch:
 
     @given(expr(RealType(), {}, depth=0))
     def test_real_dispatch_yields_real_leaf(self, e: Expr) -> None:
-        assert isinstance(e, Integer)
+        from fpy2.ast.fpyast import RationalVal
+        assert isinstance(e, RationalVal)
 
     @given(expr(BoolType(), {}, depth=0))
     def test_bool_dispatch_yields_bool_leaf(self, e: Expr) -> None:

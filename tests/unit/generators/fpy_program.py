@@ -68,6 +68,7 @@ from fpy2.ast.fpyast import (
     ContextStmt,
     ContextTypeAnn,
     Cos,
+    Decnum,
     Div,
     Enumerate,
     Exp,
@@ -94,6 +95,7 @@ from fpy2.ast.fpyast import (
     Or,
     Range1,
     Range2,
+    Rational,
     RealTypeAnn,
     ReturnStmt,
     Round,
@@ -178,7 +180,9 @@ _DEFAULT_CONTEXTS: list = [fp.FP64, fp.FP32, fp.MX_E5M2, fp.MX_E4M3]
 
 class RealProd(Flag):
     """Production set for ``real``-typed expressions."""
-    LITERAL = auto()
+    INTEGER = auto()       # ``Integer`` literal (alias: LITERAL)
+    DECNUM = auto()        # ``Decnum`` decimal-string literal
+    RATIONAL = auto()      # ``Rational(p, q)`` literal
     VAR = auto()
     ADD = auto()
     SUB = auto()
@@ -194,12 +198,14 @@ class RealProd(Flag):
     LEN = auto()
     IF_EXPR = auto()
     ROUND = auto()
-    CAST = auto()  # deferred; raises if generated
+    CAST = auto()          # deferred; raises if generated
 
     # Aliases.
+    LITERAL = INTEGER      # back-compat alias for callers that pre-dated the split
+    NUMERIC_LITERAL = INTEGER | DECNUM | RATIONAL
     ARITH = ADD | SUB | MUL | DIV | NEG | ABS
     NAMED_UNARY = SQRT | SIN | COS | LOG | EXP
-    LEAVES = LITERAL | VAR
+    LEAVES = NUMERIC_LITERAL | VAR
     ALL = (LEAVES | ARITH | NAMED_UNARY | LEN | IF_EXPR | ROUND | CAST)
 
 
@@ -300,11 +306,17 @@ class Grammar:
     """Production filters + literal bounds + ``with``-block context list.
 
     Each ``*_prods`` field gates the corresponding generator's output;
-    defaults mask currently-deferred productions (e.g. ``RealProd.CAST``).
-    ``narrow(...)`` returns a copy with the given fields replaced — the
-    idiomatic way to derive a custom grammar from :data:`DEFAULT_GRAMMAR`.
+    defaults mask currently-deferred productions (e.g. ``RealProd.CAST``)
+    and slow-to-draw productions (``RealProd.DECNUM`` / ``RATIONAL``,
+    which roughly triple ``stmt_block`` draw time relative to integer
+    literals — opt in explicitly when testing non-integer literal
+    handling).  ``narrow(...)`` returns a copy with the given fields
+    replaced — the idiomatic way to derive a custom grammar from
+    :data:`DEFAULT_GRAMMAR`.
     """
-    real_prods:    RealProd    = RealProd.ALL    & ~RealProd.CAST
+    real_prods:    RealProd    = (
+        RealProd.ALL & ~RealProd.CAST & ~RealProd.DECNUM & ~RealProd.RATIONAL
+    )
     bool_prods:    BoolProd    = BoolProd.ALL    & ~BoolProd.ISNORMAL
     list_prods:    ListProd    = (
         ListProd.ALL & ~(ListProd.RANGE3 | ListProd.LIST_COMP)
@@ -366,9 +378,28 @@ def _real_expr(
     rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
     leaves: list[st.SearchStrategy[Expr]] = []
-    if RealProd.LITERAL in use:
+    if RealProd.INTEGER in use:
         lo, hi = grammar.int_literal_range
         leaves.append(st.integers(lo, hi).map(lambda v: Integer(v, None)))
+    if RealProd.DECNUM in use:
+        lo, hi = grammar.int_literal_range
+        # Decnums carry the decimal as a string.  Emit ``<int>.<frac>``
+        # form (no exponent) — covers the non-dyadic-fraction path
+        # (e.g. ``0.1``) without growing magnitudes via ``e±N``.
+        leaves.append(
+            st.tuples(st.integers(lo, hi), st.integers(0, 9999))
+            .map(lambda pf: Decnum(f'{pf[0]}.{pf[1]:04d}', None))
+        )
+    if RealProd.RATIONAL in use:
+        lo, hi = grammar.int_literal_range
+        rat_sym = _func_sym('rational')
+        # Bound the denominator separately to keep magnitudes manageable
+        # — int_literal_range alone over both p and q would let the value
+        # explode (``1000 / 1`` = 1000) or vanish (``1 / 1000`` ≈ 0).
+        leaves.append(
+            st.tuples(st.integers(lo, hi), st.integers(1, 100))
+            .map(lambda pq: Rational(rat_sym, pq[0], pq[1], None))
+        )
     if RealProd.VAR in use:
         var_strat = _var_of_type(env, RealType())
         if var_strat is not None:
@@ -434,7 +465,8 @@ def _real_expr(
     if not leaves and not inner:
         raise ValueError(
             f'real_expr produces nothing under include={use!r}; '
-            'at minimum enable LITERAL (or VAR with a real-typed env)'
+            'at minimum enable INTEGER, DECNUM, or RATIONAL '
+            '(or VAR with a real-typed env)'
         )
     return st.one_of(*leaves, *inner)
 
