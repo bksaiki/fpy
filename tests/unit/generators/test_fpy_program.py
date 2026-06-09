@@ -20,8 +20,13 @@ from fpy2.types import BoolType, ListType, RealType, TupleType
 
 from . import (
     BOOL_TAGS,
+    BoolProd,
+    DEFAULT_GRAMMAR,
+    Grammar,
     LIST_TAGS,
+    ListProd,
     REAL_TAGS,
+    RealProd,
     arbitrary_type,
     bool_expr,
     context_expr,
@@ -397,18 +402,18 @@ class TestZipEnumerate:
 
     @given(list_expr(
         TupleType(RealType(), RealType(), RealType()), {}, depth=2,
-        include={'zip'},
+        include=ListProd.ZIP,
     ))
     def test_zip_only_for_arity3_typechecks(self, e: Expr) -> None:
-        # arity 3 → enumerate doesn't apply; with include={'zip'} we should
-        # always get a Zip node.
+        # arity 3 → enumerate doesn't apply; with include=ListProd.ZIP we
+        # should always get a Zip node.
         from fpy2.ast.fpyast import Zip as _Zip
         assert isinstance(e, _Zip)
         assert len(e.args) == 3
 
     @given(list_expr(
         TupleType(RealType(), RealType()), {}, depth=2,
-        include={'enumerate'},
+        include=ListProd.ENUMERATE,
     ))
     def test_enumerate_only_typechecks(self, e: Expr) -> None:
         from fpy2.ast.fpyast import Enumerate as _Enumerate
@@ -504,7 +509,7 @@ class TestContextStmt:
 class TestIncludeNarrowing:
     """``include`` filters which productions a helper emits."""
 
-    @given(real_expr({}, depth=3, include={'literal', 'arith'}))
+    @given(real_expr({}, depth=3, include=RealProd.LITERAL | RealProd.ARITH))
     def test_real_arith_only(self, e: Expr) -> None:
         from fpy2.ast.fpyast import (
             IfExpr, Len, NamedUnaryOp,
@@ -522,11 +527,11 @@ class TestIncludeNarrowing:
                     if isinstance(children, (list, tuple)):
                         stack.extend(c for c in children if isinstance(c, Expr))
 
-    @given(real_expr({}, depth=0, include={'literal'}))
+    @given(real_expr({}, depth=0, include=RealProd.LITERAL))
     def test_literal_only_leaf(self, e: Expr) -> None:
         assert isinstance(e, Integer)
 
-    @given(bool_expr({}, depth=3, include={'literal', 'compare'}))
+    @given(bool_expr({}, depth=3, include=BoolProd.LITERAL | BoolProd.COMPARE))
     def test_bool_compare_only(self, e: Expr) -> None:
         from fpy2.ast.fpyast import And, Not, Or
         # No And/Or/Not — only literal leaves and Compare inner.
@@ -542,19 +547,38 @@ class TestIncludeNarrowing:
                     if isinstance(children, (list, tuple)):
                         stack.extend(c for c in children if isinstance(c, Expr))
 
-    def test_unknown_tag_rejected(self) -> None:
-        import pytest as _pytest
-        with _pytest.raises(ValueError, match='unknown production tags'):
-            real_expr({}, depth=2, include={'bogus'})
-
     def test_empty_include_with_no_leaves_rejected(self) -> None:
         import pytest as _pytest
         # No literal, no var in env ⇒ no leaves, no inner ⇒ nothing to produce.
         with _pytest.raises(ValueError, match='produces nothing'):
-            real_expr({}, depth=0, include=set())
+            real_expr({}, depth=0, include=RealProd(0))
 
-    def test_tag_sets_exposed(self) -> None:
-        # Round-trip: include=all-tags is equivalent to include=None.
+
+class TestLegacyStringTagAPI:
+    """The legacy ``include=set[str]`` API still works for callers that
+    haven't migrated to :class:`RealProd` / :class:`BoolProd` / …
+    """
+
+    @given(real_expr({}, depth=3, include={'literal', 'arith'}))
+    def test_real_string_tags_still_work(self, e: Expr) -> None:
+        from fpy2.ast.fpyast import IfExpr, Len, NamedUnaryOp
+        stack = [e]
+        while stack:
+            node = stack.pop()
+            assert not isinstance(node, (IfExpr, Len, NamedUnaryOp))
+            for attr in ('args', 'elts'):
+                if hasattr(node, attr):
+                    children = getattr(node, attr)
+                    if isinstance(children, (list, tuple)):
+                        stack.extend(c for c in children if isinstance(c, Expr))
+
+    def test_unknown_string_tag_rejected(self) -> None:
+        import pytest as _pytest
+        with _pytest.raises(ValueError, match='unknown production tags'):
+            real_expr({}, depth=2, include={'bogus'})
+
+    def test_legacy_tag_sets_exposed(self) -> None:
+        # The ``*_TAGS`` constants survive for legacy callers.
         assert 'arith' in REAL_TAGS
         assert 'compare' in BOOL_TAGS
         assert 'range' in LIST_TAGS

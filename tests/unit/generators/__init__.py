@@ -19,6 +19,10 @@ __all__ = [
     'fpy_funcdef', 'fpy_function',
     'fpy_real_funcdef', 'fpy_real_function',
     'arbitrary_type', 'value_for_type',
+    # Grammar surface
+    'Grammar', 'DEFAULT_GRAMMAR',
+    'RealProd', 'BoolProd', 'ListProd', 'TupleProd', 'ContextProd', 'StmtProd',
+    # Legacy string-tag sets (kept for backward compat)
     'REAL_TAGS', 'BOOL_TAGS', 'LIST_TAGS', 'TUPLE_TAGS', 'CONTEXT_TAGS',
 ]
 
@@ -55,6 +59,16 @@ from .fpy_program import (
     fpy_real_function,
     arbitrary_type,
     value_for_type,
+    # Grammar surface
+    Grammar,
+    DEFAULT_GRAMMAR,
+    RealProd,
+    BoolProd,
+    ListProd,
+    TupleProd,
+    ContextProd,
+    StmtProd,
+    # Legacy string-tag sets (kept for backward compat)
     REAL_TAGS,
     BOOL_TAGS,
     LIST_TAGS,
