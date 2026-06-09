@@ -73,6 +73,7 @@ from fpy2.ast.fpyast import (
     Enumerate,
     Exp,
     Expr,
+    Hexnum,
     ForeignVal,
     ForStmt,
     FuncDef,
@@ -95,6 +96,7 @@ from fpy2.ast.fpyast import (
     Or,
     Range1,
     Range2,
+    Range3,
     Rational,
     RealTypeAnn,
     ReturnStmt,
@@ -182,6 +184,7 @@ class RealProd(Flag):
     """Production set for ``real``-typed expressions."""
     INTEGER = auto()       # ``Integer`` literal (alias: LITERAL)
     DECNUM = auto()        # ``Decnum`` decimal-string literal
+    HEXNUM = auto()        # ``Hexnum`` hex-string literal (e.g. ``0x1.8p+3``)
     RATIONAL = auto()      # ``Rational(p, q)`` literal
     VAR = auto()
     ADD = auto()
@@ -202,7 +205,7 @@ class RealProd(Flag):
 
     # Aliases.
     LITERAL = INTEGER      # back-compat alias for callers that pre-dated the split
-    NUMERIC_LITERAL = INTEGER | DECNUM | RATIONAL
+    NUMERIC_LITERAL = INTEGER | DECNUM | HEXNUM | RATIONAL
     ARITH = ADD | SUB | MUL | DIV | NEG | ABS
     NAMED_UNARY = SQRT | SIN | COS | LOG | EXP
     LEAVES = NUMERIC_LITERAL | VAR
@@ -310,13 +313,13 @@ def _check_flag(include: _F, expected: type[_F]) -> _F:
 # entry here.
 _DEFERRED_REAL: RealProd = RealProd.CAST
 _DEFERRED_BOOL: BoolProd = BoolProd.ISNORMAL
-_DEFERRED_LIST: ListProd = ListProd.RANGE3 | ListProd.LIST_COMP
+_DEFERRED_LIST: ListProd = ListProd.LIST_COMP
 _DEFERRED_STMT: StmtProd = StmtProd.INDEXED_ASSIGN | StmtProd.TUPLE_UNPACK_ASSIGN
 
 # Productions whose generators are implemented but noticeably slow to
 # draw — opt in explicitly when the test needs them (typically by
 # OR-ing into a narrowed ``real_prods``).
-_SLOW_REAL: RealProd = RealProd.DECNUM | RealProd.RATIONAL
+_SLOW_REAL: RealProd = RealProd.DECNUM | RealProd.HEXNUM | RealProd.RATIONAL
 
 
 @dataclasses.dataclass(frozen=True)
@@ -416,6 +419,21 @@ def _real_expr(
         leaves.append(
             st.tuples(st.integers(lo, hi), st.integers(0, 9999))
             .map(lambda pf: Decnum(f'{pf[0]}.{pf[1]:04d}', None))
+        )
+    if RealProd.HEXNUM in use:
+        # Hexnums are dyadic-by-construction.  Emit ``[-]0x<i>.<f>p±E``
+        # with at most 4 hex digits per part and a small binary exponent
+        # to keep magnitudes manageable.
+        hex_sym = _func_sym('hexnum')
+        hex_digits = st.integers(0, 0xffff).map(lambda n: f'{n:x}')
+        leaves.append(
+            st.tuples(
+                st.booleans(), hex_digits, hex_digits, st.integers(-8, 8),
+            ).map(lambda t: Hexnum(
+                hex_sym,
+                f'{"-" if t[0] else ""}0x{t[1]}.{t[2]}p{t[3]:+d}',
+                None,
+            ))
         )
     if RealProd.RATIONAL in use:
         lo, hi = grammar.int_literal_range
@@ -651,9 +669,16 @@ def _list_expr(
                 lambda ab: Range2(range_sym, ab[0], ab[1], None)
             ))
         if ListProd.RANGE3 in use:
-            raise NotImplementedError(
-                'ListProd.RANGE3 generation is deferred'
+            # ``range(start, stop, step)`` — step must be non-zero
+            # (the interpreter, like Python's ``range``, rejects step 0).
+            step_int = (
+                st.integers(rmin, rmax)
+                .filter(lambda n: n != 0)
+                .map(lambda n: Integer(n, None))
             )
+            productions.append(st.tuples(small_int, small_int, step_int).map(
+                lambda abc: Range3(range_sym, abc[0], abc[1], abc[2], None)
+            ))
 
     if (ListProd.ZIP in use and depth > 0
             and isinstance(elt_type, TupleType) and elt_type.elts):

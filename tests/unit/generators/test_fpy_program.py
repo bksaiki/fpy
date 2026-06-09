@@ -141,6 +141,31 @@ class TestListExprStrategyDirectly:
         assert isinstance(analysis.return_type.elt, BoolType)
 
 
+class TestRange3:
+    """``ListProd.RANGE3`` generates ``range(start, stop, step)`` calls
+    with non-zero step."""
+
+    def test_range3_only_emits_range3(self) -> None:
+        """``include=ListProd.RANGE3`` emits exactly ``Range3`` calls
+        with a non-zero step Integer."""
+        from fpy2.ast.fpyast import Range3 as _Range3, Integer as _Integer
+
+        @given(list_expr(RealType(), {}, depth=2, include=ListProd.RANGE3))
+        @settings(max_examples=30)
+        def _check(e: Expr) -> None:
+            assert isinstance(e, _Range3)
+            assert isinstance(e.third, _Integer)
+            assert e.third.val != 0, 'step must be non-zero'
+
+        _check()
+
+    def test_range3_in_default_grammar(self) -> None:
+        """``Range3`` is in the default grammar — the legacy deferral
+        is gone."""
+        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
+        assert ListProd.RANGE3 in DEFAULT_GRAMMAR.list_prods
+
+
 class TestTupleExprStrategyDirectly:
     """Exercise ``tuple_expr`` and verify produced tuples are well-typed."""
 
@@ -692,41 +717,59 @@ class TestRealNumericLiterals:
             assert e.q >= 1
         _check()
 
-    def test_numeric_literal_alias_covers_all_three(self) -> None:
+    def test_hexnum_only_emits_only_hexnum(self) -> None:
+        from fpy2.ast.fpyast import Hexnum as _Hexnum
+        from fractions import Fraction as _Fraction
+
+        @given(real_expr({}, depth=0, include=RealProd.HEXNUM))
+        @settings(max_examples=20)
+        def _check(e: Expr) -> None:
+            assert isinstance(e, _Hexnum)
+            # The hex string must parse back to a valid Fraction.
+            assert isinstance(e.as_rational(), _Fraction)
+        _check()
+
+    def test_numeric_literal_alias_covers_all_four(self) -> None:
         """``RealProd.NUMERIC_LITERAL`` lets the generator pick any of the
-        three forms.  Across enough draws all three should appear."""
-        from fpy2.ast.fpyast import Decnum as _Decnum, Rational as _Rational
+        four forms.  Across enough draws all four should appear."""
+        from fpy2.ast.fpyast import (
+            Decnum as _Decnum, Hexnum as _Hexnum, Rational as _Rational,
+        )
 
         seen: set[type] = set()
 
         @given(real_expr({}, depth=0, include=RealProd.NUMERIC_LITERAL))
-        @settings(max_examples=80, deadline=None)
+        @settings(max_examples=120, deadline=None)
         def _check(e: Expr) -> None:
             seen.add(type(e))
 
         _check()
         assert Integer in seen, f'no Integer literals seen: {seen}'
         assert _Decnum in seen, f'no Decnum literals seen: {seen}'
+        assert _Hexnum in seen, f'no Hexnum literals seen: {seen}'
         assert _Rational in seen, f'no Rational literals seen: {seen}'
 
     def test_default_grammar_only_enables_integer_literal(self) -> None:
         """``DEFAULT_GRAMMAR.real_prods`` only enables ``INTEGER`` by
-        default; ``DECNUM`` / ``RATIONAL`` are opt-in because their
-        Hypothesis strategies are noticeably slower to draw than plain
-        integers.  Tests that exercise non-integer literal handling
-        narrow ``real_prods`` to include them."""
+        default; ``DECNUM`` / ``HEXNUM`` / ``RATIONAL`` are opt-in
+        because their Hypothesis strategies are noticeably slower to
+        draw than plain integers.  Tests that exercise non-integer
+        literal handling narrow ``real_prods`` to include them."""
         from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
         assert RealProd.INTEGER in DEFAULT_GRAMMAR.real_prods
         assert RealProd.DECNUM not in DEFAULT_GRAMMAR.real_prods
+        assert RealProd.HEXNUM not in DEFAULT_GRAMMAR.real_prods
         assert RealProd.RATIONAL not in DEFAULT_GRAMMAR.real_prods
 
     def test_opting_in_via_narrow(self) -> None:
         """Tests get fractional literals by narrowing ``real_prods``."""
         from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
         narrowed = DEFAULT_GRAMMAR.narrow(
-            real_prods=DEFAULT_GRAMMAR.real_prods | RealProd.DECNUM | RealProd.RATIONAL,
+            real_prods=(DEFAULT_GRAMMAR.real_prods
+                        | RealProd.DECNUM | RealProd.HEXNUM | RealProd.RATIONAL),
         )
         assert RealProd.DECNUM in narrowed.real_prods
+        assert RealProd.HEXNUM in narrowed.real_prods
         assert RealProd.RATIONAL in narrowed.real_prods
 
 
