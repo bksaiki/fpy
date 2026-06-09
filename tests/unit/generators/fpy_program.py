@@ -37,15 +37,15 @@ bodies). Scoping rules:
 - ``WhileStmt`` is emitted as a counter-driven template ``c = 0; while c < N:
   <body>; c = c + 1`` to guarantee termination; only the body is fuzzed.
 
-Known-deferred surface (see inline comments for the why):
+Known-deferred surface (productions whose generators raise
+``NotImplementedError`` if explicitly enabled; see ``_DEFERRED_*``):
 
 - ``Cast`` — needs per-context exact-representable tracking.
 - ``IsNormal`` — workaround for an FPy ``ops.isnormal`` bug on context-less
   integer Floats.
 - ``ListRef`` / ``ListSlice`` — need array-size tracking to stay in bounds.
 - ``ListComp``, ``IndexedAssign``, tuple-unpacking ``Assign``.
-- ``Range3`` and ``fp.REAL`` as a ``with``-context (math ops not implemented
-  under REAL).
+- ``fp.REAL`` as a ``with``-context (math ops not implemented under REAL).
 """
 
 import dataclasses
@@ -238,7 +238,7 @@ class ListProd(Flag):
     VAR = auto()
     RANGE1 = auto()
     RANGE2 = auto()
-    RANGE3 = auto()  # deferred
+    RANGE3 = auto()
     ZIP = auto()
     ENUMERATE = auto()
     LIST_COMP = auto()  # deferred

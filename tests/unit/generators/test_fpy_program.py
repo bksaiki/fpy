@@ -8,7 +8,7 @@ double as fuzz tests for those passes.
 
 import fpy2 as fp
 
-from hypothesis import given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings, strategies as st
 
 from fpy2.analysis.type_infer import TypeInfer
 from fpy2.ast.fpyast import (
@@ -24,6 +24,7 @@ from . import (
     Grammar,
     ListProd,
     RealProd,
+    StmtProd,
     arbitrary_type,
     bool_expr,
     context_expr,
@@ -160,9 +161,9 @@ class TestRange3:
         _check()
 
     def test_range3_in_default_grammar(self) -> None:
-        """``Range3`` is in the default grammar — the legacy deferral
-        is gone."""
-        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
+        """``Range3`` is in the default grammar — opt out via
+        ``narrow(list_prods=…)`` if your test wants ``RANGE1 | RANGE2``
+        only."""
         assert ListProd.RANGE3 in DEFAULT_GRAMMAR.list_prods
 
 
@@ -188,17 +189,23 @@ class TestTupleExprStrategyDirectly:
 
 
 class TestStmtBlock:
-    """Statement-block generator."""
+    """Statement-block generator.
+
+    Both tests suppress Hypothesis's ``too_slow`` health check because
+    ``stmt_block`` is heavier than a leaf-expr strategy (a single draw
+    can recurse through nested ``with``/``if``/``for`` bodies) — the
+    health check trips on the first few draws under unfortunate seeds
+    even when later draws are fast.
+    """
 
     @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_ends_with_return(self, block) -> None:
-        from fpy2.ast.fpyast import ReturnStmt
         assert isinstance(block.stmts[-1], ReturnStmt)
 
     @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_typechecks_when_wrapped(self, block) -> None:
-        from fpy2.ast.fpyast import FuncMeta
-        from fpy2.env import ForeignEnv
         fd = FuncDef('f', [], block,
                      FuncMeta(set(), None, None, {}, ForeignEnv.default()))
         analysis = TypeInfer.check(fd)
@@ -586,13 +593,11 @@ class TestFlagInclude:
         (caught statically by a type checker; this asserts the runtime
         guard for callers that bypass static checks)."""
         import pytest as _pytest
-        from tests.unit.generators.fpy_program import BoolProd
         with _pytest.raises(TypeError, match='RealProd'):
             real_expr({}, depth=0, include=BoolProd.LITERAL)  # type: ignore[arg-type]
 
     def test_flag_dispatch_emits_only_requested_class(self) -> None:
         """``include=RealProd.LITERAL`` produces only ``Integer`` literals."""
-        from tests.unit.generators.fpy_program import RealProd
         from fpy2.ast.fpyast import Integer as _Integer
 
         @given(real_expr({}, depth=0, include=RealProd.LITERAL))
@@ -616,9 +621,6 @@ class TestGrammarCrossTypePropagation:
         through ``real_expr`` should be a bool literal or variable, never
         a ``Compare`` / ``Not`` / ``And`` / ``Or`` / predicate.
         """
-        from tests.unit.generators.fpy_program import (
-            BoolProd, DEFAULT_GRAMMAR, RealProd,
-        )
         from fpy2.ast.fpyast import (
             And as _And, BoolVal as _BoolVal, Compare as _Compare,
             IfExpr as _IfExpr, IsFinite as _IsFinite, IsInf as _IsInf,
@@ -668,7 +670,6 @@ class TestGrammarContextList:
     def test_only_fp32_contexts_appear(self) -> None:
         """With ``contexts=(fp.FP32,)`` every ``ForeignVal`` produced by
         ``context_expr`` is exactly ``fp.FP32``."""
-        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
         from fpy2.ast.fpyast import ForeignVal as _ForeignVal
 
         grammar = DEFAULT_GRAMMAR.narrow(contexts=(fp.FP32,))
@@ -755,7 +756,6 @@ class TestRealNumericLiterals:
         because their Hypothesis strategies are noticeably slower to
         draw than plain integers.  Tests that exercise non-integer
         literal handling narrow ``real_prods`` to include them."""
-        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
         assert RealProd.INTEGER in DEFAULT_GRAMMAR.real_prods
         assert RealProd.DECNUM not in DEFAULT_GRAMMAR.real_prods
         assert RealProd.HEXNUM not in DEFAULT_GRAMMAR.real_prods
@@ -763,7 +763,6 @@ class TestRealNumericLiterals:
 
     def test_opting_in_via_narrow(self) -> None:
         """Tests get fractional literals by narrowing ``real_prods``."""
-        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
         narrowed = DEFAULT_GRAMMAR.narrow(
             real_prods=(DEFAULT_GRAMMAR.real_prods
                         | RealProd.DECNUM | RealProd.HEXNUM | RealProd.RATIONAL),
@@ -781,9 +780,6 @@ class TestGrammarStmtProds:
         """``stmt_prods`` without ``WITH`` suppresses ``ContextStmt`` even
         when ``max_contexts > 0``."""
         from hypothesis import HealthCheck
-        from tests.unit.generators.fpy_program import (
-            DEFAULT_GRAMMAR, StmtProd,
-        )
         from fpy2.ast.fpyast import ContextStmt as _ContextStmt
 
         grammar = DEFAULT_GRAMMAR.narrow(
@@ -820,9 +816,6 @@ class TestGrammarStmtProds:
     def test_loops_only_yields_no_ifs_or_withs(self) -> None:
         """``stmt_prods=ASSIGN | FOR`` admits only assigns and for-loops."""
         from hypothesis import HealthCheck
-        from tests.unit.generators.fpy_program import (
-            DEFAULT_GRAMMAR, StmtProd,
-        )
         from fpy2.ast.fpyast import (
             ContextStmt as _ContextStmt, IfStmt as _IfStmt,
             If1Stmt as _If1Stmt, WhileStmt as _WhileStmt,
@@ -867,9 +860,6 @@ class TestGrammarStmtProds:
         before any strategy draws.  Assignments are the only depth-0
         base case."""
         import pytest as _pytest
-        from tests.unit.generators.fpy_program import (
-            DEFAULT_GRAMMAR, StmtProd,
-        )
 
         with _pytest.raises(ValueError, match='StmtProd.ASSIGN'):
             DEFAULT_GRAMMAR.narrow(stmt_prods=StmtProd.WITH)
@@ -878,7 +868,6 @@ class TestGrammarStmtProds:
         """An empty ``contexts`` tuple would crash ``context_expr``;
         catch it eagerly."""
         import pytest as _pytest
-        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
 
         with _pytest.raises(ValueError, match='non-empty'):
             DEFAULT_GRAMMAR.narrow(contexts=())
