@@ -329,9 +329,9 @@ class Grammar:
     Each ``*_prods`` field gates the corresponding generator's output;
     defaults mask :data:`_DEFERRED_*` (productions whose generators
     aren't implemented yet) and :data:`_SLOW_*` (productions whose
-    Hypothesis strategies materially slow draws — currently ``DECNUM``
-    and ``RATIONAL``, which roughly triple ``stmt_block`` draw time).
-    Opt either back in via :meth:`narrow`.
+    Hypothesis strategies materially slow draws — currently ``DECNUM``,
+    ``HEXNUM``, and ``RATIONAL``, which roughly triple ``stmt_block``
+    draw time).  Opt either back in via :meth:`narrow`.
     """
     real_prods:    RealProd    = RealProd.ALL    & ~_DEFERRED_REAL & ~_SLOW_REAL
     bool_prods:    BoolProd    = BoolProd.ALL    & ~_DEFERRED_BOOL
@@ -510,7 +510,7 @@ def _real_expr(
     if not leaves and not inner:
         raise ValueError(
             f'real_expr produces nothing under include={use!r}; '
-            'at minimum enable INTEGER, DECNUM, or RATIONAL '
+            'at minimum enable INTEGER, DECNUM, HEXNUM, or RATIONAL '
             '(or VAR with a real-typed env)'
         )
     return st.one_of(*leaves, *inner)
@@ -727,7 +727,7 @@ def _list_expr(
     if not productions:
         raise ValueError(
             f'list_expr produces nothing under include={use!r}; '
-            'enable LITERAL (always available) or RANGE1/RANGE2 '
+            'enable LITERAL (always available) or RANGE1/RANGE2/RANGE3 '
             '(real elt + depth > 0)'
         )
     return st.one_of(*productions)

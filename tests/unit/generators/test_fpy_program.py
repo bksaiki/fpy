@@ -95,7 +95,7 @@ class TestRealExprStrategyDirectly:
     @given(real_expr({}, depth=0))
     def test_empty_env_leaf_is_a_literal(self, e: Expr) -> None:
         # No vars in env + depth=0 ⇒ leaves only ⇒ must be a numeric
-        # literal (Integer / Decnum / Rational).
+        # literal (Integer / Decnum / Hexnum / Rational).
         from fpy2.ast.fpyast import RationalVal
         assert isinstance(e, RationalVal)
 

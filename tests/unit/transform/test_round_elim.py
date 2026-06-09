@@ -589,7 +589,7 @@ class TestRoundElimProperty:
         from hypothesis import HealthCheck, given, settings, strategies as st
 
         from tests.unit.generators import (
-            ROUND_ELIM_PROFILE, fpy_function, real_floats, value_for_type,
+            ROUND_ELIM_PROFILE, fpy_function, value_for_type,
         )
         from fpy2.types import RealType
 
