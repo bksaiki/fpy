@@ -19,13 +19,10 @@ from fpy2.env import ForeignEnv
 from fpy2.types import BoolType, ListType, RealType, TupleType
 
 from . import (
-    BOOL_TAGS,
     BoolProd,
     DEFAULT_GRAMMAR,
     Grammar,
-    LIST_TAGS,
     ListProd,
-    REAL_TAGS,
     RealProd,
     arbitrary_type,
     bool_expr,
@@ -554,50 +551,8 @@ class TestIncludeNarrowing:
             real_expr({}, depth=0, include=RealProd(0))
 
 
-class TestLegacyStringTagAPI:
-    """The legacy ``include=set[str]`` API still works for callers that
-    haven't migrated to :class:`RealProd` / :class:`BoolProd` / …
-    """
-
-    @given(real_expr({}, depth=3, include={'literal', 'arith'}))
-    def test_real_string_tags_still_work(self, e: Expr) -> None:
-        from fpy2.ast.fpyast import IfExpr, Len, NamedUnaryOp
-        stack = [e]
-        while stack:
-            node = stack.pop()
-            assert not isinstance(node, (IfExpr, Len, NamedUnaryOp))
-            for attr in ('args', 'elts'):
-                if hasattr(node, attr):
-                    children = getattr(node, attr)
-                    if isinstance(children, (list, tuple)):
-                        stack.extend(c for c in children if isinstance(c, Expr))
-
-    def test_unknown_string_tag_rejected(self) -> None:
-        import pytest as _pytest
-        with _pytest.raises(ValueError, match='unknown production tags'):
-            real_expr({}, depth=2, include={'bogus'})
-
-    def test_legacy_tag_sets_exposed(self) -> None:
-        # The ``*_TAGS`` constants survive for legacy callers.
-        assert 'arith' in REAL_TAGS
-        assert 'compare' in BOOL_TAGS
-        assert 'range' in LIST_TAGS
-
-
-class TestFlagIncludeEquivalence:
-    """The new :class:`Flag` ``include=`` API must accept the same inputs
-    as the legacy string-tag API and produce equivalent strategies.
-    """
-
-    def test_flag_and_string_produce_same_node_classes(self) -> None:
-        """A ``RealProd`` flag and the equivalent ``set[str]`` should let
-        the generator emit the same set of top-level AST classes."""
-        from tests.unit.generators.fpy_program import RealProd, _coerce_real
-
-        flag_form = RealProd.LITERAL | RealProd.ARITH
-        str_form = {'literal', 'arith'}
-        # Coercion lands on the same Flag value.
-        assert _coerce_real(str_form) == flag_form
+class TestFlagInclude:
+    """The :class:`Flag` ``include=`` API."""
 
     def test_unknown_flag_class_rejected(self) -> None:
         """Passing the wrong-enum's flag to a generator is a ``TypeError``
@@ -606,7 +561,7 @@ class TestFlagIncludeEquivalence:
         import pytest as _pytest
         from tests.unit.generators.fpy_program import BoolProd
         with _pytest.raises(TypeError, match='RealProd'):
-            real_expr({}, depth=0, include=BoolProd.LITERAL)
+            real_expr({}, depth=0, include=BoolProd.LITERAL)  # type: ignore[arg-type]
 
     def test_flag_dispatch_emits_only_requested_class(self) -> None:
         """``include=RealProd.LITERAL`` produces only ``Integer`` literals."""

@@ -11,9 +11,12 @@ in code and fed to the same passes the ``@fp.fpy`` decorator pipeline
 runs) — the parser is **not** exercised here; the target audience is
 analysis passes and the interpreter.
 
-Productions per target type are gated by string tags (see :data:`REAL_TAGS`
-etc.). Pass ``include={...}`` to narrow what a helper emits; tags
-propagate through same-type recursion but not across types. Per-call
+Productions per target type are gated by :class:`enum.Flag` enums — one
+per target type (:class:`RealProd`, :class:`BoolProd`, :class:`ListProd`,
+:class:`TupleProd`, :class:`ContextProd`, :class:`StmtProd`). Pass
+``include=RealProd.ARITH | RealProd.LITERAL`` to a helper to narrow what
+it emits, or set the corresponding ``*_prods`` field on :class:`Grammar`
+to narrow across recursive calls (including cross-type ones). Per-call
 overrides for ``range_arg_min``/``range_arg_max`` bound the integer
 literals used as ``Range1``/``Range2`` arguments.
 
@@ -47,7 +50,7 @@ Known-deferred surface (see inline comments for the why):
 
 import dataclasses
 from enum import Flag, auto
-from typing import Mapping, TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar
 
 from hypothesis import strategies as st
 
@@ -158,39 +161,6 @@ def _func_sym(name: str) -> Var:
     return Var(NamedId(name), None)
 
 
-# ---------------------------------------------------------------------------
-# Production tag sets — narrowing escape hatch
-# ---------------------------------------------------------------------------
-# Each per-target generator gates its productions by tag membership. Pass
-# ``include={'literal', 'arith'}`` to a helper to narrow what it emits.
-# Tags propagate through same-type recursion but not across types
-# (a narrowed ``_real_expr`` still calls ``_bool_expr`` with bool defaults).
-
-REAL_TAGS: frozenset[str] = frozenset({
-    'literal', 'var', 'arith', 'if_expr', 'len', 'named_unary', 'round',
-})
-"""All production tags supported by :func:`real_expr`. ``round`` enables
-``Round`` only — ``Cast`` is deferred (see ``_real_expr``)."""
-
-BOOL_TAGS: frozenset[str] = frozenset({
-    'literal', 'var', 'compare', 'predicate', 'not', 'and_or',
-})
-"""All production tags supported by :func:`bool_expr`."""
-
-LIST_TAGS: frozenset[str] = frozenset({
-    'literal', 'var', 'range', 'zip', 'enumerate',
-})
-"""All production tags supported by :func:`list_expr`. ``zip`` and
-``enumerate`` only fire when the element type is a ``TupleType`` of the
-appropriate shape (``zip``: arity ≥ 1; ``enumerate``: arity 2 with the
-first element ``RealType``)."""
-
-TUPLE_TAGS: frozenset[str] = frozenset({'literal', 'var'})
-"""All production tags supported by :func:`tuple_expr`."""
-
-CONTEXT_TAGS: frozenset[str] = frozenset({'literal'})
-"""All production tags supported by :func:`context_expr`."""
-
 # Concrete rounding contexts the generator can drop into ``with`` blocks.
 # ``fp.REAL`` is excluded — ``sqrt``/``sin``/``log``/``div`` raise under it
 # (no closed-form rational result), so ``with REAL: t = sqrt(0)`` would crash.
@@ -201,9 +171,7 @@ _DEFAULT_CONTEXTS: list = [fp.FP64, fp.FP32, fp.MX_E5M2, fp.MX_E4M3]
 # Productions — :class:`enum.Flag` grammar surface
 # ---------------------------------------------------------------------------
 # One ``Flag`` per target type names every production this generator can
-# emit (including currently-deferred ones).  ``include=`` parameters accept
-# either a string set (legacy, see ``*_TAGS``) or a ``Flag`` value; both
-# coerce to the same internal flag for dispatch.  Aliases such as
+# emit (including currently-deferred ones).  Aliases such as
 # ``RealProd.ARITH`` are conventional ``Flag`` composites (e.g.
 # ``ADD | SUB | …``).
 
@@ -302,105 +270,20 @@ class StmtProd(Flag):
            | INDEXED_ASSIGN | TUPLE_UNPACK_ASSIGN)
 
 
-# String-tag → flag mapping kept for backward compatibility with callers
-# passing ``include={'arith', 'literal'}`` etc.  New callers should pass
-# a ``Flag`` value directly (e.g. ``RealProd.ARITH | RealProd.LITERAL``).
-
-_REAL_TAG_TO_FLAG: dict[str, RealProd] = {
-    'literal': RealProd.LITERAL,
-    'var': RealProd.VAR,
-    'arith': RealProd.ARITH,
-    'named_unary': RealProd.NAMED_UNARY,
-    'if_expr': RealProd.IF_EXPR,
-    'len': RealProd.LEN,
-    'round': RealProd.ROUND,
-}
-
-_BOOL_TAG_TO_FLAG: dict[str, BoolProd] = {
-    'literal': BoolProd.LITERAL,
-    'var': BoolProd.VAR,
-    'compare': BoolProd.COMPARE,
-    'not': BoolProd.NOT,
-    'and_or': BoolProd.AND_OR,
-    'predicate': BoolProd.PREDICATE,
-}
-
-_LIST_TAG_TO_FLAG: dict[str, ListProd] = {
-    'literal': ListProd.LITERAL,
-    'var': ListProd.VAR,
-    'range': ListProd.RANGE1 | ListProd.RANGE2,
-    'zip': ListProd.ZIP,
-    'enumerate': ListProd.ENUMERATE,
-}
-
-_TUPLE_TAG_TO_FLAG: dict[str, TupleProd] = {
-    'literal': TupleProd.LITERAL,
-    'var': TupleProd.VAR,
-}
-
-_CONTEXT_TAG_TO_FLAG: dict[str, ContextProd] = {
-    'literal': ContextProd.LITERAL,
-}
-
-
 _F = TypeVar('_F', bound=Flag)
 
 
-def _coerce_flag(
-    include,
-    table: Mapping[str, _F],
-    default: _F,
-    kind: str,
-) -> _F:
-    """Resolve an ``include`` argument to a :class:`Flag`.
-
-    Accepted forms: ``None`` (⇒ *default*), a :class:`Flag` of the right
-    type (passed through), or a ``set[str]``/``frozenset[str]`` of tag
-    names looked up in *table*.  Anything else raises.
-    """
-    if include is None:
-        return default
-    if isinstance(include, Flag):
-        if not isinstance(include, type(default)):
-            raise TypeError(
-                f'expected {type(default).__name__} for include, got {type(include).__name__}'
-            )
-        return include
-    if isinstance(include, (set, frozenset)):
-        unknown = {t for t in include if t not in table}
-        if unknown:
-            raise ValueError(
-                f'unknown production tags: {sorted(unknown)}; '
-                f'valid {kind} tags are {sorted(table)}'
-            )
-        out = type(default)(0)
-        for t in include:
-            out |= table[t]
-        return out
-    raise TypeError(
-        f'expected set[str], {type(default).__name__}, or None for include, '
-        f'got {type(include).__name__}'
-    )
-
-
-def _coerce_real(include) -> RealProd:
-    return _coerce_flag(include, _REAL_TAG_TO_FLAG, RealProd.ALL, 'real')
-
-
-def _coerce_bool(include) -> BoolProd:
-    return _coerce_flag(include, _BOOL_TAG_TO_FLAG, BoolProd.ALL, 'bool')
-
-
-def _coerce_list(include) -> ListProd:
-    return _coerce_flag(include, _LIST_TAG_TO_FLAG, ListProd.ALL, 'list')
-
-
-def _coerce_tuple(include) -> TupleProd:
-    return _coerce_flag(include, _TUPLE_TAG_TO_FLAG, TupleProd.ALL, 'tuple')
-
-
-def _coerce_context(include) -> ContextProd:
-    return _coerce_flag(include, _CONTEXT_TAG_TO_FLAG, ContextProd.ALL, 'context')
+def _check_flag(include: _F, expected: type[_F]) -> _F:
+    """Assert that ``include`` is a :class:`Flag` of the expected type and
+    return it unchanged; raise :class:`TypeError` otherwise.  Callers
+    handle the ``None`` case (fall back to the grammar default) before
+    invoking this."""
+    if not isinstance(include, expected):
+        raise TypeError(
+            f'expected {expected.__name__} for include, '
+            f'got {type(include).__name__}'
+        )
+    return include
 
 
 # ---------------------------------------------------------------------------
@@ -408,8 +291,8 @@ def _coerce_context(include) -> ContextProd:
 # ---------------------------------------------------------------------------
 # Programmable filter over every production in the grammar.  Threading a
 # single :class:`Grammar` through every recursive call means a per-type
-# narrowing (e.g. ``bool_=BoolProd.LEAVES``) survives crossing into a
-# different generator, which the legacy per-call ``include=`` did not.
+# narrowing (e.g. ``bool_prods=BoolProd.LEAVES``) survives crossing into a
+# different generator, which a per-call ``include=`` cannot.
 
 
 @dataclasses.dataclass(frozen=True)
@@ -466,20 +349,19 @@ def _real_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: RealProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for an FPy expression of type ``real`` under ``env``.
 
-    ``include`` accepts either a ``set[str]`` of legacy tag names (see
-    :data:`REAL_TAGS`) or a :class:`RealProd` flag (e.g.
-    ``RealProd.ARITH | RealProd.LITERAL``).  ``grammar`` carries the
-    cross-type production filter that threads through recursive calls;
-    ``include`` (when given) overrides only this helper's local filter.
+    ``include`` is an optional :class:`RealProd` flag that overrides
+    ``grammar.real_prods`` for this helper only.  ``grammar`` carries
+    the cross-type production filter that threads through recursive
+    calls.
     """
-    use = _coerce_real(include) if include is not None else grammar.real_prods
+    use = _check_flag(include, RealProd) if include is not None else grammar.real_prods
     rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
     rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
@@ -581,18 +463,17 @@ def _bool_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: BoolProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for an FPy expression of type ``bool`` under ``env``.
 
-    ``include`` accepts either a ``set[str]`` of legacy tag names (see
-    :data:`BOOL_TAGS`) or a :class:`BoolProd` flag.  See
-    :meth:`_real_expr` for the ``grammar`` semantics.
+    ``include`` is an optional :class:`BoolProd` flag that overrides
+    ``grammar.bool_prods`` for this helper only.
     """
-    use = _coerce_bool(include) if include is not None else grammar.bool_prods
+    use = _check_flag(include, BoolProd) if include is not None else grammar.bool_prods
     rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
     rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
@@ -666,20 +547,19 @@ def _list_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: ListProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for a ``list[elt_type]`` expression under ``env``.
 
-    ``include`` accepts a ``set[str]`` (see :data:`LIST_TAGS`) or a
-    :class:`ListProd` flag.  ``RANGE1``/``RANGE2`` only fire for
-    ``RealType`` elements; ``ZIP`` requires a ``TupleType`` element with
-    arity ≥ 1; ``ENUMERATE`` requires a 2-tuple with a ``RealType`` first
-    component.
+    ``include`` is an optional :class:`ListProd` flag.
+    ``RANGE1``/``RANGE2`` only fire for ``RealType`` elements; ``ZIP``
+    requires a ``TupleType`` element with arity ≥ 1; ``ENUMERATE``
+    requires a 2-tuple with a ``RealType`` first component.
     """
-    use = _coerce_list(include) if include is not None else grammar.list_prods
+    use = _check_flag(include, ListProd) if include is not None else grammar.list_prods
     rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
     rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
@@ -774,17 +654,16 @@ def _tuple_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: TupleProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for a ``tuple[*elt_types]`` expression under ``env``.
 
-    ``include`` accepts a ``set[str]`` (see :data:`TUPLE_TAGS`) or a
-    :class:`TupleProd` flag.
+    ``include`` is an optional :class:`TupleProd` flag.
     """
-    use = _coerce_tuple(include) if include is not None else grammar.tuple_prods
+    use = _check_flag(include, TupleProd) if include is not None else grammar.tuple_prods
     rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
     rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
@@ -830,7 +709,7 @@ def _ctx_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: ContextProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
@@ -842,7 +721,7 @@ def _ctx_expr(
     accepted for API symmetry.
     """
     del env, depth, range_arg_min, range_arg_max
-    use = _coerce_context(include) if include is not None else grammar.context_prods
+    use = _check_flag(include, ContextProd) if include is not None else grammar.context_prods
     if ContextProd.LITERAL not in use:
         raise ValueError(
             f'ctx_expr has no productions under include={use!r}; '
@@ -911,15 +790,14 @@ def real_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: RealProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(RealType(), env, depth)``.
 
-    ``include`` accepts a ``set[str]`` of legacy tags (see
-    :data:`REAL_TAGS`) or a :class:`RealProd` flag.
+    ``include`` is an optional :class:`RealProd` flag.
     """
     return _real_expr(
         env, depth, include=include, grammar=grammar,
@@ -931,15 +809,14 @@ def bool_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: BoolProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(BoolType(), env, depth)``.
 
-    ``include`` accepts a ``set[str]`` of legacy tags (see
-    :data:`BOOL_TAGS`) or a :class:`BoolProd` flag.
+    ``include`` is an optional :class:`BoolProd` flag.
     """
     return _bool_expr(
         env, depth, include=include, grammar=grammar,
@@ -952,15 +829,14 @@ def list_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: ListProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(ListType(elt_type), env, depth)``.
 
-    ``include`` accepts a ``set[str]`` of legacy tags (see
-    :data:`LIST_TAGS`) or a :class:`ListProd` flag.
+    ``include`` is an optional :class:`ListProd` flag.
     """
     return _list_expr(
         elt_type, env, depth, include=include, grammar=grammar,
@@ -973,15 +849,14 @@ def tuple_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: TupleProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
     range_arg_min: int | None = None,
     range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(TupleType(*elt_types), env, depth)``.
 
-    ``include`` accepts a ``set[str]`` of legacy tags (see
-    :data:`TUPLE_TAGS`) or a :class:`TupleProd` flag.
+    ``include`` is an optional :class:`TupleProd` flag.
     """
     return _tuple_expr(
         elt_types, env, depth, include=include, grammar=grammar,
@@ -993,13 +868,13 @@ def context_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include=None,
+    include: ContextProd | None = None,
     grammar: Grammar = DEFAULT_GRAMMAR,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(ContextType(), env, depth)``.
 
-    ``include`` accepts a ``set[str]`` (see :data:`CONTEXT_TAGS`) or a
-    :class:`ContextProd` flag.  Contexts sampled from ``grammar.contexts``.
+    ``include`` is an optional :class:`ContextProd` flag.  Contexts
+    sampled from ``grammar.contexts``.
     """
     return _ctx_expr(env, depth, include=include, grammar=grammar)
 

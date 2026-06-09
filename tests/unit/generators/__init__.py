@@ -22,8 +22,6 @@ __all__ = [
     # Grammar surface
     'Grammar', 'DEFAULT_GRAMMAR',
     'RealProd', 'BoolProd', 'ListProd', 'TupleProd', 'ContextProd', 'StmtProd',
-    # Legacy string-tag sets (kept for backward compat)
-    'REAL_TAGS', 'BOOL_TAGS', 'LIST_TAGS', 'TUPLE_TAGS', 'CONTEXT_TAGS',
 ]
 
 from .context import (
@@ -68,10 +66,4 @@ from .fpy_program import (
     TupleProd,
     ContextProd,
     StmtProd,
-    # Legacy string-tag sets (kept for backward compat)
-    REAL_TAGS,
-    BOOL_TAGS,
-    LIST_TAGS,
-    TUPLE_TAGS,
-    CONTEXT_TAGS,
 )
