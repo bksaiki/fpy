@@ -560,6 +560,122 @@ class TestIncludeNarrowing:
         assert 'range' in LIST_TAGS
 
 
+class TestFlagIncludeEquivalence:
+    """The new :class:`Flag` ``include=`` API must accept the same inputs
+    as the legacy string-tag API and produce equivalent strategies.
+    """
+
+    def test_flag_and_string_produce_same_node_classes(self) -> None:
+        """A ``RealProd`` flag and the equivalent ``set[str]`` should let
+        the generator emit the same set of top-level AST classes."""
+        from tests.unit.generators.fpy_program import RealProd, _coerce_real
+
+        flag_form = RealProd.LITERAL | RealProd.ARITH
+        str_form = {'literal', 'arith'}
+        # Coercion lands on the same Flag value.
+        assert _coerce_real(str_form) == flag_form
+
+    def test_unknown_flag_class_rejected(self) -> None:
+        """Passing the wrong-enum's flag to a generator is a ``TypeError``
+        (caught statically by a type checker; this asserts the runtime
+        guard for callers that bypass static checks)."""
+        import pytest as _pytest
+        from tests.unit.generators.fpy_program import BoolProd
+        with _pytest.raises(TypeError, match='RealProd'):
+            real_expr({}, depth=0, include=BoolProd.LITERAL)
+
+    def test_flag_dispatch_emits_only_requested_class(self) -> None:
+        """``include=RealProd.LITERAL`` produces only ``Integer`` literals."""
+        from tests.unit.generators.fpy_program import RealProd
+        from fpy2.ast.fpyast import Integer as _Integer
+
+        @given(real_expr({}, depth=0, include=RealProd.LITERAL))
+        @settings(max_examples=20)
+        def _check(e):
+            assert isinstance(e, _Integer)
+
+        _check()
+
+
+class TestGrammarCrossTypePropagation:
+    """``Grammar`` threads through cross-type recursion, so a narrowing
+    on ``bool_prods`` is respected even when reached via ``_real_expr``'s
+    ``IF_EXPR`` production.  This was the leak the previous string-tag
+    ``include=`` could not fix.
+    """
+
+    def test_bool_narrowing_survives_cross_type_call(self) -> None:
+        """Disable bool ``COMPARE`` / ``AND`` / ``OR`` / ``NOT`` /
+        ``PREDICATE`` via ``Grammar``; every ``IF_EXPR`` condition reached
+        through ``real_expr`` should be a bool literal or variable, never
+        a ``Compare`` / ``Not`` / ``And`` / ``Or`` / predicate.
+        """
+        from tests.unit.generators.fpy_program import (
+            BoolProd, DEFAULT_GRAMMAR, RealProd,
+        )
+        from fpy2.ast.fpyast import (
+            And as _And, BoolVal as _BoolVal, Compare as _Compare,
+            IfExpr as _IfExpr, IsFinite as _IsFinite, IsInf as _IsInf,
+            IsNan as _IsNan, Not as _Not, Or as _Or, Signbit as _Signbit,
+        )
+
+        grammar = DEFAULT_GRAMMAR.narrow(bool_prods=BoolProd.LITERAL)
+
+        @given(real_expr(
+            {}, depth=3,
+            include=RealProd.LITERAL | RealProd.IF_EXPR,
+            grammar=grammar,
+        ))
+        @settings(max_examples=30)
+        def _check(e):
+            # Walk every IfExpr's condition and assert it's a bool literal.
+            stack = [e]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, _IfExpr):
+                    assert isinstance(node.cond, _BoolVal), (
+                        f'expected BoolVal cond, got {type(node.cond).__name__}'
+                    )
+                    stack.extend([node.cond, node.ift, node.iff])
+                # Walk inner nodes for nested IfExprs.
+                for attr in ('args', 'first', 'second', 'arg', 'expr', 'cond',
+                             'ift', 'iff'):
+                    if hasattr(node, attr):
+                        children = getattr(node, attr)
+                        if isinstance(children, (list, tuple)):
+                            stack.extend(c for c in children if isinstance(c, Expr))
+                        elif isinstance(children, Expr):
+                            stack.append(children)
+                # And these classes should never appear under this grammar.
+                assert not isinstance(node, (
+                    _Compare, _Not, _And, _Or,
+                    _IsFinite, _IsInf, _IsNan, _Signbit,
+                )), f'forbidden bool production leaked: {type(node).__name__}'
+
+        _check()
+
+
+class TestGrammarContextList:
+    """``Grammar.contexts`` controls which contexts a ``ContextStmt``
+    can drop into."""
+
+    def test_only_fp32_contexts_appear(self) -> None:
+        """With ``contexts=(fp.FP32,)`` every ``ForeignVal`` produced by
+        ``context_expr`` is exactly ``fp.FP32``."""
+        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
+        from fpy2.ast.fpyast import ForeignVal as _ForeignVal
+
+        grammar = DEFAULT_GRAMMAR.narrow(contexts=(fp.FP32,))
+
+        @given(context_expr({}, depth=0, grammar=grammar))
+        @settings(max_examples=20)
+        def _check(e):
+            assert isinstance(e, _ForeignVal)
+            assert e.val is fp.FP32
+
+        _check()
+
+
 class TestRangeArgKwarg:
     """``range_arg_min`` / ``range_arg_max`` constrain ``Range1`` / ``Range2`` args."""
 
