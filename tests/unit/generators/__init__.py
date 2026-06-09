@@ -22,6 +22,9 @@ __all__ = [
     # Grammar surface
     'Grammar', 'DEFAULT_GRAMMAR',
     'RealProd', 'BoolProd', 'ListProd', 'TupleProd', 'ContextProd', 'StmtProd',
+    # Named Grammar profiles for common scenarios
+    'MINIMAL_PROFILE', 'ROUND_ELIM_PROFILE', 'WIDENING_PROFILE',
+    'LOOP_HEAVY_PROFILE', 'CONTROL_FLOW_PROFILE', 'FRACTIONAL_PROFILE',
 ]
 
 from .context import (
@@ -66,4 +69,13 @@ from .fpy_program import (
     TupleProd,
     ContextProd,
     StmtProd,
+)
+
+from .profiles import (
+    MINIMAL_PROFILE,
+    ROUND_ELIM_PROFILE,
+    WIDENING_PROFILE,
+    LOOP_HEAVY_PROFILE,
+    CONTROL_FLOW_PROFILE,
+    FRACTIONAL_PROFILE,
 )

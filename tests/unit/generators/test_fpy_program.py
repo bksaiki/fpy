@@ -929,3 +929,96 @@ class TestTypeDispatch:
     def test_tuple_dispatch_yields_tuple_expr(self, e: Expr) -> None:
         assert isinstance(e, TupleExpr)
         assert len(e.elts) == 2
+
+
+class TestProfiles:
+    """Named :class:`Grammar` profiles in :mod:`tests.unit.generators.profiles`
+    must each (a) be a valid Grammar and (b) drive ``fpy_function`` to a
+    well-typed program."""
+
+    def test_minimal_smokes(self) -> None:
+        from hypothesis import HealthCheck
+        from . import MINIMAL_PROFILE
+
+        @given(fpy_function(
+            (RealType(),), RealType(), grammar=MINIMAL_PROFILE,
+            max_depth=st.just(1), max_assigns=st.just(1),
+            max_contexts=st.just(0), max_ifs=st.just(0),
+            max_loops=st.just(0), max_whiles=st.just(0),
+        ))
+        @settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow])
+        def _check(f: fp.Function) -> None:
+            # The minimal profile must produce *something* — at least the
+            # required ReturnStmt.
+            assert isinstance(f, fp.Function)
+        _check()
+
+    def test_round_elim_emits_only_arith_and_round(self) -> None:
+        """``ROUND_ELIM_PROFILE`` excludes ``IfExpr``, ``Len``, named
+        unaries, and ``Div`` — only assign / with / arith / round."""
+        from hypothesis import HealthCheck
+        from fpy2.ast.fpyast import (
+            Div as _Div, IfExpr as _IfExpr, Len as _Len,
+            NamedUnaryOp as _NamedUnaryOp, Round as _Round,
+        )
+        from . import ROUND_ELIM_PROFILE
+
+        @given(fpy_function(
+            (RealType(),), RealType(), grammar=ROUND_ELIM_PROFILE,
+            max_depth=st.just(2), max_assigns=st.just(2),
+            max_contexts=st.just(1), max_ifs=st.just(0),
+            max_loops=st.just(0), max_whiles=st.just(0),
+        ))
+        @settings(max_examples=8, suppress_health_check=[HealthCheck.too_slow])
+        def _check(f: fp.Function) -> None:
+            stack: list = [f.ast.body]
+            while stack:
+                node = stack.pop()
+                # No Div, IfExpr, Len, or non-Round NamedUnaryOps.
+                if isinstance(node, _NamedUnaryOp) and not isinstance(node, _Round):
+                    raise AssertionError(
+                        f'unexpected named-unary in ROUND_ELIM_PROFILE: '
+                        f'{type(node).__name__}'
+                    )
+                assert not isinstance(node, (_Div, _IfExpr, _Len))
+                # Recurse over common child attributes.
+                for attr in ('stmts', 'body', 'args', 'elts', 'expr',
+                             'first', 'second', 'third', 'arg', 'cond',
+                             'ift', 'iff', 'value'):
+                    if hasattr(node, attr):
+                        child = getattr(node, attr)
+                        if hasattr(child, 'stmts'):
+                            stack.extend(child.stmts)
+                        elif isinstance(child, (list, tuple)):
+                            stack.extend(child)
+                        elif child is not None:
+                            stack.append(child)
+        _check()
+
+    def test_widening_profile_only_uses_int_fp32_contexts(self) -> None:
+        """``WIDENING_PROFILE.contexts`` is fixed-point + FP32."""
+        from . import WIDENING_PROFILE
+        assert set(WIDENING_PROFILE.contexts) == {fp.SINT8, fp.SINT16, fp.FP32}
+
+    def test_loop_heavy_excludes_if(self) -> None:
+        """``LOOP_HEAVY_PROFILE.stmt_prods`` includes FOR/WHILE but not IF."""
+        from . import LOOP_HEAVY_PROFILE
+        from tests.unit.generators.fpy_program import StmtProd as _StmtProd
+        assert _StmtProd.FOR in LOOP_HEAVY_PROFILE.stmt_prods
+        assert _StmtProd.WHILE in LOOP_HEAVY_PROFILE.stmt_prods
+        assert _StmtProd.IF not in LOOP_HEAVY_PROFILE.stmt_prods
+
+    def test_control_flow_includes_if_and_loops(self) -> None:
+        """``CONTROL_FLOW_PROFILE`` enables the full CONTROL_FLOW alias."""
+        from . import CONTROL_FLOW_PROFILE
+        from tests.unit.generators.fpy_program import StmtProd as _StmtProd
+        assert _StmtProd.CONTROL_FLOW in CONTROL_FLOW_PROFILE.stmt_prods
+
+    def test_fractional_opts_in_all_literal_kinds(self) -> None:
+        """``FRACTIONAL_PROFILE.real_prods`` enables the three slow
+        numeric-literal kinds in addition to the default."""
+        from . import FRACTIONAL_PROFILE
+        assert RealProd.INTEGER in FRACTIONAL_PROFILE.real_prods
+        assert RealProd.DECNUM in FRACTIONAL_PROFILE.real_prods
+        assert RealProd.HEXNUM in FRACTIONAL_PROFILE.real_prods
+        assert RealProd.RATIONAL in FRACTIONAL_PROFILE.real_prods
