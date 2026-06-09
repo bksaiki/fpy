@@ -820,15 +820,25 @@ class TestGrammarStmtProds:
 
     def test_assign_required(self) -> None:
         """Dropping ``StmtProd.ASSIGN`` from ``stmt_prods`` is a hard
-        configuration error — assignments are the only depth-0 base case."""
+        configuration error caught at ``Grammar`` construction — long
+        before any strategy draws.  Assignments are the only depth-0
+        base case."""
         import pytest as _pytest
         from tests.unit.generators.fpy_program import (
             DEFAULT_GRAMMAR, StmtProd,
         )
 
-        grammar = DEFAULT_GRAMMAR.narrow(stmt_prods=StmtProd.WITH)
         with _pytest.raises(ValueError, match='StmtProd.ASSIGN'):
-            stmt_block({}, RealType(), depth=2, grammar=grammar).example()
+            DEFAULT_GRAMMAR.narrow(stmt_prods=StmtProd.WITH)
+
+    def test_empty_contexts_rejected(self) -> None:
+        """An empty ``contexts`` tuple would crash ``context_expr``;
+        catch it eagerly."""
+        import pytest as _pytest
+        from tests.unit.generators.fpy_program import DEFAULT_GRAMMAR
+
+        with _pytest.raises(ValueError, match='non-empty'):
+            DEFAULT_GRAMMAR.narrow(contexts=())
 
 
 class TestRangeArgKwarg:

@@ -269,9 +269,13 @@ class StmtProd(Flag):
     IF = auto()
     FOR = auto()
     WHILE = auto()
-    INDEXED_ASSIGN = auto()  # deferred
+    INDEXED_ASSIGN = auto()       # deferred
     TUPLE_UNPACK_ASSIGN = auto()  # deferred
 
+    # Aliases.
+    LEAVES = ASSIGN
+    CONTROL_FLOW = IF | FOR | WHILE
+    LOOPS = FOR | WHILE
     ALL = (ASSIGN | WITH | IF | FOR | WHILE
            | INDEXED_ASSIGN | TUPLE_UNPACK_ASSIGN)
 
@@ -300,36 +304,59 @@ def _check_flag(include: _F, expected: type[_F]) -> _F:
 # narrowing (e.g. ``bool_prods=BoolProd.LEAVES``) survives crossing into a
 # different generator, which a per-call ``include=`` cannot.
 
+# Productions deferred because their generators aren't implemented yet —
+# enabling one raises :class:`NotImplementedError` in the corresponding
+# helper.  Re-enable by implementing the production and dropping its
+# entry here.
+_DEFERRED_REAL: RealProd = RealProd.CAST
+_DEFERRED_BOOL: BoolProd = BoolProd.ISNORMAL
+_DEFERRED_LIST: ListProd = ListProd.RANGE3 | ListProd.LIST_COMP
+_DEFERRED_STMT: StmtProd = StmtProd.INDEXED_ASSIGN | StmtProd.TUPLE_UNPACK_ASSIGN
+
+# Productions whose generators are implemented but noticeably slow to
+# draw — opt in explicitly when the test needs them (typically by
+# OR-ing into a narrowed ``real_prods``).
+_SLOW_REAL: RealProd = RealProd.DECNUM | RealProd.RATIONAL
+
 
 @dataclasses.dataclass(frozen=True)
 class Grammar:
     """Production filters + literal bounds + ``with``-block context list.
 
     Each ``*_prods`` field gates the corresponding generator's output;
-    defaults mask currently-deferred productions (e.g. ``RealProd.CAST``)
-    and slow-to-draw productions (``RealProd.DECNUM`` / ``RATIONAL``,
-    which roughly triple ``stmt_block`` draw time relative to integer
-    literals — opt in explicitly when testing non-integer literal
-    handling).  ``narrow(...)`` returns a copy with the given fields
-    replaced — the idiomatic way to derive a custom grammar from
-    :data:`DEFAULT_GRAMMAR`.
+    defaults mask :data:`_DEFERRED_*` (productions whose generators
+    aren't implemented yet) and :data:`_SLOW_*` (productions whose
+    Hypothesis strategies materially slow draws — currently ``DECNUM``
+    and ``RATIONAL``, which roughly triple ``stmt_block`` draw time).
+    Opt either back in via :meth:`narrow`.
     """
-    real_prods:    RealProd    = (
-        RealProd.ALL & ~RealProd.CAST & ~RealProd.DECNUM & ~RealProd.RATIONAL
-    )
-    bool_prods:    BoolProd    = BoolProd.ALL    & ~BoolProd.ISNORMAL
-    list_prods:    ListProd    = (
-        ListProd.ALL & ~(ListProd.RANGE3 | ListProd.LIST_COMP)
-    )
+    real_prods:    RealProd    = RealProd.ALL    & ~_DEFERRED_REAL & ~_SLOW_REAL
+    bool_prods:    BoolProd    = BoolProd.ALL    & ~_DEFERRED_BOOL
+    list_prods:    ListProd    = ListProd.ALL    & ~_DEFERRED_LIST
     tuple_prods:   TupleProd   = TupleProd.ALL
     context_prods: ContextProd = ContextProd.ALL
-    stmt_prods:    StmtProd    = (
-        StmtProd.ALL & ~(StmtProd.INDEXED_ASSIGN | StmtProd.TUPLE_UNPACK_ASSIGN)
-    )
+    stmt_prods:    StmtProd    = StmtProd.ALL    & ~_DEFERRED_STMT
 
     contexts:          tuple = tuple(_DEFAULT_CONTEXTS)
     int_literal_range: tuple[int, int] = _LITERAL_RANGE
     range_arg_range:   tuple[int, int] = (_DEFAULT_RANGE_ARG_MIN, _DEFAULT_RANGE_ARG_MAX)
+
+    def __post_init__(self):
+        # Hard preconditions that downstream helpers would otherwise
+        # raise on (or crash with a less helpful message).  Catching
+        # here points the stack trace at the test that built the
+        # grammar, not at the strategy that consumed it.
+        if StmtProd.ASSIGN not in self.stmt_prods:
+            raise ValueError(
+                'Grammar.stmt_prods must include StmtProd.ASSIGN — '
+                'assignments are the only statement kind that fires at '
+                'sub_depth=0 and serves as the body-block base case'
+            )
+        if not self.contexts:
+            raise ValueError(
+                'Grammar.contexts must be non-empty so context_expr can '
+                'sample at least one with-block context'
+            )
 
     def narrow(self, **kw) -> 'Grammar':
         """Return a copy of this grammar with the given fields replaced."""
@@ -965,12 +992,8 @@ def _stmt_block(
     bodies. ``local_types`` overrides the Assign-local type strategy
     (defaults to :func:`arbitrary_type` at depth 1).
     """
-    if StmtProd.ASSIGN not in grammar.stmt_prods:
-        raise ValueError(
-            'stmt_block requires StmtProd.ASSIGN in grammar.stmt_prods — '
-            'assignments are the only statement kind that can fire at '
-            'sub_depth=0 and serve as the body-block base case'
-        )
+    # ``StmtProd.ASSIGN in grammar.stmt_prods`` is validated at
+    # ``Grammar.__post_init__``, so this helper can assume it.
     if local_types is None:
         local_types = _default_local_types()
     counter = [0]
