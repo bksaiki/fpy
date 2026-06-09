@@ -916,7 +916,13 @@ def _stmt_block(
     template ``c = 0; while c < N: <body>; c = c + 1``).
 
     ``grammar`` carries the production filters and context list threaded
-    through every expression sub-strategy.  Per-call ``range_arg_min``/
+    through every expression sub-strategy.  ``grammar.stmt_prods`` also
+    gates which statement kinds can appear: a kind is generated only when
+    *both* its corresponding :class:`StmtProd` flag is set and its
+    ``max_*`` budget is non-zero (so ``max_*`` bounds quantity, and
+    ``stmt_prods`` bounds existence).  ``StmtProd.ASSIGN`` is required —
+    it is the only kind that fires at ``sub_depth=0`` and at the base of
+    any ``min_n=1`` body block.  Per-call ``range_arg_min``/
     ``range_arg_max`` override ``grammar.range_arg_range`` for this call
     only.
 
@@ -927,6 +933,12 @@ def _stmt_block(
     bodies. ``local_types`` overrides the Assign-local type strategy
     (defaults to :func:`arbitrary_type` at depth 1).
     """
+    if StmtProd.ASSIGN not in grammar.stmt_prods:
+        raise ValueError(
+            'stmt_block requires StmtProd.ASSIGN in grammar.stmt_prods — '
+            'assignments are the only statement kind that can fire at '
+            'sub_depth=0 and serve as the body-block base case'
+        )
     if local_types is None:
         local_types = _default_local_types()
     counter = [0]
@@ -955,14 +967,20 @@ def _stmt_block(
         n = draw(st.integers(min_n, max(min_n, max_n)))
         stmts: list[Stmt] = []
         for _ in range(n):
-            kinds = ['assign']
-            if ctx_budget > 0 and sub_depth > 0:
+            kinds: list[str] = []
+            if StmtProd.ASSIGN in grammar.stmt_prods:
+                kinds.append('assign')
+            if (StmtProd.WITH in grammar.stmt_prods
+                    and ctx_budget > 0 and sub_depth > 0):
                 kinds.append('context')
-            if if_budget > 0 and sub_depth > 0:
+            if (StmtProd.IF in grammar.stmt_prods
+                    and if_budget > 0 and sub_depth > 0):
                 kinds.append('if')
-            if loop_budget > 0 and sub_depth > 0:
+            if (StmtProd.FOR in grammar.stmt_prods
+                    and loop_budget > 0 and sub_depth > 0):
                 kinds.append('for')
-            if while_budget > 0 and sub_depth > 0:
+            if (StmtProd.WHILE in grammar.stmt_prods
+                    and while_budget > 0 and sub_depth > 0):
                 kinds.append('while')
             kind = draw(st.sampled_from(kinds))
 

@@ -655,6 +655,107 @@ class TestGrammarContextList:
         _check()
 
 
+class TestGrammarStmtProds:
+    """``Grammar.stmt_prods`` gates which statement kinds appear in
+    bodies, complementing the ``max_*`` budgets (which bound quantity)."""
+
+    def test_with_blocks_disabled(self) -> None:
+        """``stmt_prods`` without ``WITH`` suppresses ``ContextStmt`` even
+        when ``max_contexts > 0``."""
+        from hypothesis import HealthCheck
+        from tests.unit.generators.fpy_program import (
+            DEFAULT_GRAMMAR, StmtProd,
+        )
+        from fpy2.ast.fpyast import ContextStmt as _ContextStmt
+
+        grammar = DEFAULT_GRAMMAR.narrow(
+            stmt_prods=StmtProd.ASSIGN | StmtProd.IF | StmtProd.FOR | StmtProd.WHILE,
+        )
+
+        @given(fpy_real_funcdef(
+            num_args=st.just(0),
+            max_depth=st.just(2),
+            max_assigns=st.just(2),
+            max_contexts=st.just(2),      # would emit ContextStmts under default
+            max_ifs=st.just(0),
+            max_loops=st.just(0),
+            max_whiles=st.just(0),
+            grammar=grammar,
+        ))
+        @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
+        def _check(fd) -> None:
+            stack = [fd.body]
+            while stack:
+                node = stack.pop()
+                assert not isinstance(node, _ContextStmt), (
+                    'ContextStmt leaked despite WITH disabled in stmt_prods'
+                )
+                if hasattr(node, 'stmts'):
+                    stack.extend(node.stmts)
+                if hasattr(node, 'body'):
+                    body = getattr(node, 'body')
+                    if hasattr(body, 'stmts'):
+                        stack.extend(body.stmts)
+
+        _check()
+
+    def test_loops_only_yields_no_ifs_or_withs(self) -> None:
+        """``stmt_prods=ASSIGN | FOR`` admits only assigns and for-loops."""
+        from hypothesis import HealthCheck
+        from tests.unit.generators.fpy_program import (
+            DEFAULT_GRAMMAR, StmtProd,
+        )
+        from fpy2.ast.fpyast import (
+            ContextStmt as _ContextStmt, IfStmt as _IfStmt,
+            If1Stmt as _If1Stmt, WhileStmt as _WhileStmt,
+        )
+
+        grammar = DEFAULT_GRAMMAR.narrow(
+            stmt_prods=StmtProd.ASSIGN | StmtProd.FOR,
+        )
+
+        @given(fpy_real_funcdef(
+            num_args=st.just(0),
+            max_depth=st.just(2),
+            max_assigns=st.just(2),
+            max_contexts=st.just(2),
+            max_ifs=st.just(2),
+            max_loops=st.just(2),
+            max_whiles=st.just(2),
+            grammar=grammar,
+        ))
+        @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
+        def _check(fd) -> None:
+            stack = [fd.body]
+            forbidden = (_ContextStmt, _IfStmt, _If1Stmt, _WhileStmt)
+            while stack:
+                node = stack.pop()
+                assert not isinstance(node, forbidden), (
+                    f'{type(node).__name__} leaked despite '
+                    f'stmt_prods=ASSIGN | FOR'
+                )
+                if hasattr(node, 'stmts'):
+                    stack.extend(node.stmts)
+                if hasattr(node, 'body'):
+                    body = getattr(node, 'body')
+                    if hasattr(body, 'stmts'):
+                        stack.extend(body.stmts)
+
+        _check()
+
+    def test_assign_required(self) -> None:
+        """Dropping ``StmtProd.ASSIGN`` from ``stmt_prods`` is a hard
+        configuration error — assignments are the only depth-0 base case."""
+        import pytest as _pytest
+        from tests.unit.generators.fpy_program import (
+            DEFAULT_GRAMMAR, StmtProd,
+        )
+
+        grammar = DEFAULT_GRAMMAR.narrow(stmt_prods=StmtProd.WITH)
+        with _pytest.raises(ValueError, match='StmtProd.ASSIGN'):
+            stmt_block({}, RealType(), depth=2, grammar=grammar).example()
+
+
 class TestRangeArgKwarg:
     """``range_arg_min`` / ``range_arg_max`` constrain ``Range1`` / ``Range2`` args."""
 
