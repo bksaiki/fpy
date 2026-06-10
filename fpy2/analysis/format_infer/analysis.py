@@ -1244,10 +1244,10 @@ class _FormatInferInstance(Visitor):
         arg_fmts = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case Min() | Max():
-                # ``min(a, b, …)`` / ``max(a, b, …)`` is semantically
-                # ``a < b ? a : b`` chained — selection, not arithmetic.
-                # The result is exactly one operand, so the format is the
-                # join of operand formats (mirrors :meth:`_visit_if_expr`).
+                # Selection, not arithmetic — ``min(a, b, …)`` is
+                # ``a < b ? a : b`` chained.  The result is exactly one
+                # operand, so the format joins operand formats (no scope
+                # widening; mirrors :meth:`_visit_if_expr`).
                 return reduce(self._join, arg_fmts)
             case Zip():
                 # ``zip(xs1, ..., xsN)`` yields a list of N-tuples whose
@@ -1255,12 +1255,10 @@ class _FormatInferInstance(Visitor):
                 # element formats — *not* from the active rounding context.
                 # This matches the runtime semantics: zip is a structural
                 # rearrangement and never rounds.
-                elts: list[FormatBound] = []
-                for fmt in arg_fmts:
-                    if isinstance(fmt, ListFormat):
-                        elts.append(fmt.elt)
-                    else:
-                        elts.append(REAL_FORMAT)
+                elts = [
+                    fmt.elt if isinstance(fmt, ListFormat) else REAL_FORMAT
+                    for fmt in arg_fmts
+                ]
                 return ListFormat(TupleFormat(tuple(elts)))
             case _:
                 return self._op_bound(e)
