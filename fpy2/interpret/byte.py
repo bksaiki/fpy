@@ -490,12 +490,16 @@ class BytecodeCompiler(Visitor):
 
     def _location_to_attributes(self, loc: Location | None) -> dict[str, int]:
         if loc is None:
-            # dummy value to signal missing location information
+            # Synthetic nodes (e.g. generator-built ASTs without parser
+            # locations) need a valid placeholder.  Python 3.14's bytecode
+            # CFG analyzer rejects ``lineno <= 0``: a sentinel ``-1`` here
+            # breaks stack-depth tracking across control-flow joins and
+            # surfaces as ``Invalid CFG, stack underflow`` at compile time.
             return {
-                'lineno': -1,
-                'col_offset': -1,
-                'end_lineno': -1,
-                'end_col_offset': -1
+                'lineno': 1,
+                'col_offset': 0,
+                'end_lineno': 1,
+                'end_col_offset': 0
             }
         else:
             return {
