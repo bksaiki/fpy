@@ -104,6 +104,8 @@ __all__ = [
     # Other arithmetic
     'Max',
     'Min',
+    'AMax',
+    'AMin',
     'Mod',
     'Fmod',
     'Remainder',
@@ -861,6 +863,22 @@ class Max(NamedNaryOp):
 
 class Min(NamedNaryOp):
     """FPy node: `min(x, y, ...)`"""
+    __slots__ = ()
+
+class AMax(NamedUnaryOp):
+    """FPy node: ``max(xs)`` reduce-form over ``xs : list[real]``.
+
+    Distinct AST class from :class:`Max` (the variadic scalar form) so
+    type checking is syntax-directed — ``isinstance(e, AMax)`` is the
+    complete discriminator between the two type signatures
+    (``list[real] -> real`` vs ``real -> ... -> real``).  Name follows
+    NumPy's :func:`numpy.amax`.
+    """
+    __slots__ = ()
+
+class AMin(NamedUnaryOp):
+    """FPy node: ``min(xs)`` reduce-form — list-form analogue of
+    :class:`AMax`."""
     __slots__ = ()
 
 class Mod(BinaryOp):
