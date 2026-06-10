@@ -508,8 +508,15 @@ class Parser:
                 return cls3(args[0], args[1], args[2], loc)
         elif fn in _nary_table:
             cls = _nary_table[fn]
-            if (cls is Min or cls is Max) and len(args) < 2:
-                raise self._parse_error(f'FPy expects at least 2 arguments for `{fn}`', e)
+            # min/max/fmin/fmax split at parse time by arity: 1 arg →
+            # reduce-form (AMin/AMax over a list), ≥ 2 args → variadic
+            # scalar form.  See AMin/AMax docstrings for the rationale.
+            if cls is Min and len(args) == 1:
+                return AMin(func, args[0], loc)
+            if cls is Max and len(args) == 1:
+                return AMax(func, args[0], loc)
+            if (cls is Min or cls is Max) and len(args) == 0:
+                raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
             elif cls is Empty and len(args) < 1:
                 raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
             if kwargs:
