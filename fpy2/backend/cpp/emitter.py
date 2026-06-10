@@ -40,12 +40,12 @@ from ...analysis import (
     DefineUseAnalysis, FormatAnalysis
 )
 from ...ast.fpyast import (
-    And, Argument, Assign, AssertStmt, Ast, BinaryOp, BoolVal, Cast, Compare,
-    ContextStmt, Decnum, Digits, Dim, EffectStmt, Empty, Enumerate, Expr,
-    ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign, Integer,
-    IsFinite, IsInf, IsNan, IsNormal, Len, ListComp, ListExpr, ListRef,
-    ListSlice, Max, Min, NamedId, NaryOp, Not, Or, Range1, Range2, Range3,
-    Rational, ReturnStmt, Round, Signbit, Size, StmtBlock, Sum,
+    AMax, AMin, And, Argument, Assign, AssertStmt, Ast, BinaryOp, BoolVal,
+    Cast, Compare, ContextStmt, Decnum, Digits, Dim, EffectStmt, Empty,
+    Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign,
+    Integer, IsFinite, IsInf, IsNan, IsNormal, Len, ListComp, ListExpr,
+    ListRef, ListSlice, Max, Min, NamedId, NaryOp, Not, Or, Range1, Range2,
+    Range3, Rational, ReturnStmt, Round, Signbit, Size, StmtBlock, Sum,
     TernaryOp, TupleBinding, TupleExpr, UnaryOp, UnderscoreId, Var,
     WhileStmt, Zip,
 )
@@ -1095,6 +1095,8 @@ class CppEmitter(Visitor):
                     f'std::accumulate({arg}.begin(), {arg}.end(), '
                     f'static_cast<{result_ty.format()}>(0))'
                 )
+            case AMin() | AMax():
+                return self._emit_amin_amax(e, arg)
             case Enumerate():
                 return self._emit_enumerate(e, arg)
             case UnaryOp() if type(e) in self.op_table.unary:
@@ -1518,6 +1520,55 @@ class CppEmitter(Visitor):
         for nxt in casted[1:]:
             result = f'{fn}({result}, {nxt})'
         return result
+
+    def _emit_amin_amax(self, e: 'AMin | AMax', arg_str: str) -> str:
+        """Reduce ``min(xs)`` / ``max(xs)`` to a hoisted for-loop.
+
+        Combiner mirrors :meth:`_emit_min_max`: ``std::fmin``/``fmax``
+        for FP results, ``std::min``/``max`` (templated) for integer
+        ones.  Both demand uniform operand types — we cast each element
+        to ``result_ty`` via :meth:`_maybe_cast`, which raises on a
+        lossy cast.
+
+        Empty-list behavior is undefined (matches the interpreter's
+        ``min([]) → ValueError`` contract); the emit indexes ``xs[0]``
+        without a guard.
+        """
+        result_ty = self._storage_for_expr(e)
+        if not isinstance(result_ty, CppScalar):
+            raise CppEmitError(
+                f'expected scalar result for {type(e).__name__}, got {result_ty!r}',
+                at=e,
+            )
+        arg_storage = self._storage_for_expr(e.arg)
+        if not (isinstance(arg_storage, CppList)
+                and isinstance(arg_storage.elt, CppScalar)):
+            raise CppEmitError(
+                f'expected list[scalar] arg for {type(e).__name__}, '
+                f'got {arg_storage!r}',
+                at=e,
+            )
+        elt_ty = arg_storage.elt
+        if result_ty.is_float():
+            fn = 'std::fmin' if isinstance(e, AMin) else 'std::fmax'
+        else:
+            fn = 'std::min' if isinstance(e, AMin) else 'std::max'
+
+        src = self._fresh_temp()
+        self.writer.add_line(f'auto {src} = {arg_str};')
+        acc = self._fresh_temp()
+        init = self._maybe_cast(f'{src}[0]', elt_ty, result_ty, at=e)
+        self.writer.add_line(f'{result_ty.format()} {acc} = {init};')
+        i = self._fresh_temp()
+        self.writer.add_line(
+            f'for (size_t {i} = 1; {i} < {src}.size(); ++{i}) {{'
+        )
+        self.writer.indent()
+        elt = self._maybe_cast(f'{src}[{i}]', elt_ty, result_ty, at=e)
+        self.writer.add_line(f'{acc} = {fn}({acc}, {elt});')
+        self.writer.dedent()
+        self.writer.add_line('}')
+        return acc
 
     def _emit_empty(self, e: Empty, ctx) -> str:
         """``empty(d1, ..., dN)`` builds an ``N``-dimensional zero-

@@ -1,5 +1,7 @@
 """Compilation from FPy to FPCore."""
 
+from typing import Callable
+
 import titanfp.fpbench.fpcast as fpc
 
 from ..analysis import DefineUse, DefineUseAnalysis
@@ -412,12 +414,36 @@ class _FPCoreCompileInstance(Visitor):
         return min_expr
 
     def _visit_sum(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # expand sum expression by left associativity
-        # the sum expression has at most one argument
-        # (let ([t <tuple>])
-        #   (for ([i (! :precision integer (- (size t 0) 1))]
-        #         [accum (ref t i) (+ accum (ref t (! :precision integer (+ i 1))))])
-        #     accum))
+        # sum(xs) → fold over the list with +.  Shape documented on
+        # :meth:`_visit_list_reduce`.
+        return self._visit_list_reduce(arg, fpc.Add, ctx)
+
+    def _visit_amin(self, arg: Expr, ctx: None) -> fpc.Expr:
+        # min(xs) → fold over the list with fmin.  Mirrors _visit_sum.
+        return self._visit_list_reduce(arg, fpc.Fmin, ctx)
+
+    def _visit_amax(self, arg: Expr, ctx: None) -> fpc.Expr:
+        # max(xs) → fold over the list with fmax.  Mirrors _visit_sum.
+        return self._visit_list_reduce(arg, fpc.Fmax, ctx)
+
+    def _visit_list_reduce(
+        self,
+        arg: Expr,
+        combine: Callable[[fpc.Expr, fpc.Expr], fpc.Expr],
+        ctx: None,
+    ) -> fpc.Expr:
+        """Shared lowering for left-associative list reductions
+        (``sum``/``min``/``max``).  Builds::
+
+            (let ([t <tuple>])
+              (for ([i (! :precision integer (- (size t 0) 1))]
+                    [accum (ref t i) (<combine> accum (ref t (! :precision integer (+ i 1))))])
+                accum))
+
+        Empty-input semantics are inherited from FPCore's ``for`` over a
+        zero count (the init expression still runs at ``i = 0`` — same
+        UB as the interpreter / cpp emitter contract).
+        """
         tuple_id = str(self.gensym.fresh('t'))
         iter_id = str(self.gensym.fresh('i'))
         accum_id = str(self.gensym.fresh('accum'))
@@ -431,7 +457,7 @@ class _FPCoreCompileInstance(Visitor):
                 [(
                     accum_id,
                     fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)),
-                    fpc.Ctx(idx_ctx, fpc.Add(accum_id, fpc.Ref(fpc.Var(tuple_id), fpc.Add(fpc.Var(iter_id), fpc.Integer(1)))))
+                    fpc.Ctx(idx_ctx, combine(accum_id, fpc.Ref(fpc.Var(tuple_id), fpc.Add(fpc.Var(iter_id), fpc.Integer(1)))))
                 )],
                 fpc.Var(accum_id)
             )
@@ -469,6 +495,12 @@ class _FPCoreCompileInstance(Visitor):
                 case Sum():
                     # sum expression
                     return self._visit_sum(e.arg, ctx)
+                case AMin():
+                    # min(xs) reduce-form
+                    return self._visit_amin(e.arg, ctx)
+                case AMax():
+                    # max(xs) reduce-form
+                    return self._visit_amax(e.arg, ctx)
                 case _:
                     raise NotImplementedError('no FPCore operator for', e)
 

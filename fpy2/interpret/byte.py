@@ -586,6 +586,12 @@ class BytecodeCompiler(Visitor):
                 func = pyast.Name(id='__fpy_range', ctx=pyast.Load(), **attrs)
                 arg_none = pyast.Constant(value=None, kind=None, **attrs)
                 return pyast.Call(func=func, args=[arg_none, arg, arg_none], keywords=[], **attrs)
+            case AMin() | AMax():
+                # Reduce-form lowers to Python's built-in min/max on the
+                # list, matching the n-ary Min/Max emit.
+                builtin = 'min' if isinstance(e, AMin) else 'max'
+                func = pyast.Name(id=builtin, ctx=pyast.Load(), **attrs)
+                return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
             case _:
                 raise NotImplementedError(f'unsupported unary operation: {type(e).__name__}')
 

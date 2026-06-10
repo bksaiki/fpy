@@ -59,6 +59,8 @@ import fpy2 as fp
 from fpy2.ast.fpyast import (
     Abs,
     Add,
+    AMax,
+    AMin,
     And,
     Argument,
     Assign,
@@ -199,6 +201,8 @@ class RealProd(Flag):
     LOG = auto()
     EXP = auto()
     LEN = auto()
+    AMIN = auto()          # ``min(xs)`` reduce-form over ``xs : list[real]``
+    AMAX = auto()          # ``max(xs)`` reduce-form
     IF_EXPR = auto()
     ROUND = auto()
     CAST = auto()          # deferred; raises if generated
@@ -208,8 +212,9 @@ class RealProd(Flag):
     NUMERIC_LITERAL = INTEGER | DECNUM | HEXNUM | RATIONAL
     ARITH = ADD | SUB | MUL | DIV | NEG | ABS
     NAMED_UNARY = SQRT | SIN | COS | LOG | EXP
+    LIST_REDUCE = AMIN | AMAX
     LEAVES = NUMERIC_LITERAL | VAR
-    ALL = (LEAVES | ARITH | NAMED_UNARY | LEN | IF_EXPR | ROUND | CAST)
+    ALL = (LEAVES | ARITH | NAMED_UNARY | LEN | LIST_REDUCE | IF_EXPR | ROUND | CAST)
 
 
 class BoolProd(Flag):
@@ -319,7 +324,16 @@ _DEFERRED_STMT: StmtProd = StmtProd.INDEXED_ASSIGN | StmtProd.TUPLE_UNPACK_ASSIG
 # Productions whose generators are implemented but noticeably slow to
 # draw — opt in explicitly when the test needs them (typically by
 # OR-ing into a narrowed ``real_prods``).
-_SLOW_REAL: RealProd = RealProd.DECNUM | RealProd.HEXNUM | RealProd.RATIONAL
+#
+# ``AMIN`` / ``AMAX`` are slow because each draw spins up a fresh
+# ``_list_expr`` sub-strategy that recursively generates a list of
+# reals — twice over (one per production).  ``LEN`` already takes this
+# path on its own; adding AMIN+AMAX triples that cost and pushes
+# Hypothesis past the ``too_slow`` health check.
+_SLOW_REAL: RealProd = (
+    RealProd.DECNUM | RealProd.HEXNUM | RealProd.RATIONAL
+    | RealProd.AMIN | RealProd.AMAX
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -494,6 +508,23 @@ def _real_expr(
             inner.append(sub_real_list.map(
                 lambda xs: Len(_func_sym('len'), xs, None)
             ))
+        # ``min(xs)`` / ``max(xs)`` over ``xs : list[real]``.  Distinct AST
+        # nodes from the variadic scalar ``Min``/``Max`` (which the
+        # generator does not yet emit).  Reuses the same list-of-real
+        # sub-strategy as ``LEN``.
+        if RealProd.AMIN in use or RealProd.AMAX in use:
+            sub_real_list = _list_expr(
+                RealType(), env, depth - 1, grammar=grammar,
+                range_arg_min=rmin, range_arg_max=rmax,
+            )
+            if RealProd.AMIN in use:
+                inner.append(sub_real_list.map(
+                    lambda xs: AMin(_func_sym('min'), xs, None)
+                ))
+            if RealProd.AMAX in use:
+                inner.append(sub_real_list.map(
+                    lambda xs: AMax(_func_sym('max'), xs, None)
+                ))
         if RealProd.ROUND in use:
             # ``Cast`` is deliberately not generated: it asserts the
             # rounded value is exact, which fails whenever the value
