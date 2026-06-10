@@ -116,6 +116,10 @@ Format inference rules
 - **Indexing/slicing**: list indexing returns the list's element format; list
   slicing returns the same ``ListFormat`` as the value.
 - **Inline conditionals** (``IfExpr``): ``join(then_fmt, else_fmt)``.
+- **Selection ops** (``Min`` / ``Max`` / ``AMin`` / ``AMax``): the result
+  is exactly one operand, so the format is the join of operand formats
+  (for the variadic forms) or the list element format (for the reduce
+  forms) — no widening to the active scope.
 """
 
 import operator
@@ -1090,6 +1094,13 @@ class _FormatInferInstance(Visitor):
             case Sum():
                 assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
                 return self._sum_bound(e, arg_fmt)
+            case AMin() | AMax():
+                # ``min(xs)`` / ``max(xs)`` selects one element of ``xs``
+                # exactly — no rounding.  Result format is the list's
+                # element format (which already joins all elements).
+                assert isinstance(arg_fmt, ListFormat), \
+                    f'expected ListFormat for argument of {type(e).__name__}, got {arg_fmt!r}'
+                return arg_fmt.elt
             case Round() | Cast():
                 # Identity-when-fits.  ``Round`` rounds the argument to
                 # the active scope; ``Cast`` rounds and asserts the
@@ -1231,20 +1242,28 @@ class _FormatInferInstance(Visitor):
 
     def _visit_naryop(self, e: NaryOp, ctx: None) -> FormatBound:
         arg_fmts = [self._visit_expr(arg, ctx) for arg in e.args]
-        if isinstance(e, Zip):
-            # ``zip(xs1, ..., xsN)`` yields a list of N-tuples whose
-            # element formats are taken directly from the input lists'
-            # element formats — *not* from the active rounding context.
-            # This matches the runtime semantics: zip is a structural
-            # rearrangement and never rounds.
-            elts: list[FormatBound] = []
-            for fmt in arg_fmts:
-                if isinstance(fmt, ListFormat):
-                    elts.append(fmt.elt)
-                else:
-                    elts.append(REAL_FORMAT)
-            return ListFormat(TupleFormat(tuple(elts)))
-        return self._op_bound(e)
+        match e:
+            case Min() | Max():
+                # ``min(a, b, …)`` / ``max(a, b, …)`` is semantically
+                # ``a < b ? a : b`` chained — selection, not arithmetic.
+                # The result is exactly one operand, so the format is the
+                # join of operand formats (mirrors :meth:`_visit_if_expr`).
+                return reduce(self._join, arg_fmts)
+            case Zip():
+                # ``zip(xs1, ..., xsN)`` yields a list of N-tuples whose
+                # element formats are taken directly from the input lists'
+                # element formats — *not* from the active rounding context.
+                # This matches the runtime semantics: zip is a structural
+                # rearrangement and never rounds.
+                elts: list[FormatBound] = []
+                for fmt in arg_fmts:
+                    if isinstance(fmt, ListFormat):
+                        elts.append(fmt.elt)
+                    else:
+                        elts.append(REAL_FORMAT)
+                return ListFormat(TupleFormat(tuple(elts)))
+            case _:
+                return self._op_bound(e)
 
     # Function calls: conservatively the top format of the return type
     def _visit_call(self, e: Call, ctx: None) -> FormatBound:
