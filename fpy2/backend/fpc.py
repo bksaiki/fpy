@@ -414,12 +414,8 @@ class _FPCoreCompileInstance(Visitor):
         return min_expr
 
     def _visit_sum(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # expand sum expression by left associativity
-        # the sum expression has at most one argument
-        # (let ([t <tuple>])
-        #   (for ([i (! :precision integer (- (size t 0) 1))]
-        #         [accum (ref t i) (+ accum (ref t (! :precision integer (+ i 1))))])
-        #     accum))
+        # sum(xs) → fold over the list with +.  Shape documented on
+        # :meth:`_visit_list_reduce`.
         return self._visit_list_reduce(arg, fpc.Add, ctx)
 
     def _visit_amin(self, arg: Expr, ctx: None) -> fpc.Expr:

@@ -517,7 +517,7 @@ class Parser:
                 return AMax(func, args[0], loc)
             if (cls is Min or cls is Max) and len(args) == 0:
                 raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
-            elif cls is Empty and len(args) < 1:
+            if cls is Empty and len(args) < 1:
                 raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
             if kwargs:
                 raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)

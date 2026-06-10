@@ -1522,21 +1522,15 @@ class CppEmitter(Visitor):
         return result
 
     def _emit_amin_amax(self, e: 'AMin | AMax', arg_str: str) -> str:
-        """Reduce ``min(xs)`` / ``max(xs)`` over ``xs``.
+        """Reduce ``min(xs)`` / ``max(xs)`` to a hoisted for-loop.
 
-        Combiner choice mirrors :meth:`_emit_min_max`: ``std::fmin`` /
-        ``std::fmax`` for FP results, ``std::min`` / ``std::max`` for
-        integer ones.  Both forms require uniform operand types — the
-        templated integer overload deduces ``T`` from both args, and
-        ``std::fmin`` / ``std::fmax`` only overload on ``(float,
-        float)``, ``(double, double)``, ``(long double, long double)``.
-        We force uniformity by casting each list element to ``result_ty``
-        via :meth:`_maybe_cast`, which raises if the cast would be lossy
-        (the right behavior — we can't safely store a wider element in a
-        narrower result).
+        Combiner mirrors :meth:`_emit_min_max`: ``std::fmin``/``fmax``
+        for FP results, ``std::min``/``max`` (templated) for integer
+        ones.  Both demand uniform operand types — we cast each element
+        to ``result_ty`` via :meth:`_maybe_cast`, which raises on a
+        lossy cast.
 
-        Hoists a temp + for-loop for iterative reduction.  Empty-list
-        behavior is undefined (matches the interpreter's
+        Empty-list behavior is undefined (matches the interpreter's
         ``min([]) → ValueError`` contract); the emit indexes ``xs[0]``
         without a guard.
         """
