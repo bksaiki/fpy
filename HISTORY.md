@@ -1,5 +1,12 @@
 # Version History
 
+## [0.1.8] - 2026-06-10
+### Features:
+  - Language:
+    - support Python `min/max` over lists
+  - Testing:
+    - added program generators for PBT tests over FPy programs
+
 ## [0.1.7] - 2026-05-26
 ### Features:
   - AST:
