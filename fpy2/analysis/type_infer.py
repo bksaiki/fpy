@@ -328,8 +328,8 @@ class _TypeInferInstance(Visitor):
                     ty = self._fresh_type_var()
                     self._unify(arg_ty, ListType(ty))
                     return ListType(TupleType(RealType(None), ty))
-                case Sum():
-                    # sum operator
+                case Sum() | AMin() | AMax():
+                    # list-reduce operators: list[real] -> real
                     self._unify(arg_ty, ListType(RealType(None)))
                     return RealType(None)
                 case DeclContext():
