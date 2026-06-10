@@ -8,7 +8,7 @@ double as fuzz tests for those passes.
 
 import fpy2 as fp
 
-from hypothesis import given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings, strategies as st
 
 from fpy2.analysis.type_infer import TypeInfer
 from fpy2.ast.fpyast import (
@@ -19,9 +19,12 @@ from fpy2.env import ForeignEnv
 from fpy2.types import BoolType, ListType, RealType, TupleType
 
 from . import (
-    BOOL_TAGS,
-    LIST_TAGS,
-    REAL_TAGS,
+    BoolProd,
+    DEFAULT_GRAMMAR,
+    Grammar,
+    ListProd,
+    RealProd,
+    StmtProd,
     arbitrary_type,
     bool_expr,
     context_expr,
@@ -91,8 +94,10 @@ class TestRealExprStrategyDirectly:
 
     @given(real_expr({}, depth=0))
     def test_empty_env_leaf_is_a_literal(self, e: Expr) -> None:
-        # No vars in env + depth=0 ⇒ leaves only ⇒ must be a literal node.
-        assert isinstance(e, Integer)
+        # No vars in env + depth=0 ⇒ leaves only ⇒ must be a numeric
+        # literal (Integer / Decnum / Hexnum / Rational).
+        from fpy2.ast.fpyast import RationalVal
+        assert isinstance(e, RationalVal)
 
 
 class TestBoolExprStrategyDirectly:
@@ -137,6 +142,31 @@ class TestListExprStrategyDirectly:
         assert isinstance(analysis.return_type.elt, BoolType)
 
 
+class TestRange3:
+    """``ListProd.RANGE3`` generates ``range(start, stop, step)`` calls
+    with non-zero step."""
+
+    def test_range3_only_emits_range3(self) -> None:
+        """``include=ListProd.RANGE3`` emits exactly ``Range3`` calls
+        with a non-zero step Integer."""
+        from fpy2.ast.fpyast import Range3 as _Range3, Integer as _Integer
+
+        @given(list_expr(RealType(), {}, depth=2, include=ListProd.RANGE3))
+        @settings(max_examples=30)
+        def _check(e: Expr) -> None:
+            assert isinstance(e, _Range3)
+            assert isinstance(e.third, _Integer)
+            assert e.third.val != 0, 'step must be non-zero'
+
+        _check()
+
+    def test_range3_in_default_grammar(self) -> None:
+        """``Range3`` is in the default grammar — opt out via
+        ``narrow(list_prods=…)`` if your test wants ``RANGE1 | RANGE2``
+        only."""
+        assert ListProd.RANGE3 in DEFAULT_GRAMMAR.list_prods
+
+
 class TestTupleExprStrategyDirectly:
     """Exercise ``tuple_expr`` and verify produced tuples are well-typed."""
 
@@ -159,17 +189,23 @@ class TestTupleExprStrategyDirectly:
 
 
 class TestStmtBlock:
-    """Statement-block generator."""
+    """Statement-block generator.
+
+    Both tests suppress Hypothesis's ``too_slow`` health check because
+    ``stmt_block`` is heavier than a leaf-expr strategy (a single draw
+    can recurse through nested ``with``/``if``/``for`` bodies) — the
+    health check trips on the first few draws under unfortunate seeds
+    even when later draws are fast.
+    """
 
     @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_ends_with_return(self, block) -> None:
-        from fpy2.ast.fpyast import ReturnStmt
         assert isinstance(block.stmts[-1], ReturnStmt)
 
     @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_typechecks_when_wrapped(self, block) -> None:
-        from fpy2.ast.fpyast import FuncMeta
-        from fpy2.env import ForeignEnv
         fd = FuncDef('f', [], block,
                      FuncMeta(set(), None, None, {}, ForeignEnv.default()))
         analysis = TypeInfer.check(fd)
@@ -397,18 +433,18 @@ class TestZipEnumerate:
 
     @given(list_expr(
         TupleType(RealType(), RealType(), RealType()), {}, depth=2,
-        include={'zip'},
+        include=ListProd.ZIP,
     ))
     def test_zip_only_for_arity3_typechecks(self, e: Expr) -> None:
-        # arity 3 → enumerate doesn't apply; with include={'zip'} we should
-        # always get a Zip node.
+        # arity 3 → enumerate doesn't apply; with include=ListProd.ZIP we
+        # should always get a Zip node.
         from fpy2.ast.fpyast import Zip as _Zip
         assert isinstance(e, _Zip)
         assert len(e.args) == 3
 
     @given(list_expr(
         TupleType(RealType(), RealType()), {}, depth=2,
-        include={'enumerate'},
+        include=ListProd.ENUMERATE,
     ))
     def test_enumerate_only_typechecks(self, e: Expr) -> None:
         from fpy2.ast.fpyast import Enumerate as _Enumerate
@@ -504,7 +540,7 @@ class TestContextStmt:
 class TestIncludeNarrowing:
     """``include`` filters which productions a helper emits."""
 
-    @given(real_expr({}, depth=3, include={'literal', 'arith'}))
+    @given(real_expr({}, depth=3, include=RealProd.LITERAL | RealProd.ARITH))
     def test_real_arith_only(self, e: Expr) -> None:
         from fpy2.ast.fpyast import (
             IfExpr, Len, NamedUnaryOp,
@@ -522,11 +558,11 @@ class TestIncludeNarrowing:
                     if isinstance(children, (list, tuple)):
                         stack.extend(c for c in children if isinstance(c, Expr))
 
-    @given(real_expr({}, depth=0, include={'literal'}))
+    @given(real_expr({}, depth=0, include=RealProd.LITERAL))
     def test_literal_only_leaf(self, e: Expr) -> None:
         assert isinstance(e, Integer)
 
-    @given(bool_expr({}, depth=3, include={'literal', 'compare'}))
+    @given(bool_expr({}, depth=3, include=BoolProd.LITERAL | BoolProd.COMPARE))
     def test_bool_compare_only(self, e: Expr) -> None:
         from fpy2.ast.fpyast import And, Not, Or
         # No And/Or/Not — only literal leaves and Compare inner.
@@ -542,22 +578,299 @@ class TestIncludeNarrowing:
                     if isinstance(children, (list, tuple)):
                         stack.extend(c for c in children if isinstance(c, Expr))
 
-    def test_unknown_tag_rejected(self) -> None:
-        import pytest as _pytest
-        with _pytest.raises(ValueError, match='unknown production tags'):
-            real_expr({}, depth=2, include={'bogus'})
-
     def test_empty_include_with_no_leaves_rejected(self) -> None:
         import pytest as _pytest
         # No literal, no var in env ⇒ no leaves, no inner ⇒ nothing to produce.
         with _pytest.raises(ValueError, match='produces nothing'):
-            real_expr({}, depth=0, include=set())
+            real_expr({}, depth=0, include=RealProd(0))
 
-    def test_tag_sets_exposed(self) -> None:
-        # Round-trip: include=all-tags is equivalent to include=None.
-        assert 'arith' in REAL_TAGS
-        assert 'compare' in BOOL_TAGS
-        assert 'range' in LIST_TAGS
+
+class TestFlagInclude:
+    """The :class:`Flag` ``include=`` API."""
+
+    def test_unknown_flag_class_rejected(self) -> None:
+        """Passing the wrong-enum's flag to a generator is a ``TypeError``
+        (caught statically by a type checker; this asserts the runtime
+        guard for callers that bypass static checks)."""
+        import pytest as _pytest
+        with _pytest.raises(TypeError, match='RealProd'):
+            real_expr({}, depth=0, include=BoolProd.LITERAL)  # type: ignore[arg-type]
+
+    def test_flag_dispatch_emits_only_requested_class(self) -> None:
+        """``include=RealProd.LITERAL`` produces only ``Integer`` literals."""
+        from fpy2.ast.fpyast import Integer as _Integer
+
+        @given(real_expr({}, depth=0, include=RealProd.LITERAL))
+        @settings(max_examples=20)
+        def _check(e):
+            assert isinstance(e, _Integer)
+
+        _check()
+
+
+class TestGrammarCrossTypePropagation:
+    """``Grammar`` threads through cross-type recursion, so a narrowing
+    on ``bool_prods`` is respected even when reached via ``_real_expr``'s
+    ``IF_EXPR`` production.  This was the leak the previous string-tag
+    ``include=`` could not fix.
+    """
+
+    def test_bool_narrowing_survives_cross_type_call(self) -> None:
+        """Disable bool ``COMPARE`` / ``AND`` / ``OR`` / ``NOT`` /
+        ``PREDICATE`` via ``Grammar``; every ``IF_EXPR`` condition reached
+        through ``real_expr`` should be a bool literal or variable, never
+        a ``Compare`` / ``Not`` / ``And`` / ``Or`` / predicate.
+        """
+        from fpy2.ast.fpyast import (
+            And as _And, BoolVal as _BoolVal, Compare as _Compare,
+            IfExpr as _IfExpr, IsFinite as _IsFinite, IsInf as _IsInf,
+            IsNan as _IsNan, Not as _Not, Or as _Or, Signbit as _Signbit,
+        )
+
+        grammar = DEFAULT_GRAMMAR.narrow(bool_prods=BoolProd.LITERAL)
+
+        @given(real_expr(
+            {}, depth=3,
+            include=RealProd.LITERAL | RealProd.IF_EXPR,
+            grammar=grammar,
+        ))
+        @settings(max_examples=30)
+        def _check(e):
+            # Walk every IfExpr's condition and assert it's a bool literal.
+            stack = [e]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, _IfExpr):
+                    assert isinstance(node.cond, _BoolVal), (
+                        f'expected BoolVal cond, got {type(node.cond).__name__}'
+                    )
+                    stack.extend([node.cond, node.ift, node.iff])
+                # Walk inner nodes for nested IfExprs.
+                for attr in ('args', 'first', 'second', 'arg', 'expr', 'cond',
+                             'ift', 'iff'):
+                    if hasattr(node, attr):
+                        children = getattr(node, attr)
+                        if isinstance(children, (list, tuple)):
+                            stack.extend(c for c in children if isinstance(c, Expr))
+                        elif isinstance(children, Expr):
+                            stack.append(children)
+                # And these classes should never appear under this grammar.
+                assert not isinstance(node, (
+                    _Compare, _Not, _And, _Or,
+                    _IsFinite, _IsInf, _IsNan, _Signbit,
+                )), f'forbidden bool production leaked: {type(node).__name__}'
+
+        _check()
+
+
+class TestGrammarContextList:
+    """``Grammar.contexts`` controls which contexts a ``ContextStmt``
+    can drop into."""
+
+    def test_only_fp32_contexts_appear(self) -> None:
+        """With ``contexts=(fp.FP32,)`` every ``ForeignVal`` produced by
+        ``context_expr`` is exactly ``fp.FP32``."""
+        from fpy2.ast.fpyast import ForeignVal as _ForeignVal
+
+        grammar = DEFAULT_GRAMMAR.narrow(contexts=(fp.FP32,))
+
+        @given(context_expr({}, depth=0, grammar=grammar))
+        @settings(max_examples=20)
+        def _check(e):
+            assert isinstance(e, _ForeignVal)
+            assert e.val is fp.FP32
+
+        _check()
+
+
+class TestRealNumericLiterals:
+    """``RealProd.INTEGER`` / ``DECNUM`` / ``RATIONAL`` generate the three
+    real-valued literal AST classes the FPy grammar supports."""
+
+    def test_integer_only_emits_only_integer(self) -> None:
+        @given(real_expr({}, depth=0, include=RealProd.INTEGER))
+        @settings(max_examples=20)
+        def _check(e: Expr) -> None:
+            from fpy2.ast.fpyast import Decnum as _Decnum, Rational as _Rational
+            assert isinstance(e, Integer)
+            assert not isinstance(e, (_Decnum, _Rational))
+        _check()
+
+    def test_decnum_only_emits_only_decnum(self) -> None:
+        from fpy2.ast.fpyast import Decnum as _Decnum
+        from fractions import Fraction as _Fraction
+
+        @given(real_expr({}, depth=0, include=RealProd.DECNUM))
+        @settings(max_examples=20)
+        def _check(e: Expr) -> None:
+            assert isinstance(e, _Decnum)
+            # The string must parse back to a valid Fraction.
+            assert isinstance(e.as_rational(), _Fraction)
+        _check()
+
+    def test_rational_only_emits_only_rational(self) -> None:
+        from fpy2.ast.fpyast import Rational as _Rational
+
+        @given(real_expr({}, depth=0, include=RealProd.RATIONAL))
+        @settings(max_examples=20)
+        def _check(e: Expr) -> None:
+            assert isinstance(e, _Rational)
+            assert e.q >= 1
+        _check()
+
+    def test_hexnum_only_emits_only_hexnum(self) -> None:
+        from fpy2.ast.fpyast import Hexnum as _Hexnum
+        from fractions import Fraction as _Fraction
+
+        @given(real_expr({}, depth=0, include=RealProd.HEXNUM))
+        @settings(max_examples=20)
+        def _check(e: Expr) -> None:
+            assert isinstance(e, _Hexnum)
+            # The hex string must parse back to a valid Fraction.
+            assert isinstance(e.as_rational(), _Fraction)
+        _check()
+
+    def test_numeric_literal_alias_covers_all_four(self) -> None:
+        """``RealProd.NUMERIC_LITERAL`` lets the generator pick any of the
+        four forms.  Across enough draws all four should appear."""
+        from fpy2.ast.fpyast import (
+            Decnum as _Decnum, Hexnum as _Hexnum, Rational as _Rational,
+        )
+
+        seen: set[type] = set()
+
+        @given(real_expr({}, depth=0, include=RealProd.NUMERIC_LITERAL))
+        @settings(max_examples=120, deadline=None)
+        def _check(e: Expr) -> None:
+            seen.add(type(e))
+
+        _check()
+        assert Integer in seen, f'no Integer literals seen: {seen}'
+        assert _Decnum in seen, f'no Decnum literals seen: {seen}'
+        assert _Hexnum in seen, f'no Hexnum literals seen: {seen}'
+        assert _Rational in seen, f'no Rational literals seen: {seen}'
+
+    def test_default_grammar_only_enables_integer_literal(self) -> None:
+        """``DEFAULT_GRAMMAR.real_prods`` only enables ``INTEGER`` by
+        default; ``DECNUM`` / ``HEXNUM`` / ``RATIONAL`` are opt-in
+        because their Hypothesis strategies are noticeably slower to
+        draw than plain integers.  Tests that exercise non-integer
+        literal handling narrow ``real_prods`` to include them."""
+        assert RealProd.INTEGER in DEFAULT_GRAMMAR.real_prods
+        assert RealProd.DECNUM not in DEFAULT_GRAMMAR.real_prods
+        assert RealProd.HEXNUM not in DEFAULT_GRAMMAR.real_prods
+        assert RealProd.RATIONAL not in DEFAULT_GRAMMAR.real_prods
+
+    def test_opting_in_via_narrow(self) -> None:
+        """Tests get fractional literals by narrowing ``real_prods``."""
+        narrowed = DEFAULT_GRAMMAR.narrow(
+            real_prods=(DEFAULT_GRAMMAR.real_prods
+                        | RealProd.DECNUM | RealProd.HEXNUM | RealProd.RATIONAL),
+        )
+        assert RealProd.DECNUM in narrowed.real_prods
+        assert RealProd.HEXNUM in narrowed.real_prods
+        assert RealProd.RATIONAL in narrowed.real_prods
+
+
+class TestGrammarStmtProds:
+    """``Grammar.stmt_prods`` gates which statement kinds appear in
+    bodies, complementing the ``max_*`` budgets (which bound quantity)."""
+
+    def test_with_blocks_disabled(self) -> None:
+        """``stmt_prods`` without ``WITH`` suppresses ``ContextStmt`` even
+        when ``max_contexts > 0``."""
+        from hypothesis import HealthCheck
+        from fpy2.ast.fpyast import ContextStmt as _ContextStmt
+
+        grammar = DEFAULT_GRAMMAR.narrow(
+            stmt_prods=StmtProd.ASSIGN | StmtProd.IF | StmtProd.FOR | StmtProd.WHILE,
+        )
+
+        @given(fpy_real_funcdef(
+            num_args=st.just(0),
+            max_depth=st.just(2),
+            max_assigns=st.just(2),
+            max_contexts=st.just(2),      # would emit ContextStmts under default
+            max_ifs=st.just(0),
+            max_loops=st.just(0),
+            max_whiles=st.just(0),
+            grammar=grammar,
+        ))
+        @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
+        def _check(fd) -> None:
+            stack = [fd.body]
+            while stack:
+                node = stack.pop()
+                assert not isinstance(node, _ContextStmt), (
+                    'ContextStmt leaked despite WITH disabled in stmt_prods'
+                )
+                if hasattr(node, 'stmts'):
+                    stack.extend(node.stmts)
+                if hasattr(node, 'body'):
+                    body = getattr(node, 'body')
+                    if hasattr(body, 'stmts'):
+                        stack.extend(body.stmts)
+
+        _check()
+
+    def test_loops_only_yields_no_ifs_or_withs(self) -> None:
+        """``stmt_prods=ASSIGN | FOR`` admits only assigns and for-loops."""
+        from hypothesis import HealthCheck
+        from fpy2.ast.fpyast import (
+            ContextStmt as _ContextStmt, IfStmt as _IfStmt,
+            If1Stmt as _If1Stmt, WhileStmt as _WhileStmt,
+        )
+
+        grammar = DEFAULT_GRAMMAR.narrow(
+            stmt_prods=StmtProd.ASSIGN | StmtProd.FOR,
+        )
+
+        @given(fpy_real_funcdef(
+            num_args=st.just(0),
+            max_depth=st.just(2),
+            max_assigns=st.just(2),
+            max_contexts=st.just(2),
+            max_ifs=st.just(2),
+            max_loops=st.just(2),
+            max_whiles=st.just(2),
+            grammar=grammar,
+        ))
+        @settings(max_examples=10, suppress_health_check=[HealthCheck.too_slow])
+        def _check(fd) -> None:
+            stack = [fd.body]
+            forbidden = (_ContextStmt, _IfStmt, _If1Stmt, _WhileStmt)
+            while stack:
+                node = stack.pop()
+                assert not isinstance(node, forbidden), (
+                    f'{type(node).__name__} leaked despite '
+                    f'stmt_prods=ASSIGN | FOR'
+                )
+                if hasattr(node, 'stmts'):
+                    stack.extend(node.stmts)
+                if hasattr(node, 'body'):
+                    body = getattr(node, 'body')
+                    if hasattr(body, 'stmts'):
+                        stack.extend(body.stmts)
+
+        _check()
+
+    def test_assign_required(self) -> None:
+        """Dropping ``StmtProd.ASSIGN`` from ``stmt_prods`` is a hard
+        configuration error caught at ``Grammar`` construction — long
+        before any strategy draws.  Assignments are the only depth-0
+        base case."""
+        import pytest as _pytest
+
+        with _pytest.raises(ValueError, match='StmtProd.ASSIGN'):
+            DEFAULT_GRAMMAR.narrow(stmt_prods=StmtProd.WITH)
+
+    def test_empty_contexts_rejected(self) -> None:
+        """An empty ``contexts`` tuple would crash ``context_expr``;
+        catch it eagerly."""
+        import pytest as _pytest
+
+        with _pytest.raises(ValueError, match='non-empty'):
+            DEFAULT_GRAMMAR.narrow(contexts=())
 
 
 class TestRangeArgKwarg:
@@ -590,7 +903,8 @@ class TestTypeDispatch:
 
     @given(expr(RealType(), {}, depth=0))
     def test_real_dispatch_yields_real_leaf(self, e: Expr) -> None:
-        assert isinstance(e, Integer)
+        from fpy2.ast.fpyast import RationalVal
+        assert isinstance(e, RationalVal)
 
     @given(expr(BoolType(), {}, depth=0))
     def test_bool_dispatch_yields_bool_leaf(self, e: Expr) -> None:
@@ -604,3 +918,96 @@ class TestTypeDispatch:
     def test_tuple_dispatch_yields_tuple_expr(self, e: Expr) -> None:
         assert isinstance(e, TupleExpr)
         assert len(e.elts) == 2
+
+
+class TestProfiles:
+    """Named :class:`Grammar` profiles in :mod:`tests.unit.generators.profiles`
+    must each (a) be a valid Grammar and (b) drive ``fpy_function`` to a
+    well-typed program."""
+
+    def test_minimal_smokes(self) -> None:
+        from hypothesis import HealthCheck
+        from . import MINIMAL_PROFILE
+
+        @given(fpy_function(
+            (RealType(),), RealType(), grammar=MINIMAL_PROFILE,
+            max_depth=st.just(1), max_assigns=st.just(1),
+            max_contexts=st.just(0), max_ifs=st.just(0),
+            max_loops=st.just(0), max_whiles=st.just(0),
+        ))
+        @settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow])
+        def _check(f: fp.Function) -> None:
+            # The minimal profile must produce *something* — at least the
+            # required ReturnStmt.
+            assert isinstance(f, fp.Function)
+        _check()
+
+    def test_round_elim_emits_only_arith_and_round(self) -> None:
+        """``ROUND_ELIM_PROFILE`` excludes ``IfExpr``, ``Len``, named
+        unaries, and ``Div`` — only assign / with / arith / round."""
+        from hypothesis import HealthCheck
+        from fpy2.ast.fpyast import (
+            Div as _Div, IfExpr as _IfExpr, Len as _Len,
+            NamedUnaryOp as _NamedUnaryOp, Round as _Round,
+        )
+        from . import ROUND_ELIM_PROFILE
+
+        @given(fpy_function(
+            (RealType(),), RealType(), grammar=ROUND_ELIM_PROFILE,
+            max_depth=st.just(2), max_assigns=st.just(2),
+            max_contexts=st.just(1), max_ifs=st.just(0),
+            max_loops=st.just(0), max_whiles=st.just(0),
+        ))
+        @settings(max_examples=8, suppress_health_check=[HealthCheck.too_slow])
+        def _check(f: fp.Function) -> None:
+            stack: list = [f.ast.body]
+            while stack:
+                node = stack.pop()
+                # No Div, IfExpr, Len, or non-Round NamedUnaryOps.
+                if isinstance(node, _NamedUnaryOp) and not isinstance(node, _Round):
+                    raise AssertionError(
+                        f'unexpected named-unary in ROUND_ELIM_PROFILE: '
+                        f'{type(node).__name__}'
+                    )
+                assert not isinstance(node, (_Div, _IfExpr, _Len))
+                # Recurse over common child attributes.
+                for attr in ('stmts', 'body', 'args', 'elts', 'expr',
+                             'first', 'second', 'third', 'arg', 'cond',
+                             'ift', 'iff', 'value'):
+                    if hasattr(node, attr):
+                        child = getattr(node, attr)
+                        if hasattr(child, 'stmts'):
+                            stack.extend(child.stmts)
+                        elif isinstance(child, (list, tuple)):
+                            stack.extend(child)
+                        elif child is not None:
+                            stack.append(child)
+        _check()
+
+    def test_widening_profile_only_uses_int_fp32_contexts(self) -> None:
+        """``WIDENING_PROFILE.contexts`` is fixed-point + FP32."""
+        from . import WIDENING_PROFILE
+        assert set(WIDENING_PROFILE.contexts) == {fp.SINT8, fp.SINT16, fp.FP32}
+
+    def test_loop_heavy_excludes_if(self) -> None:
+        """``LOOP_HEAVY_PROFILE.stmt_prods`` includes FOR/WHILE but not IF."""
+        from . import LOOP_HEAVY_PROFILE
+        from tests.unit.generators.fpy_program import StmtProd as _StmtProd
+        assert _StmtProd.FOR in LOOP_HEAVY_PROFILE.stmt_prods
+        assert _StmtProd.WHILE in LOOP_HEAVY_PROFILE.stmt_prods
+        assert _StmtProd.IF not in LOOP_HEAVY_PROFILE.stmt_prods
+
+    def test_control_flow_includes_if_and_loops(self) -> None:
+        """``CONTROL_FLOW_PROFILE`` enables the full CONTROL_FLOW alias."""
+        from . import CONTROL_FLOW_PROFILE
+        from tests.unit.generators.fpy_program import StmtProd as _StmtProd
+        assert _StmtProd.CONTROL_FLOW in CONTROL_FLOW_PROFILE.stmt_prods
+
+    def test_fractional_opts_in_all_literal_kinds(self) -> None:
+        """``FRACTIONAL_PROFILE.real_prods`` enables the three slow
+        numeric-literal kinds in addition to the default."""
+        from . import FRACTIONAL_PROFILE
+        assert RealProd.INTEGER in FRACTIONAL_PROFILE.real_prods
+        assert RealProd.DECNUM in FRACTIONAL_PROFILE.real_prods
+        assert RealProd.HEXNUM in FRACTIONAL_PROFILE.real_prods
+        assert RealProd.RATIONAL in FRACTIONAL_PROFILE.real_prods

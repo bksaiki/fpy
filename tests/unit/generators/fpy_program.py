@@ -11,9 +11,12 @@ in code and fed to the same passes the ``@fp.fpy`` decorator pipeline
 runs) — the parser is **not** exercised here; the target audience is
 analysis passes and the interpreter.
 
-Productions per target type are gated by string tags (see :data:`REAL_TAGS`
-etc.). Pass ``include={...}`` to narrow what a helper emits; tags
-propagate through same-type recursion but not across types. Per-call
+Productions per target type are gated by :class:`enum.Flag` enums — one
+per target type (:class:`RealProd`, :class:`BoolProd`, :class:`ListProd`,
+:class:`TupleProd`, :class:`ContextProd`, :class:`StmtProd`). Pass
+``include=RealProd.ARITH | RealProd.LITERAL`` to a helper to narrow what
+it emits, or set the corresponding ``*_prods`` field on :class:`Grammar`
+to narrow across recursive calls (including cross-type ones). Per-call
 overrides for ``range_arg_min``/``range_arg_max`` bound the integer
 literals used as ``Range1``/``Range2`` arguments.
 
@@ -34,18 +37,20 @@ bodies). Scoping rules:
 - ``WhileStmt`` is emitted as a counter-driven template ``c = 0; while c < N:
   <body>; c = c + 1`` to guarantee termination; only the body is fuzzed.
 
-Known-deferred surface (see inline comments for the why):
+Known-deferred surface (productions whose generators raise
+``NotImplementedError`` if explicitly enabled; see ``_DEFERRED_*``):
 
 - ``Cast`` — needs per-context exact-representable tracking.
 - ``IsNormal`` — workaround for an FPy ``ops.isnormal`` bug on context-less
   integer Floats.
 - ``ListRef`` / ``ListSlice`` — need array-size tracking to stay in bounds.
 - ``ListComp``, ``IndexedAssign``, tuple-unpacking ``Assign``.
-- ``Range3`` and ``fp.REAL`` as a ``with``-context (math ops not implemented
-  under REAL).
+- ``fp.REAL`` as a ``with``-context (math ops not implemented under REAL).
 """
 
-from typing import TypeAlias
+import dataclasses
+from enum import Flag, auto
+from typing import TypeAlias, TypeVar
 
 from hypothesis import strategies as st
 
@@ -63,10 +68,12 @@ from fpy2.ast.fpyast import (
     ContextStmt,
     ContextTypeAnn,
     Cos,
+    Decnum,
     Div,
     Enumerate,
     Exp,
     Expr,
+    Hexnum,
     ForeignVal,
     ForStmt,
     FuncDef,
@@ -89,6 +96,8 @@ from fpy2.ast.fpyast import (
     Or,
     Range1,
     Range2,
+    Range3,
+    Rational,
     RealTypeAnn,
     ReturnStmt,
     Round,
@@ -156,74 +165,225 @@ def _func_sym(name: str) -> Var:
     return Var(NamedId(name), None)
 
 
-# ---------------------------------------------------------------------------
-# Production tag sets — narrowing escape hatch
-# ---------------------------------------------------------------------------
-# Each per-target generator gates its productions by tag membership. Pass
-# ``include={'literal', 'arith'}`` to a helper to narrow what it emits.
-# Tags propagate through same-type recursion but not across types
-# (a narrowed ``_real_expr`` still calls ``_bool_expr`` with bool defaults).
-
-REAL_TAGS: frozenset[str] = frozenset({
-    'literal', 'var', 'arith', 'if_expr', 'len', 'named_unary', 'round',
-})
-"""All production tags supported by :func:`real_expr`. ``round`` enables
-``Round`` only — ``Cast`` is deferred (see ``_real_expr``)."""
-
-BOOL_TAGS: frozenset[str] = frozenset({
-    'literal', 'var', 'compare', 'predicate', 'not', 'and_or',
-})
-"""All production tags supported by :func:`bool_expr`."""
-
-LIST_TAGS: frozenset[str] = frozenset({
-    'literal', 'var', 'range', 'zip', 'enumerate',
-})
-"""All production tags supported by :func:`list_expr`. ``zip`` and
-``enumerate`` only fire when the element type is a ``TupleType`` of the
-appropriate shape (``zip``: arity ≥ 1; ``enumerate``: arity 2 with the
-first element ``RealType``)."""
-
-TUPLE_TAGS: frozenset[str] = frozenset({'literal', 'var'})
-"""All production tags supported by :func:`tuple_expr`."""
-
-CONTEXT_TAGS: frozenset[str] = frozenset({'literal'})
-"""All production tags supported by :func:`context_expr`."""
-
 # Concrete rounding contexts the generator can drop into ``with`` blocks.
 # ``fp.REAL`` is excluded — ``sqrt``/``sin``/``log``/``div`` raise under it
 # (no closed-form rational result), so ``with REAL: t = sqrt(0)`` would crash.
 _DEFAULT_CONTEXTS: list = [fp.FP64, fp.FP32, fp.MX_E5M2, fp.MX_E4M3]
 
 
-def _resolve_include(include: set[str] | None, all_tags: frozenset[str]) -> frozenset[str]:
-    """``None`` ⇒ everything; otherwise intersect with the helper's tag set."""
-    if include is None:
-        return all_tags
-    unknown = set(include) - all_tags
-    if unknown:
-        raise ValueError(
-            f'unknown production tags: {sorted(unknown)}; '
-            f'valid tags for this generator are {sorted(all_tags)}'
+# ---------------------------------------------------------------------------
+# Productions — :class:`enum.Flag` grammar surface
+# ---------------------------------------------------------------------------
+# One ``Flag`` per target type names every production this generator can
+# emit (including currently-deferred ones).  Aliases such as
+# ``RealProd.ARITH`` are conventional ``Flag`` composites (e.g.
+# ``ADD | SUB | …``).
+
+
+class RealProd(Flag):
+    """Production set for ``real``-typed expressions."""
+    INTEGER = auto()       # ``Integer`` literal (alias: LITERAL)
+    DECNUM = auto()        # ``Decnum`` decimal-string literal
+    HEXNUM = auto()        # ``Hexnum`` hex-string literal (e.g. ``0x1.8p+3``)
+    RATIONAL = auto()      # ``Rational(p, q)`` literal
+    VAR = auto()
+    ADD = auto()
+    SUB = auto()
+    MUL = auto()
+    DIV = auto()
+    NEG = auto()
+    ABS = auto()
+    SQRT = auto()
+    SIN = auto()
+    COS = auto()
+    LOG = auto()
+    EXP = auto()
+    LEN = auto()
+    IF_EXPR = auto()
+    ROUND = auto()
+    CAST = auto()          # deferred; raises if generated
+
+    # Aliases.
+    LITERAL = INTEGER      # back-compat alias for callers that pre-dated the split
+    NUMERIC_LITERAL = INTEGER | DECNUM | HEXNUM | RATIONAL
+    ARITH = ADD | SUB | MUL | DIV | NEG | ABS
+    NAMED_UNARY = SQRT | SIN | COS | LOG | EXP
+    LEAVES = NUMERIC_LITERAL | VAR
+    ALL = (LEAVES | ARITH | NAMED_UNARY | LEN | IF_EXPR | ROUND | CAST)
+
+
+class BoolProd(Flag):
+    """Production set for ``bool``-typed expressions."""
+    LITERAL = auto()
+    VAR = auto()
+    COMPARE = auto()
+    NOT = auto()
+    AND = auto()
+    OR = auto()
+    ISFINITE = auto()
+    ISINF = auto()
+    ISNAN = auto()
+    SIGNBIT = auto()
+    ISNORMAL = auto()  # deferred (``ops.isnormal`` crashes on int Floats)
+
+    AND_OR = AND | OR
+    PREDICATE = ISFINITE | ISINF | ISNAN | SIGNBIT | ISNORMAL
+    LEAVES = LITERAL | VAR
+    ALL = LEAVES | COMPARE | NOT | AND_OR | PREDICATE
+
+
+class ListProd(Flag):
+    """Production set for ``list[T]``-typed expressions."""
+    LITERAL = auto()
+    VAR = auto()
+    RANGE1 = auto()
+    RANGE2 = auto()
+    RANGE3 = auto()
+    ZIP = auto()
+    ENUMERATE = auto()
+    LIST_COMP = auto()  # deferred
+
+    RANGE = RANGE1 | RANGE2 | RANGE3
+    LEAVES = LITERAL | VAR
+    ALL = LEAVES | RANGE | ZIP | ENUMERATE | LIST_COMP
+
+
+class TupleProd(Flag):
+    """Production set for ``tuple[...]``-typed expressions."""
+    LITERAL = auto()
+    VAR = auto()
+
+    LEAVES = LITERAL | VAR
+    ALL = LEAVES
+
+
+class ContextProd(Flag):
+    """Production set for ``context``-typed expressions."""
+    LITERAL = auto()
+
+    LEAVES = LITERAL
+    ALL = LEAVES
+
+
+class StmtProd(Flag):
+    """Statement kinds emitted inside a generated :class:`StmtBlock`."""
+    ASSIGN = auto()
+    WITH = auto()
+    IF = auto()
+    FOR = auto()
+    WHILE = auto()
+    INDEXED_ASSIGN = auto()       # deferred
+    TUPLE_UNPACK_ASSIGN = auto()  # deferred
+
+    # Aliases.
+    LEAVES = ASSIGN
+    CONTROL_FLOW = IF | FOR | WHILE
+    LOOPS = FOR | WHILE
+    ALL = (ASSIGN | WITH | IF | FOR | WHILE
+           | INDEXED_ASSIGN | TUPLE_UNPACK_ASSIGN)
+
+
+_F = TypeVar('_F', bound=Flag)
+
+
+def _check_flag(include: _F, expected: type[_F]) -> _F:
+    """Assert that ``include`` is a :class:`Flag` of the expected type and
+    return it unchanged; raise :class:`TypeError` otherwise.  Callers
+    handle the ``None`` case (fall back to the grammar default) before
+    invoking this."""
+    if not isinstance(include, expected):
+        raise TypeError(
+            f'expected {expected.__name__} for include, '
+            f'got {type(include).__name__}'
         )
-    return frozenset(include)
+    return include
+
+
+# ---------------------------------------------------------------------------
+# Grammar bundle
+# ---------------------------------------------------------------------------
+# Programmable filter over every production in the grammar.  Threading a
+# single :class:`Grammar` through every recursive call means a per-type
+# narrowing (e.g. ``bool_prods=BoolProd.LEAVES``) survives crossing into a
+# different generator, which a per-call ``include=`` cannot.
+
+# Productions deferred because their generators aren't implemented yet —
+# enabling one raises :class:`NotImplementedError` in the corresponding
+# helper.  Re-enable by implementing the production and dropping its
+# entry here.
+_DEFERRED_REAL: RealProd = RealProd.CAST
+_DEFERRED_BOOL: BoolProd = BoolProd.ISNORMAL
+_DEFERRED_LIST: ListProd = ListProd.LIST_COMP
+_DEFERRED_STMT: StmtProd = StmtProd.INDEXED_ASSIGN | StmtProd.TUPLE_UNPACK_ASSIGN
+
+# Productions whose generators are implemented but noticeably slow to
+# draw — opt in explicitly when the test needs them (typically by
+# OR-ing into a narrowed ``real_prods``).
+_SLOW_REAL: RealProd = RealProd.DECNUM | RealProd.HEXNUM | RealProd.RATIONAL
+
+
+@dataclasses.dataclass(frozen=True)
+class Grammar:
+    """Production filters + literal bounds + ``with``-block context list.
+
+    Each ``*_prods`` field gates the corresponding generator's output;
+    defaults mask :data:`_DEFERRED_*` (productions whose generators
+    aren't implemented yet) and :data:`_SLOW_*` (productions whose
+    Hypothesis strategies materially slow draws — currently ``DECNUM``,
+    ``HEXNUM``, and ``RATIONAL``, which roughly triple ``stmt_block``
+    draw time).  Opt either back in via :meth:`narrow`.
+    """
+    real_prods:    RealProd    = RealProd.ALL    & ~_DEFERRED_REAL & ~_SLOW_REAL
+    bool_prods:    BoolProd    = BoolProd.ALL    & ~_DEFERRED_BOOL
+    list_prods:    ListProd    = ListProd.ALL    & ~_DEFERRED_LIST
+    tuple_prods:   TupleProd   = TupleProd.ALL
+    context_prods: ContextProd = ContextProd.ALL
+    stmt_prods:    StmtProd    = StmtProd.ALL    & ~_DEFERRED_STMT
+
+    contexts:          tuple = tuple(_DEFAULT_CONTEXTS)
+    int_literal_range: tuple[int, int] = _LITERAL_RANGE
+    range_arg_range:   tuple[int, int] = (_DEFAULT_RANGE_ARG_MIN, _DEFAULT_RANGE_ARG_MAX)
+
+    def __post_init__(self):
+        # Hard preconditions that downstream helpers would otherwise
+        # raise on (or crash with a less helpful message).  Catching
+        # here points the stack trace at the test that built the
+        # grammar, not at the strategy that consumed it.
+        if StmtProd.ASSIGN not in self.stmt_prods:
+            raise ValueError(
+                'Grammar.stmt_prods must include StmtProd.ASSIGN — '
+                'assignments are the only statement kind that fires at '
+                'sub_depth=0 and serves as the body-block base case'
+            )
+        if not self.contexts:
+            raise ValueError(
+                'Grammar.contexts must be non-empty so context_expr can '
+                'sample at least one with-block context'
+            )
+
+    def narrow(self, **kw) -> 'Grammar':
+        """Return a copy of this grammar with the given fields replaced."""
+        return dataclasses.replace(self, **kw)
+
+
+DEFAULT_GRAMMAR = Grammar()
+"""Default grammar: every documented production except those marked deferred
+in the per-type :class:`Flag` enums (:class:`RealProd`, :class:`BoolProd`, …)."""
 
 
 # ---------------------------------------------------------------------------
 # Real-typed expressions
 # ---------------------------------------------------------------------------
 
-def _real_literal_strategy() -> st.SearchStrategy[Expr]:
-    return st.integers(*_LITERAL_RANGE).map(lambda v: Integer(v, None))
-
-
-# (AST class, surface-syntax name) — name matters for any pass that resolves
-# the symbol back to a callable; the type-checker only looks at the class.
-_REAL_NAMED_UNARY: list[tuple[type[NamedUnaryOp], str]] = [
-    (Sqrt, 'sqrt'),
-    (Sin, 'sin'),
-    (Cos, 'cos'),
-    (Log, 'log'),
-    (Exp, 'exp'),
+# (Production flag, AST class, surface-syntax name) — name matters for any
+# pass that resolves the symbol back to a callable; the type-checker only
+# looks at the class.
+_REAL_NAMED_UNARY_FLAG: list[tuple[RealProd, type[NamedUnaryOp], str]] = [
+    (RealProd.SQRT, Sqrt, 'sqrt'),
+    (RealProd.SIN,  Sin,  'sin'),
+    (RealProd.COS,  Cos,  'cos'),
+    (RealProd.LOG,  Log,  'log'),
+    (RealProd.EXP,  Exp,  'exp'),
 ]
 
 
@@ -231,20 +391,61 @@ def _real_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: RealProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for an FPy expression of type ``real`` under ``env``.
 
-    See :data:`REAL_TAGS` for the supported ``include`` values.
+    ``include`` is an optional :class:`RealProd` flag that overrides
+    ``grammar.real_prods`` for this helper only.  ``grammar`` carries
+    the cross-type production filter that threads through recursive
+    calls.
     """
-    use = _resolve_include(include, REAL_TAGS)
+    use = _check_flag(include, RealProd) if include is not None else grammar.real_prods
+    rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
+    rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
     leaves: list[st.SearchStrategy[Expr]] = []
-    if 'literal' in use:
-        leaves.append(_real_literal_strategy())
-    if 'var' in use:
+    if RealProd.INTEGER in use:
+        lo, hi = grammar.int_literal_range
+        leaves.append(st.integers(lo, hi).map(lambda v: Integer(v, None)))
+    if RealProd.DECNUM in use:
+        lo, hi = grammar.int_literal_range
+        # Decnums carry the decimal as a string.  Emit ``<int>.<frac>``
+        # form (no exponent) — covers the non-dyadic-fraction path
+        # (e.g. ``0.1``) without growing magnitudes via ``e±N``.
+        leaves.append(
+            st.tuples(st.integers(lo, hi), st.integers(0, 9999))
+            .map(lambda pf: Decnum(f'{pf[0]}.{pf[1]:04d}', None))
+        )
+    if RealProd.HEXNUM in use:
+        # Hexnums are dyadic-by-construction.  Emit ``[-]0x<i>.<f>p±E``
+        # with at most 4 hex digits per part and a small binary exponent
+        # to keep magnitudes manageable.
+        hex_sym = _func_sym('hexnum')
+        hex_digits = st.integers(0, 0xffff).map(lambda n: f'{n:x}')
+        leaves.append(
+            st.tuples(
+                st.booleans(), hex_digits, hex_digits, st.integers(-8, 8),
+            ).map(lambda t: Hexnum(
+                hex_sym,
+                f'{"-" if t[0] else ""}0x{t[1]}.{t[2]}p{t[3]:+d}',
+                None,
+            ))
+        )
+    if RealProd.RATIONAL in use:
+        lo, hi = grammar.int_literal_range
+        rat_sym = _func_sym('rational')
+        # Bound the denominator separately to keep magnitudes manageable
+        # — int_literal_range alone over both p and q would let the value
+        # explode (``1000 / 1`` = 1000) or vanish (``1 / 1000`` ≈ 0).
+        leaves.append(
+            st.tuples(st.integers(lo, hi), st.integers(1, 100))
+            .map(lambda pq: Rational(rat_sym, pq[0], pq[1], None))
+        )
+    if RealProd.VAR in use:
         var_strat = _var_of_type(env, RealType())
         if var_strat is not None:
             leaves.append(var_strat)
@@ -252,12 +453,12 @@ def _real_expr(
     inner: list[st.SearchStrategy[Expr]] = []
     if depth > 0:
         sub_real = _real_expr(
-            env, depth - 1, include=include,
-            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+            env, depth - 1, include=use, grammar=grammar,
+            range_arg_min=rmin, range_arg_max=rmax,
         )
         sub_bool = _bool_expr(
-            env, depth - 1,
-            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+            env, depth - 1, grammar=grammar,
+            range_arg_min=rmin, range_arg_max=rmax,
         )
 
         def _binop(cls):
@@ -266,30 +467,34 @@ def _real_expr(
         def _unop(cls):
             return sub_real.map(lambda x: cls(x, None))
 
-        def _named_unary(cls, name):
+        if RealProd.ADD in use: inner.append(_binop(Add))
+        if RealProd.SUB in use: inner.append(_binop(Sub))
+        if RealProd.MUL in use: inner.append(_binop(Mul))
+        if RealProd.DIV in use: inner.append(_binop(Div))
+        if RealProd.NEG in use: inner.append(_unop(Neg))
+        if RealProd.ABS in use: inner.append(_unop(Abs))
+
+        def _named_unary(cls: type[NamedUnaryOp], name: str) -> st.SearchStrategy[Expr]:
             sym = _func_sym(name)
             return sub_real.map(lambda x: cls(sym, x, None))
 
-        if 'arith' in use:
-            inner.extend([
-                _binop(Add), _binop(Sub), _binop(Mul), _binop(Div),
-                _unop(Neg), _unop(Abs),
-            ])
-        if 'if_expr' in use:
+        for prod, cls, name in _REAL_NAMED_UNARY_FLAG:
+            if prod in use:
+                inner.append(_named_unary(cls, name))
+
+        if RealProd.IF_EXPR in use:
             inner.append(st.tuples(sub_bool, sub_real, sub_real).map(
                 lambda cab: IfExpr(cab[0], cab[1], cab[2], None)
             ))
-        if 'len' in use:
+        if RealProd.LEN in use:
             sub_real_list = _list_expr(
-                RealType(), env, depth - 1,
-                range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+                RealType(), env, depth - 1, grammar=grammar,
+                range_arg_min=rmin, range_arg_max=rmax,
             )
             inner.append(sub_real_list.map(
                 lambda xs: Len(_func_sym('len'), xs, None)
             ))
-        if 'named_unary' in use:
-            inner.extend(_named_unary(cls, name) for cls, name in _REAL_NAMED_UNARY)
-        if 'round' in use:
+        if RealProd.ROUND in use:
             # ``Cast`` is deliberately not generated: it asserts the
             # rounded value is exact, which fails whenever the value
             # isn't already representable in the active context (e.g.
@@ -297,11 +502,16 @@ def _real_expr(
             # per-context exact-representable check per literal.
             round_sym = _func_sym('round')
             inner.append(sub_real.map(lambda x: Round(round_sym, x, None)))
+        if RealProd.CAST in use:
+            raise NotImplementedError(
+                'RealProd.CAST generation is deferred — see _real_expr docstring'
+            )
 
     if not leaves and not inner:
         raise ValueError(
-            'real_expr produces nothing under the given include set; '
-            'at minimum include "literal" (or "var" with a real-typed env)'
+            f'real_expr produces nothing under include={use!r}; '
+            'at minimum enable INTEGER, DECNUM, HEXNUM, or RATIONAL '
+            '(or VAR with a real-typed env)'
         )
     return st.one_of(*leaves, *inner)
 
@@ -312,39 +522,42 @@ def _real_expr(
 
 _COMPARE_OPS = list(CompareOp)
 
-# ``IsNormal`` is omitted: ``ops.isnormal`` crashes on context-less integer
-# Floats (e.g. ``isnormal(735)``) via ``Float.is_normal`` (floats.py:616) —
-# the generator surfaced this; restore once that path handles plain integers.
-_REAL_PREDICATES: list[tuple[type[NamedUnaryOp], str]] = [
-    (IsFinite, 'isfinite'),
-    (IsInf, 'isinf'),
-    (IsNan, 'isnan'),
-    (Signbit, 'signbit'),
+# (Production flag, AST class, surface-syntax name) for the real-valued
+# predicates dispatched by ``_bool_expr``.
+_REAL_PREDICATES_FLAG: list[tuple[BoolProd, type[NamedUnaryOp], str]] = [
+    (BoolProd.ISFINITE, IsFinite, 'isfinite'),
+    (BoolProd.ISINF,    IsInf,    'isinf'),
+    (BoolProd.ISNAN,    IsNan,    'isnan'),
+    (BoolProd.SIGNBIT,  Signbit,  'signbit'),
+    # ``IsNormal`` is intentionally absent from the dispatch table: enabling
+    # ``BoolProd.ISNORMAL`` raises below because ``ops.isnormal`` crashes on
+    # context-less integer Floats (e.g. ``isnormal(735)``).  Restore once
+    # that path handles plain integers.
 ]
-
-
-def _bool_literal_strategy() -> st.SearchStrategy[Expr]:
-    return st.booleans().map(lambda v: BoolVal(v, None))
 
 
 def _bool_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: BoolProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for an FPy expression of type ``bool`` under ``env``.
 
-    See :data:`BOOL_TAGS` for the supported ``include`` values.
+    ``include`` is an optional :class:`BoolProd` flag that overrides
+    ``grammar.bool_prods`` for this helper only.
     """
-    use = _resolve_include(include, BOOL_TAGS)
+    use = _check_flag(include, BoolProd) if include is not None else grammar.bool_prods
+    rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
+    rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
     leaves: list[st.SearchStrategy[Expr]] = []
-    if 'literal' in use:
-        leaves.append(_bool_literal_strategy())
-    if 'var' in use:
+    if BoolProd.LITERAL in use:
+        leaves.append(st.booleans().map(lambda v: BoolVal(v, None)))
+    if BoolProd.VAR in use:
         var_strat = _var_of_type(env, BoolType())
         if var_strat is not None:
             leaves.append(var_strat)
@@ -352,35 +565,47 @@ def _bool_expr(
     inner: list[st.SearchStrategy[Expr]] = []
     if depth > 0:
         sub_bool = _bool_expr(
-            env, depth - 1, include=include,
-            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+            env, depth - 1, include=use, grammar=grammar,
+            range_arg_min=rmin, range_arg_max=rmax,
         )
         sub_real = _real_expr(
-            env, depth - 1,
-            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+            env, depth - 1, grammar=grammar,
+            range_arg_min=rmin, range_arg_max=rmax,
         )
 
-        if 'compare' in use:
+        if BoolProd.COMPARE in use:
             # Restrict to simple binary comparisons (chain length 1).
             inner.append(st.tuples(
                 st.sampled_from(_COMPARE_OPS), sub_real, sub_real,
             ).map(lambda oab: Compare([oab[0]], [oab[1], oab[2]], None)))
-        if 'not' in use:
+        if BoolProd.NOT in use:
             inner.append(sub_bool.map(lambda x: Not(x, None)))
-        if 'and_or' in use:
+        and_or_args = None
+        if BoolProd.AND in use or BoolProd.OR in use:
             and_or_args = st.lists(sub_bool, min_size=2, max_size=3)
+        if BoolProd.AND in use:
+            assert and_or_args is not None
             inner.append(and_or_args.map(lambda xs: And(xs, None)))
+        if BoolProd.OR in use:
+            assert and_or_args is not None
             inner.append(and_or_args.map(lambda xs: Or(xs, None)))
-        if 'predicate' in use:
-            def _predicate(cls, name):
-                sym = _func_sym(name)
-                return sub_real.map(lambda x: cls(sym, x, None))
-            inner.extend(_predicate(cls, name) for cls, name in _REAL_PREDICATES)
+        def _predicate(cls: type[NamedUnaryOp], name: str) -> st.SearchStrategy[Expr]:
+            sym = _func_sym(name)
+            return sub_real.map(lambda x: cls(sym, x, None))
+
+        for prod, cls, name in _REAL_PREDICATES_FLAG:
+            if prod in use:
+                inner.append(_predicate(cls, name))
+        if BoolProd.ISNORMAL in use:
+            raise NotImplementedError(
+                'BoolProd.ISNORMAL generation is deferred — see '
+                '_REAL_PREDICATES_FLAG comment'
+            )
 
     if not leaves and not inner:
         raise ValueError(
-            'bool_expr produces nothing under the given include set; '
-            'at minimum include "literal" (or "var" with a bool-typed env)'
+            f'bool_expr produces nothing under include={use!r}; '
+            'at minimum enable LITERAL (or VAR with a bool-typed env)'
         )
     return st.one_of(*leaves, *inner)
 
@@ -399,55 +624,71 @@ def _list_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: ListProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for a ``list[elt_type]`` expression under ``env``.
 
-    See :data:`LIST_TAGS` for the supported ``include`` values.
-
-    ``range_arg_min`` / ``range_arg_max`` (inclusive) bound the integer
-    literals used as ``Range1`` / ``Range2`` arguments when ``elt_type`` is
-    ``RealType``.
+    ``include`` is an optional :class:`ListProd` flag.
+    ``RANGE1``/``RANGE2`` only fire for ``RealType`` elements; ``ZIP``
+    requires a ``TupleType`` element with arity ≥ 1; ``ENUMERATE``
+    requires a 2-tuple with a ``RealType`` first component.
     """
-    use = _resolve_include(include, LIST_TAGS)
+    use = _check_flag(include, ListProd) if include is not None else grammar.list_prods
+    rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
+    rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
     productions: list[st.SearchStrategy[Expr]] = []
-    if 'literal' in use:
+    if ListProd.LITERAL in use:
         elt_strat = expr(
-            elt_type, env, max(0, depth - 1),
-            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+            elt_type, env, max(0, depth - 1), grammar=grammar,
+            range_arg_min=rmin, range_arg_max=rmax,
         )
         productions.append(st.lists(
             elt_strat, min_size=_LIST_LITERAL_LEN[0], max_size=_LIST_LITERAL_LEN[1],
         ).map(lambda xs: ListExpr(xs, None)))
 
-    if 'var' in use:
+    if ListProd.VAR in use:
         var_strat = _var_of_type(env, ListType(elt_type))
         if var_strat is not None:
             productions.append(var_strat)
 
-    if 'range' in use and depth > 0 and isinstance(elt_type, RealType):
+    if depth > 0 and isinstance(elt_type, RealType):
         # Args restricted to ``Integer`` literals: the interpreter rejects
         # non-integer ``range`` args (e.g. ``range(log(0)) == range(-inf)``).
         range_sym = _func_sym('range')
-        small_int = st.integers(range_arg_min, range_arg_max).map(
-            lambda n: Integer(n, None)
-        )
-        productions.append(small_int.map(lambda n: Range1(range_sym, n, None)))
-        productions.append(st.tuples(small_int, small_int).map(
-            lambda ab: Range2(range_sym, ab[0], ab[1], None)
-        ))
+        small_int = st.integers(rmin, rmax).map(lambda n: Integer(n, None))
+        if ListProd.RANGE1 in use:
+            productions.append(small_int.map(
+                lambda n: Range1(range_sym, n, None)
+            ))
+        if ListProd.RANGE2 in use:
+            productions.append(st.tuples(small_int, small_int).map(
+                lambda ab: Range2(range_sym, ab[0], ab[1], None)
+            ))
+        if ListProd.RANGE3 in use:
+            # ``range(start, stop, step)`` — step must be non-zero
+            # (the interpreter, like Python's ``range``, rejects step 0).
+            step_int = (
+                st.integers(rmin, rmax)
+                .filter(lambda n: n != 0)
+                .map(lambda n: Integer(n, None))
+            )
+            productions.append(st.tuples(small_int, small_int, step_int).map(
+                lambda abc: Range3(range_sym, abc[0], abc[1], abc[2], None)
+            ))
 
-    if 'zip' in use and depth > 0 and isinstance(elt_type, TupleType) and elt_type.elts:
+    if (ListProd.ZIP in use and depth > 0
+            and isinstance(elt_type, TupleType) and elt_type.elts):
         # FPy's ``zip`` is length-strict (unlike Python's default), so every
         # arg is a ``ListExpr`` literal of a shared drawn length.
         zip_sym = _func_sym('zip')
         elt_strats = [
             expr(
-                sub_t, env, max(0, depth - 1),
-                range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+                sub_t, env, max(0, depth - 1), grammar=grammar,
+                range_arg_min=rmin, range_arg_max=rmax,
             )
             for sub_t in elt_type.elts
         ]
@@ -463,23 +704,31 @@ def _list_expr(
 
         productions.append(st.integers(1, 4).flatmap(_zip_of_len))
 
-    if ('enumerate' in use and depth > 0 and isinstance(elt_type, TupleType)
-            and len(elt_type.elts) == 2 and isinstance(elt_type.elts[0], RealType)):
+    if (ListProd.ENUMERATE in use and depth > 0
+            and isinstance(elt_type, TupleType)
+            and len(elt_type.elts) == 2
+            and isinstance(elt_type.elts[0], RealType)):
         # enumerate(xs : list[t]) : list[tuple[real, t]] — index first.
         _, val_t = elt_type.elts
         enum_sym = _func_sym('enumerate')
         sub_list = _list_expr(
-            val_t, env, depth - 1,
-            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+            val_t, env, depth - 1, grammar=grammar,
+            range_arg_min=rmin, range_arg_max=rmax,
         )
         productions.append(sub_list.map(
             lambda xs: Enumerate(enum_sym, xs, None)
         ))
 
+    if ListProd.LIST_COMP in use:
+        raise NotImplementedError(
+            'ListProd.LIST_COMP generation is deferred'
+        )
+
     if not productions:
         raise ValueError(
-            'list_expr produces nothing under the given include set; '
-            'include "literal" (always available) or "range" (real elt + depth > 0)'
+            f'list_expr produces nothing under include={use!r}; '
+            'enable LITERAL (always available) or RANGE1/RANGE2/RANGE3 '
+            '(real elt + depth > 0)'
         )
     return st.one_of(*productions)
 
@@ -489,28 +738,31 @@ def _tuple_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: TupleProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for a ``tuple[*elt_types]`` expression under ``env``.
 
-    See :data:`TUPLE_TAGS` for the supported ``include`` values.
+    ``include`` is an optional :class:`TupleProd` flag.
     """
-    use = _resolve_include(include, TUPLE_TAGS)
+    use = _check_flag(include, TupleProd) if include is not None else grammar.tuple_prods
+    rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
+    rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
     productions: list[st.SearchStrategy[Expr]] = []
 
-    if 'var' in use:
+    if TupleProd.VAR in use:
         var_strat = _var_of_type(env, TupleType(*elt_types))
         if var_strat is not None:
             productions.append(var_strat)
 
-    if 'literal' not in use:
+    if TupleProd.LITERAL not in use:
         if not productions:
             raise ValueError(
-                'tuple_expr produces nothing under the given include set; '
-                'include "literal" (always available) or "var" (with a '
+                f'tuple_expr produces nothing under include={use!r}; '
+                'enable LITERAL (always available) or VAR (with a '
                 'matching-type binding in env)'
             )
         return st.one_of(*productions)
@@ -518,8 +770,8 @@ def _tuple_expr(
     sub_depth = max(0, depth - 1)
     elt_strats = [
         expr(
-            t, env, sub_depth,
-            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+            t, env, sub_depth, grammar=grammar,
+            range_arg_min=rmin, range_arg_max=rmax,
         )
         for t in elt_types
     ]
@@ -541,18 +793,26 @@ def _ctx_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: ContextProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for an FPy expression of type ``context``.
 
-    Only production: ``ForeignVal`` of a value from :data:`_DEFAULT_CONTEXTS`.
-    ``env``/``depth``/``range_arg_*`` are accepted for API symmetry.
+    Only production: ``ForeignVal`` of a value from ``grammar.contexts``
+    (default :data:`_DEFAULT_CONTEXTS`).  ``env``/``depth``/``range_arg_*``
+    accepted for API symmetry.
     """
     del env, depth, range_arg_min, range_arg_max
-    _resolve_include(include, CONTEXT_TAGS)  # validation only
-    return st.sampled_from(_DEFAULT_CONTEXTS).map(lambda c: ForeignVal(c, None))
+    use = _check_flag(include, ContextProd) if include is not None else grammar.context_prods
+    if ContextProd.LITERAL not in use:
+        raise ValueError(
+            f'ctx_expr has no productions under include={use!r}; '
+            'enable LITERAL'
+        )
+    contexts = grammar.contexts or _DEFAULT_CONTEXTS
+    return st.sampled_from(list(contexts)).map(lambda c: ForeignVal(c, None))
 
 
 # ---------------------------------------------------------------------------
@@ -564,8 +824,9 @@ def expr(
     env: TypeEnv,
     depth: int,
     *,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Strategy for an expression of type ``target`` under ``env``.
 
@@ -574,25 +835,38 @@ def expr(
     (literals and variable references for scalars, or single-level
     constructors for compound types) are produced.
 
-    ``range_arg_min`` / ``range_arg_max`` (inclusive) bound the integer
-    literals used as ``Range1`` / ``Range2`` arguments. Affects only
-    list-typed sub-strategies (reachable directly via a ``ListType``
-    target, or indirectly through ``Len(list[real])`` in real expressions).
+    ``grammar`` carries per-type production filters, ``with``-block
+    contexts, and literal-range bounds; see :class:`Grammar`.
+    ``range_arg_min`` / ``range_arg_max`` (when given) override
+    ``grammar.range_arg_range`` for this call only.
 
-    Raises :class:`NotImplementedError` for type targets not yet supported
-    (e.g. ``ContextType``, ``FunctionType``).
+    Raises :class:`NotImplementedError` for type targets not yet supported.
     """
-    kw = dict(range_arg_min=range_arg_min, range_arg_max=range_arg_max)
     if isinstance(target, RealType):
-        return _real_expr(env, depth, **kw)
+        return _real_expr(
+            env, depth, grammar=grammar,
+            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+        )
     if isinstance(target, BoolType):
-        return _bool_expr(env, depth, **kw)
+        return _bool_expr(
+            env, depth, grammar=grammar,
+            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+        )
     if isinstance(target, ListType):
-        return _list_expr(target.elt, env, depth, **kw)
+        return _list_expr(
+            target.elt, env, depth, grammar=grammar,
+            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+        )
     if isinstance(target, TupleType):
-        return _tuple_expr(target.elts, env, depth, **kw)
+        return _tuple_expr(
+            target.elts, env, depth, grammar=grammar,
+            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+        )
     if isinstance(target, ContextType):
-        return _ctx_expr(env, depth, **kw)
+        return _ctx_expr(
+            env, depth, grammar=grammar,
+            range_arg_min=range_arg_min, range_arg_max=range_arg_max,
+        )
     raise NotImplementedError(f'no generator for target type {target.format()}')
 
 
@@ -600,16 +874,17 @@ def real_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: RealProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(RealType(), env, depth)``.
 
-    See :data:`REAL_TAGS` for the supported ``include`` values.
+    ``include`` is an optional :class:`RealProd` flag.
     """
     return _real_expr(
-        env, depth, include=include,
+        env, depth, include=include, grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     )
 
@@ -618,16 +893,17 @@ def bool_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: BoolProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(BoolType(), env, depth)``.
 
-    See :data:`BOOL_TAGS` for the supported ``include`` values.
+    ``include`` is an optional :class:`BoolProd` flag.
     """
     return _bool_expr(
-        env, depth, include=include,
+        env, depth, include=include, grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     )
 
@@ -637,16 +913,17 @@ def list_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: ListProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(ListType(elt_type), env, depth)``.
 
-    See :data:`LIST_TAGS` for the supported ``include`` values.
+    ``include`` is an optional :class:`ListProd` flag.
     """
     return _list_expr(
-        elt_type, env, depth, include=include,
+        elt_type, env, depth, include=include, grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     )
 
@@ -656,16 +933,17 @@ def tuple_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    include: TupleProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(TupleType(*elt_types), env, depth)``.
 
-    See :data:`TUPLE_TAGS` for the supported ``include`` values.
+    ``include`` is an optional :class:`TupleProd` flag.
     """
     return _tuple_expr(
-        elt_types, env, depth, include=include,
+        elt_types, env, depth, include=include, grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     )
 
@@ -674,13 +952,15 @@ def context_expr(
     env: TypeEnv,
     depth: int,
     *,
-    include: set[str] | None = None,
+    include: ContextProd | None = None,
+    grammar: Grammar = DEFAULT_GRAMMAR,
 ) -> st.SearchStrategy[Expr]:
     """Convenience wrapper for ``expr(ContextType(), env, depth)``.
 
-    See :data:`CONTEXT_TAGS` for the supported ``include`` values.
+    ``include`` is an optional :class:`ContextProd` flag.  Contexts
+    sampled from ``grammar.contexts``.
     """
-    return _ctx_expr(env, depth, include=include)
+    return _ctx_expr(env, depth, include=include, grammar=grammar)
 
 
 # ---------------------------------------------------------------------------
@@ -707,8 +987,9 @@ def _stmt_block(
     local_prefix: str = 't',
     local_types: st.SearchStrategy[Type] | None = None,
     *,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> StmtBlock:
     """Generate a ``StmtBlock`` ending in a ``ReturnStmt``.
 
@@ -718,6 +999,17 @@ def _stmt_block(
     real-typed loop var), and ``max_whiles`` ``WhileStmt`` (counter-driven
     template ``c = 0; while c < N: <body>; c = c + 1``).
 
+    ``grammar`` carries the production filters and context list threaded
+    through every expression sub-strategy.  ``grammar.stmt_prods`` also
+    gates which statement kinds can appear: a kind is generated only when
+    *both* its corresponding :class:`StmtProd` flag is set and its
+    ``max_*`` budget is non-zero (so ``max_*`` bounds quantity, and
+    ``stmt_prods`` bounds existence).  ``StmtProd.ASSIGN`` is required —
+    it is the only kind that fires at ``sub_depth=0`` and at the base of
+    any ``min_n=1`` body block.  Per-call ``range_arg_min``/
+    ``range_arg_max`` override ``grammar.range_arg_range`` for this call
+    only.
+
     Scoping (see module docstring for the rationale): ``with``-body assigns
     leak out, ``if`` / ``for`` / ``while`` body assigns don't; for-loop
     targets and while-body locals are body-scoped, while counters leak.
@@ -725,6 +1017,8 @@ def _stmt_block(
     bodies. ``local_types`` overrides the Assign-local type strategy
     (defaults to :func:`arbitrary_type` at depth 1).
     """
+    # ``StmtProd.ASSIGN in grammar.stmt_prods`` is validated at
+    # ``Grammar.__post_init__``, so this helper can assume it.
     if local_types is None:
         local_types = _default_local_types()
     counter = [0]
@@ -734,7 +1028,8 @@ def _stmt_block(
         counter[0] += 1
         return NamedId(f'{local_prefix}{i}')
 
-    kw_expr = dict(range_arg_min=range_arg_min, range_arg_max=range_arg_max)
+    rmin = range_arg_min if range_arg_min is not None else grammar.range_arg_range[0]
+    rmax = range_arg_max if range_arg_max is not None else grammar.range_arg_range[1]
 
     range_sym = _func_sym('range')
 
@@ -752,19 +1047,27 @@ def _stmt_block(
         n = draw(st.integers(min_n, max(min_n, max_n)))
         stmts: list[Stmt] = []
         for _ in range(n):
-            kinds = ['assign']
-            if ctx_budget > 0 and sub_depth > 0:
+            kinds: list[str] = []
+            if StmtProd.ASSIGN in grammar.stmt_prods:
+                kinds.append('assign')
+            if (StmtProd.WITH in grammar.stmt_prods
+                    and ctx_budget > 0 and sub_depth > 0):
                 kinds.append('context')
-            if if_budget > 0 and sub_depth > 0:
+            if (StmtProd.IF in grammar.stmt_prods
+                    and if_budget > 0 and sub_depth > 0):
                 kinds.append('if')
-            if loop_budget > 0 and sub_depth > 0:
+            if (StmtProd.FOR in grammar.stmt_prods
+                    and loop_budget > 0 and sub_depth > 0):
                 kinds.append('for')
-            if while_budget > 0 and sub_depth > 0:
+            if (StmtProd.WHILE in grammar.stmt_prods
+                    and while_budget > 0 and sub_depth > 0):
                 kinds.append('while')
             kind = draw(st.sampled_from(kinds))
 
             if kind == 'context':
-                ctx_value_expr = draw(_ctx_expr(env_local, sub_depth))
+                ctx_value_expr = draw(_ctx_expr(
+                    env_local, sub_depth, grammar=grammar,
+                ))
                 inner_env = dict(env_local)
                 inner_stmts = gen_stmts(
                     inner_env, sub_depth - 1,
@@ -783,7 +1086,10 @@ def _stmt_block(
                 ctx_budget -= 1
 
             elif kind == 'if':
-                cond = draw(_bool_expr(env_local, sub_depth, **kw_expr))
+                cond = draw(_bool_expr(
+                    env_local, sub_depth, grammar=grammar,
+                    range_arg_min=rmin, range_arg_max=rmax,
+                ))
                 two_armed = draw(st.booleans())
                 # Branch locals do not propagate out; the shared counter
                 # still prevents cross-branch collisions.
@@ -810,7 +1116,7 @@ def _stmt_block(
                 if_budget -= 1
 
             elif kind == 'for':
-                bound = draw(st.integers(range_arg_min, range_arg_max))
+                bound = draw(st.integers(rmin, rmax))
                 iterable = Range1(range_sym, Integer(bound, None), None)
                 loop_var = fresh_local()
                 loop_env = dict(env_local)
@@ -855,7 +1161,10 @@ def _stmt_block(
             else:  # 'assign'
                 name = fresh_local()
                 local_type = draw(local_types)
-                rhs = draw(expr(local_type, env_local, sub_depth, **kw_expr))
+                rhs = draw(expr(
+                    local_type, env_local, sub_depth, grammar=grammar,
+                    range_arg_min=rmin, range_arg_max=rmax,
+                ))
                 stmts.append(Assign(name, None, rhs, None))
                 env_local[name] = local_type
 
@@ -866,7 +1175,10 @@ def _stmt_block(
         env, depth, max_assigns,
         max_contexts, max_ifs, max_loops, max_whiles,
     )
-    ret_expr = draw(expr(return_type, env, depth, **kw_expr))
+    ret_expr = draw(expr(
+        return_type, env, depth, grammar=grammar,
+        range_arg_min=rmin, range_arg_max=rmax,
+    ))
     return StmtBlock(body_stmts + [ReturnStmt(ret_expr, None)])
 
 
@@ -882,14 +1194,16 @@ def stmt_block(
     local_prefix: str = 't',
     local_types: st.SearchStrategy[Type] | None = None,
     *,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[StmtBlock]:
     """Public wrapper around the statement-block strategy."""
     return _stmt_block(
         env, return_type, depth,
         max_assigns, max_contexts, max_ifs, max_loops, max_whiles,
         local_prefix, local_types,
+        grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     )
 
@@ -992,8 +1306,9 @@ def fpy_funcdef(
     max_whiles: st.SearchStrategy[int] | None = None,
     *,
     name: str = 'f',
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> FuncDef:
     """Generate a well-typed FPy function with the given signature.
 
@@ -1001,7 +1316,7 @@ def fpy_funcdef(
     The body is a sequence of ``Assign`` / ``ContextStmt`` / ``IfStmt`` /
     ``If1Stmt`` / ``ForStmt`` / ``WhileStmt`` statements followed by a
     ``ReturnStmt`` of type ``return_type``. See :func:`stmt_block` for
-    ``max_*`` semantics.
+    ``max_*`` semantics; ``grammar`` controls the expression productions.
     """
     if max_depth is None:
         max_depth = st.integers(0, 3)
@@ -1023,6 +1338,7 @@ def fpy_funcdef(
         max_assigns=draw(max_assigns), max_contexts=draw(max_contexts),
         max_ifs=draw(max_ifs), max_loops=draw(max_loops),
         max_whiles=draw(max_whiles),
+        grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ))
     return _make_funcdef(name, arg_names, arg_types, body)
@@ -1039,8 +1355,9 @@ def fpy_function(
     max_whiles: st.SearchStrategy[int] | None = None,
     *,
     name: str = 'f',
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[fp.Function]:
     """Same as :func:`fpy_funcdef` but wraps the AST in :class:`fp.Function`."""
     return fpy_funcdef(
@@ -1048,7 +1365,7 @@ def fpy_function(
         max_depth=max_depth, max_assigns=max_assigns,
         max_contexts=max_contexts, max_ifs=max_ifs,
         max_loops=max_loops, max_whiles=max_whiles,
-        name=name,
+        name=name, grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ).map(fp.Function)
 
@@ -1068,8 +1385,9 @@ def fpy_real_funcdef(
     max_loops: st.SearchStrategy[int] | None = None,
     max_whiles: st.SearchStrategy[int] | None = None,
     *,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> FuncDef:
     """Generate ``f(x0..xN: Real) -> Real``.
 
@@ -1085,6 +1403,7 @@ def fpy_real_funcdef(
         max_depth=max_depth, max_assigns=max_assigns,
         max_contexts=max_contexts, max_ifs=max_ifs,
         max_loops=max_loops, max_whiles=max_whiles,
+        grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ))
 
@@ -1098,13 +1417,15 @@ def fpy_real_function(
     max_loops: st.SearchStrategy[int] | None = None,
     max_whiles: st.SearchStrategy[int] | None = None,
     *,
-    range_arg_min: int = _DEFAULT_RANGE_ARG_MIN,
-    range_arg_max: int = _DEFAULT_RANGE_ARG_MAX,
+    grammar: Grammar = DEFAULT_GRAMMAR,
+    range_arg_min: int | None = None,
+    range_arg_max: int | None = None,
 ) -> st.SearchStrategy[fp.Function]:
     """Same as :func:`fpy_real_funcdef` but wraps the AST in :class:`fp.Function`."""
     return fpy_real_funcdef(
         num_args=num_args, max_depth=max_depth, max_assigns=max_assigns,
         max_contexts=max_contexts, max_ifs=max_ifs,
         max_loops=max_loops, max_whiles=max_whiles,
+        grammar=grammar,
         range_arg_min=range_arg_min, range_arg_max=range_arg_max,
     ).map(fp.Function)

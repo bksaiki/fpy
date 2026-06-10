@@ -19,7 +19,12 @@ __all__ = [
     'fpy_funcdef', 'fpy_function',
     'fpy_real_funcdef', 'fpy_real_function',
     'arbitrary_type', 'value_for_type',
-    'REAL_TAGS', 'BOOL_TAGS', 'LIST_TAGS', 'TUPLE_TAGS', 'CONTEXT_TAGS',
+    # Grammar surface
+    'Grammar', 'DEFAULT_GRAMMAR',
+    'RealProd', 'BoolProd', 'ListProd', 'TupleProd', 'ContextProd', 'StmtProd',
+    # Named Grammar profiles for common scenarios
+    'MINIMAL_PROFILE', 'ROUND_ELIM_PROFILE', 'WIDENING_PROFILE',
+    'LOOP_HEAVY_PROFILE', 'CONTROL_FLOW_PROFILE', 'FRACTIONAL_PROFILE',
 ]
 
 from .context import (
@@ -55,9 +60,22 @@ from .fpy_program import (
     fpy_real_function,
     arbitrary_type,
     value_for_type,
-    REAL_TAGS,
-    BOOL_TAGS,
-    LIST_TAGS,
-    TUPLE_TAGS,
-    CONTEXT_TAGS,
+    # Grammar surface
+    Grammar,
+    DEFAULT_GRAMMAR,
+    RealProd,
+    BoolProd,
+    ListProd,
+    TupleProd,
+    ContextProd,
+    StmtProd,
+)
+
+from .profiles import (
+    MINIMAL_PROFILE,
+    ROUND_ELIM_PROFILE,
+    WIDENING_PROFILE,
+    LOOP_HEAVY_PROFILE,
+    CONTROL_FLOW_PROFILE,
+    FRACTIONAL_PROFILE,
 )

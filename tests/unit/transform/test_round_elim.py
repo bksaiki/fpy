@@ -457,7 +457,7 @@ class TestProperties:
 
     def test_type_error_on_non_funcdef(self):
         try:
-            RoundElim.apply("not a funcdef")
+            RoundElim.apply("not a funcdef")  # type: ignore[arg-type]
         except TypeError:
             pass
         else:
@@ -570,3 +570,82 @@ class TestRegression:
         assert _count_real_blocks(out) == _count_real_blocks(f.ast)
         # Add stays in its original (INTEGER) position.
         assert out.is_equiv(f.ast)
+
+
+# ----------------------------------------------------------------------
+# Property-based tests driven by the type-directed FPy generator.
+
+
+class TestRoundElimProperty:
+    """``RoundElim`` is observationally an identity: the transformed
+    function must produce the same value as the original on every
+    input.  This property is fuzzed via
+    :data:`tests.unit.generators.ROUND_ELIM_PROFILE`, which narrows the
+    grammar to the subset ``RoundElim`` operates on (arithmetic + round
+    under FP32/FP64 ``with`` blocks).
+    """
+
+    def test_semantics_preserved(self) -> None:
+        from hypothesis import HealthCheck, given, settings, strategies as st
+
+        from tests.unit.generators import (
+            ROUND_ELIM_PROFILE, fpy_function, value_for_type,
+        )
+        from fpy2.types import RealType
+
+        @given(
+            fpy_function(
+                (RealType(),), RealType(),
+                grammar=ROUND_ELIM_PROFILE,
+                max_depth=st.just(2),
+                max_assigns=st.just(2),
+                max_contexts=st.just(1),
+                max_ifs=st.just(0),
+                max_loops=st.just(0),
+                max_whiles=st.just(0),
+            ),
+            st.data(),
+        )
+        @settings(
+            max_examples=40,
+            deadline=None,
+            suppress_health_check=[HealthCheck.too_slow],
+        )
+        def _check(f: fp.Function, data: st.DataObject) -> None:
+            # Apply RoundElim to a copy of the function's AST.
+            transformed = f.with_ast(RoundElim.apply(f.ast))
+
+            # Draw a single argument value.  ``ROUND_ELIM_PROFILE``
+            # restricts to FP32/FP64 contexts, so any reasonably-bounded
+            # ``RealFloat`` works for the input.
+            x = data.draw(value_for_type(RealType()))
+
+            try:
+                expected = f(x, ctx=fp.FP64)
+            except Exception:
+                # Interpreter rejected the input (e.g. division by zero
+                # in the generated program).  Skip — we're testing
+                # ``RoundElim`` preserves semantics, not that every
+                # generated program is total.
+                return
+            try:
+                actual = transformed(x, ctx=fp.FP64)
+            except Exception as e:
+                raise AssertionError(
+                    f'RoundElim changed semantics: original ran to '
+                    f'{expected!r}, transformed raised {type(e).__name__}: {e}'
+                ) from e
+
+            # Compare as ``RealFloat``s where possible; NaNs need a
+            # type-aware check since ``nan != nan``.
+            if hasattr(expected, 'isnan') and expected.isnan:
+                assert hasattr(actual, 'isnan') and actual.isnan, (
+                    f'expected NaN, got {actual!r}'
+                )
+            else:
+                assert expected == actual, (
+                    f'RoundElim changed semantics: '
+                    f'original {expected!r}, transformed {actual!r}'
+                )
+
+        _check()
