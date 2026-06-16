@@ -30,7 +30,7 @@ Requirements:
  - Python 3.11 or later
  - `make`
 
-### Installation
+#### With `pip`
 
 If you do not have a Python virtual environment,
 create one using
@@ -54,6 +54,20 @@ To uninstall FPy, run:
 ```bash
 pip uninstall fpy2
 ```
+
+#### With `uv`
+
+[uv](https://docs.astral.sh/uv/) handles the virtual environment and
+dependency installation in one step:
+```bash
+uv sync
+```
+This creates `.venv/` and installs FPy in editable mode along with the
+`dev` dependency group.  Activate the environment with
+```bash
+source .venv/bin/activate
+```
+or prefix individual commands with `uv run` (e.g. `uv run pytest tests/unit`).
 
 ### Testing
 
