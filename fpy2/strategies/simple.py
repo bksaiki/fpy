@@ -15,20 +15,12 @@ def simplify(
     enable_copy_prop: bool = True,
     enable_dead_code_elim: bool = True
 ) -> Function:
-    """
-    Applies simplifying transformations to the function:
-
-    - constant folding + propagation (via :class:`ConstFold`, which
-      reads :class:`PartialEval` and substitutes known values at every
-      foldable site, ``Var`` sites included)
-    - copy propagation
-    - dead code elimination
-    """
+    """Apply :class:`ConstFold` + :class:`CopyPropagate` +
+    :class:`DeadCodeEliminate` to *func* until fixpoint."""
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
     ast = func.ast
 
-    # continually simplify until no more can be done
     eliminated = True
     while eliminated:
         if enable_const_fold:
