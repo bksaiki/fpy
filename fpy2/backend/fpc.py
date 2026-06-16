@@ -393,25 +393,72 @@ class _FPCoreCompileInstance(Visitor):
                 )
             )
 
+    def _fpc_minimum(self, a: fpc.Expr, b: fpc.Expr) -> fpc.Expr:
+        """IEEE 754-2019 ``minimum(a, b)`` — NaN-propagating and
+        signed-zero-correct.  Built as::
+
+            (let ([_a a] [_b b])
+              (if (or (isnan _a) (isnan _b))
+                  NAN
+                  (if (== _a _b)
+                      (if (signbit _a) _a _b)    ; min picks -0 over +0
+                      (if (< _a _b) _a _b))))
+
+        FPCore's built-in ``fmin`` follows C99 / IEEE 754-2008 ``minNum``
+        (NaN-ignoring, ±0 unspecified), which doesn't match FPy's
+        interpreter; this wrapper makes the emitted FPCore deterministic.
+        """
+        a_id = str(self.gensym.fresh('a'))
+        b_id = str(self.gensym.fresh('b'))
+        return fpc.Let(
+            [(a_id, a), (b_id, b)],
+            fpc.If(
+                fpc.Or(fpc.Isnan(a_id), fpc.Isnan(b_id)),
+                fpc.Constant('NAN'),
+                fpc.If(
+                    fpc.EQ(a_id, b_id),
+                    fpc.If(fpc.Signbit(a_id), a_id, b_id),
+                    fpc.If(fpc.LT(a_id, b_id), a_id, b_id),
+                ),
+            ),
+        )
+
+    def _fpc_maximum(self, a: fpc.Expr, b: fpc.Expr) -> fpc.Expr:
+        """IEEE 754-2019 ``maximum(a, b)`` — mirrors :meth:`_fpc_minimum`
+        with the branches swapped so the equal-magnitude tie picks ``+0``
+        and the inequality branch picks the larger operand."""
+        a_id = str(self.gensym.fresh('a'))
+        b_id = str(self.gensym.fresh('b'))
+        return fpc.Let(
+            [(a_id, a), (b_id, b)],
+            fpc.If(
+                fpc.Or(fpc.Isnan(a_id), fpc.Isnan(b_id)),
+                fpc.Constant('NAN'),
+                fpc.If(
+                    fpc.EQ(a_id, b_id),
+                    fpc.If(fpc.Signbit(a_id), b_id, a_id),
+                    fpc.If(fpc.LT(a_id, b_id), b_id, a_id),
+                ),
+            ),
+        )
+
     def _visit_min(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
-        # expand min expression by left associativity
-        # at least two arguments
-        # (fmin (fmin (fmin t1 t2) t3) ... tn)
+        # Left-fold pairwise via the NaN-propagating, signed-zero-correct
+        # minimum (see :meth:`_fpc_minimum`).
         vals = [self._visit_expr(arg, ctx) for arg in args]
         min_expr = vals[0]
         for val in vals[1:]:
-            min_expr = fpc.Fmin(min_expr, val)
+            min_expr = self._fpc_minimum(min_expr, val)
         return min_expr
 
     def _visit_max(self, args: tuple[Expr, ...], ctx: None) -> fpc.Expr:
-        # expand max expression by left associativity
-        # at least two arguments
-        # (fmax (fmax (fmax t1 t2) t3) ... tn)
+        # Left-fold pairwise via the NaN-propagating, signed-zero-correct
+        # maximum (see :meth:`_fpc_maximum`).
         vals = [self._visit_expr(arg, ctx) for arg in args]
-        min_expr = vals[0]
+        max_expr = vals[0]
         for val in vals[1:]:
-            min_expr = fpc.Fmax(min_expr, val)
-        return min_expr
+            max_expr = self._fpc_maximum(max_expr, val)
+        return max_expr
 
     def _visit_sum(self, arg: Expr, ctx: None) -> fpc.Expr:
         # sum(xs) → fold over the list with +.  Shape documented on
@@ -419,12 +466,13 @@ class _FPCoreCompileInstance(Visitor):
         return self._visit_list_reduce(arg, fpc.Add, ctx)
 
     def _visit_amin(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # min(xs) → fold over the list with fmin.  Mirrors _visit_sum.
-        return self._visit_list_reduce(arg, fpc.Fmin, ctx)
+        # min(xs) → fold over the list with the IEEE 754-2019 ``minimum``
+        # (see :meth:`_fpc_minimum`).
+        return self._visit_list_reduce(arg, self._fpc_minimum, ctx)
 
     def _visit_amax(self, arg: Expr, ctx: None) -> fpc.Expr:
-        # max(xs) → fold over the list with fmax.  Mirrors _visit_sum.
-        return self._visit_list_reduce(arg, fpc.Fmax, ctx)
+        # max(xs) → fold over the list with the IEEE 754-2019 ``maximum``.
+        return self._visit_list_reduce(arg, self._fpc_maximum, ctx)
 
     def _visit_list_reduce(
         self,

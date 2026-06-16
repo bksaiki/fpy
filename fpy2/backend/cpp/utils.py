@@ -37,9 +37,38 @@ CPP_HEADERS: tuple[str, ...] = (
     '#include <cmath>',
     '#include <cstddef>',
     '#include <cstdint>',
+    '#include <limits>',
     '#include <numeric>',
     '#include <vector>',
     '#include <tuple>',
 )
 
-CPP_HELPERS: str = ''
+# IEEE 754-2019 ``minimum`` / ``maximum`` for floating-point ``T``:
+# NaN-propagating and signed-zero-correct.  ``std::fmin`` / ``std::fmax``
+# follow C99 / IEEE 754-2008 ``minNum`` (NaN-ignoring), and on libstdc++
+# the non-constant-folded path is just ``(a < b) ? a : b``, which loses
+# the ±0 distinction (``std::fmin(-0.0, +0.0)`` with variable operands
+# returns ``+0`` instead of ``-0``).  The explicit ``a == b`` tie-break
+# fixes both issues.
+#
+# Only emitted for floating-point ``T``; integer ``min`` / ``max``
+# continue to use ``std::min`` / ``std::max`` (no NaN, no signed-zero).
+CPP_HELPERS: str = '''\
+template <typename T>
+inline T __fpy_min(T a, T b) {
+    if (std::isnan(a) || std::isnan(b))
+        return std::numeric_limits<T>::quiet_NaN();
+    if (a == b)
+        return std::signbit(a) ? a : b;
+    return (a < b) ? a : b;
+}
+
+template <typename T>
+inline T __fpy_max(T a, T b) {
+    if (std::isnan(a) || std::isnan(b))
+        return std::numeric_limits<T>::quiet_NaN();
+    if (a == b)
+        return std::signbit(a) ? b : a;
+    return (a < b) ? b : a;
+}
+'''

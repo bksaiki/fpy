@@ -1513,7 +1513,10 @@ class CppEmitter(Visitor):
             for a, s in zip(args, arg_storages)
         ]
         if target.is_float():
-            fn = 'std::fmin' if isinstance(e, Min) else 'std::fmax'
+            # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``
+            # (see :data:`CPP_HELPERS`).  ±0 ordering is delegated to the
+            # underlying ``std::fmin`` / ``std::fmax``.
+            fn = '__fpy_min' if isinstance(e, Min) else '__fpy_max'
         else:
             fn = 'std::min' if isinstance(e, Min) else 'std::max'
         result = casted[0]
@@ -1550,7 +1553,9 @@ class CppEmitter(Visitor):
             )
         elt_ty = arg_storage.elt
         if result_ty.is_float():
-            fn = 'std::fmin' if isinstance(e, AMin) else 'std::fmax'
+            # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``;
+            # see :meth:`_emit_min_max` and :data:`CPP_HELPERS`.
+            fn = '__fpy_min' if isinstance(e, AMin) else '__fpy_max'
         else:
             fn = 'std::min' if isinstance(e, AMin) else 'std::max'
 
