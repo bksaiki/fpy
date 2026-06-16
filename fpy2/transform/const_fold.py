@@ -57,14 +57,19 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         """Convert a :data:`Value` from PartialEval back to an AST
         literal.  Returns ``None`` if ``val`` isn't representable as a
         literal in the FPy AST (Python types, functions, modules,
-        tuples, etc.) — the caller will leave the original node in
-        place.
+        non-emittable element types in a container, etc.) — the
+        caller will leave the original node in place.
 
         ``bool`` is checked first because ``bool`` is a subclass of
         ``int`` in Python.  Python ``int`` and ``float`` show up when
         a Python-bound free variable is substituted at a ``Var``
         site; they normalize through :class:`Fraction` so they share
         the same AST output shape as folded numeric ops.
+
+        ``tuple`` and ``list`` recurse element-wise: every element
+        must itself be literal-emittable, otherwise the container
+        falls through to ``None`` (leaving the original AST in
+        place).
         """
         if isinstance(val, bool):
             return BoolVal(val, loc)
@@ -83,6 +88,11 @@ class _ConstFoldInstance(DefaultTransformVisitor):
             return Rational(func, val.numerator, val.denominator, loc)
         if isinstance(val, Context):
             return ForeignVal(val, loc)
+        if isinstance(val, (tuple, list)):
+            elts = [self._value_to_literal(elt, loc) for elt in val]
+            if any(e is None for e in elts):
+                return None
+            return TupleExpr(elts, loc) if isinstance(val, tuple) else ListExpr(elts, loc)
         return None
 
     def _fold(self, e: Expr) -> Expr | None:

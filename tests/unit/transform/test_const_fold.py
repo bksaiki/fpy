@@ -36,8 +36,10 @@ from fpy2.ast import (
     ContextStmt,
     ForeignVal,
     Integer,
+    ListExpr,
     Rational,
     ReturnStmt,
+    TupleExpr,
 )
 from fpy2.number import Context
 from fpy2.transform import ConstFold
@@ -171,6 +173,63 @@ class TestOpFolding:
         e = _return_expr(folded)
         assert isinstance(e, BoolVal), f'expected BoolVal; got {type(e).__name__}'
         assert e.val is True
+
+    def test_amin_folds_over_literal_list(self):
+        """``min([3.0, 1.0, 2.0])`` (AMin reduce-form) folds because
+        the list literal is now a recognized value."""
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return min([3.0, 1.0, 2.0])
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
+        assert e.val == 1
+
+    def test_list_ref_folds(self):
+        """Indexing into a known list folds."""
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                xs = [10.0, 20.0, 30.0]
+                return xs[1]
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Integer)
+        assert e.val == 20
+
+    def test_list_literal_substituted_at_var(self):
+        """A ``Var`` bound to a known list substitutes as a
+        ``ListExpr`` literal."""
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                xs = [1.0, 2.0]
+                return min(xs)
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        # The min folds all the way through to the literal; the
+        # list-at-Var-site substitution is exercised at the AMin's arg.
+        assert isinstance(e, Integer)
+        assert e.val == 1
+
+    def test_tuple_destructure_folds(self):
+        """A tuple literal flows through a destructuring assignment;
+        each bound name carries its element's value forward."""
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                t = (1.0, 2.0)
+                a, b = t
+                return a + b
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Integer)
+        assert e.val == 3
 
 
 # ---------------------------------------------------------------------------
