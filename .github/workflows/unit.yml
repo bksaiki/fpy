@@ -6,8 +6,30 @@ env:
   FPBENCH: ~/fpbench
 
 jobs:
-  build:
-    name: "Build"
+  # Verify the project builds and installs cleanly under each supported
+  # Python version, via both install paths.  ``uv`` is our primary
+  # workflow; the ``pip`` variant keeps the legacy ``pip install -e .[dev]``
+  # entry point from regressing.
+  build-uv:
+    name: "Build (uv)"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - name: Build package
+        run: uv build
+      - name: Install fpy2
+        run: uv sync
+
+  build-pip:
+    name: "Build (pip)"
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -24,39 +46,35 @@ jobs:
       - name: Build package
         run: python -m build
       - name: Install fpy2
-        run: pip install .
+        run: pip install -e .[dev]
 
   mypy:
     name: "Mypy analyzer"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
+          enable-cache: true
           python-version: "3.11"
-      - name: Install dependencies
-        run: python -m pip install --upgrade pip mypy
-      - name: Install fpy2
-        run: pip install .
+      - name: Install
+        run: uv sync
       - name: Check
-        run: mypy fpy2
+        run: uv run mypy fpy2
 
   ruff:
     name: "Ruff linter"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
+          enable-cache: true
           python-version: "3.11"
-      - name: Install dependencies
-        run: python -m pip install --upgrade pip ruff
-      - name: Install fpy2
-        run: pip install .
+      - name: Install
+        run: uv sync
       - name: Lint
-        run: ruff check fpy2/
+        run: uv run ruff check fpy2/
 
   unit:
     name: "Unit Tests"
@@ -68,20 +86,16 @@ jobs:
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.11'
-      - name: Create virtual environment
-        run: python3 -m venv .env/
-      - name: Activate virtual environment
-        run: source .env/bin/activate
+          enable-cache: true
+          python-version: "3.11"
       - name: Install
-        run: pip install -e .[dev]
+        run: uv sync
       - name: Unit Tests
-        run: make unittest
+        run: uv run make unittest
       - name: Infrastucture Tests
-        run: python3 -m tests.infra
+        run: uv run python -m tests.infra
 
   fpcore:
     name: "FPCore tests"
@@ -93,18 +107,14 @@ jobs:
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.11'
-      - name: Create virtual environment
-        run: python3 -m venv .env/
-      - name: Activate virtual environment
-        run: source .env/bin/activate
+          enable-cache: true
+          python-version: "3.11"
       - name: Install
-        run: pip install -e .[dev]
+        run: uv sync
       - name: Compilation tests
-        run: python3 -m tests.infra.fpcore
+        run: uv run python -m tests.infra.fpcore
 
   cpp:
     name: "C++ tests"
@@ -116,18 +126,14 @@ jobs:
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.11'
-      - name: Create virtual environment
-        run: python3 -m venv .env/
-      - name: Activate virtual environment
-        run: source .env/bin/activate
+          enable-cache: true
+          python-version: "3.11"
       - name: Install
-        run: pip install -e .[dev]
+        run: uv sync
       - name: Tests (C++)
-        run: python3 -m tests.infra.backend.cpp
+        run: uv run python -m tests.infra.backend.cpp
 
   sweep:
     name: "Sweep"
@@ -140,15 +146,11 @@ jobs:
         with:
           repository: fpbench/fpbench
           path: ~/fpbench
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.11'
-      - name: Create virtual environment
-        run: python3 -m venv .env/
-      - name: Activate virtual environment
-        run: source .env/bin/activate
+          enable-cache: true
+          python-version: "3.11"
       - name: Install
-        run: pip install -e .[dev]
+        run: uv sync
       - name: Sweep (fused_dp)
-        run: python3 -m exploration.fused_dp.sweep --threads 2 1_000
+        run: uv run python -m exploration.fused_dp.sweep --threads 2 1_000
