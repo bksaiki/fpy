@@ -1,219 +1,150 @@
 """
-Constant folding.
+Constant folding — thin rewriter over :class:`fpy2.analysis.PartialEval`.
+
+``PartialEval`` is the single source of truth for "what is the static
+value, if any, of every expression in the program."  ``ConstFold``
+walks the AST and, at each foldable node, queries ``by_expr`` and
+substitutes a literal AST when one is available.  No value-tracking
+dataflow lives here.
 """
 
-import inspect
-
 from fractions import Fraction
-from typing import Any, Callable, TypeAlias
 
-from ..analysis import DefineUse, DefineUseAnalysis, Definition
+from ..analysis import DefineUse, DefineUseAnalysis, PartialEval, PartialEvalInfo
+from ..analysis.partial_eval import Value
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
-from ..env import ForeignEnv
-from ..fpc_context import FPCoreContext
-from ..interpret import Interpreter, get_default_interpreter
-from ..number import Float, RealFloat, REAL
-from ..utils import is_dyadic
+from ..number import Context, Float
 
-from .. import ops
-
-ScalarValue: TypeAlias = bool | Float | Fraction | Context
-TupleValue: TypeAlias = tuple['Value', ...]
-Value: TypeAlias = ScalarValue | TupleValue
 
 class _ConstFoldInstance(DefaultTransformVisitor):
-    """
-    Constant folding instance for a function.
+    """ConstFold rewriter.
+
+    For each foldable node kind ``e``, this visitor queries
+    ``pe.by_expr[e]`` on the *original* node *before* descending into
+    children.  On a hit, it returns a literal AST replacement directly
+    (skipping the recursive rebuild for that subtree); on a miss, it
+    falls through to the default structural rewrite.
+
+    Substitution policy:
+
+    - ``Round`` / ``Cast`` / ``RoundAt`` are *never* substituted —
+      these AST nodes encode rounding intent, and folding them away
+      would lose that intent at later passes.
+    - Foldings whose result is a :class:`Context` ride
+      ``enable_context``; everything else rides ``enable_op``.  The
+      flag is decided by inspecting the *folded* value, not the source
+      AST node — so a ``Var`` bound to a ``Context`` (e.g.
+      ``CTX = fp.FP32; with CTX: ...``) is gated as a context fold,
+      and a ``Var`` bound to a numeric is gated as an op fold.
     """
 
     func: FuncDef
-    env: ForeignEnv
-    def_use: DefineUseAnalysis
-    rt: Interpreter
+    pe: PartialEvalInfo
     enable_context: bool
     enable_op: bool
-
-    vals: dict[Definition, Value]
-    remap: dict[Var, Var]
 
     def __init__(
         self,
         func: FuncDef,
-        def_use: DefineUseAnalysis,
+        pe: PartialEvalInfo,
         enable_context: bool,
         enable_op: bool,
     ):
         self.func = func
-        self.env = func.env
-        self.def_use = def_use
-        self.rt = get_default_interpreter()
+        self.pe = pe
         self.enable_context = enable_context
         self.enable_op = enable_op
-        self.vals = {}
-        self.remap = {}
 
-    def _eval_env(self):
-        return { d.name: v for d, v in self.vals.items() }
+    def _value_to_literal(self, val: Value, loc):
+        """Convert a :data:`Value` from PartialEval back to an AST
+        literal.  Returns ``None`` if ``val`` isn't representable as a
+        literal in the FPy AST (Python types, functions, modules,
+        tuples, etc.) — the caller will leave the original node in
+        place.
 
-    def _is_value(self, e: Expr) -> bool:
-        match e:
-            case Var():
-                d = self.def_use.find_def_from_use(self.remap.get(e, e))
-                return d in self.vals
-            case BoolVal() | RationalVal() | ForeignVal():
-                return True
-            case Attribute():
-                return self._is_value(e.value)
-            case TupleExpr():
-                return all(self._is_value(elt) for elt in e.elts)
-            case _:
-                return False
-
-    def _rational_as_ast(self, x: Float | Fraction, loc: Location | None):
-        if isinstance(x, Float):
-            x = x.as_rational()
-
-        if x.denominator == 1:
-            return Integer(int(x), loc)
-        else:
-            # TODO: emitting a rational node requires a name:
-            # could be `rational` or `fp.rational` or `fpy2.rational`
+        ``bool`` is checked first because ``bool`` is a subclass of
+        ``int`` in Python.  Python ``int`` and ``float`` show up when
+        a Python-bound free variable is substituted at a ``Var``
+        site; they normalize through :class:`Fraction` so they share
+        the same AST output shape as folded numeric ops.
+        """
+        if isinstance(val, bool):
+            return BoolVal(val, loc)
+        if isinstance(val, Float):
+            val = val.as_rational()
+        elif isinstance(val, (int, float)):
+            val = Fraction(val)
+        if isinstance(val, Fraction):
+            if val.denominator == 1:
+                return Integer(int(val), loc)
+            # ``fp.rational`` is the surface-level Rational constructor;
+            # the parser produces the same AST shape for literal
+            # rationals, so downstream consumers don't need to know
+            # this node came from a fold.
             func = Attribute(Var(NamedId('fp'), loc), 'rational', loc)
-            return Rational(func, x.numerator, x.denominator, loc)
+            return Rational(func, val.numerator, val.denominator, loc)
+        if isinstance(val, Context):
+            return ForeignVal(val, loc)
+        return None
 
-    def _visit_var(self, e: Var, ctx: Context | None):
-        e2 = super()._visit_var(e, ctx)
-        self.remap[e2] = e
-        return e2
+    def _fold(self, e: Expr) -> Expr | None:
+        """Look up ``e`` in ``pe.by_expr`` and convert to a literal,
+        respecting the ``enable_op`` / ``enable_context`` policy.
+        Returns ``None`` when no substitution applies."""
+        if e not in self.pe.by_expr:
+            return None
+        lit = self._value_to_literal(self.pe.by_expr[e], e.loc)
+        if lit is None:
+            return None
+        # Pick the gate by the kind of the folded result.
+        is_ctx_fold = isinstance(lit, ForeignVal) and isinstance(lit.val, Context)
+        if is_ctx_fold:
+            return lit if self.enable_context else None
+        return lit if self.enable_op else None
 
-    def _visit_attribute(self, e: Attribute, ctx: Context | None):
-        e = super()._visit_attribute(e, ctx)
-        if self._is_value(e.value) and ctx is not None:
-            # constant folding is possible
-            val = self.rt.eval_expr(e, self._eval_env(), ctx)
-            return ForeignVal(val, e.loc)
-        else:
-            return e
+    def _visit_expr(self, e: Expr, ctx) -> Expr:
+        """Single chokepoint for substitution: every expression in the
+        tree comes through this dispatcher (statements walk their
+        expression children via :meth:`_visit_expr`).  We try to fold
+        ``e`` here once; on a miss, fall through to the default
+        type-dispatched rewrite.
 
-    def _visit_nullaryop(self, e: NullaryOp, ctx: Context | None):
-        e = super()._visit_nullaryop(e, ctx)
-        if self.enable_op and ctx is not None:
-            # constant folding is possible
-            val = self.rt.eval_expr(e, self._eval_env(), ctx)
-            if not isinstance(val, Float | Fraction):
-                raise TypeError(f'expected a real number, got `{val}`')
-            return self._rational_as_ast(val, e.loc)
-        else:
-            return e
-
-    def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
-        e = super()._visit_unaryop(e, ctx)
-        if self.enable_op and not isinstance(e, Round | Cast) and ctx is not None and self._is_value(e.arg):
-            # constant folding is possible
-            val = self.rt.eval_expr(e, self._eval_env(), ctx)
-            if isinstance(val, Float | Fraction):
-                # constant folded to a real number
-                return self._rational_as_ast(val, e.loc)
-            else:
-                # TODO: constant folded to a tuple or list
-                return e
-        else:
-            return e
-
-    def _visit_binaryop(self, e: BinaryOp, ctx: Context | None):
-        e = super()._visit_binaryop(e, ctx)
-        if self.enable_op and not isinstance(e, RoundAt) and ctx is not None and self._is_value(e.first) and self._is_value(e.second):
-            # constant folding is possible
-            val = self.rt.eval_expr(e, self._eval_env(), ctx)
-            match val:
-                case Float() | Fraction():
-                    return self._rational_as_ast(val, e.loc)
-                case bool():
-                    return BoolVal(val, e.loc)
-                case _:
-                    # TODO: constant folded to a tuple or list
-                    return e
-        else:
-            return e
-
-    def _visit_ternaryop(self, e: TernaryOp, ctx: Context | None):
-        e = super()._visit_ternaryop(e, ctx)
-        if self.enable_op and ctx is not None and self._is_value(e.first) and self._is_value(e.second) and self._is_value(e.third):
-            # constant folding is possible
-            val = self.rt.eval_expr(e, self._eval_env(), ctx)
-            match val:
-                case Float() | Fraction():
-                    return self._rational_as_ast(val, e.loc)
-                case bool():
-                    return BoolVal(val, e.loc)
-                case _:
-                    # TODO: constant folded to a tuple or list
-                    return e
-        else:
-            return e
-
-    def _visit_call(self, e: Call, ctx: Context | None):
-        e = super()._visit_call(e, ctx)
-        if (
-            self.enable_context 
-            and isinstance(e.fn, type)
-            and issubclass(e.fn, Context)
-            and ctx is not None
-            and all(self._is_value(arg) for arg in e.args)
-            and all(self._is_value(v) for _, v in e.kwargs)
-        ):
-            # context constructor
-            val = self.rt.eval_expr(e, self._eval_env(), ctx)
-            if not isinstance(val, Context):
-                raise TypeError(f'expected a context, got `{val}`')
-            return ForeignVal(val, e.loc)
-        else:
-            return e
-
-    def _visit_context(self, stmt: ContextStmt, ctx: Context | None):
-        ctx_e = self._visit_expr(stmt.ctx, REAL)
-        if isinstance(ctx_e, ForeignVal) and isinstance(ctx_e.val, Context):
-            # we can determine the context
-            new_ctx = ctx_e.val
-        else:
-            # otherwise, we cannot
-            new_ctx = None
-
-        body, _ = self._visit_block(stmt.body, new_ctx)
-        s = ContextStmt(stmt.target, ctx_e, body, stmt.loc)
-        return s, ctx
-
-    def _visit_function(self, func: FuncDef, ctx: None):
-        # extract overriding context
-        match func.ctx:
-            case None:
-                fctx: Context | None = None
-            case FPCoreContext():
-                fctx = func.ctx.to_context()
-            case Context():
-                fctx = func.ctx
-            case _:
-                raise RuntimeError(f'unreachable: {func.ctx}')
-
-        # bind foreign values
-        for name in func.free_vars:
-            d = self.def_use.find_def_from_site(name, func)
-            self.vals[d] = self.env[str(name)]
-
-        return super()._visit_function(func, fctx)
+        ``Round`` / ``Cast`` / ``RoundAt`` are skipped — they encode
+        rounding intent that downstream passes need to see at the AST
+        level.
+        """
+        if not isinstance(e, (Round, Cast, RoundAt)):
+            lit = self._fold(e)
+            if lit is not None:
+                return lit
+        return super()._visit_expr(e, ctx)
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
 
 class ConstFold:
-    """
-    Constant folding.
+    """Constant folding and propagation.
 
-    This transform evaluates expressions that can be determined statically:
-    - constants constructors
-    - operations (math, lists, etc.)
+    Substitutes the following with literal AST nodes:
+
+    - **Constant propagation** at ``Var`` and ``Attribute`` sites whose
+      value is known statically.
+    - **Constant folding** at ``NullaryOp`` / ``UnaryOp`` / ``BinaryOp``
+      / ``TernaryOp`` / ``NaryOp`` whose operands are all known.
+    - **Context-constructor folding** at ``Call`` sites that build a
+      :class:`Context`.
+
+    Static values come from :class:`PartialEval`; pass an existing
+    analysis via ``partial_eval=`` to avoid re-running it.
+
+    Excluded:
+
+    - ``Round`` / ``Cast`` / ``RoundAt`` — preserved verbatim so the
+      rounding intent isn't erased.
+    - Non-literal-emittable values (types, functions, modules,
+      tuples) — left as the original AST.
     """
 
     @staticmethod
@@ -221,19 +152,29 @@ class ConstFold:
         func: FuncDef,
         *,
         def_use: DefineUseAnalysis | None = None,
+        partial_eval: PartialEvalInfo | None = None,
         enable_context: bool = True,
         enable_op: bool = True,
     ) -> FuncDef:
-        """
-        Applies constant folding.
+        """Apply constant folding to ``func``.
 
-        Optionally, specify:
-        - `enable_context`: whether to enable constant folding for context constructors [default: True]
-        - `enable_op`: whether to enable constant folding for operations [default: True]
+        Args:
+            func: The function to fold.
+            def_use: Cached def-use analysis; recomputed if absent.
+            partial_eval: Cached partial-eval analysis; recomputed if
+                absent.  When recomputed, shares ``def_use`` with this
+                call.
+            enable_context: When ``False``, suppress folds whose result
+                is a :class:`Context`.  Default ``True``.
+            enable_op: When ``False``, suppress folds whose result is
+                a number or boolean.  Default ``True``.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
         if def_use is None:
             def_use = DefineUse.analyze(func)
-        inst = _ConstFoldInstance(func, def_use, enable_context, enable_op)
-        return inst.apply()
+        if partial_eval is None:
+            partial_eval = PartialEval.apply(func, def_use=def_use)
+        return _ConstFoldInstance(
+            func, partial_eval, enable_context, enable_op,
+        ).apply()

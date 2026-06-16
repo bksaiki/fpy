@@ -223,3 +223,93 @@ class TestForeignValues:
         e = _return_expr(folded)
         assert isinstance(e, Integer)
         assert e.val == 3
+
+
+# ---------------------------------------------------------------------------
+# New capabilities introduced by reading from PartialEval
+# ---------------------------------------------------------------------------
+
+
+class TestConstantPropagation:
+    """The PartialEval-backed rewriter substitutes known values at
+    ``Var`` and foreign-value sites — capabilities the previous
+    op-only ``ConstFold`` didn't have."""
+
+    def test_local_var_substituted(self):
+        """``x = 3; return x`` → ``return 3``."""
+        @fp.fpy
+        def f():
+            x = 3
+            return x
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
+        assert e.val == 3
+
+    def test_foreign_int_var_substituted(self):
+        """A free Python ``int`` substitutes at the ``Var`` site."""
+        K = 7
+
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return K
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Integer)
+        assert e.val == 7
+
+    def test_foreign_float_var_substituted(self):
+        """A free Python ``float`` substitutes via the dyadic-rational
+        normalization (``2.5`` → ``fp.rational(5, 2)``)."""
+        K = 2.5
+
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return K
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Rational), f'expected Rational; got {type(e).__name__}'
+        assert e.p == 5 and e.q == 2
+
+    def test_foreign_context_var_folded(self):
+        """A free Python :class:`Context` substituted at the ``with``
+        block's ``Var`` so the body sees a concrete context."""
+        CTX = fp.FP32
+
+        @fp.fpy
+        def f():
+            with CTX:
+                return 1.0 + 2.0
+
+        folded = ConstFold.apply(f.ast)
+        ctx_stmt = _outer_context_stmt(folded)
+        assert isinstance(ctx_stmt.ctx, ForeignVal)
+        assert isinstance(ctx_stmt.ctx.val, Context)
+        # And the body gets folded under the concrete context.
+        e = _return_expr(folded)
+        assert isinstance(e, Integer)
+        assert e.val == 3
+
+    def test_enable_op_false_blocks_var_sub_numeric(self):
+        """``enable_op=False`` suppresses numeric var-substitution
+        (the same gate as op folding) but still folds contexts."""
+        K = 2.0
+
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return K + 1.0
+
+        folded = ConstFold.apply(f.ast, enable_op=False)
+        # Op didn't fold, K didn't substitute.
+        e = _return_expr(folded)
+        assert isinstance(e, BinaryOp), \
+            f'op should not fold under enable_op=False; got {type(e).__name__}'
+        # But the context expression did fold.
+        ctx_stmt = _outer_context_stmt(folded)
+        assert isinstance(ctx_stmt.ctx, ForeignVal)
