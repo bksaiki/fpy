@@ -97,10 +97,30 @@ class _PartialEvalInstance(DefaultVisitor):
     def _visit_digits(self, e: Digits, ctx: Context | None):
         self.by_expr[e] = e.as_rational()
 
+    def _try_eval(self, e_eval: Expr, ctx: Context):
+        """Evaluate *e_eval* via the interpreter, returning the result
+        on success or ``None`` if the interpreter raised.
+
+        Partial evaluation is best-effort: a single arithmetic edge
+        case (e.g. ``Cast`` of an inexact value, division by zero,
+        precision overflow inside MPFR) should not crash the analysis
+        for the whole function.  We treat any exception here as "this
+        expression isn't statically foldable" and move on.
+        """
+        try:
+            return self.rt.eval_expr(e_eval, self._base_env(), ctx)
+        except Exception:
+            return None
+
+    def _record(self, e: Expr, val):
+        """Record *val* as ``by_expr[e]`` unless ``val is None`` (the
+        :meth:`_try_eval` sentinel for "didn't evaluate")."""
+        if val is not None:
+            self.by_expr[e] = val
+
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context | None):
         if ctx is not None:
-            val = self.rt.eval_expr(e, {}, ctx)
-            self.by_expr[e] = val
+            self._record(e, self._try_eval(e, ctx))
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
         self._visit_expr(e.arg, ctx)
@@ -110,9 +130,7 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: UnaryOp = type(e)(e.func, e_arg, e.loc)
             else:
                 e_eval = type(e)(e_arg, e.loc)
-
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context | None):
         self._visit_expr(e.first, ctx)
@@ -124,9 +142,7 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: BinaryOp = type(e)(e.func, e_fst, e_snd, e.loc)
             else:
                 e_eval = type(e)(e_fst, e_snd, e.loc)
-
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context | None):
         self._visit_expr(e.first, ctx)
@@ -140,9 +156,7 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: TernaryOp = type(e)(e.func, e_fst, e_snd, e_trd, e.loc)
             else:
                 e_eval = type(e)(e_fst, e_snd, e_trd, e.loc)
-
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_naryop(self, e: NaryOp, ctx: Context | None):
         for arg in e.args:
@@ -160,9 +174,20 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: NaryOp = type(e)(e.func, e_args, e.loc)
             else:
                 e_eval = type(e)(e_args, e.loc)
+            self._record(e, self._try_eval(e_eval, ctx))
 
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+    def _visit_compare(self, e: Compare, ctx: Context | None):
+        """Chained comparisons (``a < b < c``) fold when every operand
+        is a known value.  The result is a Python ``bool``; we route
+        through the interpreter so chain semantics and per-op handling
+        of NaN / signed-zero match runtime behaviour.
+        """
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        if ctx is not None and all(self._is_value(arg) for arg in e.args):
+            e_args = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
+            e_eval = Compare(e.ops, e_args, e.loc)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_call(self, e: Call, ctx: Context | None):
         for arg in e.args:
@@ -179,9 +204,7 @@ class _PartialEvalInstance(DefaultVisitor):
             arg_vals = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
             kwarg_vals = [ (k, ForeignVal(self.by_expr[v], None)) for k, v in e.kwargs ]
             e_eval = Call(e.func, e.fn, arg_vals, kwarg_vals, e.loc)
-
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context | None):
         for elt in e.elts:

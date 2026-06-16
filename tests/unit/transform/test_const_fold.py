@@ -32,6 +32,7 @@ import fpy2 as fp
 
 from fpy2.ast import (
     BinaryOp,
+    BoolVal,
     ContextStmt,
     ForeignVal,
     Integer,
@@ -157,6 +158,19 @@ class TestOpFolding:
         e = _return_expr(folded)
         assert isinstance(e, Rational), f'expected Rational; got {type(e).__name__}'
         assert e.p == 5 and e.q == 2
+
+    def test_compare_folds_to_bool(self):
+        """``Compare`` nodes fold to a literal ``BoolVal`` once all
+        operands resolve under the active context."""
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return 1.0 < 2.0
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, BoolVal), f'expected BoolVal; got {type(e).__name__}'
+        assert e.val is True
 
 
 # ---------------------------------------------------------------------------
