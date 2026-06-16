@@ -49,13 +49,14 @@ every other operand kind is bound unconditionally for safety.
 
 Trade-off: the unconditional bind produces redundant copies for
 literals and already-clean subtrees.  The recommended cleanup
-chain is :class:`fpy2.transform.ConstPropagate` then
+chain is :class:`fpy2.transform.ConstFold` then
 :class:`fpy2.transform.CopyPropagate` then
 :class:`fpy2.transform.DeadCodeEliminate` — the first inlines
-literal-bound temps (``_t = 1`` → uses of ``_t`` become ``1``),
-the second collapses any remaining Var→Var copies, and the
-third removes the now-unused assigns.  The local rewrite stays
-simple at the cost of slack in the intermediate AST.
+literal-bound temps (``_t = 1`` → uses of ``_t`` become ``1``)
+via the value flow from :class:`fpy2.analysis.PartialEval`, the
+second collapses any remaining Var→Var copies, and the third
+removes the now-unused assigns.  The local rewrite stays simple
+at the cost of slack in the intermediate AST.
 
 Suppressed positions: hoisting needs a statement-level preamble
 slot, so it is disabled inside ``ListComp`` element / iterable
@@ -377,7 +378,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
         Trade-off: the unconditional bind produces redundant
         ``_t = literal`` lines and per-op REAL blocks for nested
         eliminations.  The recommended cleanup chain —
-        :class:`fpy2.transform.ConstPropagate` then
+        :class:`fpy2.transform.ConstFold` then
         :class:`fpy2.transform.CopyPropagate` then
         :class:`fpy2.transform.DeadCodeEliminate` — collapses
         them; the local rewrite stays simple at the cost of slack
