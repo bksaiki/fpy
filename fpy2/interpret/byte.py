@@ -320,6 +320,91 @@ def _eval_sum(val: list[RealValue], ctx: Context):
             accum = ops.add(accum, x, ctx=ctx)
         return accum
 
+def _unchecked_min(vals: list[RealValue]):
+    # propagate any NaN input
+    for x in vals:
+        if isinstance(x, Float) and x.isnan:
+            return x
+
+    # cannot use the built-in min function because of signed zeros
+    result = vals[0]
+    for x in vals[1:]:
+        if x < result:
+            result = x
+        elif (x == result
+            and isinstance(x, Float) and isinstance(result, Float)
+            and x.s and not result.s):
+            result = x  # x is -0, result is +0 → prefer -0 for min
+    return result
+
+def _unchecked_max(vals: list[RealValue]):
+    """
+    Performs IEEE 754 compliant maximum operation.
+    - propagates NaN inputs (if any argument is NaN, the result is NaN).
+    - max(+0.0, -0.0) == max(-0.0, +0.0) == +0.0.
+    """
+    # propagate any NaN input
+    for x in vals:
+        if isinstance(x, Float) and x.isnan:
+            return x
+
+    # cannot use the built-in max function because of signed zeros
+    result = vals[0]
+    for x in vals[1:]:
+        if x > result:
+            result = x
+        elif (x == result
+            and isinstance(x, Float) and isinstance(result, Float)
+            and not x.s and result.s):
+            result = x  # x is +0, result is -0 → prefer +0 for max
+    return result
+
+def _eval_min(arg, *args):
+    """
+    Performs IEEE 754 compliant minimum operation.
+    - propagates NaN inputs (if any argument is NaN, the result is NaN).
+    - min(+0.0, -0.0) == min(-0.0, +0.0) == -0.0.
+    """
+    if args:
+        # if there are additional values, combine them with the first value into a single list
+        vals = [arg] + list(args)
+    else:
+        # if there are no additional values, we assume its a non-empty list
+        if not isinstance(arg, list):
+            raise TypeError(f'expected a list, got {arg}')
+        if len(arg) == 0:
+            raise ValueError('min() arg is an empty sequence')
+        vals = arg
+
+    # every element must be a real number
+    for x in vals:
+        if not isinstance(x, RealValue):
+            raise TypeError(f'expected a real number argument, got {x}')
+
+    # call the underlying NaN-propagating minimum function
+    return _unchecked_min(vals)
+
+
+def _eval_max(arg, *args):
+    if args:
+        # if there are additional values, combine them with the first value into a single list
+        vals = [arg] + list(args)
+    else:
+        # if there are no additional values, we assume its a non-empty list
+        if not isinstance(arg, list):
+            raise TypeError(f'expected a list, got {arg}')
+        if len(arg) == 0:
+            raise ValueError('max() arg is an empty sequence')
+        vals = arg
+
+    # every element must be a real number
+    for x in vals:
+        if not isinstance(x, RealValue):
+            raise TypeError(f'expected a real number argument, got {x}')
+
+    # call the underlying NaN-propagating maximum function
+    return _unchecked_max(vals)
+
 ###########################################################
 # Operator tables
 
@@ -429,6 +514,8 @@ def make_namespace() -> dict[str, object]:
         '__fpy_list_set': _eval_list_set,
         '__fpy_list_slice': _eval_list_slice,
         '__fpy_range': _eval_range,
+        '__fpy_min': _eval_min,
+        '__fpy_max': _eval_max,
     }
 
     # add operations to the namespace
@@ -593,7 +680,7 @@ class BytecodeCompiler(Visitor):
             case AMin() | AMax():
                 # Reduce-form lowers to Python's built-in min/max on the
                 # list, matching the n-ary Min/Max emit.
-                builtin = 'min' if isinstance(e, AMin) else 'max'
+                builtin = '__fpy_min' if isinstance(e, AMin) else '__fpy_max'
                 func = pyast.Name(id=builtin, ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
             case _:
@@ -655,10 +742,10 @@ class BytecodeCompiler(Visitor):
             case Or():
                 return pyast.BoolOp(op=pyast.Or(), values=args, **attrs)
             case Max():
-                func = pyast.Name(id='max', ctx=pyast.Load(), **attrs)
+                func = pyast.Name(id='__fpy_max', ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=args, keywords=[], **attrs)
             case Min():
-                func = pyast.Name(id='min', ctx=pyast.Load(), **attrs)
+                func = pyast.Name(id='__fpy_min', ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=args, keywords=[], **attrs)
             case Zip():
                 # first zip the arguments with `strict=True` to ensure they have the same length
