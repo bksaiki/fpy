@@ -137,8 +137,25 @@ class _PartialEvalInstance(DefaultVisitor):
             env = self._base_env()
             self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
 
-    # TODO: implement _visit_naryop
-    # do not partially evaluate `empty()` since it creates uninitialized values
+    def _visit_naryop(self, e: NaryOp, ctx: Context | None):
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        # ``empty()`` constructs uninitialized values — never partial-eval it.
+        if isinstance(e, Empty):
+            return
+        if (
+            ctx is not None
+            and len(e.args) > 0
+            and all(self._is_value(arg) for arg in e.args)
+        ):
+            e_args = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
+            if isinstance(e, NamedNaryOp):
+                e_eval: NaryOp = type(e)(e.func, e_args, e.loc)
+            else:
+                e_eval = type(e)(e_args, e.loc)
+
+            env = self._base_env()
+            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
 
     def _visit_call(self, e: Call, ctx: Context | None):
         for arg in e.args:
