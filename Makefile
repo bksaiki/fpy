@@ -13,18 +13,6 @@ docs:
 	@echo "Building documentation..."
 	make html -C docs/
 
-install:
-	@echo "Installing fpy2..."
-	pip install .
-
-install-dev:
-	@echo "Installing fpy2 in development mode..."
-	pip install -e .[dev]
-
-uninstall:
-	@echo "Uninstalling fpy2..."
-	pip uninstall -y fpy2
-
 lint:
 	@echo "Running linters..."
 	$(MAKE) mypy
@@ -73,11 +61,8 @@ help:
 	@echo "   - make mypy       Run mypy type checker"
 	@echo "   - make ruff       Run ruff linter"
 	@echo ""
-	@echo "Install / Build"
-	@echo "  make build         Build the fpy2 package"
-	@echo "  make install       Install the fpy2 package"
-	@echo "  make install-dev   Install the fpy2 package in development mode"
-	@echo "  make uninstall     Uninstall the fpy2 package"
+	@echo "Build"
+	@echo "  make build         Build the fpy2 package (sdist + wheel)"
 	@echo ""
 	@echo "Documentation"
 	@echo "  make docs          Build the documentation"
