@@ -26,17 +26,14 @@ class _ConstFoldInstance(DefaultTransformVisitor):
     (skipping the recursive rebuild for that subtree); on a miss, it
     falls through to the default structural rewrite.
 
-    Substitution policy:
-
-    - ``Round`` / ``Cast`` / ``RoundAt`` are *never* substituted —
-      these AST nodes encode rounding intent, and folding them away
-      would lose that intent at later passes.
-    - Foldings whose result is a :class:`Context` ride
-      ``enable_context``; everything else rides ``enable_op``.  The
-      flag is decided by inspecting the *folded* value, not the source
-      AST node — so a ``Var`` bound to a ``Context`` (e.g.
-      ``CTX = fp.FP32; with CTX: ...``) is gated as a context fold,
-      and a ``Var`` bound to a numeric is gated as an op fold.
+    Substitution policy: every expression whose value is statically
+    known is replaceable by a literal — there is no per-node bypass.
+    Foldings whose result is a :class:`Context` ride ``enable_context``;
+    everything else rides ``enable_op``.  The flag is decided by
+    inspecting the *folded* value, not the source AST node — so a
+    ``Var`` bound to a ``Context`` (e.g. ``CTX = fp.FP32; with CTX:``)
+    is gated as a context fold, and a ``Var`` bound to a numeric is
+    gated as an op fold.
     """
 
     func: FuncDef
@@ -110,14 +107,14 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         ``e`` here once; on a miss, fall through to the default
         type-dispatched rewrite.
 
-        ``Round`` / ``Cast`` / ``RoundAt`` are skipped — they encode
-        rounding intent that downstream passes need to see at the AST
-        level.
+        ``Round`` / ``Cast`` / ``RoundAt`` fold like any other op
+        when their result is statically known — the substituted
+        literal sits at the target context's format, so the rounding
+        intent is preserved by the value rather than by an AST node.
         """
-        if not isinstance(e, (Round, Cast, RoundAt)):
-            lit = self._fold(e)
-            if lit is not None:
-                return lit
+        lit = self._fold(e)
+        if lit is not None:
+            return lit
         return super()._visit_expr(e, ctx)
 
     def apply(self) -> FuncDef:
@@ -141,8 +138,6 @@ class ConstFold:
 
     Excluded:
 
-    - ``Round`` / ``Cast`` / ``RoundAt`` — preserved verbatim so the
-      rounding intent isn't erased.
     - Non-literal-emittable values (types, functions, modules,
       tuples) — left as the original AST.
     """

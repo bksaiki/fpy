@@ -10,8 +10,9 @@ What's pinned here:
 
 * Numeric op folding under a concrete rounding context (``with fp.FP64:``).
 * Op folding suppressed outside any context.
-* ``Round`` / ``Cast`` / ``RoundAt`` preserved as ops (they *are* the
-  rounding; folding them would erase the rounding intent).
+* ``Round`` / ``Cast`` / ``RoundAt`` fold like any other op when their
+  result is statically known — the substituted literal sits at the
+  target context's format.
 * ``enable_op=False`` suppresses op folding but still folds the
   ``with``-block's context expression.
 * Context-constructor expressions (e.g. ``fp.FP64``) fold to
@@ -30,18 +31,12 @@ covered by separate tests in Phase 3):
 import fpy2 as fp
 
 from fpy2.ast import (
-    Attribute,
-    BoolVal,
     BinaryOp,
     ContextStmt,
     ForeignVal,
     Integer,
-    Round,
-    Cast,
-    Decnum,
     Rational,
     ReturnStmt,
-    Var,
 )
 from fpy2.number import Context
 from fpy2.transform import ConstFold
@@ -110,9 +105,11 @@ class TestOpFolding:
         assert isinstance(e, BinaryOp), \
             f'op should not fold without ctx; got {type(e).__name__}'
 
-    def test_round_preserved(self):
-        """``round`` *is* the rounding operation; folding would erase
-        the rounding intent at this AST position."""
+    def test_round_folds(self):
+        """``fp.round(1.5)`` under FP64 folds to its rounded value.
+        The literal sits at the target context's format, so the
+        rounding intent is preserved by the value (no Round node
+        needs to carry it)."""
         @fp.fpy
         def f():
             with fp.FP64:
@@ -120,9 +117,11 @@ class TestOpFolding:
 
         folded = ConstFold.apply(f.ast)
         e = _return_expr(folded)
-        assert isinstance(e, Round), f'expected Round preserved, got {type(e).__name__}'
+        # 1.5 is exact in FP64, so the round is the identity at 3/2.
+        assert isinstance(e, Rational), f'expected Rational; got {type(e).__name__}'
+        assert e.p == 3 and e.q == 2
 
-    def test_cast_preserved(self):
+    def test_cast_folds(self):
         @fp.fpy
         def f():
             with fp.FP64:
@@ -130,7 +129,8 @@ class TestOpFolding:
 
         folded = ConstFold.apply(f.ast)
         e = _return_expr(folded)
-        assert isinstance(e, Cast), f'expected Cast preserved, got {type(e).__name__}'
+        assert isinstance(e, Rational), f'expected Rational; got {type(e).__name__}'
+        assert e.p == 3 and e.q == 2
 
     def test_nested_op_folds(self):
         """``(1 + 2) * 3`` under FP64 → ``9`` (folded bottom-up)."""
@@ -143,6 +143,20 @@ class TestOpFolding:
         e = _return_expr(folded)
         assert isinstance(e, Integer)
         assert e.val == 9
+
+    def test_fold_through_round(self):
+        """A parent op folds *through* its ``Round`` child — the round
+        is evaluated and the whole subtree becomes a literal."""
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                x = 1.5
+                return fp.round(x) + 1.0
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Rational), f'expected Rational; got {type(e).__name__}'
+        assert e.p == 5 and e.q == 2
 
 
 # ---------------------------------------------------------------------------

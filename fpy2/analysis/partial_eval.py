@@ -1,5 +1,12 @@
 """
 Partial evaluation.
+
+For each expression and SSA definition, records the statically-known
+:data:`Value` (if any) under the active rounding context.  Consumed
+by :class:`fpy2.transform.ConstFold` as the single source of truth
+for "is this expression a known constant?"; also used by
+:class:`fpy2.analysis.ArraySizeInfer`, :class:`fpy2.analysis.ContextUse`,
+and :class:`fpy2.transform.LiftContext`.
 """
 
 from dataclasses import dataclass
