@@ -87,9 +87,8 @@ make ruff    # Lint only
 ## Development Setup
 
 ```bash
-python3 -m venv .venv/
-source .venv/bin/activate
-make install-dev   # Installs fpy2 in editable mode with dev dependencies
+uv sync                       # creates .venv/ and installs fpy2 + dev deps
+source .venv/bin/activate     # or prefix commands with `uv run`
 ```
 
 ## Examples

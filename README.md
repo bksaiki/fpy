@@ -10,16 +10,20 @@ Important links:
 
 ## Installation
 
-The recommended way to install FPy is through `pip`.
-FPy can also be installed from source for development.
-The following instructions assume a `bash`-like shell.
+FPy can be installed from PyPI with either `uv` or `pip`, or built from
+source for development.  The following instructions assume a `bash`-like
+shell.
 
-### Installing with `pip`
+### Installing from PyPI
 
 Requirements:
  - Python 3.11 or later
 
 To install the latest stable release of FPy, run:
+```bash
+uv pip install fpy2
+```
+or, with `pip`:
 ```bash
 pip install fpy2
 ```
@@ -30,24 +34,38 @@ Requirements:
  - Python 3.11 or later
  - `make`
 
-### Installation
+#### With `uv` (preferred)
+
+[uv](https://docs.astral.sh/uv/) is the recommended development
+workflow — it handles the virtual environment and dependency
+installation in a single step:
+```bash
+uv sync
+```
+This creates `.venv/` and installs FPy in editable mode along with the
+`dev` dependency group.  Activate the environment with
+```bash
+source .venv/bin/activate
+```
+or prefix individual commands with `uv run` (e.g. `uv run pytest tests/unit`).
+
+#### With `pip` (legacy)
+
+This path is preserved for compatibility with existing tooling; new
+contributors should prefer `uv` above.
 
 If you do not have a Python virtual environment,
 create one using
 ```bash
-python3 -m venv .env/
+python3 -m venv .venv/
 ```
-and activate it using using
+and activate it using
 ```bash
-source .env/bin/activate
+source .venv/bin/activate
 ```
 To install an instance of FPy for development, run:
 ```bash
 pip install -e .[dev]
-```
-or with `make`, run
-```bash
-make install-dev
 ```
 
 To uninstall FPy, run:

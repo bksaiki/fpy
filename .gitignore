@@ -136,6 +136,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# uv — fpy2 is a library; contributors should resolve fresh deps
+uv.lock
+
 # Spyder project settings
 .spyderproject
 .spyproject

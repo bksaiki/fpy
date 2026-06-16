@@ -22,7 +22,24 @@ dependencies = [
   "matplotlib"
 ]
 
+# ``dev`` deps are listed twice on purpose: ``[project.optional-dependencies]``
+# keeps ``pip install -e .[dev]`` working, while ``[dependency-groups]`` is
+# the PEP 735 surface uv reads when running plain ``uv sync``.  Keep the two
+# lists in sync when adding or removing dev deps.
 [project.optional-dependencies]
+dev = [
+  "pytest",
+  "hypothesis==6.135",
+  "mypy",
+  "ruff",
+  "build",
+  "twine",
+  "sphinx",
+  "sphinx-rtd-theme",
+  "sphinx-pyproject"
+]
+
+[dependency-groups]
 dev = [
   "pytest",
   "hypothesis==6.135",

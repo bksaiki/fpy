@@ -7,29 +7,46 @@ Developers of FPy should read this section since
 installing FPy is actually different.
 
 Requirements:
- 
+
 * Python 3.11 or later
 * `make`
 
 Installation
 ------------------
 
-If you do not have a Python virtual environment,
-create one using::
+With ``uv`` (preferred)
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    python3 -m venv .env/
+`uv <https://docs.astral.sh/uv/>`_ is the recommended development
+workflow.  It handles the virtual environment and dependency
+installation in a single step::
 
-and activate it using using::
+    uv sync
 
-    source .env/bin/activate
+This creates ``.venv/`` and installs FPy in editable mode along with
+the ``dev`` dependency group.  Activate the environment with::
+
+    source .venv/bin/activate
+
+or prefix individual commands with ``uv run`` (e.g. ``uv run pytest tests/unit``).
+
+With ``pip`` (legacy)
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This path is preserved for compatibility with existing tooling; new
+contributors should prefer ``uv`` above.
+
+If you do not have a Python virtual environment, create one using::
+
+    python3 -m venv .venv/
+
+and activate it using::
+
+    source .venv/bin/activate
 
 To install an instance of FPy for development, run::
 
     pip install -e .[dev]
-
-or with `make`, run::
-
-    make install-dev
 
 Testing
 ------------------
