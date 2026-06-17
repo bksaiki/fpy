@@ -181,6 +181,146 @@ class TestIfExprFolding:
         assert v is not None and float(v) == 7.0
 
 
+class TestPhiMerge:
+    """SCCP phi-merge: a use reachable only via paths that assign the
+    same value should fold to that value."""
+
+    def test_if_else_same_value_folds(self):
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                if c:
+                    x = 5.0
+                else:
+                    x = 5.0
+                return x
+
+        info = PartialEval.apply(f.ast)
+        v = info.by_expr.get(_return_expr(f.ast))
+        assert v is not None and float(v) == 5.0
+
+    def test_if_else_different_values_no_fold(self):
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                if c:
+                    x = 5.0
+                else:
+                    x = 7.0
+                return x
+
+        info = PartialEval.apply(f.ast)
+        assert _return_expr(f.ast) not in info.by_expr
+
+    def test_if_else_one_unfoldable_no_fold(self):
+        @fp.fpy
+        def f(c: bool, dyn: fp.Real) -> fp.Real:
+            with fp.FP64:
+                if c:
+                    x = 5.0
+                else:
+                    x = dyn
+                return x
+
+        info = PartialEval.apply(f.ast)
+        assert _return_expr(f.ast) not in info.by_expr
+
+    def test_if1_pre_and_branch_same_value(self):
+        """``If1Stmt``: phi merges the pre-if def with the in-branch
+        def.  Same value → fold."""
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                x = 5.0
+                if c:
+                    x = 5.0
+                return x
+
+        info = PartialEval.apply(f.ast)
+        v = info.by_expr.get(_return_expr(f.ast))
+        assert v is not None and float(v) == 5.0
+
+    def test_if1_pre_and_branch_differ_no_fold(self):
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                x = 5.0
+                if c:
+                    x = 7.0
+                return x
+
+        info = PartialEval.apply(f.ast)
+        assert _return_expr(f.ast) not in info.by_expr
+
+    def test_nested_if_with_shared_constant(self):
+        """Two nested if-else, all four leaves assign the same value."""
+        @fp.fpy
+        def f(c: bool, d: bool) -> fp.Real:
+            with fp.FP64:
+                if c:
+                    if d:
+                        x = 3.0
+                    else:
+                        x = 3.0
+                else:
+                    if d:
+                        x = 3.0
+                    else:
+                        x = 3.0
+                return x
+
+        info = PartialEval.apply(f.ast)
+        v = info.by_expr.get(_return_expr(f.ast))
+        assert v is not None and float(v) == 3.0
+
+
+class TestLoopPhiMerge:
+    """SCCP loop fixpoint: header phi merges pre-loop value and
+    post-body value.  Same value → fold; differing value → ``_TOP``."""
+
+    def test_while_invariant_folds(self):
+        """``x = 5; while c: x = 5; return x`` folds the return — the
+        phi merges 5 (lhs) and 5 (rhs)."""
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                x = 5.0
+                while c:
+                    x = 5.0
+                return x
+
+        info = PartialEval.apply(f.ast)
+        v = info.by_expr.get(_return_expr(f.ast))
+        assert v is not None and float(v) == 5.0
+
+    def test_while_mutating_no_fold(self):
+        """Loop where the variable's body value differs from its
+        pre-loop value — phi promotes to ``_TOP``."""
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                i = 0
+                while i < n:
+                    i = i + 1
+                return i
+
+        info = PartialEval.apply(f.ast)
+        assert _return_expr(f.ast) not in info.by_expr
+
+    def test_for_invariant_folds(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                x = 5.0
+                for i in range(3):
+                    x = 5.0
+                return x
+
+        info = PartialEval.apply(f.ast)
+        v = info.by_expr.get(_return_expr(f.ast))
+        assert v is not None and float(v) == 5.0
+
+
 class TestRobustness:
     """Interpreter exceptions must be swallowed: PE is best-effort."""
 

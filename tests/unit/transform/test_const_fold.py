@@ -10,6 +10,7 @@ from fpy2.ast import (
     Integer,
     Rational,
     ReturnStmt,
+    Var,
 )
 from fpy2.number import Context
 from fpy2.transform import ConstFold
@@ -307,3 +308,85 @@ class TestVariableSubstitution:
             f'op should not fold under enable_op=False; got {type(e).__name__}'
         ctx_stmt = _outer_context_stmt(folded)
         assert isinstance(ctx_stmt.ctx, ForeignVal)
+
+
+class TestPhiMergeFolding:
+    """SCCP-driven folds at phi nodes: ConstFold substitutes uses of
+    a phi-defined variable when both incoming branches assign the
+    same value."""
+
+    def test_if_else_same_value(self):
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                if c:
+                    x = 5.0
+                else:
+                    x = 5.0
+                return x
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
+        assert e.val == 5
+
+    def test_if_else_different_values(self):
+        """``Var(x)`` doesn't fold when branches disagree."""
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                if c:
+                    x = 5.0
+                else:
+                    x = 7.0
+                return x
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Var), f'expected Var; got {type(e).__name__}'
+
+    def test_if1_same_value(self):
+        """``If1Stmt``: pre-if def + in-branch def agree."""
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                x = 5.0
+                if c:
+                    x = 5.0
+                return x
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Integer)
+        assert e.val == 5
+
+    def test_loop_invariant_value_folds(self):
+        """Loop where the body re-assigns the same value the variable
+        already had — phi fixpoint stabilizes at the value."""
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                x = 5.0
+                while c:
+                    x = 5.0
+                return x
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Integer)
+        assert e.val == 5
+
+    def test_loop_mutating_does_not_fold(self):
+        """Loop where the body mutates the variable — phi goes to
+        ``_TOP``, the return stays as ``Var``."""
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                i = 0
+                while i < n:
+                    i = i + 1
+                return i
+
+        folded = ConstFold.apply(f.ast)
+        e = _return_expr(folded)
+        assert isinstance(e, Var), f'expected Var; got {type(e).__name__}'

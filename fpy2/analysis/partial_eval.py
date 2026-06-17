@@ -28,6 +28,22 @@ ListValue: TypeAlias = list['Value']
 Value: TypeAlias = ScalarValue | TupleValue | ListValue
 
 
+class _TopType:
+    """SCCP lattice top — internal sentinel for "def was analyzed; not
+    a single foldable value".  Stored only in the analysis instance's
+    ``by_def``; stripped from the public :class:`PartialEvalInfo`."""
+
+    def __repr__(self):
+        return '_TOP'
+
+
+_TOP: _TopType = _TopType()
+
+# Internal lattice value: a public :data:`Value`, BOT (absent from
+# the map), or the ``_TOP`` sentinel.
+_Lattice: TypeAlias = Value | _TopType
+
+
 @dataclass
 class PartialEvalInfo:
     by_def: dict[Definition, Value]
@@ -44,7 +60,7 @@ class _PartialEvalInstance(DefaultVisitor):
     def_use: DefineUseAnalysis
     rt: Interpreter
 
-    by_def: dict[Definition, Value]
+    by_def: dict[Definition, _Lattice]
     by_expr: dict[Expr, Value]
 
     def __init__(
@@ -60,7 +76,12 @@ class _PartialEvalInstance(DefaultVisitor):
 
     def apply(self) -> PartialEvalInfo:
         self._visit_function(self.func, None)
-        return PartialEvalInfo(self.by_def, self.by_expr, self.def_use)
+        # Strip ``_TOP`` from the public view — consumers see only
+        # foldable :data:`Value` entries.
+        public_by_def: dict[Definition, Value] = {
+            d: v for d, v in self.by_def.items() if not isinstance(v, _TopType)
+        }
+        return PartialEvalInfo(public_by_def, self.by_expr, self.def_use)
 
     def _base_env(self) -> dict[NamedId, object]:
         return {
@@ -72,10 +93,43 @@ class _PartialEvalInstance(DefaultVisitor):
     def _is_value(self, e: Expr) -> bool:
         return e in self.by_expr
 
+    def _visit_expr(self, e: Expr, ctx: Context | None):
+        # Pop any stale entry from a previous pass (matters for the
+        # loop fixpoint, which revisits the body — without this, a
+        # foldable value from an early iteration sticks around after
+        # the phi has promoted to ``_TOP``).
+        self.by_expr.pop(e, None)
+        super()._visit_expr(e, ctx)
+
     def _visit_var(self, e: Var, ctx: Context | None):
         d = self.def_use.find_def_from_use(e)
         if d in self.by_def:
-            self.by_expr[e] = self.by_def[d]
+            val = self.by_def[d]
+            if not isinstance(val, _TopType):
+                self.by_expr[e] = val
+
+    def _meet(self, a, b):
+        """SCCP meet — ``None`` is BOT (unit), :data:`_TOP` is top;
+        anything else is a :data:`Value`."""
+        if a is None:
+            return b
+        if b is None:
+            return a
+        if a is _TOP or b is _TOP:
+            return _TOP
+        return a if a == b else _TOP
+
+    def _merge_branch_phis(self, stmt: Stmt):
+        """Merge phis after an ``if`` / ``if-else``: both branches are
+        visited unconditionally, so absence from ``by_def`` means "we
+        visited and couldn't fold" (i.e. ``_TOP``-equivalent) rather
+        than "haven't seen yet"."""
+        for phi in self.def_use.phis[stmt]:
+            lhs = self.by_def.get(self.def_use.defs[phi.lhs], _TOP)
+            rhs = self.by_def.get(self.def_use.defs[phi.rhs], _TOP)
+            merged = self._meet(lhs, rhs)
+            if merged is not None:
+                self.by_def[phi] = merged
 
     def _visit_bool(self, e: BoolVal, ctx: Context | None):
         self.by_expr[e] = e.val
@@ -281,6 +335,76 @@ class _PartialEvalInstance(DefaultVisitor):
         self._visit_expr(stmt.expr, ctx)
         if self._is_value(stmt.expr):
             self._visit_binding(stmt, stmt.target, self.by_expr[stmt.expr])
+        else:
+            # RHS isn't statically foldable — clear any stale by_def
+            # entry for the target (matters for loop re-iteration).
+            self._clear_binding(stmt, stmt.target)
+
+    def _clear_binding(self, site: DefSite, binding: Id | TupleBinding):
+        match binding:
+            case NamedId():
+                d = self.def_use.find_def_from_site(binding, site)
+                self.by_def.pop(d, None)
+            case UnderscoreId():
+                pass
+            case TupleBinding():
+                for elt in binding.elts:
+                    self._clear_binding(site, elt)
+
+    def _visit_if1(self, stmt: If1Stmt, ctx: Context | None):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.body, ctx)
+        self._merge_branch_phis(stmt)
+
+    def _visit_if(self, stmt: IfStmt, ctx: Context | None):
+        self._visit_expr(stmt.cond, ctx)
+        self._visit_block(stmt.ift, ctx)
+        self._visit_block(stmt.iff, ctx)
+        self._merge_branch_phis(stmt)
+
+    def _loop_fixpoint(self, stmt: Stmt, run_body):
+        """Drive a loop's header-phis to fixpoint.  Seed each phi from
+        its lhs (pre-loop) value, then iterate ``run_body`` until phi
+        bounds stop changing.
+
+        Termination: the lattice has height 3 (``None`` → :data:`Value`
+        → :data:`_TOP`) and :meth:`_meet` is monotone, so every phi
+        transitions at most twice before stabilizing.
+        """
+        phis = self.def_use.phis.get(stmt, set())
+        for phi in phis:
+            lhs = self.by_def.get(self.def_use.defs[phi.lhs])
+            if lhs is None:
+                self.by_def.pop(phi, None)
+            else:
+                self.by_def[phi] = lhs
+        while True:
+            run_body()
+            changed = False
+            for phi in phis:
+                lhs = self.by_def.get(self.def_use.defs[phi.lhs], _TOP)
+                rhs = self.by_def.get(self.def_use.defs[phi.rhs], _TOP)
+                new = self._meet(lhs, rhs)
+                old = self.by_def.get(phi)
+                if new != old:
+                    if new is None:
+                        self.by_def.pop(phi, None)
+                    else:
+                        self.by_def[phi] = new
+                    changed = True
+            if not changed:
+                return
+
+    def _visit_while(self, stmt: WhileStmt, ctx: Context | None):
+        self._visit_expr(stmt.cond, ctx)
+        self._loop_fixpoint(stmt, lambda: self._visit_block(stmt.body, ctx))
+
+    def _visit_for(self, stmt: ForStmt, ctx: Context | None):
+        self._visit_expr(stmt.iterable, ctx)
+        # The loop variable is fresh-bound per iteration; we don't
+        # analyse it specially, just iterate the body so other phis
+        # converge.
+        self._loop_fixpoint(stmt, lambda: self._visit_block(stmt.body, ctx))
 
     def _visit_context(self, stmt: ContextStmt, ctx: Context | None):
         self._visit_expr(stmt.ctx, REAL)
