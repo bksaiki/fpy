@@ -259,6 +259,47 @@ def example_simple_4_expect():
     return x
 
 
+@fp.fpy
+def _example_assert_true():
+    assert True
+    return 1
+
+@fp.fpy
+def _example_assert_true_expect():
+    return 1
+
+
+@fp.fpy
+def _example_assert_true_with_msg():
+    assert True, 'should never fire'
+    return 1
+
+@fp.fpy
+def _example_assert_true_with_msg_expect():
+    return 1
+
+
+@fp.fpy
+def _example_assert_false_preserved():
+    assert False
+    return 1
+
+@fp.fpy
+def _example_assert_false_preserved_expect():
+    assert False
+    return 1
+
+
+@fp.fpy
+def _example_pure_effect():
+    1 + 2
+    return 0
+
+@fp.fpy
+def _example_pure_effect_expect():
+    return 0
+
+
 _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_simple_1, _example_simple_1_expect),
     (_example_simple_2, _example_simple_2_expect),
@@ -279,7 +320,11 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_dead_while_2, _example_dead_while_2_expect),
     (_example_while_1, _example_while_1_expect),
     (example_simple_3, example_simple_3_expect),
-    (example_simple_4, example_simple_4_expect)
+    (example_simple_4, example_simple_4_expect),
+    (_example_assert_true, _example_assert_true_expect),
+    (_example_assert_true_with_msg, _example_assert_true_with_msg_expect),
+    (_example_assert_false_preserved, _example_assert_false_preserved_expect),
+    (_example_pure_effect, _example_pure_effect_expect),
 ]
 
 

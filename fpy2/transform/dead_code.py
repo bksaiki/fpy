@@ -1,10 +1,4 @@
-"""
-Dead code elimination.
-
-TODO:
-- rewrite `if True: ... else: ...` to just the `if` body
-- eliminate unused context statement
-"""
+"""Dead code elimination."""
 
 from typing import cast
 
@@ -143,6 +137,25 @@ class _Eliminator(DefaultTransformVisitor):
         self.eliminated = True
         return None, ctx
 
+    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+        # ``assert True`` (with or without message) is a no-op: the
+        # message is only evaluated when the test is False, so dropping
+        # the whole statement is sound regardless of msg purity.
+        # ``assert False`` is preserved — it's a deliberate runtime
+        # failure point.
+        if isinstance(stmt.test, BoolVal) and stmt.test.val:
+            self.eliminated = True
+            return None, ctx
+        return super()._visit_assert(stmt, ctx)
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+        # An expression statement whose value is discarded and whose
+        # evaluation is observably pure has no effect.
+        if Purity.analyze_expr(stmt.expr, self.def_use):
+            self.eliminated = True
+            return None, ctx
+        return super()._visit_effect(stmt, ctx)
+
     def _visit_block(self, block: StmtBlock, ctx: None) -> tuple[StmtBlock, None]:
         if self._is_empty_block(block):
             # do nothing
@@ -252,12 +265,14 @@ class _DeadCodeEliminate:
 
 
 class DeadCodeEliminate:
-    """
-    Dead code elimination.
-    - removes any unused statements
-    - removes any unused free variables
-    - removes any never-executed branch
-    - removes empty bodies
+    """Dead code elimination.
+
+    - removes unused assignments / phi defs / free variables
+    - removes never-executed branches (``if False:``, ``while False:``)
+    - collapses trivially-true / trivially-false ``if`` / ``while``
+    - removes ``assert True`` and pure ``EffectStmt`` s
+    - removes self-assignments (``x = x``) and stray ``pass``
+    - drops empty bodies and unused ``with``-block targets
     """
 
     @staticmethod
