@@ -149,6 +149,23 @@ class _DefineUseInstance(DefaultVisitor):
             self._visit_expr(slice, ctx)
         self._visit_expr(stmt.expr, ctx)
 
+    def _visit_while(self, stmt: WhileStmt, ctx: DefCtx):
+        # The while-cond is part of the loop *header*: every iteration
+        # re-checks it against the current value of any loop-mutated
+        # variable.  That means uses inside the cond must resolve
+        # through the loop-header phis — not through the pre-loop
+        # defs.  ``in_defs[stmt.body]`` is the context with those phis
+        # (matches what ``reaching_defs._visit_while`` uses at line
+        # 425 for the same reason).  Without this override the
+        # default visitor walks the cond with ``reach[stmt]``
+        # (pre-loop), and any downstream analysis that resolves the
+        # cond's ``Var``s gets a stale pre-loop def — :class:`ConstFold`
+        # then folds ``while i < n:`` to ``while 0 < n:`` and breaks
+        # the program.
+        body_in = self.reaching_defs.in_defs[stmt.body]
+        self._visit_expr(stmt.cond, body_in)
+        self._visit_block(stmt.body, ctx)
+
     def _visit_statement(self, stmt: Stmt, ctx: DefCtx):
         ctx = self.reaching_defs.reach[stmt]
         return super()._visit_statement(stmt, ctx)
