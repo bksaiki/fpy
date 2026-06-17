@@ -140,23 +140,11 @@ def _branch_merge_expect(c: bool) -> fp.Real:
         return 5
 
 
-@fp.fpy
-def _loop_invariant(c: bool) -> fp.Real:
-    with fp.FP64:
-        # Loop-invariant variable — SCCP phi-merges 5 (pre-loop) and
-        # 5 (body), ConstFold substitutes ``return 5``.
-        x = 5.0
-        while c:
-            x = 5.0
-        return x
-
-
-@fp.fpy
-def _loop_invariant_expect(c: bool) -> fp.Real:
-    with fp.FP64:
-        while c:
-            pass
-        return 5
+# Loop-phi coverage lives at the PE level in
+# ``tests/unit/analysis/test_partial_eval.py::TestLoopPhiMerge`` —
+# integration-testing it through ``simplify`` interacts with DCE's
+# unsound "empty-body while" elimination (changes a possibly-
+# divergent loop into a value), which is orthogonal to SCCP.
 
 
 _examples: list[tuple[fp.Function, fp.Function]] = [
@@ -166,7 +154,6 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
     (_just_dead_branches, _just_dead_branches_expect),
     (_if_expr_fold, _if_expr_fold_expect),
     (_branch_merge, _branch_merge_expect),
-    (_loop_invariant, _loop_invariant_expect),
 ]
 
 

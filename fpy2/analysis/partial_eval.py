@@ -354,24 +354,23 @@ class _PartialEvalInstance(DefaultVisitor):
         self._visit_block(stmt.iff, ctx)
         self._merge_branch_phis(stmt)
 
-    # Defensive cap for ``_loop_fixpoint`` — the lattice has height 3
-    # (``None`` → :data:`Value` → :data:`_TOP`), so convergence happens
-    # in a handful of passes; this guards pathological cases.
-    _loop_iter_cap: int = 8
-
     def _loop_fixpoint(self, stmt: Stmt, run_body):
         """Drive a loop's header-phis to fixpoint.  Seed each phi from
         its lhs (pre-loop) value, then iterate ``run_body`` until phi
-        bounds stop changing."""
+        bounds stop changing.
+
+        Termination: the lattice has height 3 (``None`` → :data:`Value`
+        → :data:`_TOP`) and :meth:`_meet` is monotone, so every phi
+        transitions at most twice before stabilizing.
+        """
         phis = self.def_use.phis.get(stmt, set())
-        # Seed each phi with its pre-loop value.
         for phi in phis:
             lhs = self.by_def.get(self.def_use.defs[phi.lhs])
             if lhs is None:
                 self.by_def.pop(phi, None)
             else:
                 self.by_def[phi] = lhs  # type: ignore[assignment]
-        for _ in range(self._loop_iter_cap):
+        while True:
             run_body()
             changed = False
             for phi in phis:
@@ -387,9 +386,6 @@ class _PartialEvalInstance(DefaultVisitor):
                     changed = True
             if not changed:
                 return
-        # Didn't converge — promote every phi to _TOP defensively.
-        for phi in phis:
-            self.by_def[phi] = _TOP  # type: ignore[assignment]
 
     def _visit_while(self, stmt: WhileStmt, ctx: Context | None):
         self._visit_expr(stmt.cond, ctx)
