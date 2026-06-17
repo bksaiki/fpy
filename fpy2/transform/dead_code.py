@@ -1,16 +1,8 @@
-"""
-Dead code elimination.
-
-TODO:
-- rewrite `if True: ... else: ...` to just the `if` body
-- eliminate unused context statement
-"""
-
-from typing import cast
+"""Dead code elimination."""
 
 from ..ast import *
 from ..analysis import (
-    DefineUse, DefineUseAnalysis, AssignDef, PhiDef, DefSite,
+    DefineUse, DefineUseAnalysis, AssignDef, PhiDef,
     Purity, SyntaxCheck
 )
 
@@ -54,8 +46,55 @@ class _Eliminator(DefaultTransformVisitor):
             # remove self-assignment
             self.eliminated = True
             return None, ctx
-        else:
-            return super()._visit_assign(assign, ctx)
+        if isinstance(assign.target, TupleBinding):
+            # Two-step destructure cleanup:
+            #   (i)  unused ``NamedId`` leaves → ``UnderscoreId``
+            #   (ii) all-underscore binding + pure RHS → drop the assign
+            scrubbed = self._scrub_binding(assign.target, assign)
+            if self._all_underscore(scrubbed) and Purity.analyze_expr(assign.expr, self.def_use):
+                self.eliminated = True
+                return None, ctx
+            if scrubbed is not assign.target:
+                self.eliminated = True
+                return Assign(scrubbed, assign.type, assign.expr, assign.loc), ctx
+        return super()._visit_assign(assign, ctx)
+
+    def _scrub_binding(self, binding: TupleBinding, site: Assign) -> TupleBinding:
+        """Replace each ``NamedId`` leaf whose def has no uses (and
+        doesn't feed a phi) with ``UnderscoreId``.  Recurses into
+        nested bindings.  Returns the original object if unchanged."""
+        new_elts: list[Id | TupleBinding] = []
+        changed = False
+        for elt in binding.elts:
+            if isinstance(elt, NamedId):
+                d = self.def_use.find_def_from_site(elt, site)
+                live = (
+                    len(self.def_use.uses[d]) > 0
+                    or any(isinstance(s, PhiDef) for s in self.def_use.successors[d])
+                )
+                if live:
+                    new_elts.append(elt)
+                else:
+                    new_elts.append(UnderscoreId())
+                    changed = True
+            elif isinstance(elt, TupleBinding):
+                inner = self._scrub_binding(elt, site)
+                if inner is not elt:
+                    changed = True
+                new_elts.append(inner)
+            else:
+                new_elts.append(elt)
+        return TupleBinding(new_elts, binding.loc) if changed else binding
+
+    @staticmethod
+    def _all_underscore(binding: TupleBinding) -> bool:
+        """True iff every leaf in *binding* is an ``UnderscoreId``."""
+        for elt in binding.elts:
+            if isinstance(elt, NamedId):
+                return False
+            if isinstance(elt, TupleBinding) and not _Eliminator._all_underscore(elt):
+                return False
+        return True
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None) -> tuple[Stmt | StmtBlock | None, None]:
         if isinstance(stmt.cond, BoolVal):
@@ -143,6 +182,25 @@ class _Eliminator(DefaultTransformVisitor):
         self.eliminated = True
         return None, ctx
 
+    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+        # ``assert True`` (with or without message) is a no-op: the
+        # message is only evaluated when the test is False, so dropping
+        # the whole statement is sound regardless of msg purity.
+        # ``assert False`` is preserved — it's a deliberate runtime
+        # failure point.
+        if isinstance(stmt.test, BoolVal) and stmt.test.val:
+            self.eliminated = True
+            return None, ctx
+        return super()._visit_assert(stmt, ctx)
+
+    def _visit_effect(self, stmt: EffectStmt, ctx: None):
+        # An expression statement whose value is discarded and whose
+        # evaluation is observably pure has no effect.
+        if Purity.analyze_expr(stmt.expr, self.def_use):
+            self.eliminated = True
+            return None, ctx
+        return super()._visit_effect(stmt, ctx)
+
     def _visit_block(self, block: StmtBlock, ctx: None) -> tuple[StmtBlock, None]:
         if self._is_empty_block(block):
             # do nothing
@@ -152,7 +210,6 @@ class _Eliminator(DefaultTransformVisitor):
             stmts: list[Stmt] = []
             for stmt in block.stmts:
                 s, _ = self._visit_statement(stmt, ctx)
-                # s = cast(Stmt | StmtBlock | None, s)
                 match s:
                     case None:
                         pass
@@ -252,12 +309,17 @@ class _DeadCodeEliminate:
 
 
 class DeadCodeEliminate:
-    """
-    Dead code elimination.
-    - removes any unused statements
-    - removes any unused free variables
-    - removes any never-executed branch
-    - removes empty bodies
+    """Dead code elimination.
+
+    - removes unused assignments / phi defs / free variables
+    - rewrites unused ``TupleBinding`` leaves to ``UnderscoreId``;
+      drops the whole assign when every leaf becomes ``_`` and the
+      RHS is pure
+    - removes never-executed branches (``if False:``, ``while False:``)
+    - collapses trivially-true / trivially-false ``if`` / ``while``
+    - removes ``assert True`` and pure ``EffectStmt`` s
+    - removes self-assignments (``x = x``) and stray ``pass``
+    - drops empty bodies and unused ``with``-block targets
     """
 
     @staticmethod

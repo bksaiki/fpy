@@ -17,6 +17,15 @@ class CopyPropagate:
     @staticmethod
     def apply(func: FuncDef, *, names: set[NamedId] | None = None) -> FuncDef:
         """Applies copy propagation to the given AST."""
+        func, _ = CopyPropagate.apply_with_status(func, names=names)
+        return func
+
+    @staticmethod
+    def apply_with_status(
+        func: FuncDef, *, names: set[NamedId] | None = None,
+    ) -> tuple[FuncDef, bool]:
+        """Same as :meth:`apply` but also returns a ``changed`` flag —
+        ``True`` iff at least one alias was propagated."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\' for {func}, got {type(func)}')
 
@@ -38,9 +47,9 @@ class CopyPropagate:
                     # optimization: only propagate if there is at least one use
                     prop[d] = d.site.expr
 
-        if prop:
-            # at least one variable to propagate
-            func = SubstVar.apply(func, def_use, prop)
-            SyntaxCheck.check(func, ignore_unknown=True)
+        if not prop:
+            return func, False
 
-        return func
+        func = SubstVar.apply(func, def_use, prop)
+        SyntaxCheck.check(func, ignore_unknown=True)
+        return func, True

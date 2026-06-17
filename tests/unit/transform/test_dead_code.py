@@ -259,6 +259,93 @@ def example_simple_4_expect():
     return x
 
 
+@fp.fpy
+def _example_assert_true():
+    assert True
+    return 1
+
+@fp.fpy
+def _example_assert_true_expect():
+    return 1
+
+
+@fp.fpy
+def _example_assert_true_with_msg():
+    assert True, 'should never fire'
+    return 1
+
+@fp.fpy
+def _example_assert_true_with_msg_expect():
+    return 1
+
+
+@fp.fpy
+def _example_assert_false_preserved():
+    assert False
+    return 1
+
+@fp.fpy
+def _example_assert_false_preserved_expect():
+    assert False
+    return 1
+
+
+@fp.fpy
+def _example_pure_effect():
+    1 + 2
+    return 0
+
+@fp.fpy
+def _example_pure_effect_expect():
+    return 0
+
+
+# Rule (i): unused TupleBinding leaf → UnderscoreId.
+@fp.fpy
+def _example_tuple_scrub_one(x: fp.Real) -> fp.Real:
+    a, b = (1.0, 2.0)
+    return a + x
+
+@fp.fpy
+def _example_tuple_scrub_one_expect(x: fp.Real) -> fp.Real:
+    a, _ = (1.0, 2.0)
+    return a + x
+
+
+# Rule (ii): all-underscore + pure RHS → drop.
+@fp.fpy
+def _example_tuple_drop_all_unused(x: fp.Real) -> fp.Real:
+    a, b = (1.0, 2.0)
+    return x
+
+@fp.fpy
+def _example_tuple_drop_all_unused_expect(x: fp.Real) -> fp.Real:
+    return x
+
+
+# Rule (ii) composed with already-present underscore.
+@fp.fpy
+def _example_tuple_drop_with_underscore(x: fp.Real) -> fp.Real:
+    _, b = (1.0, 2.0)
+    return x
+
+@fp.fpy
+def _example_tuple_drop_with_underscore_expect(x: fp.Real) -> fp.Real:
+    return x
+
+
+# Nested binding: outer leaf still used, inner all-unused → scrubbed.
+@fp.fpy
+def _example_tuple_nested_scrub(x: fp.Real) -> fp.Real:
+    (a, b), c = ((1.0, 2.0), 3.0)
+    return c + x
+
+@fp.fpy
+def _example_tuple_nested_scrub_expect(x: fp.Real) -> fp.Real:
+    (_, _), c = ((1.0, 2.0), 3.0)
+    return c + x
+
+
 _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_simple_1, _example_simple_1_expect),
     (_example_simple_2, _example_simple_2_expect),
@@ -279,7 +366,15 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_dead_while_2, _example_dead_while_2_expect),
     (_example_while_1, _example_while_1_expect),
     (example_simple_3, example_simple_3_expect),
-    (example_simple_4, example_simple_4_expect)
+    (example_simple_4, example_simple_4_expect),
+    (_example_assert_true, _example_assert_true_expect),
+    (_example_assert_true_with_msg, _example_assert_true_with_msg_expect),
+    (_example_assert_false_preserved, _example_assert_false_preserved_expect),
+    (_example_pure_effect, _example_pure_effect_expect),
+    (_example_tuple_scrub_one, _example_tuple_scrub_one_expect),
+    (_example_tuple_drop_all_unused, _example_tuple_drop_all_unused_expect),
+    (_example_tuple_drop_with_underscore, _example_tuple_drop_with_underscore_expect),
+    (_example_tuple_nested_scrub, _example_tuple_nested_scrub_expect),
 ]
 
 
