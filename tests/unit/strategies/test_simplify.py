@@ -122,12 +122,51 @@ def _if_expr_fold_expect(x: fp.Real) -> fp.Real:
         return 1 * x
 
 
+@fp.fpy
+def _branch_merge(c: bool) -> fp.Real:
+    with fp.FP64:
+        # Both branches assign the same value — SCCP phi-merges to 5,
+        # ConstFold substitutes ``return 5``, DCE prunes the if.
+        if c:
+            x = 5.0
+        else:
+            x = 5.0
+        return x
+
+
+@fp.fpy
+def _branch_merge_expect(c: bool) -> fp.Real:
+    with fp.FP64:
+        return 5
+
+
+@fp.fpy
+def _loop_invariant(c: bool) -> fp.Real:
+    with fp.FP64:
+        # Loop-invariant variable — SCCP phi-merges 5 (pre-loop) and
+        # 5 (body), ConstFold substitutes ``return 5``.
+        x = 5.0
+        while c:
+            x = 5.0
+        return x
+
+
+@fp.fpy
+def _loop_invariant_expect(c: bool) -> fp.Real:
+    with fp.FP64:
+        while c:
+            pass
+        return 5
+
+
 _examples: list[tuple[fp.Function, fp.Function]] = [
     (_kitchen_sink, _kitchen_sink_expect),
     (_just_const_fold, _just_const_fold_expect),
     (_just_copy_prop, _just_copy_prop_expect),
     (_just_dead_branches, _just_dead_branches_expect),
     (_if_expr_fold, _if_expr_fold_expect),
+    (_branch_merge, _branch_merge_expect),
+    (_loop_invariant, _loop_invariant_expect),
 ]
 
 
