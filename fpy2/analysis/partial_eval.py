@@ -79,7 +79,7 @@ class _PartialEvalInstance(DefaultVisitor):
         # Strip ``_TOP`` from the public view — consumers see only
         # foldable :data:`Value` entries.
         public_by_def: dict[Definition, Value] = {
-            d: v for d, v in self.by_def.items() if v is not _TOP  # type: ignore[misc]
+            d: v for d, v in self.by_def.items() if not isinstance(v, _TopType)
         }
         return PartialEvalInfo(public_by_def, self.by_expr, self.def_use)
 
@@ -105,7 +105,7 @@ class _PartialEvalInstance(DefaultVisitor):
         d = self.def_use.find_def_from_use(e)
         if d in self.by_def:
             val = self.by_def[d]
-            if val is not _TOP:
+            if not isinstance(val, _TopType):
                 self.by_expr[e] = val
 
     def _meet(self, a, b):
