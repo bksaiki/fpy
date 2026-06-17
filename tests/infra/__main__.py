@@ -27,7 +27,6 @@ def _run_tests():
     test_purity()
     test_format_infer()
     # transformations
-    test_const_prop()
     test_copy_prop()
     test_const_fold()
     test_dead_code()

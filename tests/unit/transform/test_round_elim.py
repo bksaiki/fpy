@@ -478,23 +478,22 @@ class TestRegression:
     def test_cleanup_chain_collapses_redundant_binds(self):
         """RoundElim intentionally leaves redundant operand binds
         (``_t = literal`` lines) that the documented downstream
-        cleanup chain — :class:`ConstPropagate` then
-        :class:`CopyPropagate` then :class:`DeadCodeEliminate` — is
-        expected to collapse.
+        cleanup chain — :class:`ConstFold` then :class:`CopyPropagate`
+        then :class:`DeadCodeEliminate` — is expected to collapse.
 
-        ``ConstPropagate`` is the load-bearing piece: it inlines
-        literal-bound temps (``_t = 1`` → uses of ``_t`` become
-        ``1``) so they become dead.  ``CopyPropagate`` handles
-        Var→Var copies (also created by the per-op bind scheme).
-        ``DeadCodeEliminate`` removes the resulting unused
-        assigns.  Without ``ConstPropagate`` the literal binds
-        stay live and DCE can't remove them.
+        ``ConstFold`` is the load-bearing piece: it inlines value-bound
+        temps (``_t = 1`` → uses of ``_t`` become ``1``) via the value
+        flow from :class:`PartialEval`, so the temps become dead.
+        ``CopyPropagate`` handles Var→Var copies (also created by the
+        per-op bind scheme).  ``DeadCodeEliminate`` removes the
+        resulting unused assigns.  Without ``ConstFold`` the literal
+        binds stay live and DCE can't remove them.
 
-        This test pins that contract: the post-cleanup AST has
-        fewer fresh temps than the post-RoundElim AST."""
+        This test pins that contract: the post-cleanup AST has fewer
+        fresh temps than the post-RoundElim AST."""
 
         from fpy2.transform import (
-            ConstPropagate, CopyPropagate, DeadCodeEliminate,
+            ConstFold, CopyPropagate, DeadCodeEliminate,
         )
 
         @fp.fpy
@@ -512,7 +511,7 @@ class TestRegression:
         )
 
         # Run the documented cleanup chain.
-        after = ConstPropagate.apply(after_elim)
+        after = ConstFold.apply(after_elim)
         after = CopyPropagate.apply(after)
         after = DeadCodeEliminate.apply(after)
         cleaned_temps = _count_fresh_temp_assigns(after)

@@ -98,10 +98,6 @@ Transformations
    :members:
    :show-inheritance:
 
-.. autoclass:: fpy2.transform.ConstPropagate
-   :members:
-   :show-inheritance:
-
 .. autoclass:: fpy2.transform.CopyPropagate
    :members:
    :show-inheritance:

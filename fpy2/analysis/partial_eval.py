@@ -1,5 +1,12 @@
 """
 Partial evaluation.
+
+For each expression and SSA definition, records the statically-known
+:data:`Value` (if any) under the active rounding context.  Consumed
+by :class:`fpy2.transform.ConstFold` as the single source of truth
+for "is this expression a known constant?"; also used by
+:class:`fpy2.analysis.ArraySizeInfer`, :class:`fpy2.analysis.ContextUse`,
+and :class:`fpy2.transform.LiftContext`.
 """
 
 from dataclasses import dataclass
@@ -17,7 +24,8 @@ from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
 ScalarValue: TypeAlias = bool | Float | Fraction | Context
 TupleValue: TypeAlias = tuple['Value', ...]
-Value: TypeAlias = ScalarValue | TupleValue
+ListValue: TypeAlias = list['Value']
+Value: TypeAlias = ScalarValue | TupleValue | ListValue
 
 
 @dataclass
@@ -55,7 +63,7 @@ class _PartialEvalInstance(DefaultVisitor):
         return PartialEvalInfo(self.by_def, self.by_expr, self.def_use)
 
     def _base_env(self) -> dict[NamedId, object]:
-        return { 
+        return {
             NamedId(d): self.func.env[d]
             for d in self.func.env
             if isinstance(self.func.env[d], ModuleType)
@@ -90,10 +98,21 @@ class _PartialEvalInstance(DefaultVisitor):
     def _visit_digits(self, e: Digits, ctx: Context | None):
         self.by_expr[e] = e.as_rational()
 
+    def _try_eval(self, e_eval: Expr, ctx: Context):
+        """Evaluate via the interpreter; return ``None`` on any
+        exception (PE is best-effort)."""
+        try:
+            return self.rt.eval_expr(e_eval, self._base_env(), ctx)
+        except Exception:
+            return None
+
+    def _record(self, e: Expr, val):
+        if val is not None:
+            self.by_expr[e] = val
+
     def _visit_nullaryop(self, e: NullaryOp, ctx: Context | None):
         if ctx is not None:
-            val = self.rt.eval_expr(e, {}, ctx)
-            self.by_expr[e] = val
+            self._record(e, self._try_eval(e, ctx))
 
     def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
         self._visit_expr(e.arg, ctx)
@@ -103,9 +122,7 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: UnaryOp = type(e)(e.func, e_arg, e.loc)
             else:
                 e_eval = type(e)(e_arg, e.loc)
-
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_binaryop(self, e: BinaryOp, ctx: Context | None):
         self._visit_expr(e.first, ctx)
@@ -117,9 +134,7 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: BinaryOp = type(e)(e.func, e_fst, e_snd, e.loc)
             else:
                 e_eval = type(e)(e_fst, e_snd, e.loc)
-
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: Context | None):
         self._visit_expr(e.first, ctx)
@@ -133,12 +148,33 @@ class _PartialEvalInstance(DefaultVisitor):
                 e_eval: TernaryOp = type(e)(e.func, e_fst, e_snd, e_trd, e.loc)
             else:
                 e_eval = type(e)(e_fst, e_snd, e_trd, e.loc)
+            self._record(e, self._try_eval(e_eval, ctx))
 
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+    def _visit_naryop(self, e: NaryOp, ctx: Context | None):
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        if isinstance(e, Empty):
+            # ``empty()`` constructs uninitialized values
+            return
+        if (
+            ctx is not None
+            and len(e.args) > 0
+            and all(self._is_value(arg) for arg in e.args)
+        ):
+            e_args = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
+            if isinstance(e, NamedNaryOp):
+                e_eval: NaryOp = type(e)(e.func, e_args, e.loc)
+            else:
+                e_eval = type(e)(e_args, e.loc)
+            self._record(e, self._try_eval(e_eval, ctx))
 
-    # TODO: implement _visit_naryop
-    # do not partially evaluate `empty()` since it creates uninitialized values
+    def _visit_compare(self, e: Compare, ctx: Context | None):
+        for arg in e.args:
+            self._visit_expr(arg, ctx)
+        if ctx is not None and all(self._is_value(arg) for arg in e.args):
+            e_args = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
+            e_eval = Compare(e.ops, e_args, e.loc)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_call(self, e: Call, ctx: Context | None):
         for arg in e.args:
@@ -155,9 +191,7 @@ class _PartialEvalInstance(DefaultVisitor):
             arg_vals = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
             kwarg_vals = [ (k, ForeignVal(self.by_expr[v], None)) for k, v in e.kwargs ]
             e_eval = Call(e.func, e.fn, arg_vals, kwarg_vals, e.loc)
-
-            env = self._base_env()
-            self.by_expr[e] = self.rt.eval_expr(e_eval, env, ctx)
+            self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: Context | None):
         for elt in e.elts:
@@ -165,10 +199,48 @@ class _PartialEvalInstance(DefaultVisitor):
         if all(self._is_value(elt) for elt in e.elts):
             self.by_expr[e] = tuple(self.by_expr[elt] for elt in e.elts)
 
+    def _visit_list_expr(self, e: ListExpr, ctx: Context | None):
+        for elt in e.elts:
+            self._visit_expr(elt, ctx)
+        if all(self._is_value(elt) for elt in e.elts):
+            self.by_expr[e] = [self.by_expr[elt] for elt in e.elts]
+
+    def _visit_list_ref(self, e: ListRef, ctx: Context | None):
+        self._visit_expr(e.value, ctx)
+        self._visit_expr(e.index, ctx)
+        if (
+            ctx is not None
+            and self._is_value(e.value)
+            and self._is_value(e.index)
+        ):
+            v = ForeignVal(self.by_expr[e.value], None)
+            i = ForeignVal(self.by_expr[e.index], None)
+            e_eval = ListRef(v, i, e.loc)
+            self._record(e, self._try_eval(e_eval, ctx))
+
+    def _visit_list_slice(self, e: ListSlice, ctx: Context | None):
+        # FPy slicing is stricter than Python's; route through the
+        # interpreter rather than slicing natively.
+        self._visit_expr(e.value, ctx)
+        if e.start is not None:
+            self._visit_expr(e.start, ctx)
+        if e.stop is not None:
+            self._visit_expr(e.stop, ctx)
+        if (
+            ctx is not None
+            and self._is_value(e.value)
+            and (e.start is None or self._is_value(e.start))
+            and (e.stop is None or self._is_value(e.stop))
+        ):
+            v = ForeignVal(self.by_expr[e.value], None)
+            s = ForeignVal(self.by_expr[e.start], None) if e.start is not None else None
+            t = ForeignVal(self.by_expr[e.stop], None) if e.stop is not None else None
+            e_eval = ListSlice(v, s, t, e.loc)
+            self._record(e, self._try_eval(e_eval, ctx))
+
     def _visit_attribute(self, e: Attribute, ctx: Context | None):
         self._visit_expr(e.value, ctx)
         if self._is_value(e.value):
-            # constant folding is possible
             val = self.by_expr[e.value]
             if isinstance(val, dict):
                 if e.attr not in val:
@@ -206,7 +278,6 @@ class _PartialEvalInstance(DefaultVisitor):
 
         self._visit_block(stmt.body, new_ctx)
 
-
     def _visit_function(self, func: FuncDef, ctx: None):
         # extract overriding context
         match func.ctx:
@@ -229,18 +300,24 @@ class _PartialEvalInstance(DefaultVisitor):
 
 
 class PartialEval:
-    """
-    Partial evaluation.
+    """Partial evaluation — records the statically-known
+    :data:`Value` of each expression under the active rounding
+    context.
 
-    This analysis evaluates parts of the program that can be determined statically,
-    allowing for potential optimizations and simplifications before runtime.
+    Coverage: literals, free-variable lookups, all operator kinds
+    (nullary through n-ary, plus :class:`Compare`), context-constructor
+    :class:`Call` s, :class:`Attribute` access, tuple / list literals,
+    list indexing / slicing, and SSA definitions via ``Assign``.
+    Operators that raise inside the interpreter (e.g. inexact
+    :class:`Cast`, division by zero) are silently dropped: PE is
+    best-effort and never crashes the analysis for a single edge case.
     """
 
     @staticmethod
     def apply(func: FuncDef, *, def_use: DefineUseAnalysis | None = None):
-        """
-        Applies partial evaluation.
-        """
+        """Run partial evaluation on *func* and return the
+        :class:`PartialEvalInfo`.  Pass an existing ``def_use=`` to
+        avoid recomputing the def-use analysis."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
         if def_use is None:
