@@ -48,8 +48,56 @@ class _Eliminator(DefaultTransformVisitor):
             # remove self-assignment
             self.eliminated = True
             return None, ctx
-        else:
-            return super()._visit_assign(assign, ctx)
+        if isinstance(assign.target, TupleBinding):
+            # Two-step destructure cleanup:
+            #   (i)  unused ``NamedId`` leaves → ``UnderscoreId``
+            #   (ii) all-underscore binding + pure RHS → drop the assign
+            scrubbed = self._scrub_binding(assign.target, assign)
+            target = scrubbed if scrubbed is not assign.target else assign.target
+            if self._all_underscore(target) and Purity.analyze_expr(assign.expr, self.def_use):
+                self.eliminated = True
+                return None, ctx
+            if scrubbed is not assign.target:
+                self.eliminated = True
+                return Assign(scrubbed, assign.type, assign.expr, assign.loc), ctx
+        return super()._visit_assign(assign, ctx)
+
+    def _scrub_binding(self, binding: TupleBinding, site: Assign) -> TupleBinding:
+        """Replace each ``NamedId`` leaf whose def has no uses (and
+        doesn't feed a phi) with ``UnderscoreId``.  Recurses into
+        nested bindings.  Returns the original object if unchanged."""
+        new_elts: list[Id | TupleBinding] = []
+        changed = False
+        for elt in binding.elts:
+            if isinstance(elt, NamedId):
+                d = self.def_use.find_def_from_site(elt, site)
+                live = (
+                    len(self.def_use.uses[d]) > 0
+                    or any(isinstance(s, PhiDef) for s in self.def_use.successors[d])
+                )
+                if live:
+                    new_elts.append(elt)
+                else:
+                    new_elts.append(UnderscoreId())
+                    changed = True
+            elif isinstance(elt, TupleBinding):
+                inner = self._scrub_binding(elt, site)
+                if inner is not elt:
+                    changed = True
+                new_elts.append(inner)
+            else:
+                new_elts.append(elt)
+        return TupleBinding(new_elts, binding.loc) if changed else binding
+
+    @staticmethod
+    def _all_underscore(binding: TupleBinding) -> bool:
+        """True iff every leaf in *binding* is an ``UnderscoreId``."""
+        for elt in binding.elts:
+            if isinstance(elt, NamedId):
+                return False
+            if isinstance(elt, TupleBinding) and not _Eliminator._all_underscore(elt):
+                return False
+        return True
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None) -> tuple[Stmt | StmtBlock | None, None]:
         if isinstance(stmt.cond, BoolVal):
@@ -268,6 +316,9 @@ class DeadCodeEliminate:
     """Dead code elimination.
 
     - removes unused assignments / phi defs / free variables
+    - rewrites unused ``TupleBinding`` leaves to ``UnderscoreId``;
+      drops the whole assign when every leaf becomes ``_`` and the
+      RHS is pure
     - removes never-executed branches (``if False:``, ``while False:``)
     - collapses trivially-true / trivially-false ``if`` / ``while``
     - removes ``assert True`` and pure ``EffectStmt`` s

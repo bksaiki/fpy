@@ -61,10 +61,6 @@ def _kitchen_sink(x: fp.Real) -> fp.Real:
 @fp.fpy
 def _kitchen_sink_expect(x: fp.Real) -> fp.Real:
     with fp.FP64:
-        # The tuple destructure survives because DCE doesn't drop
-        # ``TupleBinding`` assigns even when every bound name is
-        # unused (a known limitation).
-        first, second = (3, 10)
         return 1 * (10 + 2 * x)
 
 
