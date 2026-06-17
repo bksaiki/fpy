@@ -1,10 +1,8 @@
 """Dead code elimination."""
 
-from typing import cast
-
 from ..ast import *
 from ..analysis import (
-    DefineUse, DefineUseAnalysis, AssignDef, PhiDef, DefSite,
+    DefineUse, DefineUseAnalysis, AssignDef, PhiDef,
     Purity, SyntaxCheck
 )
 
@@ -53,8 +51,7 @@ class _Eliminator(DefaultTransformVisitor):
             #   (i)  unused ``NamedId`` leaves → ``UnderscoreId``
             #   (ii) all-underscore binding + pure RHS → drop the assign
             scrubbed = self._scrub_binding(assign.target, assign)
-            target = scrubbed if scrubbed is not assign.target else assign.target
-            if self._all_underscore(target) and Purity.analyze_expr(assign.expr, self.def_use):
+            if self._all_underscore(scrubbed) and Purity.analyze_expr(assign.expr, self.def_use):
                 self.eliminated = True
                 return None, ctx
             if scrubbed is not assign.target:
@@ -213,7 +210,6 @@ class _Eliminator(DefaultTransformVisitor):
             stmts: list[Stmt] = []
             for stmt in block.stmts:
                 s, _ = self._visit_statement(stmt, ctx)
-                # s = cast(Stmt | StmtBlock | None, s)
                 match s:
                     case None:
                         pass

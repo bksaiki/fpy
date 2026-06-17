@@ -239,9 +239,8 @@ class _PartialEvalInstance(DefaultVisitor):
             self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_if_expr(self, e: IfExpr, ctx: Context | None):
-        # Selection, not arithmetic — no rounding; ctx is irrelevant.
-        # When the condition is statically known we copy the chosen
-        # branch's value (the other branch need not be foldable).
+        # When the condition is statically known, copy the chosen
+        # branch's value — the unchosen branch need not be foldable.
         self._visit_expr(e.cond, ctx)
         self._visit_expr(e.ift, ctx)
         self._visit_expr(e.iff, ctx)
