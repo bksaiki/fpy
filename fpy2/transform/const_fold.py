@@ -24,6 +24,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
     pe: PartialEvalInfo
     enable_context: bool
     enable_op: bool
+    changed: bool
 
     def __init__(
         self,
@@ -36,6 +37,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         self.pe = pe
         self.enable_context = enable_context
         self.enable_op = enable_op
+        self.changed = False
 
     def _value_to_literal(self, val: Value, loc):
         """Convert a :data:`Value` to an AST literal; return ``None`` if
@@ -64,16 +66,26 @@ class _ConstFoldInstance(DefaultTransformVisitor):
 
     def _fold(self, e: Expr) -> Expr | None:
         """Look up ``e`` in ``pe.by_expr`` and convert to a literal,
-        gated by ``enable_op`` / ``enable_context``."""
+        gated by ``enable_op`` / ``enable_context``.  Returns ``None``
+        when the substitution would be a structural no-op (the AST
+        already has the same literal at this position) so ``simplify``
+        can detect fixpoint."""
         if e not in self.pe.by_expr:
             return None
         lit = self._value_to_literal(self.pe.by_expr[e], e.loc)
         if lit is None:
             return None
+        # No-op: the literal we'd substitute is already at this site.
+        if type(e) is type(lit) and e.is_equiv(lit):
+            return None
         is_ctx_fold = isinstance(lit, ForeignVal) and isinstance(lit.val, Context)
         if is_ctx_fold:
-            return lit if self.enable_context else None
-        return lit if self.enable_op else None
+            if not self.enable_context:
+                return None
+        elif not self.enable_op:
+            return None
+        self.changed = True
+        return lit
 
     def _visit_expr(self, e: Expr, ctx) -> Expr:
         # Single chokepoint: every expression in the tree comes here
@@ -115,12 +127,31 @@ class ConstFold:
         / ``partial_eval`` to share with other passes.  Set
         ``enable_context=False`` to skip ``Context`` folds or
         ``enable_op=False`` to skip everything else."""
+        func, _ = ConstFold.apply_with_status(
+            func,
+            def_use=def_use,
+            partial_eval=partial_eval,
+            enable_context=enable_context,
+            enable_op=enable_op,
+        )
+        return func
+
+    @staticmethod
+    def apply_with_status(
+        func: FuncDef,
+        *,
+        def_use: DefineUseAnalysis | None = None,
+        partial_eval: PartialEvalInfo | None = None,
+        enable_context: bool = True,
+        enable_op: bool = True,
+    ) -> tuple[FuncDef, bool]:
+        """Same as :meth:`apply` but also returns a ``changed`` flag
+        — ``True`` iff at least one substitution occurred."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
         if def_use is None:
             def_use = DefineUse.analyze(func)
         if partial_eval is None:
             partial_eval = PartialEval.apply(func, def_use=def_use)
-        return _ConstFoldInstance(
-            func, partial_eval, enable_context, enable_op,
-        ).apply()
+        inst = _ConstFoldInstance(func, partial_eval, enable_context, enable_op)
+        return inst.apply(), inst.changed

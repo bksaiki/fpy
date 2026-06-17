@@ -16,20 +16,24 @@ def simplify(
     enable_dead_code_elim: bool = True
 ) -> Function:
     """Apply :class:`ConstFold` + :class:`CopyPropagate` +
-    :class:`DeadCodeEliminate` to *func* until fixpoint."""
+    :class:`DeadCodeEliminate` to *func* until none of the enabled
+    passes report a change."""
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
     ast = func.ast
 
-    eliminated = True
-    while eliminated:
+    while True:
+        changed = False
         if enable_const_fold:
-            ast = ConstFold.apply(ast)
+            ast, c = ConstFold.apply_with_status(ast)
+            changed |= c
         if enable_copy_prop:
-            ast = CopyPropagate.apply(ast)
+            ast, c = CopyPropagate.apply_with_status(ast)
+            changed |= c
         if enable_dead_code_elim:
-            ast, eliminated = DeadCodeEliminate.apply_with_status(ast)
-        else:
-            eliminated = False
+            ast, c = DeadCodeEliminate.apply_with_status(ast)
+            changed |= c
+        if not changed:
+            break
 
     return func.with_ast(ast)
