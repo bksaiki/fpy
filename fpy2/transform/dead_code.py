@@ -147,14 +147,14 @@ class _Eliminator(DefaultTransformVisitor):
             return super()._visit_if(stmt, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None) -> tuple[Stmt | StmtBlock | None, None]:
-        # remove `while False: ...`
-        # remove `while _: pass`
-        if (isinstance(stmt.cond, BoolVal) and not stmt.cond.val) or self._is_empty_block(stmt.body):
-            # eliminate unnecessary while statement
+        # ``while False:`` — cond is statically false, body never runs.
+        # Eliminating ``while <unknown>: pass`` is *unsound*: the loop
+        # may diverge at runtime, and removing it converts divergence
+        # into termination.
+        if isinstance(stmt.cond, BoolVal) and not stmt.cond.val:
             self.eliminated = True
             return None, ctx
-        else:
-            return super()._visit_while(stmt, ctx)
+        return super()._visit_while(stmt, ctx)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # eliminate if the body is empty

@@ -209,6 +209,9 @@ def _example_dead_while_1_expect():
 
 @fp.fpy
 def _example_dead_while_2():
+    # ``while <cond>: pass`` with a non-trivially-False cond is
+    # preserved — eliminating it would convert possibly-divergent
+    # behaviour into termination, which is unsound.
     x = 0
     while x < 10:
         pass
@@ -217,6 +220,8 @@ def _example_dead_while_2():
 @fp.fpy
 def _example_dead_while_2_expect():
     x = 0
+    while x < 10:
+        pass
     return x
 
 @fp.fpy
