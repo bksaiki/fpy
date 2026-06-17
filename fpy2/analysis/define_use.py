@@ -149,6 +149,14 @@ class _DefineUseInstance(DefaultVisitor):
             self._visit_expr(slice, ctx)
         self._visit_expr(stmt.expr, ctx)
 
+    def _visit_while(self, stmt: WhileStmt, ctx: DefCtx):
+        # Cond uses must resolve through the loop-header phis, not the
+        # pre-loop defs — the cond re-runs against mutated values on
+        # each iteration.  Default ``reach[stmt]`` is pre-loop.
+        body_in = self.reaching_defs.in_defs[stmt.body]
+        self._visit_expr(stmt.cond, body_in)
+        self._visit_block(stmt.body, ctx)
+
     def _visit_statement(self, stmt: Stmt, ctx: DefCtx):
         ctx = self.reaching_defs.reach[stmt]
         return super()._visit_statement(stmt, ctx)
