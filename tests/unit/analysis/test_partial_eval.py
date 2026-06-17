@@ -124,6 +124,63 @@ class TestListFolding:
         assert _return_expr(f.ast) not in info.by_expr
 
 
+class TestIfExprFolding:
+    """``IfExpr`` folds to the chosen branch's value when the
+    condition is statically known."""
+
+    def test_cond_true_picks_ift(self):
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return 1.0 if True else 2.0
+
+        info = PartialEval.apply(f.ast)
+        v = info.by_expr.get(_return_expr(f.ast))
+        assert v is not None and float(v) == 1.0
+
+    def test_cond_false_picks_iff(self):
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return 1.0 if False else 2.0
+
+        info = PartialEval.apply(f.ast)
+        v = info.by_expr.get(_return_expr(f.ast))
+        assert v is not None and float(v) == 2.0
+
+    def test_cond_unknown_does_not_fold(self):
+        @fp.fpy
+        def f(c: bool, x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return 1.0 if c else x
+
+        info = PartialEval.apply(f.ast)
+        assert _return_expr(f.ast) not in info.by_expr
+
+    def test_taken_branch_unknown_does_not_fold(self):
+        """Cond is known True but the chosen branch (ift) isn't a
+        value — no fold."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x if True else 2.0
+
+        info = PartialEval.apply(f.ast)
+        assert _return_expr(f.ast) not in info.by_expr
+
+    def test_unchosen_branch_unknown_still_folds(self):
+        """When cond is True, the iff branch's value is irrelevant —
+        fold still proceeds based on ift's value."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return 7.0 if True else x
+
+        info = PartialEval.apply(f.ast)
+        v = info.by_expr.get(_return_expr(f.ast))
+        assert v is not None and float(v) == 7.0
+
+
 class TestRobustness:
     """Interpreter exceptions must be swallowed: PE is best-effort."""
 

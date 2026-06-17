@@ -238,6 +238,22 @@ class _PartialEvalInstance(DefaultVisitor):
             e_eval = ListSlice(v, s, t, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
+    def _visit_if_expr(self, e: IfExpr, ctx: Context | None):
+        # Selection, not arithmetic — no rounding; ctx is irrelevant.
+        # When the condition is statically known we copy the chosen
+        # branch's value (the other branch need not be foldable).
+        self._visit_expr(e.cond, ctx)
+        self._visit_expr(e.ift, ctx)
+        self._visit_expr(e.iff, ctx)
+        if not self._is_value(e.cond):
+            return
+        cond_val = self.by_expr[e.cond]
+        if not isinstance(cond_val, bool):
+            return
+        branch = e.ift if cond_val else e.iff
+        if self._is_value(branch):
+            self.by_expr[e] = self.by_expr[branch]
+
     def _visit_attribute(self, e: Attribute, ctx: Context | None):
         self._visit_expr(e.value, ctx)
         if self._is_value(e.value):
