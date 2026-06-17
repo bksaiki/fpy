@@ -10,6 +10,7 @@ from fpy2.ast import (
     Integer,
     Rational,
     ReturnStmt,
+    Var,
 )
 from fpy2.number import Context
 from fpy2.transform import ConstFold
@@ -342,7 +343,6 @@ class TestPhiMergeFolding:
 
         folded = ConstFold.apply(f.ast)
         e = _return_expr(folded)
-        from fpy2.ast import Var
         assert isinstance(e, Var), f'expected Var; got {type(e).__name__}'
 
     def test_if1_same_value(self):
@@ -389,5 +389,4 @@ class TestPhiMergeFolding:
 
         folded = ConstFold.apply(f.ast)
         e = _return_expr(folded)
-        from fpy2.ast import Var
         assert isinstance(e, Var), f'expected Var; got {type(e).__name__}'

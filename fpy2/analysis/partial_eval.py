@@ -30,15 +30,18 @@ Value: TypeAlias = ScalarValue | TupleValue | ListValue
 
 class _TopType:
     """SCCP lattice top — internal sentinel for "def was analyzed; not
-    a single foldable value".  Stored only in ``by_def``; ``_visit_var``
-    filters it before writing to ``by_expr`` so external consumers
-    never see it."""
+    a single foldable value".  Stored only in the analysis instance's
+    ``by_def``; stripped from the public :class:`PartialEvalInfo`."""
 
     def __repr__(self):
         return '_TOP'
 
 
 _TOP: _TopType = _TopType()
+
+# Internal lattice value: a public :data:`Value`, BOT (absent from
+# the map), or the ``_TOP`` sentinel.
+_Lattice: TypeAlias = Value | _TopType
 
 
 @dataclass
@@ -57,7 +60,7 @@ class _PartialEvalInstance(DefaultVisitor):
     def_use: DefineUseAnalysis
     rt: Interpreter
 
-    by_def: dict[Definition, Value]
+    by_def: dict[Definition, _Lattice]
     by_expr: dict[Expr, Value]
 
     def __init__(
@@ -73,7 +76,12 @@ class _PartialEvalInstance(DefaultVisitor):
 
     def apply(self) -> PartialEvalInfo:
         self._visit_function(self.func, None)
-        return PartialEvalInfo(self.by_def, self.by_expr, self.def_use)
+        # Strip ``_TOP`` from the public view — consumers see only
+        # foldable :data:`Value` entries.
+        public_by_def: dict[Definition, Value] = {
+            d: v for d, v in self.by_def.items() if v is not _TOP  # type: ignore[misc]
+        }
+        return PartialEvalInfo(public_by_def, self.by_expr, self.def_use)
 
     def _base_env(self) -> dict[NamedId, object]:
         return {
@@ -121,7 +129,7 @@ class _PartialEvalInstance(DefaultVisitor):
             rhs = self.by_def.get(self.def_use.defs[phi.rhs], _TOP)
             merged = self._meet(lhs, rhs)
             if merged is not None:
-                self.by_def[phi] = merged  # type: ignore[assignment]
+                self.by_def[phi] = merged
 
     def _visit_bool(self, e: BoolVal, ctx: Context | None):
         self.by_expr[e] = e.val
@@ -369,7 +377,7 @@ class _PartialEvalInstance(DefaultVisitor):
             if lhs is None:
                 self.by_def.pop(phi, None)
             else:
-                self.by_def[phi] = lhs  # type: ignore[assignment]
+                self.by_def[phi] = lhs
         while True:
             run_body()
             changed = False
@@ -382,7 +390,7 @@ class _PartialEvalInstance(DefaultVisitor):
                     if new is None:
                         self.by_def.pop(phi, None)
                     else:
-                        self.by_def[phi] = new  # type: ignore[assignment]
+                        self.by_def[phi] = new
                     changed = True
             if not changed:
                 return

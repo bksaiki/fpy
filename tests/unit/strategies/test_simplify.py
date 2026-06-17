@@ -140,13 +140,6 @@ def _branch_merge_expect(c: bool) -> fp.Real:
         return 5
 
 
-# Loop-phi coverage lives at the PE level in
-# ``tests/unit/analysis/test_partial_eval.py::TestLoopPhiMerge`` —
-# integration-testing it through ``simplify`` interacts with DCE's
-# unsound "empty-body while" elimination (changes a possibly-
-# divergent loop into a value), which is orthogonal to SCCP.
-
-
 _examples: list[tuple[fp.Function, fp.Function]] = [
     (_kitchen_sink, _kitchen_sink_expect),
     (_just_const_fold, _just_const_fold_expect),
