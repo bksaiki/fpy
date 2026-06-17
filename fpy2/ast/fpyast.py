@@ -1313,7 +1313,7 @@ class ListExpr(Expr):
 
     def is_equiv(self, other) -> bool:
         return (
-            isinstance(other, TupleExpr)
+            isinstance(other, ListExpr)
             and len(self.elts) == len(other.elts)
             and all(arg.is_equiv(other_arg) for arg, other_arg in zip(self.elts, other.elts))
         )
