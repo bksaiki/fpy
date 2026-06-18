@@ -1,4 +1,4 @@
-FPy Language Semantics
+Language Semantics
 ======================
 
 This page documents the semantics of FPy.
@@ -15,7 +15,8 @@ Syntax
 ------
 
 FPy's expression language includes boolean and numerical constants,
-arithmetic expressions, and function calls.  It features the usual imperative
+arithmetic expressions, function calls, and compound data — lists and tuples.
+It features the usual imperative
 statements — assignment, sequencing, return, and skip — together with one
 construct unique to FPy: the *context statement*, which manages the active
 rounding context used to evaluate expressions.
@@ -30,17 +31,23 @@ function, so that no rounding actually occurs.
    \begin{array}{rcll}
    e & ::= & \texttt{true} \mid \texttt{false}
        & \text{boolean constants} \\
-     & \mid & n \mid \R
-       & \text{numerical / context constants} \\
+     & \mid & n
+       & \text{numerical constants} \\
+     & \mid & \R
+       & \text{context constants} \\
      & \mid & x
        & \text{variable} \\
-     & \mid & [\, e_1, \ldots, e_n \,] \mid e_1[e_2]
-       & \text{list literal / indexing} \\
+     & \mid & [\, e_1, \ldots, e_n \,]
+       & \text{list constructor} \\
+     & \mid & e_1[e_2]
+       & \text{list indexing} \\
+     & \mid & (\, e_1, \ldots, e_n \,)
+       & \text{tuple} \\
      & \mid & e_1 + e_2
        & \text{arithmetic} \\
      & \mid & f\ e
        & \text{function application} \\[1ex]
-   s & ::= & x := e
+   s & ::= & p := e
        & \text{assignment} \\
      & \mid & s_1\, \texttt{;}\, s_2
        & \text{sequencing} \\
@@ -49,8 +56,15 @@ function, so that no rounding actually occurs.
      & \mid & \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s
        & \text{context statement} \\
      & \mid & \texttt{skip}
-       & \text{no-op}
+       & \text{no-op} \\[1ex]
+   p & ::= & x \mid p_1, \ldots, p_n
+       & \text{pattern}
    \end{array}
+
+The left-hand side of an assignment is a *pattern* :math:`p`: either a single
+variable or a tuple of (possibly nested) patterns.  A tuple pattern takes a
+tuple value apart position by position — the only way to deconstruct a tuple,
+since tuples cannot be indexed.
 
 Only ``+`` is shown as a representative arithmetic operation; every other FPy
 operator follows the same evaluation pattern.
@@ -58,8 +72,9 @@ operator follows the same evaluation pattern.
 Values
 ------
 
-Evaluating an FPy expression produces one of four kinds of value: a boolean; a
-real number :math:`n`; a *rounding context* :math:`C`; or a list of values.
+Evaluating an FPy expression produces one of five kinds of value: a boolean; a
+real number :math:`n`; a *rounding context* :math:`C`; a list of values; or a
+tuple of values.
 For concision, the only constructible rounding context in this fragment is
 :math:`\R`; the full language provides constructors for the common rounding
 contexts.
@@ -67,7 +82,7 @@ contexts.
 .. math::
 
    v ::= \texttt{true} \mid \texttt{false} \mid n \mid C
-       \mid [\, v_1, \ldots, v_n \,]
+       \mid [\, v_1, \ldots, v_n \,] \mid (\, v_1, \ldots, v_n \,)
 
 Evaluation
 ----------
@@ -137,6 +152,19 @@ Lists evaluate their elements left to right; indexing selects an element.
         {\langle \sigma, C, e_1[e_2] \rangle \Downarrow v_n}
    \tag{E-Ref}
 
+Tuples are built like lists, evaluating their elements left to right, but they
+cannot be indexed — a tuple is taken apart only by a tuple pattern on the left
+of an assignment (see **E-Assign**).
+
+.. math::
+
+   \frac{\langle \sigma, C, e_1 \rangle \Downarrow v_1
+         \quad \cdots \quad
+         \langle \sigma, C, e_n \rangle \Downarrow v_n}
+        {\langle \sigma, C, (\, e_1, \ldots, e_n \,) \rangle \Downarrow
+         (\, v_1, \ldots, v_n \,)}
+   \tag{E-Tuple}
+
 Arithmetic is where rounding happens.  The operands evaluate to real numbers,
 their exact mathematical sum :math:`\exact{n_1 + n_2}` is computed, and the
 active context :math:`C` rounds that exact result to a representable value.
@@ -163,13 +191,43 @@ the symbol in the environment.
 Statements
 ^^^^^^^^^^
 
-Assignment evaluates its right-hand side and extends the environment.
-Sequencing threads the environment from one statement to the next.
+Assignment evaluates its right-hand side to a value and binds it against the
+pattern :math:`p` on the left.  Sequencing threads the environment from one
+statement to the next.
+
+Matching is defined by an auxiliary judgement
+:math:`p \triangleright v \Rightarrow \theta`, read as "matching pattern
+:math:`p` against value :math:`v` yields the bindings :math:`\theta`".  A
+variable pattern matches anything and binds it; a tuple pattern matches a
+tuple value position by position, and the per-component bindings are combined
+by disjoint union :math:`\uplus` (the sub-patterns bind distinct variables, so
+the bindings are independent).
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow v}
-        {\langle \sigma, C, x := e \rangle \Downarrow_S \sigma[x \mapsto v]}
+   \frac{}{x \triangleright v \Rightarrow [\, x \mapsto v \,]}
+   \tag{M-Var}
+
+.. math::
+
+   \frac{p_1 \triangleright v_1 \Rightarrow \theta_1
+         \quad \cdots \quad
+         p_n \triangleright v_n \Rightarrow \theta_n}
+        {p_1, \ldots, p_n \triangleright (\, v_1, \ldots, v_n \,)
+         \Rightarrow \theta_1 \uplus \cdots \uplus \theta_n}
+   \tag{M-Tuple}
+
+The assignment statement evaluates its right-hand side, matches it against the
+pattern, and extends the environment with the resulting bindings
+(:math:`\sigma[\theta]` denotes :math:`\sigma` updated with every binding in
+:math:`\theta`).
+
+.. math::
+
+   \frac{\langle \sigma, C, e \rangle \Downarrow v
+         \quad
+         p \triangleright v \Rightarrow \theta}
+        {\langle \sigma, C, p := e \rangle \Downarrow_S \sigma[\theta]}
    \tag{E-Assign}
 
 .. math::
@@ -184,8 +242,9 @@ The context statement is the heart of FPy.  The context expression :math:`e`
 is evaluated under the real context :math:`\R` to obtain a new context
 :math:`C'`.  The body :math:`s` is then evaluated with :math:`C'` as the active
 rounding context and with :math:`x` bound to :math:`C'`, so the body can refer
-to the context that governs it as an ordinary value.  The surrounding context
-:math:`C` is restored once the body completes.
+to the context that governs it as an ordinary value.  The new context
+:math:`C'` governs only the body; the surrounding context :math:`C` is
+unchanged, so it continues to apply to any statement that follows the ``with``.
 
 .. math::
 
