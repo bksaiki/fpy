@@ -943,8 +943,8 @@ class BytecodeCompiler(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # try:
-        #     <tmp> = <target> __ctx__
-        #     __ctx__ = <new context>
+        #     <tmp> = __ctx__
+        #     <target> = __ctx__ = <new context>
         #     <body>
         # finally:
         #     __ctx__ = <tmp>
@@ -957,17 +957,17 @@ class BytecodeCompiler(Visitor):
         # generate a unique name for the temporary variable
         tmp_name = str(self.gensym.fresh('__fpy_ctx_tmp'))
 
-        # assign the old context to the temporary variable
+        # stash the old context so it can be restored afterwards
         stash_stmt = pyast.Assign(
-            targets=[pyast.Name(id=tmp_name, ctx=pyast.Store(), **attrs), target],
+            targets=[pyast.Name(id=tmp_name, ctx=pyast.Store(), **attrs)],
             value=pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs),
             type_comment=None,
             **attrs
         )
 
-        # assign the new context to `__ctx__`
+        # bind the new context to both the target and the active context `__ctx__`
         set_stmt = pyast.Assign(
-            targets=[pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs)],
+            targets=[target, pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs)],
             value=ctx_expr,
             type_comment=None,
             **attrs

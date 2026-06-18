@@ -9,46 +9,6 @@ the difference is a bug to fix or an intentional simplification of the doc.
 
 ## Open items
 
-### Context statement binds the *enclosing* context, not the new one
-
-The **E-Context** rule states that `with e as x in s` binds `x` to the new
-context `C'` (the one that governs the body):
-
-```
-<σ, R, e> ⇓ C'    <σ[x ↦ C'], C', s> ⇓_S σ'
-─────────────────────────────────────────────
-<σ, C, with e as x in s> ⇓_S σ'
-```
-
-The `BytecodeInterpreter`, however, binds `x` to the **enclosing** context
-`C` (the one active *before* the `with`), not to `C'`. Reproduction:
-
-```python
-from fpy2 import fpy, IEEEContext, RM
-
-outer = IEEEContext(8, 32, RM.RNE)
-inner = IEEEContext(11, 64, RM.RNE)
-
-@fpy(ctx=outer)
-def f():
-    with inner as x:
-        y = x
-    return y
-
-f()  # == outer, NOT inner
-```
-
-In `fpy2/interpret/byte.py`, `_visit_context` emits `tmp = target = __ctx__`
-*before* swapping in the new context, so the target receives the old
-`__ctx__`. The existing test `test_context8` (`tests/infra/examples/unit.py`)
-relies on this: it reuses the bound name to re-enter the enclosing context.
-
-**Question to resolve:** is binding the enclosing context intentional, or a
-bug? The surface syntax `with inner as x` strongly reads as `x == inner`,
-which argues for a fix. If the enclosing-context binding is intended, the
-E-Context rule and prose should be changed to bind `x` to `C` instead, and
-the syntax/naming reconsidered.
-
 ### Context expression is evaluated under the active context, not `R`
 
 **E-Context** evaluates the context expression `e` under the real context
@@ -71,3 +31,15 @@ The core fragment models neither function-definition syntax nor the context
 override, so E-App's caller-context behavior is a simplification rather than a
 faithful account of a function with a pinned context. Extend E-App to consult
 the function's declared context if/when definitions are added to the fragment.
+
+## Resolved
+
+### Context statement now binds the new context (matches E-Context)
+
+`with e as x in s` previously bound `x` to the *enclosing* context rather than
+the new context `C'` that governs the body. `_visit_context` in
+`fpy2/interpret/byte.py` emitted `tmp = target = __ctx__`, stashing the old
+context into both the restore temporary *and* the target. Fixed to stash only
+the temporary (`tmp = __ctx__`) and bind the target to the new context
+alongside the active context (`target = __ctx__ = <new context>`), matching the
+**E-Context** rule. Verified against the full unit + infra suites.
