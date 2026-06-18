@@ -1,21 +1,20 @@
-Core Language Semantics
-=======================
+FPy Language Semantics
+======================
 
-This page documents the dynamic semantics of *Core*, the minimal imperative
-language at the foundation of the FPy DSL.  It describes how Core programs
-*evaluate*; in particular, how the *active rounding context* governs the
-result of every arithmetic operation.  Typing is intentionally out of scope.
+This page documents the semantics of FPy.
+To keep the presentation tractable, it covers only the *core* constructs of
+the language—a minimal imperative fragment of boolean and numerical constants,
+arithmetic, function calls, and the basic statements—rather than the full surface syntax.
+The remaining FPy operators and statements follow the same evaluation patterns.
 
-Core is a faithful abstraction of the FPy AST
-(:py:mod:`fpy2.ast.fpyast`) and the interpreters in ``fpy2.interpret``.  The
-:py:class:`~fpy2.ast.fpyast.Add` node, for example, corresponds to
-``e_1 + e_2`` below, and the :py:class:`~fpy2.ast.fpyast.ContextStmt` node
-corresponds to ``with e in s``.
+It describes how FPy programs *evaluate*; in particular, how the *active
+rounding context* governs the result of every arithmetic operation.  Typing is
+intentionally out of scope.
 
 Syntax
 ------
 
-Core's expression language includes boolean and numerical constants,
+FPy's expression language includes boolean and numerical constants,
 arithmetic expressions, and function calls.  It features the usual imperative
 statements — assignment, sequencing, return, and skip — together with one
 construct unique to FPy: the *context statement*, which manages the active
@@ -47,24 +46,23 @@ function, so that no rounding actually occurs.
        & \text{sequencing} \\
      & \mid & \texttt{ret}\ e
        & \text{return} \\
-     & \mid & \texttt{with}\ e\ \texttt{in}\ s
+     & \mid & \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s
        & \text{context statement} \\
      & \mid & \texttt{skip}
        & \text{no-op}
    \end{array}
 
 Only ``+`` is shown as a representative arithmetic operation; every other FPy
-operator (see :py:mod:`fpy2.ast.fpyast`) follows the same evaluation pattern.
+operator follows the same evaluation pattern.
 
 Values
 ------
 
-Evaluating a Core expression produces one of four kinds of value: a boolean; a
+Evaluating an FPy expression produces one of four kinds of value: a boolean; a
 real number :math:`n`; a *rounding context* :math:`C`; or a list of values.
-For concision, the only constructible rounding context in Core is :math:`\R`,
-which corresponds to ``fpy2.RealContext``; the full language provides
-constructors for the common rounding contexts (the ``Context`` subclasses
-exported from ``fpy2``).
+For concision, the only constructible rounding context in this fragment is
+:math:`\R`; the full language provides constructors for the common rounding
+contexts.
 
 .. math::
 
@@ -87,9 +85,7 @@ results:
 
 The active rounding context :math:`C` is the crux of FPy's semantics: it is
 threaded through every expression and applied to the exact real-number result
-of each arithmetic operation (see **E-Add**).  In the implementation, every
-arithmetic node is lowered to a call that receives the active context as an
-argument and rounds its result through it.
+of each arithmetic operation (see **E-Add**).
 
 Expressions
 ^^^^^^^^^^^
@@ -186,25 +182,15 @@ Sequencing threads the environment from one statement to the next.
 
 The context statement is the heart of FPy.  The context expression :math:`e`
 is evaluated under the real context :math:`\R` to obtain a new context
-:math:`C'`, and the body :math:`s` is then evaluated with :math:`C'` as the
-active rounding context.  The surrounding context :math:`C` is restored once
-the body completes.
+:math:`C'`.  The body :math:`s` is then evaluated with :math:`C'` as the active
+rounding context and with :math:`x` bound to :math:`C'`, so the body can refer
+to the context that governs it as an ordinary value.  The surrounding context
+:math:`C` is restored once the body completes.
 
 .. math::
 
    \frac{\langle \sigma, \R, e \rangle \Downarrow C'
          \quad
-         \langle \sigma, C', s \rangle \Downarrow_S \sigma'}
-        {\langle \sigma, C, \texttt{with}\ e\ \texttt{in}\ s \rangle \Downarrow_S \sigma'}
+         \langle \sigma[x \mapsto C'], C', s \rangle \Downarrow_S \sigma'}
+        {\langle \sigma, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle \Downarrow_S \sigma'}
    \tag{E-Context}
-
-In the bytecode interpreter (:py:class:`~fpy2.BytecodeInterpreter`),
-this is realised by saving the active context, installing :math:`C'` for the
-duration of the body, and restoring the saved context in a ``finally`` block,
-so the swap is correctly undone even if the body raises.
-
-.. note::
-
-   ``with`` also binds the active context to its target identifier (the
-   ``target`` field of :py:class:`~fpy2.ast.fpyast.ContextStmt`), making the
-   context that governs the body available as an ordinary value inside it.
