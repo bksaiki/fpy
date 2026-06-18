@@ -12,11 +12,11 @@ rounding context* governs every arithmetic operation.  Typing is out of scope.
 Syntax
 ------
 
-FPy's expressions are boolean and numerical constants, arithmetic, function
-calls, and compound data — lists and tuples.  Its statements are the usual
-imperative ones — assignment, sequencing, return, and skip — plus one unique to
-FPy: the *context statement*, which sets the active rounding context for the
-expressions it evaluates.
+FPy's expressions are boolean and numerical constants, arithmetic, comparisons,
+function calls, and compound data—lists and tuples.  Its statements are the
+usual imperative ones—assignment, sequencing, conditionals, return, assertion,
+and skip—plus one unique to FPy: the *context statement*, which sets
+the active rounding context for the expressions it evaluates.
 
 In the formal syntax, :math:`n` is an arbitrary real number, :math:`x` ranges
 over a countable set of identifiers, and :math:`\R` is the *real rounding
@@ -41,16 +41,22 @@ context*, whose rounding operation is the identity, so no rounding occurs.
        & \text{tuple} \\
      & \mid & e_1 + e_2
        & \text{arithmetic} \\
+     & \mid & e_1 < e_2
+       & \text{comparison} \\
      & \mid & f\ e
        & \text{function application} \\[1ex]
    s & ::= & p := e
        & \text{assignment} \\
      & \mid & s_1\, \texttt{;}\, s_2
        & \text{sequencing} \\
+     & \mid & \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2
+       & \text{conditional} \\
      & \mid & \texttt{ret}\ e
        & \text{return} \\
      & \mid & \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s
        & \text{context statement} \\
+     & \mid & \texttt{assert}\ e
+       & \text{assertion} \\
      & \mid & \texttt{skip}
        & \text{no-op} \\[1ex]
    p & ::= & x
@@ -59,13 +65,14 @@ context*, whose rounding operation is the identity, so no rounding occurs.
        & \text{tuple pattern}
    \end{array}
 
-An assignment's left-hand side is a *pattern* :math:`p` — a variable or a
+An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
 tuple of (possibly nested) patterns.  A tuple pattern deconstructs a tuple
 position by position; this is the only way to take a tuple apart, since tuples
 cannot be indexed.
 
-``+`` stands in for arithmetic in general; every other FPy operator evaluates
-the same way.
+``+`` and ``<`` stand in for arithmetic and comparison in general; every other
+FPy operator evaluates the same way, though comparison and classification
+operators yield booleans rather than rounded reals.
 
 Values
 ------
@@ -82,10 +89,10 @@ contexts.
        \mid [\, v_1, \ldots, v_n \,] \mid (\, v_1, \ldots, v_n \,)
        \mid \langle \lambda x.\, s,\, \rho \rangle
 
-A function value is a *closure* :math:`\langle \lambda x.\, s,\, \rho \rangle` —
-a parameter :math:`x`, a body :math:`s`, and the environment :math:`\rho`
-captured at definition.  The fragment has no definition syntax, so closures are
-pre-bound in the initial environment, one per top-level FPy function.
+A function value is a *closure* :math:`\langle \lambda x.\, s,\, \rho \rangle`—a parameter
+:math:`x`, a body :math:`s`, and the environment :math:`\rho` captured at definition.
+The fragment has no definition syntax, so closures are pre-bound in the initial environment,
+one per top-level FPy function.
 
 Evaluation
 ----------
@@ -96,13 +103,13 @@ triple :math:`\langle \sigma, C, p \rangle`, where :math:`p` is the expression
 or statement under evaluation.  Two big-step judgements relate states to
 results:
 
-* :math:`\langle \sigma, C, e \rangle \Downarrow v` — expression :math:`e`
+* :math:`\langle \sigma, C, e \rangle \Downarrow v` - expression :math:`e`
   evaluates to value :math:`v`;
-* :math:`\langle \sigma, C, s \rangle \Downarrow_S o` — statement :math:`s`
+* :math:`\langle \sigma, C, s \rangle \Downarrow_S o` - statement :math:`s`
   evaluates to an *outcome* :math:`o`.
 
-A statement either falls through to an updated environment or returns a value,
-so an outcome is one of:
+A statement either completes normally with an updated environment or returns a
+value, so an outcome is one of:
 
 .. math::
 
@@ -166,7 +173,7 @@ Lists evaluate their elements left to right; indexing selects an element.
         {\langle \sigma, C, e_1[e_2] \rangle \Downarrow v_n}
    \tag{E-Ref}
 
-Tuples are built like lists — elements left to right — but cannot be indexed;
+Tuples are built like lists—elements left to right—but cannot be indexed;
 a tuple is taken apart only by a tuple pattern (see **E-Assign**).
 
 .. math::
@@ -191,9 +198,21 @@ exact result is returned unchanged.
         {\langle \sigma, C, e_1 + e_2 \rangle \Downarrow C(\exact{n_1 + n_2})}
    \tag{E-Add}
 
+A comparison evaluates its operands and tests them as real numbers, producing a
+boolean; unlike arithmetic, the result is exact and no rounding is applied.
+``<`` is the representative—the other comparisons behave identically.
+
+.. math::
+
+   \frac{\langle \sigma, C, e_1 \rangle \Downarrow n_1
+         \quad
+         \langle \sigma, C, e_2 \rangle \Downarrow n_2}
+        {\langle \sigma, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2)}
+   \tag{E-Lt}
+
 A function application looks up the closure bound to :math:`f`, evaluates the
 argument, binds the parameter in the captured environment :math:`\rho`, and runs
-the body to the value it returns.  The body runs under the caller's context
+the body to the value it returns. The body runs under the caller's context
 :math:`C`; a well-formed body always returns, so its outcome is
 :math:`\mathsf{return}\ v'`.
 
@@ -210,9 +229,12 @@ the body to the value it returns.  The body runs under the caller's context
 Statements
 ^^^^^^^^^^
 
-Every statement evaluates to an outcome: assignment, skip, and the context
-statement fall through (:math:`\mathsf{normal}`), while :math:`\texttt{ret}`
-produces a :math:`\mathsf{return}` that sequencing propagates out of the body.
+Every statement evaluates to an outcome.  Assignment, skip, and a passing
+assertion complete normally (:math:`\mathsf{normal}`) and :math:`\texttt{ret}`
+returns
+(:math:`\mathsf{return}`); sequencing, conditionals, and the context statement
+pass along the outcome of whatever sub-statement they run, so a
+:math:`\mathsf{return}` propagates out to the enclosing function.
 
 Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \theta`,
 read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
@@ -260,9 +282,20 @@ returns it.
         {\langle \sigma, C, \texttt{ret}\ e \rangle \Downarrow_S \mathsf{return}\ v}
    \tag{E-Ret}
 
-Sequencing runs :math:`s_1` first.  If it falls through, :math:`s_2` runs under
-the updated environment and gives the sequence's outcome; if :math:`s_1`
-returns, the sequence returns at once and :math:`s_2` is skipped.
+An assertion evaluates its test; if it holds, evaluation continues with the
+environment unchanged. FPy has no error handling, so a failing assertion has no
+rule—evaluation is simply stuck, as for any other undefined operation.
+
+.. math::
+
+   \frac{\langle \sigma, C, e \rangle \Downarrow \texttt{true}}
+        {\langle \sigma, C, \texttt{assert}\ e \rangle \Downarrow_S \mathsf{normal}\ \sigma}
+   \tag{E-Assert}
+
+Sequencing runs :math:`s_1` first.
+If :math:`s_1` returns, the sequence returns at once.
+Otherwise, :math:`s_2` runs under the updated environment to produce the
+sequence's outcome.
 
 .. math::
 
@@ -278,10 +311,30 @@ returns, the sequence returns at once and :math:`s_2` is skipped.
         {\langle \sigma, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S \mathsf{return}\ v}
    \tag{E-Seq-Return}
 
+A conditional evaluates its condition to a boolean and runs the matching
+branch; the branch's outcome becomes the conditional's, so a :math:`\texttt{ret}`
+in either branch returns from the enclosing function.
+
+.. math::
+
+   \frac{\langle \sigma, C, e \rangle \Downarrow \texttt{true}
+         \quad
+         \langle \sigma, C, s_1 \rangle \Downarrow_S o}
+        {\langle \sigma, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle \Downarrow_S o}
+   \tag{E-If-True}
+
+.. math::
+
+   \frac{\langle \sigma, C, e \rangle \Downarrow \texttt{false}
+         \quad
+         \langle \sigma, C, s_2 \rangle \Downarrow_S o}
+        {\langle \sigma, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle \Downarrow_S o}
+   \tag{E-If-False}
+
 The context statement is the heart of FPy.  The context expression :math:`e` is
 evaluated under :math:`\R` to a new context :math:`C'`, and the body :math:`s`
 runs under :math:`C'` with :math:`x` bound to :math:`C'`, so it can refer to its
-governing context as a value.  :math:`C'` governs only the body — the
+governing context as a value.  :math:`C'` governs only the body—the
 surrounding context :math:`C` is unchanged and still applies after the
 ``with``.  The body's outcome becomes the statement's outcome, so a
 :math:`\texttt{ret}` inside a ``with`` returns from the enclosing function.
