@@ -32,7 +32,7 @@ Important links:
    backend
    example
    faq
-   developers
+   dev/index
 
 Indices and tables
 ==================

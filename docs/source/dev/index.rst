@@ -82,3 +82,4 @@ Internal
    :caption: Table of Contents
 
    ast
+   semantics
