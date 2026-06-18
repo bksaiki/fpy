@@ -1,5 +1,17 @@
 # Version History
 
+## [0.1.9] - 2026-06-18
+### Features:
+ - Analyses:
+   - constant folding now implements SCCP
+   - cleaned up simplification passes
+ - Misc:
+   - support installation via `uv`
+
+### Fixes:
+ - Language:
+   - fixes semantics of `min/max`; implements IEEE 754 `minimum/maximum` functions
+
 ## [0.1.8] - 2026-06-10
 ### Features:
   - Language:
