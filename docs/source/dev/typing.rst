@@ -36,11 +36,14 @@ Typing
 ------
 
 Typing is the judgement :math:`\Gamma \vdash e : T`, read "under typing context
-:math:`\Gamma`, expression :math:`e` has type :math:`T`", where :math:`\Gamma`
-maps each variable to its type.  Inference computes :math:`\Gamma` by
-unification (so library functions may be polymorphic); the rules below present
-the monomorphic case and specify when the result is well-typed.  Statement
-well-formedness is written :math:`\Gamma \vdash s\ \texttt{ok}`.
+:math:`\Gamma`, expression :math:`e` has type :math:`T`".  :math:`\Gamma`
+assigns each variable a single type and is the solution of whole-function type
+inference — computed by unification, so library functions may be polymorphic.
+The rules below present the monomorphic case and state when a program agrees
+with that solution; statement well-formedness is written
+:math:`\Gamma \vdash s\ \texttt{ok}`.  Because :math:`\Gamma` is fixed, typing
+*checks* a program against it rather than building it up statement by
+statement.
 
 Expressions
 ^^^^^^^^^^^
@@ -94,9 +97,8 @@ records each component.
         {\Gamma \vdash (\, e_1, \ldots, e_n \,) : T_1 \times \cdots \times T_n}
    \tag{T-Tuple}
 
-As in :doc:`semantics`, ``+``, ``<``, and :math:`\wedge` are representatives:
-arithmetic maps reals to a real, comparison maps reals to a boolean, and the
-logical connectives map booleans to a boolean.
+As in :doc:`semantics`, ``+`` and ``<`` are representatives: arithmetic maps
+reals to a real, and comparison maps reals to a boolean.
 
 .. math::
 
@@ -112,12 +114,6 @@ logical connectives map booleans to a boolean.
 
 .. math::
 
-   \frac{\Gamma \vdash e_1 : \texttt{bool} \quad \Gamma \vdash e_2 : \texttt{bool}}
-        {\Gamma \vdash e_1 \wedge e_2 : \texttt{bool}}
-   \tag{T-And}
-
-.. math::
-
    \frac{\Gamma \vdash f : T_1 \rightarrow T_2 \quad \Gamma \vdash e : T_1}
         {\Gamma \vdash f\ e : T_2}
    \tag{T-App}
@@ -125,20 +121,12 @@ logical connectives map booleans to a boolean.
 Statements
 ^^^^^^^^^^
 
-Assignment binds a *pattern*, so it first types the pattern against the
-right-hand side's type.  Pattern typing :math:`\Gamma \vdash p : T` checks that
-the variables in :math:`p` carry the components of :math:`T`.
-
-.. math::
-
-   \frac{x : T \in \Gamma}{\Gamma \vdash x : T}
-   \tag{TP-Var}
-
-.. math::
-
-   \frac{\Gamma \vdash p_1 : T_1 \quad \cdots \quad \Gamma \vdash p_n : T_n}
-        {\Gamma \vdash p_1, \ldots, p_n : T_1 \times \cdots \times T_n}
-   \tag{TP-Tuple}
+An assignment checks that its right-hand side's type agrees with the pattern on
+the left.  Because :math:`\Gamma` is fixed — every variable already has its
+inferred type — a pattern needs no rules of its own: it is typed by the
+*expression* rules, a variable by **T-Var** and a tuple pattern
+:math:`x_1, \ldots, x_n` like the tuple :math:`(\, x_1, \ldots, x_n \,)` by
+**T-Tuple**.
 
 .. math::
 
@@ -182,9 +170,8 @@ also requires a boolean guard.
         {\Gamma \vdash \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2\ \texttt{ok}}
    \tag{T-If}
 
-The context statement requires a context-typed expression — evaluating it
-yields the active rounding context for the body — and binds the target to that
-context.
+The context statement requires a context-typed expression — evaluating it yields
+the active rounding context for the body — and binds the target to that context.
 
 .. math::
 
