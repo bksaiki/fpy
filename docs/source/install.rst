@@ -15,4 +15,4 @@ or, with ``pip``::
 
     pip install fpy2
 
-To install from source, see :doc:`developers`.
+To install from source, see :doc:`dev/index`.
