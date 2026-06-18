@@ -9,17 +9,6 @@ the difference is a bug to fix or an intentional simplification of the doc.
 
 ## Open items
 
-### Context expression is evaluated under the active context, not `R`
-
-**E-Context** evaluates the context expression `e` under the real context
-`R` (`<σ, R, e> ⇓ C'`). The implementation evaluates `e` under the *current*
-active context `C` instead — `_visit_context` lowers `e` while the old
-`__ctx__` is still installed, and only swaps afterward.
-
-This is typically immaterial: context-constructor expressions do not perform
-rounding, so the active context does not affect their value. Listed for
-completeness; revisit if a context expression can ever observe rounding.
-
 ### Function bodies run under the caller's context, ignoring per-function context
 
 **E-App** evaluates the called function's body under the *caller's* active
@@ -43,3 +32,13 @@ context into both the restore temporary *and* the target. Fixed to stash only
 the temporary (`tmp = __ctx__`) and bind the target to the new context
 alongside the active context (`target = __ctx__ = <new context>`), matching the
 **E-Context** rule. Verified against the full unit + infra suites.
+
+### Context expression is now evaluated under the real context `R`
+
+**E-Context** evaluates the context expression `e` under the real context `R`
+(`<σ, R, e> ⇓ C'`), not the enclosing active context. `_visit_context` now
+installs the real context before evaluating `e`: it emits `__ctx__ = __fpy_real`
+(a namespace symbol bound to `REAL`) before the
+`<target> = __ctx__ = <new context>` assignment, so any rounding inside the
+context expression uses `REAL`, the identity. Verified against the full unit +
+infra suites.
