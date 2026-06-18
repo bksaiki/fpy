@@ -32,6 +32,8 @@ Value: TypeAlias = ScalarValue | list['Value'] | tuple['Value', ...]
 """Type of values in FPy programs."""
 
 CTX_NAME = '__ctx__'
+REAL_NAME = '__fpy_real'
+"""namespace symbol bound to the real context ``REAL``"""
 
 
 def _is_integer(x: Float | Fraction) -> bool:
@@ -516,6 +518,7 @@ def make_namespace() -> dict[str, object]:
         '__fpy_range': _eval_range,
         '__fpy_min': _eval_min,
         '__fpy_max': _eval_max,
+        REAL_NAME: REAL,
     }
 
     # add operations to the namespace
@@ -943,8 +946,9 @@ class BytecodeCompiler(Visitor):
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
         # try:
-        #     <tmp> = <target> __ctx__
-        #     __ctx__ = <new context>
+        #     <tmp> = __ctx__
+        #     __ctx__ = __fpy_real
+        #     <target> = __ctx__ = <new context>
         #     <body>
         # finally:
         #     __ctx__ = <tmp>
@@ -957,17 +961,25 @@ class BytecodeCompiler(Visitor):
         # generate a unique name for the temporary variable
         tmp_name = str(self.gensym.fresh('__fpy_ctx_tmp'))
 
-        # assign the old context to the temporary variable
+        # stash the old context so it can be restored afterwards
         stash_stmt = pyast.Assign(
-            targets=[pyast.Name(id=tmp_name, ctx=pyast.Store(), **attrs), target],
+            targets=[pyast.Name(id=tmp_name, ctx=pyast.Store(), **attrs)],
             value=pyast.Name(id=CTX_NAME, ctx=pyast.Load(), **attrs),
             type_comment=None,
             **attrs
         )
 
-        # assign the new context to `__ctx__`
-        set_stmt = pyast.Assign(
+        # evaluate the context expression under the real context
+        real_stmt = pyast.Assign(
             targets=[pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs)],
+            value=pyast.Name(id=REAL_NAME, ctx=pyast.Load(), **attrs),
+            type_comment=None,
+            **attrs
+        )
+
+        # bind the new context to both the target and the active context `__ctx__`
+        set_stmt = pyast.Assign(
+            targets=[target, pyast.Name(id=CTX_NAME, ctx=pyast.Store(), **attrs)],
             value=ctx_expr,
             type_comment=None,
             **attrs
@@ -982,7 +994,7 @@ class BytecodeCompiler(Visitor):
         )
 
         # build the try-finally block
-        try_body = [stash_stmt, set_stmt] + body
+        try_body = [stash_stmt, real_stmt, set_stmt] + body
         finally_body: list[pyast.stmt] = [restore_stmt]
         return pyast.Try(body=try_body, handlers=[], orelse=[], finalbody=finally_body, **attrs)
 
