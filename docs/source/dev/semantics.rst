@@ -1,30 +1,26 @@
 Language Semantics
 ======================
 
-This page documents the semantics of FPy.
-To keep the presentation tractable, it covers only the *core* constructs of
-the language—a minimal imperative fragment of boolean and numerical constants,
-arithmetic, function calls, and the basic statements—rather than the full surface syntax.
-The remaining FPy operators and statements follow the same evaluation patterns.
+This page documents the semantics of FPy.  To stay tractable, it covers only
+the *core* of the language—a minimal imperative fragment of constants,
+arithmetic, function calls, and the basic statements—not the full surface
+syntax; the remaining operators and statements evaluate the same way.
 
-It describes how FPy programs *evaluate*; in particular, how the *active
-rounding context* governs the result of every arithmetic operation.  Typing is
-intentionally out of scope.
+It describes how FPy programs *evaluate*, and in particular how the *active
+rounding context* governs every arithmetic operation.  Typing is out of scope.
 
 Syntax
 ------
 
-FPy's expression language includes boolean and numerical constants,
-arithmetic expressions, function calls, and compound data — lists and tuples.
-It features the usual imperative
-statements — assignment, sequencing, return, and skip — together with one
-construct unique to FPy: the *context statement*, which manages the active
-rounding context used to evaluate expressions.
+FPy's expressions are boolean and numerical constants, arithmetic, function
+calls, and compound data — lists and tuples.  Its statements are the usual
+imperative ones — assignment, sequencing, return, and skip — plus one unique to
+FPy: the *context statement*, which sets the active rounding context for the
+expressions it evaluates.
 
 In the formal syntax, :math:`n` is an arbitrary real number, :math:`x` ranges
 over a countable set of identifiers, and :math:`\R` is the *real rounding
-context*: the unique context whose rounding operation is the identity
-function, so that no rounding actually occurs.
+context*, whose rounding operation is the identity, so no rounding occurs.
 
 .. math::
 
@@ -57,32 +53,39 @@ function, so that no rounding actually occurs.
        & \text{context statement} \\
      & \mid & \texttt{skip}
        & \text{no-op} \\[1ex]
-   p & ::= & x \mid p_1, \ldots, p_n
-       & \text{pattern}
+   p & ::= & x
+       & \text{variable pattern} \\
+     & \mid & p_1, \ldots, p_n
+       & \text{tuple pattern}
    \end{array}
 
-The left-hand side of an assignment is a *pattern* :math:`p`: either a single
-variable or a tuple of (possibly nested) patterns.  A tuple pattern takes a
-tuple value apart position by position — the only way to deconstruct a tuple,
-since tuples cannot be indexed.
+An assignment's left-hand side is a *pattern* :math:`p` — a variable or a
+tuple of (possibly nested) patterns.  A tuple pattern deconstructs a tuple
+position by position; this is the only way to take a tuple apart, since tuples
+cannot be indexed.
 
-Only ``+`` is shown as a representative arithmetic operation; every other FPy
-operator follows the same evaluation pattern.
+``+`` stands in for arithmetic in general; every other FPy operator evaluates
+the same way.
 
 Values
 ------
 
-Evaluating an FPy expression produces one of five kinds of value: a boolean; a
-real number :math:`n`; a *rounding context* :math:`C`; a list of values; or a
-tuple of values.
-For concision, the only constructible rounding context in this fragment is
-:math:`\R`; the full language provides constructors for the common rounding
+Evaluating an FPy expression produces one of six kinds of value: a boolean, a
+real number :math:`n`, a *rounding context* :math:`C`, a list of values, a
+tuple of values, or a *function value*.  The only context constructible in this
+fragment is :math:`\R`; full FPy provides constructors for the common rounding
 contexts.
 
 .. math::
 
    v ::= \texttt{true} \mid \texttt{false} \mid n \mid C
        \mid [\, v_1, \ldots, v_n \,] \mid (\, v_1, \ldots, v_n \,)
+       \mid \langle \lambda x.\, s,\, \rho \rangle
+
+A function value is a *closure* :math:`\langle \lambda x.\, s,\, \rho \rangle` —
+a parameter :math:`x`, a body :math:`s`, and the environment :math:`\rho`
+captured at definition.  The fragment has no definition syntax, so closures are
+pre-bound in the initial environment, one per top-level FPy function.
 
 Evaluation
 ----------
@@ -95,12 +98,23 @@ results:
 
 * :math:`\langle \sigma, C, e \rangle \Downarrow v` — expression :math:`e`
   evaluates to value :math:`v`;
-* :math:`\langle \sigma, C, s \rangle \Downarrow_S \sigma'` — statement
-  :math:`s` evaluates to an updated environment :math:`\sigma'`.
+* :math:`\langle \sigma, C, s \rangle \Downarrow_S o` — statement :math:`s`
+  evaluates to an *outcome* :math:`o`.
+
+A statement either falls through to an updated environment or returns a value,
+so an outcome is one of:
+
+.. math::
+
+   o ::= \mathsf{normal}\ \sigma \mid \mathsf{return}\ v
+
+A :math:`\mathsf{normal}` outcome carries the environment threaded to the next
+statement; a :math:`\mathsf{return}` outcome carries a function's result and
+short-circuits the rest of the body.
 
 The active rounding context :math:`C` is the crux of FPy's semantics: it is
-threaded through every expression and applied to the exact real-number result
-of each arithmetic operation (see **E-Add**).
+threaded through every expression and rounds the exact result of each
+arithmetic operation (see **E-Add**).
 
 Expressions
 ^^^^^^^^^^^
@@ -152,9 +166,8 @@ Lists evaluate their elements left to right; indexing selects an element.
         {\langle \sigma, C, e_1[e_2] \rangle \Downarrow v_n}
    \tag{E-Ref}
 
-Tuples are built like lists, evaluating their elements left to right, but they
-cannot be indexed — a tuple is taken apart only by a tuple pattern on the left
-of an assignment (see **E-Assign**).
+Tuples are built like lists — elements left to right — but cannot be indexed;
+a tuple is taken apart only by a tuple pattern (see **E-Assign**).
 
 .. math::
 
@@ -166,10 +179,9 @@ of an assignment (see **E-Assign**).
    \tag{E-Tuple}
 
 Arithmetic is where rounding happens.  The operands evaluate to real numbers,
-their exact mathematical sum :math:`\exact{n_1 + n_2}` is computed, and the
-active context :math:`C` rounds that exact result to a representable value.
-Under the real context :math:`\R`, rounding is the identity and the exact
-result is returned unchanged.
+and the active context :math:`C` rounds their exact sum :math:`\exact{n_1 + n_2}`
+to a representable value.  Under :math:`\R`, rounding is the identity, so the
+exact result is returned unchanged.
 
 .. math::
 
@@ -179,29 +191,34 @@ result is returned unchanged.
         {\langle \sigma, C, e_1 + e_2 \rangle \Downarrow C(\exact{n_1 + n_2})}
    \tag{E-Add}
 
-A function application evaluates its argument and applies the function bound to
-the symbol in the environment.
+A function application looks up the closure bound to :math:`f`, evaluates the
+argument, binds the parameter in the captured environment :math:`\rho`, and runs
+the body to the value it returns.  The body runs under the caller's context
+:math:`C`; a well-formed body always returns, so its outcome is
+:math:`\mathsf{return}\ v'`.
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow v}
-        {\langle \sigma, C, f\ e \rangle \Downarrow \sigma(f)(v)}
+   \frac{\sigma(f) = \langle \lambda x.\, s,\, \rho \rangle
+         \quad
+         \langle \sigma, C, e \rangle \Downarrow v
+         \quad
+         \langle \rho[x \mapsto v], C, s \rangle \Downarrow_S \mathsf{return}\ v'}
+        {\langle \sigma, C, f\ e \rangle \Downarrow v'}
    \tag{E-App}
 
 Statements
 ^^^^^^^^^^
 
-Assignment evaluates its right-hand side to a value and binds it against the
-pattern :math:`p` on the left.  Sequencing threads the environment from one
-statement to the next.
+Every statement evaluates to an outcome: assignment, skip, and the context
+statement fall through (:math:`\mathsf{normal}`), while :math:`\texttt{ret}`
+produces a :math:`\mathsf{return}` that sequencing propagates out of the body.
 
-Matching is defined by an auxiliary judgement
-:math:`p \triangleright v \Rightarrow \theta`, read as "matching pattern
-:math:`p` against value :math:`v` yields the bindings :math:`\theta`".  A
-variable pattern matches anything and binds it; a tuple pattern matches a
-tuple value position by position, and the per-component bindings are combined
-by disjoint union :math:`\uplus` (the sub-patterns bind distinct variables, so
-the bindings are independent).
+Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \theta`,
+read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
+A variable matches anything and binds it; a tuple pattern matches a tuple
+position by position, combining the per-component bindings by disjoint union
+:math:`\uplus` (the sub-patterns bind distinct variables).
 
 .. math::
 
@@ -217,39 +234,62 @@ the bindings are independent).
          \Rightarrow \theta_1 \uplus \cdots \uplus \theta_n}
    \tag{M-Tuple}
 
-The assignment statement evaluates its right-hand side, matches it against the
-pattern, and extends the environment with the resulting bindings
-(:math:`\sigma[\theta]` denotes :math:`\sigma` updated with every binding in
-:math:`\theta`).
+Assignment evaluates its right-hand side, matches the value against the
+pattern, and extends the environment with the bindings (:math:`\sigma[\theta]`
+is :math:`\sigma` updated with every binding in :math:`\theta`).
 
 .. math::
 
    \frac{\langle \sigma, C, e \rangle \Downarrow v
          \quad
          p \triangleright v \Rightarrow \theta}
-        {\langle \sigma, C, p := e \rangle \Downarrow_S \sigma[\theta]}
+        {\langle \sigma, C, p := e \rangle \Downarrow_S \mathsf{normal}\ \sigma[\theta]}
    \tag{E-Assign}
+
+The skip statement does nothing; :math:`\texttt{ret}` evaluates its operand and
+returns it.
 
 .. math::
 
-   \frac{\langle \sigma, C, s_1 \rangle \Downarrow_S \sigma'
-         \quad
-         \langle \sigma', C, s_2 \rangle \Downarrow_S \sigma''}
-        {\langle \sigma, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S \sigma''}
-   \tag{E-Seq}
+   \frac{}{\langle \sigma, C, \texttt{skip} \rangle \Downarrow_S \mathsf{normal}\ \sigma}
+   \tag{E-Skip}
 
-The context statement is the heart of FPy.  The context expression :math:`e`
-is evaluated under the real context :math:`\R` to obtain a new context
-:math:`C'`.  The body :math:`s` is then evaluated with :math:`C'` as the active
-rounding context and with :math:`x` bound to :math:`C'`, so the body can refer
-to the context that governs it as an ordinary value.  The new context
-:math:`C'` governs only the body; the surrounding context :math:`C` is
-unchanged, so it continues to apply to any statement that follows the ``with``.
+.. math::
+
+   \frac{\langle \sigma, C, e \rangle \Downarrow v}
+        {\langle \sigma, C, \texttt{ret}\ e \rangle \Downarrow_S \mathsf{return}\ v}
+   \tag{E-Ret}
+
+Sequencing runs :math:`s_1` first.  If it falls through, :math:`s_2` runs under
+the updated environment and gives the sequence's outcome; if :math:`s_1`
+returns, the sequence returns at once and :math:`s_2` is skipped.
+
+.. math::
+
+   \frac{\langle \sigma, C, s_1 \rangle \Downarrow_S \mathsf{normal}\ \sigma'
+         \quad
+         \langle \sigma', C, s_2 \rangle \Downarrow_S o}
+        {\langle \sigma, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S o}
+   \tag{E-Seq-Normal}
+
+.. math::
+
+   \frac{\langle \sigma, C, s_1 \rangle \Downarrow_S \mathsf{return}\ v}
+        {\langle \sigma, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S \mathsf{return}\ v}
+   \tag{E-Seq-Return}
+
+The context statement is the heart of FPy.  The context expression :math:`e` is
+evaluated under :math:`\R` to a new context :math:`C'`, and the body :math:`s`
+runs under :math:`C'` with :math:`x` bound to :math:`C'`, so it can refer to its
+governing context as a value.  :math:`C'` governs only the body — the
+surrounding context :math:`C` is unchanged and still applies after the
+``with``.  The body's outcome becomes the statement's outcome, so a
+:math:`\texttt{ret}` inside a ``with`` returns from the enclosing function.
 
 .. math::
 
    \frac{\langle \sigma, \R, e \rangle \Downarrow C'
          \quad
-         \langle \sigma[x \mapsto C'], C', s \rangle \Downarrow_S \sigma'}
-        {\langle \sigma, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle \Downarrow_S \sigma'}
+         \langle \sigma[x \mapsto C'], C', s \rangle \Downarrow_S o}
+        {\langle \sigma, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle \Downarrow_S o}
    \tag{E-Context}

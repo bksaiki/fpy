@@ -59,3 +59,15 @@ active context `C` instead — `_visit_context` lowers `e` while the old
 This is typically immaterial: context-constructor expressions do not perform
 rounding, so the active context does not affect their value. Listed for
 completeness; revisit if a context expression can ever observe rounding.
+
+### Function bodies run under the caller's context, ignoring per-function context
+
+**E-App** evaluates the called function's body under the *caller's* active
+context `C`. Real FPy functions may pin their own rounding context
+(`@fpy(ctx=...)`, surfaced as `FuncDef.ctx`); `Interpreter._func_ctx` uses that
+override when present and only falls back to the caller's context otherwise.
+
+The core fragment models neither function-definition syntax nor the context
+override, so E-App's caller-context behavior is a simplification rather than a
+faithful account of a function with a pinned context. Extend E-App to consult
+the function's declared context if/when definitions are added to the fragment.
