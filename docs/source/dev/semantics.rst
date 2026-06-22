@@ -207,7 +207,7 @@ boolean; unlike arithmetic, the result is exact and no rounding is applied.
    \frac{\langle \sigma, C, e_1 \rangle \Downarrow n_1
          \quad
          \langle \sigma, C, e_2 \rangle \Downarrow n_2}
-        {\langle \sigma, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2)}
+        {\langle \sigma, C, e_1 < e_2 \rangle \Downarrow \exact{n_1 < n_2}}
    \tag{E-Lt}
 
 A function application looks up the closure bound to :math:`f`, evaluates the
