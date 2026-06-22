@@ -33,6 +33,7 @@ pip install fpy2
 Requirements:
  - Python 3.11 or later
  - `make`
+ - [`uv`](https://docs.astral.sh/uv/) (optional; recommended for development)
 
 #### With `uv` (preferred)
 

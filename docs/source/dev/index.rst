@@ -10,6 +10,7 @@ Requirements:
 
 * Python 3.11 or later
 * `make`
+* `uv <https://docs.astral.sh/uv/>`_ (optional; recommended for development)
 
 Installation
 ------------------
