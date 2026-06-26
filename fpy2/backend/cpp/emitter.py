@@ -1202,8 +1202,14 @@ class CppEmitter(Visitor):
                 stop = self._visit_expr(e.arg, ctx)
                 stop_ty = self._scalar_storage_for_expr(e.arg)
                 stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
+                # ``range(stop)`` with ``stop <= 0`` is empty; clamp before
+                # the unsigned cast so a negative stop doesn't wrap to a
+                # huge allocation.
+                size_expr = (
+                    f'static_cast<size_t>({stop_cast} > 0 ? {stop_cast} : 0)'
+                )
                 self.writer.add_line(
-                    f'{result_ty.format()} {tmp}(static_cast<size_t>({stop_cast}));'
+                    f'{result_ty.format()} {tmp}({size_expr});'
                 )
                 self.writer.add_line(
                     f'std::iota({tmp}.begin(), {tmp}.end(), '

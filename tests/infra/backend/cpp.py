@@ -330,8 +330,30 @@ def _regression_quant_dot_real_widen(
         return sum(prods)
 
 
+@fp.fpy
+def _regression_empty_range() -> fp.Real:
+    """Empty/flipped/negative ranges compile and behave as empty
+    iterables (mirroring Python).  Pins:
+
+    - ``range(-5)`` (statically-known empty Range1): the loop body is
+      never executed but is still emitted, so its inner definitions
+      need format/storage bounds — a negative iteration count must be
+      treated as zero, not skipped.
+    - ``range(5, 0)`` (statically-known flipped Range2): emitted as an
+      empty ``for`` loop.
+    """
+    with fp.SINT32:
+        acc = 0
+        for _ in range(-5):
+            acc = acc + 1
+        for _ in range(5, 0):
+            acc = acc + 1
+        return acc
+
+
 _regression_funcs: list[fp.Function] = [
     _regression_quant_dot_real_widen,
+    _regression_empty_range,
 ]
 
 

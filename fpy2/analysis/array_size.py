@@ -183,7 +183,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case Range1():
                 stop = self._get_eval(e.arg)
                 if isinstance(stop, Float | Fraction):
-                    size = int(INTEGER.round(stop))
+                    # ``range(stop)`` with ``stop <= 0`` is empty (mirrors
+                    # Python); clamp so the size is never negative.
+                    size = max(0, int(INTEGER.round(stop)))
                     return ListSize(None, size)
                 else:
                     return ListSize(None, None)
