@@ -222,6 +222,35 @@ class TestArraySizeInfer:
         ]
         assert range_bounds, f'expected a ListSize with size 5, got {info.by_expr.values()}'
 
+    def test_range1_negative_is_empty(self):
+        """``range(n)`` with ``n <= 0`` is empty (size 0), mirroring
+        Python — the size must be clamped, not negative."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(-5)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Range1'
+        ]
+        assert range_bounds and range_bounds[0].size == 0
+
+    def test_range2_flipped_is_empty(self):
+        """``range(start, stop)`` with ``start >= stop`` is empty (size 0)."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(5, 0)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Range2'
+        ]
+        assert range_bounds and range_bounds[0].size == 0
+
     def test_range2_known_size(self):
         """``range(start, stop)`` with both static yields ``stop - start``."""
 

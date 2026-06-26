@@ -711,8 +711,14 @@ class TestFormatInfer:
     def test_for_loop_with_zero_count_keeps_pre_loop_bound(self):
         """
         ``for _ in range(0, 0)`` runs 0 iterations.  The body never
-        executes, so the loop phi stays at the pre-loop value.
+        executes, so the loop phi stays at the pre-loop value (no
+        widening to REAL).  The body itself is still visited once so
+        its inner definitions receive bounds — the backend emits the
+        body even when the loop is statically empty — but those bounds
+        are *not* folded into the phi.
         """
+        from fpy2.analysis.reaching_defs import PhiDef
+
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP32:
@@ -724,11 +730,15 @@ class TestFormatInfer:
             return z
 
         info = self._run(f)
-        # All z-bounds must be FP32 (no widening since body didn't run).
-        z_bounds = [b for d, b in info.by_def.items() if d.name.base == 'z']
         fp32 = fp.FP32.format()
-        assert all(b == fp32 for b in z_bounds), (
-            f'expected all z bounds to be FP32 with N=0, got {z_bounds}'
+        # The loop phi (and thus the post-loop value of z) must stay
+        # FP32 — the body's REAL context must not leak into the result.
+        z_phis = [
+            b for d, b in info.by_def.items()
+            if d.name.base == 'z' and isinstance(d, PhiDef) and d.is_loop
+        ]
+        assert z_phis and all(b == fp32 for b in z_phis), (
+            f'expected loop phi for z to stay FP32 with N=0, got {z_phis}'
         )
 
     # ------------------------------------------------------------------
