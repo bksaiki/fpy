@@ -335,6 +335,82 @@ class TestArraySizeInfer:
         ]
         assert comp_bounds
 
+    def test_zip_equal_known_sizes(self):
+        """``zip`` of equal-length known lists has that size, with a
+        per-input tuple element bound."""
+
+        @fp.fpy
+        def f() -> list[tuple[fp.Real, fp.Real]]:
+            return [t for t in zip([1.0, 2.0, 3.0], [4.0, 5.0, 6.0])]
+
+        info = self._run(f)
+        zip_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Zip'
+        ]
+        assert len(zip_bounds) == 1
+        bound = zip_bounds[0]
+        assert isinstance(bound, ListSize)
+        assert bound.size == 3
+        # element is a 2-tuple (one slot per input list)
+        assert isinstance(bound.elt, TupleSize)
+        assert len(bound.elt.elts) == 2
+
+    def test_zip_unequal_known_sizes_is_unknown(self):
+        """``zip`` is strict (raises on length mismatch), so it must NOT
+        report the *min* of conflicting known sizes — the result is
+        unreachable, hence unknown."""
+
+        @fp.fpy
+        def f() -> list[tuple[fp.Real, fp.Real]]:
+            return [t for t in zip([1.0, 2.0, 3.0], [4.0, 5.0])]
+
+        info = self._run(f)
+        zip_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Zip'
+        ]
+        assert len(zip_bounds) == 1
+        bound = zip_bounds[0]
+        assert isinstance(bound, ListSize)
+        # NOT 2 (the min) — strict zip raises on mismatch.
+        assert bound.size is None
+
+    def test_zip_with_unknown_size_is_unknown(self):
+        """If any input length is statically unknown, the zip size is
+        unknown (flat lattice doesn't yet track equal-but-unknown)."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[tuple[fp.Real, fp.Real]]:
+            return [t for t in zip(xs, [1.0, 2.0, 3.0])]
+
+        info = self._run(f)
+        zip_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Zip'
+        ]
+        assert len(zip_bounds) == 1
+        bound = zip_bounds[0]
+        assert isinstance(bound, ListSize)
+        assert bound.size is None
+
+    def test_zip_single_arg_preserves_size(self):
+        """A 1-argument ``zip`` preserves the input's known size."""
+
+        @fp.fpy
+        def f() -> list[tuple[fp.Real]]:
+            return [t for t in zip([1.0, 2.0, 3.0, 4.0])]
+
+        info = self._run(f)
+        zip_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Zip'
+        ]
+        assert len(zip_bounds) == 1
+        bound = zip_bounds[0]
+        assert isinstance(bound, ListSize)
+        assert bound.size == 4
+
     def test_list_ref_returns_element_bound(self):
         """``xs[i]`` exposes the list's element bound."""
 

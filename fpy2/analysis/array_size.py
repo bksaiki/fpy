@@ -244,16 +244,27 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case Zip():
                 if len(e.args) == 0:
                     return ListSize(None, 0)
-                else:
-                    assert isinstance(tys[0], ListSize)
-                    elt_tys: list[ArraySizeBound] = [tys[0].elt]
-                    size = tys[0].size
-                    for ty in tys[1:]:
-                        assert isinstance(ty, ListSize)
-                        elt_tys.append(ty.elt)
-                        size = _join_size(size, ty.size)
 
-                    return ListSize(TupleSize(tuple(elt_tys)), size)
+                # FPy's ``zip`` is *strict*: it raises unless every input
+                # has the same length (no truncation to the shortest), so
+                # the result length is that common length — known only
+                # when all inputs are known and agree.  Conflicting known
+                # sizes always raise (result unreachable) => unknown.
+                elt_tys: list[ArraySizeBound] = []
+                sizes: list[ArraySize] = []
+                for ty in tys:
+                    assert isinstance(ty, ListSize)
+                    elt_tys.append(ty.elt)
+                    sizes.append(ty.size)
+
+                if any(s is None for s in sizes):
+                    size: ArraySize = None
+                elif len(set(sizes)) == 1:
+                    size = sizes[0]
+                else:
+                    size = None
+
+                return ListSize(TupleSize(tuple(elt_tys)), size)
 
             case Empty():
                 # iterate from the inner dimension outwards to compute size

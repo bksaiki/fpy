@@ -147,10 +147,15 @@ without minting:
 Where the rule isn't "fresh symbol" or "propagate symbol," the visitor
 needs to compute relationships explicitly.  Highlights:
 
-- **`zip(xs1, …, xsN)`**: result size = min of input sizes.  If any
-  input is concrete, the result size is at most that int; if all
-  inputs are *equal* (UF-equiv) symbols, the result keeps that symbol.
-  Otherwise: fresh symbol with no constraints.
+- **`zip(xs1, …, xsN)`**: FPy's `zip` is *strict* — it raises unless
+  every input has the same length (it does **not** truncate to the
+  shortest like Python's default `zip`).  So the result length *equals*
+  the common input length.  If all inputs are *equal* (UF-equiv)
+  symbols, the result keeps that symbol.  If any input is concrete,
+  every other input must equal it on the non-raising path, so the
+  result size is exactly that int — and a symbolic input can be
+  `pin`/`merge`d to it.  Statically-conflicting concrete sizes mean the
+  call always raises (the result is unreachable): report `None`.
 - **List concatenation `xs + ys`**: result size = `len(xs) + len(ys)`.
   Concrete + concrete → int.  Anything else → fresh symbol (we don't
   track sums, see Non-goals).
