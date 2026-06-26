@@ -1476,7 +1476,11 @@ class _FormatInferInstance(Visitor):
         for phi in phis:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
         if n == 0:
-            # Body never runs; the phi stays at the pre-loop value.
+            # The body never executes at runtime, so the phi stays at the
+            # pre-loop value.  But the backend still emits the body, so its
+            # inner definitions need format bounds: visit the body once to
+            # populate them, without folding the result into the phi.
+            run_body()
             return
         for _ in range(n):
             run_body()
