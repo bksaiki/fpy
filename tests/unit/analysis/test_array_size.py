@@ -57,7 +57,9 @@ class TestArraySizeInfer:
         assert x_bounds == [None]
 
     def test_list_argument_has_listsize(self):
-        """A list-of-real argument has a ListSize with empty size set."""
+        """A list-of-real argument has a ListSize whose size is a fresh
+        size variable (its length is fixed per call, just unknown)."""
+        from fpy2.utils import NamedId
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -69,7 +71,7 @@ class TestArraySizeInfer:
         bound = xs_bounds[0]
         assert isinstance(bound, ListSize)
         assert bound.elt is None
-        assert bound.size is None
+        assert isinstance(bound.size, NamedId)
 
     def test_tuple_argument_has_tuplesize(self):
         """A tuple argument is a TupleSize with one entry per element."""
@@ -376,9 +378,11 @@ class TestArraySizeInfer:
         # NOT 2 (the min) — strict zip raises on mismatch.
         assert bound.size is None
 
-    def test_zip_with_unknown_size_is_unknown(self):
-        """If any input length is statically unknown, the zip size is
-        unknown (flat lattice doesn't yet track equal-but-unknown)."""
+    def test_zip_unknown_with_known_pins_to_known(self):
+        """``zip`` is strict, so an unknown-size input zipped with a
+        known-size one must equal it (or the zip raises): the result size
+        is the known length, and the symbolic input is pinned to it."""
+        from fpy2.analysis.array_size import concrete_size
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[tuple[fp.Real, fp.Real]]:
@@ -392,7 +396,10 @@ class TestArraySizeInfer:
         assert len(zip_bounds) == 1
         bound = zip_bounds[0]
         assert isinstance(bound, ListSize)
-        assert bound.size is None
+        assert bound.size == 3
+        # the strict zip also pins `xs` to length 3
+        xs_bound = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
+        assert concrete_size(xs_bound.size, info.size_uf) == 3
 
     def test_zip_single_arg_preserves_size(self):
         """A 1-argument ``zip`` preserves the input's known size."""
@@ -1087,3 +1094,126 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         assert info.ret_size is None
+
+    # ------------------------------------------------------------------
+    # Symbolic sizes (union-find): equal-but-unknown lengths
+
+    @staticmethod
+    def _def_size(info, name):
+        bounds = [b for d, b in info.by_def.items() if d.name.base == name]
+        assert bounds, f'no def found for {name}'
+        return bounds[0]
+
+    def test_rebind_preserves_symbol(self):
+        """``ys = xs`` gives ``ys`` the same symbolic length as ``xs``."""
+        from fpy2.analysis.array_size import is_size_eq
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = xs
+            return ys
+
+        info = self._run(f)
+        xs_b, ys_b = self._def_size(info, 'xs'), self._def_size(info, 'ys')
+        assert is_size_eq(xs_b, ys_b, info.size_uf)
+
+    def test_comprehension_over_argument_is_equivalent(self):
+        """``[f(x) for x in xs]`` has the same length as ``xs``."""
+        from fpy2.utils import NamedId
+        from fpy2.analysis.array_size import is_size_eq
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                ys = [x for x in xs]
+            return ys
+
+        info = self._run(f)
+        assert isinstance(info.ret_size, ListSize)
+        assert isinstance(info.ret_size.size, NamedId)
+        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'), info.size_uf)
+
+    def test_enumerate_over_argument_is_equivalent(self):
+        """``enumerate(xs)`` preserves ``xs``'s symbolic length."""
+        from fpy2.analysis.array_size import is_size_eq
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = [x for _, x in enumerate(xs)]
+            return ys
+
+        info = self._run(f)
+        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'), info.size_uf)
+
+    def test_full_slice_preserves_symbol(self):
+        """``xs[:]`` spans the whole list, keeping its symbolic length."""
+        from fpy2.analysis.array_size import is_size_eq
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return xs[:]
+
+        info = self._run(f)
+        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'), info.size_uf)
+
+    def test_zip_two_unknowns_merges_classes(self):
+        """``zip(xs, ys)`` is strict, so on the non-raising path
+        ``len(xs) == len(ys)``: their symbolic classes are merged."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for a, b in zip(xs, ys):
+                with fp.FP64:
+                    acc = acc + a
+            return acc
+
+        info = self._run(f)
+        xs_b, ys_b = self._def_size(info, 'xs'), self._def_size(info, 'ys')
+        assert info.size_uf.find(xs_b.size) == info.size_uf.find(ys_b.size)
+
+    def test_distinct_arguments_are_not_equivalent(self):
+        """Two independent list arguments get distinct, non-equivalent
+        symbols (no false equality)."""
+        from fpy2.analysis.array_size import is_size_eq
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            return xs[0]
+
+        info = self._run(f)
+        xs_b, ys_b = self._def_size(info, 'xs'), self._def_size(info, 'ys')
+        assert not is_size_eq(xs_b, ys_b, info.size_uf)
+
+    def test_loop_rebind_keeps_symbol(self):
+        """A loop that re-binds a list via a size-preserving op keeps the
+        symbolic length across the fixpoint."""
+        from fpy2.analysis.array_size import is_size_eq
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = xs
+            for _ in range(3):
+                ys = ys
+            return ys
+
+        info = self._run(f)
+        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'), info.size_uf)
+
+    def test_concrete_size_helper(self):
+        """``concrete_size`` resolves ints directly and pinned symbols."""
+        from fpy2.analysis.array_size import concrete_size
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for t in zip(xs, [1.0, 2.0]):   # pins xs to 2
+                with fp.FP64:
+                    acc = acc + 1.0
+            return acc
+
+        info = self._run(f)
+        xs_b = self._def_size(info, 'xs')
+        assert concrete_size(xs_b.size, info.size_uf) == 2
+        assert concrete_size(7, info.size_uf) == 7
+        assert concrete_size(None, info.size_uf) is None

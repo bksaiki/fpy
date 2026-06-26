@@ -1,5 +1,52 @@
 # Array-size analysis: symbolic sizes via union-find
 
+> **Status: implemented.**  The proposal below was the original design;
+> the as-built differs in a few deliberate ways, summarized here.  The
+> rest of the document is retained as design rationale.
+>
+> ### As-built summary
+>
+> - **Representation.** No bespoke `SymbolicSize` / `_SizeUF`.  Following
+>   the type-inference precedent, a *size variable* is a `NamedId` minted
+>   by a `Gensym`, and the analysis carries a shared
+>   `Unionfind[NamedId | int]` (`fpy2.utils.Unionfind`).  So:
+>   `ArraySize: TypeAlias = int | NamedId | None`.
+> - **Concrete int is the representative.** Pinning a class to a constant
+>   is just `union(int, var)` with the `int` as leader.  There is no
+>   separate `pin`/`resolve` map: `concrete_size(size, uf)` is a `find`
+>   that lands on an `int` (or `None`).  `ArraySizeAnalysis.size_uf` is
+>   the raw `Unionfind`; consumers use the module helpers
+>   `concrete_size(size, uf)` and `is_size_eq(b1, b2, uf)`.
+> - **Size-preserving propagation is mostly free.** `ys = xs`,
+>   `[f(x) for x in xs]`, `enumerate(xs)`, `xs[:]`, and `IndexedAssign`
+>   already thread `.size`, so the size variable rides along — no special
+>   per-op symbol plumbing was needed.  Arguments / free vars mint one
+>   fresh variable for their outer list dimension (`_arg_bound`).
+> - **Phase 3 (loop-phi merge) was NOT implemented — it is unsound.**
+>   Optimistically merging the pre-loop and post-body size vars assumes
+>   the body preserves length, which is false for size-changing bodies
+>   (e.g. `ys = ys[1:]`).  Instead the loop fixpoint uses the ordinary
+>   join: a size-preserving body re-propagates the *same* variable so the
+>   join keeps it; a size-changing body yields a different size so the
+>   join goes to `None`.  Sound, and no optimism required.
+> - **`zip` is strict, not min.** (Already corrected in the operation
+>   rules below.)  Any concrete input pins the symbolic inputs to it and
+>   the result is that int; all-symbolic inputs are merged and the result
+>   keeps the representative.
+> - **Cross-function safety.** `_refine_sizes` (call-result size overlay)
+>   adopts only *concrete* `int` callee sizes — a callee's size variables
+>   belong to its own run and must not leak across the call.
+> - **Convergence (open question #3) resolved.** The visitor keeps a
+>   monotone `_uf_changes` counter (bumped only on a real union); the loop
+>   fixpoint requires both stored-bound stability *and* a stable counter,
+>   so a `zip`-merge inside a loop body can't terminate the fixpoint one
+>   iteration early.
+> - **Deferred (not needed by any current consumer):** assertion-seeded
+>   equalities (`assert len(xs) == len(ys)`), and consumer integration
+>   (`format_infer`'s `Sum`, bounds-check elimination).  `format_infer`
+>   already ignores non-`int` sizes, so symbolic sizes are a safe no-op
+>   there until a consumer opts in.
+
 ## Context
 
 The current `array_size` analysis tracks list sizes as a flat lattice

@@ -24,6 +24,7 @@ from ..ast.visitor import DefaultVisitor
 from ..function import Function
 from ..number import Float, INTEGER, REAL
 from ..types import ListType, TupleType, Type
+from ..utils import Gensym, NamedId, Unionfind
 from .context_use import ContextUse, ContextUseAnalysis
 from .define_use import Definition, DefSite, DefineUseAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo, Value
@@ -35,29 +36,78 @@ __all__ = [
     'ArraySizeBound',
     'ArraySizeInfer',
     'ListSize',
+    'SizeUnionfind',
     'TupleSize',
+    'concrete_size',
+    'is_size_eq',
 ]
 
 
 #####################################################################
 # Array-size lattice
 
-ArraySize: TypeAlias = int | None
+ArraySize: TypeAlias = 'int | NamedId | None'
 """
-Static size of a list-valued expression: a concrete ``int`` when the
-size is known, ``None`` when unknown.
+Static size of a list-valued expression:
 
-This is a flat 3-element lattice — ``None`` is top; equal known sizes
-join to themselves; unequal known sizes join to ``None``.  It is *not*
-a set of possible sizes: every consumer that ever inspected the size
-treated "multiple possibilities" identically to "unknown", so the
-information was not load-bearing.
+- a concrete ``int`` when the size is a compile-time constant;
+- a :class:`NamedId` *size variable* when the length is unknown but
+  tracked, so equalities like ``len(ys) == len(xs)`` survive.  Two size
+  variables in the same :class:`SizeUnionfind` class denote the same
+  runtime length; a class whose representative is an ``int`` is pinned to
+  that constant.
+- ``None`` — top; no information.
+
+``None`` is top; equal sizes (same ``int``, or co-representative size
+variables) join to themselves; everything else joins to ``None``.  It is
+*not* a set of possible sizes.  Size variables are minted per analysis
+run and are **not** meaningful across functions.
 """
 
+SizeUnionfind: TypeAlias = 'Unionfind[NamedId | int]'
+"""Equivalence classes of size variables (and the concrete ``int``s they
+pin to) for one analysis run.  By convention a concrete ``int`` is always
+the representative of its class, so :func:`concrete_size` is just a
+``find`` that lands on an ``int``.  Use :func:`concrete_size` /
+:func:`is_size_eq` rather than poking the union-find directly."""
 
-def _join_size(a: ArraySize, b: ArraySize) -> ArraySize:
-    """Lattice join for :data:`ArraySize`.  Equal sizes survive; otherwise top."""
-    return a if a == b else None
+
+def _repr_size(size: ArraySize, uf: SizeUnionfind) -> int | NamedId | None:
+    """The representative of *size*'s class: an ``int`` if the class is
+    pinned to a constant, else the size variable itself (``None`` stays
+    ``None``)."""
+    if isinstance(size, NamedId):
+        return uf.get(size, size)
+    return size
+
+
+def concrete_size(size: ArraySize, uf: SizeUnionfind) -> int | None:
+    """The concrete ``int`` *size* denotes — directly, or via a pinned
+    size-variable class — or ``None`` if not a compile-time constant."""
+    rep = _repr_size(size, uf)
+    return rep if isinstance(rep, int) else None
+
+
+def _size_eq(a: ArraySize, b: ArraySize, uf: SizeUnionfind) -> bool:
+    """Are two sizes provably equal: same representative (concrete int or
+    co-representative size variable)?"""
+    ra = _repr_size(a, uf)
+    return ra is not None and ra == _repr_size(b, uf)
+
+
+def is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound, uf: SizeUnionfind) -> bool:
+    """Structurally compare two bounds, treating equal-representative
+    sizes at each level as equal."""
+    match b1, b2:
+        case ListSize(), ListSize():
+            return _size_eq(b1.size, b2.size, uf) and is_size_eq(b1.elt, b2.elt, uf)
+        case TupleSize(), TupleSize():
+            return (len(b1.elts) == len(b2.elts)
+                    and all(is_size_eq(a, b, uf) for a, b in zip(b1.elts, b2.elts)))
+        case None, None:
+            return True
+        case _:
+            return False
 
 
 @dataclass(frozen=True)
@@ -100,6 +150,10 @@ class ArraySizeAnalysis:
     by_def: dict[Definition, ArraySizeBound]
     ret_size: ArraySizeBound
     def_use: DefineUseAnalysis
+    size_uf: SizeUnionfind
+    """Equivalence classes for the size variables appearing in the bounds
+    above.  Use :func:`concrete_size` / :func:`is_size_eq` (which take
+    this) rather than comparing sizes directly."""
 
 
 #####################################################################
@@ -115,6 +169,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
     by_expr: dict[Expr, ArraySizeBound]
     by_def: dict[Definition, ArraySizeBound]
     ret_size: ArraySizeBound
+    uf: SizeUnionfind
+    gensym: Gensym
+    _uf_changes: int
     _callee_ret: dict[FuncDef, ArraySizeBound]
     _ctx_use_cache: ContextUseAnalysis | None
 
@@ -125,8 +182,42 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self.by_expr = {}
         self.by_def = {}
         self.ret_size = None
+        self.uf = Unionfind()
+        self.gensym = Gensym()
+        # Bumped whenever a union actually collapses two classes — lets the
+        # loop fixpoint detect union-find progress even when no stored bound
+        # changes (e.g. a ``zip`` inside the body merges two size vars).
+        self._uf_changes = 0
         self._callee_ret = {}
         self._ctx_use_cache = None
+
+    def _fresh_size(self) -> NamedId:
+        """Mint a fresh size variable (only ever for arguments / free
+        vars, which are bound once before any fixpoint — so no AST-keyed
+        memoization is needed)."""
+        s = self.gensym.fresh('n')
+        self.uf.add(s)
+        return s
+
+    def _pin_size(self, sym: NamedId, n: int) -> None:
+        """Constrain *sym*'s class to the concrete length *n*, making the
+        ``int`` the class representative."""
+        self.uf.add(n)
+        if self.uf.find(sym) != self.uf.find(n):
+            self.uf.union(n, sym)   # ``int`` first => it leads
+            self._uf_changes += 1
+
+    def _merge_sizes(self, a: NamedId, b: NamedId) -> None:
+        """Prove two size variables equal (e.g. via strict ``zip``),
+        keeping a concrete ``int`` as the representative if either class
+        already has one."""
+        ra, rb = self.uf.get(a, a), self.uf.get(b, b)
+        if ra == rb:
+            return
+        if isinstance(rb, int):
+            ra, rb = rb, ra          # keep the concrete as leader
+        self.uf.union(ra, rb)
+        self._uf_changes += 1
 
     @property
     def def_use(self) -> DefineUseAnalysis:
@@ -145,7 +236,10 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     def analyze(self) -> ArraySizeAnalysis:
         self._visit_function(self.func, None)
-        return ArraySizeAnalysis(self.by_expr, self.by_def, self.ret_size, self.partial_eval.def_use)
+        return ArraySizeAnalysis(
+            self.by_expr, self.by_def, self.ret_size,
+            self.partial_eval.def_use, self.uf,
+        )
 
     def _cvt_type(self, ty: Type) -> ArraySizeBound:
         match ty:
@@ -158,17 +252,37 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return None
 
+    def _arg_bound(self, ty: Type) -> ArraySizeBound:
+        """Like :meth:`_cvt_type`, but a list parameter's *outer* length
+        gets a fresh size variable (its length is fixed per call, just
+        unknown), so equalities such as ``ys = xs`` are tracked.  Inner
+        dimensions stay ``None`` (one size variable per argument)."""
+        match ty:
+            case ListType():
+                return ListSize(self._cvt_type(ty.elt), self._fresh_size())
+            case TupleType():
+                return TupleSize(tuple(self._arg_bound(e) for e in ty.elts))
+            case _:
+                return None
+
     def _get_eval(self, e: Expr) -> Value | None:
         if e in self.partial_eval.by_expr:
             return self.partial_eval.by_expr[e]
         else:
             return None
 
+    def _join_size(self, a: ArraySize, b: ArraySize) -> ArraySize:
+        """Lattice join: equal sizes (same int, or co-representative size
+        variables) survive as their representative — concrete when the
+        class is pinned; everything else goes to ``None``."""
+        ra = _repr_size(a, self.uf)
+        return ra if ra is not None and ra == _repr_size(b, self.uf) else None
+
     def _unify(self, t1: ArraySizeBound, t2: ArraySizeBound) -> ArraySizeBound:
         match t1, t2:
             case ListSize(), ListSize():
                 elt = self._unify(t1.elt, t2.elt)
-                size = _join_size(t1.size, t2.size)
+                size = self._join_size(t1.size, t2.size)
                 return ListSize(elt, size)
             case TupleSize(), TupleSize():
                 elts = tuple(self._unify(e1, e2) for e1, e2 in zip(t1.elts, t2.elts, strict=True))
@@ -260,9 +374,14 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
                 # FPy's ``zip`` is *strict*: it raises unless every input
                 # has the same length (no truncation to the shortest), so
-                # the result length is that common length — known only
-                # when all inputs are known and agree.  Conflicting known
-                # sizes always raise (result unreachable) => unknown.
+                # the result length *equals* every input length.  We use
+                # that runtime-enforced equality:
+                #   * any input concrete -> all inputs equal it (or the zip
+                #     raises); result is that int.  Conflicting concretes
+                #     => always-raising => unknown.
+                #   * else all symbolic -> merge their classes (sound: the
+                #     zip enforces equality) and keep the representative.
+                #   * any input truly unknown (``None``) -> unknown.
                 elt_tys: list[ArraySizeBound] = []
                 sizes: list[ArraySize] = []
                 for ty in tys:
@@ -270,12 +389,24 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     elt_tys.append(ty.elt)
                     sizes.append(ty.size)
 
+                concretes = {concrete_size(s, self.uf) for s in sizes}
+                concretes.discard(None)
+                symbols = [s for s in sizes if isinstance(s, NamedId)]
+
                 if any(s is None for s in sizes):
                     size: ArraySize = None
-                elif len(set(sizes)) == 1:
-                    size = sizes[0]
+                elif concretes:
+                    # all inputs must equal the concrete length(s)
+                    size = next(iter(concretes)) if len(concretes) == 1 else None
+                    if size is not None:
+                        for s in symbols:
+                            self._pin_size(s, size)
                 else:
-                    size = None
+                    # all symbolic: strict zip proves them equal
+                    rep = symbols[0]
+                    for s in symbols[1:]:
+                        self._merge_sizes(rep, s)
+                    size = self.uf.find(rep)
 
                 return ListSize(TupleSize(tuple(elt_tys)), size)
 
@@ -347,10 +478,18 @@ class _ArraySizeInferInstance(DefaultVisitor):
         # process element expression
         elt_ty = self._visit_expr(e.elt, ctx)
 
-        # try to compute size
+        # A single-iterable comprehension has exactly the iterable's
+        # length — propagate its size verbatim, so a *symbolic* size flows
+        # through (``[f(x) for x in xs]`` stays length-linked to ``xs``).
+        if len(iter_tys) == 1:
+            return ListSize(elt_ty, iter_tys[0].size)
+
+        # Multiple iterables form a cartesian product; the size is the
+        # product of the lengths, known only when every one is a concrete
+        # ``int`` (symbolic sizes don't multiply).
         size = 1
         for ty in iter_tys:
-            if ty.size is None:
+            if not isinstance(ty.size, int):
                 return ListSize(elt_ty, None)
             size *= ty.size
 
@@ -370,6 +509,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
         if e.stop is not None:
             self._visit_expr(e.stop, ctx)
 
+        # ``xs[:]`` spans the whole list — propagate its (possibly
+        # symbolic) size verbatim.
+        if e.start is None and e.stop is None:
+            return ListSize(ty.elt, ty.size)
+
         # The slice size is ``stop - start``, which we can pin whenever
         # that difference is a compile-time constant.  Decomposing each
         # bound into ``base + offset`` (see ``_affine``) covers two cases
@@ -378,10 +522,10 @@ class _ArraySizeInferInstance(DefaultVisitor):
         #   * both bounds share a symbolic base that cancels:
         #     ``x[i : i + 16]`` -> 16.
         # Omitted bounds: ``start`` defaults to 0; ``stop`` defaults to
-        # the list's own size (``ty.size``, itself possibly unknown).
+        # the list's own size — usable as an offset only if it's concrete.
         start = (None, 0) if e.start is None else self._affine(e.start)
         if e.stop is None:
-            stop = None if ty.size is None else (None, ty.size)
+            stop = (None, ty.size) if isinstance(ty.size, int) else None
         else:
             stop = self._affine(e.stop)
 
@@ -512,11 +656,15 @@ class _ArraySizeInferInstance(DefaultVisitor):
         generic callee monomorphized at this site — a possibly different
         element shape.  Where shapes agree, prefer *src*'s concrete size;
         on any mismatch, keep *shape* unchanged.
+
+        Only *concrete* ``int`` sizes are adopted: a :class:`SymbolicSize`
+        in *src* belongs to the callee's own analysis run and is
+        meaningless in ours, so it must not leak across the call.
         """
         match shape, src:
             case ListSize(), ListSize():
                 elt = self._refine_sizes(shape.elt, src.elt)
-                size = src.size if src.size is not None else shape.size
+                size = src.size if isinstance(src.size, int) else shape.size
                 return ListSize(elt, size)
             case TupleSize(), TupleSize() if len(shape.elts) == len(src.elts):
                 elts = tuple(
@@ -583,20 +731,28 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
         Initialises each phi from its pre-loop (lhs) definition, then
         repeatedly runs *run_body* and unifies the post-body (rhs) into
-        each phi until no phi changes.  The lattice has finite height
-        (``ArraySize`` is ``int | None``, structural lattice is
-        shape-preserving), so this terminates.
+        each phi until no phi changes *and* the union-find is stable.  The
+        height is finite (sizes are ``int``/symbol/``None``; the structural
+        lattice is shape-preserving; UF merges are monotone), so this
+        terminates.
+
+        The UF-stability check matters because a merge inside the body
+        (e.g. a ``zip``) can change which sizes are *equivalent* without
+        changing any stored phi value; without it the loop could stop one
+        iteration before that equivalence propagates.
         """
         for phi in phis:
             self.by_def[phi] = self.by_def[self.def_use.defs[phi.lhs]]
         while True:
             prev = {phi: self.by_def[phi] for phi in phis}
+            prev_changes = self._uf_changes
             run_body()
             for phi in phis:
                 lhs = self.by_def[self.def_use.defs[phi.lhs]]
                 rhs = self.by_def[self.def_use.defs[phi.rhs]]
                 self.by_def[phi] = self._unify(lhs, rhs)
-            if all(self.by_def[phi] == prev[phi] for phi in phis):
+            if (self._uf_changes == prev_changes
+                    and all(self.by_def[phi] == prev[phi] for phi in phis)):
                 break
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
@@ -642,17 +798,17 @@ class _ArraySizeInferInstance(DefaultVisitor):
         return ty
 
     def _visit_function(self, func: FuncDef, ctx: None):
-        # process arguments
+        # process arguments — list parameters get a fresh size variable
         for arg, ty in zip(func.args, self.type_info.arg_types):
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
-                self.by_def[d] = self._cvt_type(ty)
+                self.by_def[d] = self._arg_bound(ty)
 
-        # process free variables
+        # process free variables — same treatment as arguments
         for fv in func.free_vars:
             d = self.def_use.find_def_from_site(fv, func)
             ty = self.type_info.by_def[d]
-            self.by_def[d] = self._cvt_type(ty)
+            self.by_def[d] = self._arg_bound(ty)
 
         # visit body
         self._visit_block(func.body, ctx)
