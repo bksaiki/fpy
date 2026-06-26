@@ -539,6 +539,84 @@ class TestArraySizeInfer:
         ]
         assert len(slice_bounds) == 1 and slice_bounds[0].size == 2
 
+    def _slice_bound(self, f):
+        info = self._run(f)
+        slice_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'ListSlice'
+        ]
+        assert len(slice_bounds) == 1
+        assert isinstance(slice_bounds[0], ListSize)
+        return slice_bounds[0]
+
+    def test_list_slice_symbolic_offset_under_real(self):
+        """``x[i : i + 16]`` on an unknown-size list has size 16: the
+        symbolic base ``i`` cancels in ``(i + 16) - i``.  Sound only
+        because the ``+`` runs under the exact ``REAL`` context."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], i: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                y = x[i:i + 16]
+            return y
+
+        assert self._slice_bound(f).size == 16
+
+    def test_list_slice_symbolic_offset_subtraction_under_real(self):
+        """Both endpoints offset from the same base: ``x[i-4 : i+4]`` -> 8."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], i: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                y = x[i - 4:i + 4]
+            return y
+
+        assert self._slice_bound(f).size == 8
+
+    def test_list_slice_symbolic_offset_constant_on_left(self):
+        """``x[i : 16 + i]`` -> 16 (constant operand on either side)."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], i: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                y = x[i:16 + i]
+            return y
+
+        assert self._slice_bound(f).size == 16
+
+    def test_list_slice_symbolic_offset_not_under_real_is_unknown(self):
+        """Without an exact context, rounding could perturb ``i + 16``,
+        so the difference is not provably constant -> unknown."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], i: fp.Real) -> list[fp.Real]:
+            return x[i:i + 16]
+
+        assert self._slice_bound(f).size is None
+
+    def test_list_slice_symbolic_offset_inverted_is_unknown(self):
+        """``x[i+16 : i]`` has start > stop: strict slicing always raises,
+        so report unknown rather than a negative size."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], i: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                y = x[i + 16:i]
+            return y
+
+        assert self._slice_bound(f).size is None
+
+    def test_list_slice_symbolic_offset_nonconstant_is_unknown(self):
+        """``x[i : i + k]`` with symbolic ``k`` can't be pinned."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], i: fp.Real, k: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                y = x[i:i + k]
+            return y
+
+        assert self._slice_bound(f).size is None
+
     # ------------------------------------------------------------------
     # IndexedAssign as a fresh SSA def
 

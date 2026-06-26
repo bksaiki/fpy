@@ -214,7 +214,12 @@ class ContextUse:
     """
 
     @staticmethod
-    def analyze(func: FuncDef, *, def_use: DefineUseAnalysis | None = None) -> ContextUseAnalysis:
+    def analyze(
+        func: FuncDef,
+        *,
+        def_use: DefineUseAnalysis | None = None,
+        partial_eval: PartialEvalInfo | None = None,
+    ) -> ContextUseAnalysis:
         """
         Runs context-use analysis on a function.
 
@@ -224,11 +229,17 @@ class ContextUse:
             The function to analyze.
         def_use:
             Optional pre-computed definition-use analysis.  If ``None``,
-            it is computed automatically.
+            it is computed automatically.  Ignored when *partial_eval*
+            is supplied (the partial-eval info already carries its own).
+        partial_eval:
+            Optional pre-computed partial-evaluation info.  If ``None``,
+            it is computed from *def_use*.  Supply it to avoid recomputing
+            partial evaluation when the caller already has it.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
-        if def_use is None:
-            def_use = DefineUse.analyze(func)
-        eval_info = PartialEval.apply(func, def_use=def_use)
-        return _ContextUseInstance(func, eval_info).analyze()
+        if partial_eval is None:
+            if def_use is None:
+                def_use = DefineUse.analyze(func)
+            partial_eval = PartialEval.apply(func, def_use=def_use)
+        return _ContextUseInstance(func, partial_eval).analyze()

@@ -22,8 +22,9 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..function import Function
-from ..number import Float, INTEGER
+from ..number import Float, INTEGER, REAL
 from ..types import ListType, TupleType, Type
+from .context_use import ContextUse, ContextUseAnalysis
 from .define_use import Definition, DefSite, DefineUseAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo, Value
 from .type_infer import TypeInfer, TypeAnalysis
@@ -115,6 +116,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     by_def: dict[Definition, ArraySizeBound]
     ret_size: ArraySizeBound
     _callee_ret: dict[FuncDef, ArraySizeBound]
+    _ctx_use_cache: ContextUseAnalysis | None
 
     def __init__(self, func: FuncDef, partial_eval: PartialEvalInfo, type_info: TypeAnalysis):
         self.func = func
@@ -124,10 +126,22 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self.by_def = {}
         self.ret_size = None
         self._callee_ret = {}
+        self._ctx_use_cache = None
 
     @property
     def def_use(self) -> DefineUseAnalysis:
         return self.partial_eval.def_use
+
+    @property
+    def _ctx_use(self) -> ContextUseAnalysis:
+        # Computed lazily — only slices with symbolic-offset bounds need
+        # the active rounding context, so functions without them never
+        # pay for it.  Reuse our partial-eval info so it isn't recomputed.
+        if self._ctx_use_cache is None:
+            self._ctx_use_cache = ContextUse.analyze(
+                self.func, partial_eval=self.partial_eval
+            )
+        return self._ctx_use_cache
 
     def analyze(self) -> ArraySizeAnalysis:
         self._visit_function(self.func, None)
@@ -355,44 +369,88 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _visit_list_slice(self, e: ListSlice, ctx: None):
         ty = self._visit_expr(e.value, ctx)
         assert isinstance(ty, ListSize)
-
-        # Resolve the start bound.  Omitted ``e.start`` defaults to 0;
-        # otherwise we need partial-eval to pin it to a concrete int.
-        if e.start is None:
-            start: int | None = 0
-        else:
+        if e.start is not None:
             self._visit_expr(e.start, ctx)
-            start_val = self._get_eval(e.start)
-            if isinstance(start_val, Float | Fraction):
-                start = int(INTEGER.round(start_val))
-            else:
-                start = None
-
-        # Resolve the stop bound.  Omitted ``e.stop`` defaults to the
-        # *list's own size* (``ty.size``) — which itself may be ``None``
-        # if the list size isn't known.  Otherwise partial-eval it.
-        if e.stop is None:
-            stop = ty.size
-        else:
+        if e.stop is not None:
             self._visit_expr(e.stop, ctx)
-            stop_val = self._get_eval(e.stop)
-            if isinstance(stop_val, Float | Fraction):
-                stop = int(INTEGER.round(stop_val))
-            else:
-                stop = None
 
-        # FPy slicing is *strict*: ``xs[a:b]`` is valid only when
-        # ``0 <= a <= b <= len(xs)``.  Out-of-range bounds raise at
-        # runtime rather than being clamped (Python's behavior).  So
-        # when both bounds are concrete the static size is exactly
-        # ``stop - start`` — no ``min``/``max`` clamping.  We don't
-        # need ``ty.size`` to be known to compute the difference.
-        if start is not None and stop is not None and stop >= start:
-            slice_size: int | None = stop - start
+        # The slice size is ``stop - start``, which we can pin whenever
+        # that difference is a compile-time constant.  Decomposing each
+        # bound into ``base + offset`` (see ``_affine``) covers two cases
+        # with one rule:
+        #   * both bounds concrete (base ``None``): ``x[1:3]`` -> 2;
+        #   * both bounds share a symbolic base that cancels:
+        #     ``x[i : i + 16]`` -> 16.
+        # Omitted bounds: ``start`` defaults to 0; ``stop`` defaults to
+        # the list's own size (``ty.size``, itself possibly unknown).
+        start = (None, 0) if e.start is None else self._affine(e.start)
+        if e.stop is None:
+            stop = None if ty.size is None else (None, ty.size)
         else:
-            slice_size = None
+            stop = self._affine(e.stop)
+
+        slice_size: int | None = None
+        if stop is not None:
+            (sbase, soff), (tbase, toff) = start, stop
+            same_base = (
+                (sbase is None and tbase is None)
+                or (sbase is not None and tbase is not None
+                    and sbase.is_equiv(tbase))
+            )
+            # FPy slicing is *strict*: ``xs[a:b]`` is valid only when
+            # ``0 <= a <= b <= len(xs)`` — out-of-range / inverted bounds
+            # raise rather than clamp.  So a negative difference is an
+            # always-raising slice: report unknown, never a bogus size.
+            if same_base and toff - soff >= 0:
+                slice_size = toff - soff
 
         return ListSize(ty.elt, slice_size)
+
+    def _affine(self, e: Expr) -> tuple[Expr | None, int]:
+        """Decompose *e* into ``(base, offset)`` with ``e == base +
+        offset``, where *offset* is a compile-time integer and *base* is
+        the residual expression (``None`` when *e* is a pure constant).
+
+        Only descends through ``+`` / ``-`` whose result is computed
+        under the exact (``REAL``) context: under a rounding context the
+        addition could perturb the value, so ``(i + 16) - i`` would not
+        be guaranteed to equal ``16``.  Falls back to ``(e, 0)`` when no
+        constant offset can be peeled off — sound, just less precise.
+        """
+        val = self._get_eval(e)
+        if isinstance(val, Float | Fraction):
+            return (None, int(INTEGER.round(val)))
+
+        match e:
+            case Add() if self._is_exact(e):
+                c = self._const_int(e.second)
+                if c is not None:
+                    base, off = self._affine(e.first)
+                    return (base, off + c)
+                c = self._const_int(e.first)
+                if c is not None:
+                    base, off = self._affine(e.second)
+                    return (base, off + c)
+            case Sub() if self._is_exact(e):
+                c = self._const_int(e.second)
+                if c is not None:
+                    base, off = self._affine(e.first)
+                    return (base, off - c)
+
+        return (e, 0)
+
+    def _const_int(self, e: Expr) -> int | None:
+        """The integer value *e* partial-evaluates to, or ``None``."""
+        val = self._get_eval(e)
+        if isinstance(val, Float | Fraction):
+            return int(INTEGER.round(val))
+        return None
+
+    def _is_exact(self, e: Expr) -> bool:
+        """True iff *e* is evaluated under the exact (``REAL``) rounding
+        context, so its arithmetic introduces no rounding."""
+        scope = self._ctx_use.use_to_scope.get(e)
+        return scope is not None and scope.ctx == REAL
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         return TupleSize(tuple(self._visit_expr(elt, ctx) for elt in e.elts))
