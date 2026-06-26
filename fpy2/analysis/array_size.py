@@ -198,14 +198,14 @@ class _ArraySizeInferInstance(DefaultVisitor):
         ty = self._visit_expr(e.arg, ctx)
         match e:
             case Range1():
-                stop = self._get_eval(e.arg)
-                if isinstance(stop, Float | Fraction):
-                    # ``range(stop)`` with ``stop <= 0`` is empty (mirrors
-                    # Python); clamp so the size is never negative.
-                    size = max(0, int(INTEGER.round(stop)))
-                    return ListSize(None, size)
-                else:
-                    return ListSize(None, None)
+                # ``range(stop)`` -> ``max(0, stop)`` when ``stop`` is a
+                # known integer (clamped: ``stop <= 0`` is empty, like
+                # Python).  ``_const_int`` also resolves ``len(xs)`` of a
+                # known-size list, so ``range(len(xs))`` is covered.
+                n = self._const_int(e.arg)
+                if n is not None:
+                    return ListSize(None, max(0, n))
+                return ListSize(None, None)
             case Enumerate():
                 assert isinstance(ty, ListSize)
                 return ListSize(TupleSize((None, ty.elt)), ty.size)
@@ -217,15 +217,16 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self._visit_expr(e.second, ctx)
         match e:
             case Range2():
-                start = self._get_eval(e.first)
-                stop = self._get_eval(e.second)
-                if isinstance(start, Float | Fraction) and isinstance(stop, Float | Fraction):
-                    start_i = int(INTEGER.round(start))
-                    stop_i = int(INTEGER.round(stop))
-                    size = max(0, stop_i - start_i)
-                    return ListSize(None, size)
-                else:
-                    return ListSize(None, None)
+                # ``range(start, stop)`` -> ``max(0, stop - start)``.  The
+                # difference is constant when both bounds are concrete or
+                # share a symbolic base that cancels (e.g.
+                # ``range(i, i + 16)`` under REAL -> 16).
+                diff = self._affine_diff(
+                    self._affine(e.first), self._affine(e.second)
+                )
+                if diff is not None:
+                    return ListSize(None, max(0, diff))
+                return ListSize(None, None)
             case _:
                 return None
 
@@ -235,23 +236,18 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self._visit_expr(e.third, ctx)
         match e:
             case Range3():
-                start = self._get_eval(e.first)
-                stop = self._get_eval(e.second)
-                step = self._get_eval(e.third)
-                if (
-                    isinstance(start, Float | Fraction)
-                    and isinstance(stop, Float | Fraction)
-                    and isinstance(step, Float | Fraction)
-                ):
-                    start_i = int(INTEGER.round(start))
-                    stop_i = int(INTEGER.round(stop))
-                    step_i = int(INTEGER.round(step))
-                    if step_i == 0:
-                        # invalid (Python's range raises); leave size unknown
-                        return ListSize(None, None)
-                    return ListSize(None, len(range(start_i, stop_i, step_i)))
-                else:
-                    return ListSize(None, None)
+                # The count depends only on the span ``stop - start`` and
+                # the step: ``len(range(a, b, s)) == len(range(0, b-a, s))``.
+                # So a constant span (concrete bounds, or a cancelling
+                # symbolic base) plus a concrete non-zero step is enough —
+                # e.g. ``range(i, i + 16, 2)`` under REAL -> 8.
+                span = self._affine_diff(
+                    self._affine(e.first), self._affine(e.second)
+                )
+                step = self._const_int(e.third)
+                if span is not None and step is not None and step != 0:
+                    return ListSize(None, len(range(0, span, step)))
+                return ListSize(None, None)
             case _:
                 return None
 
@@ -391,18 +387,13 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
         slice_size: int | None = None
         if stop is not None:
-            (sbase, soff), (tbase, toff) = start, stop
-            same_base = (
-                (sbase is None and tbase is None)
-                or (sbase is not None and tbase is not None
-                    and sbase.is_equiv(tbase))
-            )
+            diff = self._affine_diff(start, stop)
             # FPy slicing is *strict*: ``xs[a:b]`` is valid only when
             # ``0 <= a <= b <= len(xs)`` — out-of-range / inverted bounds
             # raise rather than clamp.  So a negative difference is an
             # always-raising slice: report unknown, never a bogus size.
-            if same_base and toff - soff >= 0:
-                slice_size = toff - soff
+            if diff is not None and diff >= 0:
+                slice_size = diff
 
         return ListSize(ty.elt, slice_size)
 
@@ -417,9 +408,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
         be guaranteed to equal ``16``.  Falls back to ``(e, 0)`` when no
         constant offset can be peeled off — sound, just less precise.
         """
-        val = self._get_eval(e)
-        if isinstance(val, Float | Fraction):
-            return (None, int(INTEGER.round(val)))
+        c = self._const_int(e)
+        if c is not None:
+            return (None, c)
 
         match e:
             case Add() if self._is_exact(e):
@@ -439,11 +430,37 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
         return (e, 0)
 
+    def _affine_diff(
+        self,
+        lo: tuple[Expr | None, int],
+        hi: tuple[Expr | None, int],
+    ) -> int | None:
+        """``hi - lo`` as a compile-time constant, or ``None``.
+
+        Constant exactly when the two affine forms share a base — both
+        pure constants, or the same symbolic base (so it cancels).
+        """
+        (lbase, loff), (hbase, hoff) = lo, hi
+        same_base = (
+            (lbase is None and hbase is None)
+            or (lbase is not None and hbase is not None
+                and lbase.is_equiv(hbase))
+        )
+        return hoff - loff if same_base else None
+
     def _const_int(self, e: Expr) -> int | None:
-        """The integer value *e* partial-evaluates to, or ``None``."""
+        """The integer value *e* statically evaluates to, or ``None``.
+
+        Covers partial-eval constants and ``len(xs)`` of a list whose
+        size is statically known.
+        """
         val = self._get_eval(e)
         if isinstance(val, Float | Fraction):
             return int(INTEGER.round(val))
+        if isinstance(e, Len):
+            inner = self.by_expr.get(e.arg)
+            if isinstance(inner, ListSize) and isinstance(inner.size, int):
+                return inner.size
         return None
 
     def _is_exact(self, e: Expr) -> bool:

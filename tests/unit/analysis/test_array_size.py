@@ -618,6 +618,94 @@ class TestArraySizeInfer:
         assert self._slice_bound(f).size is None
 
     # ------------------------------------------------------------------
+    # range() with symbolic-offset bounds (shares the slice affine logic)
+
+    def _range_bound(self, f, tyname):
+        info = self._run(f)
+        bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == tyname
+        ]
+        assert len(bounds) == 1
+        assert isinstance(bounds[0], ListSize)
+        return bounds[0]
+
+    def test_range2_symbolic_offset_under_real(self):
+        """``range(i, i + 16)`` -> 16: the symbolic base cancels, and the
+        ``+`` runs under the exact ``REAL`` context."""
+
+        @fp.fpy
+        def f(i: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                ys = [0.0 for _ in range(i, i + 16)]
+            return ys
+
+        assert self._range_bound(f, 'Range2').size == 16
+
+    def test_range2_symbolic_offset_not_under_real_is_unknown(self):
+        """Without an exact context, ``i + 16`` may round, so the span
+        isn't provably constant -> unknown."""
+
+        @fp.fpy
+        def f(i: fp.Real) -> list[fp.Real]:
+            return [0.0 for _ in range(i, i + 16)]
+
+        assert self._range_bound(f, 'Range2').size is None
+
+    def test_range2_symbolic_offset_inverted_is_empty(self):
+        """``range(i + 16, i)`` is empty (start > stop) for any ``i`` —
+        range clamps to 0 (unlike slicing, which raises)."""
+
+        @fp.fpy
+        def f(i: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                ys = [0.0 for _ in range(i + 16, i)]
+            return ys
+
+        assert self._range_bound(f, 'Range2').size == 0
+
+    def test_range3_symbolic_offset_with_step(self):
+        """``range(i, i + 16, 2)`` -> 8: span 16 stepped by 2."""
+
+        @fp.fpy
+        def f(i: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                ys = [0.0 for _ in range(i, i + 16, 2)]
+            return ys
+
+        assert self._range_bound(f, 'Range3').size == 8
+
+    def test_range1_len_of_known_list(self):
+        """``range(len(xs))`` -> size of ``xs`` when statically known."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            xs = [1.0, 2.0, 3.0, 4.0]
+            return [0.0 for _ in range(len(xs))]
+
+        # the inner range has the size; the comprehension echoes it
+        assert self._range_bound(f, 'Range1').size == 4
+
+    def test_slice_len_of_known_list(self):
+        """``xs[0:len(xs)]`` -> full size via ``len`` of a known list."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+            return xs[0:len(xs)]
+
+        assert self._slice_bound(f).size == 5
+
+    def test_range1_len_of_unknown_list_is_unknown(self):
+        """``range(len(xs))`` for an unknown-size ``xs`` stays unknown."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return [0.0 for _ in range(len(xs))]
+
+        assert self._range_bound(f, 'Range1').size is None
+
+    # ------------------------------------------------------------------
     # IndexedAssign as a fresh SSA def
 
     def test_indexed_assign_creates_fresh_def(self):
