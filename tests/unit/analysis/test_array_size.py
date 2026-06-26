@@ -823,3 +823,101 @@ class TestArraySizeInfer:
         info = self._run(f)
         assert isinstance(info.ret_size, ListSize)
         assert info.ret_size.size == 2
+
+    # ------------------------------------------------------------------
+    # Call-result size propagation
+
+    def test_call_propagates_known_return_size(self):
+        """A call to a callee whose return size is statically known
+        adopts that size at the call site (and onto a binding of it)."""
+
+        @fp.fpy
+        def callee() -> list[fp.Real]:
+            return [1.0, 2.0, 3.0]
+
+        @fp.fpy
+        def caller() -> list[fp.Real]:
+            ys = callee()
+            return ys
+
+        info = self._run(caller)
+        call_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Call'
+        ]
+        assert len(call_bounds) == 1
+        assert isinstance(call_bounds[0], ListSize)
+        assert call_bounds[0].size == 3
+        # ...and it survives onto the binding / return.
+        assert isinstance(info.ret_size, ListSize)
+        assert info.ret_size.size == 3
+
+    def test_call_with_arg_dependent_size_stays_unknown(self):
+        """A callee whose return size depends on its arguments has no
+        statically-known size; the call site must not invent one."""
+
+        @fp.fpy
+        def callee(xs: list[fp.Real]) -> list[fp.Real]:
+            return [x for x in xs]
+
+        @fp.fpy
+        def caller(xs: list[fp.Real]) -> list[fp.Real]:
+            return callee(xs)
+
+        info = self._run(caller)
+        call_bounds = [
+            b for e, b in info.by_expr.items()
+            if type(e).__name__ == 'Call'
+        ]
+        assert len(call_bounds) == 1
+        assert isinstance(call_bounds[0], ListSize)
+        assert call_bounds[0].size is None
+
+    def test_call_propagates_transitively(self):
+        """A known size flows through a chain of calls."""
+
+        @fp.fpy
+        def leaf() -> list[fp.Real]:
+            return [1.0, 2.0, 3.0, 4.0, 5.0]
+
+        @fp.fpy
+        def mid() -> list[fp.Real]:
+            return leaf()
+
+        @fp.fpy
+        def top() -> list[fp.Real]:
+            return mid()
+
+        info = self._run(top)
+        assert isinstance(info.ret_size, ListSize)
+        assert info.ret_size.size == 5
+
+    def test_call_propagates_nested_sizes(self):
+        """Nested known sizes (``empty(2, 3)``) propagate per-dimension
+        through a call via the structural overlay."""
+
+        @fp.fpy
+        def grid() -> list[list[fp.Real]]:
+            return fp.empty(2, 3)
+
+        @fp.fpy
+        def use_grid() -> list[list[fp.Real]]:
+            return grid()
+
+        info = self._run(use_grid)
+        outer = info.ret_size
+        assert isinstance(outer, ListSize)
+        assert outer.size == 2
+        assert isinstance(outer.elt, ListSize)
+        assert outer.elt.size == 3
+
+    def test_primitive_call_has_no_size(self):
+        """Calling a primitive (non-FPy-function) doesn't crash and
+        yields no list-size info."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return fp.sqrt(x)
+
+        info = self._run(f)
+        assert info.ret_size is None

@@ -21,6 +21,7 @@ from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
+from ..function import Function
 from ..number import Float, INTEGER
 from ..types import ListType, TupleType, Type
 from .define_use import Definition, DefSite, DefineUseAnalysis
@@ -113,6 +114,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     by_expr: dict[Expr, ArraySizeBound]
     by_def: dict[Definition, ArraySizeBound]
     ret_size: ArraySizeBound
+    _callee_ret: dict[FuncDef, ArraySizeBound]
 
     def __init__(self, func: FuncDef, partial_eval: PartialEvalInfo, type_info: TypeAnalysis):
         self.func = func
@@ -121,6 +123,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self.by_expr = {}
         self.by_def = {}
         self.ret_size = None
+        self._callee_ret = {}
 
     @property
     def def_use(self) -> DefineUseAnalysis:
@@ -403,9 +406,51 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _visit_call(self, e: Call, ctx: None):
         for arg in e.args:
             self._visit_expr(arg, ctx)
-        # just convert type for now
-        ty = self.type_info.by_expr[e]
-        return self._cvt_type(ty)
+        # Start from the call's type shapeeton (correct shape, all-``None``
+        # sizes), then overlay any statically-known sizes the callee's own
+        # return-size analysis proved.  A concrete size in a callee's
+        # ``ret_size`` is independent of the call's arguments (arg-derived
+        # sizes resolve to ``None``), so it's a constant property of the
+        # callee and sound to propagate to every call site.
+        shapeeton = self._cvt_type(self.type_info.by_expr[e])
+        return self._refine_sizes(shapeeton, self._callee_ret_size(e))
+
+    def _callee_ret_size(self, e: Call) -> ArraySizeBound:
+        """The callee's inferred return-size bound, or ``None`` when the
+        call target isn't an analyzable FPy function (primitive, context
+        constructor, or unbound call)."""
+        if not isinstance(e.fn, Function):
+            return None
+        callee = e.fn.ast
+        if callee not in self._callee_ret:
+            # The call graph is acyclic (enforced by ``TypeInfer.check``,
+            # which has already run), so this recursion terminates;
+            # memoize so each callee is analyzed once per analysis run.
+            self._callee_ret[callee] = ArraySizeInfer.analyze(callee).ret_size
+        return self._callee_ret[callee]
+
+    def _refine_sizes(self, shape: ArraySizeBound, src: ArraySizeBound) -> ArraySizeBound:
+        """Overlay concrete sizes from *src* onto the structural *shape*.
+
+        *shape* (from the call's type) has the correct shape; *src* (the
+        callee's ``ret_size``) may carry concrete sizes but — for a
+        generic callee monomorphized at this site — a possibly different
+        element shape.  Where shapes agree, prefer *src*'s concrete size;
+        on any mismatch, keep *shape* unchanged.
+        """
+        match shape, src:
+            case ListSize(), ListSize():
+                elt = self._refine_sizes(shape.elt, src.elt)
+                size = src.size if src.size is not None else shape.size
+                return ListSize(elt, size)
+            case TupleSize(), TupleSize() if len(shape.elts) == len(src.elts):
+                elts = tuple(
+                    self._refine_sizes(a, b)
+                    for a, b in zip(shape.elts, src.elts)
+                )
+                return TupleSize(elts)
+            case _:
+                return shape
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         ty = self._visit_expr(stmt.expr, ctx)
