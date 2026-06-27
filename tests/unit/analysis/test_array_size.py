@@ -1213,6 +1213,87 @@ class TestArraySizeInfer:
         assert concrete_size(7) == 7
         assert concrete_size(None) is None
 
+    # ------------------------------------------------------------------
+    # Assertion-seeded size equalities
+
+    def test_assert_len_eq_merges(self):
+        """``assert len(xs) == len(ys)`` makes their sizes equivalent."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            assert len(xs) == len(ys)
+            return xs[0]
+
+        info = self._run(f)
+        assert is_size_eq(self._def_size(info, 'xs'),
+                          self._def_size(info, 'ys'))
+
+    def test_assert_len_eq_constant_pins(self):
+        """``assert len(xs) == 16`` pins ``xs`` to a concrete size."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            assert len(xs) == 16
+            return xs[0]
+
+        info = self._run(f)
+        assert concrete_size(self._def_size(info, 'xs').size) == 16
+
+    def test_assert_len_eq_transitive(self):
+        """Two asserts chain: ``xs`` and ``zs`` become equivalent."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real], zs: list[fp.Real]) -> fp.Real:
+            assert len(xs) == len(ys)
+            assert len(ys) == len(zs)
+            return xs[0]
+
+        info = self._run(f)
+        assert is_size_eq(self._def_size(info, 'xs'),
+                          self._def_size(info, 'zs'))
+
+    def test_conditional_assert_does_not_merge(self):
+        """An assert inside an ``if`` need not hold on every execution, so
+        it must NOT constrain sizes globally (soundness)."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real], c: bool) -> fp.Real:
+            if c:
+                assert len(xs) == len(ys)
+            return xs[0]
+
+        info = self._run(f)
+        assert not is_size_eq(self._def_size(info, 'xs'),
+                              self._def_size(info, 'ys'))
+
+    def test_loop_assert_does_not_merge(self):
+        """An assert inside a loop body is conditional (the loop may run
+        zero times), so it must not constrain sizes globally."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            for _ in range(0):
+                assert len(xs) == len(ys)
+            return xs[0]
+
+        info = self._run(f)
+        assert not is_size_eq(self._def_size(info, 'xs'),
+                              self._def_size(info, 'ys'))
+
+    def test_assert_under_context_still_merges(self):
+        """A ``with`` block executes unconditionally, so an assert inside
+        one still seeds the equality."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                assert len(xs) == len(ys)
+            return xs[0]
+
+        info = self._run(f)
+        assert is_size_eq(self._def_size(info, 'xs'),
+                          self._def_size(info, 'ys'))
+
 
 # ----------------------------------------------------------------------
 # Differential soundness: inferred sizes vs. actual runtime lengths.
@@ -1391,6 +1472,12 @@ def _d_call_known() -> list[fp.Real]:
     return _d_callee_known()
 
 
+@fp.fpy
+def _d_assert_eq(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+    assert len(xs) == len(ys)   # merges xs ~ ys; only equal-length inputs return
+    return ys
+
+
 def _floats(n):
     return [float(k) for k in range(n)]
 
@@ -1422,6 +1509,8 @@ _DIFFERENTIAL_SPECS = [
     (_d_loop_preserve, [(_floats(0),), (_floats(4),)]),
     (_d_indexed_assign, [(_floats(0),), (_floats(1),), (_floats(6),)]),
     (_d_call_known, [()]),
+    # equal-length inputs (unequal would raise the assert and be skipped)
+    (_d_assert_eq, [(_floats(0), _floats(0)), (_floats(3), _floats(3)), (_floats(8), _floats(8))]),
 ]
 
 

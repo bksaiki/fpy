@@ -14,6 +14,7 @@ the pre-mutation bound from the use def, widens the element bound at
 depth ``len(indices)``, and writes the result to the fresh def.
 """
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
@@ -168,6 +169,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     uf: SizeUnionfind
     gensym: Gensym
     _uf_changes: int
+    _cond_depth: int
     _callee_ret: dict[FuncDef, ArraySizeBound]
     _ctx_use_cache: ContextUseAnalysis | None
 
@@ -183,8 +185,20 @@ class _ArraySizeInferInstance(DefaultVisitor):
         # Counts unions; lets the loop fixpoint detect progress when a
         # merge changes equivalences without changing any stored bound.
         self._uf_changes = 0
+        # Nesting depth in conditionally-executed regions (if / loop
+        # bodies); only depth-0 asserts hold on every execution.
+        self._cond_depth = 0
         self._callee_ret = {}
         self._ctx_use_cache = None
+
+    @contextmanager
+    def _branch(self):
+        """Mark the enclosed block as conditionally executed."""
+        self._cond_depth += 1
+        try:
+            yield
+        finally:
+            self._cond_depth -= 1
 
     def _fresh_size(self) -> NamedId:
         """Mint a fresh size variable (only ever for arguments / free
@@ -660,7 +674,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.body, ctx)
+        with self._branch():
+            self._visit_block(stmt.body, ctx)
 
         # unify any merged variable
         for phi in self.def_use.phis[stmt]:
@@ -670,8 +685,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.ift, ctx)
-        self._visit_block(stmt.iff, ctx)
+        with self._branch():
+            self._visit_block(stmt.ift, ctx)
+            self._visit_block(stmt.iff, ctx)
 
         # unify any merged variable
         for phi in self.def_use.phis[stmt]:
@@ -707,7 +723,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
             self._visit_expr(stmt.cond, ctx)
             self._visit_block(stmt.body, ctx)
 
-        self._iterate_to_fixpoint(self.def_use.phis[stmt], body)
+        with self._branch():
+            self._iterate_to_fixpoint(self.def_use.phis[stmt], body)
 
     def _visit_for(self, stmt, ctx):
         # iterable + target bound once, before the fixpoint
@@ -715,9 +732,10 @@ class _ArraySizeInferInstance(DefaultVisitor):
         assert isinstance(iter_ty, ListSize)
         self._visit_binding(stmt, stmt.target, iter_ty.elt)
 
-        self._iterate_to_fixpoint(
-            self.def_use.phis[stmt], lambda: self._visit_block(stmt.body, ctx)
-        )
+        with self._branch():
+            self._iterate_to_fixpoint(
+                self.def_use.phis[stmt], lambda: self._visit_block(stmt.body, ctx)
+            )
 
     def _visit_context(self, stmt, ctx):
         ty = self._visit_expr(stmt.ctx, ctx)
@@ -735,6 +753,43 @@ class _ArraySizeInferInstance(DefaultVisitor):
             self.ret_size = ret_size
         else:
             self.ret_size = self._unify(self.ret_size, ret_size)
+
+    def _visit_assert(self, stmt: AssertStmt, ctx: None):
+        self._visit_expr(stmt.test, ctx)
+        # Only an *unconditional* assert holds on every execution, so only
+        # then may it constrain sizes globally (cf. strict ``zip``).
+        if self._cond_depth == 0:
+            self._seed_from_assert(stmt.test)
+
+    def _seed_from_assert(self, test: Expr):
+        """Learn size equalities from ``len(a) == len(b)`` / ``len(a) == N``
+        (and chained ``==``) — pins or merges the size variables."""
+        if not isinstance(test, Compare):
+            return
+        for op, lhs, rhs in zip(test.ops, test.args, test.args[1:]):
+            if op == CompareOp.EQ:
+                self._relate_sizes(self._len_size(lhs), self._len_size(rhs))
+
+    def _len_size(self, e: Expr) -> ArraySize:
+        """The size ``e`` constrains: the list's size for ``len(xs)``, the
+        constant for an integer expression, else ``None`` (not relatable)."""
+        if isinstance(e, Len):
+            bound = self.by_expr.get(e.arg)
+            return bound.size if isinstance(bound, ListSize) else None
+        return self._const_int(e)
+
+    def _relate_sizes(self, a: ArraySize, b: ArraySize):
+        """Record that two sizes are equal: merge two variables, or pin a
+        variable to a concrete length."""
+        match a, b:
+            case NamedId(), NamedId():
+                self._merge_sizes(a, b)
+            case NamedId(), int():
+                self._pin_size(a, b)
+            case int(), NamedId():
+                self._pin_size(b, a)
+            case _:
+                pass  # both concrete (already constrained) or unknown
 
     def _visit_expr(self, expr: Expr, ctx: None) -> ArraySizeBound:
         ty = super()._visit_expr(expr, ctx)
