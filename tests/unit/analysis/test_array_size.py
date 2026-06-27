@@ -5,12 +5,17 @@ Unit tests for :class:`ArraySizeInfer`.
 import fpy2 as fp
 import pytest
 
+from hypothesis import given, settings, strategies as st
+
 from fpy2.analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
     ListSize,
     TupleSize,
+    concrete_size,
+    is_size_eq,
 )
+from fpy2.utils import NamedId
 
 
 class TestArraySizeInfer:
@@ -399,7 +404,7 @@ class TestArraySizeInfer:
         assert bound.size == 3
         # the strict zip also pins `xs` to length 3
         xs_bound = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
-        assert concrete_size(xs_bound.size, info.size_uf) == 3
+        assert concrete_size(xs_bound.size) == 3
 
     def test_zip_single_arg_preserves_size(self):
         """A 1-argument ``zip`` preserves the input's known size."""
@@ -1115,7 +1120,7 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         xs_b, ys_b = self._def_size(info, 'xs'), self._def_size(info, 'ys')
-        assert is_size_eq(xs_b, ys_b, info.size_uf)
+        assert is_size_eq(xs_b, ys_b)
 
     def test_comprehension_over_argument_is_equivalent(self):
         """``[f(x) for x in xs]`` has the same length as ``xs``."""
@@ -1131,7 +1136,7 @@ class TestArraySizeInfer:
         info = self._run(f)
         assert isinstance(info.ret_size, ListSize)
         assert isinstance(info.ret_size.size, NamedId)
-        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'), info.size_uf)
+        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'))
 
     def test_enumerate_over_argument_is_equivalent(self):
         """``enumerate(xs)`` preserves ``xs``'s symbolic length."""
@@ -1143,7 +1148,7 @@ class TestArraySizeInfer:
             return ys
 
         info = self._run(f)
-        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'), info.size_uf)
+        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'))
 
     def test_full_slice_preserves_symbol(self):
         """``xs[:]`` spans the whole list, keeping its symbolic length."""
@@ -1154,7 +1159,7 @@ class TestArraySizeInfer:
             return xs[:]
 
         info = self._run(f)
-        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'), info.size_uf)
+        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'))
 
     def test_zip_two_unknowns_merges_classes(self):
         """``zip(xs, ys)`` is strict, so on the non-raising path
@@ -1170,7 +1175,7 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         xs_b, ys_b = self._def_size(info, 'xs'), self._def_size(info, 'ys')
-        assert info.size_uf.find(xs_b.size) == info.size_uf.find(ys_b.size)
+        assert xs_b.size == ys_b.size
 
     def test_distinct_arguments_are_not_equivalent(self):
         """Two independent list arguments get distinct, non-equivalent
@@ -1183,7 +1188,7 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         xs_b, ys_b = self._def_size(info, 'xs'), self._def_size(info, 'ys')
-        assert not is_size_eq(xs_b, ys_b, info.size_uf)
+        assert not is_size_eq(xs_b, ys_b)
 
     def test_loop_rebind_keeps_symbol(self):
         """A loop that re-binds a list via a size-preserving op keeps the
@@ -1198,7 +1203,7 @@ class TestArraySizeInfer:
             return ys
 
         info = self._run(f)
-        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'), info.size_uf)
+        assert is_size_eq(info.ret_size, self._def_size(info, 'xs'))
 
     def test_concrete_size_helper(self):
         """``concrete_size`` resolves ints directly and pinned symbols."""
@@ -1214,6 +1219,337 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         xs_b = self._def_size(info, 'xs')
-        assert concrete_size(xs_b.size, info.size_uf) == 2
-        assert concrete_size(7, info.size_uf) == 7
-        assert concrete_size(None, info.size_uf) is None
+        assert concrete_size(xs_b.size) == 2
+        assert concrete_size(7) == 7
+        assert concrete_size(None) is None
+
+
+# ----------------------------------------------------------------------
+# Differential soundness: inferred sizes vs. actual runtime lengths.
+#
+# Each function is analyzed statically, then *run* through the
+# interpreter on concrete inputs; the inferred sizes are checked against
+# the real runtime list lengths.  Two invariants must hold for **every**
+# input (a single counterexample is a soundness bug):
+#
+#   1. concrete-size soundness — a static concrete ``int`` size (directly
+#      or via a pinned size variable) equals the runtime list length;
+#   2. equivalence soundness — ``is_size_eq`` bounds have equal runtime
+#      lengths.
+#
+# Only the ``static-fact => runtime-fact`` direction is checked (the
+# analysis is conservative, so the converse may legitimately fail).
+# Observables are the list-typed arguments and the return value.  Inputs
+# that raise at runtime (strict-``zip`` mismatch, out-of-range slice) are
+# skipped — the static claim about them is vacuous.
+
+@fp.fpy
+def _d_literal() -> list[fp.Real]:
+    return [1.0, 2.0, 3.0]
+
+
+@fp.fpy
+def _d_empty_literal() -> list[fp.Real]:
+    return []
+
+
+@fp.fpy
+def _d_nested_literal() -> list[list[fp.Real]]:
+    return [[1.0, 2.0], [3.0, 4.0]]
+
+
+@fp.fpy
+def _d_range1() -> list[fp.Real]:
+    return [0.0 for _ in range(5)]
+
+
+@fp.fpy
+def _d_range1_negative() -> list[fp.Real]:
+    return [0.0 for _ in range(-5)]
+
+
+@fp.fpy
+def _d_range2() -> list[fp.Real]:
+    return [0.0 for _ in range(2, 7)]
+
+
+@fp.fpy
+def _d_range2_flipped() -> list[fp.Real]:
+    return [0.0 for _ in range(7, 2)]
+
+
+@fp.fpy
+def _d_range3() -> list[fp.Real]:
+    return [0.0 for _ in range(0, 10, 3)]
+
+
+@fp.fpy
+def _d_range_len_literal() -> list[fp.Real]:
+    xs = [1.0, 2.0, 3.0, 4.0]
+    return [0.0 for _ in range(len(xs))]
+
+
+@fp.fpy
+def _d_comp_over_arg(xs: list[fp.Real]) -> list[fp.Real]:
+    return [x for x in xs]
+
+
+@fp.fpy
+def _d_comp_product() -> list[fp.Real]:
+    return [0.0 for _ in range(3) for _ in range(4)]
+
+
+@fp.fpy
+def _d_enumerate(xs: list[fp.Real]) -> list[fp.Real]:
+    return [x for _, x in enumerate(xs)]
+
+
+@fp.fpy
+def _d_zip_args(xs: list[fp.Real], ys: list[fp.Real]) -> list[tuple[fp.Real, fp.Real]]:
+    return [t for t in zip(xs, ys)]
+
+
+@fp.fpy
+def _d_zip_literal(xs: list[fp.Real]) -> fp.Real:
+    acc = 0.0
+    for _ in zip(xs, [1.0, 2.0, 3.0]):
+        with fp.FP64:
+            acc = acc + 1.0
+    return acc
+
+
+@fp.fpy
+def _d_slice_concrete() -> list[fp.Real]:
+    xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+    return xs[1:4]
+
+
+@fp.fpy
+def _d_slice_full(xs: list[fp.Real]) -> list[fp.Real]:
+    return xs[:]
+
+
+@fp.fpy
+def _d_slice_prefix(xs: list[fp.Real]) -> list[fp.Real]:
+    return xs[0:2]
+
+
+@fp.fpy
+def _d_slice_sym_offset(xs: list[fp.Real], i: fp.Real) -> list[fp.Real]:
+    with fp.REAL:
+        ys = xs[i:i + 2]
+    return ys
+
+
+@fp.fpy
+def _d_range_sym_offset(i: fp.Real) -> list[fp.Real]:
+    with fp.REAL:
+        ys = [0.0 for _ in range(i, i + 4)]
+    return ys
+
+
+@fp.fpy
+def _d_empty_2d() -> list[list[fp.Real]]:
+    return fp.empty(2, 3)
+
+
+@fp.fpy
+def _d_cond_equal(b: bool) -> list[fp.Real]:
+    if b:
+        return [1.0, 2.0]
+    else:
+        return [3.0, 4.0]
+
+
+@fp.fpy
+def _d_cond_unequal(b: bool) -> list[fp.Real]:
+    if b:
+        return [1.0]
+    else:
+        return [2.0, 3.0]
+
+
+@fp.fpy
+def _d_rebind(xs: list[fp.Real]) -> list[fp.Real]:
+    ys = xs
+    return ys
+
+
+@fp.fpy
+def _d_loop_preserve(xs: list[fp.Real]) -> list[fp.Real]:
+    ys = xs
+    for _ in range(3):
+        ys = ys
+    return ys
+
+
+@fp.fpy
+def _d_indexed_assign(xs: list[fp.Real]) -> list[fp.Real]:
+    ys = [0.0 for _ in xs]
+    for i, x in enumerate(xs):
+        ys[i] = x
+    return ys
+
+
+@fp.fpy
+def _d_callee_known() -> list[fp.Real]:
+    return [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+@fp.fpy
+def _d_call_known() -> list[fp.Real]:
+    return _d_callee_known()
+
+
+def _floats(n):
+    return [float(k) for k in range(n)]
+
+
+_DIFFERENTIAL_SPECS = [
+    (_d_literal, [()]),
+    (_d_empty_literal, [()]),
+    (_d_nested_literal, [()]),
+    (_d_range1, [()]),
+    (_d_range1_negative, [()]),
+    (_d_range2, [()]),
+    (_d_range2_flipped, [()]),
+    (_d_range3, [()]),
+    (_d_range_len_literal, [()]),
+    (_d_comp_over_arg, [(_floats(0),), (_floats(1),), (_floats(3),), (_floats(10),)]),
+    (_d_comp_product, [()]),
+    (_d_enumerate, [(_floats(0),), (_floats(1),), (_floats(7),)]),
+    (_d_zip_args, [(_floats(0), _floats(0)), (_floats(4), _floats(4)), (_floats(9), _floats(9))]),
+    (_d_zip_literal, [(_floats(3),)]),
+    (_d_slice_concrete, [()]),
+    (_d_slice_full, [(_floats(0),), (_floats(1),), (_floats(6),)]),
+    (_d_slice_prefix, [(_floats(2),), (_floats(5),)]),
+    (_d_slice_sym_offset, [(_floats(5), 1), (_floats(10), 3), (_floats(2), 0)]),
+    (_d_range_sym_offset, [(0,), (5,), (-3,)]),
+    (_d_empty_2d, [()]),
+    (_d_cond_equal, [(True,), (False,)]),
+    (_d_cond_unequal, [(True,), (False,)]),
+    (_d_rebind, [(_floats(0),), (_floats(1),), (_floats(8),)]),
+    (_d_loop_preserve, [(_floats(0),), (_floats(4),)]),
+    (_d_indexed_assign, [(_floats(0),), (_floats(1),), (_floats(6),)]),
+    (_d_call_known, [()]),
+]
+
+
+class TestArraySizeDifferential:
+    """Compare inferred sizes against runtime list lengths."""
+
+    @classmethod
+    def _runtime_tree(cls, v):
+        """Nested-length shape of a runtime value: ``('list', n,
+        inner|None)`` / ``('tuple', (sub, ...))`` / ``('scalar',)``."""
+        if isinstance(v, list):
+            return ('list', len(v), cls._runtime_tree(v[0]) if v else None)
+        if isinstance(v, tuple):
+            return ('tuple', tuple(cls._runtime_tree(e) for e in v))
+        return ('scalar',)
+
+    def _check_concrete(self, bound, tree, path):
+        """Every concrete static size must match the runtime length."""
+        if bound is None:
+            return
+        if isinstance(bound, ListSize):
+            assert tree[0] == 'list', f'{path}: static list vs runtime {tree[0]}'
+            c = concrete_size(bound.size)
+            if c is not None:
+                assert c == tree[1], (
+                    f'{path}: static size {c} != runtime length {tree[1]}'
+                )
+            if tree[2] is not None:
+                self._check_concrete(bound.elt, tree[2], path + '[0]')
+        elif isinstance(bound, TupleSize):
+            assert tree[0] == 'tuple', f'{path}: static tuple vs runtime {tree[0]}'
+            assert len(bound.elts) == len(tree[1]), f'{path}: tuple arity'
+            for k, (b, t) in enumerate(zip(bound.elts, tree[1])):
+                self._check_concrete(b, t, f'{path}.{k}')
+
+    @staticmethod
+    def _observables(func, info, inputs, result):
+        obs = []
+        for arg, val in zip(func.ast.args, inputs):
+            if isinstance(arg.name, NamedId):
+                d = info.def_use.find_def_from_site(arg.name, arg)
+                obs.append((str(arg.name), info.by_def[d], val))
+        obs.append(('<ret>', info.ret_size, result))
+        return obs
+
+    def _assert_sound(self, func, input_sets):
+        info = ArraySizeInfer.analyze(func.ast)
+        ran_any = False
+        for inputs in input_sets:
+            try:
+                result = func(*inputs)
+            except Exception:
+                continue  # invalid input -> static claim is vacuous
+            ran_any = True
+            obs = self._observables(func, info, inputs, result)
+
+            # (1) concrete-size soundness on every observable
+            for label, bound, val in obs:
+                self._check_concrete(bound, self._runtime_tree(val), label)
+
+            # (2) equivalence soundness: equal bounds => equal runtime lengths
+            for i in range(len(obs)):
+                for j in range(i + 1, len(obs)):
+                    _, bi, vi = obs[i]
+                    _, bj, vj = obs[j]
+                    if (isinstance(vi, list) and isinstance(vj, list)
+                            and is_size_eq(bi, bj)):
+                        assert len(vi) == len(vj), (
+                            f'{obs[i][0]} ~ {obs[j][0]} are is_size_eq but '
+                            f'runtime lengths differ: {len(vi)} != {len(vj)}'
+                        )
+        assert ran_any, f'no input set ran without raising for {func.name}'
+
+    @pytest.mark.parametrize(
+        'func,input_sets', _DIFFERENTIAL_SPECS,
+        ids=[f.name for f, _ in _DIFFERENTIAL_SPECS],
+    )
+    def test_sound(self, func, input_sets):
+        self._assert_sound(func, input_sets)
+
+    # -- hypothesis: fuzz argument lengths for size-linked functions ----
+
+    @settings(max_examples=60)
+    @given(n=st.integers(min_value=0, max_value=64))
+    def test_fuzz_comp_over_arg(self, n):
+        self._assert_sound(_d_comp_over_arg, [(_floats(n),)])
+
+    @settings(max_examples=60)
+    @given(n=st.integers(min_value=0, max_value=64))
+    def test_fuzz_enumerate(self, n):
+        self._assert_sound(_d_enumerate, [(_floats(n),)])
+
+    @settings(max_examples=60)
+    @given(n=st.integers(min_value=0, max_value=64))
+    def test_fuzz_rebind(self, n):
+        self._assert_sound(_d_rebind, [(_floats(n),)])
+
+    @settings(max_examples=60)
+    @given(n=st.integers(min_value=0, max_value=64))
+    def test_fuzz_full_slice(self, n):
+        self._assert_sound(_d_slice_full, [(_floats(n),)])
+
+    @settings(max_examples=60)
+    @given(n=st.integers(min_value=0, max_value=64))
+    def test_fuzz_indexed_assign(self, n):
+        self._assert_sound(_d_indexed_assign, [(_floats(n),)])
+
+    @settings(max_examples=60)
+    @given(n=st.integers(min_value=0, max_value=64))
+    def test_fuzz_zip_args_equal(self, n):
+        self._assert_sound(_d_zip_args, [(_floats(n), _floats(n))])
+
+    @settings(max_examples=60)
+    @given(i=st.integers(min_value=0, max_value=32))
+    def test_fuzz_slice_sym_offset(self, i):
+        self._assert_sound(_d_slice_sym_offset, [(_floats(i + 2), i)])
+
+    @settings(max_examples=60)
+    @given(i=st.integers(min_value=-8, max_value=32))
+    def test_fuzz_range_sym_offset(self, i):
+        self._assert_sound(_d_range_sym_offset, [(i,)])

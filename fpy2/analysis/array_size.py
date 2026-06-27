@@ -36,7 +36,6 @@ __all__ = [
     'ArraySizeBound',
     'ArraySizeInfer',
     'ListSize',
-    'SizeUnionfind',
     'TupleSize',
     'concrete_size',
     'is_size_eq',
@@ -81,29 +80,27 @@ def _repr_size(size: ArraySize, uf: SizeUnionfind) -> int | NamedId | None:
     return size
 
 
-def concrete_size(size: ArraySize, uf: SizeUnionfind) -> int | None:
-    """The concrete ``int`` *size* denotes — directly, or via a pinned
-    size-variable class — or ``None`` if not a compile-time constant."""
-    rep = _repr_size(size, uf)
-    return rep if isinstance(rep, int) else None
+def concrete_size(size: ArraySize) -> int | None:
+    """The concrete ``int`` *size* denotes, or ``None`` if unknown.
+    Assumes *size* comes from a resolved :class:`ArraySizeAnalysis`."""
+    return size if isinstance(size, int) else None
 
 
-def _size_eq(a: ArraySize, b: ArraySize, uf: SizeUnionfind) -> bool:
-    """Are two sizes provably equal: same representative (concrete int or
-    co-representative size variable)?"""
-    ra = _repr_size(a, uf)
-    return ra is not None and ra == _repr_size(b, uf)
+def _size_eq(a: ArraySize, b: ArraySize) -> bool:
+    """Are two (resolved) sizes provably equal — identical and not an
+    untracked unknown (``None`` is never equal, even to itself)?"""
+    return a is not None and a == b
 
 
-def is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound, uf: SizeUnionfind) -> bool:
-    """Structurally compare two bounds, treating equal-representative
-    sizes at each level as equal."""
+def is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound) -> bool:
+    """Structurally compare two (resolved) bounds, treating equal sizes
+    at each level as equal."""
     match b1, b2:
         case ListSize(), ListSize():
-            return _size_eq(b1.size, b2.size, uf) and is_size_eq(b1.elt, b2.elt, uf)
+            return _size_eq(b1.size, b2.size) and is_size_eq(b1.elt, b2.elt)
         case TupleSize(), TupleSize():
             return (len(b1.elts) == len(b2.elts)
-                    and all(is_size_eq(a, b, uf) for a, b in zip(b1.elts, b2.elts)))
+                    and all(is_size_eq(a, b) for a, b in zip(b1.elts, b2.elts)))
         case None, None:
             return True
         case _:
@@ -150,10 +147,6 @@ class ArraySizeAnalysis:
     by_def: dict[Definition, ArraySizeBound]
     ret_size: ArraySizeBound
     def_use: DefineUseAnalysis
-    size_uf: SizeUnionfind
-    """Equivalence classes for the size variables appearing in the bounds
-    above.  Use :func:`concrete_size` / :func:`is_size_eq` (which take
-    this) rather than comparing sizes directly."""
 
 
 #####################################################################
@@ -236,10 +229,25 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     def analyze(self) -> ArraySizeAnalysis:
         self._visit_function(self.func, None)
-        return ArraySizeAnalysis(
-            self.by_expr, self.by_def, self.ret_size,
-            self.partial_eval.def_use, self.uf,
-        )
+        # Resolve every size to its union-find representative so the
+        # result is self-contained: afterwards a size is known iff it's an
+        # ``int`` and equal sizes are ``==`` — no union-find needed by
+        # consumers (cf. type inference's ``_resolve_type``).
+        by_expr = {e: self._resolve(b) for e, b in self.by_expr.items()}
+        by_def = {d: self._resolve(b) for d, b in self.by_def.items()}
+        ret_size = self._resolve(self.ret_size)
+        return ArraySizeAnalysis(by_expr, by_def, ret_size, self.partial_eval.def_use)
+
+    def _resolve(self, bound: ArraySizeBound) -> ArraySizeBound:
+        """Replace every size variable in *bound* with its union-find
+        representative (an ``int`` if pinned, else the canonical var)."""
+        match bound:
+            case ListSize():
+                return ListSize(self._resolve(bound.elt), _repr_size(bound.size, self.uf))
+            case TupleSize():
+                return TupleSize(tuple(self._resolve(e) for e in bound.elts))
+            case _:
+                return None
 
     def _cvt_type(self, ty: Type) -> ArraySizeBound:
         match ty:
@@ -389,8 +397,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     elt_tys.append(ty.elt)
                     sizes.append(ty.size)
 
-                concretes = {concrete_size(s, self.uf) for s in sizes}
-                concretes.discard(None)
+                concretes = {r for s in sizes
+                             if isinstance((r := _repr_size(s, self.uf)), int)}
                 symbols = [s for s in sizes if isinstance(s, NamedId)]
 
                 if any(s is None for s in sizes):
