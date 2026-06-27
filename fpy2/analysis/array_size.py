@@ -26,7 +26,7 @@ from ..function import Function
 from ..number import Float, INTEGER, REAL
 from ..types import ListType, TupleType, Type
 from ..utils import Gensym, NamedId, Unionfind
-from .context_use import ContextUse, ContextUseAnalysis
+from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
 from .define_use import Definition, DefSite, DefineUseAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo, Value
 from .type_infer import TypeInfer, TypeAnalysis
@@ -96,21 +96,6 @@ def _size_eq(a: ArraySize, b: ArraySize) -> bool:
     return a is not None and a == b
 
 
-def is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound) -> bool:
-    """Structurally compare two (resolved) bounds, treating equal sizes
-    at each level as equal."""
-    match b1, b2:
-        case ListSize(), ListSize():
-            return _size_eq(b1.size, b2.size) and is_size_eq(b1.elt, b2.elt)
-        case TupleSize(), TupleSize():
-            return (len(b1.elts) == len(b2.elts)
-                    and all(is_size_eq(a, b) for a, b in zip(b1.elts, b2.elts)))
-        case None, None:
-            return True
-        case _:
-            return False
-
-
 @dataclass(frozen=True)
 class ListSize:
     """Array-size info for a list-valued expression."""
@@ -133,6 +118,20 @@ Inferred array-size info for an expression or variable definition.
   an :class:`ArraySize`.
 - :class:`TupleSize` — heterogeneous tuple, per-element bounds preserved.
 """
+
+def is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound) -> bool:
+    """Structurally compare two (resolved) bounds, treating equal sizes
+    at each level as equal."""
+    match b1, b2:
+        case ListSize(), ListSize():
+            return _size_eq(b1.size, b2.size) and is_size_eq(b1.elt, b2.elt)
+        case TupleSize(), TupleSize():
+            return (len(b1.elts) == len(b2.elts)
+                    and all(is_size_eq(a, b) for a, b in zip(b1.elts, b2.elts)))
+        case None, None:
+            return True
+        case _:
+            return False
 
 
 #####################################################################
@@ -426,7 +425,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     assert isinstance(elt_ty, ListSize)
                     elt_ty = elt_ty.elt
 
-                ty: ArraySizeBound = elt_ty
+                acc: ArraySizeBound = elt_ty
                 for arg in arg_rev:
                     size_v = self._get_eval(arg)
                     size = (
@@ -434,8 +433,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                         if isinstance(size_v, Float | Fraction)
                         else None
                     )
-                    ty = ListSize(ty, size)
-                return ty
+                    acc = ListSize(acc, size)
+                return acc
 
             case _:
                 return None
@@ -500,7 +499,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
         # constant (``x[1:3]`` -> 2, or ``x[i:i+16]`` where the base
         # cancels; see ``_affine``).  An omitted ``stop`` is the list's own
         # size, usable only when concrete.
+        start: tuple[Expr | None, int]
         start = (None, 0) if e.start is None else self._affine(e.start)
+        stop: tuple[Expr | None, int] | None
         if e.stop is None:
             stop = (None, ty.size) if isinstance(ty.size, int) else None
         else:
@@ -608,9 +609,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
             bound = bound.elt
         return depth
 
-    def _is_exact(self, e: Expr) -> bool:
+    def _is_exact(self, e: ContextUseSite) -> bool:
         """True iff *e* is evaluated under the exact (``REAL``) rounding
-        context, so its arithmetic introduces no rounding."""
+        context, so its arithmetic introduces no rounding.  Only called on
+        arithmetic nodes (always context-use sites), so the lookup is safe
+        even though ``e`` is typed wider than the map's key."""
         scope = self._ctx_use.use_to_scope.get(e)
         return scope is not None and scope.ctx == REAL
 

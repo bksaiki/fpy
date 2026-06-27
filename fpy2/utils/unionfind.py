@@ -64,7 +64,7 @@ class Unionfind(Generic[_T]):
             raise KeyError(x)
         return self._find(x)
 
-    def get(self, x: _T, default=None):
+    def get(self, x: _T, default: _T | None = None):
         """
         Finds the representative of the set containing `x`,
         or `default` if a representative is not found.
