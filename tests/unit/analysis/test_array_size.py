@@ -714,6 +714,45 @@ class TestArraySizeInfer:
 
         assert self._range_bound(f, 'Range1').size is None
 
+    def test_range1_dim_is_known_structurally(self):
+        """``dim(xs)`` is the nesting depth — known even when sizes aren't,
+        so ``range(dim(xs))`` is a known size."""
+
+        @fp.fpy
+        def f(xs: list[list[fp.Real]]) -> list[fp.Real]:
+            return [0.0 for _ in range(fp.dim(xs))]
+
+        assert self._range_bound(f, 'Range1').size == 2
+
+    def test_range1_size_of_known_dimension(self):
+        """``size(xs, d)`` folds to the length of dimension ``d`` when
+        statically known."""
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            xs = fp.empty(4, 3)
+            return [0.0 for _ in range(fp.size(xs, 1))]
+
+        assert self._range_bound(f, 'Range1').size == 3
+
+    def test_range1_size_of_unknown_dimension_is_unknown(self):
+        """``size(xs, d)`` of an unknown-size dimension stays unknown."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return [0.0 for _ in range(fp.size(xs, 0))]
+
+        assert self._range_bound(f, 'Range1').size is None
+
+    def test_slice_dim_of_known_list(self):
+        """``dim`` folds inside a slice bound too."""
+
+        @fp.fpy
+        def f(xs: list[list[fp.Real]]) -> list[list[fp.Real]]:
+            return xs[0:fp.dim(xs)]
+
+        assert self._slice_bound(f).size == 2
+
     # ------------------------------------------------------------------
     # IndexedAssign as a fresh SSA def
 

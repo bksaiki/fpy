@@ -570,17 +570,43 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _const_int(self, e: Expr) -> int | None:
         """The integer value *e* statically evaluates to, or ``None``.
 
-        Covers partial-eval constants and ``len(xs)`` of a list whose
-        size is statically known.
+        Covers partial-eval constants and the integer-valued list queries
+        ``len(xs)`` / ``size(xs, d)`` / ``dim(xs)`` when the queried size
+        is statically known (``dim`` always is — it's the nesting depth).
         """
         val = self._get_eval(e)
         if isinstance(val, Float | Fraction):
             return int(INTEGER.round(val))
-        if isinstance(e, Len):
-            inner = self.by_expr.get(e.arg)
-            if isinstance(inner, ListSize) and isinstance(inner.size, int):
-                return inner.size
+        match e:
+            case Len():
+                bound = self.by_expr.get(e.arg)
+                if isinstance(bound, ListSize) and isinstance(bound.size, int):
+                    return bound.size
+            case Dim():
+                bound = self.by_expr.get(e.arg)
+                if isinstance(bound, ListSize):
+                    return self._list_depth(bound)
+            case Size():
+                d = self._const_int(e.second)
+                if d is None:
+                    return None
+                bound = self.by_expr.get(e.first)
+                for _ in range(d):
+                    if not isinstance(bound, ListSize):
+                        return None
+                    bound = bound.elt
+                if isinstance(bound, ListSize) and isinstance(bound.size, int):
+                    return bound.size
         return None
+
+    @staticmethod
+    def _list_depth(bound: ArraySizeBound) -> int:
+        """Number of nested list dimensions in *bound* (== ``dim``)."""
+        depth = 0
+        while isinstance(bound, ListSize):
+            depth += 1
+            bound = bound.elt
+        return depth
 
     def _is_exact(self, e: Expr) -> bool:
         """True iff *e* is evaluated under the exact (``REAL``) rounding
