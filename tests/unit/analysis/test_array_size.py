@@ -12,9 +12,8 @@ from fpy2.analysis import (
     ArraySizeInfer,
     ListSize,
     TupleSize,
-    concrete_size,
-    is_size_eq,
 )
+from fpy2.analysis.array_size import concrete_size, is_size_eq
 from fpy2.utils import NamedId
 
 
@@ -64,7 +63,6 @@ class TestArraySizeInfer:
     def test_list_argument_has_listsize(self):
         """A list-of-real argument has a ListSize whose size is a fresh
         size variable (its length is fixed per call, just unknown)."""
-        from fpy2.utils import NamedId
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -387,7 +385,6 @@ class TestArraySizeInfer:
         """``zip`` is strict, so an unknown-size input zipped with a
         known-size one must equal it (or the zip raises): the result size
         is the known length, and the symbolic input is pinned to it."""
-        from fpy2.analysis.array_size import concrete_size
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[tuple[fp.Real, fp.Real]]:
@@ -1111,7 +1108,6 @@ class TestArraySizeInfer:
 
     def test_rebind_preserves_symbol(self):
         """``ys = xs`` gives ``ys`` the same symbolic length as ``xs``."""
-        from fpy2.analysis.array_size import is_size_eq
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
@@ -1125,7 +1121,6 @@ class TestArraySizeInfer:
     def test_comprehension_over_argument_is_equivalent(self):
         """``[f(x) for x in xs]`` has the same length as ``xs``."""
         from fpy2.utils import NamedId
-        from fpy2.analysis.array_size import is_size_eq
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
@@ -1140,7 +1135,6 @@ class TestArraySizeInfer:
 
     def test_enumerate_over_argument_is_equivalent(self):
         """``enumerate(xs)`` preserves ``xs``'s symbolic length."""
-        from fpy2.analysis.array_size import is_size_eq
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
@@ -1152,7 +1146,6 @@ class TestArraySizeInfer:
 
     def test_full_slice_preserves_symbol(self):
         """``xs[:]`` spans the whole list, keeping its symbolic length."""
-        from fpy2.analysis.array_size import is_size_eq
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
@@ -1180,7 +1173,6 @@ class TestArraySizeInfer:
     def test_distinct_arguments_are_not_equivalent(self):
         """Two independent list arguments get distinct, non-equivalent
         symbols (no false equality)."""
-        from fpy2.analysis.array_size import is_size_eq
 
         @fp.fpy
         def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
@@ -1193,7 +1185,6 @@ class TestArraySizeInfer:
     def test_loop_rebind_keeps_symbol(self):
         """A loop that re-binds a list via a size-preserving op keeps the
         symbolic length across the fixpoint."""
-        from fpy2.analysis.array_size import is_size_eq
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
@@ -1207,7 +1198,6 @@ class TestArraySizeInfer:
 
     def test_concrete_size_helper(self):
         """``concrete_size`` resolves ints directly and pinned symbols."""
-        from fpy2.analysis.array_size import concrete_size
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:

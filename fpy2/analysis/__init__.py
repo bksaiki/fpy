@@ -7,8 +7,6 @@ from .array_size import (
     ArraySizeInfer,
     ListSize,
     TupleSize,
-    concrete_size,
-    is_size_eq,
 )
 from .call_graph import CallGraph, CallGraphAnalysis, CallGraphError
 from .context_use import (
