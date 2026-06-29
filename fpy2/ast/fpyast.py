@@ -43,7 +43,6 @@ __all__ = [
     'ContextTypeAnn',
     'TupleTypeAnn',
     'ListTypeAnn',
-    'SizedTensorTypeAnn',
 
     # Value expressions
     'Var',
@@ -346,25 +345,6 @@ class ListTypeAnn(TypeAnn):
             and self.elt.is_equiv(other.elt)
             and self.length == other.length
         )
-
-class SizedTensorTypeAnn(TypeAnn):
-    """FPy AST: sized, homogenous tensor type annotation"""
-    __slots__ = ('dims', 'elt')
-    dims: tuple[int | NamedId, ...]
-    elt: TypeAnn
-
-    def __init__(self, dims: list[int | NamedId], elt: TypeAnn, loc: Location | None):
-        super().__init__(loc)
-        self.dims = tuple(dims)
-        self.elt = elt
-
-    def is_equiv(self, other) -> bool:
-        return (
-            isinstance(other, SizedTensorTypeAnn)
-            and self.dims == other.dims
-            and self.elt.is_equiv(other.elt)
-        )
-
 
 class Expr(Ast):
     """FPy AST: expression"""

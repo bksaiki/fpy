@@ -155,14 +155,6 @@ def _ann_to_type(ty: TypeAnn | None, fresh_var: Callable[[], VarType]) -> Type:
         case ListTypeAnn():
             # list type — carry the optional size annotation onto the type
             return ListType(_ann_to_type(ty.elt, fresh_var), ty.length)
-        case SizedTensorTypeAnn():
-            if len(ty.dims) == 0:
-                return ListType(fresh_var())
-            else:
-                arr_ty = ListType(_ann_to_type(ty.elt, fresh_var))
-                for _ in ty.dims[1:]:
-                    arr_ty = ListType(arr_ty)
-                return arr_ty
         case _:
             raise RuntimeError(f'unreachable: {ty}')
 

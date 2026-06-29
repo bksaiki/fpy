@@ -191,16 +191,6 @@ class _FPCoreCompileInstance(Visitor):
                                 'FPCore-compilable', arg)
                     ann = ann.elt
                 return str(arg.name), {}, dims
-            case SizedTensorTypeAnn():
-                dims = []
-                for dim in arg.type.dims:
-                    if isinstance(dim, int):
-                        dims.append(dim)
-                    elif isinstance(dim, NamedId):
-                        dims.append(str(dim))
-                    else:
-                        raise FPCoreCompileError('unexpected dimension type', dim)
-                return str(arg.name), {}, dims
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)
 

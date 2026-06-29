@@ -76,6 +76,38 @@ class TestArraySizeInfer:
         assert bound.elt is None
         assert isinstance(bound.size, NamedId)
 
+    def test_arg_concrete_length_annotation_seeds_size(self):
+        """A ``list[Real]`` argument annotated with a concrete length
+        (e.g. an FPCore fixed dimension) seeds a concrete array-size."""
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return xs[0]
+
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 16, None)
+        info = self._run(f)
+        xs_bound = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
+        assert concrete_size(xs_bound.size) == 16
+
+    def test_shared_symbolic_length_annotation_unifies(self):
+        """Two list args annotated with the *same* symbolic length share a
+        size class (provably-equal lengths)."""
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+
+        n = NamedId('N')
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            return xs[0]
+
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), n, None)
+        f.ast.args[1].type = ListTypeAnn(RealTypeAnn(None, None), n, None)
+        info = self._run(f)
+        xs_b = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
+        ys_b = [b for d, b in info.by_def.items() if d.name.base == 'ys'][0]
+        assert is_size_eq(xs_b, ys_b)
+
     def test_tuple_argument_has_tuplesize(self):
         """A tuple argument is a TupleSize with one entry per element."""
 
