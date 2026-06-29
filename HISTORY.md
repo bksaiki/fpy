@@ -1,5 +1,22 @@
 # Version History
 
+## [0.1.10] - 2026-06-29
+### Features:
+ - Analyses:
+   - array size:
+     - extend to consider symbolic sizes
+     - solve for affine slices
+     - consider length assertions
+
+### Fixes:
+ - Analyses:
+   - array size: fix empty ranges
+   - format inference: fix empty ranges
+ - Compilers:
+   - C++: fix empty ranges
+ - Languages:
+   - fixes semantics of context statements
+
 ## [0.1.9] - 2026-06-18
 ### Features:
  - Analyses:
