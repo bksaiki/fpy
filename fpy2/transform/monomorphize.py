@@ -13,6 +13,25 @@ from ..fpc_context import FPCoreContext
 from ..types import *
 
 
+def _merge_length(a: int | NamedId | None, b: int | NamedId | None) -> int | NamedId | None:
+    """Merge two list-size annotations, preferring the more specific
+    (``concrete > symbolic > None``).  Two *different* concrete sizes are a
+    genuine contradiction and raise."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    if isinstance(a, int) and isinstance(b, int):
+        if a != b:
+            raise RuntimeError(f'Cannot merge list sizes {a} and {b}')
+        return a
+    if isinstance(a, int):
+        return a
+    if isinstance(b, int):
+        return b
+    return a  # both symbolic — keep the existing one
+
+
 class _MonomorphizeVisitor(DefaultTransformVisitor):
     """Monomorphize visitor."""
 
@@ -43,7 +62,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
                 return TupleTypeAnn(elts, None)
             case ListType():
                 elt = self._cvt_arg_type(ty.elt)
-                return ListTypeAnn(elt, None, None)
+                return ListTypeAnn(elt, ty.length, None)
             case _:
                 raise RuntimeError(f'Unsupported argument type `{ty}`')
 
@@ -85,7 +104,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
                 return TupleTypeAnn(elts, None)
             case ListTypeAnn(), ListTypeAnn():
                 elt = self._merge_annotation(a.elt, b.elt)
-                return ListTypeAnn(elt, None, None)
+                return ListTypeAnn(elt, _merge_length(a.length, b.length), None)
             case _:
                 raise RuntimeError(f'Cannot merge different types `{a}` and `{b}`')
 
@@ -189,6 +208,9 @@ class Monomorphize:
                     for a_elt, b_elt in zip(a_ty.elts, b_ty.elts):
                         _check_merge(curr_ty, new_ty, a_elt, b_elt)
                 case ListType(), ListType():
+                    if (isinstance(a_ty.length, int) and isinstance(b_ty.length, int)
+                            and a_ty.length != b_ty.length):
+                        _raise_conflict(curr_ty, new_ty)
                     _check_merge(curr_ty, new_ty, a_ty.elt, b_ty.elt)
                 case _:
                     _raise_conflict(curr_ty, new_ty)
