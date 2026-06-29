@@ -279,10 +279,19 @@ class ListType(Type):
     elt: Type
     """element type"""
 
-    def __init__(self, elt: Type):
+    length: int | NamedId | None
+    """optional list size: a known ``int``, a symbolic ``NamedId``, or
+    ``None`` (unknown).  This is *metadata* — like :attr:`RealType.ctx` it
+    is ignored by ``__eq__`` / ``__hash__`` (and hence by unification), and
+    is read only by array-size inference, monomorphization, and the FPCore
+    backend."""
+
+    def __init__(self, elt: Type, length: int | NamedId | None = None):
         self.elt = elt
+        self.length = length
 
     def __eq__(self, other):
+        # ``length`` is metadata and deliberately excluded from equality.
         return isinstance(other, ListType) and self.elt == other.elt
 
     def __hash__(self):
@@ -292,7 +301,9 @@ class ListType(Type):
         return self.elt.is_context_type()
 
     def format(self) -> str:
-        return f'list[{self.elt.format()}]'
+        if self.length is None:
+            return f'list[{self.elt.format()}]'
+        return f'list[{self.elt.format()}][{self.length}]'
 
     def free_type_vars(self) -> set[NamedId]:
         return self.elt.free_type_vars()
@@ -301,10 +312,10 @@ class ListType(Type):
         return self.elt.free_context_vars()
 
     def subst_type(self, subst: dict[NamedId, Type]) -> Type:
-        return ListType(self.elt.subst_type(subst))
+        return ListType(self.elt.subst_type(subst), self.length)
 
     def subst_context(self, subst: dict[NamedId, ContextParam]) -> Type:
-        return ListType(self.elt.subst_context(subst))
+        return ListType(self.elt.subst_context(subst), self.length)
 
 
 class FunctionType(Type):

@@ -105,6 +105,37 @@ _ternary_table: dict[type[TernaryOp], FunctionType] = {
 }
 
 
+def _merge_length(a: int | NamedId | None, b: int | NamedId | None) -> int | NamedId | None:
+    """Keep the more specific of two list lengths: ``concrete > symbolic >
+    None``.  Used when unifying two list types; never fails (length is
+    metadata)."""
+    if isinstance(a, int):
+        return a
+    if isinstance(b, int):
+        return b
+    return a if a is not None else b
+
+
+def _drop_symbolic_lengths(ty: Type) -> Type:
+    """Replace every *symbolic* (``NamedId``) list length with ``None``,
+    keeping concrete ``int`` lengths.  Applied when instantiating a callee's
+    type so its dimension variables don't leak across the call boundary."""
+    match ty:
+        case ListType():
+            length = ty.length if isinstance(ty.length, int) else None
+            return ListType(_drop_symbolic_lengths(ty.elt), length)
+        case TupleType():
+            return TupleType(*[_drop_symbolic_lengths(e) for e in ty.elts])
+        case FunctionType():
+            return FunctionType(
+                ty.ctx,
+                [_drop_symbolic_lengths(a) for a in ty.arg_types],
+                _drop_symbolic_lengths(ty.return_type),
+            )
+        case _:
+            return ty
+
+
 def _ann_to_type(ty: TypeAnn | None, fresh_var: Callable[[], VarType]) -> Type:
     match ty:
         case AnyTypeAnn():
@@ -122,16 +153,8 @@ def _ann_to_type(ty: TypeAnn | None, fresh_var: Callable[[], VarType]) -> Type:
             elt_tys = [_ann_to_type(elt, fresh_var) for elt in ty.elts]
             return TupleType(*elt_tys)
         case ListTypeAnn():
-            # list type
-            return ListType(_ann_to_type(ty.elt, fresh_var))
-        case SizedTensorTypeAnn():
-            if len(ty.dims) == 0:
-                return ListType(fresh_var())
-            else:
-                arr_ty = ListType(_ann_to_type(ty.elt, fresh_var))
-                for _ in ty.dims[1:]:
-                    arr_ty = ListType(arr_ty)
-                return arr_ty
+            # list type — carry the optional size annotation onto the type
+            return ListType(_ann_to_type(ty.elt, fresh_var), ty.length)
         case _:
             raise RuntimeError(f'unreachable: {ty}')
 
@@ -214,7 +237,7 @@ class _TypeInferInstance(Visitor):
                 return self.tvars.add(TupleType(*elts))
             case ListType():
                 elt_ty = self._resolve_type(ty.elt)
-                return self.tvars.add(ListType(elt_ty))
+                return self.tvars.add(ListType(elt_ty, ty.length))
             case _:
                 raise NotImplementedError(f'cannot resolve type {ty}')
 
@@ -235,7 +258,9 @@ class _TypeInferInstance(Visitor):
                 elt_ty = self.tvars.add(elt_ty)
                 elt_ty = self.tvars.union(elt_ty, self.tvars.add(a_ty.elt))
                 elt_ty = self.tvars.union(elt_ty, self.tvars.add(b_ty.elt))
-                return self.tvars.add(ListType(elt_ty))
+                # length is metadata: keep the more specific, never fail
+                length = _merge_length(a_ty.length, b_ty.length)
+                return self.tvars.add(ListType(elt_ty, length))
             case TupleType(), TupleType():
                 # TODO: what if the length doesn't match
                 if len(a_ty.elts) != len(b_ty.elts):
@@ -252,7 +277,10 @@ class _TypeInferInstance(Visitor):
         subst: dict[NamedId, Type] = {}
         for fv in sorted(ty.free_type_vars()):
             subst[fv] = self._fresh_type_var()
-        return ty.subst_type(subst)
+        # a callee's *symbolic* list lengths name the callee's own
+        # dimensions and are meaningless at the call site — drop them
+        # (concrete lengths stay; they hold regardless of caller).
+        return _drop_symbolic_lengths(ty.subst_type(subst))
 
     def _generalize(self, ty: Type) -> tuple[Type, dict[NamedId, Type]]:
         subst: dict[NamedId, Type] = {}

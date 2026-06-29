@@ -173,15 +173,23 @@ class _FPCoreCompileInstance(Visitor):
                 return str(arg.name), {}, None
             case RealTypeAnn():
                 return str(arg.name), {}, None
-            case SizedTensorTypeAnn():
+            case ListTypeAnn():
+                # nested sized list -> FPCore tensor dims (outermost first).
+                # Every dimension must have a known size (int) or symbolic
+                # name (NamedId); an unsized list isn't FPCore-compilable.
                 dims: list[int | str] = []
-                for dim in arg.type.dims:
-                    if isinstance(dim, int):
-                        dims.append(dim)
-                    elif isinstance(dim, NamedId):
-                        dims.append(str(dim))
-                    else:
-                        raise FPCoreCompileError('unexpected dimension type', dim)
+                ann: TypeAnn = arg.type
+                while isinstance(ann, ListTypeAnn):
+                    match ann.length:
+                        case int():
+                            dims.append(ann.length)
+                        case NamedId():
+                            dims.append(str(ann.length))
+                        case _:
+                            raise FPCoreCompileError(
+                                'list argument without a known size is not '
+                                'FPCore-compilable', arg)
+                    ann = ann.elt
                 return str(arg.name), {}, dims
             case _:
                 raise FPCoreCompileError('unsupported argument type', arg)

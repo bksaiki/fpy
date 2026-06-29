@@ -767,7 +767,17 @@ class _FPCore2FPy:
                             case _:
                                 raise RuntimeError(f'unsupported shape {shape} for argument {name}')
 
-                    arg = Argument(t, SizedTensorTypeAnn(dims, AnyTypeAnn(None), None), None)
+                    # nested sized list type: outermost dimension first, so
+                    # ``(d0, d1)`` -> ``list[list[any][d1]][d0]``.  Each
+                    # ``length`` is the dim's size (``int``) or the gensym'd
+                    # name shared with the body's ``size(t, i)`` binding.
+                    if dims:
+                        ann: TypeAnn = AnyTypeAnn(None)
+                        for dim in reversed(dims):
+                            ann = ListTypeAnn(ann, dim, None)
+                    else:
+                        ann = ListTypeAnn(AnyTypeAnn(None), None, None)
+                    arg = Argument(t, ann, None)
                     args.append(arg)
                     ctx.env[name] = t
                 case None:

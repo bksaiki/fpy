@@ -199,7 +199,7 @@ class Parser:
             return TupleTypeAnn(elts, loc)
         elif isinstance(ty, list):
             elt = self._convert_type(ty[0], loc)
-            return ListTypeAnn(elt, loc)
+            return ListTypeAnn(elt, None, loc)
         else:
             # TODO: implement
             return AnyTypeAnn(loc)
