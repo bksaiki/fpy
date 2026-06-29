@@ -12,11 +12,14 @@
 >   `Unionfind[NamedId | int]` (`fpy2.utils.Unionfind`).  So:
 >   `ArraySize: TypeAlias = int | NamedId | None`.
 > - **Concrete int is the representative.** Pinning a class to a constant
->   is just `union(int, var)` with the `int` as leader.  There is no
->   separate `pin`/`resolve` map: `concrete_size(size, uf)` is a `find`
->   that lands on an `int` (or `None`).  `ArraySizeAnalysis.size_uf` is
->   the raw `Unionfind`; consumers use the module helpers
->   `concrete_size(size, uf)` and `is_size_eq(b1, b2, uf)`.
+>   is just `union(int, var)` with the `int` as leader — no separate
+>   `pin`/`resolve` map.
+> - **Result is fully resolved; the union-find is not exposed.** Before
+>   returning, every size is replaced by its representative (`_resolve`,
+>   cf. type inference's `_resolve_type`): an `int` if the class is pinned,
+>   else the canonical variable.  So `ArraySizeAnalysis` carries **no**
+>   `size_uf`; a size is known iff it's an `int`, and the helpers
+>   `concrete_size(size)` / `is_size_eq(b1, b2)` take no union-find.
 > - **Size-preserving propagation is mostly free.** `ys = xs`,
 >   `[f(x) for x in xs]`, `enumerate(xs)`, `xs[:]`, and `IndexedAssign`
 >   already thread `.size`, so the size variable rides along — no special
@@ -41,11 +44,22 @@
 >   fixpoint requires both stored-bound stability *and* a stable counter,
 >   so a `zip`-merge inside a loop body can't terminate the fixpoint one
 >   iteration early.
-> - **Deferred (not needed by any current consumer):** assertion-seeded
->   equalities (`assert len(xs) == len(ys)`), and consumer integration
->   (`format_infer`'s `Sum`, bounds-check elimination).  `format_infer`
->   already ignores non-`int` sizes, so symbolic sizes are a safe no-op
->   there until a consumer opts in.
+> - **Assertion-seeded equalities (done).** `assert len(xs) == len(ys)`
+>   merges the two size variables and `assert len(xs) == N` pins one — but
+>   only for *unconditional* asserts (not nested in an `if`/loop), so the
+>   equality holds on every execution.
+>
+> ### Remaining work
+>
+> The analysis is implemented; what's left is **consumer integration** —
+> nothing yet reads the symbolic equalities (`format_infer` ignores
+> non-`int` sizes, a safe no-op):
+>
+> - **Bounds-check elimination** — discharge `ys[i]` when `is_size_eq`
+>   proves `len(ys) == len(xs)` and `i < len(xs)`.  The flagship payoff;
+>   three equality sources now feed it (arguments, strict `zip`, asserts).
+> - **`format_infer` `Sum`** — fall back to a runtime-bounded loop when the
+>   list size is a tracked variable rather than a static `int`.
 
 ## Context
 
