@@ -43,7 +43,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
                 return TupleTypeAnn(elts, None)
             case ListType():
                 elt = self._cvt_arg_type(ty.elt)
-                return ListTypeAnn(elt, None)
+                return ListTypeAnn(elt, None, None)
             case _:
                 raise RuntimeError(f'Unsupported argument type `{ty}`')
 
@@ -85,7 +85,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
                 return TupleTypeAnn(elts, None)
             case ListTypeAnn(), ListTypeAnn():
                 elt = self._merge_annotation(a.elt, b.elt)
-                return ListTypeAnn(elt, None)
+                return ListTypeAnn(elt, None, None)
             case _:
                 raise RuntimeError(f'Cannot merge different types `{a}` and `{b}`')
 

@@ -1252,7 +1252,7 @@ def _type_to_typeann(t: Type) -> TypeAnn:
     if isinstance(t, TupleType):
         return TupleTypeAnn([_type_to_typeann(e) for e in t.elts], None)
     if isinstance(t, ListType):
-        return ListTypeAnn(_type_to_typeann(t.elt), None)
+        return ListTypeAnn(_type_to_typeann(t.elt), t.length, None)
     if isinstance(t, ContextType):
         return ContextTypeAnn(None)
     raise NotImplementedError(f'no TypeAnn for type {t.format()}')

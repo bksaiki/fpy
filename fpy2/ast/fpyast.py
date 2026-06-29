@@ -327,15 +327,25 @@ class TupleTypeAnn(TypeAnn):
 
 class ListTypeAnn(TypeAnn):
     """FPy AST: native list type annotation"""
-    __slots__ = ('elt',)
+    __slots__ = ('elt', 'length')
     elt: TypeAnn
+    length: int | NamedId | None
+    """optional list size: a known ``int``, a symbolic ``NamedId``, or
+    ``None`` (unknown)"""
 
-    def __init__(self, elt: TypeAnn, loc: Location | None):
+    def __init__(self, elt: TypeAnn, length: int | NamedId | None, loc: Location | None):
         super().__init__(loc)
         self.elt = elt
+        self.length = length
 
     def is_equiv(self, other) -> bool:
-        return isinstance(other, ListTypeAnn) and self.elt.is_equiv(other.elt)
+        # annotation equivalence is syntactic, so the size is compared
+        # (unlike the semantic ``ListType``, where length is metadata)
+        return (
+            isinstance(other, ListTypeAnn)
+            and self.elt.is_equiv(other.elt)
+            and self.length == other.length
+        )
 
 class SizedTensorTypeAnn(TypeAnn):
     """FPy AST: sized, homogenous tensor type annotation"""
