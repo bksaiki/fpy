@@ -805,11 +805,16 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _seed_from_assert(self, test: Expr):
         """Learn size equalities from ``len(a) == len(b)`` / ``len(a) == N``
         (and chained ``==``) — pins or merges the size variables."""
-        if not isinstance(test, Compare):
-            return
-        for op, lhs, rhs in zip(test.ops, test.args, test.args[1:]):
-            if op == CompareOp.EQ:
-                self._relate_sizes(self._len_size(lhs), self._len_size(rhs))
+        match test:
+            case And():
+                for arg in test.args:
+                    self._seed_from_assert(arg)
+            case Compare():
+                for op, lhs, rhs in zip(test.ops, test.args, test.args[1:]):
+                    if op == CompareOp.EQ:
+                        self._relate_sizes(self._len_size(lhs), self._len_size(rhs))
+            case _:
+                pass
 
     def _len_size(self, e: Expr) -> ArraySize:
         """The size ``e`` constrains: the list's size for ``len(xs)``, the

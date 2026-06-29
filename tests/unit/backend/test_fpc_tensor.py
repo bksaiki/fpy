@@ -12,6 +12,7 @@ from fpy2 import Function, FPCoreCompiler
 from fpy2.ast.fpyast import ListTypeAnn
 from fpy2.analysis import DefineUse
 from fpy2.backend.fpc import _FPCoreCompileInstance
+from fpy2.utils import NamedId
 
 
 def _parse(src: str) -> Function:
@@ -30,8 +31,10 @@ class TestFPCoreTensorSizes:
         """Named dims become symbolic lengths on the nested list."""
         fun = _parse('(FPCore foo ((B m n)) :precision binary64 1.0)')
         ann = fun.ast.args[0].type
-        assert isinstance(ann, ListTypeAnn) and ann.length.base == 'm'
-        assert isinstance(ann.elt, ListTypeAnn) and ann.elt.length.base == 'n'
+        assert isinstance(ann, ListTypeAnn) and isinstance(ann.length, NamedId)
+        assert ann.length.base == 'm'
+        assert isinstance(ann.elt, ListTypeAnn) and isinstance(ann.elt.length, NamedId)
+        assert ann.elt.length.base == 'n'
 
     def test_fixed_dims_round_trip(self):
         """FPCore -> FPy -> FPCore preserves fixed tensor dimensions."""
