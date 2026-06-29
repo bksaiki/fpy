@@ -260,11 +260,20 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case _:
                 return None
 
+    def _annotated_size(self, length: int | NamedId | None) -> ArraySize:
+        """The array-size seeded by a :class:`ListType`'s optional length:
+        a concrete ``int``; a symbolic ``NamedId`` (registered in the
+        union-find, so equal dim names share a class); or ``None`` when the
+        annotation gives no size."""
+        if isinstance(length, NamedId):
+            self.uf.add(length)
+        return length
+
     def _cvt_type(self, ty: Type) -> ArraySizeBound:
         match ty:
             case ListType():
                 elt = self._cvt_type(ty.elt)
-                return ListSize(elt, None)
+                return ListSize(elt, self._annotated_size(ty.length))
             case TupleType():
                 elts = tuple(self._cvt_type(e) for e in ty.elts)
                 return TupleSize(elts)
@@ -272,13 +281,16 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 return None
 
     def _arg_bound(self, ty: Type) -> ArraySizeBound:
-        """Like :meth:`_cvt_type`, but a list parameter's *outer* length
-        gets a fresh size variable (its length is fixed per call, just
-        unknown), so equalities such as ``ys = xs`` are tracked.  Inner
-        dimensions stay ``None`` (one size variable per argument)."""
+        """Like :meth:`_cvt_type`, but a list parameter's *outer* length,
+        when the annotation gives none, gets a fresh size variable (its
+        length is fixed per call, just unknown), so equalities such as
+        ``ys = xs`` are tracked."""
         match ty:
             case ListType():
-                return ListSize(self._cvt_type(ty.elt), self._fresh_size())
+                size = self._annotated_size(ty.length)
+                if size is None:
+                    size = self._fresh_size()
+                return ListSize(self._cvt_type(ty.elt), size)
             case TupleType():
                 return TupleSize(tuple(self._arg_bound(e) for e in ty.elts))
             case _:
