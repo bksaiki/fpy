@@ -512,10 +512,11 @@ class _TypeInferInstance(Visitor):
             case UnderscoreId():
                 pass
             case TupleBinding():
-                if not isinstance(ty, TupleType) or len(binding.elts) != len(ty.elts):
-                    raise TypeInferError(f'cannot unpack `{ty.format()}` for `{binding.format()}`')
-                # type has expected shape
-                for elt_ty, elt in zip(ty.elts, binding.elts):
+                # unify with a tuple of this arity (constrains an open
+                # type, raises on a real mismatch)
+                elts = [self._fresh_type_var() for _ in binding.elts]
+                self._unify(ty, TupleType(*elts))
+                for elt_ty, elt in zip(elts, binding.elts):
                     self._visit_binding(site, elt, elt_ty)
             case _:
                 raise RuntimeError(f'unreachable: {binding}')
@@ -523,10 +524,10 @@ class _TypeInferInstance(Visitor):
     def _visit_list_comp(self, e: ListComp, ctx: None) -> ListType:
         for target, iterable in zip(e.targets, e.iterables):
             iter_ty = self._visit_expr(iterable, None)
-            if not isinstance(iter_ty, ListType):
-                raise TypeInferError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
-            # expected type: list a
-            self._visit_binding(e, target, iter_ty.elt)
+            # unify with a list (constrains an open type, raises on a non-list)
+            item_ty = self._fresh_type_var()
+            self._unify(iter_ty, ListType(item_ty))
+            self._visit_binding(e, target, item_ty)
 
         elt_ty = self._visit_expr(e.elt, None)
         return ListType(elt_ty)
@@ -650,13 +651,11 @@ class _TypeInferInstance(Visitor):
             self._unify(lhs_ty, rhs_ty)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
-        # type check iterable
+        # unify with a list (constrains an open type, raises on a non-list)
         iter_ty = self._visit_expr(stmt.iterable, None)
-        if not isinstance(iter_ty, ListType):
-            raise TypeInferError(f'iterator must be of type `list`, got `{iter_ty.format()}`')
-
-        # expected type: list a
-        self._visit_binding(stmt, stmt.target, iter_ty.elt)
+        elt_ty = self._fresh_type_var()
+        self._unify(iter_ty, ListType(elt_ty))
+        self._visit_binding(stmt, stmt.target, elt_ty)
 
         # add types to phi variables
         for phi in self.def_use.phis[stmt]:
