@@ -473,6 +473,8 @@ _UNARY_TABLE: dict[type[UnaryOp], object] = {
     DeclContext: ops.declcontext,
     # structured
     Dim: ops.dim,
+    Fst: ops.fst,
+    Snd: ops.snd,
     Enumerate: _eval_enumerate,
     Sum: _eval_sum,
 }
