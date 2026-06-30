@@ -202,3 +202,65 @@ class TestTupleAccessors:
         assert 'std::make_tuple(' in out
         assert 'std::get<1>(' in out
         assert 'std::get<2>(' in out
+
+    def test_fst_snd_chain_folds_to_single_get(self):
+        """``fst(snd(p))`` over a 3-tuple reads element 1 directly — one
+        ``std::get<1>``, with no intermediate ``std::make_tuple``."""
+        @fp.fpy
+        def f(p: tuple[fp.Real, fp.Real, fp.Real]) -> fp.Real:
+            return fp.fst(fp.snd(p))
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64), RealType(fp.FP64))],
+        )
+        assert 'std::get<1>(p)' in out
+        assert 'make_tuple' not in out
+
+    def test_deep_chain_folds_to_single_get(self):
+        """``fst(snd(snd(p)))`` over a 4-tuple folds to ``std::get<2>``."""
+        @fp.fpy
+        def f(p: tuple[fp.Real, fp.Real, fp.Real, fp.Real]) -> fp.Real:
+            return fp.fst(fp.snd(fp.snd(p)))
+
+        R = RealType(fp.FP64)
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[TupleType(R, R, R, R)])
+        assert 'std::get<2>(p)' in out
+        assert 'make_tuple' not in out
+
+    def test_all_snd_chain_to_bare_element_folds(self):
+        """``snd(snd(p))`` over a 3-tuple is the bare last element —
+        ``std::get<2>``, no ``make_tuple``."""
+        @fp.fpy
+        def f(p: tuple[fp.Real, fp.Real, fp.Real]) -> fp.Real:
+            return fp.snd(fp.snd(p))
+
+        R = RealType(fp.FP64)
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[TupleType(R, R, R)])
+        assert 'std::get<2>(p)' in out
+        assert 'make_tuple' not in out
+
+    def test_unconsumed_tail_still_materializes(self):
+        """A ``snd`` whose multi-element tail is the actual result (not
+        consumed by an outer ``fst``) still builds a ``std::make_tuple``."""
+        @fp.fpy
+        def f(p: tuple[fp.Real, fp.Real, fp.Real, fp.Real]) -> tuple[fp.Real, fp.Real, fp.Real]:
+            return fp.snd(p)
+
+        R = RealType(fp.FP64)
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[TupleType(R, R, R, R)])
+        assert 'std::make_tuple(' in out
+        assert 'std::get<3>(' in out
+
+    def test_nested_element_tuple_rebases(self):
+        """When ``snd`` yields a bare element that is itself a tuple, an
+        outer ``fst`` indexes into it (a fresh base)."""
+        @fp.fpy
+        def f(p: tuple[fp.Real, tuple[fp.Real, fp.Real]]) -> fp.Real:
+            return fp.fst(fp.snd(p))
+
+        R = RealType(fp.FP64)
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[TupleType(R, TupleType(R, R))],
+        )
+        assert 'std::get<0>(std::get<1>(p))' in out

@@ -32,6 +32,8 @@ Anything else raises :class:`CppEmitError`, which the public
 ``CppCompiler`` re-wraps as :class:`CppCompileError`.
 """
 
+import dataclasses
+
 from contextlib import contextmanager
 from fractions import Fraction
 
@@ -88,6 +90,24 @@ def _list_depth(ty: CppType) -> int:
         depth += 1
         ty = ty.elt
     return depth
+
+
+@dataclasses.dataclass(frozen=True)
+class _TupleAccess:
+    """Resolved form of a folded ``fst``/``snd`` chain over a tuple.
+
+    - ``off is None`` — a finished value: ``s`` is its C++ expression and
+      ``ty`` its type (one ``std::get`` for an element, or a non-accessor
+      base).
+    - ``off`` an ``int`` — the not-yet-materialized suffix ``base[off:]`` of
+      a tuple: ``s`` is the base expression and ``ty`` the base
+      :class:`CppTuple`.  Materialized into a ``std::make_tuple`` only if the
+      suffix is actually used (it never is when a ``fst`` reads one element
+      out of it).
+    """
+    s: str
+    ty: CppType
+    off: int | None
 
 
 class _IndentedWriter:
@@ -1055,6 +1075,11 @@ class CppEmitter(Visitor):
         return None
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
+        if isinstance(e, (Fst, Snd)):
+            # Tuple accessors fold as a chain (e.g. ``fst(snd(e))``) into a
+            # single ``std::get``, so they bypass the eager operand visit
+            # below — see ``_emit_tuple_accessor``.
+            return self._emit_tuple_accessor(e, ctx)
         arg = self._visit_expr(e.arg, ctx)
         match e:
             case Cast():
@@ -1087,24 +1112,6 @@ class CppEmitter(Visitor):
                 # differs from ``int64_t``.
                 result_ty = self._storage_for_expr(e)
                 return f'static_cast<{result_ty.format()}>({arg}.size())'
-            case Fst():
-                # tuple head — element 0 of the ``std::tuple``.
-                return f'std::get<0>({arg})'
-            case Snd():
-                # tuple tail. For a pair this is the bare second element;
-                # for a longer tuple it is a new tuple of the remaining
-                # elements (bind the operand to a temp so it is evaluated
-                # once across the several ``std::get``s).
-                storage = self._storage_for_expr(e.arg)
-                if not isinstance(storage, CppTuple):
-                    raise CppEmitError(f'snd expects a tuple, got {storage.format()}', at=e)
-                n = len(storage.elts)
-                if n == 2:
-                    return f'std::get<1>({arg})'
-                tmp = self._fresh_temp()
-                self.writer.add_line(f'auto {tmp} = {arg};')
-                gets = ', '.join(f'std::get<{i}>({tmp})' for i in range(1, n))
-                return f'std::make_tuple({gets})'
             case Sum():
                 # ``sum(xs)`` → ``std::accumulate(begin, end, T(0))``
                 # with ``T`` taken from format inference.
@@ -1124,6 +1131,59 @@ class CppEmitter(Visitor):
                 raise CppEmitError(
                     f'unsupported unary op: {type(e).__name__}', at=e,
                 )
+
+    def _emit_tuple_accessor(self, e: UnaryOp, ctx) -> str:
+        """Emit a (possibly nested) ``fst``/``snd`` chain.
+
+        The chain is folded to a single ``std::get`` whenever it reads one
+        element of a tuple — e.g. ``fst(snd(e))`` over a 3+-tuple is
+        ``std::get<1>(e)`` rather than ``std::get<0>`` of a freshly built
+        tail tuple.  Only a chain that genuinely yields a shorter tuple (a
+        ``snd`` whose result is still multi-element and is *not* consumed by
+        an outer ``fst``) materializes a ``std::make_tuple``.
+        """
+        acc = self._tuple_access(e, ctx)
+        if acc.off is None:
+            return acc.s
+        # Unconsumed tail: materialize the remaining elements as a new tuple,
+        # binding the base to a temp so it is evaluated once across the gets.
+        assert isinstance(acc.ty, CppTuple)
+        tmp = self._fresh_temp()
+        self.writer.add_line(f'auto {tmp} = {acc.s};')
+        gets = ', '.join(
+            f'std::get<{i}>({tmp})' for i in range(acc.off, len(acc.ty.elts))
+        )
+        return f'std::make_tuple({gets})'
+
+    def _tuple_access(self, e: Expr, ctx) -> _TupleAccess:
+        """Resolve a ``fst``/``snd`` chain over a tuple into a
+        :class:`_TupleAccess`, peeling the nesting and tracking the net
+        offset into the underlying base tuple."""
+        match e:
+            case Fst():
+                inner = self._tuple_access(e.arg, ctx)
+                base_s, base_ty = self._as_tuple(inner, e)
+                off = 0 if inner.off is None else inner.off
+                return _TupleAccess(f'std::get<{off}>({base_s})', base_ty.elts[off], None)
+            case Snd():
+                inner = self._tuple_access(e.arg, ctx)
+                base_s, base_ty = self._as_tuple(inner, e)
+                off = (0 if inner.off is None else inner.off) + 1
+                if len(base_ty.elts) - off == 1:
+                    # the tail is a single (bare) element
+                    return _TupleAccess(f'std::get<{off}>({base_s})', base_ty.elts[off], None)
+                return _TupleAccess(base_s, base_ty, off)
+            case _:
+                # opaque base: emit it once, treat as a finished value
+                return _TupleAccess(self._visit_expr(e, ctx), self._storage_for_expr(e), None)
+
+    def _as_tuple(self, acc: _TupleAccess, e: Expr) -> tuple[str, CppTuple]:
+        """The (base string, tuple type) of *acc*, which must be a tuple."""
+        if not isinstance(acc.ty, CppTuple):
+            raise CppEmitError(
+                f'tuple accessor expects a tuple, got {acc.ty.format()}', at=e,
+            )
+        return acc.s, acc.ty
 
     def _emit_enumerate(self, e: Enumerate, src_str: str) -> str:
         """``enumerate(xs)`` builds a ``std::vector<std::tuple<I, T>>``
