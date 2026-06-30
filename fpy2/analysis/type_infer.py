@@ -351,6 +351,22 @@ class _TypeInferInstance(Visitor):
                     # dimension operator
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
                     return RealType(None)
+                case Fst():
+                    # tuple head accessor. A tuple's arity cannot be unified
+                    # from an open type, so the operand must resolve to a
+                    # concrete tuple; the head exists for any non-empty tuple.
+                    resolved = self._resolve_type(arg_ty)
+                    if not isinstance(resolved, TupleType) or len(resolved.elts) < 1:
+                        raise TypeInferError(f'`fst` requires a non-empty tuple, got `{resolved.format()}`')
+                    return resolved.elts[0]
+                case Snd():
+                    # tuple tail accessor. The tail exists only for arity >= 2;
+                    # it is the bare element for a pair, else the rest tuple.
+                    resolved = self._resolve_type(arg_ty)
+                    if not isinstance(resolved, TupleType) or len(resolved.elts) < 2:
+                        raise TypeInferError(f'`snd` requires a tuple of at least 2 elements, got `{resolved.format()}`')
+                    rest = resolved.elts[1:]
+                    return rest[0] if len(rest) == 1 else TupleType(*rest)
                 case Enumerate():
                     # enumerate operator
                     ty = self._fresh_type_var()

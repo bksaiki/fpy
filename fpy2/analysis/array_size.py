@@ -352,6 +352,18 @@ class _ArraySizeInferInstance(DefaultVisitor):
             case Enumerate():
                 assert isinstance(ty, ListSize)
                 return ListSize(TupleSize((None, ty.elt)), ty.size)
+            case Fst():
+                # tuple head — the first element's bound (if tracked).
+                if isinstance(ty, TupleSize) and len(ty.elts) >= 1:
+                    return ty.elts[0]
+                return None
+            case Snd():
+                # tuple tail — the second element's bound for a pair, else
+                # the bounds of the remaining elements.
+                if isinstance(ty, TupleSize) and len(ty.elts) >= 2:
+                    rest = ty.elts[1:]
+                    return rest[0] if len(rest) == 1 else TupleSize(rest)
+                return None
             case _:
                 return None
 

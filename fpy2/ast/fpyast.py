@@ -179,6 +179,8 @@ __all__ = [
     'Range2',
     'Range3',
     'Dim',
+    'Fst',
+    'Snd',
     'Empty',
     'Zip',
     'Enumerate',
@@ -1129,6 +1131,14 @@ class Range3(NamedTernaryOp):
 
 class Dim(NamedUnaryOp):
     """FPy node: dimension operator"""
+    __slots__ = ()
+
+class Fst(NamedUnaryOp):
+    """FPy node: tuple head accessor"""
+    __slots__ = ()
+
+class Snd(NamedUnaryOp):
+    """FPy node: tuple tail accessor"""
     __slots__ = ()
 
 class Empty(NamedNaryOp):

@@ -1703,3 +1703,63 @@ class TestArraySizeDifferential:
     @given(i=st.integers(min_value=-8, max_value=32))
     def test_fuzz_range_sym_offset(self, i):
         self._assert_sound(_d_range_sym_offset, [(i,)])
+
+
+class TestTupleAccessorSizes:
+    """``fst`` / ``snd`` project the operand's :class:`TupleSize`, so a
+    known list length survives a tuple access."""
+
+    @staticmethod
+    def _run(func: fp.Function) -> ArraySizeAnalysis:
+        return ArraySizeInfer.analyze(func.ast)
+
+    @staticmethod
+    def _pin(func: fp.Function, lengths: dict[str, int]) -> None:
+        """Pin concrete list lengths onto the named list arguments."""
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+        for arg in func.ast.args:
+            n = lengths.get(arg.name.base)
+            if n is not None:
+                arg.type = ListTypeAnn(RealTypeAnn(None, None), n, None)
+
+    @staticmethod
+    def _bound(info: ArraySizeAnalysis, name: str):
+        return [b for d, b in info.by_def.items() if d.name.base == name][0]
+
+    def test_fst_projects_first_component_size(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]):
+            t = (xs, ys)
+            u = fp.fst(t)
+            return u
+
+        self._pin(f, {'xs': 16, 'ys': 8})
+        u = self._bound(self._run(f), 'u')
+        assert isinstance(u, ListSize)
+        assert concrete_size(u.size) == 16
+
+    def test_snd_of_pair_projects_second_size(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]):
+            t = (xs, ys)
+            u = fp.snd(t)        # pair -> bare second element
+            return u
+
+        self._pin(f, {'xs': 16, 'ys': 8})
+        u = self._bound(self._run(f), 'u')
+        assert isinstance(u, ListSize)
+        assert concrete_size(u.size) == 8
+
+    def test_snd_of_longer_projects_rest_tuple(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real], zs: list[fp.Real]):
+            t = (xs, ys, zs)
+            u = fp.snd(t)        # arity 3 -> TupleSize of the last two
+            return u
+
+        self._pin(f, {'xs': 16, 'ys': 8, 'zs': 4})
+        u = self._bound(self._run(f), 'u')
+        assert isinstance(u, TupleSize)
+        assert len(u.elts) == 2
+        assert concrete_size(u.elts[0].size) == 8
+        assert concrete_size(u.elts[1].size) == 4

@@ -42,10 +42,10 @@ from ...analysis import (
 from ...ast.fpyast import (
     AMax, AMin, And, Argument, Assign, AssertStmt, Ast, BinaryOp, BoolVal,
     Cast, Compare, ContextStmt, Decnum, Digits, Dim, EffectStmt, Empty,
-    Enumerate, Expr, ForStmt, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign,
+    Enumerate, Expr, ForStmt, Fst, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign,
     Integer, IsFinite, IsInf, IsNan, IsNormal, Len, ListComp, ListExpr,
     ListRef, ListSlice, Max, Min, NamedId, NaryOp, Not, Or, Range1, Range2,
-    Range3, Rational, ReturnStmt, Round, Signbit, Size, StmtBlock, Sum,
+    Range3, Rational, ReturnStmt, Round, Signbit, Size, Snd, StmtBlock, Sum,
     TernaryOp, TupleBinding, TupleExpr, UnaryOp, UnderscoreId, Var,
     WhileStmt, Zip,
 )
@@ -1087,6 +1087,24 @@ class CppEmitter(Visitor):
                 # differs from ``int64_t``.
                 result_ty = self._storage_for_expr(e)
                 return f'static_cast<{result_ty.format()}>({arg}.size())'
+            case Fst():
+                # tuple head — element 0 of the ``std::tuple``.
+                return f'std::get<0>({arg})'
+            case Snd():
+                # tuple tail. For a pair this is the bare second element;
+                # for a longer tuple it is a new tuple of the remaining
+                # elements (bind the operand to a temp so it is evaluated
+                # once across the several ``std::get``s).
+                storage = self._storage_for_expr(e.arg)
+                if not isinstance(storage, CppTuple):
+                    raise CppEmitError(f'snd expects a tuple, got {storage.format()}', at=e)
+                n = len(storage.elts)
+                if n == 2:
+                    return f'std::get<1>({arg})'
+                tmp = self._fresh_temp()
+                self.writer.add_line(f'auto {tmp} = {arg};')
+                gets = ', '.join(f'std::get<{i}>({tmp})' for i in range(1, n))
+                return f'std::make_tuple({gets})'
             case Sum():
                 # ``sum(xs)`` → ``std::accumulate(begin, end, T(0))``
                 # with ``T`` taken from format inference.

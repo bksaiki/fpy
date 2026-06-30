@@ -4,13 +4,14 @@ from typing import Callable
 
 import titanfp.fpbench.fpcast as fpc
 
-from ..analysis import DefineUse, DefineUseAnalysis
+from ..analysis import DefineUse, DefineUseAnalysis, TypeInfer, TypeAnalysis
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..module import Module, ModuleEntry
 from ..number import Context
 from ..transform import ConstFold, ForBundling, ForUnpack, IfBundling, WhileBundling
+from ..types import TupleType
 from ..utils import Gensym
 
 from .backend import Backend, CompileError
@@ -155,12 +156,14 @@ class _FPCoreCompileInstance(Visitor):
     gensym: Gensym
 
     unsafe_int_cast: bool
+    _type_info: TypeAnalysis | None
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, unsafe_int_cast: bool = True):
         self.func = func
         self.def_use = def_use
         self.gensym = Gensym(reserved=def_use.names())
         self.unsafe_int_cast = unsafe_int_cast
+        self._type_info = None
 
     def compile(self) -> fpc.FPCore:
         f = self._visit_function(self.func, None)
@@ -367,6 +370,35 @@ class _FPCoreCompileInstance(Visitor):
         tup = self._visit_expr(arr, ctx)
         return fpc.Dim(tup)
 
+    def _tuple_arity(self, e: Expr) -> int:
+        # Type inference runs lazily here: only ``snd`` needs the operand's
+        # arity, and FPCore-sourced functions never contain tuple accessors,
+        # so the common case skips type checking entirely (and avoids
+        # imposing FPy's type system on round-tripped FPCore).
+        if self._type_info is None:
+            self._type_info = TypeInfer.check(self.func)
+        ty = self._type_info.by_expr.get(e)
+        if not isinstance(ty, TupleType):
+            raise FPCoreCompileError('expected a tuple operand', e)
+        return len(ty.elts)
+
+    def _visit_fst(self, arr: Expr, ctx) -> fpc.Expr:
+        # tuple head — element 0 of the (array-encoded) tuple.
+        tup = self._visit_expr(arr, ctx)
+        return fpc.Ref(tup, fpc.Integer(0))
+
+    def _visit_snd(self, arr: Expr, ctx) -> fpc.Expr:
+        # tuple tail. For a pair this is the bare second element; for a
+        # longer tuple it is a new array of the remaining elements, binding
+        # the operand to a `let` so it is evaluated once.
+        n = self._tuple_arity(arr)
+        tup = self._visit_expr(arr, ctx)
+        if n == 2:
+            return fpc.Ref(tup, fpc.Integer(1))
+        tuple_id = str(self.gensym.fresh('t'))
+        refs = [fpc.Ref(fpc.Var(tuple_id), fpc.Integer(i)) for i in range(1, n)]
+        return fpc.Let([(tuple_id, tup)], fpc.Array(*refs))
+
     def _visit_enumerate(self, arr: Expr, ctx: None) -> fpc.Expr:
         # (let ([t <tuple>])
         #  (tensor ([i (size t 0)])
@@ -545,6 +577,12 @@ class _FPCoreCompileInstance(Visitor):
                 case Dim():
                     # dim expression
                     return self._visit_dim(e.arg, ctx)
+                case Fst():
+                    # tuple head accessor
+                    return self._visit_fst(e.arg, ctx)
+                case Snd():
+                    # tuple tail accessor
+                    return self._visit_snd(e.arg, ctx)
                 case Enumerate():
                     # enumerate expression
                     return self._visit_enumerate(e.arg, ctx)
