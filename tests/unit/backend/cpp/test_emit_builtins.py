@@ -150,6 +150,6 @@ class TestZip:
         # No tuple-vector machinery at all.
         assert 'std::tuple' not in out
         assert 'std::make_tuple' not in out
-        # The two sources are bound to plain ``std::vector<double>``
-        # temps and indexed directly.
-        assert 'std::vector<double> _src' in out
+        # The two sources are bound to read-only ``_src`` aliases (const
+        # references — no copy) and indexed directly.
+        assert 'const auto& _src' in out

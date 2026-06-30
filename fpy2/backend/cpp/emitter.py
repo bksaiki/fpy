@@ -288,6 +288,27 @@ class CppEmitter(Visitor):
             return f'const {storage.format()}& {name}'
         return f'{storage.format()} {name}'
 
+    def _is_readonly_alias(self, stmt: Assign, target_def, target_storage: CppType) -> bool:
+        """Whether ``x = y`` can bind a ``const`` reference to ``y`` instead
+        of copying it.
+
+        Safe iff the RHS is a bare variable, the value is an aggregate, and
+        *both* the target and the source are written exactly once (single
+        storage classes).  Then neither side can observe a mutation through
+        the other, so a reference is indistinguishable from a copy — minus
+        the O(n) copy.  (This is the local-variable analog of the const-ref
+        parameter and loop-variable bindings.)"""
+        if not isinstance(stmt.expr, Var):
+            return False
+        if not self._is_aggregate(target_storage):
+            return False
+        if target_def not in self.storage.declare_at_assign:
+            return False
+        if not self.storage.is_single_def(target_def):
+            return False
+        src_def = self.def_use.find_def_from_use(stmt.expr)
+        return self.storage.is_single_def(src_def)
+
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
         """Emit a single ``T name = rhs;`` (declare-on-assign) or
         ``name = rhs;`` (reassign) line for a NamedId target whose
@@ -472,8 +493,15 @@ class CppEmitter(Visitor):
                 # hoisted decl (multi-writer class).
                 target_def = self.def_use.find_def_from_site(stmt.target, stmt)
                 target_storage = self.storage.storage_of(target_def)
-                rhs = self._emit_assign_rhs(stmt.expr, target_storage, ctx)
-                self._emit_bind(stmt.target, stmt, rhs)
+                if self._is_readonly_alias(stmt, target_def, target_storage):
+                    # ``x = y`` where both are read-only aggregates: bind a
+                    # const reference instead of copying the whole value.
+                    src = self._visit_expr(stmt.expr, ctx)
+                    target_name = self.storage.def_to_name[target_def]
+                    self.writer.add_line(f'const auto& {target_name} = {src};')
+                else:
+                    rhs = self._emit_assign_rhs(stmt.expr, target_storage, ctx)
+                    self._emit_bind(stmt.target, stmt, rhs)
             case TupleBinding():
                 # ``(a, b) = expr``: bind the rhs to a tuple-valued
                 # temp once, then destructure.  Each NamedId in the
