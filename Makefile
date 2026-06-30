@@ -41,6 +41,10 @@ unittest:
 	@echo "Running unit tests..."
 	python3 -m pytest -v tests/unit -k $(UNITTEST_PATTERN)
 
+cpptest:
+	@echo "Running C++ backend tests (compile + execute, bit-compare vs interpreter)..."
+	python3 -m tests.infra.backend.cpp --mode run
+
 clean: clean-docs
 	@echo "Cleaning build artifacts..."
 	rm -rf build/ dist/ *.egg-info
@@ -57,6 +61,7 @@ help:
 	@echo "  make tests         Run all tests"
 	@echo "  make infratest     Run infrastructure testing"
 	@echo "  make unittest      Run unit tests"
+	@echo "  make cpptest       Compile + execute the C++ backend corpus (needs a C++ compiler)"
 	@echo "  make lint          Run linters"
 	@echo "   - make mypy       Run mypy type checker"
 	@echo "   - make ruff       Run ruff linter"
@@ -73,4 +78,4 @@ help:
 	@echo "  make clean-docs    Clean documentation build artifacts"
 	@echo ""
 
-.PHONY: docs tests
+.PHONY: docs tests cpptest
