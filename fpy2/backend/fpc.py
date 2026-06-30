@@ -1,5 +1,7 @@
 """Compilation from FPy to FPCore."""
 
+import dataclasses
+
 from typing import Callable
 
 import titanfp.fpbench.fpcast as fpc
@@ -11,10 +13,29 @@ from ..function import Function
 from ..module import Module, ModuleEntry
 from ..number import Context
 from ..transform import ConstFold, ForBundling, ForUnpack, IfBundling, WhileBundling
-from ..types import TupleType
+from ..types import TupleType, Type
 from ..utils import Gensym
 
 from .backend import Backend, CompileError
+
+
+@dataclasses.dataclass(frozen=True)
+class _TupleAccess:
+    """Resolved form of a folded ``fst``/``snd`` chain over a tuple.
+
+    - ``off is None`` — a finished value: ``e`` is its FPCore expression
+      (one ``ref`` for an element, or a non-accessor base) and ``ty`` its
+      type.
+    - ``off`` an ``int`` — the not-yet-materialized suffix ``base[off:]`` of
+      a tuple: ``e`` is the base expression and ``ty`` the base
+      :class:`TupleType`.  Built into a ``(let … (array …))`` only if the
+      suffix is actually used (never when an outer ``fst`` reads one element
+      out of it).
+    """
+    e: fpc.Expr
+    ty: Type
+    off: int | None
+
 
 # Cached table storage
 _nullary_table_cache: dict[type[NullaryOp], fpc.Expr] | None = None
@@ -370,34 +391,66 @@ class _FPCoreCompileInstance(Visitor):
         tup = self._visit_expr(arr, ctx)
         return fpc.Dim(tup)
 
-    def _tuple_arity(self, e: Expr) -> int:
-        # Type inference runs lazily here: only ``snd`` needs the operand's
-        # arity, and FPCore-sourced functions never contain tuple accessors,
-        # so the common case skips type checking entirely (and avoids
-        # imposing FPy's type system on round-tripped FPCore).
+    def _expr_type(self, e: Expr) -> Type:
+        # Type inference runs lazily: tuple accessors are the only consumer,
+        # and FPCore-sourced functions never contain them, so the common
+        # case skips type checking entirely (and avoids imposing FPy's type
+        # system on round-tripped FPCore).
         if self._type_info is None:
             self._type_info = TypeInfer.check(self.func)
         ty = self._type_info.by_expr.get(e)
-        if not isinstance(ty, TupleType):
-            raise FPCoreCompileError('expected a tuple operand', e)
-        return len(ty.elts)
+        if ty is None:
+            raise FPCoreCompileError('missing type for tuple accessor operand', e)
+        return ty
 
-    def _visit_fst(self, arr: Expr, ctx) -> fpc.Expr:
-        # tuple head — element 0 of the (array-encoded) tuple.
-        tup = self._visit_expr(arr, ctx)
-        return fpc.Ref(tup, fpc.Integer(0))
+    def _emit_tuple_accessor(self, e: UnaryOp, ctx) -> fpc.Expr:
+        """Emit a (possibly nested) ``fst``/``snd`` chain.
 
-    def _visit_snd(self, arr: Expr, ctx) -> fpc.Expr:
-        # tuple tail. For a pair this is the bare second element; for a
-        # longer tuple it is a new array of the remaining elements, binding
-        # the operand to a `let` so it is evaluated once.
-        n = self._tuple_arity(arr)
-        tup = self._visit_expr(arr, ctx)
-        if n == 2:
-            return fpc.Ref(tup, fpc.Integer(1))
+        A chain that reads one element folds to a single ``ref`` — e.g.
+        ``fst(snd(t))`` over a 3+-tuple is ``(ref t 1)`` rather than a
+        ``ref`` into a freshly built tail array.  Only an unconsumed
+        multi-element tail materializes a ``(let … (array …))``.
+        """
+        acc = self._tuple_access(e, ctx)
+        if acc.off is None:
+            return acc.e
+        # Unconsumed tail: build a new array of the remaining elements,
+        # binding the base to a `let` so it is evaluated once.
+        assert isinstance(acc.ty, TupleType)
         tuple_id = str(self.gensym.fresh('t'))
-        refs = [fpc.Ref(fpc.Var(tuple_id), fpc.Integer(i)) for i in range(1, n)]
-        return fpc.Let([(tuple_id, tup)], fpc.Array(*refs))
+        refs = [
+            fpc.Ref(fpc.Var(tuple_id), fpc.Integer(i))
+            for i in range(acc.off, len(acc.ty.elts))
+        ]
+        return fpc.Let([(tuple_id, acc.e)], fpc.Array(*refs))
+
+    def _tuple_access(self, e: Expr, ctx) -> _TupleAccess:
+        """Resolve a ``fst``/``snd`` chain over a tuple into a
+        :class:`_TupleAccess`, peeling the nesting and tracking the net
+        offset into the underlying base tuple."""
+        match e:
+            case Fst():
+                inner = self._tuple_access(e.arg, ctx)
+                base, base_ty = self._as_tuple(inner, e)
+                off = 0 if inner.off is None else inner.off
+                return _TupleAccess(fpc.Ref(base, fpc.Integer(off)), base_ty.elts[off], None)
+            case Snd():
+                inner = self._tuple_access(e.arg, ctx)
+                base, base_ty = self._as_tuple(inner, e)
+                off = (0 if inner.off is None else inner.off) + 1
+                if len(base_ty.elts) - off == 1:
+                    # the tail is a single (bare) element
+                    return _TupleAccess(fpc.Ref(base, fpc.Integer(off)), base_ty.elts[off], None)
+                return _TupleAccess(base, base_ty, off)
+            case _:
+                # opaque base: emit it once, treat as a finished value
+                return _TupleAccess(self._visit_expr(e, ctx), self._expr_type(e), None)
+
+    def _as_tuple(self, acc: _TupleAccess, e: Expr) -> tuple[fpc.Expr, TupleType]:
+        """The (base expr, tuple type) of *acc*, which must be a tuple."""
+        if not isinstance(acc.ty, TupleType):
+            raise FPCoreCompileError('expected a tuple operand', e)
+        return acc.e, acc.ty
 
     def _visit_enumerate(self, arr: Expr, ctx: None) -> fpc.Expr:
         # (let ([t <tuple>])
@@ -577,12 +630,10 @@ class _FPCoreCompileInstance(Visitor):
                 case Dim():
                     # dim expression
                     return self._visit_dim(e.arg, ctx)
-                case Fst():
-                    # tuple head accessor
-                    return self._visit_fst(e.arg, ctx)
-                case Snd():
-                    # tuple tail accessor
-                    return self._visit_snd(e.arg, ctx)
+                case Fst() | Snd():
+                    # tuple accessors — fold a chain (e.g. ``fst(snd(e))``)
+                    # into a single ``ref``.
+                    return self._emit_tuple_accessor(e, ctx)
                 case Enumerate():
                     # enumerate expression
                     return self._visit_enumerate(e.arg, ctx)

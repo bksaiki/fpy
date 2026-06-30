@@ -41,3 +41,47 @@ class TestTupleAccessors:
 
         # tail of a 3-tuple -> an array of the last two elements
         assert '(array (ref' in _compile(f)
+
+    def test_fst_snd_chain_folds_to_single_ref(self):
+        """``fst(snd(t))`` over a 3-tuple folds to ``(ref t 1)`` — no
+        intermediate tail array."""
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+            t = (a, b, c)
+            return fp.fst(fp.snd(t))
+
+        s = _compile(f)
+        assert '(ref t 1)' in s
+        assert 'array (ref' not in s
+
+    def test_deep_chain_folds_to_single_ref(self):
+        """``fst(snd(snd(t)))`` over a 4-tuple folds to ``(ref t 2)``."""
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real, d: fp.Real) -> fp.Real:
+            t = (a, b, c, d)
+            return fp.fst(fp.snd(fp.snd(t)))
+
+        s = _compile(f)
+        assert '(ref t 2)' in s
+        assert 'array (ref' not in s
+
+    def test_all_snd_chain_to_bare_element_folds(self):
+        """``snd(snd(t))`` over a 3-tuple is the bare last element ``(ref t 2)``."""
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+            t = (a, b, c)
+            return fp.snd(fp.snd(t))
+
+        s = _compile(f)
+        assert '(ref t 2)' in s
+        assert 'array (ref' not in s
+
+    def test_unconsumed_tail_still_materializes(self):
+        """A multi-element tail that is the result still builds an array."""
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real, d: fp.Real):
+            t = (a, b, c, d)
+            return fp.snd(t)
+
+        s = _compile(f)
+        assert '(array (ref' in s
