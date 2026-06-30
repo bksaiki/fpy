@@ -135,7 +135,8 @@ def example_ops():
 ### Tuples
 
 FPy supports tuples, which are immutable sequences of values.
-Unlike in Python, tuple elements can only be accessed via pattern matching, not via indexing.
+Unlike in Python, tuple elements are not accessed via indexing.
+Instead, use pattern matching, or the `fst` and `snd` accessors.
 
 ```python
 @fp.fpy
@@ -143,6 +144,22 @@ def example_tuples():
     t = (x, y, z) # create a tuple
     # access tuple elements via pattern matching
     a, b, c = t
+    ...
+```
+
+Viewing a tuple as a binary pair, `fst` returns the head and `snd` returns
+the tail. `fst` works on any non-empty tuple; `snd` requires at least two
+elements and, for a pair, returns the bare second element (so
+`snd((a, b)) == b`, while for a longer tuple the tail is the tuple of the
+remaining elements). Element `k` is reached by chaining, e.g. `fst(snd(t))`.
+
+```python
+@fp.fpy
+def example_accessors():
+    t = (x, y, z)
+    a = fp.fst(t)       # x
+    rest = fp.snd(t)    # (y, z)
+    b = fp.fst(rest)    # y == fp.fst(fp.snd(t))
     ...
 ```
 

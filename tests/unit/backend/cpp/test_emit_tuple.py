@@ -161,3 +161,44 @@ class TestTupleDestructure:
         assert '        double b = std::get<1>(__cpp_tmp2);' in out
         assert '.push_back((a + b));' in out
 
+
+
+class TestTupleAccessors:
+    """``fst`` / ``snd`` lower to ``std::get`` (and ``std::make_tuple`` for
+    the tail of a tuple longer than a pair)."""
+
+    def test_fst_emits_get0(self):
+        @fp.fpy
+        def f(p: tuple[fp.Real, fp.Real, fp.Real]) -> fp.Real:
+            return fp.fst(p)
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64), RealType(fp.FP64))],
+        )
+        assert 'std::get<0>(p)' in out
+
+    def test_snd_pair_emits_get1(self):
+        @fp.fpy
+        def f(p: tuple[fp.Real, fp.Real]) -> fp.Real:
+            return fp.snd(p)
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64))],
+        )
+        assert 'std::get<1>(p)' in out
+
+    def test_snd_longer_emits_make_tuple(self):
+        @fp.fpy
+        def f(p: tuple[fp.Real, fp.Real, fp.Real]) -> tuple[fp.Real, fp.Real]:
+            return fp.snd(p)
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64), RealType(fp.FP64))],
+        )
+        # tail of a 3-tuple -> a new tuple of elements 1 and 2
+        assert 'std::make_tuple(' in out
+        assert 'std::get<1>(' in out
+        assert 'std::get<2>(' in out

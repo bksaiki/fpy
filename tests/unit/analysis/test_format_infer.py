@@ -1537,3 +1537,54 @@ class TestFormatInferOnGeneratedPrograms:
         t_info = TypeInfer.check(fd)
         f_info = FormatInfer.analyze(fd)
         assert _format_kind_matches_type(f_info.fn_fmt.ret_fmt, t_info.return_type)
+
+
+class TestTupleAccessorFormats:
+    """``fst`` / ``snd`` project the operand's :class:`TupleFormat`, so a
+    per-element precision survives a tuple access."""
+
+    @staticmethod
+    def _bounds(info, name):
+        return [b for d, b in info.by_def.items() if d.name.base == name]
+
+    def test_fst_projects_first_format(self):
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real):
+            t = (x, y)
+            u = fp.fst(t)
+            return u
+
+        mono = Monomorphize.apply(f.ast, None, [RealType(fp.FP32), RealType(fp.FP64)])
+        info = FormatInfer.analyze(mono)
+        assert fp.FP32.format() in self._bounds(info, 'u')
+
+    def test_snd_of_pair_projects_second_format(self):
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real):
+            t = (x, y)
+            u = fp.snd(t)        # pair -> bare second element
+            return u
+
+        mono = Monomorphize.apply(f.ast, None, [RealType(fp.FP32), RealType(fp.FP64)])
+        info = FormatInfer.analyze(mono)
+        assert fp.FP64.format() in self._bounds(info, 'u')
+
+    def test_snd_of_longer_projects_rest_tuple_format(self):
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real, z: fp.Real):
+            t = (x, y, z)
+            u = fp.snd(t)        # arity 3 -> TupleFormat of the last two
+            return u
+
+        mono = Monomorphize.apply(
+            f.ast, None, [RealType(fp.FP32), RealType(fp.FP64), RealType(fp.FP16)],
+        )
+        info = FormatInfer.analyze(mono)
+        u_bounds = self._bounds(info, 'u')
+        assert TupleFormat((fp.FP64.format(), fp.FP16.format())) in u_bounds

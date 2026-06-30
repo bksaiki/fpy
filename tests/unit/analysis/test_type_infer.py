@@ -10,13 +10,15 @@ Unit tests for `TypeInfer`:
 """
 
 import fpy2 as fp
+import pytest
 
 from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis import TypeInfer
 from fpy2.analysis.type_infer import TypeInfer as _TI
-from fpy2.ast.fpyast import Ast, Expr, FuncDef
-from fpy2.types import Type
+from fpy2.analysis.type_infer import TypeInferError
+from fpy2.ast.fpyast import Ast, Expr, Fst, FuncDef, Snd
+from fpy2.types import BoolType, RealType, TupleType, Type
 
 from ..generators import (
     arbitrary_type,
@@ -250,3 +252,93 @@ class TestTypeInferOnGeneratedPrograms:
                 f'sub-expression of type {type(expr).__name__} '
                 f'has no inferred type in by_expr'
             )
+
+
+class TestTupleAccessors:
+    """``fst`` / ``snd`` projection and the arity/non-tuple errors.
+
+    ``fst`` returns the head (any non-empty tuple); ``snd`` returns the tail
+    — the bare second element for a pair, else the tuple of the rest — and
+    requires arity >= 2.
+    """
+
+    @staticmethod
+    def _return_type(f) -> Type:
+        return TypeInfer.check(f.ast).fn_type.return_type
+
+    def test_fst_parses_to_fst_node(self):
+        @fp.fpy
+        def f(t: tuple[fp.Real, fp.Real]) -> fp.Real:
+            return fp.fst(t)
+
+        assert any(isinstance(e, Fst) for e in TypeInfer.check(f.ast).by_expr)
+
+    def test_snd_parses_to_snd_node(self):
+        @fp.fpy
+        def f(t: tuple[fp.Real, fp.Real]) -> fp.Real:
+            return fp.snd(t)
+
+        assert any(isinstance(e, Snd) for e in TypeInfer.check(f.ast).by_expr)
+
+    def test_fst_projects_head(self):
+        @fp.fpy
+        def f(t: tuple[fp.Real, bool]) -> fp.Real:
+            return fp.fst(t)
+
+        assert isinstance(self._return_type(f), RealType)
+
+    def test_fst_accepts_one_tuple(self):
+        @fp.fpy
+        def f(t: tuple[fp.Real]) -> fp.Real:
+            return fp.fst(t)
+
+        assert isinstance(self._return_type(f), RealType)
+
+    def test_snd_of_pair_is_bare_element(self):
+        @fp.fpy
+        def f(t: tuple[fp.Real, bool]):
+            return fp.snd(t)
+
+        assert isinstance(self._return_type(f), BoolType)
+
+    def test_snd_of_longer_tuple_is_rest_tuple(self):
+        @fp.fpy
+        def f(t: tuple[fp.Real, bool, fp.Real]):
+            return fp.snd(t)
+
+        rt = self._return_type(f)
+        assert isinstance(rt, TupleType)
+        assert len(rt.elts) == 2
+        assert isinstance(rt.elts[0], BoolType)
+        assert isinstance(rt.elts[1], RealType)
+
+    def test_chained_fst_snd_walks_pairs(self):
+        @fp.fpy
+        def f(t: tuple[fp.Real, bool, fp.Real]):
+            return fp.fst(fp.snd(t))
+
+        assert isinstance(self._return_type(f), BoolType)
+
+    def test_snd_of_one_tuple_errors(self):
+        @fp.fpy
+        def f(t: tuple[fp.Real]):
+            return fp.snd(t)
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
+
+    def test_fst_of_non_tuple_errors(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return fp.fst(x)
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
+
+    def test_snd_of_list_errors(self):
+        @fp.fpy
+        def f(x: list[fp.Real]) -> fp.Real:
+            return fp.snd(x)
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
