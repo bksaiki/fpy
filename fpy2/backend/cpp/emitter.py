@@ -257,6 +257,58 @@ class CppEmitter(Visitor):
         d = self.def_use.find_def_from_site(arg.name, arg)
         return self.storage.storage_of(d)
 
+    @staticmethod
+    def _is_aggregate(storage: CppType) -> bool:
+        """A ``std::vector`` / ``std::tuple`` — copying it is O(n), unlike
+        a scalar (where a copy is free and by-value is idiomatic)."""
+        return isinstance(storage, (CppList, CppTuple))
+
+    def _arg_decl(self, arg: Argument, storage: CppType) -> str:
+        """Parameter declaration.  An aggregate parameter the body never
+        writes (its storage class has a single member — no reassignment,
+        no in-place mutation) is taken by ``const&`` to avoid copying it on
+        every call; everything else stays by value, faithful to FPy's
+        value semantics (a written parameter needs its own copy)."""
+        assert isinstance(arg.name, NamedId)
+        d = self.def_use.find_def_from_site(arg.name, arg)
+        if self._is_aggregate(storage) and self.storage.is_single_def(d):
+            return f'const {storage.format()}& {arg.name}'
+        return f'{storage.format()} {arg.name}'
+
+    def _foreach_decl(self, target_def, name: str) -> str:
+        """Loop-variable declaration for a range-for over a container.  A
+        non-scalar element bound read-only is taken by ``const&`` to avoid
+        copying every element; scalars and mutated elements stay by value.
+        ``target_def is None`` marks a discarded/anonymous element (always
+        read-only) — ``const auto&`` lets the element type deduce."""
+        if target_def is None:
+            return f'const auto& {name}'
+        storage = self.storage.storage_of(target_def)
+        if self._is_aggregate(storage) and self.storage.is_single_def(target_def):
+            return f'const {storage.format()}& {name}'
+        return f'{storage.format()} {name}'
+
+    def _is_readonly_alias(self, stmt: Assign, target_def, target_storage: CppType) -> bool:
+        """Whether ``x = y`` can bind a ``const`` reference to ``y`` instead
+        of copying it.
+
+        Safe iff the RHS is a bare variable, the value is an aggregate, and
+        *both* the target and the source are written exactly once (single
+        storage classes).  Then neither side can observe a mutation through
+        the other, so a reference is indistinguishable from a copy — minus
+        the O(n) copy.  (This is the local-variable analog of the const-ref
+        parameter and loop-variable bindings.)"""
+        if not isinstance(stmt.expr, Var):
+            return False
+        if not self._is_aggregate(target_storage):
+            return False
+        if target_def not in self.storage.declare_at_assign:
+            return False
+        if not self.storage.is_single_def(target_def):
+            return False
+        src_def = self.def_use.find_def_from_use(stmt.expr)
+        return self.storage.is_single_def(src_def)
+
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
         """Emit a single ``T name = rhs;`` (declare-on-assign) or
         ``name = rhs;`` (reassign) line for a NamedId target whose
@@ -294,7 +346,8 @@ class CppEmitter(Visitor):
                 case TupleBinding():
                     access = f'std::get<{i}>({src})'
                     sub_tmp = self._fresh_temp()
-                    self.writer.add_line(f'auto {sub_tmp} = {access};')
+                    # read-only (destructured) -> reference, no copy
+                    self.writer.add_line(f'auto&& {sub_tmp} = {access};')
                     self._destructure(elt, sub_tmp, site)
                 case _:
                     raise CppEmitError(
@@ -338,7 +391,7 @@ class CppEmitter(Visitor):
                     f'unsupported arg pattern: {arg.name!r}', at=arg,
                 )
             storage = self._storage_for_arg(arg)
-            arg_strs.append(f'{storage.format()} {arg.name}')
+            arg_strs.append(self._arg_decl(arg, storage))
         emitted_name = self._func_name_override or func.name
         sig = f'{ret_str} {emitted_name}({", ".join(arg_strs)})'
 
@@ -441,8 +494,15 @@ class CppEmitter(Visitor):
                 # hoisted decl (multi-writer class).
                 target_def = self.def_use.find_def_from_site(stmt.target, stmt)
                 target_storage = self.storage.storage_of(target_def)
-                rhs = self._emit_assign_rhs(stmt.expr, target_storage, ctx)
-                self._emit_bind(stmt.target, stmt, rhs)
+                if self._is_readonly_alias(stmt, target_def, target_storage):
+                    # ``x = y`` where both are read-only aggregates: bind a
+                    # const reference instead of copying the whole value.
+                    src = self._visit_expr(stmt.expr, ctx)
+                    target_name = self.storage.def_to_name[target_def]
+                    self.writer.add_line(f'const auto& {target_name} = {src};')
+                else:
+                    rhs = self._emit_assign_rhs(stmt.expr, target_storage, ctx)
+                    self._emit_bind(stmt.target, stmt, rhs)
             case TupleBinding():
                 # ``(a, b) = expr``: bind the rhs to a tuple-valued
                 # temp once, then destructure.  Each NamedId in the
@@ -450,7 +510,8 @@ class CppEmitter(Visitor):
                 # Assign statement.
                 rhs = self._visit_expr(stmt.expr, ctx)
                 tmp = self._fresh_temp()
-                self.writer.add_line(f'auto {tmp} = {rhs};')
+                # read-only (destructured) -> reference, no copy
+                self.writer.add_line(f'auto&& {tmp} = {rhs};')
                 self._destructure(stmt.target, tmp, stmt)
             case _:
                 raise CppEmitError(
@@ -1157,7 +1218,8 @@ class CppEmitter(Visitor):
         # binding the base to a temp so it is evaluated once across the gets.
         assert isinstance(acc.ty, CppTuple)
         tmp = self._fresh_temp()
-        self.writer.add_line(f'auto {tmp} = {acc.s};')
+        # base read only via the gets below -> reference, no copy
+        self.writer.add_line(f'auto&& {tmp} = {acc.s};')
         gets = ', '.join(
             f'std::get<{i}>({tmp})' for i in range(acc.off, len(acc.ty.elts))
         )
@@ -1210,7 +1272,8 @@ class CppEmitter(Visitor):
         idx_ty = result_ty.elt.elts[0]
 
         src = self._fresh_temp()
-        self.writer.add_line(f'auto {src} = {src_str};')
+        # source read only (size + indexing) -> reference, no copy
+        self.writer.add_line(f'auto&& {src} = {src_str};')
         result = self._fresh_temp()
         self.writer.add_line(
             f'{result_ty.format()} {result}({src}.size());'
@@ -1652,7 +1715,8 @@ class CppEmitter(Visitor):
             fn = 'std::min' if isinstance(e, AMin) else 'std::max'
 
         src = self._fresh_temp()
-        self.writer.add_line(f'auto {src} = {arg_str};')
+        # source read only (indexing + size) -> reference, no copy
+        self.writer.add_line(f'auto&& {src} = {arg_str};')
         acc = self._fresh_temp()
         init = self._maybe_cast(f'{src}[0]', elt_ty, result_ty, at=e)
         self.writer.add_line(f'{result_ty.format()} {acc} = {init};')
@@ -1729,7 +1793,8 @@ class CppEmitter(Visitor):
         for arg in e.args:
             arg_str = self._visit_expr(arg, ctx)
             s = self._fresh_temp()
-            self.writer.add_line(f'auto {s} = {arg_str};')
+            # source read only (size + indexing) -> reference, no copy
+            self.writer.add_line(f'auto&& {s} = {arg_str};')
             srcs.append(s)
 
         result = self._fresh_temp()
@@ -1884,12 +1949,16 @@ class CppEmitter(Visitor):
         SSA site is the ``ListComp`` node, not the target id itself
         (see ``define_use._visit_list_comp``).
         """
+        # ``loop_def`` drives the value-iterable element binding (const&
+        # for read-only aggregates); ``None`` => discarded/anonymous.
+        loop_def = None
         match target:
             case NamedId():
                 target_def = self.def_use.find_def_from_site(target, comp_site)
                 target_name = self.storage.def_to_name[target_def]
                 target_ty = self.storage.storage_of(target_def).format()
                 decl = f'{target_ty} {target_name}'
+                loop_def = target_def
             case UnderscoreId():
                 # ``_`` discards the loop variable — no SSA def, no
                 # storage class.  Synthesize a fresh name and pick
@@ -1920,7 +1989,8 @@ class CppEmitter(Visitor):
                     )
                 tmp = self._fresh_temp()
                 iter_str = self._visit_expr(iterable, ctx)
-                self.writer.add_line(f'for (auto {tmp} : {iter_str}) {{')
+                # element read-only (only destructured) -> bind by const&
+                self.writer.add_line(f'for (const auto& {tmp} : {iter_str}) {{')
                 self.writer.indent()
                 self._destructure(target, tmp, comp_site)
                 return
@@ -1954,6 +2024,7 @@ class CppEmitter(Visitor):
                 )
             case _:
                 iter_str = self._visit_expr(iterable, ctx)
+                decl = self._foreach_decl(loop_def, target_name)
                 self.writer.add_line(f'for ({decl} : {iter_str}) {{')
         self.writer.indent()
 
@@ -1969,19 +2040,21 @@ class CppEmitter(Visitor):
 
     def _visit_list_slice(self, e: ListSlice, ctx) -> str:
         # ``xs[start:stop]`` →
-        #   auto __cpp_tmpN = <xs>;
+        #   auto&& __cpp_tmpN = <xs>;
         #   <result_ty>(__cpp_tmpN.begin() + start,
         #               __cpp_tmpN.begin() + stop)
         #
-        # Binding the value to a temp avoids re-evaluating ``<xs>``
+        # Binding the value to a reference avoids re-evaluating ``<xs>``
         # when it isn't a simple lvalue (and matches the interpreter,
-        # which evaluates the value exactly once).  Indices are cast to
-        # ``size_t`` to match the iterator-arithmetic API.  Strict
-        # bounds-checking against the interpreter's behaviour is a TODO
-        # (slice-out-of-range, negative-index handling, etc.).
+        # which evaluates the value exactly once).  ``auto&&`` binds an
+        # lvalue without copying and lifetime-extends a prvalue — the temp
+        # is only read (``begin``/``size``) before the slice is copied out.
+        # Indices are cast to ``size_t`` to match the iterator-arithmetic
+        # API.  Strict bounds-checking against the interpreter's behaviour
+        # is a TODO (slice-out-of-range, negative-index handling, etc.).
         arr_tmp = self._fresh_temp()
         arr_str = self._visit_expr(e.value, ctx)
-        self.writer.add_line(f'auto {arr_tmp} = {arr_str};')
+        self.writer.add_line(f'auto&& {arr_tmp} = {arr_str};')
 
         if e.start is None:
             start = '0'
@@ -2116,8 +2189,9 @@ class CppEmitter(Visitor):
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
+                # discarded element -> bind by const& (no per-element copy)
                 iter_str = self._visit_expr(stmt.iterable, ctx)
-                header = f'for ({decl} : {iter_str})'
+                header = f'for ({self._foreach_decl(None, target)} : {iter_str})'
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)
@@ -2156,8 +2230,10 @@ class CppEmitter(Visitor):
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
+                # range-for over a container: bind the element (const& for
+                # read-only aggregates — no per-element copy).
                 iter_str = self._visit_expr(stmt.iterable, ctx)
-                header = f'for ({decl} : {iter_str})'
+                header = f'for ({self._foreach_decl(target_def, target)} : {iter_str})'
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)
@@ -2176,7 +2252,8 @@ class CppEmitter(Visitor):
             )
         iter_str = self._visit_expr(stmt.iterable, ctx)
         tmp = self._fresh_temp()
-        self.writer.add_line(f'for (auto {tmp} : {iter_str}) {{')
+        # element read-only (only destructured) -> bind by const&
+        self.writer.add_line(f'for (const auto& {tmp} : {iter_str}) {{')
         self.writer.indent()
         assert isinstance(stmt.target, TupleBinding)
         self._destructure(stmt.target, tmp, stmt)

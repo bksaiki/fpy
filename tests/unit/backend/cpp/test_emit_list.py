@@ -39,7 +39,8 @@ class TestListLiteral:
                 return xs[0]
 
         out = _compile_list_arg(f)
-        assert out.startswith('double f(std::vector<double> xs)')
+        # read-only aggregate parameter -> passed by const reference
+        assert out.startswith('double f(const std::vector<double>& xs)')
 
 
 class TestListRef:
@@ -197,9 +198,9 @@ class TestListSlice:
                 return ys[0]
 
         out = _compile_list_arg(f)
-        # Value bound to a temp, then both endpoints emit as iterator
-        # arithmetic with size_t casts.
-        assert 'auto __cpp_tmp1 = xs;' in out
+        # Value bound to a reference (no copy), then both endpoints emit as
+        # iterator arithmetic with size_t casts.
+        assert 'auto&& __cpp_tmp1 = xs;' in out
         assert (
             '__cpp_tmp1.begin() + static_cast<size_t>(1), '
             '__cpp_tmp1.begin() + static_cast<size_t>(4)'

@@ -100,6 +100,13 @@ class StorageAnalysis:
         """Convenience: the C++ storage type chosen for *d*'s class."""
         return self.class_storage[self.def_class[d]]
 
+    def is_single_def(self, d: Definition) -> bool:
+        """True iff *d*'s class has exactly one member — i.e. the C++
+        variable is written exactly once (never reassigned via a phi edge
+        nor mutated in place).  Such a binding can be a ``const`` reference
+        to its initializer instead of an owning copy."""
+        return len(self.class_members[self.def_class[d]]) == 1
+
 
 def _is_external(members: list[Definition]) -> bool:
     for d in members:

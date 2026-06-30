@@ -124,7 +124,7 @@ class CppCompiler(Backend):
         """Convenience: the headers and helpers concatenated as a
         single source-ready string.  Equivalent to
         ``'\\n'.join(self.headers()) + '\\n' + self.helpers()``."""
-        return '\n'.join(self.headers()) + '\n' + self.helpers()
+        return '\n'.join(self.headers()) + '\n\n' + self.helpers()
 
     # ------------------------------------------------------------------
     # Pipeline — runs all pre-analyses and selects storage.
