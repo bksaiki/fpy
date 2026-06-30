@@ -1091,6 +1091,18 @@ class _FormatInferInstance(Visitor):
                 assert isinstance(arg_fmt, ListFormat), \
                     f'expected ListFormat for argument of Enumerate, got {arg_fmt!r}'
                 return ListFormat(TupleFormat((_INTEGER_FORMAT, arg_fmt.elt)))
+            case Fst():
+                # tuple head — the first element's format.
+                assert isinstance(arg_fmt, TupleFormat), \
+                    f'expected TupleFormat for argument of fst, got {arg_fmt!r}'
+                return arg_fmt.elts[0]
+            case Snd():
+                # tuple tail — the second element's format for a pair, else
+                # the format of the remaining elements.
+                assert isinstance(arg_fmt, TupleFormat), \
+                    f'expected TupleFormat for argument of snd, got {arg_fmt!r}'
+                rest = arg_fmt.elts[1:]
+                return rest[0] if len(rest) == 1 else TupleFormat(rest)
             case Sum():
                 assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
                 return self._sum_bound(e, arg_fmt)
