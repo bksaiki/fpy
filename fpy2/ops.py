@@ -1083,8 +1083,11 @@ def fst(x, ctx: Context = REAL):
     """
     Returns the first element (head) of the tuple `x`.
 
-    Viewing a tuple as a binary pair, `fst((a, b)) == a`.
+    Viewing a tuple as a binary pair, `fst((a, b)) == a`. Defined for any
+    non-empty tuple (the head of a 1-tuple is its sole element).
     """
+    if len(x) < 1:
+        raise ValueError(f'fst requires a non-empty tuple, got `{x}`')
     return x[0]
 
 def snd(x, ctx: Context = REAL):
@@ -1092,8 +1095,11 @@ def snd(x, ctx: Context = REAL):
     Returns the rest (tail) of the tuple `x`.
 
     Viewing a tuple as a binary pair, `snd((a, b)) == b`; for a longer
-    tuple the tail is the tuple of the remaining elements.
+    tuple the tail is the tuple of the remaining elements. Requires a tuple
+    of at least 2 elements (a pair has no tail unless a second element exists).
     """
+    if len(x) < 2:
+        raise ValueError(f'snd requires a tuple of at least 2 elements, got `{x}`')
     return x[1] if len(x) == 2 else tuple(x[1:])
 
 #############################################################################
