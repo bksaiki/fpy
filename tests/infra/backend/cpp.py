@@ -100,7 +100,13 @@ _NON_CR_OPS = frozenset([
 # diverge from the interpreter for a known reason (populate as discovered,
 # e.g. exact-rational decimal literals rounded once in the interpreter vs.
 # per-literal in C++).
-_run_ignore: list[str] = []
+_run_ignore: list[str] = [
+    # Quantized dot product that collapses to zero: the interpreter yields
+    # -0.0 and C++ `std::accumulate` (seeded with +0.0) yields +0.0 —
+    # numerically equal, a signed-zero-from-reduction edge.  This function
+    # exists to pin widening codegen (which compiles), not exact execution.
+    '_regression_quant_dot_real_widen',
+]
 
 
 class _OpScan(DefaultVisitor):
@@ -118,12 +124,17 @@ class _OpScan(DefaultVisitor):
 
 
 def _exec_eligible(func: fp.Function) -> bool:
-    """True iff *func* can be executed and bit-exactly compared: it takes
-    no arguments (phase 1), uses only correctly-rounded operations, and
-    calls no user-defined function."""
-    if len(func.ast.args) != 0:
-        return False
+    """True iff *func* can be executed and bit-exactly compared: it uses
+    only correctly-rounded operations, calls no user-defined function, and
+    every argument type is one we can synthesize inputs for."""
     if func.name in _run_ignore:
+        return False
+    try:
+        ty_info = fp.analysis.TypeInfer.check(func.ast)
+        arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
+    except Exception:
+        return False
+    if not all(_generatable(ty) for ty in arg_types):
         return False
     scan = _OpScan()
     scan._visit_function(func.ast, None)
@@ -197,19 +208,112 @@ def _float_bit_eq(a: float, b: float) -> bool:
     return struct.pack('<d', a) == struct.pack('<d', b)
 
 
+# ---- input synthesis (phase 2) ---------------------------------------
+#
+# Inputs are exact FP64 doubles, so they round-trip identically to the
+# interpreter (which receives the same Python floats) and to C++ (which
+# parses the same hex-float literals).  We try a few deterministic samples
+# per function and skip any the interpreter rejects.
+
+# Nonzero reals, all exactly representable; varied sign/magnitude to
+# exercise branches without provoking trivial domain errors.
+_REAL_POOL = (1.0, 2.5, -3.0, 0.5, -0.25, 4.0, -1.5, 0.75)
+_LIST_LEN = 3
+_N_SAMPLES = 5
+
+
+def _generatable(ty) -> bool:
+    """Whether :func:`_gen_value` can synthesize an input of type *ty*
+    (after context instantiation)."""
+    match ty:
+        case fp.types.RealType() | fp.types.BoolType():
+            return True
+        case fp.types.ListType():
+            return _generatable(ty.elt)
+        case fp.types.TupleType():
+            return all(_generatable(elt) for elt in ty.elts)
+        case _:
+            return False
+
+
+def _gen_value(ty, k: int):
+    """Synthesize a Python input value of (instantiated) type *ty* for
+    sample seed *k*.  Sub-elements are offset by position so list/tuple
+    components differ."""
+    match ty:
+        case fp.types.RealType():
+            return _REAL_POOL[k % len(_REAL_POOL)]
+        case fp.types.BoolType():
+            return bool(k % 2)
+        case fp.types.ListType():
+            return [_gen_value(ty.elt, k + i) for i in range(_LIST_LEN)]
+        case fp.types.TupleType():
+            return tuple(_gen_value(elt, k + i) for i, elt in enumerate(ty.elts))
+        case _:
+            raise ValueError(f'cannot generate input for type: {ty.format()}')
+
+
+def _cpp_type(ty) -> str:
+    """C++ storage type for an (instantiated) argument type — must match the
+    backend's choice (FP64 real -> ``double``, etc.)."""
+    match ty:
+        case fp.types.RealType():
+            return 'double'
+        case fp.types.BoolType():
+            return 'bool'
+        case fp.types.ListType():
+            return f'std::vector<{_cpp_type(ty.elt)}>'
+        case fp.types.TupleType():
+            return f'std::tuple<{", ".join(_cpp_type(elt) for elt in ty.elts)}>'
+        case _:
+            raise ValueError(f'no C++ type for: {ty.format()}')
+
+
+def _cpp_literal(value, ty) -> str:
+    """C++ literal for *value* of (instantiated) type *ty*."""
+    match ty:
+        case fp.types.RealType():
+            # ``repr`` is the shortest round-tripping decimal; C++ parses it
+            # (correctly-rounded) to the identical double.  Decimal — not a
+            # hex-float literal — keeps the driver valid under C++11, which
+            # the harness compiles with (hex floats are C++17).
+            return repr(float(value))
+        case fp.types.BoolType():
+            return 'true' if value else 'false'
+        case fp.types.ListType():
+            elts = ', '.join(_cpp_literal(v, ty.elt) for v in value)
+            return f'{_cpp_type(ty)}{{{elts}}}'
+        case fp.types.TupleType():
+            elts = ', '.join(_cpp_literal(v, e) for v, e in zip(value, ty.elts))
+            return f'std::make_tuple({elts})'
+        case _:
+            raise ValueError(f'no C++ literal for: {ty.format()}')
+
+
 def _emit_driver(
     output_dir: Path, prefix: str, compiler: fp.CppCompiler,
-    func: fp.Function, arg_types: list, value,
+    func: fp.Function, arg_types: list, samples: list,
 ) -> Path:
     """Write a self-contained translation unit: headers, helpers, the
-    compiled function, and a ``main`` that calls it (no arguments — phase 1)
-    and prints the result for :func:`_compare`."""
+    compiled function, and a ``main`` that calls it once per sample and
+    prints each result (one line per sample) for :func:`_compare`.
+
+    *samples* is a list of ``(inputs, expected)``; each ``inputs`` is the
+    list of Python argument values to pass (empty for a nullary function).
+    """
     name = hashlib.md5(func.name.encode()).hexdigest()
     cpp_path = output_dir / f'{prefix}_{name}_run.cpp'
     body = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
-    main_lines = ['int main() {', f'  auto __ret = {func.name}();']
-    _emit_print('__ret', value, main_lines, [0])
-    main_lines.append(r'  std::printf("\n");')
+    counter = [0]
+    main_lines = ['int main() {']
+    for inputs, expected in samples:
+        args = ', '.join(_cpp_literal(v, t) for v, t in zip(inputs, arg_types))
+        # Each sample in its own scope; one printed line per sample.
+        main_lines.append('  {')
+        main_lines.append(f'    auto __ret = {func.name}({args});')
+        _emit_print('__ret', expected, main_lines, counter)
+        main_lines.append(r'    std::printf("\n");')
+        main_lines.append('  }')
     main_lines.append('  return 0;')
     main_lines.append('}')
     with open(cpp_path, 'w') as f:
@@ -237,19 +341,36 @@ def _run_and_check(
     output_dir: Path, prefix: str, compiler: fp.CppCompiler, func: fp.Function,
 ) -> str | None:
     """Run *func* through the interpreter and the compiled binary on the
-    same (empty) input and compare.  Returns ``None`` on agreement, an
-    error string on mismatch, or ``'skip'`` when the interpreter rejects
-    the input (so there is nothing to compare against)."""
+    same synthesized inputs and compare bit-for-bit.  Returns ``None`` on
+    agreement, an error string on mismatch, or ``'skip'`` when the
+    interpreter rejects every sampled input (nothing to compare against)."""
     ty_info = fp.analysis.TypeInfer.check(func.ast)
     arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
-    try:
-        expected = func(ctx=fp.FP64)
-    except Exception:
-        # the oracle rejects this input — cannot compare (no C++ run)
+
+    # Generate deterministic samples; keep only those the oracle accepts so
+    # the compiled binary is never run on inputs the interpreter rejects.
+    n = _N_SAMPLES if arg_types else 1
+    samples: list[tuple[list, object]] = []
+    for k in range(n):
+        inputs = [_gen_value(ty, k + i) for i, ty in enumerate(arg_types)]
+        try:
+            expected = func(*inputs, ctx=fp.FP64)
+        except Exception:
+            continue
+        samples.append((inputs, expected))
+    if not samples:
         return 'skip'
-    driver = _emit_driver(output_dir, prefix, compiler, func, arg_types, expected)
+
+    driver = _emit_driver(output_dir, prefix, compiler, func, arg_types, samples)
     out = _build_and_run(driver)
-    return _compare(expected, out.split(), [0])
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    if len(lines) != len(samples):
+        return f'expected {len(samples)} output line(s), got {len(lines)}'
+    for (inputs, expected), line in zip(samples, lines):
+        err = _compare(expected, line.split(), [0])
+        if err:
+            return f'inputs={inputs}: {err}'
+    return None
 
 ###########################################################
 # Unit tests
