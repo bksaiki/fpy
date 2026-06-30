@@ -6,6 +6,7 @@ import argparse
 import fpy2 as fp
 import hashlib
 import math
+import random
 import shutil
 import signal
 import struct
@@ -242,6 +243,16 @@ _REAL_POOL = (
 _LIST_LENS = (3, 1, 2, 0, 4)
 _N_SAMPLES = len(_REAL_POOL)
 
+# Random-distribution sampling, layered on top of the curated sweep above.
+# Seeded with a fixed value per function, so it is fully reproducible (a
+# failure always reproduces — no flaky CI).  Magnitudes stay modest so a
+# value used as a loop bound can't blow up the interpreter.
+_INT_N = 64           # integer-mode reals: uniform in [-_INT_N, _INT_N]
+_FLOAT_STD = 8.0      # float-mode reals: normal(0, _FLOAT_STD) ...
+_FLOAT_CAP = 128.0    # ... clamped to [-_FLOAT_CAP, _FLOAT_CAP]
+_MAX_RANDOM_LEN = 5   # upper bound on a random list length
+_RANDOM_SAMPLES = 16  # per arg-taking function (half integer-, half float-mode)
+
 
 class _OracleTimeout(Exception):
     """The interpreter ran too long on a sampled input."""
@@ -299,6 +310,28 @@ def _gen_value(ty, vseed: int, lseed: int):
                 _gen_value(elt, vseed + j, lseed)
                 for j, elt in enumerate(ty.elts)
             )
+        case _:
+            raise ValueError(f'cannot generate input for type: {ty.format()}')
+
+
+def _rand_value(ty, rng: random.Random, list_len: int, int_mode: bool):
+    """Draw a random input of (instantiated) type *ty*.
+
+    *int_mode* selects the real distribution: uniform integers in
+    ``[-_INT_N, _INT_N]`` (exercises loop bounds / exact-integer arithmetic)
+    versus a clamped normal (general floating-point).  *list_len* is shared
+    across a sample's arguments so paired lists stay equal-length."""
+    match ty:
+        case fp.types.RealType():
+            if int_mode:
+                return float(rng.randint(-_INT_N, _INT_N))
+            return max(-_FLOAT_CAP, min(_FLOAT_CAP, rng.gauss(0.0, _FLOAT_STD)))
+        case fp.types.BoolType():
+            return rng.random() < 0.5
+        case fp.types.ListType():
+            return [_rand_value(ty.elt, rng, list_len, int_mode) for _ in range(list_len)]
+        case fp.types.TupleType():
+            return tuple(_rand_value(elt, rng, list_len, int_mode) for elt in ty.elts)
         case _:
             raise ValueError(f'cannot generate input for type: {ty.format()}')
 
@@ -422,6 +455,20 @@ def _run_and_check(
             # interpreter rejected the input (domain error) or ran too long
             continue
         samples.append((inputs, expected))
+
+    # Random samples (fixed seed -> reproducible): alternate integer-mode
+    # (uniform) and float-mode (clamped normal); one list length per sample.
+    if arg_types:
+        rng = random.Random(0)
+        for s in range(_RANDOM_SAMPLES):
+            list_len = rng.randint(0, _MAX_RANDOM_LEN)
+            inputs = [_rand_value(ty, rng, list_len, s % 2 == 0) for ty in arg_types]
+            try:
+                expected = _interp(func, inputs)
+            except Exception:
+                continue
+            samples.append((inputs, expected))
+
     if not samples:
         return 'skip'
 
