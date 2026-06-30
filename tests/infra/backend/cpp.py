@@ -7,6 +7,7 @@ import fpy2 as fp
 import hashlib
 import math
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
@@ -192,9 +193,17 @@ def _compare(value, toks: list[str], pos: list[int]) -> str | None:
             if err:
                 return err
     else:  # real scalar
-        cpp = float.fromhex(take())
+        tok = take().lower()
+        # ``printf("%a", ...)`` prints "nan"/"-nan"/"nan(0x..)" and
+        # "inf"/"-inf" for non-finite values; finite values are hex floats.
+        if 'nan' in tok:
+            cpp = math.nan
+        elif 'inf' in tok:
+            cpp = -math.inf if tok.startswith('-') else math.inf
+        else:
+            cpp = float.fromhex(tok)
         if not _float_bit_eq(float(value), cpp):
-            return f'real {float(value).hex()} != {cpp.hex()}'
+            return f'real {float(value).hex()} != {tok}'
     return None
 
 
@@ -212,14 +221,49 @@ def _float_bit_eq(a: float, b: float) -> bool:
 #
 # Inputs are exact FP64 doubles, so they round-trip identically to the
 # interpreter (which receives the same Python floats) and to C++ (which
-# parses the same hex-float literals).  We try a few deterministic samples
-# per function and skip any the interpreter rejects.
+# parses the same decimal/`numeric_limits` literals).  Generation is
+# deterministic (no flaky CI); samples the interpreter rejects are skipped,
+# and since all of a function's samples run in one executable, a generous
+# sample count is essentially free.
 
-# Nonzero reals, all exactly representable; varied sign/magnitude to
-# exercise branches without provoking trivial domain errors.
-_REAL_POOL = (1.0, 2.5, -3.0, 0.5, -0.25, 4.0, -1.5, 0.75)
-_LIST_LEN = 3
-_N_SAMPLES = 5
+# Reals spanning sign, zero (both signs), special values, a subnormal, and
+# a "random-looking" double.  Magnitudes stay <= 100 so a value used as a
+# loop bound can't blow up the interpreter; overflow behavior is covered by
+# the explicit infinities.
+_REAL_POOL = (
+    0.0, -0.0,
+    1.0, -1.0, 2.5, -3.0, 0.5, -0.25, 0.1, 100.0,
+    1e-10, 5e-324,                          # tiny, smallest subnormal
+    float('inf'), float('-inf'), float('nan'),
+)
+# List lengths cycled per sample (a single length per sample keeps multiple
+# list arguments equal-length, as ``zip`` requires).  Includes 0 and 1 to
+# exercise empty/singleton handling.
+_LIST_LENS = (3, 1, 2, 0, 4)
+_N_SAMPLES = len(_REAL_POOL)
+
+
+class _OracleTimeout(Exception):
+    """The interpreter ran too long on a sampled input."""
+
+
+def _interp(func: fp.Function, inputs: list, seconds: float = 2.0):
+    """Run the interpreter with a wall-clock timeout.
+
+    Special inputs (e.g. ``inf`` as a loop bound) can make a data-dependent
+    loop in the interpreter run forever; ``SIGALRM`` interrupts it between
+    bytecodes, raising :class:`_OracleTimeout` so the caller skips the
+    sample.  Main-thread only (the harness is)."""
+    def _handler(signum, frame):
+        raise _OracleTimeout()
+
+    old = signal.signal(signal.SIGALRM, _handler)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        return func(*inputs, ctx=fp.FP64)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
 
 
 def _generatable(ty) -> bool:
@@ -236,19 +280,25 @@ def _generatable(ty) -> bool:
             return False
 
 
-def _gen_value(ty, k: int):
-    """Synthesize a Python input value of (instantiated) type *ty* for
-    sample seed *k*.  Sub-elements are offset by position so list/tuple
-    components differ."""
+def _gen_value(ty, vseed: int, lseed: int):
+    """Synthesize a Python input value of (instantiated) type *ty*.
+
+    *vseed* selects scalar values (offset by position for sub-elements so
+    components differ); *lseed* — constant across all arguments of one
+    sample — selects list lengths, so paired lists stay equal-length."""
     match ty:
         case fp.types.RealType():
-            return _REAL_POOL[k % len(_REAL_POOL)]
+            return _REAL_POOL[vseed % len(_REAL_POOL)]
         case fp.types.BoolType():
-            return bool(k % 2)
+            return bool(vseed % 2)
         case fp.types.ListType():
-            return [_gen_value(ty.elt, k + i) for i in range(_LIST_LEN)]
+            n = _LIST_LENS[lseed % len(_LIST_LENS)]
+            return [_gen_value(ty.elt, vseed + j, lseed) for j in range(n)]
         case fp.types.TupleType():
-            return tuple(_gen_value(elt, k + i) for i, elt in enumerate(ty.elts))
+            return tuple(
+                _gen_value(elt, vseed + j, lseed)
+                for j, elt in enumerate(ty.elts)
+            )
         case _:
             raise ValueError(f'cannot generate input for type: {ty.format()}')
 
@@ -273,11 +323,17 @@ def _cpp_literal(value, ty) -> str:
     """C++ literal for *value* of (instantiated) type *ty*."""
     match ty:
         case fp.types.RealType():
+            v = float(value)
+            if math.isnan(v):
+                return 'std::numeric_limits<double>::quiet_NaN()'
+            if math.isinf(v):
+                inf = 'std::numeric_limits<double>::infinity()'
+                return f'-{inf}' if v < 0 else inf
             # ``repr`` is the shortest round-tripping decimal; C++ parses it
             # (correctly-rounded) to the identical double.  Decimal — not a
             # hex-float literal — keeps the driver valid under C++11, which
             # the harness compiles with (hex floats are C++17).
-            return repr(float(value))
+            return repr(v)
         case fp.types.BoolType():
             return 'true' if value else 'false'
         case fp.types.ListType():
@@ -333,7 +389,12 @@ def _build_and_run(cpp_path: Path) -> str:
     cmd = [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)]
     print(f"Building `{cpp_path}` with command: `{' '.join(cmd)}`")
     subprocess.run(cmd, check=True)
-    result = subprocess.run([str(exe)], check=True, capture_output=True, text=True)
+    # Timeout guards against a codegen bug producing an infinite loop; the
+    # interpreter ran first (and fast) on the same inputs, so a hang here is
+    # a divergence, surfaced as a SubprocessError failure.
+    result = subprocess.run(
+        [str(exe)], check=True, capture_output=True, text=True, timeout=10,
+    )
     return result.stdout
 
 
@@ -352,10 +413,13 @@ def _run_and_check(
     n = _N_SAMPLES if arg_types else 1
     samples: list[tuple[list, object]] = []
     for k in range(n):
-        inputs = [_gen_value(ty, k + i) for i, ty in enumerate(arg_types)]
+        # `lseed=k` is shared across args (paired lists stay equal-length);
+        # `vseed=k + i` decorrelates values between argument positions.
+        inputs = [_gen_value(ty, k + i, k) for i, ty in enumerate(arg_types)]
         try:
-            expected = func(*inputs, ctx=fp.FP64)
+            expected = _interp(func, inputs)
         except Exception:
+            # interpreter rejected the input (domain error) or ran too long
             continue
         samples.append((inputs, expected))
     if not samples:
@@ -508,7 +572,8 @@ def _test_unit_tests(
         if mode == 'run' and _CXX is not None and _exec_eligible(func):
             try:
                 err = _run_and_check(output_dir, prefix, compiler, func)
-            except subprocess.CalledProcessError as e:
+            except subprocess.SubprocessError as e:
+                # build failure, nonzero exit (e.g. assert/SIGSEGV), or timeout
                 print(f'  FAILED `{func.name}`: execution error: {e}')
                 failures.append((prefix, func.name, f'execution error: {e}'))
                 continue
