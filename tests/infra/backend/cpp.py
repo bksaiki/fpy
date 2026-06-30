@@ -13,6 +13,7 @@ import struct
 import subprocess
 import tempfile
 
+from collections import Counter
 from pathlib import Path
 from types import ModuleType
 
@@ -125,22 +126,28 @@ class _OpScan(DefaultVisitor):
         return super()._visit_expr(e, ctx)
 
 
-def _exec_eligible(func: fp.Function) -> bool:
-    """True iff *func* can be executed and bit-exactly compared: it uses
-    only correctly-rounded operations, calls no user-defined function, and
-    every argument type is one we can synthesize inputs for."""
+def _exec_skip_reason(func: fp.Function) -> str | None:
+    """Why *func* can't be executed and bit-exactly compared, or ``None``
+    if it can.  The reason categories drive the coverage summary.
+
+    A function is eligible iff it uses only correctly-rounded operations,
+    calls no user-defined function, and has only synthesizable arg types."""
     if func.name in _run_ignore:
-        return False
+        return 'run-ignored'
     try:
         ty_info = fp.analysis.TypeInfer.check(func.ast)
         arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
     except Exception:
-        return False
+        return 'type-error'
     if not all(_generatable(ty) for ty in arg_types):
-        return False
+        return 'arg-type'
     scan = _OpScan()
     scan._visit_function(func.ast, None)
-    return not scan.bad
+    if 'Call' in scan.bad:
+        return 'calls'
+    if scan.bad:
+        return 'transcendental'
+    return None
 
 
 def _emit_print(expr: str, value, lines: list[str], counter: list[int]) -> None:
@@ -583,6 +590,7 @@ def _test_unit_tests(
     ignore: list[str],
     *,
     mode: str = 'compile',
+    cov: 'Counter[str] | None' = None,
 ) -> list[tuple[str, str, str]]:
     """Take each non-ignored function in *funcs* through the cpp backend up
     to *mode* (``'emit'`` / ``'compile'`` / ``'run'``).  Returns a list of
@@ -590,9 +598,10 @@ def _test_unit_tests(
     means everything succeeded.  Failures are also printed inline.
 
     In ``'run'`` mode, execution-eligible functions (see
-    :func:`_exec_eligible`) are compiled to an executable and their output
-    is checked bit-for-bit against the interpreter; everything else is
-    compiled as in ``'compile'`` mode.
+    :func:`_exec_skip_reason`) are compiled to an executable and their
+    output is checked bit-for-bit against the interpreter; everything else
+    is compiled as in ``'compile'`` mode.  When *cov* is given, each
+    function's outcome is tallied into it for the coverage summary.
 
     Continues past failures so a single run reports every regression, but
     does *not* mask them — the caller aggregates the returned list and
@@ -614,24 +623,42 @@ def _test_unit_tests(
         if mode == 'emit':
             continue
 
-        # In `run` mode, execute eligible functions and bit-compare against
-        # the interpreter; otherwise just object-compile.
-        if mode == 'run' and _CXX is not None and _exec_eligible(func):
-            try:
-                err = _run_and_check(output_dir, prefix, compiler, func)
-            except subprocess.SubprocessError as e:
-                # build failure, nonzero exit (e.g. assert/SIGSEGV), or timeout
-                print(f'  FAILED `{func.name}`: execution error: {e}')
-                failures.append((prefix, func.name, f'execution error: {e}'))
-                continue
-            if err == 'skip':
-                # interpreter rejects the input; fall back to object-compile
-                _compile_obj(cpp_path)
-            elif err is not None:
-                print(f'  MISMATCH `{func.name}`: {err}')
-                failures.append((prefix, func.name, f'output mismatch: {err}'))
-        else:
+        if mode != 'run':
             _compile_obj(cpp_path)
+            continue
+
+        # `run` mode: execute eligible functions and bit-compare against the
+        # interpreter; object-compile the rest, tallying why each is or
+        # isn't executed (see the coverage summary in `test_compile_cpp`).
+        reason = 'no-compiler' if _CXX is None else _exec_skip_reason(func)
+        if reason is not None:
+            if cov is not None:
+                cov[reason] += 1
+            _compile_obj(cpp_path)
+            continue
+
+        try:
+            err = _run_and_check(output_dir, prefix, compiler, func)
+        except subprocess.SubprocessError as e:
+            # build failure, nonzero exit (e.g. assert/SIGSEGV), or timeout
+            print(f'  FAILED `{func.name}`: execution error: {e}')
+            failures.append((prefix, func.name, f'execution error: {e}'))
+            if cov is not None:
+                cov['exec-error'] += 1
+            continue
+        if err == 'skip':
+            # interpreter rejected every sampled input; nothing to compare
+            if cov is not None:
+                cov['uncovered'] += 1
+            _compile_obj(cpp_path)
+        elif err is not None:
+            print(f'  MISMATCH `{func.name}`: {err}')
+            failures.append((prefix, func.name, f'output mismatch: {err}'))
+            if cov is not None:
+                cov['mismatch'] += 1
+        else:
+            if cov is not None:
+                cov['executed'] += 1
     if failures:
         print(f'\n{len(failures)} failures in `{prefix}`:')
         for _, name, msg in failures:
@@ -639,10 +666,12 @@ def _test_unit_tests(
     return failures
 
 
-def _test_unit(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
+def _test_unit(
+    output_dir: Path, mode: str = 'compile', cov: 'Counter[str] | None' = None,
+) -> list[tuple[str, str, str]]:
     failures: list[tuple[str, str, str]] = []
-    failures += _test_unit_tests(output_dir, 'unit_tests', all_unit_tests(), _test_ignore, mode=mode)
-    failures += _test_unit_tests(output_dir, 'unit_examples', all_example_tests(), _example_ignore, mode=mode)
+    failures += _test_unit_tests(output_dir, 'unit_tests', all_unit_tests(), _test_ignore, mode=mode, cov=cov)
+    failures += _test_unit_tests(output_dir, 'unit_examples', all_example_tests(), _example_ignore, mode=mode, cov=cov)
     return failures
 
 ###########################################################
@@ -802,14 +831,14 @@ _regression_funcs: list[fp.Function] = [
 
 
 def _test_regressions(
-    output_dir: Path, mode: str = 'compile',
+    output_dir: Path, mode: str = 'compile', cov: 'Counter[str] | None' = None,
 ) -> list[tuple[str, str, str]]:
     """Take each regression function through the same pipeline as the
     corpus.  Failures are accumulated and returned for the top-level
     harness to surface."""
     return _test_unit_tests(
         output_dir, 'regressions', _regression_funcs, ignore=[],
-        mode=mode,
+        mode=mode, cov=cov,
     )
 
 ###########################################################
@@ -821,6 +850,32 @@ class CppInfraFailure(AssertionError):
     interpreter).  Raised at the end of :func:`test_compile_cpp` so CI
     surfaces regressions reliably (failures aren't swallowed by
     per-function ``try/except`` blocks)."""
+
+
+_COV_LABELS = {
+    'uncovered': 'uncovered (interpreter rejected all sampled inputs)',
+    'transcendental': 'ineligible: uses non-correctly-rounded op(s)',
+    'calls': 'ineligible: calls a user-defined function',
+    'arg-type': 'ineligible: unsupported argument type',
+    'run-ignored': 'ineligible: in _run_ignore (known divergence)',
+    'type-error': 'ineligible: type inference failed',
+    'no-compiler': 'skipped: no C++ compiler driver found',
+    'mismatch': 'FAIL: output mismatch',
+    'exec-error': 'FAIL: build/run error',
+}
+
+
+def _print_coverage(cov: 'Counter[str]') -> None:
+    """Print the ``run``-mode execution-coverage breakdown: how many
+    functions were bit-compared vs. only compiled, and why."""
+    executed = cov.get('executed', 0)
+    total = executed + sum(cov.get(k, 0) for k in _COV_LABELS)
+    print(f'\n=== cpp exec coverage: {executed}/{total} bit-compared '
+          f'against the interpreter ===')
+    for key, label in _COV_LABELS.items():
+        n = cov.get(key, 0)
+        if n:
+            print(f'  {n:4d}  {label}')
 
 
 def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
@@ -835,12 +890,16 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
 
     print(f"Running C++ tests (mode={mode}) with output under `{output_dir}`")
     failures: list[tuple[str, str, str]] = []
-    failures += _test_unit(output_dir, mode=mode)
+    cov: Counter[str] = Counter()
+    failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)
-    failures += _test_regressions(output_dir, mode=mode)
+    failures += _test_regressions(output_dir, mode=mode, cov=cov)
 
     if delete:
         shutil.rmtree(output_dir)
+
+    if mode == 'run':
+        _print_coverage(cov)
 
     if failures:
         # Print a single consolidated summary so the failing names
