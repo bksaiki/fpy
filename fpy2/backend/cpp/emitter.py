@@ -257,6 +257,37 @@ class CppEmitter(Visitor):
         d = self.def_use.find_def_from_site(arg.name, arg)
         return self.storage.storage_of(d)
 
+    @staticmethod
+    def _is_aggregate(storage: CppType) -> bool:
+        """A ``std::vector`` / ``std::tuple`` — copying it is O(n), unlike
+        a scalar (where a copy is free and by-value is idiomatic)."""
+        return isinstance(storage, (CppList, CppTuple))
+
+    def _arg_decl(self, arg: Argument, storage: CppType) -> str:
+        """Parameter declaration.  An aggregate parameter the body never
+        writes (its storage class has a single member — no reassignment,
+        no in-place mutation) is taken by ``const&`` to avoid copying it on
+        every call; everything else stays by value, faithful to FPy's
+        value semantics (a written parameter needs its own copy)."""
+        assert isinstance(arg.name, NamedId)
+        d = self.def_use.find_def_from_site(arg.name, arg)
+        if self._is_aggregate(storage) and self.storage.is_single_def(d):
+            return f'const {storage.format()}& {arg.name}'
+        return f'{storage.format()} {arg.name}'
+
+    def _foreach_decl(self, target_def, name: str) -> str:
+        """Loop-variable declaration for a range-for over a container.  A
+        non-scalar element bound read-only is taken by ``const&`` to avoid
+        copying every element; scalars and mutated elements stay by value.
+        ``target_def is None`` marks a discarded/anonymous element (always
+        read-only) — ``const auto&`` lets the element type deduce."""
+        if target_def is None:
+            return f'const auto& {name}'
+        storage = self.storage.storage_of(target_def)
+        if self._is_aggregate(storage) and self.storage.is_single_def(target_def):
+            return f'const {storage.format()}& {name}'
+        return f'{storage.format()} {name}'
+
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
         """Emit a single ``T name = rhs;`` (declare-on-assign) or
         ``name = rhs;`` (reassign) line for a NamedId target whose
@@ -338,7 +369,7 @@ class CppEmitter(Visitor):
                     f'unsupported arg pattern: {arg.name!r}', at=arg,
                 )
             storage = self._storage_for_arg(arg)
-            arg_strs.append(f'{storage.format()} {arg.name}')
+            arg_strs.append(self._arg_decl(arg, storage))
         emitted_name = self._func_name_override or func.name
         sig = f'{ret_str} {emitted_name}({", ".join(arg_strs)})'
 
@@ -1884,12 +1915,16 @@ class CppEmitter(Visitor):
         SSA site is the ``ListComp`` node, not the target id itself
         (see ``define_use._visit_list_comp``).
         """
+        # ``loop_def`` drives the value-iterable element binding (const&
+        # for read-only aggregates); ``None`` => discarded/anonymous.
+        loop_def = None
         match target:
             case NamedId():
                 target_def = self.def_use.find_def_from_site(target, comp_site)
                 target_name = self.storage.def_to_name[target_def]
                 target_ty = self.storage.storage_of(target_def).format()
                 decl = f'{target_ty} {target_name}'
+                loop_def = target_def
             case UnderscoreId():
                 # ``_`` discards the loop variable — no SSA def, no
                 # storage class.  Synthesize a fresh name and pick
@@ -1920,7 +1955,8 @@ class CppEmitter(Visitor):
                     )
                 tmp = self._fresh_temp()
                 iter_str = self._visit_expr(iterable, ctx)
-                self.writer.add_line(f'for (auto {tmp} : {iter_str}) {{')
+                # element read-only (only destructured) -> bind by const&
+                self.writer.add_line(f'for (const auto& {tmp} : {iter_str}) {{')
                 self.writer.indent()
                 self._destructure(target, tmp, comp_site)
                 return
@@ -1954,6 +1990,7 @@ class CppEmitter(Visitor):
                 )
             case _:
                 iter_str = self._visit_expr(iterable, ctx)
+                decl = self._foreach_decl(loop_def, target_name)
                 self.writer.add_line(f'for ({decl} : {iter_str}) {{')
         self.writer.indent()
 
@@ -2116,8 +2153,9 @@ class CppEmitter(Visitor):
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
+                # discarded element -> bind by const& (no per-element copy)
                 iter_str = self._visit_expr(stmt.iterable, ctx)
-                header = f'for ({decl} : {iter_str})'
+                header = f'for ({self._foreach_decl(None, target)} : {iter_str})'
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)
@@ -2156,8 +2194,10 @@ class CppEmitter(Visitor):
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
+                # range-for over a container: bind the element (const& for
+                # read-only aggregates — no per-element copy).
                 iter_str = self._visit_expr(stmt.iterable, ctx)
-                header = f'for ({decl} : {iter_str})'
+                header = f'for ({self._foreach_decl(target_def, target)} : {iter_str})'
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)
@@ -2176,7 +2216,8 @@ class CppEmitter(Visitor):
             )
         iter_str = self._visit_expr(stmt.iterable, ctx)
         tmp = self._fresh_temp()
-        self.writer.add_line(f'for (auto {tmp} : {iter_str}) {{')
+        # element read-only (only destructured) -> bind by const&
+        self.writer.add_line(f'for (const auto& {tmp} : {iter_str}) {{')
         self.writer.indent()
         assert isinstance(stmt.target, TupleBinding)
         self._destructure(stmt.target, tmp, stmt)

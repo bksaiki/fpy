@@ -39,7 +39,8 @@ class TestListLiteral:
                 return xs[0]
 
         out = _compile_list_arg(f)
-        assert out.startswith('double f(std::vector<double> xs)')
+        # read-only aggregate parameter -> passed by const reference
+        assert out.startswith('double f(const std::vector<double>& xs)')
 
 
 class TestListRef:
