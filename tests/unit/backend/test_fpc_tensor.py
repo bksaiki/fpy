@@ -10,7 +10,7 @@ import titanfp.fpbench.fpcparser as fpcparser
 
 from fpy2 import Function, FPCoreCompiler
 from fpy2.ast.fpyast import ListTypeAnn
-from fpy2.analysis import DefineUse, TypeInfer
+from fpy2.analysis import DefineUse
 from fpy2.backend.fpc import _FPCoreCompileInstance
 from fpy2.utils import NamedId
 
@@ -49,6 +49,6 @@ class TestFPCoreTensorSizes:
         FPCore-backend limitation, so the argument compilation is checked
         directly.)"""
         fun = _parse('(FPCore foo ((A 3 4) (B m n)) :precision binary64 1.0)')
-        inst = _FPCoreCompileInstance(fun.ast, DefineUse.analyze(fun.ast), TypeInfer.check(fun.ast))
+        inst = _FPCoreCompileInstance(fun.ast, DefineUse.analyze(fun.ast))
         name, _, dims = inst._compile_arg(fun.ast.args[1])
         assert name == 'B' and dims == ['m', 'n']

@@ -153,17 +153,17 @@ class _FPCoreCompileInstance(Visitor):
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    type_info: TypeAnalysis
     gensym: Gensym
 
     unsafe_int_cast: bool
+    _type_info: TypeAnalysis | None
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, type_info: TypeAnalysis, unsafe_int_cast: bool = True):
+    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis, unsafe_int_cast: bool = True):
         self.func = func
         self.def_use = def_use
-        self.type_info = type_info
         self.gensym = Gensym(reserved=def_use.names())
         self.unsafe_int_cast = unsafe_int_cast
+        self._type_info = None
 
     def compile(self) -> fpc.FPCore:
         f = self._visit_function(self.func, None)
@@ -371,7 +371,13 @@ class _FPCoreCompileInstance(Visitor):
         return fpc.Dim(tup)
 
     def _tuple_arity(self, e: Expr) -> int:
-        ty = self.type_info.by_expr.get(e)
+        # Type inference runs lazily here: only ``snd`` needs the operand's
+        # arity, and FPCore-sourced functions never contain tuple accessors,
+        # so the common case skips type checking entirely (and avoids
+        # imposing FPy's type system on round-tripped FPCore).
+        if self._type_info is None:
+            self._type_info = TypeInfer.check(self.func)
+        ty = self._type_info.by_expr.get(e)
         if not isinstance(ty, TupleType):
             raise FPCoreCompileError('expected a tuple operand', e)
         return len(ty.elts)
@@ -1279,7 +1285,6 @@ class FPCoreCompiler(Backend):
         """Emit one FPCore from a (post-pass) public entry."""
         ast = entry.func.ast
         def_use = DefineUse.analyze(ast)
-        type_info = TypeInfer.check(ast)
         return _FPCoreCompileInstance(
-            ast, def_use, type_info, self.unsafe_int_cast,
+            ast, def_use, self.unsafe_int_cast,
         ).compile()
