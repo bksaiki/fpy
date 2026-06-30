@@ -1,5 +1,14 @@
 # Version History
 
+## [0.1.11] - 2026-06-30
+### Features:
+ - Analyses:
+   - extend `ZipElim` to list comprehensions with tuple destructuring
+ - Language:
+   - add tuple accessors `fst` and `snd`
+ - Misc:
+   - list type (annotations) carry an optional size parameter for static sizing
+
 ## [0.1.10] - 2026-06-29
 ### Features:
  - Analyses:
