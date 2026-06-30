@@ -21,7 +21,8 @@ the original AST is sufficient and stable.
 import fpy2 as fp
 
 from fpy2.ast.fpyast import (
-    Assign, ForStmt, Len, ListComp, ListRef, NamedId, Range1, Var, Zip,
+    Assign, ForStmt, Fst, Len, ListComp, ListRef, NamedId, Range1, Snd,
+    TupleBinding, Var, Zip,
 )
 from fpy2.transform import ZipElim
 
@@ -267,3 +268,93 @@ class TestProperties:
 
         # Should not raise.
         ZipElim.apply(f.ast)
+
+
+def _contains(ast: fp.ast.FuncDef, types) -> bool:
+    """True iff any sub-expression of *ast* is an instance of *types*."""
+    from fpy2.ast.visitor import DefaultVisitor
+
+    hits: list = []
+
+    class _C(DefaultVisitor):
+        def _visit_expr(self, e, ctx):
+            if isinstance(e, types):
+                hits.append(e)
+            return super()._visit_expr(e, ctx)
+
+    _C()._visit_function(ast, None)
+    return bool(hits)
+
+
+class TestNestedTupleBinding:
+    """Zip targets with a nested ``TupleBinding`` slot — newly supported
+    via the ``fst``/``snd`` accessors (comp path) and a destructuring
+    assignment (for-loop path)."""
+
+    def test_for_loop_nested_binding(self):
+        @fp.fpy
+        def f(pairs: list[tuple[fp.Real, fp.Real]], xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for (a, b), c in zip(pairs, xs):
+                    acc = acc + a + b + c
+                return acc
+
+        new_ast = ZipElim.apply(f.ast)
+        loop = _find_for(new_ast)
+        assert isinstance(loop.iterable, Range1)
+        # The nested slot lowers to a destructuring assign (TupleBinding
+        # target); the plain ``c`` slot to a ListRef assign.
+        body = loop.body.stmts
+        assert any(
+            isinstance(s, Assign) and isinstance(s.target, TupleBinding)
+            for s in body
+        )
+        assert not _contains(new_ast, Zip)
+        pairs = [(1.0, 2.0), (3.0, 4.0)]
+        xs = [10.0, 20.0]
+        assert _eval(new_ast, f, pairs, xs) == f(pairs, xs)
+
+    def test_list_comp_nested_binding(self):
+        @fp.fpy
+        def f(pairs: list[tuple[fp.Real, fp.Real]], xs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [a + b + c for (a, b), c in zip(pairs, xs)]
+
+        new_ast = ZipElim.apply(f.ast)
+        comp = _find_listcomp(new_ast)
+        # Rewritten to a range-indexed comp; the nested slot's elements are
+        # reached by fst/snd accessors in the elt.
+        assert isinstance(comp.iterables[0], Range1)
+        assert isinstance(comp.targets[0], NamedId)
+        assert not _contains(new_ast, Zip)
+        assert _contains(new_ast, (Fst, Snd))
+        pairs = [(1.0, 2.0), (3.0, 4.0)]
+        xs = [10.0, 20.0]
+        assert list(_eval(new_ast, f, pairs, xs)) == list(f(pairs, xs))
+
+    def test_list_comp_deeply_nested_binding(self):
+        @fp.fpy
+        def f(
+            ps: list[tuple[tuple[fp.Real, fp.Real], fp.Real]], xs: list[fp.Real]
+        ) -> list[fp.Real]:
+            with fp.FP64:
+                return [a + b + c + d for ((a, b), c), d in zip(ps, xs)]
+
+        new_ast = ZipElim.apply(f.ast)
+        assert not _contains(new_ast, Zip)
+        ps = [((1.0, 2.0), 3.0), ((4.0, 5.0), 6.0)]
+        xs = [10.0, 20.0]
+        assert list(_eval(new_ast, f, ps, xs)) == list(f(ps, xs))
+
+    def test_underscore_inside_nested_binding(self):
+        @fp.fpy
+        def f(pairs: list[tuple[fp.Real, fp.Real]], xs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [b + c for (_, b), c in zip(pairs, xs)]
+
+        new_ast = ZipElim.apply(f.ast)
+        assert not _contains(new_ast, Zip)
+        pairs = [(99.0, 2.0), (99.0, 4.0)]
+        xs = [10.0, 20.0]
+        assert list(_eval(new_ast, f, pairs, xs)) == list(f(pairs, xs))

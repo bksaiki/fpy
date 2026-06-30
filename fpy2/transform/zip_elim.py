@@ -48,9 +48,15 @@ Two patterns are recognized:
    The transform leaves non-``Var``-argument zip comps alone; the
    cpp backend's emit-time fast path still optimizes them.
 
+A binding slot may itself be a nested ``TupleBinding`` (e.g.
+``for (a, b), c in zip(pairs, xs)``).  In the for-loop path the nested
+slot lowers to a destructuring assignment ``(a, b) = _srcK[_i]``; in the
+comp path — which has no statement context — each leaf name is reached by
+an ``fst``/``snd`` chain over ``argK[_i]`` (element ``i`` of a ``k``-tuple
+``t`` is ``fst(snd^i(t))``, or ``snd^(k-1)(t)`` for the last element).
+
 Patterns that don't match the guards (range iterables, mismatched
-arity, nested ``TupleBinding`` elements, non-``Var`` list-comp zip
-args) are left unchanged.
+arity, non-``Var`` list-comp zip args) are left unchanged.
 
 Ordering note: run :class:`ZipElim` *before*
 :class:`fpy2.transform.ForUnpack`.  ``ForUnpack`` rewrites
@@ -61,12 +67,12 @@ defeats this transform's guard.
 
 import dataclasses
 
-from typing import Any
+from typing import Any, Callable
 
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast.fpyast import (
-    Assign, Expr, ForStmt, FuncDef, Len, ListComp, ListRef, NamedId,
-    Range1, Stmt, StmtBlock, TupleBinding, UnderscoreId, Var, Zip,
+    Assign, Attribute, Expr, ForStmt, Fst, FuncDef, Len, ListComp, ListRef, NamedId,
+    Range1, Snd, Stmt, StmtBlock, TupleBinding, UnderscoreId, Var, Zip,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym, Id
@@ -89,12 +95,12 @@ class _Ctx:
 def _is_zip_tuple_binding(target: Id | TupleBinding, iterable: Expr) -> bool:
     """Predicate for the for-loop / comp fast path.
 
-    Fires iff *iterable* is a :class:`Zip`, *target* is a
-    :class:`TupleBinding` of matching arity, and every element of
-    the binding is a :class:`NamedId` or :class:`UnderscoreId`.
-    Nested tuple bindings are out of scope — they'd require
-    recursive destructuring of each per-iteration element, which
-    isn't worth the complication.
+    Fires iff *iterable* is a :class:`Zip` and *target* is a
+    :class:`TupleBinding` of matching arity.  Each binding slot may be a
+    :class:`NamedId`, an :class:`UnderscoreId`, or a nested
+    :class:`TupleBinding` (the per-iteration element of a nested slot is
+    itself a tuple, destructured via the ``fst``/``snd`` accessors in the
+    comp path and via a destructuring assignment in the for-loop path).
     """
     if not isinstance(iterable, Zip):
         return False
@@ -103,9 +109,71 @@ def _is_zip_tuple_binding(target: Id | TupleBinding, iterable: Expr) -> bool:
     if len(iterable.args) != len(target.elts):
         return False
     return all(
-        isinstance(e, (NamedId, UnderscoreId))
+        isinstance(e, (NamedId, UnderscoreId, TupleBinding))
         for e in target.elts
     )
+
+
+def _index_access(arg_name: NamedId, idx: NamedId) -> Callable[[], Expr]:
+    """A thunk building ``arg_name[idx]`` fresh on each call."""
+    return lambda: ListRef(Var(arg_name, None), Var(idx, None), None)
+
+
+def _fst(arg: Expr) -> Expr:
+    """Build ``fst(arg)``."""
+    name = Attribute(Var(NamedId('fp'), None), 'fst', None)
+    return Fst(name, arg, None)
+
+
+def _snd(arg: Expr) -> Expr:
+    """Build ``snd(arg)``."""
+    name = Attribute(Var(NamedId('fp'), None), 'snd', None)
+    return Snd(name, arg, None)
+
+
+def _snd_n(arg: Expr, n: int) -> Expr:
+    """Apply ``snd`` ``n`` times (``n == 0`` returns ``arg`` unchanged)."""
+    for _ in range(n):
+        arg = _snd(arg)
+    return arg
+
+
+def _elt_access(
+    make_access: Callable[[], Expr], i: int, k: int,
+) -> Callable[[], Expr]:
+    """A thunk for element ``i`` of the ``k``-tuple built by *make_access*.
+
+    Viewing a tuple as a binary pair, element ``i`` is ``fst(snd^i(t))`` for
+    ``i < k - 1`` and ``snd^(k-1)(t)`` for the last element (``snd`` of a
+    pair is the bare element).
+    """
+    if i < k - 1:
+        return lambda: _fst(_snd_n(make_access(), i))
+    return lambda: _snd_n(make_access(), k - 1)
+
+
+def _destructure_subst(
+    binding: Id | TupleBinding,
+    make_access: Callable[[], Expr],
+    subst: dict[NamedId, Expr],
+) -> None:
+    """Map every :class:`NamedId` in *binding* to an accessor expression.
+
+    *make_access* builds a *fresh* expression for the value bound to
+    *binding* (the per-iteration source element).  It is invoked once per
+    leaf, so no AST node is shared between substitutions.
+    """
+    match binding:
+        case NamedId():
+            subst[binding] = make_access()
+        case UnderscoreId():
+            pass
+        case TupleBinding():
+            k = len(binding.elts)
+            for i, elt in enumerate(binding.elts):
+                _destructure_subst(elt, _elt_access(make_access, i, k), subst)
+        case _:
+            raise RuntimeError(f'unexpected zip binding element: {binding!r}')
 
 
 class _SubstNames(DefaultTransformVisitor):
@@ -227,7 +295,11 @@ class _ZipElimInstance(DefaultTransformVisitor):
             match elt:
                 case UnderscoreId():
                     continue
-                case NamedId():
+                case NamedId() | TupleBinding():
+                    # ``NamedId`` -> ``a = src[i]``; a nested
+                    # ``TupleBinding`` -> ``(a, b) = src[i]``, whose
+                    # destructuring the backends already lower (the
+                    # statement context needs no ``fst``/``snd``).
                     per_iter.append(
                         Assign(
                             elt, None,
@@ -284,25 +356,15 @@ class _ZipElimInstance(DefaultTransformVisitor):
                 and all(isinstance(a, Var) for a in new_iter.args)
             ):
                 idx = self.gensym.fresh('_i')
-                # Build a substitution for each named binding slot:
-                # ``name -> arg[idx]``.  Underscore slots contribute
-                # no substitution.
+                # Substitute each binding slot with an accessor into its
+                # source: ``name -> arg[idx]`` for a plain slot, and the
+                # ``fst``/``snd`` chain for a nested tuple binding (whose
+                # per-iteration element is itself a tuple).
                 for binding, arg in zip(target.elts, new_iter.args):
-                    match binding:
-                        case NamedId():
-                            assert isinstance(arg, Var)
-                            subst[binding] = ListRef(
-                                Var(arg.name, None),
-                                Var(idx, None),
-                                None,
-                            )
-                        case UnderscoreId():
-                            continue
-                        case _:
-                            raise RuntimeError(
-                                f'unexpected binding element in zip '
-                                f'target: {binding!r}'
-                            )
+                    assert isinstance(arg, Var)
+                    _destructure_subst(
+                        binding, _index_access(arg.name, idx), subst,
+                    )
                 # New target/iterable: ``_i in range(len(arg0))``.
                 assert isinstance(new_iter.args[0], Var)
                 len_expr = Len(
