@@ -1114,10 +1114,18 @@ class CppEmitter(Visitor):
                 return f'static_cast<{result_ty.format()}>({arg}.size())'
             case Sum():
                 # ``sum(xs)`` → ``std::accumulate(begin, end, T(0))``
-                # with ``T`` taken from format inference.
+                # with ``T`` taken from format inference.  Bind the operand
+                # to a reference first: when ``arg`` is a prvalue (e.g. a
+                # list literal), ``arg.begin()`` and ``arg.end()`` would
+                # otherwise name iterators into *different* temporaries — an
+                # invalid range (undefined behavior at runtime).  ``auto&&``
+                # lifetime-extends a temporary and binds an lvalue without
+                # copying.
                 result_ty = self._storage_for_expr(e)
+                src = self._fresh_temp()
+                self.writer.add_line(f'auto&& {src} = {arg};')
                 return (
-                    f'std::accumulate({arg}.begin(), {arg}.end(), '
+                    f'std::accumulate({src}.begin(), {src}.end(), '
                     f'static_cast<{result_ty.format()}>(0))'
                 )
             case AMin() | AMax():

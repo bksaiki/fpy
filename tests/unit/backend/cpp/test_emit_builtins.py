@@ -33,10 +33,13 @@ class TestSum:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        assert (
-            'std::accumulate(xs.begin(), xs.end(), '
-            'static_cast<double>(0))'
-        ) in out
+        # The operand is bound to a reference (``auto&&``) so begin()/end()
+        # name the same object — required when the operand is a prvalue;
+        # ``accumulate`` then folds over that binding.
+        assert 'auto&& ' in out and '= xs;' in out
+        assert 'std::accumulate(' in out
+        assert '.begin(), ' in out
+        assert '.end(), static_cast<double>(0))' in out
 
 
 class TestEnumerate:

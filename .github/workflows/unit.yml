@@ -133,7 +133,10 @@ jobs:
       - name: Install
         run: uv sync
       - name: Tests (C++)
-        run: uv run python -m tests.infra.backend.cpp
+        # `run` mode is a superset of `compile`: it compiles every corpus
+        # function and additionally executes the bit-exact-eligible subset,
+        # checking each output against the FPy interpreter.
+        run: uv run python -m tests.infra.backend.cpp --mode run
 
   sweep:
     name: "Sweep"
