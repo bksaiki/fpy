@@ -113,16 +113,21 @@ _run_ignore: list[str] = [
 
 
 class _OpScan(DefaultVisitor):
-    """Collect operator/call nodes that disqualify bit-exact execution."""
+    """Scan one function body: collect non-correctly-rounded ops and the
+    resolved targets of any calls (so the caller can recurse the call
+    graph)."""
 
     def __init__(self):
         super().__init__()
-        self.bad: set[str] = set()
+        self.bad: set[str] = set()    # non-correctly-rounded op names
+        self.callees: list = []       # ``Call.fn`` targets
 
     def _visit_expr(self, e, ctx):
         name = type(e).__name__
-        if name in _NON_CR_OPS or name == 'Call':
+        if name in _NON_CR_OPS:
             self.bad.add(name)
+        elif name == 'Call':
+            self.callees.append(e.fn)
         return super()._visit_expr(e, ctx)
 
 
@@ -130,8 +135,10 @@ def _exec_skip_reason(func: fp.Function) -> str | None:
     """Why *func* can't be executed and bit-exactly compared, or ``None``
     if it can.  The reason categories drive the coverage summary.
 
-    A function is eligible iff it uses only correctly-rounded operations,
-    calls no user-defined function, and has only synthesizable arg types."""
+    A function is eligible iff its whole (transitive) call graph uses only
+    correctly-rounded operations, every call resolves to an analyzable FPy
+    function (the emitted translation unit includes those callees), and the
+    entry's argument types are synthesizable."""
     if func.name in _run_ignore:
         return 'run-ignored'
     try:
@@ -141,12 +148,22 @@ def _exec_skip_reason(func: fp.Function) -> str | None:
         return 'type-error'
     if not all(_generatable(ty) for ty in arg_types):
         return 'arg-type'
-    scan = _OpScan()
-    scan._visit_function(func.ast, None)
-    if 'Call' in scan.bad:
-        return 'calls'
-    if scan.bad:
-        return 'transcendental'
+
+    # Walk the call graph: a transcendental anywhere, or a call we can't
+    # resolve to an FPy function, makes the whole thing ineligible.
+    seen: set[int] = {id(func.ast)}
+    work = [func.ast]
+    while work:
+        scan = _OpScan()
+        scan._visit_function(work.pop(), None)
+        if scan.bad:
+            return 'transcendental'
+        for callee in scan.callees:
+            if not isinstance(callee, fp.Function):
+                return 'calls'  # foreign / unresolved callee — can't verify
+            if id(callee.ast) not in seen:
+                seen.add(id(callee.ast))
+                work.append(callee.ast)
     return None
 
 
@@ -824,9 +841,27 @@ def _regression_empty_range() -> fp.Real:
         return acc
 
 
+@fp.fpy
+def _regression_call_helper(x: fp.Real) -> fp.Real:
+    """Callee for :func:`_regression_calls_user_fn`."""
+    with fp.FP64:
+        return x * x + 1.0
+
+
+@fp.fpy
+def _regression_calls_user_fn(x: fp.Real, y: fp.Real) -> fp.Real:
+    """A caller of another FPy function — exercises multi-function
+    execution: eligibility recurses the (exact-op) call graph, and the
+    emitted translation unit includes the specialized callee, so the
+    binary links, runs, and bit-matches the interpreter."""
+    with fp.FP64:
+        return _regression_call_helper(x) + _regression_call_helper(y)
+
+
 _regression_funcs: list[fp.Function] = [
     _regression_quant_dot_real_widen,
     _regression_empty_range,
+    _regression_calls_user_fn,
 ]
 
 
@@ -855,7 +890,7 @@ class CppInfraFailure(AssertionError):
 _COV_LABELS = {
     'uncovered': 'uncovered (interpreter rejected all sampled inputs)',
     'transcendental': 'ineligible: uses non-correctly-rounded op(s)',
-    'calls': 'ineligible: calls a user-defined function',
+    'calls': 'ineligible: calls an unanalyzable/foreign function',
     'arg-type': 'ineligible: unsupported argument type',
     'run-ignored': 'ineligible: in _run_ignore (known divergence)',
     'type-error': 'ineligible: type inference failed',
