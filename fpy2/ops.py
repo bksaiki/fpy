@@ -82,6 +82,9 @@ __all__ = [
     'empty',
     'dim',
     'size',
+    # Tuple
+    'fst',
+    'snd',
     # Constants
     'digits',
     'hexfloat',
@@ -1072,6 +1075,26 @@ def size(x: list, dim: Real, ctx: Context = REAL):
             return Float.from_int(len(x))
         else:
             return ctx.round(len(x))
+
+#############################################################################
+# Tuple
+
+def fst(x, ctx: Context = REAL):
+    """
+    Returns the first element (head) of the tuple `x`.
+
+    Viewing a tuple as a binary pair, `fst((a, b)) == a`.
+    """
+    return x[0]
+
+def snd(x, ctx: Context = REAL):
+    """
+    Returns the rest (tail) of the tuple `x`.
+
+    Viewing a tuple as a binary pair, `snd((a, b)) == b`; for a longer
+    tuple the tail is the tuple of the remaining elements.
+    """
+    return x[1] if len(x) == 2 else tuple(x[1:])
 
 #############################################################################
 # Constants

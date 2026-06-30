@@ -73,6 +73,8 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     cast: Cast,
     len: Len,
     dim: Dim,
+    fst: Fst,
+    snd: Snd,
     enumerate: Enumerate,
     sum: Sum,
     logb: Logb,
