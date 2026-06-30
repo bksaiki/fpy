@@ -48,10 +48,16 @@ def _inst_type(ty: fp.types.Type):
             raise ValueError(f'Cannot instantiate type: {ty.format()}')
 
 
-def _compile(output_dir: Path, prefix: str, compiler: fp.CppCompiler, func: fp.Function):
-    # substitute context variables with `FP64`
-    ty_info = fp.analysis.TypeInfer.check(func.ast)
-    arg_types = [ _inst_type(ty) for ty in ty_info.arg_types ]
+def _compile(
+    output_dir: Path, prefix: str, compiler: fp.CppCompiler, func: fp.Function,
+    arg_types: list | None = None,
+):
+    # Use the caller's explicit argument types when given (e.g. a
+    # low-precision element type); otherwise substitute context variables
+    # with `FP64`.
+    if arg_types is None:
+        ty_info = fp.analysis.TypeInfer.check(func.ast)
+        arg_types = [ _inst_type(ty) for ty in ty_info.arg_types ]
 
     name = hashlib.md5(func.name.encode()).hexdigest()
     cpp_path = output_dir / f'{prefix}_{name}.cpp'
@@ -865,6 +871,68 @@ _regression_funcs: list[fp.Function] = [
 ]
 
 
+@fp.fpy
+def _regression_blocked_dot_e4m3(xs):
+    """Blocked reduction over a low-precision tensor.  Pins several things
+    at once:
+
+    - a strided ``range(0, len(xs), 32)``,
+    - a slice ``xs[i:i+32]`` and ``sum`` of it under ``with fp.REAL``,
+      whose accumulation widens losslessly to the element's wider storage
+      (only well-defined for a low-precision element type — hence the
+      explicit ``MX_E4M3`` argument), and
+    - the read-only-aggregate optimizations: ``xs`` is a ``const&`` param,
+      the slice/sum operands bind by reference rather than copying.
+    """
+    acc = 0
+    for i in range(0, len(xs), 32):
+        with fp.REAL:
+            slc = xs[i:i+32]
+            slc_acc = sum(slc)
+        with fp.FP32:
+            acc += slc_acc
+    return acc
+
+
+# Regressions needing a specific (non-FP64) argument instantiation — e.g.
+# a low-precision element type whose REAL-context reduction widens
+# losslessly.  These are compiled (and ``cc``-checked) with the given arg
+# types; they are not run-mode executed (custom-typed inputs aren't
+# synthesized by the differential harness).
+_typed_regression_funcs: list[tuple[fp.Function, list]] = [
+    (
+        _regression_blocked_dot_e4m3,
+        [fp.types.ListType(fp.types.RealType(fp.MX_E4M3))],
+    ),
+]
+
+
+def _test_typed_regressions(
+    output_dir: Path, mode: str = 'compile',
+) -> list[tuple[str, str, str]]:
+    """Compile each explicitly-typed regression with its given arg types
+    (bypassing the FP64 instantiation), then object-compile unless in
+    ``emit`` mode.  No execution — these carry non-synthesizable arg types."""
+    compiler = fp.CppCompiler(unsafe_cast_int=True)
+    failures: list[tuple[str, str, str]] = []
+    for func, arg_types in _typed_regression_funcs:
+        try:
+            cpp_path = _compile(
+                output_dir, 'typed_regressions', compiler, func, arg_types,
+            )
+        except fp.backend.CppCompileError as e:
+            print(f'  FAILED `{func.name}`: {e}')
+            failures.append(('typed_regressions', func.name, str(e)))
+            continue
+        if mode != 'emit':
+            _compile_obj(cpp_path)
+    if failures:
+        print(f'\n{len(failures)} failures in `typed_regressions`:')
+        for _, name, msg in failures:
+            print(f'  - {name}: {msg}')
+    return failures
+
+
 def _test_regressions(
     output_dir: Path, mode: str = 'compile', cov: 'Counter[str] | None' = None,
 ) -> list[tuple[str, str, str]]:
@@ -929,6 +997,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)
     failures += _test_regressions(output_dir, mode=mode, cov=cov)
+    failures += _test_typed_regressions(output_dir, mode=mode)
 
     if delete:
         shutil.rmtree(output_dir)
