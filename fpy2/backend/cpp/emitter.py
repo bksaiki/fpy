@@ -346,7 +346,8 @@ class CppEmitter(Visitor):
                 case TupleBinding():
                     access = f'std::get<{i}>({src})'
                     sub_tmp = self._fresh_temp()
-                    self.writer.add_line(f'auto {sub_tmp} = {access};')
+                    # read-only (destructured) -> reference, no copy
+                    self.writer.add_line(f'auto&& {sub_tmp} = {access};')
                     self._destructure(elt, sub_tmp, site)
                 case _:
                     raise CppEmitError(
@@ -509,7 +510,8 @@ class CppEmitter(Visitor):
                 # Assign statement.
                 rhs = self._visit_expr(stmt.expr, ctx)
                 tmp = self._fresh_temp()
-                self.writer.add_line(f'auto {tmp} = {rhs};')
+                # read-only (destructured) -> reference, no copy
+                self.writer.add_line(f'auto&& {tmp} = {rhs};')
                 self._destructure(stmt.target, tmp, stmt)
             case _:
                 raise CppEmitError(
@@ -1216,7 +1218,8 @@ class CppEmitter(Visitor):
         # binding the base to a temp so it is evaluated once across the gets.
         assert isinstance(acc.ty, CppTuple)
         tmp = self._fresh_temp()
-        self.writer.add_line(f'auto {tmp} = {acc.s};')
+        # base read only via the gets below -> reference, no copy
+        self.writer.add_line(f'auto&& {tmp} = {acc.s};')
         gets = ', '.join(
             f'std::get<{i}>({tmp})' for i in range(acc.off, len(acc.ty.elts))
         )
@@ -1269,7 +1272,8 @@ class CppEmitter(Visitor):
         idx_ty = result_ty.elt.elts[0]
 
         src = self._fresh_temp()
-        self.writer.add_line(f'auto {src} = {src_str};')
+        # source read only (size + indexing) -> reference, no copy
+        self.writer.add_line(f'auto&& {src} = {src_str};')
         result = self._fresh_temp()
         self.writer.add_line(
             f'{result_ty.format()} {result}({src}.size());'
@@ -1711,7 +1715,8 @@ class CppEmitter(Visitor):
             fn = 'std::min' if isinstance(e, AMin) else 'std::max'
 
         src = self._fresh_temp()
-        self.writer.add_line(f'auto {src} = {arg_str};')
+        # source read only (indexing + size) -> reference, no copy
+        self.writer.add_line(f'auto&& {src} = {arg_str};')
         acc = self._fresh_temp()
         init = self._maybe_cast(f'{src}[0]', elt_ty, result_ty, at=e)
         self.writer.add_line(f'{result_ty.format()} {acc} = {init};')
@@ -1788,7 +1793,8 @@ class CppEmitter(Visitor):
         for arg in e.args:
             arg_str = self._visit_expr(arg, ctx)
             s = self._fresh_temp()
-            self.writer.add_line(f'auto {s} = {arg_str};')
+            # source read only (size + indexing) -> reference, no copy
+            self.writer.add_line(f'auto&& {s} = {arg_str};')
             srcs.append(s)
 
         result = self._fresh_temp()
@@ -2034,19 +2040,21 @@ class CppEmitter(Visitor):
 
     def _visit_list_slice(self, e: ListSlice, ctx) -> str:
         # ``xs[start:stop]`` →
-        #   auto __cpp_tmpN = <xs>;
+        #   auto&& __cpp_tmpN = <xs>;
         #   <result_ty>(__cpp_tmpN.begin() + start,
         #               __cpp_tmpN.begin() + stop)
         #
-        # Binding the value to a temp avoids re-evaluating ``<xs>``
+        # Binding the value to a reference avoids re-evaluating ``<xs>``
         # when it isn't a simple lvalue (and matches the interpreter,
-        # which evaluates the value exactly once).  Indices are cast to
-        # ``size_t`` to match the iterator-arithmetic API.  Strict
-        # bounds-checking against the interpreter's behaviour is a TODO
-        # (slice-out-of-range, negative-index handling, etc.).
+        # which evaluates the value exactly once).  ``auto&&`` binds an
+        # lvalue without copying and lifetime-extends a prvalue — the temp
+        # is only read (``begin``/``size``) before the slice is copied out.
+        # Indices are cast to ``size_t`` to match the iterator-arithmetic
+        # API.  Strict bounds-checking against the interpreter's behaviour
+        # is a TODO (slice-out-of-range, negative-index handling, etc.).
         arr_tmp = self._fresh_temp()
         arr_str = self._visit_expr(e.value, ctx)
-        self.writer.add_line(f'auto {arr_tmp} = {arr_str};')
+        self.writer.add_line(f'auto&& {arr_tmp} = {arr_str};')
 
         if e.start is None:
             start = '0'

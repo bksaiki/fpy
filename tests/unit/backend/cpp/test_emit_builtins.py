@@ -97,8 +97,8 @@ class TestZip:
             ],
         )
         # Both iterables bound to temps.
-        assert 'auto __cpp_tmp1 = xs;' in out
-        assert 'auto __cpp_tmp2 = ys;' in out
+        assert 'auto&& __cpp_tmp1 = xs;' in out
+        assert 'auto&& __cpp_tmp2 = ys;' in out
         # Per-element tuple draws from both temps.
         assert (
             'std::make_tuple(__cpp_tmp1[__cpp_tmp4], '
@@ -125,9 +125,9 @@ class TestZip:
         )
         assert 'std::vector<std::tuple<double, double, double>>' in out
         # Three iterables bound, three subscript reads in make_tuple.
-        assert 'auto __cpp_tmp1 = xs;' in out
-        assert 'auto __cpp_tmp2 = ys;' in out
-        assert 'auto __cpp_tmp3 = zs;' in out
+        assert 'auto&& __cpp_tmp1 = xs;' in out
+        assert 'auto&& __cpp_tmp2 = ys;' in out
+        assert 'auto&& __cpp_tmp3 = zs;' in out
 
     def test_zip_optimized_skips_tuple_vector(self):
         """Default ``CppCompiler()`` has ``optimize=True``, so
