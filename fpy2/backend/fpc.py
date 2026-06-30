@@ -10,8 +10,8 @@ from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..module import Module, ModuleEntry
 from ..number import Context
-from ..types import TupleType
 from ..transform import ConstFold, ForBundling, ForUnpack, IfBundling, WhileBundling
+from ..types import TupleType
 from ..utils import Gensym
 
 from .backend import Backend, CompileError
