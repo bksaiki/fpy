@@ -1463,6 +1463,19 @@ class _FormatInferInstance(Visitor):
             iter_count += 1
         self._widen = saved_widen
 
+        # Widening is only a device to converge the phi fixpoint.  If it had
+        # to engage (the loop hit the iteration limit), the body's recorded
+        # ``by_expr`` came from a *widened* pass, which collapses every
+        # rounding/exact chain — including loop-invariant ones that don't
+        # depend on a widened phi — to the scope format.  Re-run the body
+        # once with widening off, using the now-fixed phi bounds: a single
+        # pass terminates (the phis are constants) and records precise
+        # formats for everything that isn't genuinely tied to a widened phi.
+        # (Skip when an outer loop is still widening — it wants the coarse
+        # bounds.)
+        if not saved_widen and iter_count >= self._loop_iter_limit:
+            run_body()
+
     def _unroll(
         self,
         phis: Iterable[PhiDef],
