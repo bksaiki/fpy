@@ -14,9 +14,20 @@ data free variable becomes an ordinary local binding.
 """
 
 from ..analysis import SyntaxCheck
-from ..ast.fpyast import Assign, FuncDef, FuncMeta, StmtBlock
+from ..ast.fpyast import Assign, Expr, FuncDef, FuncMeta, StmtBlock
+from ..number import Context
 
 from .const_fold import value_to_literal
+
+
+def inline_literal(val: object) -> Expr | None:
+    """The AST literal to bind for a captured free-variable value, or ``None``
+    if the variable should stay free: no literal form (a callable, a module,
+    ...), or a rounding :class:`Context` (resolved by context analysis, not a
+    value binding)."""
+    if isinstance(val, Context):
+        return None
+    return value_to_literal(val, None)
 
 
 class FreeVarElim:
@@ -38,9 +49,10 @@ class FreeVarElim:
             name = str(fv)
             if name not in env:
                 continue
-            lit = value_to_literal(env[name], None)
+            lit = inline_literal(env[name])
             if lit is None:
-                # No literal form (a callable, module, ...) — leave it free.
+                # No value binding to emit (callable, module, context, ...) —
+                # leave it free for the resolving machinery.
                 continue
             prelude.append(Assign(fv, None, lit, None))
             bound.add(fv)

@@ -22,7 +22,7 @@ from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...transform import FreeVarElim, RoundElim, Specialize, ZipElim
-from ...transform.const_fold import value_to_literal
+from ...transform.free_var_elim import inline_literal
 from ...types import Type
 from ..backend import Backend, CompileError
 
@@ -197,7 +197,7 @@ class CppCompiler(Backend):
         literal form and are left alone."""
         for fv in ast.free_vars:
             name = str(fv)
-            if name in ast.env and value_to_literal(ast.env[name], None) is not None:
+            if name in ast.env and inline_literal(ast.env[name]) is not None:
                 raise CppCompileError(
                     f'unbound data free variable `{name}` = {ast.env[name]!r}'
                 )
