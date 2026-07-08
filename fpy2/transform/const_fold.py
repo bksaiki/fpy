@@ -8,7 +8,6 @@ when a value is available.  No value-tracking dataflow lives here.
 from fractions import Fraction
 
 from ..analysis import DefineUse, DefineUseAnalysis, PartialEval, PartialEvalInfo
-from ..analysis.partial_eval import Value
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import Context, Float
@@ -23,10 +22,10 @@ def _rational_literal(val: Fraction, loc):
     return Rational(func, val.numerator, val.denominator, loc)
 
 
-def value_to_literal(val: Value, loc):
-    """Convert a :data:`Value` to an AST literal; return ``None`` if
-    ``val`` has no FPy literal form (types, functions, modules,
-    containers with non-emittable elements)."""
+def value_to_literal(val: object, loc):
+    """Convert a value to an AST literal; return ``None`` if ``val`` has no
+    FPy literal form (types, functions, modules, containers with
+    non-emittable elements)."""
     match val:
         case bool():                       # before int — bool is a subclass
             return BoolVal(val, loc)
