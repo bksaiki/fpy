@@ -186,6 +186,26 @@ class SetFormat:
         return SetFormat(frozenset((x,)))
 
 
+def _free_var_set_format(val: object) -> 'SetFormat | None':
+    """Singleton :class:`SetFormat` for a captured numeric free variable, or
+    ``None`` if *val* has no exact finite rational form (non-numeric, or a
+    non-finite ``Float``/``float``)."""
+    match val:
+        case Fraction():
+            return SetFormat.from_value(val)
+        case Float():
+            return SetFormat.from_value(val.as_rational()) if val.is_finite() else None
+        case RealFloat():
+            return SetFormat.from_value(Fraction(val))
+        case int() | float():
+            try:
+                return SetFormat.from_value(Fraction(val))
+            except (ValueError, OverflowError):
+                return None  # non-finite float
+        case _:
+            return None
+
+
 @dataclass(frozen=True)
 class TupleFormat:
     """Format for a tuple-valued expression."""
@@ -1636,26 +1656,14 @@ class _FormatInferInstance(Visitor):
                 self._set_def_bound(d, params[i])
             else:
                 self._set_def_bound(d, param_from_type(self.type_info.by_def[d]))
-        # Free-variable defs (captured from an outer scope)
+        # Free-variable defs (captured from an outer scope).  A finite numeric
+        # capture pins the def to the singleton set {value}; anything else
+        # falls back to the type-derived bound.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            val = self.func.env[str(d.name)]
-            match val:
-                case Fraction():
-                    # map to SetFormat(v)
-                    fmt: FormatBound = SetFormat.from_value(val)
-                case int() | float() | RealFloat():
-                    # map to SetFormat(v)
-                    fmt = SetFormat.from_value(Fraction(val))
-                case Float():
-                    # map to SetFormat
-                    if val.is_finite():
-                        fmt = SetFormat.from_value(val.as_rational())
-                    else:
-                        fmt = SetFormat.from_value(Fraction(0))
-                case _:
-                    fmt = param_from_type(self.type_info.by_def[d])
-
+            fmt = _free_var_set_format(self.func.env[str(v)])
+            if fmt is None:
+                fmt = param_from_type(self.type_info.by_def[d])
             self._set_def_bound(d, fmt)
 
         # Walk the body — populates ``by_def`` / ``by_expr`` / ``by_call``.

@@ -352,18 +352,16 @@ class _TypeInferInstance(Visitor):
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
                     return RealType(None)
                 case Fst():
-                    # tuple head accessor: `fst` is the first projection of a
-                    # pair. Unify the operand with a fresh pair `(head, tail)` and
-                    # let unification do the checking — this both constrains an
-                    # open type variable and rejects non-pairs (a `real`, a list,
-                    # or a tuple of arity != 2). See the OCaml `fst : 'a * 'b -> 'a`.
+                    # `fst : 'a * 'b -> 'a`, the first projection of a pair.
+                    # Unifying the operand with a fresh pair both constrains an
+                    # open type variable and rejects non-pairs (a real, a list,
+                    # or a tuple of arity != 2).
                     head = self._fresh_type_var()
                     tail = self._fresh_type_var()
                     self._unify(arg_ty, TupleType(head, tail))
                     return head
                 case Snd():
-                    # tuple tail accessor: `snd` is the second projection of a
-                    # pair (see `Fst`).
+                    # `snd : 'a * 'b -> 'b`, the second projection (see `Fst`).
                     head = self._fresh_type_var()
                     tail = self._fresh_type_var()
                     self._unify(arg_ty, TupleType(head, tail))

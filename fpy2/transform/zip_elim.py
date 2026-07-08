@@ -119,18 +119,13 @@ def _is_zip_tuple_binding(target: Id | TupleBinding, iterable: Expr) -> bool:
 
 
 def _is_access_path(e: Expr) -> bool:
-    """Whether *e* may be substituted into the comp body — i.e. re-evaluated
-    once per iteration in place of a ``_srcK = ...`` preamble binding (which a
-    comprehension, being an expression, cannot host).
+    """Whether *e* is safe to inline into the comp body (re-evaluated once per
+    iteration, since a comp has no preamble to bind it once).
 
-    True for a ``Var`` or a *pure, O(1), deterministic* projection/index chain
-    rooted at one: ``fst``/``snd``/``arg[i]``.  Such an access path has no side
-    effects and yields the same value each time, so inlining it preserves
-    ``zip``'s "evaluate each argument once" semantics.
-
-    Deliberately excludes allocating/expensive args (e.g. ``xs[1:]`` slices,
-    calls): re-evaluating those per iteration would turn O(n) into O(n^2), so
-    they are left for the backend to materialize.
+    True for a ``Var`` or a pure, O(1) projection/index chain rooted at one
+    (``fst``/``snd``/``arg[i]``): no side effects, same value each time.
+    Excludes allocating/expensive args (slices, calls) whose re-evaluation
+    would turn O(n) into O(n^2); those are left for the backend to materialize.
     """
     match e:
         case Var():
@@ -171,14 +166,12 @@ def _snd(arg: Expr) -> Expr:
 
 
 def _comp_nesting_is_pairs(target: TupleBinding) -> bool:
-    """Whether *target* can be lowered by the comp path under pair-only
-    ``fst``/``snd``.
+    """Whether *target*'s nested bindings can be lowered by the comp path.
 
-    The comp path reaches the leaves of a nested ``TupleBinding`` slot with
-    ``fst``/``snd`` (see :func:`_destructure_subst`), which are pair-only: a
-    nested slot of arity != 2 would emit ``snd`` of a non-pair.  The top-level
-    zip target is exempt — its slots are reached by direct ``argK[_i]``
-    indexing, not ``fst``/``snd`` — so only *nested* bindings must be pairs.
+    The comp path reaches a nested ``TupleBinding``'s leaves with ``fst``/``snd``
+    (see :func:`_destructure_subst`), which are pair-only, so every nested slot
+    must have arity 2.  The top-level target is exempt — its slots are reached
+    by direct ``argK[_i]`` indexing, not ``fst``/``snd``.
     """
     def check(binding: Id | TupleBinding, *, top: bool) -> bool:
         match binding:
@@ -229,18 +222,12 @@ class _SubstNames(DefaultTransformVisitor):
 
     def __init__(self, subst: dict[NamedId, Expr]):
         super().__init__()
-        # Active substitutions, shadowed lexically.  We mutate in
-        # place via push/pop because ``DefaultTransformVisitor`` is
-        # purely top-down and gives us no return-trip hook for
-        # popping; the surrounding ``_visit_list_comp`` override
-        # restores after recursing.
+        # Active substitutions; `_visit_list_comp` shadows/restores entries
+        # around a nested comp that rebinds a substituted name.
         self._subst = dict(subst)
 
     def _visit_var(self, e: Var, ctx: Any):
-        # The substitution targets are ``NamedId``s; FPy's parser
-        # synthesizes a ``Var`` whose ``.name`` is the same
-        # ``NamedId`` object.  Equality is structural (``NamedId``
-        # implements ``__eq__`` over (base, count)).
+        # Substitution targets are ``NamedId``s, keyed by structural equality.
         replacement = self._subst.get(e.name)
         if replacement is not None:
             return replacement

@@ -435,13 +435,12 @@ class RationalVal(RealVal):
         ...
 
     def as_real(self) -> 'Fraction | Float':
-        """
-        Returns the represented value as an exact real number.
+        """Returns the represented value as an exact real number.
 
-        Unlike `as_rational`, this preserves the sign of a zero: a `Fraction`
-        cannot represent negative zero, so a negative-zero literal is returned as
-        an exact `Float`. Prefer this over `as_rational` when the sign of a zero
-        is significant, e.g. when lowering a literal to a runtime value.
+        Unlike `as_rational`, this preserves the sign of a zero: a negative-zero
+        literal is returned as an exact `Float` (a `Fraction` cannot represent
+        one). Prefer this when the sign of a zero matters, e.g. when lowering a
+        literal to a runtime value.
         """
         return self.as_rational()
 
