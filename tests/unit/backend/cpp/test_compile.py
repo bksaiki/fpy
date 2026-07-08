@@ -163,3 +163,22 @@ class TestSpecializationNameCollisions:
             f'expected 2 distinct mangled names for the two `zeros` '
             f'specs, got {distinct_names!r}'
         )
+
+
+class TestFreeVarClosing:
+    """A captured *data* free variable is materialized as a local binding
+    (via ``FreeVarElim``) rather than emitted as an undeclared name."""
+
+    def test_data_free_var_bound(self):
+        from fpy2.types import RealType
+
+        def make_f(x):
+            @fp.fpy
+            def f(y: fp.Real) -> fp.Real:
+                return x + y
+            return f
+
+        f = make_f(1)
+        out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        assert 'float f(float y)' in out
+        assert 'x = 1' in out          # `x` bound locally, not undeclared

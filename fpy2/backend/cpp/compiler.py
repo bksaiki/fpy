@@ -21,7 +21,8 @@ from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
 from ...number import Context
-from ...transform import RoundElim, Specialize, ZipElim
+from ...transform import FreeVarElim, RoundElim, Specialize, ZipElim
+from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
 
@@ -166,6 +167,10 @@ class CppCompiler(Backend):
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
 
+        # Close each function over its captured data free variables (a
+        # correctness pass — codegen has no closure environment).
+        module = module.map(lambda _m, fd: FreeVarElim.apply(fd))
+
         if self._optimize:
             module = module.map(lambda _m, fd: ZipElim.apply(fd))
 
@@ -189,6 +194,8 @@ class CppCompiler(Backend):
         (set by :class:`Specialize` — public entries keep their user-given
         name, private specs get a mangled one)."""
         ast = func.ast
+        if bad := unclosed_data_free_vars(ast):
+            raise CppCompileError(f'unbound data free variable(s): {", ".join(bad)}')
 
         # Per-spec analyses.
         def_use = DefineUse.analyze(ast)
