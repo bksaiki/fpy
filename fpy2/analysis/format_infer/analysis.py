@@ -132,11 +132,8 @@ from typing import Any, Callable, Iterable, TypeAlias
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...function import Function
-from ...number import Context, INTEGER
-from ...number.context.format import Format
-from ...number import REAL
-from ...number.context.real import REAL_FORMAT
-from ...number.number.reals import RealFloat
+from ...number import Context, Float, RealFloat, INTEGER, REAL
+from ...number.format import Format, REAL_FORMAT
 from ...utils import is_dyadic
 from ...types import (
     Type,
@@ -183,6 +180,10 @@ class SetFormat:
     widens to ``REAL_FORMAT``).
     """
     values: frozenset[Fraction]
+
+    @staticmethod
+    def from_value(x: Fraction):
+        return SetFormat(frozenset((x,)))
 
 
 @dataclass(frozen=True)
@@ -404,7 +405,7 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
     else:
         return _setformat_to_abstract(f)
 
-_ZERO_SET: 'SetFormat' = SetFormat(frozenset((Fraction(0),)))
+_ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
 
 def _is_zero_set(f: 'FormatBound') -> bool:
@@ -1039,19 +1040,19 @@ class _FormatInferInstance(Visitor):
 
     # Numeric literals: exact real values bounded by the singleton set {v}
     def _visit_decnum(self, e: Decnum, ctx: None) -> FormatBound:
-        return SetFormat(frozenset((e.as_rational(),)))
+        return SetFormat.from_value(e.as_rational())
 
     def _visit_hexnum(self, e: Hexnum, ctx: None) -> FormatBound:
-        return SetFormat(frozenset((e.as_rational(),)))
+        return SetFormat.from_value(e.as_rational())
 
     def _visit_integer(self, e: Integer, ctx: None) -> FormatBound:
-        return SetFormat(frozenset((e.as_rational(),)))
+        return SetFormat.from_value(e.as_rational())
 
     def _visit_rational(self, e: Rational, ctx: None) -> FormatBound:
-        return SetFormat(frozenset((e.as_rational(),)))
+        return SetFormat.from_value(e.as_rational())
 
     def _visit_digits(self, e: Digits, ctx: None) -> FormatBound:
-        return SetFormat(frozenset((e.as_rational(),)))
+        return SetFormat.from_value(e.as_rational())
 
     # Non-real-valued leaves
     def _visit_bool(self, e: BoolVal, ctx: None) -> FormatBound:
@@ -1180,7 +1181,7 @@ class _FormatInferInstance(Visitor):
 
         # ``sum([])`` is conventionally 0 — fits trivially in any scope.
         if n == 0:
-            return SetFormat(frozenset((Fraction(0),)))
+            return SetFormat.from_value(Fraction(0))
 
         elt_fmt = arg_fmt.elt
         # Single-element reduction: ``sum([x])`` evaluates to
@@ -1638,7 +1639,24 @@ class _FormatInferInstance(Visitor):
         # Free-variable defs (captured from an outer scope)
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            self._set_def_bound(d, param_from_type(self.type_info.by_def[d]))
+            val = self.func.env[str(d.name)]
+            match val:
+                case Fraction():
+                    # map to SetFormat(v)
+                    fmt: FormatBound = SetFormat.from_value(val)
+                case int() | float() | RealFloat():
+                    # map to SetFormat(v)
+                    fmt = SetFormat.from_value(Fraction(val))
+                case Float():
+                    # map to SetFormat
+                    if val.is_finite():
+                        fmt = SetFormat.from_value(val.as_rational())
+                    else:
+                        fmt = SetFormat.from_value(Fraction(0))
+                case _:
+                    fmt = param_from_type(self.type_info.by_def[d])
+
+            self._set_def_bound(d, fmt)
 
         # Walk the body — populates ``by_def`` / ``by_expr`` / ``by_call``.
         self._visit_block(func.body, ctx)
