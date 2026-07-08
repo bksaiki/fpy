@@ -13,7 +13,7 @@ from ..function import Function
 from ..module import Module, ModuleEntry
 from ..number import Context
 from ..transform import ConstFold, ForBundling, ForUnpack, FreeVarElim, IfBundling, WhileBundling
-from ..transform.free_var_elim import inline_literal
+from ..transform.free_var_elim import unclosed_data_free_vars
 from ..types import TupleType, Type
 from ..utils import Gensym
 
@@ -1280,8 +1280,7 @@ class _FPCoreCompileInstance(Visitor):
 def _apply_fpc_passes(fd: FuncDef) -> FuncDef:
     """Normalization pipeline shared by every function the FPCore backend
     sees: shape-only, idempotent, and safe to apply across callees too."""
-    # Close over captured data free variables first (FPCore has no closure
-    # environment; an un-bound free variable would emit as a dangling name).
+    # Close over captured data free variables (FPCore has no closure env).
     fd = FreeVarElim.apply(fd)
     fd = ConstFold.apply(fd, enable_op=False)
     fd = ForUnpack.apply(fd)
@@ -1339,13 +1338,10 @@ class FPCoreCompiler(Backend):
     def _emit_entry(self, entry: ModuleEntry) -> fpc.FPCore:
         """Emit one FPCore from a (post-pass) public entry."""
         ast = entry.func.ast
-        # After `FreeVarElim` no *data* free variable should remain — one would
-        # emit as a dangling FPCore name.  Callables/contexts have no value
-        # binding and are referenced by name / resolved elsewhere.
-        for fv in ast.free_vars:
-            name = str(fv)
-            if name in ast.env and inline_literal(ast.env[name]) is not None:
-                raise FPCoreCompileError(f'unbound data free variable `{name}`', ast)
+        if bad := unclosed_data_free_vars(ast):
+            raise FPCoreCompileError(
+                f'unbound data free variable(s): {", ".join(bad)}', ast
+            )
         def_use = DefineUse.analyze(ast)
         return _FPCoreCompileInstance(
             ast, def_use, self.unsafe_int_cast,

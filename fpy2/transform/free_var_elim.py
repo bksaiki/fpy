@@ -1,16 +1,11 @@
 """
-Eliminate a function's free variables by materializing each captured value
-as a leading assignment ``x = <value>``, closing the function.
+Close a function over its free variables by materializing each captured *data*
+value as a leading assignment ``x = <value>``.
 
-A free variable whose captured value has an FPy literal form (numbers, bools,
-tuples/lists thereof) is inlined as an assignment at the top of the body; a
-free variable bound to something with no literal form — a callable
-(:class:`~fpy2.Function` / :class:`~fpy2.Primitive`) resolved at the call site,
-a module, etc. — is left untouched.  After the pass the function's
-``free_vars`` no longer lists any inlined (now locally-bound) variable.
-
-Backends that cannot reference a closure environment run this first so that a
-data free variable becomes an ordinary local binding.
+A free variable with an FPy literal form (numbers, bools, tuples/lists thereof)
+is inlined; one with no literal form — a callable resolved at the call site, a
+module, a rounding context — is left free for its own resolving machinery.
+Backends that can't reference a closure environment run this first.
 """
 
 from ..analysis import SyntaxCheck
@@ -21,13 +16,21 @@ from .const_fold import value_to_literal
 
 
 def inline_literal(val: object) -> Expr | None:
-    """The AST literal to bind for a captured free-variable value, or ``None``
-    if the variable should stay free: no literal form (a callable, a module,
-    ...), or a rounding :class:`Context` (resolved by context analysis, not a
-    value binding)."""
+    """The AST literal to bind for a captured value, or ``None`` if it should
+    stay free (no literal form, or a rounding :class:`Context` resolved by
+    context analysis rather than a value binding)."""
     if isinstance(val, Context):
         return None
     return value_to_literal(val, None)
+
+
+def unclosed_data_free_vars(func: FuncDef) -> list[str]:
+    """Free-variable names in *func* that still have a value binding to emit.
+    Backends assert this is empty after :meth:`FreeVarElim.apply`."""
+    return [
+        str(fv) for fv in func.free_vars
+        if str(fv) in func.env and inline_literal(func.env[str(fv)]) is not None
+    ]
 
 
 class FreeVarElim:
@@ -35,24 +38,21 @@ class FreeVarElim:
 
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:
-        """Apply the transformation to a :class:`FuncDef`.  Returns a new
-        ``FuncDef`` (the input is not mutated); returns it unchanged when no
-        free variable has an inlinable value."""
+        """Return a new ``FuncDef`` closed over its data free variables (the
+        input is not mutated); returns it unchanged when there are none."""
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got `{func}`")
 
         env = func.env
         prelude: list[Assign] = []
         bound = set()
-        # Sort by name for a deterministic prelude order.
+        # Sorted for a deterministic prelude order.
         for fv in sorted(func.free_vars, key=str):
             name = str(fv)
             if name not in env:
                 continue
             lit = inline_literal(env[name])
             if lit is None:
-                # No value binding to emit (callable, module, context, ...) —
-                # leave it free for the resolving machinery.
                 continue
             prelude.append(Assign(fv, None, lit, None))
             bound.add(fv)

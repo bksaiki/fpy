@@ -22,7 +22,7 @@ from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...transform import FreeVarElim, RoundElim, Specialize, ZipElim
-from ...transform.free_var_elim import inline_literal
+from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
 
@@ -167,9 +167,8 @@ class CppCompiler(Backend):
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
 
-        # Close each function over its captured *data* free variables
-        # (materialize them as leading assignments) so codegen never sees an
-        # undeclared closure value.  This is a correctness pass — always runs.
+        # Close each function over its captured data free variables (a
+        # correctness pass — codegen has no closure environment).
         module = module.map(lambda _m, fd: FreeVarElim.apply(fd))
 
         if self._optimize:
@@ -189,26 +188,14 @@ class CppCompiler(Backend):
         cg = specialized.call_graph()
         return '\n\n'.join(self._compile_function(f) for f in cg.order)
 
-    @staticmethod
-    def _assert_free_vars_closed(ast: FuncDef) -> None:
-        """After :class:`FreeVarElim`, no *data* free variable should remain —
-        one would be emitted as an undeclared value.  Free variables bound to
-        callables/modules (used only for call or attribute resolution) have no
-        literal form and are left alone."""
-        for fv in ast.free_vars:
-            name = str(fv)
-            if name in ast.env and inline_literal(ast.env[name]) is not None:
-                raise CppCompileError(
-                    f'unbound data free variable `{name}` = {ast.env[name]!r}'
-                )
-
     def _compile_function(self, func: Function) -> str:
         """Emit one C++ function definition for a fully-specialized
         :class:`Function`.  ``func.ast.name`` is the final emitted name
         (set by :class:`Specialize` — public entries keep their user-given
         name, private specs get a mangled one)."""
         ast = func.ast
-        self._assert_free_vars_closed(ast)
+        if bad := unclosed_data_free_vars(ast):
+            raise CppCompileError(f'unbound data free variable(s): {", ".join(bad)}')
 
         # Per-spec analyses.
         def_use = DefineUse.analyze(ast)

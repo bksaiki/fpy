@@ -75,9 +75,6 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         self.enable_op = enable_op
         self.changed = False
 
-    def _value_to_literal(self, val: Value, loc):
-        return value_to_literal(val, loc)
-
     def _fold(self, e: Expr) -> Expr | None:
         """Look up ``e`` in ``pe.by_expr`` and convert to a literal,
         gated by ``enable_op`` / ``enable_context``.  Returns ``None``
@@ -86,7 +83,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         can detect fixpoint."""
         if e not in self.pe.by_expr:
             return None
-        lit = self._value_to_literal(self.pe.by_expr[e], e.loc)
+        lit = value_to_literal(self.pe.by_expr[e], e.loc)
         if lit is None:
             return None
         # No-op: the literal we'd substitute is already at this site.
