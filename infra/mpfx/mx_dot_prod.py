@@ -3,7 +3,7 @@ import gzip
 import pickle
 import fpy2 as fp
 import random
-import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -32,22 +32,6 @@ def sample_block():
         elt_bits = (bits >> (8 * i)) & 0xFF
         elt = fp.MX_E5M2.decode(elt_bits)
         elts.append(elt)
-    return bits, scale, elts
-
-
-
-    # sample a scale
-    scale_bits = random.randint(MIN_E8M0_BITS, MAX_E8M0_BITS)
-    scale = fp.MX_E8M0.decode(scale_bits)
-    # sample 32 elements
-    bits = scale_bits
-    elts = []
-    for i in range(32):
-        elt_bits = random.randint(0, 255)
-        elt = fp.MX_E5M2.decode(elt_bits)
-        bits |= elt_bits << (8 * i)  # pack the element bits into the block
-        elts.append(elt)
-    # return the scale and elements
     return bits, scale, elts
 
 
@@ -91,40 +75,47 @@ def plot_mismatches(mismatch_x, mismatch_y):
 
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("num_inputs", type=int, help="number of trials")
-parser.add_argument("-t", "--threads", type=int, default=1, help="number of worker threads (default: all CPUs)")
-parser.add_argument("-s", "--seed", type=int, default=1, help="base random seed")
-parser.add_argument("-o", "--output", type=str, default="mismatches.pkl", help="file to dump mismatches (default: mismatches.pkl)")
-parser.add_argument("--replot", action="store_true", help="replot from existing mismatch file instead of running new trials")
-args = parser.parse_args()
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("num_inputs", type=int, help="number of trials")
+    parser.add_argument("-t", "--threads", type=int, default=1, help="number of worker threads (default: 1)")
+    parser.add_argument("-s", "--seed", type=int, default=1, help="base random seed")
+    parser.add_argument("-o", "--output", type=str, default="mismatches.pkl", help="file to dump mismatches (default: mismatches.pkl)")
+    parser.add_argument("--replot", action="store_true", help="replot from existing mismatch file instead of running new trials")
+    args = parser.parse_args()
 
-num_inputs: int = args.num_inputs
-seed: int = args.seed
-num_threads: int = args.threads
-output: str = args.output
-replot: bool = args.replot
+    num_inputs: int = args.num_inputs
+    seed: int = args.seed
+    num_threads: int = args.threads
+    output: str = args.output
+    replot: bool = args.replot
 
-if replot:
-    with gzip.open(output, "rb") as f:
-        data = pickle.load(f)
-    mismatch_x = data["x"]
-    mismatch_y = data["y"]
-    print(len(mismatch_x), "mismatches loaded from", output)
-else:
-    mismatch_x = []
-    mismatch_y = []
-    with mp.Pool(processes=num_threads) as pool:
-        for xbits, ybits, is_mismatch in pool.map(run_trial, range(seed, seed + num_inputs)):
-            if is_mismatch:
-                mismatch_x.append(xbits)
-                mismatch_y.append(ybits)
+    if replot:
+        with gzip.open(output, "rb") as f:
+            data = pickle.load(f)
+        mismatch_x = data["x"]
+        mismatch_y = data["y"]
+        print(len(mismatch_x), "mismatches loaded from", output)
+    else:
+        mismatch_x = []
+        mismatch_y = []
+        with ProcessPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(run_trial, s) for s in range(seed, seed + num_inputs)]
+            for future in as_completed(futures):
+                xbits, ybits, is_mismatch = future.result()
+                if is_mismatch:
+                    mismatch_x.append(xbits)
+                    mismatch_y.append(ybits)
 
-    print(len(mismatch_x), "mismatches found out of", num_inputs)
+        print(len(mismatch_x), "mismatches found out of", num_inputs)
 
-    # dump mismatches to file
-    with gzip.open(args.output, "wb") as f:
-        pickle.dump({"x": mismatch_x, "y": mismatch_y, "N": num_inputs, "seed": seed}, f)
-    print("mismatches saved to", args.output)
+        # dump mismatches to file
+        with gzip.open(args.output, "wb") as f:
+            pickle.dump({"x": mismatch_x, "y": mismatch_y, "N": num_inputs, "seed": seed}, f)
+        print("mismatches saved to", args.output)
 
-plot_mismatches(mismatch_x, mismatch_y)
+    plot_mismatches(mismatch_x, mismatch_y)
+
+
+if __name__ == "__main__":
+    main()
