@@ -75,15 +75,19 @@ class TestTupleAccessors:
     """Eager semantics of the ``fst`` / ``snd`` tuple accessors."""
 
     def test_fst(self):
-        assert fp.fst((1, 2, 3)) == 1
-        assert fp.fst((9,)) == 9          # head of a 1-tuple
+        assert fp.fst((1, 2)) == 1
 
-    def test_snd_pair_is_bare(self):
-        assert fp.snd((4, 5)) == 5
+    def test_snd(self):
+        assert fp.snd((1, 2)) == 2
 
-    def test_snd_longer_is_rest_tuple(self):
-        assert fp.snd((1, 2, 3)) == (2, 3)
+    def test_fst_requires_two_elements(self):
+        with pytest.raises(ValueError):
+            fp.fst((9,))
+        with pytest.raises(ValueError):
+            fp.fst((1, 2, 3))
 
-    def test_snd_requires_at_least_two_elements(self):
+    def test_snd_requires_two_elements(self):
         with pytest.raises(ValueError):
             fp.snd((9,))
+        with pytest.raises(ValueError):
+            fp.snd((1, 2, 3))
