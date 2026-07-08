@@ -75,8 +75,8 @@ from typing import Any, Callable
 
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast.fpyast import (
-    Assign, Attribute, Expr, ForStmt, Fst, FuncDef, Len, ListComp, ListRef, NamedId,
-    Range1, Snd, Stmt, StmtBlock, TupleBinding, UnderscoreId, Var, Zip,
+    Assign, Attribute, Expr, ForStmt, Fst, FuncDef, Integer, Len, ListComp, ListRef,
+    NamedId, Range1, Snd, Stmt, StmtBlock, TupleBinding, UnderscoreId, Var, Zip,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym, Id
@@ -118,9 +118,44 @@ def _is_zip_tuple_binding(target: Id | TupleBinding, iterable: Expr) -> bool:
     )
 
 
-def _index_access(arg_name: NamedId, idx: NamedId) -> Callable[[], Expr]:
-    """A thunk building ``arg_name[idx]`` fresh on each call."""
-    return lambda: ListRef(Var(arg_name, None), Var(idx, None), None)
+def _is_access_path(e: Expr) -> bool:
+    """Whether *e* may be substituted into the comp body — i.e. re-evaluated
+    once per iteration in place of a ``_srcK = ...`` preamble binding (which a
+    comprehension, being an expression, cannot host).
+
+    True for a ``Var`` or a *pure, O(1), deterministic* projection/index chain
+    rooted at one: ``fst``/``snd``/``arg[i]``.  Such an access path has no side
+    effects and yields the same value each time, so inlining it preserves
+    ``zip``'s "evaluate each argument once" semantics.
+
+    Deliberately excludes allocating/expensive args (e.g. ``xs[1:]`` slices,
+    calls): re-evaluating those per iteration would turn O(n) into O(n^2), so
+    they are left for the backend to materialize.
+    """
+    match e:
+        case Var():
+            return True
+        case Fst() | Snd():
+            return _is_access_path(e.arg)
+        case ListRef():
+            return _is_access_path(e.value) and _is_access_path(e.index)
+        case Integer():                       # a constant index in ``arg[i]``
+            return True
+        case _:
+            return False
+
+
+def _clone(e: Expr) -> Expr:
+    """A structurally fresh copy of *e* (no AST shared between substituted
+    occurrences); ``DefaultTransformVisitor`` rebuilds every node."""
+    return DefaultTransformVisitor()._visit_expr(e, None)
+
+
+def _index_access(arg: Expr, idx: NamedId) -> Callable[[], Expr]:
+    """A thunk building ``arg[idx]`` with a fresh copy of ``arg`` each call.
+
+    *arg* must be an :func:`_is_access_path` (safe to re-evaluate per call)."""
+    return lambda: ListRef(_clone(arg), Var(idx, None), None)
 
 
 def _fst(arg: Expr) -> Expr:
@@ -361,7 +396,10 @@ class _ZipElimInstance(DefaultTransformVisitor):
                 _is_zip_tuple_binding(target, new_iter)
                 and isinstance(new_iter, Zip)
                 and isinstance(target, TupleBinding)
-                and all(isinstance(a, Var) for a in new_iter.args)
+                # Each arg is inlined into the comp body (re-evaluated per
+                # iteration, since a comp has no preamble to bind it once), so it
+                # must be a pure, re-evaluable access path.
+                and all(_is_access_path(a) for a in new_iter.args)
                 # `fst`/`snd` are pair-only, so a nested slot of arity != 2 can't
                 # be reached by the comp path's accessor chains; leave such a
                 # `zip` in place (the backends materialize it) rather than emit
@@ -374,15 +412,13 @@ class _ZipElimInstance(DefaultTransformVisitor):
                 # ``fst``/``snd`` chain for a nested tuple binding (whose
                 # per-iteration element is itself a tuple).
                 for binding, arg in zip(target.elts, new_iter.args):
-                    assert isinstance(arg, Var)
                     _destructure_subst(
-                        binding, _index_access(arg.name, idx), subst,
+                        binding, _index_access(arg, idx), subst,
                     )
                 # New target/iterable: ``_i in range(len(arg0))``.
-                assert isinstance(new_iter.args[0], Var)
                 len_expr = Len(
                     Var(NamedId('len'), None),
-                    Var(new_iter.args[0].name, None),
+                    _clone(new_iter.args[0]),
                     None,
                 )
                 new_targets.append(idx)
