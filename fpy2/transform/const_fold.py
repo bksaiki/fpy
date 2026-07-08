@@ -14,6 +14,35 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..number import Context, Float
 
 
+def value_to_literal(val: Value, loc):
+    """Convert a :data:`Value` to an AST literal; return ``None`` if
+    ``val`` has no FPy literal form (types, functions, modules,
+    containers with non-emittable elements)."""
+    # bool is checked first — it's a subclass of int.
+    if isinstance(val, bool):
+        return BoolVal(val, loc)
+    if isinstance(val, Float):
+        if val.is_zero() and val.s:
+            # negative zero has no `Fraction` form; emit a signed literal
+            return Decnum('-0.0', loc)
+        val = val.as_rational()
+    elif isinstance(val, (int, float)):
+        val = Fraction(val)
+    if isinstance(val, Fraction):
+        if val.denominator == 1:
+            return Integer(int(val), loc)
+        func = Attribute(Var(NamedId('fp'), loc), 'rational', loc)
+        return Rational(func, val.numerator, val.denominator, loc)
+    if isinstance(val, Context):
+        return ForeignVal(val, loc)
+    if isinstance(val, (tuple, list)):
+        elts = [value_to_literal(elt, loc) for elt in val]
+        if any(e is None for e in elts):
+            return None
+        return TupleExpr(elts, loc) if isinstance(val, tuple) else ListExpr(elts, loc)
+    return None
+
+
 class _ConstFoldInstance(DefaultTransformVisitor):
     """ConstFold rewriter — queries ``pe.by_expr`` at each node before
     descent and substitutes a literal on hit.  The ``enable_*`` flags
@@ -40,32 +69,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         self.changed = False
 
     def _value_to_literal(self, val: Value, loc):
-        """Convert a :data:`Value` to an AST literal; return ``None`` if
-        ``val`` has no FPy literal form (types, functions, modules,
-        containers with non-emittable elements)."""
-        # bool is checked first — it's a subclass of int.
-        if isinstance(val, bool):
-            return BoolVal(val, loc)
-        if isinstance(val, Float):
-            if val.is_zero() and val.s:
-                # negative zero has no `Fraction` form; emit a signed literal
-                return Decnum('-0.0', loc)
-            val = val.as_rational()
-        elif isinstance(val, (int, float)):
-            val = Fraction(val)
-        if isinstance(val, Fraction):
-            if val.denominator == 1:
-                return Integer(int(val), loc)
-            func = Attribute(Var(NamedId('fp'), loc), 'rational', loc)
-            return Rational(func, val.numerator, val.denominator, loc)
-        if isinstance(val, Context):
-            return ForeignVal(val, loc)
-        if isinstance(val, (tuple, list)):
-            elts = [self._value_to_literal(elt, loc) for elt in val]
-            if any(e is None for e in elts):
-                return None
-            return TupleExpr(elts, loc) if isinstance(val, tuple) else ListExpr(elts, loc)
-        return None
+        return value_to_literal(val, loc)
 
     def _fold(self, e: Expr) -> Expr | None:
         """Look up ``e`` in ``pe.by_expr`` and convert to a literal,
