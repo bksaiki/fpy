@@ -255,11 +255,12 @@ class TestTypeInferOnGeneratedPrograms:
 
 
 class TestTupleAccessors:
-    """``fst`` / ``snd`` projection and the arity/non-tuple errors.
+    """``fst`` / ``snd`` projection and the non-pair errors.
 
-    ``fst`` returns the head (any non-empty tuple); ``snd`` returns the tail
-    — the bare second element for a pair, else the tuple of the rest — and
-    requires arity >= 2.
+    ``fst``/``snd`` are the two projections of a *pair* (``'a * 'b -> 'a`` /
+    ``'a * 'b -> 'b``), so they are HM-typeable even on an open operand.
+    Anything that isn't a pair — a non-tuple, a 1-tuple, or a tuple of arity
+    != 2 — is rejected by unification.
     """
 
     @staticmethod
@@ -287,12 +288,14 @@ class TestTupleAccessors:
 
         assert isinstance(self._return_type(f), RealType)
 
-    def test_fst_accepts_one_tuple(self):
+    def test_fst_of_one_tuple_errors(self):
+        # `fst` is pair-only: a 1-tuple is not a pair.
         @fp.fpy
         def f(t: tuple[fp.Real]) -> fp.Real:
             return fp.fst(t)
 
-        assert isinstance(self._return_type(f), RealType)
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
 
     def test_snd_of_pair_is_bare_element(self):
         @fp.fpy
@@ -301,20 +304,19 @@ class TestTupleAccessors:
 
         assert isinstance(self._return_type(f), BoolType)
 
-    def test_snd_of_longer_tuple_is_rest_tuple(self):
+    def test_snd_of_longer_tuple_errors(self):
+        # `snd` is pair-only: a 3-tuple is not a pair (destructure instead).
         @fp.fpy
         def f(t: tuple[fp.Real, bool, fp.Real]):
             return fp.snd(t)
 
-        rt = self._return_type(f)
-        assert isinstance(rt, TupleType)
-        assert len(rt.elts) == 2
-        assert isinstance(rt.elts[0], BoolType)
-        assert isinstance(rt.elts[1], RealType)
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
 
-    def test_chained_fst_snd_walks_pairs(self):
+    def test_chained_fst_snd_walks_nested_pairs(self):
+        # nesting is explicit: a 3-element value is a pair whose tail is a pair.
         @fp.fpy
-        def f(t: tuple[fp.Real, bool, fp.Real]):
+        def f(t: tuple[fp.Real, tuple[bool, fp.Real]]):
             return fp.fst(fp.snd(t))
 
         assert isinstance(self._return_type(f), BoolType)

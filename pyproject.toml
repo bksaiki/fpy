@@ -29,6 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "pytest-xdist",
   "hypothesis==6.135",
   "mypy",
   "ruff",
@@ -42,6 +43,7 @@ dev = [
 [dependency-groups]
 dev = [
   "pytest",
+  "pytest-xdist",
   "hypothesis==6.135",
   "mypy",
   "ruff",
@@ -59,6 +61,11 @@ Documentation = "https://fpy.readthedocs.io/"
 
 [tool.setuptools.packages.find]
 include = ["fpy2*"]
+
+[tool.pytest.ini_options]
+# Many test classes follow the `<Feature>TestCase` convention rather than the
+# default `Test*` prefix; collect both so those suites actually run.
+python_classes = ["Test*", "*TestCase"]
 
 [tool.mypy]
 disable_error_code = ["import-untyped"]

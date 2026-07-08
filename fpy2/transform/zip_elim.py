@@ -50,10 +50,14 @@ Two patterns are recognized:
 
 A binding slot may itself be a nested ``TupleBinding`` (e.g.
 ``for (a, b), c in zip(pairs, xs)``).  In the for-loop path the nested
-slot lowers to a destructuring assignment ``(a, b) = _srcK[_i]``; in the
-comp path — which has no statement context — each leaf name is reached by
-an ``fst``/``snd`` chain over ``argK[_i]`` (element ``i`` of a ``k``-tuple
-``t`` is ``fst(snd^i(t))``, or ``snd^(k-1)(t)`` for the last element).
+slot lowers to a destructuring assignment ``(a, b) = _srcK[_i]`` (any arity;
+no ``fst``/``snd``).  In the comp path — which has no statement context —
+each leaf name is reached by an ``fst``/``snd`` chain over ``argK[_i]``
+(for a pair ``t``, ``fst(t)`` / ``snd(t)``).  Because ``fst``/``snd`` are
+pair-only, the comp path rewrites a nested slot only when it (and any
+binding nested within it) is a pair; a comp with a nested slot of arity != 2
+is left unchanged for the backend to materialize (see
+:func:`_comp_nesting_is_pairs`).
 
 Patterns that don't match the guards (range iterables, mismatched
 arity, non-``Var`` list-comp zip args) are left unchanged.
@@ -71,8 +75,8 @@ from typing import Any, Callable
 
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast.fpyast import (
-    Assign, Attribute, Expr, ForStmt, Fst, FuncDef, Len, ListComp, ListRef, NamedId,
-    Range1, Snd, Stmt, StmtBlock, TupleBinding, UnderscoreId, Var, Zip,
+    Assign, Attribute, Expr, ForStmt, Fst, FuncDef, Integer, Len, ListComp, ListRef,
+    NamedId, Range1, Snd, Stmt, StmtBlock, TupleBinding, UnderscoreId, Var, Zip,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym, Id
@@ -114,9 +118,39 @@ def _is_zip_tuple_binding(target: Id | TupleBinding, iterable: Expr) -> bool:
     )
 
 
-def _index_access(arg_name: NamedId, idx: NamedId) -> Callable[[], Expr]:
-    """A thunk building ``arg_name[idx]`` fresh on each call."""
-    return lambda: ListRef(Var(arg_name, None), Var(idx, None), None)
+def _is_access_path(e: Expr) -> bool:
+    """Whether *e* is safe to inline into the comp body (re-evaluated once per
+    iteration, since a comp has no preamble to bind it once).
+
+    True for a ``Var`` or a pure, O(1) projection/index chain rooted at one
+    (``fst``/``snd``/``arg[i]``): no side effects, same value each time.
+    Excludes allocating/expensive args (slices, calls) whose re-evaluation
+    would turn O(n) into O(n^2); those are left for the backend to materialize.
+    """
+    match e:
+        case Var():
+            return True
+        case Fst() | Snd():
+            return _is_access_path(e.arg)
+        case ListRef():
+            return _is_access_path(e.value) and _is_access_path(e.index)
+        case Integer():                       # a constant index in ``arg[i]``
+            return True
+        case _:
+            return False
+
+
+def _clone(e: Expr) -> Expr:
+    """A structurally fresh copy of *e* (no AST shared between substituted
+    occurrences); ``DefaultTransformVisitor`` rebuilds every node."""
+    return DefaultTransformVisitor()._visit_expr(e, None)
+
+
+def _index_access(arg: Expr, idx: NamedId) -> Callable[[], Expr]:
+    """A thunk building ``arg[idx]`` with a fresh copy of ``arg`` each call.
+
+    *arg* must be an :func:`_is_access_path` (safe to re-evaluate per call)."""
+    return lambda: ListRef(_clone(arg), Var(idx, None), None)
 
 
 def _fst(arg: Expr) -> Expr:
@@ -131,25 +165,23 @@ def _snd(arg: Expr) -> Expr:
     return Snd(name, arg, None)
 
 
-def _snd_n(arg: Expr, n: int) -> Expr:
-    """Apply ``snd`` ``n`` times (``n == 0`` returns ``arg`` unchanged)."""
-    for _ in range(n):
-        arg = _snd(arg)
-    return arg
+def _comp_nesting_is_pairs(target: TupleBinding) -> bool:
+    """Whether *target*'s nested bindings can be lowered by the comp path.
 
-
-def _elt_access(
-    make_access: Callable[[], Expr], i: int, k: int,
-) -> Callable[[], Expr]:
-    """A thunk for element ``i`` of the ``k``-tuple built by *make_access*.
-
-    Viewing a tuple as a binary pair, element ``i`` is ``fst(snd^i(t))`` for
-    ``i < k - 1`` and ``snd^(k-1)(t)`` for the last element (``snd`` of a
-    pair is the bare element).
+    The comp path reaches a nested ``TupleBinding``'s leaves with ``fst``/``snd``
+    (see :func:`_destructure_subst`), which are pair-only, so every nested slot
+    must have arity 2.  The top-level target is exempt — its slots are reached
+    by direct ``argK[_i]`` indexing, not ``fst``/``snd``.
     """
-    if i < k - 1:
-        return lambda: _fst(_snd_n(make_access(), i))
-    return lambda: _snd_n(make_access(), k - 1)
+    def check(binding: Id | TupleBinding, *, top: bool) -> bool:
+        match binding:
+            case TupleBinding():
+                if not top and len(binding.elts) != 2:
+                    return False
+                return all(check(e, top=False) for e in binding.elts)
+            case _:
+                return True
+    return check(target, top=True)
 
 
 def _destructure_subst(
@@ -169,9 +201,13 @@ def _destructure_subst(
         case UnderscoreId():
             pass
         case TupleBinding():
-            k = len(binding.elts)
-            for i, elt in enumerate(binding.elts):
-                _destructure_subst(elt, _elt_access(make_access, i, k), subst)
+            # The comp path only reaches a nested slot that is a pair
+            # (guaranteed by `_comp_nesting_is_pairs`); `fst`/`snd` are its two
+            # projections.
+            assert len(binding.elts) == 2, 'comp-path nested slot must be a pair'
+            head, tail = binding.elts
+            _destructure_subst(head, lambda: _fst(make_access()), subst)
+            _destructure_subst(tail, lambda: _snd(make_access()), subst)
         case _:
             raise RuntimeError(f'unexpected zip binding element: {binding!r}')
 
@@ -186,18 +222,12 @@ class _SubstNames(DefaultTransformVisitor):
 
     def __init__(self, subst: dict[NamedId, Expr]):
         super().__init__()
-        # Active substitutions, shadowed lexically.  We mutate in
-        # place via push/pop because ``DefaultTransformVisitor`` is
-        # purely top-down and gives us no return-trip hook for
-        # popping; the surrounding ``_visit_list_comp`` override
-        # restores after recursing.
+        # Active substitutions; `_visit_list_comp` shadows/restores entries
+        # around a nested comp that rebinds a substituted name.
         self._subst = dict(subst)
 
     def _visit_var(self, e: Var, ctx: Any):
-        # The substitution targets are ``NamedId``s; FPy's parser
-        # synthesizes a ``Var`` whose ``.name`` is the same
-        # ``NamedId`` object.  Equality is structural (``NamedId``
-        # implements ``__eq__`` over (base, count)).
+        # Substitution targets are ``NamedId``s, keyed by structural equality.
         replacement = self._subst.get(e.name)
         if replacement is not None:
             return replacement
@@ -353,7 +383,15 @@ class _ZipElimInstance(DefaultTransformVisitor):
                 _is_zip_tuple_binding(target, new_iter)
                 and isinstance(new_iter, Zip)
                 and isinstance(target, TupleBinding)
-                and all(isinstance(a, Var) for a in new_iter.args)
+                # Each arg is inlined into the comp body (re-evaluated per
+                # iteration, since a comp has no preamble to bind it once), so it
+                # must be a pure, re-evaluable access path.
+                and all(_is_access_path(a) for a in new_iter.args)
+                # `fst`/`snd` are pair-only, so a nested slot of arity != 2 can't
+                # be reached by the comp path's accessor chains; leave such a
+                # `zip` in place (the backends materialize it) rather than emit
+                # ill-typed `snd`-of-non-pair.
+                and _comp_nesting_is_pairs(target)
             ):
                 idx = self.gensym.fresh('_i')
                 # Substitute each binding slot with an accessor into its
@@ -361,15 +399,13 @@ class _ZipElimInstance(DefaultTransformVisitor):
                 # ``fst``/``snd`` chain for a nested tuple binding (whose
                 # per-iteration element is itself a tuple).
                 for binding, arg in zip(target.elts, new_iter.args):
-                    assert isinstance(arg, Var)
                     _destructure_subst(
-                        binding, _index_access(arg.name, idx), subst,
+                        binding, _index_access(arg, idx), subst,
                     )
                 # New target/iterable: ``_i in range(len(arg0))``.
-                assert isinstance(new_iter.args[0], Var)
                 len_expr = Len(
                     Var(NamedId('len'), None),
-                    Var(new_iter.args[0].name, None),
+                    _clone(new_iter.args[0]),
                     None,
                 )
                 new_targets.append(idx)

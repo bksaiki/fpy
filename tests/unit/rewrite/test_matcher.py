@@ -87,6 +87,30 @@ class MatchExprTestCase(_MatcherTestCase):
         self.assertAstEqual(m1.subst['b'], Var(NamedId('y'), None))
         self.assertAstEqual(m1.subst['c'], Var(NamedId('z'), None))
 
+    def test_signed_zero_is_distinct(self):
+        # `+0.0` and `-0.0` are distinct literals: a rule keyed on one must not
+        # match the other (e.g. `x + 0.0 -> x` is unsound at `x = -0.0`).
+        @pattern
+        def add_pos_zero(a):
+            a + 0.0
+
+        @pattern
+        def add_neg_zero(a):
+            a + -0.0
+
+        @fpy
+        def f_pos(x):
+            return x + 0.0
+
+        @fpy
+        def f_neg(x):
+            return x + -0.0
+
+        assert len(Matcher(add_pos_zero).match(f_pos)) == 1
+        assert len(Matcher(add_pos_zero).match(f_neg)) == 0
+        assert len(Matcher(add_neg_zero).match(f_neg)) == 1
+        assert len(Matcher(add_neg_zero).match(f_pos)) == 0
+
 
 @fpy
 def f2(lst):

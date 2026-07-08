@@ -352,21 +352,20 @@ class _TypeInferInstance(Visitor):
                     self._unify(arg_ty, ListType(self._fresh_type_var()))
                     return RealType(None)
                 case Fst():
-                    # tuple head accessor. A tuple's arity cannot be unified
-                    # from an open type, so the operand must resolve to a
-                    # concrete tuple; the head exists for any non-empty tuple.
-                    resolved = self._resolve_type(arg_ty)
-                    if not isinstance(resolved, TupleType) or len(resolved.elts) < 1:
-                        raise TypeInferError(f'`fst` requires a non-empty tuple, got `{resolved.format()}`')
-                    return resolved.elts[0]
+                    # `fst : 'a * 'b -> 'a`, the first projection of a pair.
+                    # Unifying the operand with a fresh pair both constrains an
+                    # open type variable and rejects non-pairs (a real, a list,
+                    # or a tuple of arity != 2).
+                    head = self._fresh_type_var()
+                    tail = self._fresh_type_var()
+                    self._unify(arg_ty, TupleType(head, tail))
+                    return head
                 case Snd():
-                    # tuple tail accessor. The tail exists only for arity >= 2;
-                    # it is the bare element for a pair, else the rest tuple.
-                    resolved = self._resolve_type(arg_ty)
-                    if not isinstance(resolved, TupleType) or len(resolved.elts) < 2:
-                        raise TypeInferError(f'`snd` requires a tuple of at least 2 elements, got `{resolved.format()}`')
-                    rest = resolved.elts[1:]
-                    return rest[0] if len(rest) == 1 else TupleType(*rest)
+                    # `snd : 'a * 'b -> 'b`, the second projection (see `Fst`).
+                    head = self._fresh_type_var()
+                    tail = self._fresh_type_var()
+                    self._unify(arg_ty, TupleType(head, tail))
+                    return tail
                 case Enumerate():
                     # enumerate operator
                     ty = self._fresh_type_var()

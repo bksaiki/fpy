@@ -6,10 +6,25 @@ from fractions import Fraction
 
 from ..ast import *
 from ..function import Function
+from ..number import Float
 from ..utils import default_repr, sliding_window
 
 from .pattern import Pattern, ExprPattern, StmtPattern
 from .subst import Subst
+
+
+def _real_eq(a: 'Fraction | Float', b: 'Fraction | Float') -> bool:
+    """Signed-zero-aware equality of two exact-real literal values.
+
+    `RationalVal.as_real` returns a `Float` only for negative zero, which is
+    otherwise `==` to `+0.0` under IEEE semantics. Treat a negative-zero literal
+    as equal only to another negative zero, so a rule keyed on `+0.0` does not
+    match `-0.0` (which would be unsound, e.g. `x + 0.0 -> x` at `x = -0.0`)."""
+    a_negzero = isinstance(a, Float)
+    b_negzero = isinstance(b, Float)
+    if a_negzero or b_negzero:
+        return a_negzero and b_negzero
+    return a == b
 
 class _MatchFailure(Exception):
     """
@@ -129,13 +144,14 @@ class _MatcherInst(Visitor):
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_decnum(self, e: Decnum, pat: Decnum):
-        # this is a semantic match, not a syntactic match!
-        if e.as_rational() != pat.as_rational():
+        # semantic match, not syntactic — but signed-zero aware: `-0.0` and
+        # `+0.0` are distinct (see `_real_eq` / `RationalVal.as_real`).
+        if not _real_eq(e.as_real(), pat.as_real()):
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_hexnum(self, e: Hexnum, pat: Hexnum):
-        # this is a semantic match, not a syntactic match!
-        if e.as_rational() != pat.as_rational():
+        # semantic match, not syntactic — signed-zero aware (see `_visit_decnum`).
+        if not _real_eq(e.as_real(), pat.as_real()):
             raise _MatchFailure(f'matching {pat} against {e}')
 
     def _visit_integer(self, e: Integer, pat: Integer):

@@ -1572,19 +1572,3 @@ class TestTupleAccessorFormats:
         mono = Monomorphize.apply(f.ast, None, [RealType(fp.FP32), RealType(fp.FP64)])
         info = FormatInfer.analyze(mono)
         assert fp.FP64.format() in self._bounds(info, 'u')
-
-    def test_snd_of_longer_projects_rest_tuple_format(self):
-        from fpy2.transform import Monomorphize
-
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real, z: fp.Real):
-            t = (x, y, z)
-            u = fp.snd(t)        # arity 3 -> TupleFormat of the last two
-            return u
-
-        mono = Monomorphize.apply(
-            f.ast, None, [RealType(fp.FP32), RealType(fp.FP64), RealType(fp.FP16)],
-        )
-        info = FormatInfer.analyze(mono)
-        u_bounds = self._bounds(info, 'u')
-        assert TupleFormat((fp.FP64.format(), fp.FP16.format())) in u_bounds

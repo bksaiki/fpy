@@ -52,7 +52,7 @@ from ...ast.fpyast import (
     WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
-from ...number import EFloatContext, MPFixedContext, MPBFixedContext, REAL, RM
+from ...number import EFloatContext, Float, MPFixedContext, MPBFixedContext, REAL, RM
 from ...number.context.context import Context
 
 from ...analysis.format_infer import (
@@ -779,10 +779,10 @@ class CppEmitter(Visitor):
         return self._name_for_var_use(e)
 
     def _visit_decnum(self, e: Decnum, ctx) -> str:
-        return self._emit_numeric_literal(e.as_rational())
+        return self._emit_real_literal(e.as_real())
 
     def _visit_hexnum(self, e: Hexnum, ctx) -> str:
-        return self._emit_numeric_literal(e.as_rational())
+        return self._emit_real_literal(e.as_real())
 
     def _visit_integer(self, e: Integer, ctx) -> str:
         # Integer literals print directly.
@@ -793,6 +793,14 @@ class CppEmitter(Visitor):
 
     def _visit_digits(self, e: Digits, ctx) -> str:
         return self._emit_numeric_literal(e.as_rational())
+
+    def _emit_real_literal(self, v: 'Fraction | Float') -> str:
+        """Emit an exact-real literal, preserving the sign of a negative zero
+        (which has no `Fraction` form; see `RationalVal.as_real`)."""
+        if isinstance(v, Float):
+            # negative zero is the only non-`Fraction` real `as_real` produces
+            return '-0.0'
+        return self._emit_numeric_literal(v)
 
     def _emit_numeric_literal(self, v: Fraction) -> str:
         """

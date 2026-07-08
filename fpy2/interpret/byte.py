@@ -97,6 +97,10 @@ def _cvt_return_value(x: Value):
 def _cvt_return(x: Value):
     return x if _is_return_value(x) else _cvt_return_value(x)
 
+def _neg_zero() -> Float:
+    """Constructs an exact negative zero (not representable as a `Fraction`)."""
+    return Float(s=True, exp=0, c=0)
+
 def _cvt_float(x: Value):
     match x:
         case Float():
@@ -514,6 +518,7 @@ def make_namespace() -> dict[str, object]:
     namespace = {
         '__fpy_call': _eval_call,
         '__fpy_fraction': Fraction,
+        '__fpy_negzero': _neg_zero,
         '__fpy_int': _cvt_int,
         '__fpy_list_set': _eval_list_set,
         '__fpy_list_slice': _eval_list_slice,
@@ -602,8 +607,18 @@ class BytecodeCompiler(Visitor):
             }
 
     def _rational_to_ast(self, e: RationalVal) -> pyast.Call:
-        val = e.as_rational()
+        val = e.as_real()
         attrs = self._location_to_attributes(e.loc)
+        if isinstance(val, Float):
+            # negative zero: a signed zero cannot be constructed from a
+            # `Fraction`, so emit the exact real value directly (see
+            # `RationalVal.as_real`).
+            return pyast.Call(
+                func=pyast.Name(id='__fpy_negzero', ctx=pyast.Load(), **attrs),
+                args=[],
+                keywords=[],
+                **attrs
+            )
         return pyast.Call(
             func=pyast.Name(id='__fpy_fraction', ctx=pyast.Load(), **attrs),
             args=[
