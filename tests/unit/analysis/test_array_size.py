@@ -1749,17 +1749,3 @@ class TestTupleAccessorSizes:
         u = self._bound(self._run(f), 'u')
         assert isinstance(u, ListSize)
         assert concrete_size(u.size) == 8
-
-    def test_snd_of_longer_projects_rest_tuple(self):
-        @fp.fpy
-        def f(xs: list[fp.Real], ys: list[fp.Real], zs: list[fp.Real]):
-            t = (xs, ys, zs)
-            u = fp.snd(t)        # arity 3 -> TupleSize of the last two
-            return u
-
-        self._pin(f, {'xs': 16, 'ys': 8, 'zs': 4})
-        u = self._bound(self._run(f), 'u')
-        assert isinstance(u, TupleSize)
-        assert len(u.elts) == 2
-        assert concrete_size(u.elts[0].size) == 8
-        assert concrete_size(u.elts[1].size) == 4

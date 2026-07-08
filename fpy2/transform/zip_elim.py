@@ -50,10 +50,14 @@ Two patterns are recognized:
 
 A binding slot may itself be a nested ``TupleBinding`` (e.g.
 ``for (a, b), c in zip(pairs, xs)``).  In the for-loop path the nested
-slot lowers to a destructuring assignment ``(a, b) = _srcK[_i]``; in the
-comp path — which has no statement context — each leaf name is reached by
-an ``fst``/``snd`` chain over ``argK[_i]`` (element ``i`` of a ``k``-tuple
-``t`` is ``fst(snd^i(t))``, or ``snd^(k-1)(t)`` for the last element).
+slot lowers to a destructuring assignment ``(a, b) = _srcK[_i]`` (any arity;
+no ``fst``/``snd``).  In the comp path — which has no statement context —
+each leaf name is reached by an ``fst``/``snd`` chain over ``argK[_i]``
+(for a pair ``t``, ``fst(t)`` / ``snd(t)``).  Because ``fst``/``snd`` are
+pair-only, the comp path rewrites a nested slot only when it (and any
+binding nested within it) is a pair; a comp with a nested slot of arity != 2
+is left unchanged for the backend to materialize (see
+:func:`_comp_nesting_is_pairs`).
 
 Patterns that don't match the guards (range iterables, mismatched
 arity, non-``Var`` list-comp zip args) are left unchanged.
@@ -131,25 +135,25 @@ def _snd(arg: Expr) -> Expr:
     return Snd(name, arg, None)
 
 
-def _snd_n(arg: Expr, n: int) -> Expr:
-    """Apply ``snd`` ``n`` times (``n == 0`` returns ``arg`` unchanged)."""
-    for _ in range(n):
-        arg = _snd(arg)
-    return arg
+def _comp_nesting_is_pairs(target: TupleBinding) -> bool:
+    """Whether *target* can be lowered by the comp path under pair-only
+    ``fst``/``snd``.
 
-
-def _elt_access(
-    make_access: Callable[[], Expr], i: int, k: int,
-) -> Callable[[], Expr]:
-    """A thunk for element ``i`` of the ``k``-tuple built by *make_access*.
-
-    Viewing a tuple as a binary pair, element ``i`` is ``fst(snd^i(t))`` for
-    ``i < k - 1`` and ``snd^(k-1)(t)`` for the last element (``snd`` of a
-    pair is the bare element).
+    The comp path reaches the leaves of a nested ``TupleBinding`` slot with
+    ``fst``/``snd`` (see :func:`_destructure_subst`), which are pair-only: a
+    nested slot of arity != 2 would emit ``snd`` of a non-pair.  The top-level
+    zip target is exempt — its slots are reached by direct ``argK[_i]``
+    indexing, not ``fst``/``snd`` — so only *nested* bindings must be pairs.
     """
-    if i < k - 1:
-        return lambda: _fst(_snd_n(make_access(), i))
-    return lambda: _snd_n(make_access(), k - 1)
+    def check(binding: Id | TupleBinding, *, top: bool) -> bool:
+        match binding:
+            case TupleBinding():
+                if not top and len(binding.elts) != 2:
+                    return False
+                return all(check(e, top=False) for e in binding.elts)
+            case _:
+                return True
+    return check(target, top=True)
 
 
 def _destructure_subst(
@@ -169,9 +173,13 @@ def _destructure_subst(
         case UnderscoreId():
             pass
         case TupleBinding():
-            k = len(binding.elts)
-            for i, elt in enumerate(binding.elts):
-                _destructure_subst(elt, _elt_access(make_access, i, k), subst)
+            # The comp path only reaches a nested slot that is a pair
+            # (guaranteed by `_comp_nesting_is_pairs`); `fst`/`snd` are its two
+            # projections.
+            assert len(binding.elts) == 2, 'comp-path nested slot must be a pair'
+            head, tail = binding.elts
+            _destructure_subst(head, lambda: _fst(make_access()), subst)
+            _destructure_subst(tail, lambda: _snd(make_access()), subst)
         case _:
             raise RuntimeError(f'unexpected zip binding element: {binding!r}')
 
@@ -354,6 +362,11 @@ class _ZipElimInstance(DefaultTransformVisitor):
                 and isinstance(new_iter, Zip)
                 and isinstance(target, TupleBinding)
                 and all(isinstance(a, Var) for a in new_iter.args)
+                # `fst`/`snd` are pair-only, so a nested slot of arity != 2 can't
+                # be reached by the comp path's accessor chains; leave such a
+                # `zip` in place (the backends materialize it) rather than emit
+                # ill-typed `snd`-of-non-pair.
+                and _comp_nesting_is_pairs(target)
             ):
                 idx = self.gensym.fresh('_i')
                 # Substitute each binding slot with an accessor into its
