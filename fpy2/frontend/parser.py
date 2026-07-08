@@ -264,7 +264,9 @@ class Parser:
             case int():
                 return Integer(e.value, loc)
             case float():
-                if e.value.is_integer():
+                # Do not fold `0.0` to an integer: it must stay a float so that
+                # negation (`-0.0`) yields negative zero rather than integer 0.
+                if e.value.is_integer() and e.value != 0.0:
                     return Integer(int(e.value), loc)
                 else:
                     return Decnum(str(e.value), loc)
