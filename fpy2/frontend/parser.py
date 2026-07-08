@@ -264,9 +264,7 @@ class Parser:
             case int():
                 return Integer(e.value, loc)
             case float():
-                # Do not fold `0.0` to an integer: it must stay a float so that
-                # negation (`-0.0`) yields negative zero rather than integer 0.
-                if e.value.is_integer() and e.value != 0.0:
+                if e.value.is_integer():
                     return Integer(int(e.value), loc)
                 else:
                     return Decnum(str(e.value), loc)
@@ -353,7 +351,13 @@ class Parser:
                 return self._parse_expr(e.operand)
             case ast.USub():
                 arg = self._parse_expr(e.operand)
-                if isinstance(arg, Integer):
+                if isinstance(arg, RationalVal) and arg.as_rational() == 0:
+                    # Negating a zero literal yields negative zero: a signed
+                    # literal, not a `Neg` operation (which is rounded under the
+                    # current context, and yields a signed zero even under an
+                    # exact context). See `RationalVal.as_real`.
+                    return Decnum('-0.0', loc)
+                elif isinstance(arg, Integer):
                     return Integer(-arg.val, loc)
                 else:
                     return Neg(arg, loc)

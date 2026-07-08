@@ -138,13 +138,15 @@ class _PartialEvalInstance(DefaultVisitor):
         self.by_expr[e] = e.val
 
     def _visit_decnum(self, e: Decnum, ctx: Context | None):
-        self.by_expr[e] = e.as_rational()
+        # `as_real` (not `as_rational`) so a `-0.0` literal folds to a signed
+        # zero rather than collapsing to `+0.0`.
+        self.by_expr[e] = e.as_real()
 
     def _visit_integer(self, e: Integer, ctx: Context | None):
         self.by_expr[e] = e.as_rational()
 
     def _visit_hexnum(self, e: Hexnum, ctx: Context | None):
-        self.by_expr[e] = e.as_rational()
+        self.by_expr[e] = e.as_real()
 
     def _visit_rational(self, e: Rational, ctx: Context | None):
         self.by_expr[e] = e.as_rational()

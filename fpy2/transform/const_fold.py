@@ -47,6 +47,9 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         if isinstance(val, bool):
             return BoolVal(val, loc)
         if isinstance(val, Float):
+            if val.is_zero() and val.s:
+                # negative zero has no `Fraction` form; emit a signed literal
+                return Decnum('-0.0', loc)
             val = val.as_rational()
         elif isinstance(val, (int, float)):
             val = Fraction(val)

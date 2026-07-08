@@ -9,7 +9,7 @@ from fractions import Fraction
 
 from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
-from ..number import Context
+from ..number import Context, Float
 from ..utils import (
     CompareOp,
     Id, NamedId, SourceId, UnderscoreId,
@@ -434,6 +434,17 @@ class RationalVal(RealVal):
         """Returns the represented rational value as a Fraction in simplest form."""
         ...
 
+    def as_real(self) -> 'Fraction | Float':
+        """
+        Returns the represented value as an exact real number.
+
+        Unlike `as_rational`, this preserves the sign of a zero: a `Fraction`
+        cannot represent negative zero, so a negative-zero literal is returned as
+        an exact `Float`. Prefer this over `as_rational` when the sign of a zero
+        is significant, e.g. when lowering a literal to a runtime value.
+        """
+        return self.as_rational()
+
     def is_integer(self) -> bool:
         """Returns true if the represented value is an integer."""
         return self.as_rational().denominator == 1
@@ -454,6 +465,13 @@ class Decnum(RationalVal):
     def as_rational(self) -> Fraction:
         return decnum_to_fraction(self.val)
 
+    def as_real(self) -> 'Fraction | Float':
+        r = self.as_rational()
+        if r == 0 and self.val.lstrip().startswith('-'):
+            # negative zero: not representable as a `Fraction`
+            return Float(s=True, exp=0, c=0)
+        return r
+
 class Hexnum(RationalVal):
     """FPy AST: hexadecimal number"""
     __slots__ = ('func', 'val')
@@ -470,6 +488,13 @@ class Hexnum(RationalVal):
 
     def as_rational(self) -> Fraction:
         return hexnum_to_fraction(self.val)
+
+    def as_real(self) -> 'Fraction | Float':
+        r = self.as_rational()
+        if r == 0 and self.val.lstrip().startswith('-'):
+            # negative zero: not representable as a `Fraction`
+            return Float(s=True, exp=0, c=0)
+        return r
 
 class Integer(RationalVal):
     """FPy AST: integer"""
