@@ -29,6 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "pytest-xdist",
   "hypothesis==6.135",
   "mypy",
   "ruff",
@@ -42,6 +43,7 @@ dev = [
 [dependency-groups]
 dev = [
   "pytest",
+  "pytest-xdist",
   "hypothesis==6.135",
   "mypy",
   "ruff",
