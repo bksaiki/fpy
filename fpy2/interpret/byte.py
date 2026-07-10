@@ -473,8 +473,6 @@ _UNARY_TABLE: dict[type[UnaryOp], object] = {
     Round: ops.round,
     Cast: ops.cast,
     Logb: ops.logb,
-    # rounding context
-    DeclContext: ops.declcontext,
     # structured
     Dim: ops.dim,
     Fst: ops.fst,

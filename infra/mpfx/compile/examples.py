@@ -68,8 +68,7 @@ def dot_prod_mp(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Real:
     FINAL_CTX = fp.FP32
 
     # initialize accumulator
-    with ACCUM_CTX:
-        z = fp.round(0)
+    z = 0
 
     # perform the dot product
     for x, y in zip(xs, ys):
@@ -97,7 +96,7 @@ def num_blocks(n: fp.Real, k: fp.Real):
     with fp.UINT32:
         nq = fp.round(n)
         kq = fp.round(k)
-        return (nq + kq - fp.round(1)) / kq
+        return (nq + kq - 1) / kq
 
 @fp.fpy(ctx=fp.REAL)
 def extract_vec(xs: list[fp.Real], n: int, start: int, K: int) -> list[fp.Real]:
@@ -109,9 +108,7 @@ def extract_vec(xs: list[fp.Real], n: int, start: int, K: int) -> list[fp.Real]:
     for i in range(start, min(end, n)):
         vec[i - start] = xs[i]
     for i in range(min(end, n), end):
-        with fp.declcontext(vec[i]):
-            x = fp.round(0)
-        vec[i - start] = x
+        vec[i - start] = 0
 
     return vec
 
@@ -154,8 +151,7 @@ def mx_block_quantize(xs: list[fp.Real]):
             elts = [elt / scale for elt in xs]
     else:
         # all inputs were invalid, return dummy values
-        with SCALE_CTX:
-            scale = fp.round(1)
+        scale = 1
         with ELT_CTX:
             elts = [fp.round(x) for x in xs]
 
@@ -201,8 +197,7 @@ def dot_prod_blocked(xs: list[fp.Real], ys: list[fp.Real], c: fp.Real) -> fp.Rea
     n = len(xs)
     for start in range(0, n, K):
         # initialize internal accumulator
-        with ACCUM_CTX:
-            z = fp.round(0)
+        z = 0
 
         # extract blocks of size K, padding with zeros if necessary
         xvec = extract_vec(xs, n, start, K)
@@ -247,8 +242,7 @@ def dot_prod_arm(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     assert len(xs) == len(ys), "Input lists must have the same length"
 
     # initialize accumulator
-    with FINAL_CTX:
-        acc = fp.round(0)
+    acc = 0
 
     # perform the dot product over blocks of size K
     n = len(xs)
@@ -297,8 +291,7 @@ def mx_block_round(xs: list[fp.Real]):
             elts = [elt / scale for elt in xs]
     else:
         # all inputs were invalid, return dummy values
-        with SCALE_CTX:
-            scale = fp.round(1)
+        scale = 1
         with ELT_CTX:
             elts = [fp.round(x) for x in xs]
 
@@ -409,7 +402,7 @@ def lorenz_3d(xyz: tuple[fp.Real, fp.Real, fp.Real]):
     x, y, z = xyz
     with fp.FP16:
         sigma = fp.round(10)
-        beta = fp.round(8) / fp.round(3)
+        beta = fp.round(8 / 3)
         rho = fp.round(28)
 
         dx = sigma * (y - x)
@@ -501,7 +494,7 @@ def fastblur_mask_3x3(img: list[list[list[fp.Real]]], mask: list[list[fp.Real]])
             yy = 0
 
             with CTX1:
-                mw = fp.round(0)
+                mw = 0
 
             w = fp.empty(C)
             for my in range(MH):

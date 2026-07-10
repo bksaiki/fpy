@@ -10,13 +10,6 @@ def test_logb(x: fp.Real) -> fp.Real:
     return fp.logb(x)
 
 @fp.fpy
-def test_declcontext(x: fp.Real) -> list[fp.Real]:
-    """Example function for `declcontext`."""
-    with fp.declcontext(x):
-        y = fp.round(x)
-    return [x, y]
-
-@fp.fpy
 def test_empty1(n: fp.Real):
     """Example function for `empty`."""
     arr = fp.empty(n)

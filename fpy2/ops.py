@@ -77,7 +77,6 @@ __all__ = [
     # Numerical data
     'signbit',
     'logb',
-    'declcontext',
     # Tensor
     'empty',
     'dim',
@@ -992,18 +991,6 @@ def logb(x: Real, ctx: Context = REAL) -> Float:
         # 0 => -inf
         return ctx.round(Float(s=True, isinf=True))
 
-
-def declcontext(x: Real, ctx: Context = REAL) -> Context:
-    """
-    Returns the context that `x` was rounded under.
-    """
-    if isinstance(x, Fraction):
-        return REAL
-    elif isinstance(x, Float):
-        x = _cvt_to_float(x)
-        return REAL if x.ctx is None else x.ctx
-    else:
-        raise TypeError(f'Expected a list, Float, or Fraction, got {type(x)} for x={x}')
 
 #############################################################################
 # Tensor
