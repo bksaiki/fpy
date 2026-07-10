@@ -71,15 +71,48 @@ computed:
   follows C (sign of the dividend), ``Remainder`` is the IEEE 754 value
   nearest zero.
 
-**Composite** operators desugar to the above:
+**Composite** operators compute their defining expression *exactly* and round
+the result **once**.  The desugaring therefore evaluates the body under
+:math:`\R` (so the intermediates do not round) and rounds only the final
+result — a naive expression that rounded each intermediate would give a
+different answer.
 
-* ``Fdim`` — ``fp.fdim(x, y)`` :math:`\equiv` ``max(x - y, 0)``.
-* ``Hypot`` — ``fp.hypot(x, y)`` :math:`\equiv` ``sqrt(x*x + y*y)``.
+* ``Fdim`` — ``fp.fdim(x, y)`` has the semantics of::
 
-**Selection** (returns one operand exactly—no rounding, like **E-Lt** but
-yielding a real, with IEEE 754 NaN-propagation and signed-zero rules):
+    @fp.fpy
+    def fdim(x: fp.Real, y: fp.Real) -> fp.Real:
+        with fp.REAL:
+            t = max(x - y, 0)
+        return fp.round(t)
 
-* ``Max`` / ``Min`` — variadic ``max(x, y, …)`` / ``min(x, y, …)``.
+* ``Hypot`` — ``fp.hypot(x, y)`` has the semantics of::
+
+    @fp.fpy
+    def hypot(x: fp.Real, y: fp.Real) -> fp.Real:
+        with fp.REAL:
+            t = x * x + y * y
+        return fp.sqrt(t)
+
+**Selection** returns one operand exactly (no rounding, like **E-Lt** but
+yielding a real).  ``Max`` / ``Min`` *propagate NaN* — any NaN operand makes
+the result NaN — and break ``±0`` ties by sign (``max(-0, +0) = +0``,
+``min(-0, +0) = -0``), independent of argument order.  The binary case has the
+semantics of::
+
+    @fp.fpy
+    def maximum(x: fp.Real, y: fp.Real) -> fp.Real:
+        if fp.isnan(x) or fp.isnan(y):
+            return x if fp.isnan(x) else y   # any NaN operand propagates
+        return x if x > y or (x == y and not fp.signbit(x)) else y  # tie: +0
+
+    @fp.fpy
+    def minimum(x: fp.Real, y: fp.Real) -> fp.Real:
+        if fp.isnan(x) or fp.isnan(y):
+            return x if fp.isnan(x) else y   # any NaN operand propagates
+        return x if x < y or (x == y and fp.signbit(x)) else y      # tie: -0
+
+The variadic ``max(x, y, …)`` / ``min(x, y, …)`` and the list-reduce forms
+``AMax`` / ``AMin`` fold this binary operation left-to-right.
 
 **Round-to-integer** (round the exact integer-valued result under :math:`C`,
 like **E-Add**; they differ only in which integer is chosen):
@@ -89,11 +122,16 @@ like **E-Add**; they differ only in which integer is chosen):
 Reductions
 ----------
 
-* ``Sum`` — ``sum(xs)`` is a left fold with ``+``, rounding at each step::
+* ``Sum`` — ``sum(xs)`` is a left fold with ``+``, so every addition rounds
+  under :math:`C` (the empty sum is exact ``0``); it has the semantics of::
 
-    acc := 0 ; for x in xs: acc := acc + x ; ret acc
+    @fp.fpy
+    def sum(xs: list[fp.Real]) -> fp.Real:
+        acc = 0
+        for x in xs:
+            acc = acc + x
+        return acc
 
-  so every addition rounds under :math:`C`; the empty sum is exact ``0``.
 * ``AMax`` / ``AMin`` — the reduce form ``max(xs)`` / ``min(xs)`` over a
   single list; same select-without-rounding semantics as ``Max`` / ``Min``.
 
@@ -109,20 +147,30 @@ Logical operators
 -----------------
 
 * ``Not`` — boolean negation; like **E-Lt** (boolean, no rounding).
-* ``And`` / ``Or`` — short-circuiting conjunction / disjunction.  They
-  desugar to nested conditionals (**E-If** lifted to a value via ``IfExpr``):
-  ``a and b`` :math:`\equiv` ``b if a else False`` and ``a or b``
-  :math:`\equiv` ``True if a else b``; the right operand is evaluated only
-  when needed.
+* ``And`` / ``Or`` — short-circuiting conjunction / disjunction; the right
+  operand is evaluated only when needed, so each has the semantics of a
+  conditional (**E-If** lifted to a value via ``IfExpr``)::
+
+    @fp.fpy
+    def and_(a: bool, b: bool) -> bool:
+        return b if a else False
+
+    @fp.fpy
+    def or_(a: bool, b: bool) -> bool:
+        return True if a else b
 
 Comparisons
 -----------
 
-* ``Compare`` — a Python-style chained comparison desugars to the
-  conjunction of adjacent pairwise tests, each an **E-Lt**-style comparison,
-  with every operand evaluated once: ``a < b <= c`` :math:`\equiv`
-  ``a < b and b <= c``.  All six operators (``<``, ``<=``, ``>``, ``>=``,
-  ``==``, ``!=``) are exact booleans like **E-Lt**.
+* ``Compare`` — a Python-style chained comparison is the conjunction of
+  adjacent pairwise tests, each an **E-Lt**-style comparison, with every
+  operand evaluated once.  All six operators (``<``, ``<=``, ``>``, ``>=``,
+  ``==``, ``!=``) are exact booleans like **E-Lt**.  For example, ``a < b <= c``
+  has the semantics of::
+
+    @fp.fpy
+    def chain(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
+        return (a < b) and (b <= c)
 
 Rounding operators
 ------------------
@@ -140,31 +188,76 @@ Rounding operators
 Compound data
 -------------
 
+Most operations here are *polymorphic* in the element type—they move values
+around without inspecting them—so ``Any`` in the functions below stands for an
+arbitrary element type, not just ``fp.Real``.
+
 * ``TupleExpr`` — **E-Tuple**; ``ListExpr`` — **E-List**; ``ListRef`` —
   ``xs[i]``, **E-Ref**.
 * ``TupleBinding`` — the tuple pattern :math:`p_1, \ldots, p_n` of
   **M-Tuple**; it *is* the core tuple pattern.
-* ``Fst`` / ``Snd`` — tuple accessors that project a position via
-  **M-Tuple**: ``fst(t)`` is the head; ``snd(t)`` is the second element of a
-  pair, or the tuple of the remaining elements otherwise.  ``fst((a, b))``
-  :math:`\equiv` ``let (h, _) = (a, b) in h``.
-* ``IfExpr`` — ``a if c else b`` is the expression form of the conditional;
-  it evaluates ``c`` then only the selected branch, like **E-If-True** /
-  **E-If-False** lifted to a value.
-* ``ListSlice`` — ``xs[a:b]`` extracts *exactly* ``b - a`` elements
-  (defaults ``a = 0``, ``b = len(xs)``; out-of-range bounds are stuck, not
-  clamped).  It desugars to a comprehension ``[xs[i] for i in range(a, b)]``.
-* ``ListComp`` — ``[elt for x in xs]`` desugars to a list-building loop
-  (multiple targets zip their iterables)::
+* ``Fst`` / ``Snd`` — tuple accessors that project a position via a tuple
+  pattern (**M-Tuple**): ``fst(t)`` is the head; ``snd(t)`` is the second
+  element of a pair, or the tuple of the remaining elements otherwise.  For a
+  pair they have the semantics of::
 
-    acc := empty(len(xs)) ; j := 0
-    for x in xs: acc[j] := elt ; j := j + 1
-    ret acc
+    @fp.fpy
+    def fst(t: tuple[Any, Any]) -> Any:
+        a, b = t
+        return a
 
-* ``Zip`` — ``zip(xs, ys, …)`` is the list of tuples of corresponding
-  elements, ``[(x, y, …) for x, y, … in …]``.
+    @fp.fpy
+    def snd(t: tuple[Any, Any]) -> Any:
+        a, b = t
+        return b
+
+* ``IfExpr`` — ``a if c else b`` is the expression form of the conditional; it
+  evaluates ``c`` then only the selected branch, so it has the semantics of::
+
+    @fp.fpy
+    def if_expr(c: bool, a: Any, b: Any) -> Any:
+        if c:
+            r = a
+        else:
+            r = b
+        return r
+
+* ``ListSlice`` — ``xs[start:stop]`` extracts *exactly* ``stop - start``
+  elements (defaults ``start = 0``, ``stop = len(xs)``; out-of-range bounds are
+  stuck, not clamped).  It has the semantics of::
+
+    @fp.fpy
+    def slice(xs: list[Any], start: int, stop: int) -> list[Any]:
+        return [xs[i] for i in range(start, stop)]
+
+* ``ListComp`` — a comprehension is a list-building loop.  A target may be a
+  tuple binding, unpacked via **M-Tuple** (several generators nest, as in
+  Python — a cartesian product — rather than zipping).  For an element
+  expression ``g``, ``[g(x, y) for x, y in zip(xs, ys)]`` has the semantics
+  of::
+
+    @fp.fpy
+    def comp(xs: list[Any], ys: list[Any]) -> list[Any]:
+        pairs = zip(xs, ys)
+        acc = fp.empty(len(pairs))
+        j = 0
+        for x, y in pairs:
+            acc[j] = g(x, y)
+            j = j + 1
+        return acc
+
+* ``Zip`` — ``zip(xs, ys)`` is the list of tuples of corresponding elements::
+
+    @fp.fpy
+    def zip(xs: list[Any], ys: list[Any]) -> list[tuple[Any, Any]]:
+        return [(xs[i], ys[i]) for i in range(len(xs))]
+
 * ``Enumerate`` — ``enumerate(xs)`` is the list of ``(i, xs[i])`` pairs with
-  integer ``i``; a comprehension over indices.
+  integer ``i``::
+
+    @fp.fpy
+    def enumerate(xs: list[Any]) -> list[tuple[fp.Real, Any]]:
+        return [(i, xs[i]) for i in range(len(xs))]
 * ``Empty`` — ``fp.empty(d1, …, dn)`` allocates an ``n``-dimensional list of
   the given integer sizes (elements uninitialized); a library allocator, no
   rounding.
@@ -197,11 +290,19 @@ Statements
 * ``WhileStmt`` — ``while c: s`` :math:`\equiv`
   ``if c then (s ; while c: s) else skip``: a recursive unfolding into
   **E-If** and **E-Seq**.
-* ``ForStmt`` — ``for x in xs: s`` desugars to an index loop (tuple targets
-  destructure via **M-Tuple**; multiple iterables zip)::
+* ``ForStmt`` — ``for x in xs: s`` is an index loop over a ``WhileStmt``
+  (tuple targets destructure via **M-Tuple**; multiple iterables zip).  For a
+  body ``s`` that accumulates, it has the semantics of::
 
-    ys := xs ; i := 0
-    while i < len(ys): x := ys[i] ; s ; i := i + 1
+    @fp.fpy
+    def for_loop(xs: list[fp.Real]) -> fp.Real:
+        acc = 0
+        i = 0
+        while i < len(xs):
+            x = xs[i]
+            acc = acc + x  # loop body s
+            i = i + 1
+        return acc
 
 * ``ContextStmt`` — **E-Context**.
 * ``AssertStmt`` — **E-Assert**; the optional message is used only on
@@ -225,10 +326,11 @@ Definitions and non-evaluable nodes
   ``ContextTypeAnn``, ``TupleTypeAnn``, ``ListTypeAnn``) have no runtime
   semantics—typing is out of scope (see :doc:`semantics`).
 * **Abstract bases** (``Ast``, ``Expr``, ``Stmt``, ``TypeAnn``,
-  ``ValueExpr``, ``RealVal``, ``RationalVal``, ``NaryExpr``, and the
-  ``NullaryOp`` / ``UnaryOp`` / ``BinaryOp`` / ``TernaryOp`` / ``NaryOp``
-  families with their ``Named*`` variants) are structural only; their
-  concrete subclasses carry the semantics above.
+  ``ValueExpr``, ``RealVal``, ``RationalVal``, ``NaryExpr``, and the operator
+  families ``NullaryOp``, ``UnaryOp`` / ``NamedUnaryOp``, ``BinaryOp`` /
+  ``NamedBinaryOp``, ``TernaryOp`` / ``NamedTernaryOp``, and ``NaryOp`` /
+  ``NamedNaryOp``) are structural only; their concrete subclasses carry the
+  semantics above.
 * **Re-exports** (``Id``, ``NamedId``, ``SourceId``, ``UnderscoreId``,
   ``CompareOp``, ``Location``, ``Context``, ``FuncSymbol``) and the
   **formatter** helpers (``BaseFormatter``, ``get_default_formatter``,

@@ -5,10 +5,11 @@ Every AST node outside the core fragment is documented there as either
 (i) evaluating like a core rule or (ii) desugaring to a core FPy program.
 These tests make each claim executable:
 
-* **desugarings** are checked by running the node form *and* an equivalent
-  core-FPy program and asserting they agree **under several rounding
-  contexts** (``REAL``, ``FP16``, ``FP64``) — so the check catches any place
-  where the rounding context would make the two diverge.
+* **desugarings** are checked by running the node form against the *exact
+  baseline FPy function given in the doc* and asserting they agree **under
+  several rounding contexts** (``REAL``, ``FP16``, ``FP64``) — so the check
+  catches any place where the rounding context would make the two diverge.
+  The ``*_desugar`` / ``*_node`` pairs below mirror the doc's functions.
 * **rounding primitives** are checked for the documented rounding behaviour
   (exact under ``REAL``, correctly rounded under a finite context).
 
@@ -34,14 +35,24 @@ _CTXS = (REAL, FP16, FP64)
 
 
 def _same(a, b) -> bool:
-    """Structural equality over interpreter results (scalars / lists)."""
-    if isinstance(a, list) or isinstance(b, list):
+    """Structural equality over interpreter results (scalars / lists / tuples)."""
+    a_seq = isinstance(a, (list, tuple))
+    b_seq = isinstance(b, (list, tuple))
+    if a_seq or b_seq:
         return (
-            isinstance(a, list) and isinstance(b, list)
+            a_seq and b_seq
             and len(a) == len(b)
             and all(_same(x, y) for x, y in zip(a, b))
         )
     return a == b
+
+
+def _fp_eq(a, b) -> bool:
+    """Equality that treats NaNs as equal and distinguishes signed zeros."""
+    fa, fb = float(a), float(b)
+    if math.isnan(fa) or math.isnan(fb):
+        return math.isnan(fa) and math.isnan(fb)
+    return fa == fb and math.copysign(1.0, fa) == math.copysign(1.0, fb)
 
 
 def _agree(node_fn, desugar_fn, args, ctxs=_CTXS):
@@ -268,26 +279,42 @@ class TestArithmetic:
             assert float(f(x, ctx=FP64)) == pytest.approx(ref(x), rel=1e-9), op
 
     def test_composite_desugarings_across_contexts(self):
-        # Fdim == max(x - y, 0)  (a single rounding either way;
-        # unimplemented under REAL, so checked on finite contexts)
+        # Composite ops round ONCE: compute the body exactly (under REAL), then
+        # round the result.  The baselines below are the doc's functions; the
+        # inputs include cases where a naive per-step-rounding form diverges.
+        # (fdim / hypot are unimplemented under REAL, so checked on finite ctxs.)
         @fp.fpy
         def fdim_node(x: fp.Real, y: fp.Real) -> fp.Real:
             return fp.fdim(x, y)
         @fp.fpy
         def fdim_desugar(x: fp.Real, y: fp.Real) -> fp.Real:
-            return max(x - y, 0)
-        for args in [(5.3, 2.1), (2.1, 5.3)]:
-            _agree(fdim_node, fdim_desugar, args, ctxs=(FP16, FP64))
+            with REAL:
+                t = max(x - y, 0)
+            return fp.round(t)
 
-        # Hypot == sqrt(x*x + y*y)  (rounds each step; unimplemented under REAL)
         @fp.fpy
         def hypot_node(x: fp.Real, y: fp.Real) -> fp.Real:
             return fp.hypot(x, y)
         @fp.fpy
         def hypot_desugar(x: fp.Real, y: fp.Real) -> fp.Real:
+            with REAL:
+                t = x * x + y * y
+            return fp.sqrt(t)
+        # a naive form that rounds every intermediate -- must NOT match, else
+        # the single-rounding check is vacuous
+        @fp.fpy
+        def hypot_naive(x: fp.Real, y: fp.Real) -> fp.Real:
             return fp.sqrt(x * x + y * y)
-        for args in [(3.0, 4.0), (3.1, 4.7)]:
+
+        inputs = [(5.3, 2.1), (2.1, 5.3), (0.7, 0.9), (3.7, 5.9), (1.3, 8.1)]
+        for args in inputs:
+            _agree(fdim_node, fdim_desugar, args, ctxs=(FP16, FP64))
             _agree(hypot_node, hypot_desugar, args, ctxs=(FP16, FP64))
+
+        # guard: single-rounding genuinely differs from the naive form, so the
+        # agreement above is meaningful and not a coincidence of the inputs
+        assert hypot_node(0.7, 0.9, ctx=FP16) != hypot_naive(0.7, 0.9, ctx=FP16)
+        assert hypot_node(3.7, 5.9, ctx=FP64) != hypot_naive(3.7, 5.9, ctx=FP64)
 
     def test_selection_no_rounding(self):
         # Max / Min return an operand exactly, even under a finite context
@@ -299,6 +326,44 @@ class TestArithmetic:
             return min(a, b)
         assert float(max_(0.1, 0.2, ctx=FP64)) == 0.2
         assert float(min_(0.1, 0.2, ctx=FP64)) == 0.1
+
+    def test_min_max_desugarings(self):
+        # baselines mirror the doc: NaN propagates, ±0 ties break by sign
+        @fp.fpy
+        def max_node(x: fp.Real, y: fp.Real) -> fp.Real:
+            return max(x, y)
+        @fp.fpy
+        def max_desugar(x: fp.Real, y: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isnan(y):
+                return x if fp.isnan(x) else y
+            return x if x > y or (x == y and not fp.signbit(x)) else y
+
+        @fp.fpy
+        def min_node(x: fp.Real, y: fp.Real) -> fp.Real:
+            return min(x, y)
+        @fp.fpy
+        def min_desugar(x: fp.Real, y: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isnan(y):
+                return x if fp.isnan(x) else y
+            return x if x < y or (x == y and fp.signbit(x)) else y
+
+        nan = math.nan
+        cases = [
+            (1.0, 2.0), (2.0, 1.0),
+            (nan, 1.0), (1.0, nan), (nan, nan),   # NaN propagation
+            (-0.0, 0.0), (0.0, -0.0),             # signed-zero ties
+            (-3.0, -3.0),
+        ]
+        for x, y in cases:
+            assert _fp_eq(max_node(x, y, ctx=FP64), max_desugar(x, y, ctx=FP64)), ('max', x, y)
+            assert _fp_eq(min_node(x, y, ctx=FP64), min_desugar(x, y, ctx=FP64)), ('min', x, y)
+
+        # guard: NaN propagates regardless of position (unlike Python's builtin
+        # max, which is order-dependent for NaN)
+        assert math.isnan(float(max_node(nan, 1.0, ctx=FP64)))
+        assert math.isnan(float(max_node(1.0, nan, ctx=FP64)))
+        assert math.isnan(float(min_node(nan, 1.0, ctx=FP64)))
+        assert math.isnan(float(min_node(1.0, nan, ctx=FP64)))
 
     def test_round_to_integer(self):
         @fp.fpy
@@ -495,12 +560,23 @@ class TestCompoundData:
             return xs[0] + fp.snd(t)
         assert float(f(3.0, 4.0, ctx=FP64)) == 7.0
 
-    def test_fst_snd(self):
+    def test_fst_snd_match_tuple_pattern(self):
         @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            t = (a, b)
-            return fp.fst(t) - fp.snd(t)
-        assert float(f(5.0, 2.0, ctx=FP64)) == 3.0
+        def fst_node(t: tuple[fp.Real, fp.Real]) -> fp.Real:
+            return fp.fst(t)
+        @fp.fpy
+        def fst_desugar(t: tuple[fp.Real, fp.Real]) -> fp.Real:
+            a, b = t
+            return a
+        @fp.fpy
+        def snd_node(t: tuple[fp.Real, fp.Real]) -> fp.Real:
+            return fp.snd(t)
+        @fp.fpy
+        def snd_desugar(t: tuple[fp.Real, fp.Real]) -> fp.Real:
+            a, b = t
+            return b
+        _agree(fst_node, fst_desugar, ((5.0, 2.0),))
+        _agree(snd_node, snd_desugar, ((5.0, 2.0),))
 
     def test_if_expr_matches_if_stmt(self):
         @fp.fpy
@@ -526,28 +602,38 @@ class TestCompoundData:
         _agree(slice_, comp_, ([10.0, 11.0, 12.0, 13.0],))
 
     def test_list_comp_builds_list_across_contexts(self):
+        # tuple-binding comprehension over a zipped iterable, vs. its loop form
         @fp.fpy
-        def comp_(xs: list[fp.Real]) -> list[fp.Real]:
-            return [x * x for x in xs]
+        def comp_(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            return [x * y for x, y in zip(xs, ys)]
         @fp.fpy
-        def loop_(xs: list[fp.Real]) -> list[fp.Real]:
-            acc = fp.empty(len(xs))
+        def loop_(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            pairs = zip(xs, ys)
+            acc = fp.empty(len(pairs))
             j = 0
-            for x in xs:
-                acc[j] = x * x
+            for x, y in pairs:
+                acc[j] = x * y
                 j = j + 1
             return acc
-        _agree(comp_, loop_, ([0.1, 0.2, 0.3],))
+        _agree(comp_, loop_, ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6]))
 
-    def test_zip_and_enumerate(self):
+    def test_zip_matches_index_comprehension(self):
         @fp.fpy
-        def zip_(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
-            return [a + b for a, b in zip(xs, ys)]
+        def zip_node(xs: list[fp.Real], ys: list[fp.Real]) -> list[tuple[fp.Real, fp.Real]]:
+            return zip(xs, ys)
         @fp.fpy
-        def enum_(xs: list[fp.Real]) -> list[fp.Real]:
-            return [i + x for i, x in enumerate(xs)]
-        assert [float(v) for v in zip_([1.0, 2.0], [3.0, 4.0], ctx=FP64)] == [4.0, 6.0]
-        assert [float(v) for v in enum_([10.0, 20.0], ctx=FP64)] == [10.0, 21.0]
+        def zip_desugar(xs: list[fp.Real], ys: list[fp.Real]) -> list[tuple[fp.Real, fp.Real]]:
+            return [(xs[i], ys[i]) for i in range(len(xs))]
+        _agree(zip_node, zip_desugar, ([1.0, 2.0], [3.0, 4.0]))
+
+    def test_enumerate_matches_index_comprehension(self):
+        @fp.fpy
+        def enum_node(xs: list[fp.Real]) -> list[tuple[fp.Real, fp.Real]]:
+            return enumerate(xs)
+        @fp.fpy
+        def enum_desugar(xs: list[fp.Real]) -> list[tuple[fp.Real, fp.Real]]:
+            return [(i, xs[i]) for i in range(len(xs))]
+        _agree(enum_node, enum_desugar, ([10.0, 20.0, 30.0],))
 
     def test_empty_len_dim_size(self):
         @fp.fpy
@@ -584,6 +670,39 @@ class TestCompoundData:
         assert [float(v) for v in r1(ctx=FP64)] == [0.0, 1.0, 2.0]
         assert [float(v) for v in r2(ctx=FP64)] == [2.0, 3.0, 4.0]
         assert [float(v) for v in r3(ctx=FP64)] == [0.0, 2.0, 4.0]
+
+
+# ---------------------------------------------------------------------------
+# Polymorphism: the structural ops move values without inspecting them, so they
+# work on any element type (the doc annotates these with `Any`, not fp.Real).
+# ---------------------------------------------------------------------------
+
+class TestPolymorphism:
+
+    def test_tuple_and_if_on_bools(self):
+        @fp.fpy
+        def fst_(t: tuple[bool, bool]) -> bool:
+            return fp.fst(t)
+        @fp.fpy
+        def snd_(t: tuple[bool, bool]) -> bool:
+            return fp.snd(t)
+        @fp.fpy
+        def if_(c: bool, a: bool, b: bool) -> bool:
+            return a if c else b
+        assert fst_((True, False), ctx=FP64) is True
+        assert snd_((True, False), ctx=FP64) is False
+        assert if_(False, True, False, ctx=FP64) is False
+
+    def test_list_ops_on_bools(self):
+        @fp.fpy
+        def slice_(xs: list[bool], a: int, b: int) -> list[bool]:
+            return xs[a:b]
+        @fp.fpy
+        def enum_(xs: list[bool]) -> list[tuple[fp.Real, bool]]:
+            return enumerate(xs)
+        assert list(slice_([True, False, True], 0, 2, ctx=FP64)) == [True, False]
+        out = enum_([True, False], ctx=FP64)
+        assert [(float(i), v) for i, v in out] == [(0.0, True), (1.0, False)]
 
 
 # ---------------------------------------------------------------------------
