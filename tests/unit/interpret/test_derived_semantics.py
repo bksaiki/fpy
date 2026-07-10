@@ -20,6 +20,7 @@ here only so every group is self-contained.
 """
 
 import math
+import types
 from fractions import Fraction
 
 import pytest
@@ -69,6 +70,7 @@ def _agree(node_fn, desugar_fn, args, ctxs=_CTXS):
 # ---------------------------------------------------------------------------
 
 _FOREIGN = 7  # closed-over Python value -> ForeignVal
+_ATTR = types.SimpleNamespace(x=5.0)  # foreign object for Attribute access
 
 
 class TestLiterals:
@@ -575,6 +577,15 @@ class TestRoundingOperators:
             return fp.cast(x)
         assert float(f(1.5, ctx=FP64)) == 1.5
 
+    def test_cast_stuck_when_inexact(self):
+        # 0.1 denotes exactly 1/10, which is not representable in FP64, so the
+        # exactness assertion fails (stuck), unlike plain Round
+        @fp.fpy
+        def f() -> fp.Real:
+            return fp.cast(0.1)
+        with pytest.raises(Exception):
+            f(ctx=FP64)
+
 
 # ---------------------------------------------------------------------------
 # Compound data  (TupleExpr, ListExpr, ListRef, Fst, Snd, IfExpr, ListSlice,
@@ -702,6 +713,13 @@ class TestCompoundData:
         assert [float(v) for v in r2(ctx=FP64)] == [2.0, 3.0, 4.0]
         assert [float(v) for v in r3(ctx=FP64)] == [0.0, 2.0, 4.0]
 
+    def test_attribute_reads_foreign(self):
+        # `e.name` reads a native attribute of a foreign value
+        @fp.fpy
+        def f() -> fp.Real:
+            return _ATTR.x
+        assert float(f(ctx=FP64)) == 5.0
+
 
 # ---------------------------------------------------------------------------
 # Polymorphism: the structural ops move values without inspecting them, so they
@@ -767,6 +785,18 @@ class TestStatements:
             return xs
         assert [float(v) for v in f(ctx=FP64)] == [1.0, 2.0, 3.0]
 
+    def test_indexed_assign_is_inplace(self):
+        # lists are references: an aliased binding observes the update
+        @fp.fpy
+        def f() -> fp.Real:
+            xs = fp.empty(2)
+            xs[0] = 1
+            xs[1] = 2
+            ys = xs      # alias, not a copy
+            xs[0] = 9    # in-place update
+            return ys[0]
+        assert float(f(ctx=FP64)) == 9.0
+
     def test_if1_and_if(self):
         @fp.fpy
         def if1(x: fp.Real) -> fp.Real:
@@ -808,6 +838,15 @@ class TestStatements:
             pass
             return x
         assert float(f(2.0, ctx=FP64)) == 2.0
+
+    def test_assert_failure_is_stuck(self):
+        # a failing assertion has no rule — evaluation is stuck (raises)
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            assert x > 0, 'must be positive'
+            return x
+        with pytest.raises(AssertionError):
+            f(-1.0, ctx=FP64)
 
     def test_effect_statement(self):
         # a bare call evaluated for effect; result discarded, evaluation

@@ -261,8 +261,9 @@ Statements
 
 * ``StmtBlock`` — a statement sequence, **E-Seq**; empty is **E-Skip**.
 * ``Assign`` — **E-Assign** (pattern via **M-Var** / **M-Tuple**).
-* ``IndexedAssign`` — ``x[i] = e`` rebinds ``x`` to a copy with position ``i``
-  replaced (a functional update), **E-Assign**.
+* ``IndexedAssign`` — ``x[i] = e`` updates element ``i`` of the list bound to
+  ``x`` *in place*; lists are references, so other bindings to the same list
+  observe the update.
 * ``If1Stmt`` — ``if c: body`` is **E-If** with an **E-Skip** else-branch.
 * ``IfStmt`` — **E-If-True** / **E-If-False**.
 * ``WhileStmt`` — ``while c: s`` :math:`\equiv`
