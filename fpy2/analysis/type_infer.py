@@ -375,12 +375,6 @@ class _TypeInferInstance(Visitor):
                     # list-reduce operators: list[real] -> real
                     self._unify(arg_ty, ListType(RealType(None)))
                     return RealType(None)
-                case DeclContext():
-                    #        Γ |- e : real
-                    # -------------------------------
-                    #  Γ |- declcontext(e) : context
-                    self._unify(arg_ty, RealType())
-                    return ContextType()
                 case _:
                     raise ValueError(f'unknown unary operator: {cls}')
 

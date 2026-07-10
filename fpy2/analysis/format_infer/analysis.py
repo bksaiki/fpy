@@ -1091,7 +1091,7 @@ class _FormatInferInstance(Visitor):
         return self._bound_of_def(d)
 
     # Context-sensitive operations: real-valued results take the active scope's
-    # format; non-real results (bool predicates, range, declcontext, …) take
+    # format; non-real results (bool predicates, range, …) take
     # the top format of their inferred type.
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> FormatBound:
         return self._op_bound(e)

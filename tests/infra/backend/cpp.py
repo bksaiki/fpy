@@ -588,7 +588,6 @@ _test_ignore = [
     # not monomorphic
     'test_meta_inner',
     # unsupported operations
-    'test_declcontext',
     'test_empty1',
     'test_empty2',
     'test_empty3',

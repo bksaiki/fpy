@@ -109,9 +109,7 @@ def extract_vec(xs: list[fp.Real], n: int, start: int, K: int) -> list[fp.Real]:
     for i in range(start, min(end, n)):
         vec[i - start] = xs[i]
     for i in range(min(end, n), end):
-        with fp.declcontext(vec[i]):
-            x = fp.round(0)
-        vec[i - start] = x
+        vec[i - start] = fp.round(0)
 
     return vec
 
