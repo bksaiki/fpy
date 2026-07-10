@@ -144,6 +144,37 @@ class TestConstants:
                 return const()
             assert float(f(ctx=FP64)) == pytest.approx(expected), const
 
+    def test_simple_constants_match_their_definitions(self):
+        # the doc defines the "simple" constants as ordinary computable FPy
+        # functions (final rounding op in the return); each must equal the
+        # corresponding builtin constant, under every context.
+        @fp.fpy
+        def def_e() -> fp.Real:
+            return fp.exp(1)
+        @fp.fpy
+        def def_ln2() -> fp.Real:
+            return fp.log(2)
+        @fp.fpy
+        def def_sqrt2() -> fp.Real:
+            return fp.sqrt(2)
+        @fp.fpy
+        def def_sqrt1_2() -> fp.Real:
+            return fp.sqrt(1 / 2)
+        @fp.fpy
+        def def_pi_2() -> fp.Real:
+            return fp.const_pi() / 2
+        @fp.fpy
+        def def_pi_4() -> fp.Real:
+            return fp.const_pi() / 4
+        cases = [
+            (def_e, fp.const_e), (def_ln2, fp.const_ln2),
+            (def_sqrt2, fp.const_sqrt2), (def_sqrt1_2, fp.const_sqrt1_2),
+            (def_pi_2, fp.const_pi_2), (def_pi_4, fp.const_pi_4),
+        ]
+        for defn, builtin in cases:
+            for ctx in (FP16, FP64):
+                assert defn(ctx=ctx) == builtin(ctx=ctx), (defn.__name__, ctx)
+
     def test_nan(self):
         @fp.fpy
         def f() -> fp.Real:
