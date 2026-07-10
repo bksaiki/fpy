@@ -237,6 +237,7 @@ below is any element type, not just ``fp.Real``.
 
     @fp.fpy
     def zip(xs: list[Any], ys: list[Any]) -> list[tuple[Any, Any]]:
+        assert len(xs) == len(ys)
         return [(xs[i], ys[i]) for i in range(len(xs))]
 
 * ``Enumerate`` — ``(i, xs[i])`` pairs with integer ``i``::
