@@ -371,7 +371,22 @@ class SyntaxCheck:
             raise TypeError(f'expected a Function, got {func}')
 
         if free_vars is None:
+            # Validating an already-assembled function (the pattern used by
+            # transforms, which call `check` on their rewritten output).  Its
+            # `free_vars` and `env` must agree: every free variable needs a
+            # value in the environment.  The decorator instead passes an
+            # explicit `free_vars` to *establish* the set before `env` is
+            # attached, so this check is scoped to the `None` case.  Catching a
+            # desync here (e.g. a transform that renamed a free variable without
+            # updating `env`) surfaces the bug at its source rather than as an
+            # opaque failure in a later analysis.
             free_vars = set(func.free_vars)
+            missing = sorted(str(v) for v in free_vars if str(v) not in func.env)
+            if missing:
+                raise FPySyntaxError(
+                    f'free variables {missing} have no value in the function '
+                    f'environment; `free_vars` and `env` are out of sync'
+                )
 
         inst = SyntaxCheckInstance(func, free_vars, ignore_unknown, allow_wildcard)
         return inst.analyze()
