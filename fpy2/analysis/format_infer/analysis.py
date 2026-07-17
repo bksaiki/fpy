@@ -1661,7 +1661,10 @@ class _FormatInferInstance(Visitor):
         # falls back to the type-derived bound.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            fmt: FormatBound = _free_var_set_format(self.func.env[str(v)])
+            # `.get`: a free var absent from `env` (a desynced `free_vars`,
+            # normally caught earlier by `SyntaxCheck`) degrades soundly to the
+            # type-derived bound rather than raising `KeyError`.
+            fmt: FormatBound = _free_var_set_format(self.func.env.get(str(v)))
             if fmt is None:
                 fmt = param_from_type(self.type_info.by_def[d])
             self._set_def_bound(d, fmt)

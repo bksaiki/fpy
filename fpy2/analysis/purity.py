@@ -44,6 +44,10 @@ class _Purity(DefaultVisitor):
 
     def _visit_call(self, e: Call, ctx: None):
         super()._visit_call(e, ctx)
+        # `super()._visit_call` visits positional arguments only; also visit
+        # keyword-argument values so an impure call nested in a kwarg is caught.
+        for _, kwarg in e.kwargs:
+            self._visit_expr(kwarg, ctx)
         match e.fn:
             case None:
                 # unknown function -> impure by default
@@ -54,17 +58,15 @@ class _Purity(DefaultVisitor):
                 if not is_pure:
                     raise _ImpureError(f'Impure: Call to impure function {e.fn.name}')
             case Primitive():
-                # primitive function -> assume pure
-                # TODO: how to specify unpure primitives?
-                pass
+                # primitive function -> impure unless declared pure
+                if not e.fn.pure:
+                    raise _ImpureError(f'Impure: call to impure primitive {e.fn.name}')
             case type() if issubclass(e.fn, Context):
                 # context constructor -> assume pure
                 pass
-            case _ if e.fn == print:
-                # print function
-                raise _ImpureError(f'Impure: call to print {e}')
             case _:
-                raise NotImplementedError(f'unknown call {e}')
+                # any other foreign callable (e.g. `print`) -> impure by default
+                raise _ImpureError(f'Impure: call to foreign function {e}')
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         super()._visit_indexed_assign(stmt, ctx)

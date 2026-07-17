@@ -27,6 +27,7 @@ class Primitive(Generic[P, R]):
     # function info
     func: Callable[..., R]
     has_ctx_kwd: bool
+    pure: bool
     # type info
     arg_types: tuple[TypeAnn, ...]
     ret_type: TypeAnn
@@ -47,10 +48,12 @@ class Primitive(Generic[P, R]):
         arg_ctxs: list[str | tuple] | None = None,
         ret_ctx: Context | str | tuple | None = None,
         spec: Any | None = None,
-        meta: dict[str, Any] | None = None
+        meta: dict[str, Any] | None = None,
+        pure: bool = True
     ):
         self.func = func
         self.has_ctx_kwd = has_keyword(func, 'ctx')
+        self.pure = pure
         self.arg_types = tuple(arg_types)
         self.ret_type = return_type
         self.ctx = ctx

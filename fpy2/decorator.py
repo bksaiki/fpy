@@ -99,6 +99,7 @@ def fpy_primitive(
     ret_ctx: Context | str | tuple | None = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
+    pure: bool = True,
 ) -> Callable[[Callable[P, R]], Primitive[P, R]]:
     ...
 
@@ -110,6 +111,7 @@ def fpy_primitive(
     ret_ctx: Context | str | tuple | None = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
+    pure: bool = True,
 ):
     """
     Decorator to parse a Python function into an FPy primitive.
@@ -125,22 +127,24 @@ def fpy_primitive(
     if func is None:
         # create a new decorator to be applied directly
         return lambda func: _apply_fpy_prim_decorator(
-            func, 
+            func,
             ctx=ctx,
             arg_ctxs=arg_ctxs,
             ret_ctx=ret_ctx,
             spec=spec,
-            meta=meta
+            meta=meta,
+            pure=pure
         )
     else:
         # parse the function as an FPy primitive
         return _apply_fpy_prim_decorator(
-            func, 
+            func,
             ctx=ctx,
             arg_ctxs=arg_ctxs,
             ret_ctx=ret_ctx,
             spec=spec,
-            meta=meta
+            meta=meta,
+            pure=pure
         )
 
 ###########################################################
@@ -283,6 +287,7 @@ def _apply_fpy_prim_decorator(
     ret_ctx: Context | str | tuple | None = None,
     spec: Any = None,
     meta: dict[str, Any] | None = None,
+    pure: bool = True,
 ):
     """
     Applies the `@fpy_prim` decorator to a function.
@@ -308,5 +313,6 @@ def _apply_fpy_prim_decorator(
         arg_ctxs=arg_ctxs,
         ret_ctx=ret_ctx,
         spec=spec,
-        meta=meta
+        meta=meta,
+        pure=pure
     )
