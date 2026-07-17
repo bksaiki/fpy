@@ -285,6 +285,66 @@ class TestExternalLeaves:
         assert cg.call_sites[f.ast] == []
 
 
+class TestEnvFallback:
+    """A call whose ``fn`` is unresolved (``None``) — as produced by FPCore
+    import or an AST transform — still yields an edge when the callee name
+    resolves to a ``Function`` in the caller's environment."""
+
+    def test_unresolved_fn_resolved_via_env(self):
+        @fp.fpy
+        def callee(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def caller(x: fp.Real) -> fp.Real:
+            return callee(x)
+
+        # `callee` resolves through `caller`'s environment.
+        assert isinstance(caller.ast.env.get('callee'), fp.Function)
+        # Simulate a call built without parse-time resolution.
+        _first_call(caller).fn = None
+
+        cg = _cg(caller)
+        assert cg.callees_of(caller.ast) == [callee.ast]
+        assert callee.ast in cg.nodes
+
+    def test_unresolved_fn_not_in_env_is_leaf(self):
+        @fp.fpy
+        def callee(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def caller(x: fp.Real) -> fp.Real:
+            return callee(x)
+
+        # Drop both the resolution and the env binding: a genuine leaf.
+        _first_call(caller).fn = None
+        env = caller.ast.env
+        env.globals.pop('callee', None)
+        env.nonlocals.pop('callee', None)
+        env.builtins.pop('callee', None)
+
+        cg = _cg(caller)
+        assert cg.callees_of(caller.ast) == []
+        assert cg.nodes == {caller.ast}
+
+    def test_env_resolved_cycle_detected(self):
+        @fp.fpy
+        def leaf(x: fp.Real) -> fp.Real:
+            return x + 1
+
+        @fp.fpy
+        def a(x: fp.Real) -> fp.Real:
+            return leaf(x)
+
+        # Close a -> a via env resolution with an unresolved `fn`.
+        _first_call(a).fn = None
+        a.ast.env['leaf'] = a
+
+        with pytest.raises(CallGraphError):
+            _cg(a)
+
+
 class TestRecursion:
     """FPy forbids recursion — cycles raise ``CallGraphError``.
 
