@@ -3,9 +3,11 @@ Type checking for FPy programs.
 """
 
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import Callable, cast
 
 from ..ast import *
+from ..number import Context, Float, RealFloat
 from ..primitive import Primitive
 from ..utils import Gensym, NamedId, Unionfind
 
@@ -221,6 +223,43 @@ class _TypeInferInstance(Visitor):
         ty = VarType(self.gensym.fresh('t'))
         self.tvars.add(ty)
         return ty
+
+    def _value_to_type(self, val: object) -> Type | None:
+        """The FPy type of a captured free-variable *value*, or ``None`` for a
+        value with no FPy type (a callable, module, class, or a heterogeneous /
+        empty container), in which case the caller keeps a fresh type variable.
+
+        The capture is fixed at reparse time, so its type is authoritative:
+        seeding it lets a free var used polymorphically (or only passed through)
+        recover a concrete type instead of generalizing to a bare variable, and
+        gives :class:`ArraySizeInfer` the arity of captured tuples/lists.  The
+        numeric cases mirror format inference's capture matcher so the two
+        analyses agree on what counts as a real value."""
+        match val:
+            case bool():
+                # `bool` subclasses `int`; match before the numeric case.
+                return BoolType()
+            case Float() | RealFloat() | Fraction() | int() | float():
+                return RealType(None)
+            case Context():
+                return ContextType()
+            case tuple():
+                elts = [self._value_to_type(x) for x in val]
+                if any(e is None for e in elts):
+                    return None
+                return TupleType(*cast(list[Type], elts))
+            case list():
+                # Lists are homogeneous; require a single element type and a
+                # non-empty list, else fall back to a fresh variable.
+                elt_tys = [self._value_to_type(x) for x in val]
+                if not elt_tys or any(e is None for e in elt_tys):
+                    return None
+                first = cast(Type, elt_tys[0])
+                if any(e != first for e in elt_tys):
+                    return None
+                return ListType(first, len(val))
+            case _:
+                return None
 
     def _resolve_type(self, ty: Type):
         match ty:
@@ -756,9 +795,16 @@ class _TypeInferInstance(Visitor):
             arg_tys.append(arg_ty)
 
         # generate free variables types
+        # A captured value's type is authoritative; seed it when known so a
+        # free var recovers a concrete type instead of a bare variable.  A
+        # foreign value (callable, module, ...) keeps a fresh type variable and
+        # is refined by use, as before.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            self._set_type(d, self._fresh_type_var())
+            ty = self._value_to_type(func.env.get(str(v)))
+            if ty is None:
+                ty = self._fresh_type_var()
+            self._set_type(d, ty)
 
         # type check body
         self._visit_block(func.body, None)
