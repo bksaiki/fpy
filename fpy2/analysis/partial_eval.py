@@ -432,6 +432,10 @@ class _PartialEvalInstance(DefaultVisitor):
 
         # bind foreign values
         for name in func.free_vars:
+            # `free_vars ⊆ env` should always hold; fail loudly if a
+            # transform desynced them rather than raising an opaque `KeyError`.
+            if str(name) not in func.env:
+                raise KeyError(f'free variable `{name}` missing from env')
             d = self.def_use.find_def_from_site(name, func)
             self.by_def[d] = self.func.env[str(name)]
 

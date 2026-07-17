@@ -39,6 +39,9 @@ def value_to_literal(val: object, loc):
         case Fraction():
             return _rational_literal(val, loc)
         case Context():
+            # A rounding context DOES have a literal form here (folded to a
+            # `ForeignVal` for context analysis).  This intentionally differs
+            # from `free_var_elim.inline_literal`, which keeps a `Context` free.
             return ForeignVal(val, loc)
         case tuple() | list():
             elts = [value_to_literal(elt, loc) for elt in val]

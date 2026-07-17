@@ -4,10 +4,13 @@ Call graph analysis.
 Builds the call graph of a :class:`~fpy2.ast.FuncDef` and everything it
 transitively calls.  The graph is keyed on ``FuncDef`` objects (by
 identity); each edge ``caller -> callee`` corresponds to a :class:`Call`
-whose ``fn`` resolves to a user-defined :class:`~fpy2.function.Function`.
-Calls to primitives, context constructors, or builtins have no FPy body
-to recurse into, so they are treated as external leaves and excluded
-from the graph.
+targeting a user-defined :class:`~fpy2.function.Function`.  A call's
+target is its parse-time-resolved ``fn`` when set; when ``fn`` is ``None``
+(a call built without env resolution, e.g. FPCore import or an AST
+transform) the callee name is resolved against the containing function's
+environment.  Calls to primitives, context constructors, or builtins have
+no FPy body to recurse into, so they are treated as external leaves and
+excluded from the graph.
 
 FPy does not support recursion, so the call graph is a DAG.  This
 invariant is *enforced*: a direct (``f -> f``) or mutual
@@ -190,6 +193,26 @@ class _CallGraphInstance:
             self._body_calls[fdef] = _CallCollector().collect(fdef)
         return self._body_calls[fdef]
 
+    def _resolve_callee(self, fdef: FuncDef, call: Call) -> Function | None:
+        """The user-defined :class:`Function` a call targets, or ``None`` for
+        an external leaf.
+
+        ``call.fn`` is the parse-time resolution and is authoritative when
+        set.  When it is ``None`` (a call built without env resolution, e.g.
+        FPCore import or an AST transform) fall back to resolving the callee
+        *name* against the containing function's environment, so a call to a
+        known FPy function still produces an edge (and is subject to the
+        acyclicity guard) rather than being dropped as a leaf."""
+        if isinstance(call.fn, Function):
+            return call.fn
+        if call.fn is None and isinstance(call.func, Var):
+            name = call.func.name
+            if isinstance(name, NamedId):
+                val = fdef.env.get(str(name))
+                if isinstance(val, Function):
+                    return val
+        return None
+
     def _visit(self, fdef: FuncDef):
         self._color[fdef] = _GRAY
         self._stack.append(fdef)
@@ -200,10 +223,11 @@ class _CallGraphInstance:
 
         seen: set[FuncDef] = set()
         for call in self._calls_in(fdef):
-            fn = call.fn
-            if not isinstance(fn, Function):
-                # primitive / builtin / context constructor /
-                # unresolved — an external leaf, not a graph node.
+            fn = self._resolve_callee(fdef, call)
+            if fn is None:
+                # primitive / builtin / context constructor / a name that
+                # doesn't resolve to an FPy function — an external leaf, not
+                # a graph node.
                 continue
             callee = fn.ast
             self.call_sites[fdef].append(call)

@@ -18,7 +18,13 @@ from .const_fold import value_to_literal
 def inline_literal(val: object) -> Expr | None:
     """The AST literal to bind for a captured value, or ``None`` if it should
     stay free (no literal form, or a rounding :class:`Context` resolved by
-    context analysis rather than a value binding)."""
+    context analysis rather than a value binding).
+
+    Note the deliberate divergence from :func:`const_fold.value_to_literal`,
+    which *does* give a ``Context`` a literal form (``ForeignVal``): that path
+    feeds context analysis, whereas this pass emits a leading value-binding
+    prelude and leaves the ``Context`` free for the context machinery.  Do not
+    "unify" the two — folding a ``Context`` here would break context analysis."""
     if isinstance(val, Context):
         return None
     return value_to_literal(val, None)

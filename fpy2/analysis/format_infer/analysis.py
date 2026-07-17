@@ -186,11 +186,21 @@ class SetFormat:
         return SetFormat(frozenset((x,)))
 
 
-def _free_var_set_format(val: object) -> 'SetFormat | None':
-    """Singleton :class:`SetFormat` for a captured numeric free variable, or
-    ``None`` if *val* has no exact finite rational form (non-numeric, or a
-    non-finite ``Float``/``float``)."""
+def _free_var_format(val: object) -> 'FormatBound':
+    """Recursive :data:`FormatBound` for a captured free-variable value.
+
+    A finite numeric scalar pins to a singleton :class:`SetFormat`; a native
+    ``tuple``/``list`` capture recurses so a captured ``(1.0, 2.0)`` becomes
+    ``TupleFormat((SetFormat{1}, SetFormat{2}))`` instead of widening every
+    element to ``REAL_FORMAT``.  Returns ``None`` when no better-than-type bound
+    is available (``bool``, non-finite / non-numeric scalar, empty or
+    heterogeneous list), so the caller falls back to the type-derived bound."""
     match val:
+        case bool():
+            # `bool` subclasses `int`, but a boolean has no numeric format;
+            # match before `int` so a captured `True`/`False` falls back to its
+            # (None) type-derived bound rather than becoming `SetFormat{1}`.
+            return None
         case Fraction():
             return SetFormat.from_value(val)
         case Float():
@@ -202,6 +212,21 @@ def _free_var_set_format(val: object) -> 'SetFormat | None':
                 return SetFormat.from_value(Fraction(val))
             except (ValueError, OverflowError):
                 return None  # non-finite float
+        case tuple():
+            # Tuple slots are independent; a non-numeric slot is `None`, which
+            # `TupleFormat` permits (mirrors `_bound_of_type` on a `TupleType`).
+            return TupleFormat(tuple(_free_var_format(x) for x in val))
+        case list():
+            # A list carries one joined element format.  Only build it when
+            # every element contributed a bound and the joins are structurally
+            # compatible; otherwise defer to the type-derived bound.
+            elt_fmts = [_free_var_format(x) for x in val]
+            if not elt_fmts or any(f is None for f in elt_fmts):
+                return None
+            try:
+                return ListFormat(reduce(_join_bounds, elt_fmts))
+            except RuntimeError:
+                return None
         case _:
             return None
 
@@ -1657,11 +1682,15 @@ class _FormatInferInstance(Visitor):
             else:
                 self._set_def_bound(d, param_from_type(self.type_info.by_def[d]))
         # Free-variable defs (captured from an outer scope).  A finite numeric
-        # capture pins the def to the singleton set {value}; anything else
+        # capture pins the def to the singleton set {value}; a native
+        # tuple/list capture recurses to per-element singletons; anything else
         # falls back to the type-derived bound.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
-            fmt: FormatBound = _free_var_set_format(self.func.env[str(v)])
+            # `.get`: a free var absent from `env` (a desynced `free_vars`,
+            # normally caught earlier by `SyntaxCheck`) degrades soundly to the
+            # type-derived bound rather than raising `KeyError`.
+            fmt: FormatBound = _free_var_format(self.func.env.get(str(v)))
             if fmt is None:
                 fmt = param_from_type(self.type_info.by_def[d])
             self._set_def_bound(d, fmt)

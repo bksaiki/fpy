@@ -128,6 +128,10 @@ class _DefineUseInstance(DefaultVisitor):
         self._add_use(e.name, e, ctx)
 
     def _visit_call(self, e: Call, ctx: DefCtx):
+        # Record the callee as a use iff it was resolved from the environment
+        # (`e.fn` set at parse time) — i.e. the callee names a free variable
+        # (`foo`, `np`).  An unresolved callee (`e.fn is None`, e.g. an
+        # FPCore-origin AST) has no environment binding and is not a var use.
         if e.fn is not None:
             self._visit_expr(e.func, ctx)
         for arg in e.args:

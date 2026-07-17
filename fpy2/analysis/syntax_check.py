@@ -116,6 +116,11 @@ class SyntaxCheckInstance(Visitor):
                 raise FPySyntaxError(f'unbound variable `{name}`')
             if not env[name]:
                 raise FPySyntaxError(f'variable `{name}` not defined along all paths')
+        # A reference counts as a free-variable use purely by name membership,
+        # with no check that a local rebinding shadows the free var at this
+        # point.  That is exact for the decorator flow (a rebound name is a
+        # Python local, so it never enters `free_vars`); for a hand-built
+        # `free_vars` (transforms) it is a safe over-approximation.
         if name in self.free_vars:
             self.free_var_args.add(name)
 
@@ -371,7 +376,19 @@ class SyntaxCheck:
             raise TypeError(f'expected a Function, got {func}')
 
         if free_vars is None:
+            # Validating an assembled function (how transforms call `check`):
+            # its `free_vars` and `env` must agree.  Scoped to this branch
+            # because the decorator instead passes an explicit `free_vars` to
+            # establish the set before `env` is attached.  Catches a transform
+            # that desynced the two (e.g. renamed a free var without updating
+            # `env`) here rather than as an opaque failure downstream.
             free_vars = set(func.free_vars)
+            missing = sorted(str(v) for v in free_vars if str(v) not in func.env)
+            if missing:
+                raise FPySyntaxError(
+                    f'free variables {missing} have no value in the function '
+                    f'environment; `free_vars` and `env` are out of sync'
+                )
 
         inst = SyntaxCheckInstance(func, free_vars, ignore_unknown, allow_wildcard)
         return inst.analyze()

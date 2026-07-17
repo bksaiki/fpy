@@ -411,6 +411,13 @@ def _eval_max(arg, *args):
     # call the underlying NaN-propagating maximum function
     return _unchecked_max(vals)
 
+def _eval_len(x):
+    # `len` is list-only in FPy (matches `TypeInfer`); native `len` would
+    # otherwise silently accept a tuple.
+    if not isinstance(x, list):
+        raise TypeError(f'len() expects a list, got {x}')
+    return len(x)
+
 ###########################################################
 # Operator tables
 
@@ -523,6 +530,7 @@ def make_namespace() -> dict[str, object]:
         '__fpy_range': _eval_range,
         '__fpy_min': _eval_min,
         '__fpy_max': _eval_max,
+        '__fpy_len': _eval_len,
         REAL_NAME: REAL,
     }
 
@@ -685,8 +693,8 @@ class BytecodeCompiler(Visitor):
             case Not():
                 return pyast.UnaryOp(op=pyast.Not(), operand=arg, **attrs)
             case Len():
-                # call the native `len` function
-                func = pyast.Name(id='len', ctx=pyast.Load(), **attrs)
+                # call the list-only `__fpy_len` guard (not native `len`)
+                func = pyast.Name(id='__fpy_len', ctx=pyast.Load(), **attrs)
                 len_expr = pyast.Call(func=func, args=[arg], keywords=[], **attrs)
                 # convert to a Fraction using `__fpy_fraction`
                 func = pyast.Name(id='__fpy_fraction', ctx=pyast.Load(), **attrs)
