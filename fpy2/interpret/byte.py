@@ -412,10 +412,8 @@ def _eval_max(arg, *args):
     return _unchecked_max(vals)
 
 def _eval_len(x):
-    # `len` is list-only in FPy — tuples use structural access (Fst/Snd) and
-    # dimension queries.  `TypeInfer` unifies `Len`'s argument with a list
-    # type, so reject a non-list operand at runtime to match it (native
-    # `len` would otherwise silently accept a tuple).
+    # `len` is list-only in FPy (matches `TypeInfer`); native `len` would
+    # otherwise silently accept a tuple.
     if not isinstance(x, list):
         raise TypeError(f'len() expects a list, got {x}')
     return len(x)

@@ -804,11 +804,8 @@ class _TypeInferInstance(Visitor):
                 self._set_type(d, arg_ty)
             arg_tys.append(arg_ty)
 
-        # generate free variables types
-        # A captured value's type is authoritative; seed it when known so a
-        # free var recovers a concrete type instead of a bare variable.  A
-        # foreign value (callable, module, ...) keeps a fresh type variable and
-        # is refined by use, as before.
+        # free variables: seed the captured value's type when known
+        # (see `_value_to_type`), else a fresh variable refined by use.
         for v in func.free_vars:
             d = self.def_use.find_def_from_site(v, func)
             ty = self._value_to_type(func.env.get(str(v)))
