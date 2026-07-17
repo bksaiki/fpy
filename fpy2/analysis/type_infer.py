@@ -249,10 +249,12 @@ class _TypeInferInstance(Visitor):
                     return None
                 return TupleType(*cast(list[Type], elts))
             case list():
-                # Lists are homogeneous; require a single element type and a
-                # non-empty list, else fall back to a fresh variable.
+                # Lists are homogeneous.  An empty list has a known length (0)
+                # but no element to type — use a fresh element variable.
+                if not val:
+                    return ListType(self._fresh_type_var(), 0)
                 elt_tys = [self._value_to_type(x) for x in val]
-                if not elt_tys or any(e is None for e in elt_tys):
+                if any(e is None for e in elt_tys):
                     return None
                 first = cast(Type, elt_tys[0])
                 if any(e != first for e in elt_tys):

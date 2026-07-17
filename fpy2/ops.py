@@ -1024,6 +1024,11 @@ def dim(x: list, ctx: Context = REAL):
 
     Assumes that `x` is not a ragged tensor.
     """
+    # `dim` is list-only in FPy (matches `TypeInfer`, which unifies `Dim`'s
+    # argument with a list type); reject a non-list operand rather than
+    # silently returning 0.
+    if not isinstance(x, list):
+        raise TypeError(f'dim() expects a list, got {x}')
     dim = 0
     while True:
         if isinstance(x, list):
