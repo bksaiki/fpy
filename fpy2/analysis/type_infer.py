@@ -279,6 +279,14 @@ class _TypeInferInstance(Visitor):
             case ListType():
                 elt_ty = self._resolve_type(ty.elt)
                 return self.tvars.add(ListType(elt_ty, ty.length))
+            case FunctionType():
+                # Function-valued definitions don't arise today (callees flow
+                # through `Call.fn`, not `by_def`), but resolve structurally so
+                # a first-class function value degrades gracefully instead of
+                # hitting the `NotImplementedError` below.
+                arg_tys = [self._resolve_type(a) for a in ty.arg_types]
+                ret_ty = self._resolve_type(ty.return_type)
+                return self.tvars.add(FunctionType(ty.ctx, arg_tys, ret_ty))
             case _:
                 raise NotImplementedError(f'cannot resolve type {ty}')
 

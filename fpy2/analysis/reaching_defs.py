@@ -4,7 +4,6 @@ Reaching definitions analysis.
 
 from dataclasses import dataclass
 from typing import TypeAlias
-from unittest import case
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor

@@ -116,6 +116,11 @@ class SyntaxCheckInstance(Visitor):
                 raise FPySyntaxError(f'unbound variable `{name}`')
             if not env[name]:
                 raise FPySyntaxError(f'variable `{name}` not defined along all paths')
+        # A reference counts as a free-variable use purely by name membership,
+        # with no check that a local rebinding shadows the free var at this
+        # point.  That is exact for the decorator flow (a rebound name is a
+        # Python local, so it never enters `free_vars`); for a hand-built
+        # `free_vars` (transforms) it is a safe over-approximation.
         if name in self.free_vars:
             self.free_var_args.add(name)
 
