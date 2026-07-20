@@ -90,6 +90,15 @@ def concrete_size(size: ArraySize) -> int | None:
     return size if isinstance(size, int) else None
 
 
+def list_depth(bound: 'ArraySizeBound') -> int:
+    """Number of nested list dimensions in *bound* (== ``dim``)."""
+    depth = 0
+    while isinstance(bound, ListSize):
+        depth += 1
+        bound = bound.elt
+    return depth
+
+
 def _size_eq(a: ArraySize, b: ArraySize) -> bool:
     """Are two (resolved) sizes provably equal — identical and not an
     untracked unknown (``None`` is never equal, even to itself)?"""
@@ -627,11 +636,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     @staticmethod
     def _list_depth(bound: ArraySizeBound) -> int:
         """Number of nested list dimensions in *bound* (== ``dim``)."""
-        depth = 0
-        while isinstance(bound, ListSize):
-            depth += 1
-            bound = bound.elt
-        return depth
+        return list_depth(bound)
 
     def _is_exact(self, e: ContextUseSite) -> bool:
         """True iff *e* is evaluated under the exact (``REAL``) rounding

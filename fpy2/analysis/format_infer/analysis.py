@@ -146,7 +146,7 @@ from ...types import (
     VarType,
 )
 
-from ..array_size import ArraySizeAnalysis, ArraySizeInfer, ListSize
+from ..array_size import ArraySizeAnalysis, ArraySizeInfer, ListSize, concrete_size, list_depth
 from ..call_graph import CallGraph, CallGraphError
 from ..context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextUseSite
 from ..define_use import DefineUse, DefineUseAnalysis
@@ -1141,9 +1141,18 @@ class _FormatInferInstance(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:
         arg_fmt = self._visit_expr(e.arg, ctx)
         match e:
-            case Len() | Dim():
-                # len(...) / dim(...) -> result format is INTEGER regardless
-                # of the active rounding context.
+            case Len():
+                # len(xs) -> integer; pin the exact value when the size is
+                # statically known, else the unbounded integer format.
+                n = self._known_iter_count(e.arg)
+                if n is not None:
+                    return SetFormat.from_value(Fraction(n))
+                return _INTEGER_FORMAT
+            case Dim():
+                # dim(xs) -> the list's nesting depth, always statically known.
+                bound = self.array_size.by_expr.get(e.arg)
+                if isinstance(bound, ListSize):
+                    return SetFormat.from_value(Fraction(list_depth(bound)))
                 return _INTEGER_FORMAT
             case Range1():
                 # range(stop) -> list of integers; tighten when stop is concrete
@@ -1152,11 +1161,13 @@ class _FormatInferInstance(Visitor):
                     return self._range_format(0, stop, 1)
                 return ListFormat(_INTEGER_FORMAT)
             case Enumerate():
-                # enumerate(xs) -> list of (int, elt) tuples; the int projection
-                # is INTEGER, the original element format is preserved.
+                # enumerate(xs) -> list of (index, elt) tuples; pin the index
+                # projection to range(len(xs)) when the size is known.
                 assert isinstance(arg_fmt, ListFormat), \
                     f'expected ListFormat for argument of Enumerate, got {arg_fmt!r}'
-                return ListFormat(TupleFormat((_INTEGER_FORMAT, arg_fmt.elt)))
+                n = self._known_iter_count(e.arg)
+                idx_fmt = self._range_elt_format(0, n, 1) if n is not None else _INTEGER_FORMAT
+                return ListFormat(TupleFormat((idx_fmt, arg_fmt.elt)))
             case Fst():
                 # tuple head — the first element's format.
                 assert isinstance(arg_fmt, TupleFormat), \
@@ -1275,35 +1286,58 @@ class _FormatInferInstance(Visitor):
         fitted = self._bound_if_fits(e, af_acc)
         return fitted if fitted is not None else self._op_bound(e)
 
-    def _range_format(self, start: int, stop: int, step: int) -> FormatBound:
-        """Element-tight :class:`ListFormat` for ``range(start, stop, step)``
+    def _range_elt_format(self, start: int, stop: int, step: int) -> FormatBound:
+        """Format of the integers produced by ``range(start, stop, step)``
         with statically-known integer arguments.
 
         Small ranges (at most ``range_set_threshold`` elements) pin the exact
         value set as a :class:`SetFormat`; larger ranges use the bounded
         integer ``A(inf, 0, b)`` with ``b`` the largest magnitude attained
         (quantum 1, i.e. ``exp = 0``).  Invalid (``step == 0``) and empty
-        ranges fall back to the unbounded integer format — an empty list's
-        element format is vacuous.
+        ranges fall back to the unbounded integer format — a vacuous element.
         """
         if step == 0:
-            return ListFormat(_INTEGER_FORMAT)
+            return _INTEGER_FORMAT
         rng = range(start, stop, step)
         n = len(rng)
         if n == 0:
-            return ListFormat(_INTEGER_FORMAT)
+            return _INTEGER_FORMAT
         if n <= self._range_set_threshold:
-            return ListFormat(SetFormat(frozenset(Fraction(v) for v in rng)))
+            return SetFormat(frozenset(Fraction(v) for v in rng))
         last = start + (n - 1) * step
         b = RealFloat.from_int(max(abs(start), abs(last)))
-        return ListFormat(AbstractFormat(float('inf'), 0, b).format())
+        return AbstractFormat(float('inf'), 0, b).format()
+
+    def _range_format(self, start: int, stop: int, step: int) -> FormatBound:
+        """:class:`ListFormat` over :meth:`_range_elt_format`."""
+        return ListFormat(self._range_elt_format(start, stop, step))
+
+    def _static_dim_size(self, arg: Expr, d: int) -> int | None:
+        """Statically-known length of *arg* along dimension *d*, or ``None``.
+
+        Descends *d* list levels through the array-size bound (dimension 0 is
+        the outermost list, matching ``size(xs, d)``).
+        """
+        bound = self.array_size.by_expr.get(arg)
+        for _ in range(d):
+            if not isinstance(bound, ListSize):
+                return None
+            bound = bound.elt
+        if isinstance(bound, ListSize):
+            return concrete_size(bound.size)
+        return None
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> FormatBound:
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
         match e:
             case Size():
-                # size(...) -> result format is INTEGER regardless of scope.
+                # size(xs, d) -> the length along dimension d; pin the exact
+                # value when d is concrete and that dimension's size is known.
+                d = _concrete_int(rhs)
+                n = self._static_dim_size(e.first, d) if d is not None else None
+                if n is not None:
+                    return SetFormat.from_value(Fraction(n))
                 return _INTEGER_FORMAT
             case Range2():
                 # range(start, stop) -> list of integers; tighten when concrete

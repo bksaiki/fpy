@@ -8,6 +8,8 @@ runs property tests driven by the type-directed FPy program generator.
 import fpy2 as fp
 import pytest
 
+from fpy2 import dim, size
+
 from fractions import Fraction
 from hypothesis import given, settings, strategies as st
 
@@ -1093,6 +1095,63 @@ class TestFormatInfer:
         high = FormatInfer.analyze(f.ast, range_set_threshold=100)
         exact = [b for e, b in high.by_expr.items() if type(e).__name__ == 'Range1'][0]
         assert isinstance(exact, ListFormat) and isinstance(exact.elt, SetFormat)
+
+    def test_len_pins_known_size(self):
+        """``len(xs)`` pins the exact size when it is statically known."""
+        @fp.fpy
+        def f() -> fp.Real:
+            xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+            return len(xs)
+
+        info = self._run(f)
+        lens = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Len']
+        assert lens and lens[0] == SetFormat.from_value(Fraction(5))
+
+    def test_len_symbolic_size_falls_back_to_integer(self):
+        """``len(xs)`` for an unknown-size argument stays the integer format."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return len(xs)
+
+        info = self._run(f)
+        lens = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Len']
+        assert lens and lens[0] == fp.INTEGER.format()
+
+    def test_dim_pins_nesting_depth(self):
+        """``dim(xs)`` always pins the (static) nesting depth."""
+        @fp.fpy
+        def f(xs: list[list[fp.Real]]) -> fp.Real:
+            return dim(xs)
+
+        info = self._run(f)
+        dims = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Dim']
+        assert dims and dims[0] == SetFormat.from_value(Fraction(2))
+
+    def test_size_pins_known_dimension(self):
+        """``size(xs, d)`` pins the length along a statically-known dimension."""
+        @fp.fpy
+        def f() -> fp.Real:
+            xs = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+            return size(xs, 1)
+
+        info = self._run(f)
+        sizes = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Size']
+        assert sizes and sizes[0] == SetFormat.from_value(Fraction(3))
+
+    def test_enumerate_index_pinned_when_size_known(self):
+        """``enumerate(xs)`` pins the index projection to ``range(len(xs))``."""
+        @fp.fpy
+        def f() -> fp.Real:
+            xs = [1.0, 2.0, 3.0]
+            for i, x in enumerate(xs):
+                pass
+            return 0.0
+
+        info = self._run(f)
+        enums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Enumerate']
+        assert enums and isinstance(enums[0], ListFormat)
+        idx_fmt = enums[0].elt.elts[0]
+        assert idx_fmt == SetFormat(frozenset(Fraction(v) for v in range(3)))
 
     def test_enumerate_returns_listformat_of_int_value_tuple(self):
         """
