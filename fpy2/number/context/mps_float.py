@@ -30,7 +30,13 @@ class MPSFloatFormat(OrdinalFormat):
     emin: int
     """minimum (normalized) exponent"""
 
-    def __init__(self, pmax: int, emin: int):
+    enable_nan: bool
+    """whether NaN is representable"""
+
+    enable_inf: bool
+    """whether (signed) infinity is representable"""
+
+    def __init__(self, pmax: int, emin: int, enable_nan: bool = True, enable_inf: bool = True):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
@@ -39,16 +45,20 @@ class MPSFloatFormat(OrdinalFormat):
             raise TypeError(f'Expected \'int\' for emin={emin}, got {type(emin)}')
         self.pmax = pmax
         self.emin = emin
+        self.enable_nan = enable_nan
+        self.enable_inf = enable_inf
 
     def __eq__(self, other):
         return (
             isinstance(other, MPSFloatFormat)
             and self.pmax == other.pmax
             and self.emin == other.emin
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
         )
 
     def __hash__(self):
-        return hash((self.__class__, self.pmax, self.emin))
+        return hash((self.__class__, self.pmax, self.emin, self.enable_nan, self.enable_inf))
 
     @property
     def expmin(self) -> int:
@@ -63,8 +73,10 @@ class MPSFloatFormat(OrdinalFormat):
     def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
-                if x.is_nar():
-                    return True
+                if x.isnan:
+                    return self.enable_nan
+                if x.isinf:
+                    return self.enable_inf
                 xr = x._real
             case RealFloat():
                 xr = x
@@ -341,6 +353,9 @@ class MPSFloatContext(OrdinalContext):
         """Creates a context from a `MPSFloatFormat` and rounding parameters."""
         if not isinstance(fmt, MPSFloatFormat):
             raise TypeError(f'Expected \'MPSFloatFormat\', got {type(fmt)}')
+        # TODO: thread enable_nan/enable_inf into the context and its rounding
+        if not fmt.enable_nan or not fmt.enable_inf:
+            raise NotImplementedError('MPSFloatContext does not yet support disabling NaN/inf')
         return cls(fmt.pmax, fmt.emin, rm, num_randbits, rng=rng)
 
     def round_params(self):

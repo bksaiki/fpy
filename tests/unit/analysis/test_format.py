@@ -378,12 +378,21 @@ class TestAbstractFormat():
         # fixed-point / integer formats have no special values
         sint8 = AbstractFormat.from_format(fp.SINT8.format())
         assert not sint8.has_pos_inf and not sint8.has_neg_inf and not sint8.has_nan
-        # MPFR-style container formats are treated as carrying no asserted
-        # specials (their representable_in is an uninformative constant True)
+        # a plain MPBFloatContext admits NaN/inf (enable_* default True),
+        # matching its pass-through/overflow rounding
         mpb = AbstractFormat.from_format(
             fp.MPBFloatContext(24, -10, fp.RealFloat.from_int(1)).format()
         )
-        assert not mpb.has_pos_inf and not mpb.has_neg_inf and not mpb.has_nan
+        assert mpb.has_pos_inf and mpb.has_neg_inf and mpb.has_nan
+        # but a float format constructed with special values disabled reports none
+        # (this is what AbstractFormat.format() emits for e.g. sint8 + sint8)
+        mpb_none = AbstractFormat.from_format(
+            fp.number.context.mpb_float.MPBFloatFormat(
+                24, -10, fp.RealFloat.from_int(1),
+                enable_nan=False, enable_inf=False,
+            )
+        )
+        assert not mpb_none.has_pos_inf and not mpb_none.has_neg_inf and not mpb_none.has_nan
 
     def test_specials_default_absent(self):
         """Special values default to absent, preserving legacy semantics."""

@@ -338,21 +338,16 @@ class AbstractFormat:
         Special-value membership (``has_pos_inf``/``has_neg_inf``/``has_nan``)
         is derived by probing *fmt*'s own :meth:`representable_in` with the
         signed infinities and NaN.  Probing ``+inf`` and ``-inf`` separately
-        captures per-sign asymmetry that the underlying single ``enable_inf``
-        flag cannot express (e.g. a positive-only format represents no -inf).
-
-        Exception: the MPFR-style *container* formats ``MPFloatFormat``,
-        ``MPSFloatFormat``, and ``MPBFloatFormat`` answer ``representable_in``
-        with an unconditional ``True`` for NaN/inf — they can *store* any
-        special value, but that says nothing about whether a denoted value set
-        actually contains one.  Because ``.format()`` maps bounded fixed-point
-        results (e.g. ``sint8 + sint8``) onto exactly these container formats,
-        probing them would over-approximate every such intermediate as
-        possibly-NaN/inf and defeat downstream integer widening.  We therefore
-        treat these three as carrying no asserted special values, matching the
-        abstraction's ordinary-values semantics.  (``RealFormat``, the lattice
-        top, is intentionally *not* in this set: it probes to all-True, which
-        is the correct top element.)
+        captures per-sign asymmetry that a single ``enable_inf`` flag cannot
+        express (e.g. a positive-only format represents no -inf).  This is
+        uniform across every :class:`Format`: the fixed-point and float
+        families both carry ``enable_nan``/``enable_inf`` (or, for
+        :class:`EFloatFormat`, ``nan_kind``/``enable_inf``), so the probe
+        reflects the format's true representable set.  This relies on
+        :meth:`AbstractFormat.format` round-tripping the flags — it constructs
+        result formats with ``enable_nan``/``enable_inf`` set from ``self``, so
+        e.g. a ``sint8 + sint8`` result (no special values) materializes as a
+        float format that reports none, and the probe recovers that faithfully.
         """
         # finite grid: quantum, precision, and bounds
         match fmt:
@@ -397,13 +392,10 @@ class AbstractFormat:
             case _:
                 raise ValueError(f'format is not abstractable: {fmt!r}')
 
-        # special values: probe the format's representable set directly,
-        # except for the MPFR-style containers whose representable_in is an
-        # uninformative constant True (see the docstring).
-        if not isinstance(fmt, (MPFloatFormat, MPSFloatFormat, MPBFloatFormat)):
-            af.has_pos_inf = fmt.representable_in(Float.inf(s=False))
-            af.has_neg_inf = fmt.representable_in(Float.inf(s=True))
-            af.has_nan = fmt.representable_in(Float.nan())
+        # special values: probe the format's representable set directly.
+        af.has_pos_inf = fmt.representable_in(Float.inf(s=False))
+        af.has_neg_inf = fmt.representable_in(Float.inf(s=True))
+        af.has_nan = fmt.representable_in(Float.nan())
         return af
 
     def format(self) -> Format:
@@ -418,14 +410,14 @@ class AbstractFormat:
         does not correspond cleanly to one of the supported :class:`Format`
         subclasses, ``REAL_FORMAT`` is returned as a sound fall-back.
 
-        Special values: the float-shaped and ``REAL_FORMAT`` branches
-        already represent ``+/-inf`` and ``NaN`` unconditionally, so they
-        remain supersets regardless of ``self``'s flags.  The fixed-point
-        branches represent no special values by default, so they are
-        constructed with ``enable_nan``/``enable_inf`` matching ``self`` to
-        preserve the superset guarantee.  (``enable_inf`` is a single flag
-        for both signs; using ``has_pos_inf or has_neg_inf`` may add the
-        opposite-signed infinity, which is a sound over-approximation.)
+        Special values: both the fixed-point and float branches are
+        constructed with ``enable_nan``/``enable_inf`` matching ``self``, so
+        the special-value flags round-trip exactly (a subsequent
+        :meth:`from_format` recovers them).  ``REAL_FORMAT`` represents every
+        special value and is used only when ``self`` is fully saturated.
+        (``enable_inf`` is a single flag for both signs; using ``has_pos_inf
+        or has_neg_inf`` may add the opposite-signed infinity, which is a
+        sound over-approximation.)
         """
         enable_nan = self.has_nan
         enable_inf = self.has_pos_inf or self.has_neg_inf
@@ -450,13 +442,18 @@ class AbstractFormat:
                     # MPBFloatFormat requires a strictly-negative neg_maxval;
                     # widen symmetrically (sound over-approximation).
                     neg_maxval = RealFloat(s=True, x=self.pos_bound)
-                return MPBFloatFormat(self.prec, emin, self.pos_bound, neg_maxval)
+                return MPBFloatFormat(
+                    self.prec, emin, self.pos_bound, neg_maxval,
+                    enable_nan=enable_nan, enable_inf=enable_inf,
+                )
             if bounds_unbounded:
-                return MPSFloatFormat(self.prec, emin)
+                return MPSFloatFormat(
+                    self.prec, emin, enable_nan=enable_nan, enable_inf=enable_inf,
+                )
 
         if not prec_inf and exp_inf and bounds_unbounded:
             assert isinstance(self.prec, int)
-            return MPFloatFormat(self.prec)
+            return MPFloatFormat(self.prec, enable_nan=enable_nan, enable_inf=enable_inf)
 
         if prec_inf and not exp_inf:
             assert isinstance(self.exp, int)
