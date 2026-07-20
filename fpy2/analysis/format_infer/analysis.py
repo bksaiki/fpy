@@ -309,6 +309,20 @@ would be unnecessarily loose.
 """
 
 
+def _concrete_int(fmt: FormatBound) -> int | None:
+    """Returns the integer value of *fmt* iff it pins a single integer.
+
+    Used to recognise ``range`` arguments that are statically known (either
+    literals or constant-folded expressions, both of which surface as a
+    singleton :class:`SetFormat`).  Returns ``None`` otherwise.
+    """
+    if isinstance(fmt, SetFormat) and len(fmt.values) == 1:
+        (v,) = fmt.values
+        if v.denominator == 1:
+            return v.numerator
+    return None
+
+
 def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
     """
     Returns true iff every value in *values* is representable under *fmt*.
@@ -836,6 +850,7 @@ class _FormatInferInstance(Visitor):
     _fn_fmt: FunctionFormat | None
     _return_fmt: FormatBound | None
     _loop_iter_limit: int
+    _range_set_threshold: int
     _widen: bool
 
     def __init__(
@@ -845,6 +860,7 @@ class _FormatInferInstance(Visitor):
         pre_cache: PreAnalysisCache,
         fn_fmt: FunctionFormat | None,
         loop_iter_limit: int,
+        range_set_threshold: int,
     ):
         self.func = func
         self.type_info = pre.type_info
@@ -873,6 +889,7 @@ class _FormatInferInstance(Visitor):
         # mix of bool and non-bool returns in a single function.
         self._return_fmt = None
         self._loop_iter_limit = loop_iter_limit
+        self._range_set_threshold = range_set_threshold
         # When True, joins forced inside a saturated loop fixpoint widen
         # distinct scalar Formats to ``REAL_FORMAT`` instead of going through
         # an :class:`AbstractFormat` union (which has infinite ascending
@@ -1129,7 +1146,10 @@ class _FormatInferInstance(Visitor):
                 # of the active rounding context.
                 return _INTEGER_FORMAT
             case Range1():
-                # range(...) -> result is a list of integers.
+                # range(stop) -> list of integers; tighten when stop is concrete
+                stop = _concrete_int(arg_fmt)
+                if stop is not None:
+                    return self._range_format(0, stop, 1)
                 return ListFormat(_INTEGER_FORMAT)
             case Enumerate():
                 # enumerate(xs) -> list of (int, elt) tuples; the int projection
@@ -1255,6 +1275,29 @@ class _FormatInferInstance(Visitor):
         fitted = self._bound_if_fits(e, af_acc)
         return fitted if fitted is not None else self._op_bound(e)
 
+    def _range_format(self, start: int, stop: int, step: int) -> FormatBound:
+        """Element-tight :class:`ListFormat` for ``range(start, stop, step)``
+        with statically-known integer arguments.
+
+        Small ranges (at most ``range_set_threshold`` elements) pin the exact
+        value set as a :class:`SetFormat`; larger ranges use the bounded
+        integer ``A(inf, 0, b)`` with ``b`` the largest magnitude attained
+        (quantum 1, i.e. ``exp = 0``).  Invalid (``step == 0``) and empty
+        ranges fall back to the unbounded integer format — an empty list's
+        element format is vacuous.
+        """
+        if step == 0:
+            return ListFormat(_INTEGER_FORMAT)
+        rng = range(start, stop, step)
+        n = len(rng)
+        if n == 0:
+            return ListFormat(_INTEGER_FORMAT)
+        if n <= self._range_set_threshold:
+            return ListFormat(SetFormat(frozenset(Fraction(v) for v in rng)))
+        last = start + (n - 1) * step
+        b = RealFloat.from_int(max(abs(start), abs(last)))
+        return ListFormat(AbstractFormat(float('inf'), 0, b).format())
+
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> FormatBound:
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
@@ -1263,7 +1306,10 @@ class _FormatInferInstance(Visitor):
                 # size(...) -> result format is INTEGER regardless of scope.
                 return _INTEGER_FORMAT
             case Range2():
-                # range(...) -> result is a list of integers.
+                # range(start, stop) -> list of integers; tighten when concrete
+                start, stop = _concrete_int(lhs), _concrete_int(rhs)
+                if start is not None and stop is not None:
+                    return self._range_format(start, stop, 1)
                 return ListFormat(_INTEGER_FORMAT)
             case Add():
                 # Exact addition.  Use the unrounded result whenever
@@ -1291,10 +1337,14 @@ class _FormatInferInstance(Visitor):
         return self._op_bound(e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> FormatBound:
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        self._visit_expr(e.third, ctx)
+        first = self._visit_expr(e.first, ctx)
+        second = self._visit_expr(e.second, ctx)
+        third = self._visit_expr(e.third, ctx)
         if isinstance(e, Range3):
+            # range(start, stop, step) -> list of integers; tighten when concrete
+            start, stop, step = _concrete_int(first), _concrete_int(second), _concrete_int(third)
+            if start is not None and stop is not None and step is not None:
+                return self._range_format(start, stop, step)
             return ListFormat(_INTEGER_FORMAT)
         return self._op_bound(e)
 
@@ -1386,6 +1436,7 @@ class _FormatInferInstance(Visitor):
             pre_cache=self._pre_cache,
             fn_fmt=callee_signature,
             loop_iter_limit=self._loop_iter_limit,
+            range_set_threshold=self._range_set_threshold,
         ).analyze()
 
     # Comparison: produces a bool, so no numeric format
@@ -1802,6 +1853,14 @@ class FormatInfer:
     parameter of :meth:`analyze`.
     """
 
+    DEFAULT_RANGE_SET_THRESHOLD = 16
+    """
+    Default maximum element count for which a concrete ``range(...)`` pins its
+    exact value set as a :class:`SetFormat`.  Larger ranges use the bounded
+    integer format ``A(inf, 0, b)`` instead.  Tunable via the
+    ``range_set_threshold`` parameter of :meth:`analyze`.
+    """
+
     @staticmethod
     def analyze(
         func: FuncDef,
@@ -1813,6 +1872,7 @@ class FormatInfer:
         pre_cache: PreAnalysisCache | None = None,
         fn_fmt: FunctionFormat | None = None,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
+        range_set_threshold: int = DEFAULT_RANGE_SET_THRESHOLD,
     ) -> FormatAnalysis:
         """
         Performs format analysis on an FPy function.
@@ -1871,6 +1931,11 @@ class FormatInfer:
                 ``REAL_FORMAT``.  Only applies to loops without a known
                 iteration count (``while`` loops, and ``for`` loops
                 over symbolic-size iterables).
+            range_set_threshold:
+                Maximum element count for which a concrete ``range(...)``
+                pins its exact value set as a :class:`SetFormat`.  Larger
+                ranges fall back to the bounded integer format
+                ``A(inf, 0, b)``.
 
         Returns:
             A :class:`FormatAnalysis` whose ``by_def``, ``by_expr``,
@@ -1910,5 +1975,6 @@ class FormatInfer:
             pre_cache=pre_cache,
             fn_fmt=fn_fmt,
             loop_iter_limit=loop_iter_limit,
+            range_set_threshold=range_set_threshold,
         )
         return inst.analyze()
