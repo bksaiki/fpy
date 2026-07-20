@@ -183,12 +183,14 @@ class MPBFloatFormat(SizedFormat):
         if not isinstance(x, int):
             raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
 
+        # sentinel ordinals map to infinity only when this format has it
+        allow_inf = infval and self.enable_inf
         if x > self._pos_maxval_ord:
-            if not infval or x > self._pos_maxval_ord + 1:
+            if not allow_inf or x > self._pos_maxval_ord + 1:
                 raise ValueError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
             return Float(isinf=True)
         elif x < self._neg_maxval_ord:
-            if not infval or x < self._neg_maxval_ord - 1:
+            if not allow_inf or x < self._neg_maxval_ord - 1:
                 raise ValueError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
             return Float(s=True, isinf=True)
         else:

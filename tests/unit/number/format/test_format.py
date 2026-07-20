@@ -354,6 +354,45 @@ class TestFormatRepresentable:
 
 
 ###########################################################
+# Tests: enable_nan / enable_inf on the float formats
+
+class TestFloatFormatSpecialValues:
+    """`enable_nan`/`enable_inf` gate special values on the float formats."""
+
+    def _mpb(self, **kwargs):
+        return fp.number.format.MPBFloatFormat(8, 4, fp.RealFloat(exp=0, c=100), **kwargs)
+
+    def test_default_admits_specials(self):
+        fmt = self._mpb()
+        assert fmt.representable_in(fp.number.Float.nan())
+        assert fmt.representable_in(fp.number.Float.inf(s=False))
+        assert fmt.representable_in(fp.number.Float.inf(s=True))
+
+    def test_disabled_specials_not_representable(self):
+        fmt = self._mpb(enable_nan=False, enable_inf=False)
+        assert not fmt.representable_in(fp.number.Float.nan())
+        assert not fmt.representable_in(fp.number.Float.inf(s=False))
+        assert not fmt.representable_in(fp.number.Float.inf(s=True))
+        # finite values are unaffected
+        assert fmt.representable_in(fp.RealFloat(exp=0, c=50))
+
+    def test_from_ordinal_inf_gated_by_enable_inf(self):
+        # sentinel ordinal maps to inf only when the format has infinity
+        f_inf = self._mpb(enable_inf=True)
+        f_noinf = self._mpb(enable_inf=False)
+        sentinel = f_inf._pos_maxval_ord + 1
+        assert f_inf.from_ordinal(sentinel, infval=True).isinf
+        with pytest.raises(ValueError):
+            f_noinf.from_ordinal(sentinel, infval=True)
+
+    def test_context_from_format_guards_disabled_specials(self):
+        # contexts do not yet support disabling NaN/inf (see TODOs)
+        for fmt in (self._mpb(enable_nan=False), self._mpb(enable_inf=False)):
+            with pytest.raises(NotImplementedError):
+                fp.MPBFloatContext.from_format(fmt)
+
+
+###########################################################
 # Tests: OrdinalFormat methods
 
 class TestOrdinalFormat:

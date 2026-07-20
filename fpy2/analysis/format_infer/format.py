@@ -57,6 +57,9 @@ class AbstractFormat:
     - `has_neg_inf`: whether `-inf` is a representable value
     - `has_nan`: whether `NaN` is a representable value
 
+    A special-value flag is independent of the corresponding bound: e.g.
+    `pos_bound = inf` means the finite grid is unbounded, not that `+inf` is a
+    member (that is `has_pos_inf`).
     """
 
     prec: int | float
@@ -112,10 +115,11 @@ class AbstractFormat:
             tag for flag, tag in (
                 (self.has_pos_inf, '+inf'),
                 (self.has_neg_inf, '-inf'),
-                (self.has_nan, ' nan'),
+                (self.has_nan, 'nan'),
             ) if flag
         )
-        return f'A({self.prec}, {self.exp}, +{str(self.pos_bound)}, {str(self.neg_bound)}, S={{{specials}}})'
+        base = f'A({self.prec}, {self.exp}, +{self.pos_bound}, {self.neg_bound}'
+        return f'{base}, S={{{specials}}})' if specials else f'{base})'
 
     def __pos__(self) -> 'AbstractFormat':
         """Identity of the format."""
@@ -263,12 +267,11 @@ class AbstractFormat:
         pos_bound = max(self.pos_bound * other.pos_bound, self.neg_bound * other.neg_bound)
         neg_bound = max(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
 
-        # special values: 0 is representable in every format, so `inf * 0 = NaN`
-        # is reachable whenever either operand carries an infinity.  Both signs
-        # of infinity are reachable via sign combinations of `inf * nonzero`.
-        # This is a sound over-approximation for the covering format (it may
-        # claim +/-inf or NaN when a degenerate {0} operand would preclude it;
-        # the analysis short-circuits `0 * x`).
+        # special values: 0 is representable everywhere, so `inf * 0 = NaN` is
+        # reachable whenever either operand has an infinity -- the NaN result is
+        # exact.  The infinity outputs are conservative: we set both signs
+        # rather than tracking sign ranges (exact for symmetric operands like
+        # IEEE x IEEE; over-approximate for asymmetric or {0}-only operands).
         self_inf = self.has_pos_inf or self.has_neg_inf
         other_inf = other.has_pos_inf or other.has_neg_inf
         inf_out = self_inf or other_inf
@@ -335,19 +338,11 @@ class AbstractFormat:
         :class:`Format` subclasses listed in :data:`AbstractableFormat`.
         Callers should gate with ``isinstance(fmt, AbstractableFormat)``.
 
-        Special-value membership (``has_pos_inf``/``has_neg_inf``/``has_nan``)
-        is derived by probing *fmt*'s own :meth:`representable_in` with the
-        signed infinities and NaN.  Probing ``+inf`` and ``-inf`` separately
-        captures per-sign asymmetry that a single ``enable_inf`` flag cannot
-        express (e.g. a positive-only format represents no -inf).  This is
-        uniform across every :class:`Format`: the fixed-point and float
-        families both carry ``enable_nan``/``enable_inf`` (or, for
-        :class:`EFloatFormat`, ``nan_kind``/``enable_inf``), so the probe
-        reflects the format's true representable set.  This relies on
-        :meth:`AbstractFormat.format` round-tripping the flags — it constructs
-        result formats with ``enable_nan``/``enable_inf`` set from ``self``, so
-        e.g. a ``sint8 + sint8`` result (no special values) materializes as a
-        float format that reports none, and the probe recovers that faithfully.
+        Special-value membership is derived by probing *fmt*'s
+        :meth:`representable_in` with each signed infinity and NaN.  Probing
+        ``+inf``/``-inf`` separately captures per-sign asymmetry a single
+        ``enable_inf`` flag cannot (e.g. a positive-only format has no -inf).
+        This round-trips with :meth:`format`, which sets the ``enable_*`` flags.
         """
         # finite grid: quantum, precision, and bounds
         match fmt:
@@ -410,14 +405,12 @@ class AbstractFormat:
         does not correspond cleanly to one of the supported :class:`Format`
         subclasses, ``REAL_FORMAT`` is returned as a sound fall-back.
 
-        Special values: both the fixed-point and float branches are
-        constructed with ``enable_nan``/``enable_inf`` matching ``self``, so
-        the special-value flags round-trip exactly (a subsequent
-        :meth:`from_format` recovers them).  ``REAL_FORMAT`` represents every
-        special value and is used only when ``self`` is fully saturated.
-        (``enable_inf`` is a single flag for both signs; using ``has_pos_inf
-        or has_neg_inf`` may add the opposite-signed infinity, which is a
-        sound over-approximation.)
+        Special values: each non-``REAL_FORMAT`` branch is constructed with
+        ``enable_nan``/``enable_inf`` matching ``self`` so the flags round-trip
+        through :meth:`from_format` (``REAL_FORMAT`` already represents them
+        all).  ``enable_inf`` is a single flag for both signs, so ``has_pos_inf
+        or has_neg_inf`` may add the opposite-signed infinity — a sound
+        over-approximation.
         """
         enable_nan = self.has_nan
         enable_inf = self.has_pos_inf or self.has_neg_inf
