@@ -114,10 +114,12 @@ class TestAbstractFormat():
         CTX2 = AbstractFormat.from_format((fp.MX_E5M2).format())
         assert not CTX1 <= CTX2, "Expected MX_E4M3 to not be contained in MX_E5M2."
 
-        # MX_E4M3 \subseteq fixed<-9, 32>
+        # MX_E4M3 ⊄ fixed<-9, 32>: E4M3 represents NaN (nan_kind=MAX_VAL) but
+        # fixed-point does not, so the NaN member breaks containment even
+        # though every finite E4M3 value fits in fixed<-9, 32>.
         CTX1 = AbstractFormat.from_format((fp.MX_E4M3).format())
         CTX2 = AbstractFormat.from_format((fp.FixedContext(True, -9, 32).format()))
-        assert CTX1 <= CTX2, "Expected MX_E4M3 to be contained in fixed<-9, 32>."
+        assert not CTX1 <= CTX2, "Expected MX_E4M3 to not be contained in fixed<-9, 32> (NaN not representable)."
 
         # MX_E5M2 ⊄ fixed<-9, 32>
         CTX1 = AbstractFormat.from_format((fp.MX_E5M2).format())
@@ -363,6 +365,25 @@ class TestAbstractFormat():
 
     # ------------------------------------------------------------------
     # Special-value membership (has_pos_inf / has_neg_inf / has_nan)
+
+    def test_specials_from_format(self):
+        """from_format lifts special-value membership from concrete formats."""
+        # IEEE formats (E5M2/FP32) represent +inf, -inf, and NaN
+        e5m2 = AbstractFormat.from_format(fp.MX_E5M2.format())
+        assert e5m2.has_pos_inf and e5m2.has_neg_inf and e5m2.has_nan
+        # E4M3 represents NaN but no infinities (nan_kind=MAX_VAL, enable_inf=False)
+        e4m3 = AbstractFormat.from_format(fp.MX_E4M3.format())
+        assert e4m3.has_nan
+        assert not e4m3.has_pos_inf and not e4m3.has_neg_inf
+        # fixed-point / integer formats have no special values
+        sint8 = AbstractFormat.from_format(fp.SINT8.format())
+        assert not sint8.has_pos_inf and not sint8.has_neg_inf and not sint8.has_nan
+        # MPFR-style container formats are treated as carrying no asserted
+        # specials (their representable_in is an uninformative constant True)
+        mpb = AbstractFormat.from_format(
+            fp.MPBFloatContext(24, -10, fp.RealFloat.from_int(1)).format()
+        )
+        assert not mpb.has_pos_inf and not mpb.has_neg_inf and not mpb.has_nan
 
     def test_specials_default_absent(self):
         """Special values default to absent, preserving legacy semantics."""
