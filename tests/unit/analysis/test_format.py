@@ -114,10 +114,12 @@ class TestAbstractFormat():
         CTX2 = AbstractFormat.from_format((fp.MX_E5M2).format())
         assert not CTX1 <= CTX2, "Expected MX_E4M3 to not be contained in MX_E5M2."
 
-        # MX_E4M3 \subseteq fixed<-9, 32>
+        # MX_E4M3 ⊄ fixed<-9, 32>: E4M3 represents NaN (nan_kind=MAX_VAL) but
+        # fixed-point does not, so the NaN member breaks containment even
+        # though every finite E4M3 value fits in fixed<-9, 32>.
         CTX1 = AbstractFormat.from_format((fp.MX_E4M3).format())
         CTX2 = AbstractFormat.from_format((fp.FixedContext(True, -9, 32).format()))
-        assert CTX1 <= CTX2, "Expected MX_E4M3 to be contained in fixed<-9, 32>."
+        assert not CTX1 <= CTX2, "Expected MX_E4M3 to not be contained in fixed<-9, 32> (NaN not representable)."
 
         # MX_E5M2 ⊄ fixed<-9, 32>
         CTX1 = AbstractFormat.from_format((fp.MX_E5M2).format())
@@ -360,6 +362,110 @@ class TestAbstractFormat():
                 assert fmt.exp == min(e1, e2)
                 assert fmt.pos_bound == b1 + b2
 
+
+    # ------------------------------------------------------------------
+    # Special-value membership (has_pos_inf / has_neg_inf / has_nan)
+
+    def test_specials_from_format(self):
+        """from_format lifts special-value membership from concrete formats."""
+        # IEEE formats (E5M2/FP32) represent +inf, -inf, and NaN
+        e5m2 = AbstractFormat.from_format(fp.MX_E5M2.format())
+        assert e5m2.has_pos_inf and e5m2.has_neg_inf and e5m2.has_nan
+        # E4M3 represents NaN but no infinities (nan_kind=MAX_VAL, enable_inf=False)
+        e4m3 = AbstractFormat.from_format(fp.MX_E4M3.format())
+        assert e4m3.has_nan
+        assert not e4m3.has_pos_inf and not e4m3.has_neg_inf
+        # fixed-point / integer formats have no special values
+        sint8 = AbstractFormat.from_format(fp.SINT8.format())
+        assert not sint8.has_pos_inf and not sint8.has_neg_inf and not sint8.has_nan
+        # a plain MPBFloatContext admits NaN/inf (enable_* default True),
+        # matching its pass-through/overflow rounding
+        mpb = AbstractFormat.from_format(
+            fp.MPBFloatContext(24, -10, fp.RealFloat.from_int(1)).format()
+        )
+        assert mpb.has_pos_inf and mpb.has_neg_inf and mpb.has_nan
+        # but a float format constructed with special values disabled reports none
+        # (this is what AbstractFormat.format() emits for e.g. sint8 + sint8)
+        mpb_none = AbstractFormat.from_format(
+            fp.number.context.mpb_float.MPBFloatFormat(
+                24, -10, fp.RealFloat.from_int(1),
+                enable_nan=False, enable_inf=False,
+            )
+        )
+        assert not mpb_none.has_pos_inf and not mpb_none.has_neg_inf and not mpb_none.has_nan
+
+    def test_specials_default_absent(self):
+        """Special values default to absent, preserving legacy semantics."""
+        fmt = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        assert not fmt.has_pos_inf
+        assert not fmt.has_neg_inf
+        assert not fmt.has_nan
+
+    def test_specials_distinguish_eq_and_hash(self):
+        """Flags participate in equality and hashing."""
+        base = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        with_nan = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_nan=True)
+        assert base != with_nan
+        assert hash(base) != hash(with_nan)
+        # same flags => equal and hash-equal
+        again = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_nan=True)
+        assert with_nan == again
+        assert hash(with_nan) == hash(again)
+
+    def test_specials_neg_swaps_infinities(self):
+        """Negation swaps +/-inf and preserves NaN."""
+        fmt = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True, has_nan=True)
+        neg = -fmt
+        assert neg.has_neg_inf and not neg.has_pos_inf
+        assert neg.has_nan
+
+    def test_specials_abs_folds_infinities(self):
+        """abs maps -inf to +inf and clears -inf."""
+        fmt = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_neg_inf=True, has_nan=True)
+        result = abs(fmt)
+        assert result.has_pos_inf and not result.has_neg_inf
+        assert result.has_nan
+
+    def test_specials_containment_implication(self):
+        """A member special value in self must exist in other."""
+        no_specials = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        with_nan = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_nan=True)
+        # a format with NaN is not contained in one without it
+        assert not (with_nan <= no_specials)
+        # but the reverse holds (dropping a special is fine)
+        assert no_specials <= with_nan
+
+    def test_specials_add_inf_minus_inf_is_nan(self):
+        """+inf + -inf produces NaN in the covering format."""
+        pos = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        neg = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_neg_inf=True)
+        result = pos + neg
+        assert result.has_pos_inf and result.has_neg_inf and result.has_nan
+
+    def test_specials_sub_inf_minus_inf_is_nan(self):
+        """+inf - +inf produces NaN in the covering format."""
+        a = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        b = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        result = a - b
+        # a.+inf - b.+inf = NaN; a.+inf - b.finite = +inf; finite - b.+inf = -inf
+        assert result.has_nan and result.has_pos_inf and result.has_neg_inf
+
+    def test_specials_mul_inf_times_zero_is_nan(self):
+        """inf * 0 is reachable (0 is always representable), forcing NaN."""
+        inf_fmt = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        finite = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        result = inf_fmt * finite
+        assert result.has_nan
+        assert result.has_pos_inf and result.has_neg_inf
+
+    def test_specials_union_and_intersection(self):
+        """Union OR-s flags; intersection AND-s them."""
+        with_nan = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_nan=True)
+        with_inf = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        union = with_nan | with_inf
+        assert union.has_nan and union.has_pos_inf
+        inter = with_nan & with_inf
+        assert not inter.has_nan and not inter.has_pos_inf
 
     def test_mul(self):
         precs: list[int | float] = [2, 4, 8, float('inf')]

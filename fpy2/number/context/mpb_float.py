@@ -44,12 +44,20 @@ class MPBFloatFormat(SizedFormat):
     _neg_maxval_ord: int
     """precomputed ordinal of `self.neg_maxval`"""
 
+    enable_nan: bool
+    """whether NaN is representable"""
+
+    enable_inf: bool
+    """whether (signed) infinity is representable"""
+
     def __init__(
         self,
         pmax: int,
         emin: int,
         pos_maxval: RealFloat,
         neg_maxval: RealFloat | None = None,
+        enable_nan: bool = True,
+        enable_inf: bool = True,
     ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
@@ -73,8 +81,10 @@ class MPBFloatFormat(SizedFormat):
         self.emin = emin
         self.pos_maxval = pos_maxval
         self.neg_maxval = neg_maxval
+        self.enable_nan = enable_nan
+        self.enable_inf = enable_inf
 
-        self._mps_fmt = MPSFloatFormat(pmax, emin)
+        self._mps_fmt = MPSFloatFormat(pmax, emin, enable_nan, enable_inf)
         self._pos_maxval_ord = self._mps_fmt._to_ordinal(pos_maxval)
         self._neg_maxval_ord = self._mps_fmt._to_ordinal(neg_maxval)
 
@@ -85,10 +95,15 @@ class MPBFloatFormat(SizedFormat):
             and self.emin == other.emin
             and self.pos_maxval == other.pos_maxval
             and self.neg_maxval == other.neg_maxval
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
         )
 
     def __hash__(self):
-        return hash((self.__class__, self.pmax, self.emin, self.pos_maxval, self.neg_maxval))
+        return hash((
+            self.__class__, self.pmax, self.emin, self.pos_maxval, self.neg_maxval,
+            self.enable_nan, self.enable_inf,
+        ))
 
     @property
     def expmin(self) -> int:
@@ -113,6 +128,11 @@ class MPBFloatFormat(SizedFormat):
         return self.emax - self.pmax + 1
 
     def representable_in(self, x: RealFloat | Float) -> bool:
+        if isinstance(x, Float):
+            if x.isnan:
+                return self.enable_nan
+            if x.isinf:
+                return self.enable_inf
         if not self._mps_fmt.representable_in(x):
             return False
         if not x.is_nonzero():
@@ -163,12 +183,14 @@ class MPBFloatFormat(SizedFormat):
         if not isinstance(x, int):
             raise TypeError(f'Expected an \'int\', got \'{type(x)}\' for x={x}')
 
+        # sentinel ordinals map to infinity only when this format has it
+        allow_inf = infval and self.enable_inf
         if x > self._pos_maxval_ord:
-            if not infval or x > self._pos_maxval_ord + 1:
+            if not allow_inf or x > self._pos_maxval_ord + 1:
                 raise ValueError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
             return Float(isinf=True)
         elif x < self._neg_maxval_ord:
-            if not infval or x < self._neg_maxval_ord - 1:
+            if not allow_inf or x < self._neg_maxval_ord - 1:
                 raise ValueError(f'Expected an \'int\' between {self._neg_maxval_ord} and {self._pos_maxval_ord}, got x={x}')
             return Float(s=True, isinf=True)
         else:
@@ -379,6 +401,9 @@ class MPBFloatContext(SizedContext):
         """Creates a context from a `MPBFloatFormat` and rounding parameters."""
         if not isinstance(fmt, MPBFloatFormat):
             raise TypeError(f'Expected \'MPBFloatFormat\', got {type(fmt)}')
+        # TODO: thread enable_nan/enable_inf into the context and its rounding
+        if not fmt.enable_nan or not fmt.enable_inf:
+            raise NotImplementedError('MPBFloatContext does not yet support disabling NaN/inf')
         if overflow is None:
             overflow = OverflowMode.OVERFLOW
         return cls(

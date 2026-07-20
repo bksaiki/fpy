@@ -23,23 +23,40 @@ class MPFloatFormat(Format):
     pmax: int
     """maximum precision"""
 
-    def __init__(self, pmax: int):
+    enable_nan: bool
+    """whether NaN is representable"""
+
+    enable_inf: bool
+    """whether (signed) infinity is representable"""
+
+    def __init__(self, pmax: int, enable_nan: bool = True, enable_inf: bool = True):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
         if pmax < 1:
             raise ValueError(f'Expected positive integer for pmax={pmax}')
         self.pmax = pmax
+        self.enable_nan = enable_nan
+        self.enable_inf = enable_inf
 
     def __eq__(self, other):
-        return isinstance(other, MPFloatFormat) and self.pmax == other.pmax
+        return (
+            isinstance(other, MPFloatFormat)
+            and self.pmax == other.pmax
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
+        )
 
     def __hash__(self):
-        return hash((self.__class__, self.pmax))
+        return hash((self.__class__, self.pmax, self.enable_nan, self.enable_inf))
 
     def representable_in(self, x: RealFloat | Float) -> bool:
         match x:
             case Float():
-                if x.is_nar() or x.is_zero():
+                if x.isnan:
+                    return self.enable_nan
+                if x.isinf:
+                    return self.enable_inf
+                if x.is_zero():
                     return True
             case RealFloat():
                 if x.is_zero():
@@ -181,6 +198,9 @@ class MPFloatContext(Context):
         """Creates a context from a `MPFloatFormat` and rounding parameters."""
         if not isinstance(fmt, MPFloatFormat):
             raise TypeError(f'Expected \'MPFloatFormat\', got {type(fmt)}')
+        # TODO: thread enable_nan/enable_inf into the context and its rounding
+        if not fmt.enable_nan or not fmt.enable_inf:
+            raise NotImplementedError('MPFloatContext does not yet support disabling NaN/inf')
         return cls(fmt.pmax, rm, num_randbits, rng=rng)
 
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:

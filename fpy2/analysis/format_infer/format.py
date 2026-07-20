@@ -6,7 +6,7 @@ import math
 
 from typing import TypeAlias
 
-from ...number import RealFloat
+from ...number import Float, RealFloat
 from ...number.context.efloat import EFloatFormat
 from ...number.context.exponential import ExpFormat
 from ...number.context.fixed import FixedFormat
@@ -51,14 +51,24 @@ class AbstractFormat:
     Abstract number system.
     - `prec`: maximum precision (use float('inf') for unbounded)
     - `exp`: minimum unnormalized exponent (use float('-inf') for unbounded)
-    - `pos_bound`: largest positive representable number (use float('inf') for unbounded)
-    - `neg_bound`: largest negative representable number (use float('inf') for unbounded magnitude)
+    - `pos_bound`: largest positive *finite* representable number (use float('inf') for unbounded)
+    - `neg_bound`: largest negative *finite* representable number (use float('inf') for unbounded magnitude)
+    - `has_pos_inf`: whether `+inf` is a representable value
+    - `has_neg_inf`: whether `-inf` is a representable value
+    - `has_nan`: whether `NaN` is a representable value
+
+    A special-value flag is independent of the corresponding bound: e.g.
+    `pos_bound = inf` means the finite grid is unbounded, not that `+inf` is a
+    member (that is `has_pos_inf`).
     """
 
     prec: int | float
     exp: int | float
     pos_bound: RealFloat | float
     neg_bound: RealFloat | float
+    has_pos_inf: bool
+    has_neg_inf: bool
+    has_nan: bool
 
     def __init__(
         self,
@@ -67,6 +77,9 @@ class AbstractFormat:
         bound: RealFloat | float,
         *,
         neg_bound: RealFloat | float | None = None,
+        has_pos_inf: bool = False,
+        has_neg_inf: bool = False,
+        has_nan: bool = False,
     ):
         if prec <= 0:
             raise ValueError("`prec` must be positive.")
@@ -75,9 +88,15 @@ class AbstractFormat:
         self.exp = exp
         self.pos_bound = bound
         self.neg_bound = -bound if neg_bound is None else neg_bound
+        self.has_pos_inf = has_pos_inf
+        self.has_neg_inf = has_neg_inf
+        self.has_nan = has_nan
 
     def __hash__(self):
-        return hash((self.prec, self.exp, self.pos_bound, self.neg_bound))
+        return hash((
+            self.prec, self.exp, self.pos_bound, self.neg_bound,
+            self.has_pos_inf, self.has_neg_inf, self.has_nan,
+        ))
 
     def __eq__(self, other):
         return (
@@ -86,22 +105,44 @@ class AbstractFormat:
             and self.exp == other.exp
             and self.pos_bound == other.pos_bound
             and self.neg_bound == other.neg_bound
+            and self.has_pos_inf == other.has_pos_inf
+            and self.has_neg_inf == other.has_neg_inf
+            and self.has_nan == other.has_nan
         )
 
     def __str__(self) -> str:
-        return f'A({self.prec}, {self.exp}, +{str(self.pos_bound)}, {str(self.neg_bound)})'
+        specials = ','.join(
+            tag for flag, tag in (
+                (self.has_pos_inf, '+inf'),
+                (self.has_neg_inf, '-inf'),
+                (self.has_nan, 'nan'),
+            ) if flag
+        )
+        base = f'A({self.prec}, {self.exp}, +{self.pos_bound}, {self.neg_bound}'
+        return f'{base}, S={{{specials}}})' if specials else f'{base})'
 
     def __pos__(self) -> 'AbstractFormat':
         """Identity of the format."""
-        return AbstractFormat(self.prec, self.exp, self.pos_bound, neg_bound=self.neg_bound)
+        return AbstractFormat(
+            self.prec, self.exp, self.pos_bound, neg_bound=self.neg_bound,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+        )
 
     def __neg__(self) -> 'AbstractFormat':
         """Negation of the format (swaps positive and negative bounds)."""
-        return AbstractFormat(self.prec, self.exp, -self.neg_bound, neg_bound=-self.pos_bound)
+        # negation maps +inf <-> -inf; NaN is unsigned so it is preserved
+        return AbstractFormat(
+            self.prec, self.exp, -self.neg_bound, neg_bound=-self.pos_bound,
+            has_pos_inf=self.has_neg_inf, has_neg_inf=self.has_pos_inf, has_nan=self.has_nan,
+        )
 
     def __abs__(self) -> 'AbstractFormat':
         """Absolute value of the format (clamps the negative bound to zero)."""
-        return AbstractFormat(self.prec, self.exp, self.pos_bound, neg_bound=RealFloat.from_int(0))
+        # abs maps -inf to +inf, so +inf is present if either infinity was
+        return AbstractFormat(
+            self.prec, self.exp, self.pos_bound, neg_bound=RealFloat.from_int(0),
+            has_pos_inf=self.has_pos_inf or self.has_neg_inf, has_neg_inf=False, has_nan=self.has_nan,
+        )
 
     def __add__(self, other: 'AbstractFormat') -> 'AbstractFormat':
         """
@@ -140,7 +181,19 @@ class AbstractFormat:
             # ``{0}``, but ``prec`` itself must be valid.
             prec = max(max_bound.p, 1)
 
-        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+        # special values: +inf + x = +inf, -inf + x = -inf, +inf + -inf = NaN
+        has_pos_inf = self.has_pos_inf or other.has_pos_inf
+        has_neg_inf = self.has_neg_inf or other.has_neg_inf
+        has_nan = (
+            self.has_nan or other.has_nan
+            or (self.has_pos_inf and other.has_neg_inf)
+            or (self.has_neg_inf and other.has_pos_inf)
+        )
+
+        return AbstractFormat(
+            prec, exp, pos_bound, neg_bound=neg_bound,
+            has_pos_inf=has_pos_inf, has_neg_inf=has_neg_inf, has_nan=has_nan,
+        )
 
     def __sub__(self, other: 'AbstractFormat') -> 'AbstractFormat':
         """
@@ -180,7 +233,20 @@ class AbstractFormat:
             max_bound = max_bound.normalize(n=exp - 1)
             prec = max(max_bound.p, 1)
 
-        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+        # special values: subtraction is addition with `other` negated, so
+        # other's +inf/-inf swap roles; +inf - +inf and -inf - -inf give NaN
+        has_pos_inf = self.has_pos_inf or other.has_neg_inf
+        has_neg_inf = self.has_neg_inf or other.has_pos_inf
+        has_nan = (
+            self.has_nan or other.has_nan
+            or (self.has_pos_inf and other.has_pos_inf)
+            or (self.has_neg_inf and other.has_neg_inf)
+        )
+
+        return AbstractFormat(
+            prec, exp, pos_bound, neg_bound=neg_bound,
+            has_pos_inf=has_pos_inf, has_neg_inf=has_neg_inf, has_nan=has_nan,
+        )
 
 
     def __mul__(self, other: 'AbstractFormat') -> 'AbstractFormat':
@@ -200,7 +266,20 @@ class AbstractFormat:
         exp = self.exp + other.exp
         pos_bound = max(self.pos_bound * other.pos_bound, self.neg_bound * other.neg_bound)
         neg_bound = max(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
-        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+
+        # special values: 0 is representable everywhere, so `inf * 0 = NaN` is
+        # reachable whenever either operand has an infinity -- the NaN result is
+        # exact.  The infinity outputs are conservative: we set both signs
+        # rather than tracking sign ranges (exact for symmetric operands like
+        # IEEE x IEEE; over-approximate for asymmetric or {0}-only operands).
+        self_inf = self.has_pos_inf or self.has_neg_inf
+        other_inf = other.has_pos_inf or other.has_neg_inf
+        inf_out = self_inf or other_inf
+        has_nan = self.has_nan or other.has_nan or inf_out
+        return AbstractFormat(
+            prec, exp, pos_bound, neg_bound=neg_bound,
+            has_pos_inf=inf_out, has_neg_inf=inf_out, has_nan=has_nan,
+        )
 
     def __and__(self, other: 'AbstractFormat') -> 'AbstractFormat':
         """Intersection of two formats."""
@@ -210,7 +289,13 @@ class AbstractFormat:
         exp = max(self.exp, other.exp)
         pos_bound = min(self.pos_bound, other.pos_bound)
         neg_bound = max(self.neg_bound, other.neg_bound)
-        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+        # a special value is in the intersection iff it is in both operands
+        return AbstractFormat(
+            prec, exp, pos_bound, neg_bound=neg_bound,
+            has_pos_inf=self.has_pos_inf and other.has_pos_inf,
+            has_neg_inf=self.has_neg_inf and other.has_neg_inf,
+            has_nan=self.has_nan and other.has_nan,
+        )
 
     def __or__(self, other: 'AbstractFormat') -> 'AbstractFormat':
         """Union of two formats."""
@@ -220,7 +305,13 @@ class AbstractFormat:
         exp = min(self.exp, other.exp)
         pos_bound = max(self.pos_bound, other.pos_bound)
         neg_bound = min(self.neg_bound, other.neg_bound)
-        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+        # a special value is in the union iff it is in either operand
+        return AbstractFormat(
+            prec, exp, pos_bound, neg_bound=neg_bound,
+            has_pos_inf=self.has_pos_inf or other.has_pos_inf,
+            has_neg_inf=self.has_neg_inf or other.has_neg_inf,
+            has_nan=self.has_nan or other.has_nan,
+        )
 
     def __le__(self, other) -> bool:
         if not isinstance(other, AbstractFormat):
@@ -246,10 +337,17 @@ class AbstractFormat:
         Partial: raises :class:`ValueError` when *fmt* is not one of the
         :class:`Format` subclasses listed in :data:`AbstractableFormat`.
         Callers should gate with ``isinstance(fmt, AbstractableFormat)``.
+
+        Special-value membership is derived by probing *fmt*'s
+        :meth:`representable_in` with each signed infinity and NaN.  Probing
+        ``+inf``/``-inf`` separately captures per-sign asymmetry a single
+        ``enable_inf`` flag cannot (e.g. a positive-only format has no -inf).
+        This round-trips with :meth:`format`, which sets the ``enable_*`` flags.
         """
+        # finite grid: quantum, precision, and bounds
         match fmt:
             case RealFormat():
-                return AbstractFormat(
+                af = AbstractFormat(
                     float('inf'),
                     float('-inf'),
                     float('inf'),
@@ -257,37 +355,43 @@ class AbstractFormat:
                 )
             case FixedFormat() if not fmt.signed:
                 neg_maxval = RealFloat.from_int(0)
-                return AbstractFormat(
+                af = AbstractFormat(
                     float('inf'), fmt.expmin, fmt.pos_maxval, neg_bound=neg_maxval
                 )
             case MPBFixedFormat():
-                return AbstractFormat(
+                af = AbstractFormat(
                     float('inf'), fmt.expmin, fmt.pos_maxval, neg_bound=fmt.neg_maxval
                 )
             case MPFixedFormat():
-                return AbstractFormat(float('inf'), fmt.expmin, float('inf'))
+                af = AbstractFormat(float('inf'), fmt.expmin, float('inf'))
             case ExpFormat():
                 pos_maxval = fmt.maxval().as_real()
                 neg_maxval = RealFloat.from_int(0)
                 expmin = fmt.minval().exp
-                return AbstractFormat(1, expmin, pos_maxval, neg_bound=neg_maxval)
+                af = AbstractFormat(1, expmin, pos_maxval, neg_bound=neg_maxval)
             case EFloatFormat():
-                return AbstractFormat(
+                af = AbstractFormat(
                     fmt.pmax,
                     fmt.expmin,
                     fmt._mpb_fmt.pos_maxval,
                     neg_bound=fmt._mpb_fmt.neg_maxval,
                 )
             case MPBFloatFormat():
-                return AbstractFormat(
+                af = AbstractFormat(
                     fmt.pmax, fmt.expmin, fmt.pos_maxval, neg_bound=fmt.neg_maxval
                 )
             case MPSFloatFormat():
-                return AbstractFormat(fmt.pmax, fmt.expmin, float('inf'))
+                af = AbstractFormat(fmt.pmax, fmt.expmin, float('inf'))
             case MPFloatFormat():
-                return AbstractFormat(fmt.pmax, float('-inf'), float('inf'))
+                af = AbstractFormat(fmt.pmax, float('-inf'), float('inf'))
             case _:
                 raise ValueError(f'format is not abstractable: {fmt!r}')
+
+        # special values: probe the format's representable set directly.
+        af.has_pos_inf = fmt.representable_in(Float.inf(s=False))
+        af.has_neg_inf = fmt.representable_in(Float.inf(s=True))
+        af.has_nan = fmt.representable_in(Float.nan())
+        return af
 
     def format(self) -> Format:
         """
@@ -300,7 +404,16 @@ class AbstractFormat:
         unbounded) collapse to ``REAL_FORMAT``.  When the parameter shape
         does not correspond cleanly to one of the supported :class:`Format`
         subclasses, ``REAL_FORMAT`` is returned as a sound fall-back.
+
+        Special values: each non-``REAL_FORMAT`` branch is constructed with
+        ``enable_nan``/``enable_inf`` matching ``self`` so the flags round-trip
+        through :meth:`from_format` (``REAL_FORMAT`` already represents them
+        all).  ``enable_inf`` is a single flag for both signs, so ``has_pos_inf
+        or has_neg_inf`` may add the opposite-signed infinity — a sound
+        over-approximation.
         """
+        enable_nan = self.has_nan
+        enable_inf = self.has_pos_inf or self.has_neg_inf
         prec_inf = isinstance(self.prec, float)
         exp_inf = isinstance(self.exp, float)
         pos_inf = isinstance(self.pos_bound, float)
@@ -322,13 +435,18 @@ class AbstractFormat:
                     # MPBFloatFormat requires a strictly-negative neg_maxval;
                     # widen symmetrically (sound over-approximation).
                     neg_maxval = RealFloat(s=True, x=self.pos_bound)
-                return MPBFloatFormat(self.prec, emin, self.pos_bound, neg_maxval)
+                return MPBFloatFormat(
+                    self.prec, emin, self.pos_bound, neg_maxval,
+                    enable_nan=enable_nan, enable_inf=enable_inf,
+                )
             if bounds_unbounded:
-                return MPSFloatFormat(self.prec, emin)
+                return MPSFloatFormat(
+                    self.prec, emin, enable_nan=enable_nan, enable_inf=enable_inf,
+                )
 
         if not prec_inf and exp_inf and bounds_unbounded:
             assert isinstance(self.prec, int)
-            return MPFloatFormat(self.prec)
+            return MPFloatFormat(self.prec, enable_nan=enable_nan, enable_inf=enable_inf)
 
         if prec_inf and not exp_inf:
             assert isinstance(self.exp, int)
@@ -336,9 +454,12 @@ class AbstractFormat:
             if bounds_bounded:
                 assert isinstance(self.pos_bound, RealFloat)
                 assert isinstance(self.neg_bound, RealFloat)
-                return MPBFixedFormat(nmin, self.pos_bound, self.neg_bound)
+                return MPBFixedFormat(
+                    nmin, self.pos_bound, self.neg_bound,
+                    enable_nan=enable_nan, enable_inf=enable_inf,
+                )
             if bounds_unbounded:
-                return MPFixedFormat(nmin)
+                return MPFixedFormat(nmin, enable_nan=enable_nan, enable_inf=enable_inf)
 
         return REAL_FORMAT
 
@@ -363,13 +484,23 @@ class AbstractFormat:
     def _is_contained_in(self, other: 'AbstractFormat') -> bool:
         """Return True iff every value representable by `self` is also representable by `other`.
 
-        The three necessary and sufficient conditions are:
+        The conditions are:
           1. Quantum: other.exp <= self.exp  (other is at least as fine-grained)
           2. Bounds:  other.pos_bound >= self.pos_bound  and  other.neg_bound <= self.neg_bound
           3. Precision: either other.prec >= self.prec, *or* self's entire range lies within
              other's subnormal region (pos_bound <= 2^(other.exp + other.prec)), in which case
              the floating-point precision of other is irrelevant — all values fit exactly.
+          4. Special values: every special value in self must also be in other
+             (a member of self that other lacks breaks containment).
         """
+
+        # 4. special values — each is a cheap membership implication
+        if self.has_pos_inf and not other.has_pos_inf:
+            return False
+        if self.has_neg_inf and not other.has_neg_inf:
+            return False
+        if self.has_nan and not other.has_nan:
+            return False
 
         # 1. quantum
         if other.exp > self.exp:
@@ -411,7 +542,10 @@ class AbstractFormat:
         new_prec = self.prec + delta
         if new_prec < 1:
             raise ValueError("resulting precision must be at least 1")
-        return AbstractFormat(new_prec, self.exp, self.pos_bound, neg_bound=self.neg_bound)
+        return AbstractFormat(
+            new_prec, self.exp, self.pos_bound, neg_bound=self.neg_bound,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+        )
 
     def with_exp_offset(self, delta: int) -> 'AbstractFormat':
         """
@@ -423,7 +557,10 @@ class AbstractFormat:
             New AbstractFormat with adjusted exponent.
         """
         new_exp = self.exp + delta
-        return AbstractFormat(self.prec, new_exp, self.pos_bound, neg_bound=self.neg_bound)
+        return AbstractFormat(
+            self.prec, new_exp, self.pos_bound, neg_bound=self.neg_bound,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+        )
 
     def with_bounds_scale(self, factor: RealFloat) -> 'AbstractFormat':
         """
@@ -440,4 +577,8 @@ class AbstractFormat:
         # inf * positive = inf, so no need to check
         new_pos_bound = self.pos_bound * factor
         new_neg_bound = self.neg_bound * factor
-        return AbstractFormat(self.prec, self.exp, new_pos_bound, neg_bound=new_neg_bound)
+        # scaling by a positive factor preserves special-value membership
+        return AbstractFormat(
+            self.prec, self.exp, new_pos_bound, neg_bound=new_neg_bound,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+        )
