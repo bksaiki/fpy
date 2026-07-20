@@ -1037,8 +1037,8 @@ class TestFormatInfer:
             f'expected ListFormat(INTEGER) for Range1, got {range_bounds}'
         )
 
-    def test_range2_returns_listformat_of_integer(self):
-        """``range(start, stop)`` produces a list of integers."""
+    def test_range2_returns_exact_value_set(self):
+        """A small concrete ``range(start, stop)`` pins its exact values."""
         @fp.fpy
         def f() -> list[fp.Real]:
             return [0.0 for _ in range(0, 10)]
@@ -1047,11 +1047,11 @@ class TestFormatInfer:
         range_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Range2'
         ]
-        integer_fmt = fp.INTEGER.format()
-        assert range_bounds and range_bounds[0] == ListFormat(integer_fmt)
+        expected = ListFormat(SetFormat(frozenset(Fraction(v) for v in range(0, 10))))
+        assert range_bounds and range_bounds[0] == expected
 
-    def test_range3_returns_listformat_of_integer(self):
-        """``range(start, stop, step)`` produces a list of integers."""
+    def test_range3_returns_exact_value_set(self):
+        """A small concrete ``range(start, stop, step)`` pins its exact values."""
         @fp.fpy
         def f() -> list[fp.Real]:
             return [0.0 for _ in range(0, 10, 2)]
@@ -1060,8 +1060,39 @@ class TestFormatInfer:
         range_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Range3'
         ]
-        integer_fmt = fp.INTEGER.format()
-        assert range_bounds and range_bounds[0] == ListFormat(integer_fmt)
+        expected = ListFormat(SetFormat(frozenset(Fraction(v) for v in range(0, 10, 2))))
+        assert range_bounds and range_bounds[0] == expected
+
+    def test_range_large_uses_bounded_integer(self):
+        """A range past the set threshold uses the bounded integer format."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(1000)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Range1'
+        ]
+        # values 0..999 -> A(inf, 0, 999); quantum 1, symmetric bound
+        expected_elt = AbstractFormat(
+            float('inf'), 0, fp.RealFloat.from_int(999)
+        ).format()
+        assert range_bounds and range_bounds[0] == ListFormat(expected_elt)
+
+    def test_range_set_threshold_is_tunable(self):
+        """``range_set_threshold`` controls the set-vs-bounded split."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(100)]
+
+        # threshold below the count -> bounded integer
+        low = FormatInfer.analyze(f.ast, range_set_threshold=10)
+        bounded = [b for e, b in low.by_expr.items() if type(e).__name__ == 'Range1'][0]
+        assert isinstance(bounded, ListFormat) and not isinstance(bounded.elt, SetFormat)
+        # threshold at/above the count -> exact value set
+        high = FormatInfer.analyze(f.ast, range_set_threshold=100)
+        exact = [b for e, b in high.by_expr.items() if type(e).__name__ == 'Range1'][0]
+        assert isinstance(exact, ListFormat) and isinstance(exact.elt, SetFormat)
 
     def test_enumerate_returns_listformat_of_int_value_tuple(self):
         """

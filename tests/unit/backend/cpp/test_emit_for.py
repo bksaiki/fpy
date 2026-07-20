@@ -33,7 +33,7 @@ class TestForRange:
         # (acc was assigned before the loop), so the pre-loop assign
         # declares and the body reassigns.
         assert 'double acc = 0;' in out
-        assert 'for (int64_t i = 0; i < 10; ++i) {' in out
+        assert 'for (int8_t i = 0; i < 10; ++i) {' in out
         assert 'acc = (acc + x);' in out
 
     def test_for_range2(self):
@@ -48,7 +48,7 @@ class TestForRange:
                 return acc
 
         out = _compile(CppCompiler(), f)
-        assert 'for (int64_t i = 2; i < 8; ++i) {' in out
+        assert 'for (int8_t i = 2; i < 8; ++i) {' in out
 
     def test_for_range3(self):
         """``range(start, stop, step)`` increments by ``step``."""
@@ -62,7 +62,7 @@ class TestForRange:
                 return acc
 
         out = _compile(CppCompiler(), f)
-        assert 'for (int64_t i = 0; i < 12; i += 3) {' in out
+        assert 'for (int8_t i = 0; i < 12; i += 3) {' in out
 
     def test_two_loops_share_independent_counters(self):
         """Two for-loops over different counters each declare-on-assign
@@ -79,8 +79,8 @@ class TestForRange:
                 return acc
 
         out = _compile(CppCompiler(), f)
-        assert 'for (int64_t i = 2; i < 8; ++i) {' in out
-        assert 'for (int64_t j = 0; j < 12; j += 3) {' in out
+        assert 'for (int8_t i = 2; i < 8; ++i) {' in out
+        assert 'for (int8_t j = 0; j < 12; j += 3) {' in out
 
     def test_nested_for(self):
         """A nested loop's counter declares in the inner header; the
@@ -99,8 +99,8 @@ class TestForRange:
         # Inner loop sits inside the outer loop's body, both folded
         # into their own headers.
         assert (
-            'for (int64_t i = 0; i < 3; ++i) {\n'
-            '        for (int64_t j = 0; j < 2; ++j) {'
+            'for (int8_t i = 0; i < 3; ++i) {\n'
+            '        for (int8_t j = 0; j < 2; ++j) {'
         ) in out
 
     def test_for_over_list(self):
