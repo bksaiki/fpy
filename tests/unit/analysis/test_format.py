@@ -361,6 +361,82 @@ class TestAbstractFormat():
                 assert fmt.pos_bound == b1 + b2
 
 
+    # ------------------------------------------------------------------
+    # Special-value membership (has_pos_inf / has_neg_inf / has_nan)
+
+    def test_specials_default_absent(self):
+        """Special values default to absent, preserving legacy semantics."""
+        fmt = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        assert not fmt.has_pos_inf
+        assert not fmt.has_neg_inf
+        assert not fmt.has_nan
+
+    def test_specials_distinguish_eq_and_hash(self):
+        """Flags participate in equality and hashing."""
+        base = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        with_nan = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_nan=True)
+        assert base != with_nan
+        assert hash(base) != hash(with_nan)
+        # same flags => equal and hash-equal
+        again = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_nan=True)
+        assert with_nan == again
+        assert hash(with_nan) == hash(again)
+
+    def test_specials_neg_swaps_infinities(self):
+        """Negation swaps +/-inf and preserves NaN."""
+        fmt = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True, has_nan=True)
+        neg = -fmt
+        assert neg.has_neg_inf and not neg.has_pos_inf
+        assert neg.has_nan
+
+    def test_specials_abs_folds_infinities(self):
+        """abs maps -inf to +inf and clears -inf."""
+        fmt = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_neg_inf=True, has_nan=True)
+        result = abs(fmt)
+        assert result.has_pos_inf and not result.has_neg_inf
+        assert result.has_nan
+
+    def test_specials_containment_implication(self):
+        """A member special value in self must exist in other."""
+        no_specials = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        with_nan = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_nan=True)
+        # a format with NaN is not contained in one without it
+        assert not (with_nan <= no_specials)
+        # but the reverse holds (dropping a special is fine)
+        assert no_specials <= with_nan
+
+    def test_specials_add_inf_minus_inf_is_nan(self):
+        """+inf + -inf produces NaN in the covering format."""
+        pos = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        neg = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_neg_inf=True)
+        result = pos + neg
+        assert result.has_pos_inf and result.has_neg_inf and result.has_nan
+
+    def test_specials_sub_inf_minus_inf_is_nan(self):
+        """+inf - +inf produces NaN in the covering format."""
+        a = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        b = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        result = a - b
+        # a.+inf - b.+inf = NaN; a.+inf - b.finite = +inf; finite - b.+inf = -inf
+        assert result.has_nan and result.has_pos_inf and result.has_neg_inf
+
+    def test_specials_mul_inf_times_zero_is_nan(self):
+        """inf * 0 is reachable (0 is always representable), forcing NaN."""
+        inf_fmt = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        finite = AbstractFormat(5, -3, fp.RealFloat.from_int(1))
+        result = inf_fmt * finite
+        assert result.has_nan
+        assert result.has_pos_inf and result.has_neg_inf
+
+    def test_specials_union_and_intersection(self):
+        """Union OR-s flags; intersection AND-s them."""
+        with_nan = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_nan=True)
+        with_inf = AbstractFormat(5, -3, fp.RealFloat.from_int(1), has_pos_inf=True)
+        union = with_nan | with_inf
+        assert union.has_nan and union.has_pos_inf
+        inter = with_nan & with_inf
+        assert not inter.has_nan and not inter.has_pos_inf
+
     def test_mul(self):
         precs: list[int | float] = [2, 4, 8, float('inf')]
         exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
