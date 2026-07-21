@@ -1060,9 +1060,23 @@ class _FormatInferInstance(Visitor):
         # ``F ⊆ scope_af`` case collapse into this single check —
         # single-sourced via :func:`round_is_identity` so external
         # consumers (e.g. ``RoundElim``) see the same notion.
-        if round_is_identity(exact, resolved):
-            return exact if isinstance(exact, SetFormat) else exact.format()
         scope_fmt = resolved.format()
+        if round_is_identity(exact, resolved):
+            if isinstance(exact, SetFormat):
+                return exact
+            # ``exact.format()`` can over-approximate *past* the scope — e.g.
+            # a non-negative bound has no unsigned float format, so it
+            # symmetrizes into a signed one that a cast to an unsigned scope
+            # would reject.  Keep the tight materialization only when it still
+            # fits the scope; otherwise fall back to the scope format (a sound
+            # superset of ``exact`` that is emittable under the context).
+            cand = exact.format()
+            if (isinstance(cand, AbstractableFormat)
+                    and isinstance(scope_fmt, AbstractableFormat)
+                    and not AbstractFormat.from_format(cand).contained_in(
+                        AbstractFormat.from_format(scope_fmt))):
+                return scope_fmt
+            return cand
         if isinstance(exact, SetFormat):
             # TODO: we can round each value in the set individually
             # to produce a precise image even when some values exceed the scope
