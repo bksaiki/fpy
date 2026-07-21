@@ -1096,6 +1096,44 @@ class TestFormatInfer:
         exact = [b for e, b in high.by_expr.items() if type(e).__name__ == 'Range1'][0]
         assert isinstance(exact, ListFormat) and isinstance(exact.elt, SetFormat)
 
+    @staticmethod
+    def _last_acc(info):
+        return [b for e, b in info.by_expr.items()
+                if type(e).__name__ == 'Var' and str(e.name) == 'acc'][-1]
+
+    def test_set_format_threshold_caps_growth(self):
+        """A SetFormat grown past the cap collapses to a bounded format."""
+        @fp.fpy
+        def f():
+            with fp.REAL:
+                acc = 0
+                for i in range(10):
+                    acc += i
+                return acc
+
+        # accumulates to a 91-value set — kept when the cap is high
+        high = FormatInfer.analyze(f.ast, set_format_threshold=256)
+        acc_hi = self._last_acc(high)
+        assert isinstance(acc_hi, SetFormat) and len(acc_hi.values) == 91
+        # collapses to a bounded (non-Set) format when the cap is low
+        low = FormatInfer.analyze(f.ast, set_format_threshold=8)
+        assert not isinstance(self._last_acc(low), SetFormat)
+
+    def test_multiplicative_reduction_stays_bounded(self):
+        """A multiplicative reduction must not blow up into a huge SetFormat
+        (without the cap this hangs the analysis)."""
+        @fp.fpy
+        def f():
+            with fp.REAL:
+                acc = 1
+                for p in [2.0, 3.0, 5.0, 7.0, 11.0, 13.0, 17.0, 19.0]:
+                    for i in range(8):
+                        acc = acc * p
+                return acc
+
+        info = self._run(f)
+        assert not isinstance(self._last_acc(info), SetFormat)
+
     def test_len_pins_known_size(self):
         """``len(xs)`` pins the exact size when it is statically known."""
         @fp.fpy

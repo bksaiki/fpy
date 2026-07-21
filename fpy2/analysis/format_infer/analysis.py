@@ -476,6 +476,8 @@ def exact_binop(
     lhs: 'FormatBound',
     rhs: 'FormatBound',
     op: Callable[[Any, Any], Any],
+    *,
+    cap: int | None = None,
 ) -> 'SetFormat | AbstractFormat | None':
     """Compute the exact unrounded result of an arithmetic binary op.
 
@@ -499,6 +501,12 @@ def exact_binop(
     consumed by downstream transforms (e.g.,
     :class:`fpy2.transform.RoundElim`) that need the unrounded
     image of a rounded operation.
+
+    When *cap* is given and the pointwise :class:`SetFormat` result would
+    exceed it, the result collapses to the covering :class:`AbstractFormat`
+    (or ``None`` if the values aren't dyadic).  This bounds the combinatorial
+    growth of repeated set arithmetic (e.g. a multiplicative reduction), which
+    is otherwise unbounded; callers pass their ``set_format_threshold``.
     """
     if not (
         isinstance(lhs, AbstractableFormatBound)
@@ -506,9 +514,11 @@ def exact_binop(
     ):
         return None
     if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
-        return SetFormat(frozenset(
-            op(va, vb) for va in lhs.values for vb in rhs.values
-        ))
+        result = frozenset(op(va, vb) for va in lhs.values for vb in rhs.values)
+        if cap is not None and len(result) > cap:
+            # collapse an over-large set to its covering AbstractFormat
+            return _setformat_to_abstract(SetFormat(result))
+        return SetFormat(result)
     lhs_zero = _is_zero_set(lhs)
     rhs_zero = _is_zero_set(rhs)
     if op is operator.mul and (lhs_zero or rhs_zero):
@@ -851,6 +861,7 @@ class _FormatInferInstance(Visitor):
     _return_fmt: FormatBound | None
     _loop_iter_limit: int
     _range_set_threshold: int
+    _set_format_threshold: int
     _widen: bool
 
     def __init__(
@@ -861,6 +872,7 @@ class _FormatInferInstance(Visitor):
         fn_fmt: FunctionFormat | None,
         loop_iter_limit: int,
         range_set_threshold: int,
+        set_format_threshold: int,
     ):
         self.func = func
         self.type_info = pre.type_info
@@ -890,6 +902,7 @@ class _FormatInferInstance(Visitor):
         self._return_fmt = None
         self._loop_iter_limit = loop_iter_limit
         self._range_set_threshold = range_set_threshold
+        self._set_format_threshold = set_format_threshold
         # When True, joins forced inside a saturated loop fixpoint widen
         # distinct scalar Formats to ``REAL_FORMAT`` instead of going through
         # an :class:`AbstractFormat` union (which has infinite ascending
@@ -918,7 +931,23 @@ class _FormatInferInstance(Visitor):
 
     def _join(self, s1: FormatBound, s2: FormatBound) -> FormatBound:
         """Join two formats, respecting the visitor's current widen state."""
-        return _join_bounds(s1, s2, widen=self._widen)
+        return self._cap_set(_join_bounds(s1, s2, widen=self._widen))
+
+    def _cap_set(self, fmt: FormatBound) -> FormatBound:
+        """Collapse an over-large :class:`SetFormat` to its covering
+        :class:`AbstractFormat`.
+
+        Set arithmetic and repeated joins can grow a :class:`SetFormat`
+        combinatorially (worst case a multiplicative reduction); once a set
+        exceeds ``set_format_threshold`` we replace it with the bounded
+        ``AbstractFormat`` covering the same values — a sound superset that
+        keeps the analysis (and its ``O(|set|)`` joins/fit-checks) from
+        blowing up.  Non-``SetFormat`` bounds pass through unchanged.
+        """
+        if isinstance(fmt, SetFormat) and len(fmt.values) > self._set_format_threshold:
+            af = _setformat_to_abstract(fmt)
+            return af if af is not None else REAL_FORMAT
+        return fmt
 
     def _resolve_active_ctx(
         self, e: ContextUseSite
@@ -1351,19 +1380,19 @@ class _FormatInferInstance(Visitor):
                 # :meth:`_bound_if_fits`.  Subsumes the legacy REAL-only
                 # fast path (REAL_FORMAT contains everything).
                 fitted = self._bound_if_fits(
-                    e, exact_binop(lhs, rhs, operator.add),
+                    e, exact_binop(lhs, rhs, operator.add, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
                     return fitted
             case Sub():
                 fitted = self._bound_if_fits(
-                    e, exact_binop(lhs, rhs, operator.sub),
+                    e, exact_binop(lhs, rhs, operator.sub, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
                     return fitted
             case Mul():
                 fitted = self._bound_if_fits(
-                    e, exact_binop(lhs, rhs, operator.mul),
+                    e, exact_binop(lhs, rhs, operator.mul, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
                     return fitted
@@ -1471,6 +1500,7 @@ class _FormatInferInstance(Visitor):
             fn_fmt=callee_signature,
             loop_iter_limit=self._loop_iter_limit,
             range_set_threshold=self._range_set_threshold,
+            set_format_threshold=self._set_format_threshold,
         ).analyze()
 
     # Comparison: produces a bool, so no numeric format
@@ -1895,6 +1925,16 @@ class FormatInfer:
     ``range_set_threshold`` parameter of :meth:`analyze`.
     """
 
+    DEFAULT_SET_FORMAT_THRESHOLD = 256
+    """
+    Default maximum size of a :class:`SetFormat` produced by set arithmetic or
+    joins.  Beyond this, the set collapses to the covering bounded
+    :class:`AbstractFormat` — a sound superset that bounds the otherwise
+    combinatorial growth of repeated set operations (e.g. a multiplicative
+    reduction).  Tunable via the ``set_format_threshold`` parameter of
+    :meth:`analyze`.
+    """
+
     @staticmethod
     def analyze(
         func: FuncDef,
@@ -1907,6 +1947,7 @@ class FormatInfer:
         fn_fmt: FunctionFormat | None = None,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
         range_set_threshold: int = DEFAULT_RANGE_SET_THRESHOLD,
+        set_format_threshold: int = DEFAULT_SET_FORMAT_THRESHOLD,
     ) -> FormatAnalysis:
         """
         Performs format analysis on an FPy function.
@@ -1970,6 +2011,11 @@ class FormatInfer:
                 pins its exact value set as a :class:`SetFormat`.  Larger
                 ranges fall back to the bounded integer format
                 ``A(inf, 0, b)``.
+            set_format_threshold:
+                Maximum size of a :class:`SetFormat` produced by set
+                arithmetic or joins before it collapses to the covering
+                bounded :class:`AbstractFormat`.  Bounds the combinatorial
+                growth of repeated set operations.
 
         Returns:
             A :class:`FormatAnalysis` whose ``by_def``, ``by_expr``,
@@ -2010,5 +2056,6 @@ class FormatInfer:
             fn_fmt=fn_fmt,
             loop_iter_limit=loop_iter_limit,
             range_set_threshold=range_set_threshold,
+            set_format_threshold=set_format_threshold,
         )
         return inst.analyze()
