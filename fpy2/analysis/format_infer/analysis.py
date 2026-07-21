@@ -939,14 +939,16 @@ class _FormatInferInstance(Visitor):
 
         Set arithmetic and repeated joins can grow a :class:`SetFormat`
         combinatorially (worst case a multiplicative reduction); once a set
-        exceeds ``set_format_threshold`` we replace it with the bounded
-        ``AbstractFormat`` covering the same values — a sound superset that
-        keeps the analysis (and its ``O(|set|)`` joins/fit-checks) from
-        blowing up.  Non-``SetFormat`` bounds pass through unchanged.
+        exceeds ``set_format_threshold`` we replace it with the concrete
+        :class:`Format` covering the same values — a sound superset that keeps
+        the analysis (and its ``O(|set|)`` joins/fit-checks) from blowing up.
+        Non-``SetFormat`` bounds pass through unchanged.
         """
         if isinstance(fmt, SetFormat) and len(fmt.values) > self._set_format_threshold:
             af = _setformat_to_abstract(fmt)
-            return af if af is not None else REAL_FORMAT
+            # materialize to a concrete Format (a valid FormatBound); a
+            # non-dyadic set can't be abstracted, so fall back to REAL_FORMAT
+            return af.format() if af is not None else REAL_FORMAT
         return fmt
 
     def _resolve_active_ctx(
