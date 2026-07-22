@@ -86,6 +86,8 @@ class WhileUnroll:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
+        if where is not None and not isinstance(where, int):
+            raise TypeError(f"Expected an \'int\' or None for where, got {where}")
         if not isinstance(times, int):
             raise TypeError(f"Expected an \'int\' for times, got {times}")
         if times < 0:
@@ -93,5 +95,15 @@ class WhileUnroll:
 
         unroller = _WhileUnroll(func, where, times)
         func = unroller.apply()
+        # A `where` that named no loop leaves the function unchanged; fail
+        # rather than silently no-op.  When `where` is out of range no loop
+        # matches, so no body is re-visited and `index` is the true loop
+        # count; an in-range `where` matches (so `index` exceeds it, even
+        # though re-visiting a matched loop's body can inflate the counter).
+        if where is not None and not (0 <= where < unroller.index):
+            raise ValueError(
+                f'where={where} does not correspond to a `while` loop; '
+                f'the function has {unroller.index} `while` loop(s)'
+            )
         SyntaxCheck.check(func, ignore_unknown=True)
         return func
