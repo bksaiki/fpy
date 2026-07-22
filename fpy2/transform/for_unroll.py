@@ -4,13 +4,15 @@ Unroller for `for` loops.
 Rounding-context safety
 -----------------------
 Unrolling introduces loop-control and index arithmetic (``len(t)``, the
-remainder ``n % k``, index offsets ``t[i + j]``).  These are *integer*
+remainder ``n % k``, index offsets ``i + j``).  These are *integer*
 computations, but FPy rounds every arithmetic operation under the active
 context (**E-Add**): under a low-precision float context an offset or bound
 could round to the wrong value and read out of bounds.  Every such inserted
 computation is therefore wrapped in ``with fp.INTEGER:`` (see
-:func:`_integer_ctx`).  The iterable and the loop body, by contrast, run
-under the *ambient* context so their rounding is unchanged.
+:func:`_integer_ctx`); the element reads then index with the resulting exact
+values, so the reads themselves need no special context.  The iterable and
+the loop body, by contrast, run under the *ambient* context so their rounding
+is unchanged.
 """
 
 import dataclasses
@@ -31,10 +33,14 @@ from ..number import INTEGER
 from ..utils import Gensym
 
 class ForUnrollStrategy(enum.Enum):
-    """Strategy for dealing with the loop remainder."""
+    """Strategy for dealing with a length that is not a multiple of the
+    unroll factor ``k = times + 1``."""
 
     STRICT = 0
-    """Asserts that the loop can be unrolled without remainder."""
+    """Require the length to be an exact multiple of ``k`` (no remainder):
+    verified at compile time when the length is statically known (a
+    provably-indivisible length raises), else guarded by a runtime
+    ``assert len(t) % k == 0``."""
 
     PEEL = 1
     """Unroll the largest multiple-of-``k`` prefix, then handle the
@@ -353,6 +359,13 @@ class _ForUnroll(DefaultTransformVisitor):
 class ForUnroll:
     """
     Unrolling for `for` loops.
+
+    A ``for`` loop over an iterable is rewritten to consume ``k = times + 1``
+    consecutive elements per iteration of the rewritten loop.  The iterable is
+    materialized once and indexed; loop-control and index arithmetic run under
+    the exact integer context while the iterable and body keep their ambient
+    rounding (see the module docstring).  When the array-size analysis proves
+    the iterable's length, the remainder handling is resolved at compile time.
     """
 
     @staticmethod
@@ -376,10 +389,13 @@ class ForUnroll:
             The index of the `for` loop to unroll. If `None`, unroll all
             `for` loops.
         times : int
-            The number of times to unroll the loop.
+            Number of *extra* body copies per iteration; the unroll factor is
+            ``k = times + 1`` elements consumed per rewritten iteration.
+            ``times == 0`` leaves the loop unchanged.
         strategy : ForUnrollStrategy
-            How to handle a length that is not a multiple of the unroll
-            factor (see :class:`ForUnrollStrategy`).
+            How to handle a length that is not a multiple of ``k`` (see
+            :class:`ForUnrollStrategy`).  Defaults to ``PEEL``, which is
+            correct for any length; ``STRICT`` instead requires divisibility.
         reaching_defs : ReachingDefsAnalysis | None
             Pre-computed reaching-definitions analysis (for fresh names).
         array_size : ArraySizeAnalysis | None
