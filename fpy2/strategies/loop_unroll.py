@@ -41,7 +41,7 @@ def unroll_for(
     where: int | None = None,
     times: int = 1,
     *,
-    strategy: ForUnrollStrategy = ForUnrollStrategy.STRICT,
+    strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
     temp_id: str = 't',
     len_id: str = 'n',
     idx_id: str = 'i'

@@ -92,6 +92,65 @@ class TestForUnrollPeel():
 
         _check_peel(f, [(1.5, 2.5), (0.1, 0.3), (3.0, 7.0)], times_range=(1,))
 
+    def test_static_divisible_no_runtime_check(self):
+        # A statically-known length divisible by k needs no `len`/`fmod` and
+        # no remainder region — just the main loop over a literal bound.
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(8):
+                x = x + i
+            return x
+
+        out = ForUnroll.apply(r.ast, times=1, strategy=PEEL)   # k=2, 8 % 2 == 0
+        txt = out.format()
+        assert 'len(' not in txt and 'fmod(' not in txt
+        assert txt.count('for ') == 1                          # main loop only
+        assert r() == r.with_ast(out)()
+
+    def test_static_non_divisible_peels_remainder(self):
+        # A known length not divisible by k: literal main bound plus the
+        # leftover peeled straight-line (still no residual loop, no len/fmod).
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(7):
+                x = x + i
+            return x
+
+        out = ForUnroll.apply(r.ast, times=1, strategy=PEEL)   # k=2, 7 % 2 == 1
+        txt = out.format()
+        assert 'len(' not in txt and 'fmod(' not in txt
+        assert txt.count('for ') == 1                          # main loop; remainder is straight-line
+        assert r() == r.with_ast(out)()
+
+    def test_static_full_unroll(self):
+        # When k exceeds the known length, there is no main region at all:
+        # the loop becomes fully straight-line.
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(3):
+                x = x + i
+            return x
+
+        out = ForUnroll.apply(r.ast, times=7, strategy=PEEL)   # k=8 > 3
+        txt = out.format()
+        assert txt.count('for ') == 0                          # no loop
+        assert r() == r.with_ast(out)()
+
+    def test_static_empty(self):
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(0):
+                x = x + i
+            return x
+
+        out = ForUnroll.apply(r.ast, times=1, strategy=PEEL)
+        assert out.format().count('for ') == 0                 # nothing to iterate
+        assert r() == r.with_ast(out)()
+
 
 class TestForUnroll():
 

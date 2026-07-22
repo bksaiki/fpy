@@ -19,9 +19,11 @@ import enum
 from ..analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
+    ListSize,
     ReachingDefs,
     ReachingDefsAnalysis,
     SyntaxCheck,
+    concrete_size,
 )
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
@@ -190,37 +192,103 @@ class _ForUnroll(DefaultTransformVisitor):
             case _:
                 raise RuntimeError(f'Unexpected target {target}')
 
+    def _static_size(self, iterable: Expr) -> int | None:
+        """The statically-known length of *iterable* (the original AST node),
+        or ``None`` if the array-size analysis could not pin it down."""
+        if self.array_size is None:
+            return None
+        bound = self.array_size.by_expr.get(iterable)
+        if isinstance(bound, ListSize):
+            return concrete_size(bound.size)
+        return None
+
+    def _body_copy(
+        self,
+        target: Id | TupleBinding,
+        t: NamedId,
+        index: Expr,
+        *,
+        body: StmtBlock,
+        loc: Location | None
+    ) -> list[Stmt]:
+        """One unrolled iteration: bind *target* to ``t[index]`` then run a
+        fresh copy of *body*.  *index* must already be exact (a bare variable
+        or a literal); any arithmetic offset is precomputed under the integer
+        context by the caller, so no rounding occurs in the read itself.  The
+        read must stay adjacent to its body — reordering reads ahead of bodies
+        is unsound when a body mutates the iterable in place."""
+        stmts: list[Stmt] = [_assign(self._copy_target(target), ListRef(_var(t), index, None))]
+        stmts.extend(_clone_block(body).stmts)
+        return stmts
+
+    def _main_loop(
+        self,
+        t: NamedId,
+        bound: Expr,
+        k: int,
+        target: Id | TupleBinding,
+        body: StmtBlock,
+        loc: Location | None
+    ) -> ForStmt:
+        """The unrolled loop over ``range(0, bound, k)`` consuming ``k``
+        consecutive elements (``t[i]``, ``t[i+1]``, …) per iteration.
+
+        The ``k - 1`` offset indices are computed together in a single
+        exact-integer block, so the element reads use plain-variable indices
+        (no per-read rounding context).  The reads stay interleaved with their
+        bodies — see :meth:`_body_copy`."""
+        idx = self.gensym.refresh(self.idx_id)
+
+        # group the index arithmetic: off_j = idx + j, all under `with INTEGER`
+        offsets = [self.gensym.refresh(self.idx_id) for _ in range(1, k)]
+        offset_defs = [_assign(off, _add(_var(idx), _int(j + 1))) for j, off in enumerate(offsets)]
+
+        main_body: list[Stmt] = []
+        if offset_defs:
+            main_body.append(_integer_ctx(offset_defs, loc))
+        # `idx` (straight from `range`) and each `off_j` are exact integers
+        for index in [_var(idx)] + [_var(off) for off in offsets]:
+            main_body.extend(self._body_copy(target, t, index, body=body, loc=loc))
+
+        return ForStmt(idx, _range(_int(0), bound, _int(k)), StmtBlock(main_body), loc)
+
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> tuple[Stmt, None]:
-        # ``k`` consecutive elements are consumed per iteration of the
-        # rewritten loop (``times`` extra copies on top of the original).
-        k = self.times + 1
         if (self.where is None or self.index == self.where) and self.times > 0:
             self.index += 1
+            # ``k`` consecutive elements are consumed per iteration of the
+            # rewritten loop (``times`` extra copies on top of the original).
+            k = self.times + 1
             iterable = self._visit_expr(stmt.iterable, ctx)
             body, _ = self._visit_block(stmt.body, ctx)
 
             match self.strategy:
                 case ForUnrollStrategy.STRICT:
-                    return self._build_strict(stmt, iterable, body, k, ctx), None
+                    emitted = self._build_strict(stmt, iterable, body, k)
                 case ForUnrollStrategy.PEEL:
-                    return self._build_peel(stmt, iterable, body, k, ctx), None
+                    emitted = self._build_peel(stmt, iterable, body, k)
                 case _:
                     raise RuntimeError(f'unknown strategy `{self.strategy}`')
+
+            # The loop expands to several statements: emit all but the last
+            # into the enclosing block and return the last as the replacement.
+            for s in emitted[:-1]:
+                ctx.stmts.append(s)
+            return emitted[-1], None
         else:
             self.index += 1
             return super()._visit_for(stmt, ctx)
 
-    def _build_strict(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int, ctx: _Ctx) -> Stmt:
+    def _build_strict(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int) -> list[Stmt]:
         t = self.gensym.refresh(self.temp_id)
         n = self.gensym.refresh(self.len_id)
         idx = self.gensym.refresh(self.idx_id)
 
         # need to check that len(t) % k == 0
-        ctx.stmts.append(_integer_ctx([
+        prelude = _integer_ctx([
             _assign(t, iterable),
             _assign(n, _len(_var(t))),
             AssertStmt(_eq(_fmod(_var(n), _int(k)), _int(0)), None, None),
-        ], stmt.loc))
+        ], stmt.loc)
 
         # original iteration uses (target, body) as is
         body_stmts: list[Stmt] = list(body.stmts)
@@ -240,72 +308,57 @@ class _ForUnroll(DefaultTransformVisitor):
 
         unpack_stmt = _integer_ctx(assign_stmts, stmt.loc)
 
-        return ForStmt(
+        loop = ForStmt(
             idx,
             _range(_int(0), _var(n), _int(k)),
             StmtBlock([unpack_stmt] + body_stmts),
             stmt.loc
         )
+        return [prelude, loop]
 
-    def _build_peel(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int, ctx: _Ctx) -> Stmt:
+    def _build_peel(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int) -> list[Stmt]:
         # Unroll the largest multiple-of-``k`` prefix ``[0, m)`` and run the
-        # remaining ``[m, n)`` elements one at a time.  Correct for any length.
+        # remaining ``[m, n)`` elements separately.  Correct for any length.
+        #
+        # Materialize the iterable under the *ambient* context (its elements
+        # must round as they did in the original loop); everything downstream
+        # indexes the temporary ``t``.
         t = self.gensym.refresh(self.temp_id)
-        n = self.gensym.refresh(self.len_id)
-        m = self.gensym.fresh('m')
-        main_idx = self.gensym.refresh(self.idx_id)
-        rem_idx = self.gensym.refresh(self.idx_id)
+        emitted: list[Stmt] = [_assign(t, iterable)]
 
-        # prelude: materialize the iterable under the *ambient* context (its
-        # elements must round as they did in the original loop), then compute
-        # the length and main-region bound under the exact integer context.
-        ctx.stmts.append(_assign(t, iterable))
-        ctx.stmts.append(_integer_ctx([
-            _assign(n, _len(_var(t))),
-            _assign(m, _sub(_var(n), _fmod(_var(n), _int(k)))),
-        ], stmt.loc))
-
-        # main loop: `k` consecutive elements per iteration.  Each copy binds
-        # the loop target to `t[main_idx + j]` and then runs a fresh body; the
-        # target is reassigned (not renamed), matching the original loop's
-        # per-iteration rebinding.
-        main_body: list[Stmt] = []
-        for j in range(k):
-            if j == 0:
-                # `main_idx` comes straight from `range` (an exact integer),
-                # so no index arithmetic and no exact context is needed.
-                main_body.append(
-                    _assign(self._copy_target(stmt.target), ListRef(_var(t), _var(main_idx), None))
+        size = self._static_size(stmt.iterable)
+        if size is not None:
+            # Statically-known length: the bound and remainder indices are
+            # compile-time constants, so no `len`, no `fmod`, and the leftover
+            # is peeled straight-line (no residual loop).
+            m = (size // k) * k
+            if m > 0:
+                emitted.append(self._main_loop(t, _int(m), k, stmt.target, body, stmt.loc))
+            for p in range(m, size):
+                # literal index: exact by construction, no integer context
+                emitted.extend(
+                    self._body_copy(stmt.target, t, _int(p), exact=False, body=body, loc=stmt.loc)
                 )
-            else:
-                # `main_idx + j` must be exact (see rounding-context safety);
-                # the element read itself introduces no rounding.
-                main_body.append(_integer_ctx([
-                    _assign(
-                        self._copy_target(stmt.target),
-                        ListRef(_var(t), _add(_var(main_idx), _int(j)), None)
-                    )
-                ], stmt.loc))
-            main_body.extend(_clone_block(body).stmts)
+        else:
+            # Unknown length: compute the main-region bound `m = n - n % k`
+            # under the exact integer context and run a residual loop.
+            n = self.gensym.refresh(self.len_id)
+            m = self.gensym.fresh('m')
+            emitted.append(_integer_ctx([
+                _assign(n, _len(_var(t))),
+                _assign(m, _sub(_var(n), _fmod(_var(n), _int(k)))),
+            ], stmt.loc))
+            emitted.append(self._main_loop(t, _var(m), k, stmt.target, body, stmt.loc))
 
-        ctx.stmts.append(ForStmt(
-            main_idx,
-            _range(_int(0), _var(m), _int(k)),
-            StmtBlock(main_body),
-            stmt.loc
-        ))
+            rem_idx = self.gensym.refresh(self.idx_id)
+            rem_body = self._body_copy(
+                stmt.target, t, _var(rem_idx), exact=False, body=body, loc=stmt.loc
+            )
+            emitted.append(ForStmt(
+                rem_idx, _range(_var(m), _var(n), _int(1)), StmtBlock(rem_body), stmt.loc
+            ))
 
-        # remainder loop: the leftover `[m, n)` elements, one per iteration.
-        rem_body: list[Stmt] = [
-            _assign(self._copy_target(stmt.target), ListRef(_var(t), _var(rem_idx), None))
-        ]
-        rem_body.extend(_clone_block(body).stmts)
-        return ForStmt(
-            rem_idx,
-            _range(_var(m), _var(n), _int(1)),
-            StmtBlock(rem_body),
-            stmt.loc
-        )
+        return emitted
 
     def _visit_block(self, block: StmtBlock, ctx: _Ctx | None):
         block_ctx = _Ctx.default()
@@ -329,7 +382,7 @@ class ForUnroll:
         func: FuncDef,
         where: int | None = None,
         times: int = 1,
-        strategy: ForUnrollStrategy = ForUnrollStrategy.STRICT,
+        strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
         reaching_defs: ReachingDefsAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,
         temp_id: NamedId | None = None,
