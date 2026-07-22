@@ -241,8 +241,8 @@ class _ForUnroll(DefaultTransformVisitor):
         # Compute the k-1 offset indices `idx + j` together under `with INTEGER`
         # so the reads below can index with plain, already-exact variables.
         offsets = [self.gensym.refresh(self.idx_id) for _ in range(1, k)]
-        offset_defs = [_assign(off, _add(_var(idx), _int(j)))
-                       for j, off in zip(range(1, k), offsets)]
+        offset_defs: list[Stmt] = [_assign(off, _add(_var(idx), _int(j)))
+                                   for j, off in zip(range(1, k), offsets)]
 
         main_body: list[Stmt] = [_integer_ctx(offset_defs, loc)] if offset_defs else []
         for index in [_var(idx), *(_var(off) for off in offsets)]:
