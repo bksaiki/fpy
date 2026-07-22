@@ -2,7 +2,325 @@
 Unit tests for loop unrolling.
 """
 
+import re
+from collections import Counter
+
 import fpy2 as fp
+
+from fpy2.transform import ForUnroll, ForUnrollStrategy
+
+PEEL = ForUnrollStrategy.PEEL
+STRICT = ForUnrollStrategy.STRICT
+
+
+def _check_peel(fn, inputs, times_range=(1, 2, 3, 4)):
+    """Unroll `fn` with the PEEL strategy for several factors and assert the
+    result is semantically identical to the original on every input (a
+    name-independent correctness check, executed via the interpreter)."""
+    for times in times_range:
+        out = ForUnroll.apply(fn.ast, times=times, strategy=PEEL)
+        unrolled = fn.with_ast(out)
+        for args in inputs:
+            expect = fn(*args)
+            actual = unrolled(*args)
+            assert expect == actual, (
+                f'times={times} args={args}: expected {expect}, got {actual}'
+            )
+
+
+class TestForUnrollPeel():
+    """PEEL strategy: unroll the multiple-of-k prefix, run the remainder
+    separately. Correct for any length, so verified by execution."""
+
+    def test_unknown_length(self):
+        # A list parameter has no statically-known length, so this exercises
+        # the residual-loop path.
+        @fp.fpy
+        def sumlist(xs: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                acc = acc + x
+            return acc
+
+        _check_peel(sumlist, [
+            ([],),
+            ([1.0],),
+            ([1.0, 2.0, 3.0],),           # non-divisible by several factors
+            ([1.0, 2.0, 3.0, 4.0],),
+            ([float(i) for i in range(10)],),
+        ])
+
+    def test_range_iterable(self):
+        @fp.fpy
+        def sumrange() -> fp.Real:
+            x = 0
+            for i in range(32):
+                x = x + i
+            return x
+
+        _check_peel(sumrange, [()], times_range=(1, 3, 7))
+
+    def test_non_divisible_length(self):
+        @fp.fpy
+        def sumrange5() -> fp.Real:
+            x = 0
+            for i in range(5):
+                x = x + i
+            return x
+
+        _check_peel(sumrange5, [()])
+
+    def test_tuple_target(self):
+        @fp.fpy
+        def dot(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for a, b in zip(xs, ys):
+                acc = acc + a * b
+            return acc
+
+        _check_peel(dot, [
+            ([], []),
+            ([1.0, 2.0], [3.0, 4.0]),
+            ([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]),
+        ])
+
+    def test_iterable_evaluated_at_ambient_context(self):
+        # The iterable computes rounded values inline; it must be materialized
+        # under the ambient context, not the (integer) index context.
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            s = 0.0
+            for x in [a * b, a + b]:
+                s = s + x
+            return s
+
+        _check_peel(f, [(1.5, 2.5), (0.1, 0.3), (3.0, 7.0)], times_range=(1,))
+
+    def test_static_divisible_no_runtime_check(self):
+        # A statically-known length divisible by k needs no `len`/`fmod` and
+        # no remainder region — just the main loop over a literal bound.
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(8):
+                x = x + i
+            return x
+
+        out = ForUnroll.apply(r.ast, times=1, strategy=PEEL)   # k=2, 8 % 2 == 0
+        txt = out.format()
+        assert 'len(' not in txt and 'fmod(' not in txt
+        assert txt.count('for ') == 1                          # main loop only
+        assert r() == r.with_ast(out)()
+
+    def test_static_non_divisible_peels_remainder(self):
+        # A known length not divisible by k: literal main bound plus the
+        # leftover peeled straight-line (still no residual loop, no len/fmod).
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(7):
+                x = x + i
+            return x
+
+        out = ForUnroll.apply(r.ast, times=1, strategy=PEEL)   # k=2, 7 % 2 == 1
+        txt = out.format()
+        assert 'len(' not in txt and 'fmod(' not in txt
+        assert txt.count('for ') == 1                          # main loop; remainder is straight-line
+        assert r() == r.with_ast(out)()
+
+    def test_static_full_unroll(self):
+        # When k exceeds the known length, there is no main region at all:
+        # the loop becomes fully straight-line.
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(3):
+                x = x + i
+            return x
+
+        out = ForUnroll.apply(r.ast, times=7, strategy=PEEL)   # k=8 > 3
+        txt = out.format()
+        assert txt.count('for ') == 0                          # no loop
+        assert r() == r.with_ast(out)()
+
+    def test_static_empty(self):
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(0):
+                x = x + i
+            return x
+
+        out = ForUnroll.apply(r.ast, times=1, strategy=PEEL)
+        assert out.format().count('for ') == 0                 # nothing to iterate
+        assert r() == r.with_ast(out)()
+
+
+class TestForUnrollMutation():
+    """Regression: a body that mutates the iterable in place. Reads must stay
+    interleaved with their bodies (grouping reads ahead of bodies miscompiles
+    this), so both strategies must match the original."""
+
+    def test_in_place_mutation(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                xs[1] = 99.0     # in-place mutation of the iterable
+                s = s + x
+            return s
+
+        for strategy in (STRICT, PEEL):
+            for times in (1, 3):
+                # length 4 keeps STRICT's divisibility precondition satisfied
+                out = ForUnroll.apply(f.ast, times=times, strategy=strategy)
+                expect = f([10.0, 20.0, 30.0, 40.0])
+                actual = f.with_ast(out)([10.0, 20.0, 30.0, 40.0])
+                assert expect == actual, (strategy, times, expect, actual)
+
+
+class TestForUnrollStrict():
+    """STRICT strategy specifics (beyond the example round-trip tests)."""
+
+    def test_static_non_divisible_raises(self):
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(5):
+                x = x + i
+            return x
+
+        # 5 is not a multiple of k=2, and the length is statically known.
+        try:
+            ForUnroll.apply(r.ast, times=1, strategy=STRICT)
+            assert False, 'expected a ValueError for a provably-indivisible length'
+        except ValueError:
+            pass
+
+    def test_unknown_length_keeps_assert(self):
+        @fp.fpy
+        def sumlist(xs: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                acc = acc + x
+            return acc
+
+        txt = ForUnroll.apply(sumlist.ast, times=1, strategy=STRICT).format()
+        assert 'fmod(' in txt and 'len(' in txt          # runtime divisibility assert
+        # divisible input runs correctly
+        assert sumlist([1.0, 2.0, 3.0, 4.0]) == \
+            sumlist.with_ast(ForUnroll.apply(sumlist.ast, times=1, strategy=STRICT))([1.0, 2.0, 3.0, 4.0])
+
+
+class TestForUnrollNested():
+    """Nested-loop unrolling: the inner loop's transform-generated temporaries
+    must be fresh in every copy of the outer body (no name reused across
+    unrolled iterations), while loop-carried and live-out user variables keep
+    their names."""
+
+    def test_nested_semantics(self):
+        @fp.fpy
+        def nested(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                for y in ys:
+                    s = s + x * y
+            return s
+
+        _check_peel(nested, [
+            ([1.0, 2.0, 3.0], [4.0, 5.0]),
+            ([1.0, 2.0], [3.0, 4.0, 5.0, 6.0]),
+            ([], [1.0]),
+        ])
+
+    def test_generated_temps_are_unique(self):
+        @fp.fpy
+        def nested(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                for y in ys:
+                    s = s + x * y
+            return s
+
+        txt = ForUnroll.apply(nested.ast, times=1, strategy=PEEL).format()
+        # every transform-generated temp (t*/n*/m*/i<digits>) is assigned once
+        gen = [a for a in re.findall(r'^\s*([A-Za-z_][A-Za-z0-9_]*) =', txt, re.M)
+               if re.fullmatch(r'(t|n|m|i)\d+', a)]
+        dupes = [name for name, c in Counter(gen).items() if c > 1]
+        assert not dupes, f'generated temps reused across copies: {dupes}'
+
+    def test_live_out_body_var_preserved(self):
+        # `last` is written in the body and read after the loop; it must NOT be
+        # freshened away (it is a user variable, not transform-generated).
+        @fp.fpy
+        def liveout(xs: list[fp.Real]) -> fp.Real:
+            last = 0.0
+            for x in xs:
+                last = x
+            return last
+
+        _check_peel(liveout, [([1.0, 2.0, 3.0, 4.0, 5.0],), ([9.0],), ([],)])
+
+
+class TestForUnrollWhere():
+    """`where` selects a single loop by pre-order index; an index that names
+    no loop is a caller error, not a silent no-op."""
+
+    def test_out_of_range_raises(self):
+        @fp.fpy
+        def one_loop(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:      # the only for loop -> index 0
+                s = s + x
+            return s
+
+        for bad in (1, 2, 5):
+            try:
+                ForUnroll.apply(one_loop.ast, where=bad, times=1)
+                assert False, f'expected ValueError for where={bad}'
+            except ValueError:
+                pass
+
+    def test_negative_raises(self):
+        @fp.fpy
+        def one_loop(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                s = s + x
+            return s
+
+        try:
+            ForUnroll.apply(one_loop.ast, where=-1, times=1)
+            assert False, 'expected ValueError for where=-1'
+        except ValueError:
+            pass
+
+    def test_no_loops_raises(self):
+        @fp.fpy
+        def no_loop(x: fp.Real) -> fp.Real:
+            return x + 1.0
+
+        try:
+            ForUnroll.apply(no_loop.ast, where=0, times=1)
+            assert False, 'expected ValueError: no loop at index 0'
+        except ValueError:
+            pass
+
+    def test_valid_where_selects_one_loop(self):
+        @fp.fpy
+        def two_loops(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                s = s + x
+            for x in xs:
+                s = s + x
+            return s
+
+        # where=1 is in range -> no error, and semantics preserved
+        out = ForUnroll.apply(two_loops.ast, where=1, times=1, strategy=PEEL)
+        for data in ([1.0, 2.0, 3.0, 4.0], [], [5.0]):
+            assert two_loops(data) == two_loops.with_ast(out)(data)
+
 
 class TestForUnroll():
 
@@ -39,16 +357,14 @@ class TestForUnroll():
         @fp.fpy
         def test_expect():
             x = 0
-            with fp.INTEGER:
-                t = range(32)
-                n = len(t)
-                assert fp.fmod(n, 2) == 0
-            for i2 in range(0, n, 2):
-                with fp.INTEGER:
-                    i = t[i2]
-                    i3 = t[i2 + 1]
+            t = range(32)                # length 32 is statically known:
+            for i2 in range(0, 32, 2):   # no len/assert, literal bound
+                with fp.INTEGER:         # offset indices grouped
+                    i3 = i2 + 1
+                i = t[i2]                # reads interleaved with bodies,
+                x += i                   # target reassigned (not renamed)
+                i = t[i3]
                 x += i
-                x += i3
             return x
 
         h = fp.transform.ForUnroll.apply(test.ast, times=1)
@@ -69,20 +385,20 @@ class TestForUnroll():
         @fp.fpy
         def test_expect():
             x = 0
-            with fp.INTEGER:
-                t = range(32)
-                n = len(t)
-                assert fp.fmod(n, 4) == 0
-            for i2 in range(0, n, 4):
+            t = range(32)
+            for i2 in range(0, 32, 4):
                 with fp.INTEGER:
-                    i = t[i2]
-                    i3 = t[i2 + 1]
-                    i4 = t[i2 + 2]
-                    i5 = t[i2 + 3]
+                    i3 = i2 + 1
+                    i4 = i2 + 2
+                    i5 = i2 + 3
+                i = t[i2]
                 x += i
-                x += i3
-                x += i4
-                x += i5
+                i = t[i3]
+                x += i
+                i = t[i4]
+                x += i
+                i = t[i5]
+                x += i
             return x
 
         h = fp.transform.ForUnroll.apply(test.ast, times=3)
