@@ -67,6 +67,9 @@ def _int(value: int) -> Integer:
 def _add(a: Expr, b: Expr) -> Add:
     return Add(a, b, None)
 
+def _sub(a: Expr, b: Expr) -> Sub:
+    return Sub(a, b, None)
+
 def _len(xs: Expr) -> Len:
     return Len(_var(NamedId('len')), xs, None)
 
@@ -87,6 +90,12 @@ def _integer_ctx(stmts: list[Stmt], loc: Location | None) -> ContextStmt:
     loop-control and index arithmetic must be evaluated (see the module
     docstring on rounding-context safety)."""
     return ContextStmt(UnderscoreId(), ForeignVal(INTEGER, None), StmtBlock(stmts), loc)
+
+def _clone_block(block: StmtBlock) -> StmtBlock:
+    """A structurally-fresh copy of *block*, so each unrolled body occupies
+    distinct AST nodes (a plain transform visit rebuilds every node)."""
+    block, _ = DefaultTransformVisitor()._visit_block(block, None)
+    return block
 
 
 class _ForUnroll(DefaultTransformVisitor):
@@ -168,6 +177,19 @@ class _ForUnroll(DefaultTransformVisitor):
             case _:
                 raise RuntimeError(f'Unexpected target {target}')
 
+    def _copy_target(self, target: Id | TupleBinding) -> Id | TupleBinding:
+        """A fresh copy of a loop target with the *same* names.  ``Id``s are
+        value-like and shared verbatim (as the base transform visitor does);
+        a ``TupleBinding`` is rebuilt so no node is shared between the copies
+        it appears in."""
+        match target:
+            case Id():
+                return target
+            case TupleBinding():
+                return TupleBinding([self._copy_target(e) for e in target.elts], target.loc)
+            case _:
+                raise RuntimeError(f'Unexpected target {target}')
+
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> tuple[Stmt, None]:
         # ``k`` consecutive elements are consumed per iteration of the
         # rewritten loop (``times`` extra copies on top of the original).
@@ -177,51 +199,113 @@ class _ForUnroll(DefaultTransformVisitor):
             iterable = self._visit_expr(stmt.iterable, ctx)
             body, _ = self._visit_block(stmt.body, ctx)
 
-            t = self.gensym.refresh(self.temp_id)
-            n = self.gensym.refresh(self.len_id)
-            idx = self.gensym.refresh(self.idx_id)
             match self.strategy:
                 case ForUnrollStrategy.STRICT:
-                    # need to check that len(t) % k == 0
-                    ctx.stmts.append(_integer_ctx([
-                        _assign(t, iterable),
-                        _assign(n, _len(_var(t))),
-                        AssertStmt(_eq(_fmod(_var(n), _int(k)), _int(0)), None, None),
-                    ], stmt.loc))
+                    return self._build_strict(stmt, iterable, body, k, ctx), None
                 case ForUnrollStrategy.PEEL:
-                    raise NotImplementedError('PEEL strategy is not yet implemented')
+                    return self._build_peel(stmt, iterable, body, k, ctx), None
                 case _:
                     raise RuntimeError(f'unknown strategy `{self.strategy}`')
-
-            # original iteration uses (target, body) as is
-            body_stmts: list[Stmt] = list(body.stmts)
-            assign_stmts: list[Stmt] = [
-                _assign(stmt.target, ListRef(_var(t), _var(idx), None))
-            ]
-
-            for i in range(self.times):
-                # unrolled iteration uses (target, body) with target renamed
-                target, subst = self._refresh(stmt.target)
-                renamed_body = RenameTarget.apply_block(body, subst)
-                body_stmts.extend(renamed_body.stmts)
-                assign_stmts.append(_assign(
-                    target,
-                    ListRef(_var(t), _add(_var(idx), _int(i + 1)), None)
-                ))
-
-            unpack_stmt = _integer_ctx(assign_stmts, stmt.loc)
-
-            stmt = ForStmt(
-                idx,
-                _range(_int(0), _var(n), _int(k)),
-                StmtBlock([unpack_stmt] + body_stmts),
-                stmt.loc
-            )
-
-            return stmt, None
         else:
             self.index += 1
             return super()._visit_for(stmt, ctx)
+
+    def _build_strict(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int, ctx: _Ctx) -> Stmt:
+        t = self.gensym.refresh(self.temp_id)
+        n = self.gensym.refresh(self.len_id)
+        idx = self.gensym.refresh(self.idx_id)
+
+        # need to check that len(t) % k == 0
+        ctx.stmts.append(_integer_ctx([
+            _assign(t, iterable),
+            _assign(n, _len(_var(t))),
+            AssertStmt(_eq(_fmod(_var(n), _int(k)), _int(0)), None, None),
+        ], stmt.loc))
+
+        # original iteration uses (target, body) as is
+        body_stmts: list[Stmt] = list(body.stmts)
+        assign_stmts: list[Stmt] = [
+            _assign(stmt.target, ListRef(_var(t), _var(idx), None))
+        ]
+
+        for i in range(self.times):
+            # unrolled iteration uses (target, body) with target renamed
+            target, subst = self._refresh(stmt.target)
+            renamed_body = RenameTarget.apply_block(body, subst)
+            body_stmts.extend(renamed_body.stmts)
+            assign_stmts.append(_assign(
+                target,
+                ListRef(_var(t), _add(_var(idx), _int(i + 1)), None)
+            ))
+
+        unpack_stmt = _integer_ctx(assign_stmts, stmt.loc)
+
+        return ForStmt(
+            idx,
+            _range(_int(0), _var(n), _int(k)),
+            StmtBlock([unpack_stmt] + body_stmts),
+            stmt.loc
+        )
+
+    def _build_peel(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int, ctx: _Ctx) -> Stmt:
+        # Unroll the largest multiple-of-``k`` prefix ``[0, m)`` and run the
+        # remaining ``[m, n)`` elements one at a time.  Correct for any length.
+        t = self.gensym.refresh(self.temp_id)
+        n = self.gensym.refresh(self.len_id)
+        m = self.gensym.fresh('m')
+        main_idx = self.gensym.refresh(self.idx_id)
+        rem_idx = self.gensym.refresh(self.idx_id)
+
+        # prelude: materialize the iterable under the *ambient* context (its
+        # elements must round as they did in the original loop), then compute
+        # the length and main-region bound under the exact integer context.
+        ctx.stmts.append(_assign(t, iterable))
+        ctx.stmts.append(_integer_ctx([
+            _assign(n, _len(_var(t))),
+            _assign(m, _sub(_var(n), _fmod(_var(n), _int(k)))),
+        ], stmt.loc))
+
+        # main loop: `k` consecutive elements per iteration.  Each copy binds
+        # the loop target to `t[main_idx + j]` and then runs a fresh body; the
+        # target is reassigned (not renamed), matching the original loop's
+        # per-iteration rebinding.
+        main_body: list[Stmt] = []
+        for j in range(k):
+            if j == 0:
+                # `main_idx` comes straight from `range` (an exact integer),
+                # so no index arithmetic and no exact context is needed.
+                main_body.append(
+                    _assign(self._copy_target(stmt.target), ListRef(_var(t), _var(main_idx), None))
+                )
+            else:
+                # `main_idx + j` must be exact (see rounding-context safety);
+                # the element read itself introduces no rounding.
+                main_body.append(_integer_ctx([
+                    _assign(
+                        self._copy_target(stmt.target),
+                        ListRef(_var(t), _add(_var(main_idx), _int(j)), None)
+                    )
+                ], stmt.loc))
+            main_body.extend(_clone_block(body).stmts)
+
+        ctx.stmts.append(ForStmt(
+            main_idx,
+            _range(_int(0), _var(m), _int(k)),
+            StmtBlock(main_body),
+            stmt.loc
+        ))
+
+        # remainder loop: the leftover `[m, n)` elements, one per iteration.
+        rem_body: list[Stmt] = [
+            _assign(self._copy_target(stmt.target), ListRef(_var(t), _var(rem_idx), None))
+        ]
+        rem_body.extend(_clone_block(body).stmts)
+        return ForStmt(
+            rem_idx,
+            _range(_var(m), _var(n), _int(1)),
+            StmtBlock(rem_body),
+            stmt.loc
+        )
 
     def _visit_block(self, block: StmtBlock, ctx: _Ctx | None):
         block_ctx = _Ctx.default()
