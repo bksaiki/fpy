@@ -1,11 +1,28 @@
 """
 Unroller for `for` loops.
+
+Rounding-context safety
+-----------------------
+Unrolling introduces loop-control and index arithmetic (``len(t)``, the
+remainder ``n % k``, index offsets ``t[i + j]``).  These are *integer*
+computations, but FPy rounds every arithmetic operation under the active
+context (**E-Add**): under a low-precision float context an offset or bound
+could round to the wrong value and read out of bounds.  Every such inserted
+computation is therefore wrapped in ``with fp.INTEGER:`` (see
+:func:`_integer_ctx`).  The iterable and the loop body, by contrast, run
+under the *ambient* context so their rounding is unchanged.
 """
 
 import dataclasses
 import enum
 
-from ..analysis import ReachingDefs, ReachingDefsAnalysis, SyntaxCheck
+from ..analysis import (
+    ArraySizeAnalysis,
+    ArraySizeInfer,
+    ReachingDefs,
+    ReachingDefsAnalysis,
+    SyntaxCheck,
+)
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import INTEGER
@@ -19,6 +36,13 @@ class ForUnrollStrategy(enum.Enum):
     STRICT = 0
     """Asserts that the loop can be unrolled without remainder."""
 
+    PEEL = 1
+    """Unroll the largest multiple-of-``k`` prefix, then handle the
+    remaining ``len % k`` iterations separately (a residual loop, or —
+    when the length is statically known — straight-line peeled copies).
+    Correct for any length."""
+
+
 @dataclasses.dataclass
 class _Ctx:
     stmts: list[Stmt]
@@ -26,6 +50,43 @@ class _Ctx:
     @staticmethod
     def default():
         return _Ctx(stmts=[])
+
+
+#####################################################################
+# AST construction helpers
+#
+# Small builders for the nodes the unroller emits, so the transformation
+# reads close to the FPy surface syntax it produces.
+
+def _var(name: NamedId) -> Var:
+    return Var(name, None)
+
+def _int(value: int) -> Integer:
+    return Integer(value, None)
+
+def _add(a: Expr, b: Expr) -> Add:
+    return Add(a, b, None)
+
+def _len(xs: Expr) -> Len:
+    return Len(_var(NamedId('len')), xs, None)
+
+def _fmod(a: Expr, b: Expr) -> Fmod:
+    return Fmod(_var(NamedId('fmod')), a, b, None)
+
+def _range(start: Expr, stop: Expr, step: Expr) -> Range3:
+    return Range3(_var(NamedId('range')), start, stop, step, None)
+
+def _eq(a: Expr, b: Expr) -> Compare:
+    return Compare([CompareOp.EQ], [a, b], None)
+
+def _assign(target: Id | TupleBinding, expr: Expr) -> Assign:
+    return Assign(target, None, expr, None)
+
+def _integer_ctx(stmts: list[Stmt], loc: Location | None) -> ContextStmt:
+    """A ``with fp.INTEGER:`` block: the exact integer context under which
+    loop-control and index arithmetic must be evaluated (see the module
+    docstring on rounding-context safety)."""
+    return ContextStmt(UnderscoreId(), ForeignVal(INTEGER, None), StmtBlock(stmts), loc)
 
 
 class _ForUnroll(DefaultTransformVisitor):
@@ -61,6 +122,9 @@ class _ForUnroll(DefaultTransformVisitor):
     temp_id: NamedId
     len_id: NamedId
     idx_id: NamedId
+    # Static list sizes of iterables; enables discharging the remainder
+    # check at compile time (used by the static-size specialization).
+    array_size: ArraySizeAnalysis | None
 
     def __init__(
         self,
@@ -71,7 +135,8 @@ class _ForUnroll(DefaultTransformVisitor):
         reaching_defs: ReachingDefsAnalysis,
         temp_id: NamedId,
         len_id: NamedId,
-        idx_id: NamedId
+        idx_id: NamedId,
+        array_size: ArraySizeAnalysis | None
     ):
         super().__init__()
         self.func = func
@@ -83,6 +148,7 @@ class _ForUnroll(DefaultTransformVisitor):
         self.temp_id = temp_id
         self.len_id = len_id
         self.idx_id = idx_id
+        self.array_size = array_size
 
     def _refresh(self, target: Id | TupleBinding) -> tuple[Id | TupleBinding, dict[NamedId, NamedId]]:
         match target:
@@ -103,6 +169,9 @@ class _ForUnroll(DefaultTransformVisitor):
                 raise RuntimeError(f'Unexpected target {target}')
 
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> tuple[Stmt, None]:
+        # ``k`` consecutive elements are consumed per iteration of the
+        # rewritten loop (``times`` extra copies on top of the original).
+        k = self.times + 1
         if (self.where is None or self.index == self.where) and self.times > 0:
             self.index += 1
             iterable = self._visit_expr(stmt.iterable, ctx)
@@ -113,65 +182,38 @@ class _ForUnroll(DefaultTransformVisitor):
             idx = self.gensym.refresh(self.idx_id)
             match self.strategy:
                 case ForUnrollStrategy.STRICT:
-                    # need to check that len(t) % times == 0
-                    ctx.stmts.append(ContextStmt(
-                        UnderscoreId(),
-                        ForeignVal(INTEGER, None),
-                        StmtBlock([
-                            Assign(t, None, iterable, None),
-                            Assign(n, None, Len(Var(NamedId('len'), None), Var(t, None), None), None),
-                            AssertStmt(
-                                Compare(
-                                    [CompareOp.EQ], 
-                                    [
-                                        Fmod(Var(NamedId('fmod'), None), Var(n, None), Integer(self.times + 1, None), None),
-                                        Integer(0, None)
-                                    ],
-                                    None
-                                ),
-                                None,
-                                None
-                            )
-                        ]),
-                        stmt.loc
-                    ))
+                    # need to check that len(t) % k == 0
+                    ctx.stmts.append(_integer_ctx([
+                        _assign(t, iterable),
+                        _assign(n, _len(_var(t))),
+                        AssertStmt(_eq(_fmod(_var(n), _int(k)), _int(0)), None, None),
+                    ], stmt.loc))
+                case ForUnrollStrategy.PEEL:
+                    raise NotImplementedError('PEEL strategy is not yet implemented')
                 case _:
                     raise RuntimeError(f'unknown strategy `{self.strategy}`')
 
             # original iteration uses (target, body) as is
             body_stmts: list[Stmt] = list(body.stmts)
-            assign_stmts: list[Stmt] = [Assign(
-                stmt.target, None,
-                ListRef(Var(t, None), Var(idx, None), None),
-                None
-            )]
+            assign_stmts: list[Stmt] = [
+                _assign(stmt.target, ListRef(_var(t), _var(idx), None))
+            ]
 
             for i in range(self.times):
                 # unrolled iteration uses (target, body) with target renamed
                 target, subst = self._refresh(stmt.target)
                 renamed_body = RenameTarget.apply_block(body, subst)
                 body_stmts.extend(renamed_body.stmts)
-                assign_stmts.append(Assign(
+                assign_stmts.append(_assign(
                     target,
-                    None,
-                    ListRef(
-                        Var(t, None),
-                        Add(Var(idx, None), Integer(i + 1, None), None),
-                        None
-                    ),
-                    None
+                    ListRef(_var(t), _add(_var(idx), _int(i + 1)), None)
                 ))
 
-            unpack_stmt = ContextStmt(
-                UnderscoreId(),
-                ForeignVal(INTEGER, None),
-                StmtBlock(assign_stmts),
-                stmt.loc
-            )
+            unpack_stmt = _integer_ctx(assign_stmts, stmt.loc)
 
             stmt = ForStmt(
                 idx,
-                Range3(Var(NamedId('range'), None), Integer(0, None), Var(n, None), Integer(self.times + 1, None), None),
+                _range(_int(0), _var(n), _int(k)),
                 StmtBlock([unpack_stmt] + body_stmts),
                 stmt.loc
             )
@@ -205,6 +247,7 @@ class ForUnroll:
         times: int = 1,
         strategy: ForUnrollStrategy = ForUnrollStrategy.STRICT,
         reaching_defs: ReachingDefsAnalysis | None = None,
+        array_size: ArraySizeAnalysis | None = None,
         temp_id: NamedId | None = None,
         len_id: NamedId | None = None,
         idx_id: NamedId | None = None
@@ -215,10 +258,18 @@ class ForUnroll:
         Parameters
         ----------
         where : int | None
-            The index of the `while` loop to unroll. If `None`, unroll all
-            `while` loops.
+            The index of the `for` loop to unroll. If `None`, unroll all
+            `for` loops.
         times : int
             The number of times to unroll the loop.
+        strategy : ForUnrollStrategy
+            How to handle a length that is not a multiple of the unroll
+            factor (see :class:`ForUnrollStrategy`).
+        reaching_defs : ReachingDefsAnalysis | None
+            Pre-computed reaching-definitions analysis (for fresh names).
+        array_size : ArraySizeAnalysis | None
+            Pre-computed array-size analysis, used to discharge the
+            remainder check when an iterable's length is statically known.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
@@ -229,6 +280,13 @@ class ForUnroll:
 
         if reaching_defs is None:
             reaching_defs = ReachingDefs.analyze(func)
+        if array_size is None:
+            # Auxiliary: a failed size analysis only disables the static
+            # optimization, so never let it break the transformation.
+            try:
+                array_size = ArraySizeInfer.analyze(func)
+            except Exception:
+                array_size = None
         if temp_id is None:
             temp_id = NamedId('t')
         if len_id is None:
@@ -236,7 +294,10 @@ class ForUnroll:
         if idx_id is None:
             idx_id = NamedId('i')
 
-        unroller = _ForUnroll(func, where, times, strategy, reaching_defs, temp_id, len_id, idx_id)
+        unroller = _ForUnroll(
+            func, where, times, strategy, reaching_defs,
+            temp_id, len_id, idx_id, array_size
+        )
         func = unroller.apply()
         SyntaxCheck.check(func, ignore_unknown=True)
         return func
