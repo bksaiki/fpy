@@ -15,7 +15,6 @@ the loop body, by contrast, run under the *ambient* context so their rounding
 is unchanged.
 """
 
-import dataclasses
 import enum
 
 from ..analysis import (
@@ -49,15 +48,6 @@ class ForUnrollStrategy(enum.Enum):
     remaining ``len % k`` iterations separately (a residual loop, or —
     when the length is statically known — straight-line peeled copies).
     Correct for any length."""
-
-
-@dataclasses.dataclass
-class _Ctx:
-    stmts: list[Stmt]
-
-    @staticmethod
-    def default():
-        return _Ctx(stmts=[])
 
 
 #####################################################################
@@ -248,48 +238,45 @@ class _ForUnroll(DefaultTransformVisitor):
         bodies — see :meth:`_body_copy`."""
         idx = self.gensym.refresh(self.idx_id)
 
-        # group the index arithmetic: off_j = idx + j, all under `with INTEGER`
+        # Compute the k-1 offset indices `idx + j` together under `with INTEGER`
+        # so the reads below can index with plain, already-exact variables.
         offsets = [self.gensym.refresh(self.idx_id) for _ in range(1, k)]
-        offset_defs = [_assign(off, _add(_var(idx), _int(j + 1))) for j, off in enumerate(offsets)]
+        offset_defs = [_assign(off, _add(_var(idx), _int(j)))
+                       for j, off in zip(range(1, k), offsets)]
 
-        main_body: list[Stmt] = []
-        if offset_defs:
-            main_body.append(_integer_ctx(offset_defs, loc))
-        # `idx` (straight from `range`) and each `off_j` are exact integers
-        for index in [_var(idx)] + [_var(off) for off in offsets]:
+        main_body: list[Stmt] = [_integer_ctx(offset_defs, loc)] if offset_defs else []
+        for index in [_var(idx), *(_var(off) for off in offsets)]:
             main_body.extend(self._body_copy(target, t, index, body=body, nested_gen=nested_gen))
 
         return ForStmt(idx, _range(_int(0), bound, _int(k)), StmtBlock(main_body), loc)
 
-    def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> tuple[Stmt, None]:
-        if (self.where is None or self.index == self.where) and self.times > 0:
-            self.index += 1
-            # ``k`` consecutive elements are consumed per iteration of the
-            # rewritten loop (``times`` extra copies on top of the original).
-            k = self.times + 1
-            iterable = self._visit_expr(stmt.iterable, ctx)
-            gen_before = set(self.gensym.generated)
-            body, _ = self._visit_block(stmt.body, ctx)
-            # Names the transform minted while unrolling nested loops in this
-            # body; each unrolled copy gets fresh ones (see `_body_copy`).
-            nested_gen = set(self.gensym.generated) - gen_before
-
-            match self.strategy:
-                case ForUnrollStrategy.STRICT:
-                    emitted = self._build_strict(stmt, iterable, body, k, nested_gen)
-                case ForUnrollStrategy.PEEL:
-                    emitted = self._build_peel(stmt, iterable, body, k, nested_gen)
-                case _:
-                    raise RuntimeError(f'unknown strategy `{self.strategy}`')
-
-            # The loop expands to several statements: emit all but the last
-            # into the enclosing block and return the last as the replacement.
-            for s in emitted[:-1]:
-                ctx.stmts.append(s)
-            return emitted[-1], None
-        else:
-            self.index += 1
+    def _visit_for(self, stmt: ForStmt, ctx: list[Stmt]) -> tuple[Stmt, None]:
+        selected = (self.where is None or self.index == self.where) and self.times > 0
+        self.index += 1
+        if not selected:
             return super()._visit_for(stmt, ctx)
+
+        # ``k`` consecutive elements are consumed per rewritten iteration.
+        k = self.times + 1
+        iterable = self._visit_expr(stmt.iterable, ctx)
+        gen_before = set(self.gensym.generated)
+        body, _ = self._visit_block(stmt.body, ctx)
+        # Names the transform minted while unrolling nested loops in this body;
+        # each unrolled copy gets fresh ones (see `_body_copy`).
+        nested_gen = set(self.gensym.generated) - gen_before
+
+        match self.strategy:
+            case ForUnrollStrategy.STRICT:
+                emitted = self._build_strict(stmt, iterable, body, k, nested_gen)
+            case ForUnrollStrategy.PEEL:
+                emitted = self._build_peel(stmt, iterable, body, k, nested_gen)
+            case _:
+                raise RuntimeError(f'unknown strategy `{self.strategy}`')
+
+        # The loop expands to several statements: emit all but the last into
+        # the enclosing block and return the last as the replacement.
+        ctx.extend(emitted[:-1])
+        return emitted[-1], None
 
     def _build_strict(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int, nested_gen: set[NamedId]) -> list[Stmt]:
         # STRICT: the length must be an exact multiple of `k`, so the whole
@@ -321,14 +308,10 @@ class _ForUnroll(DefaultTransformVisitor):
         return emitted
 
     def _build_peel(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int, nested_gen: set[NamedId]) -> list[Stmt]:
-        # Unroll the largest multiple-of-``k`` prefix ``[0, m)`` and run the
-        # remaining ``[m, n)`` elements separately.  Correct for any length.
-        #
-        # Materialize the iterable under the *ambient* context (its elements
-        # must round as they did in the original loop); everything downstream
-        # indexes the temporary ``t``.
+        # Unroll the ``[0, m)`` prefix (largest multiple of ``k``) and run the
+        # ``[m, n)`` remainder separately.  Correct for any length.
         t = self.gensym.refresh(self.temp_id)
-        emitted: list[Stmt] = [_assign(t, iterable)]
+        emitted: list[Stmt] = [_assign(t, iterable)]   # ambient materialize
 
         size = self._static_size(stmt.iterable)
         if size is not None:
@@ -364,13 +347,12 @@ class _ForUnroll(DefaultTransformVisitor):
 
         return emitted
 
-    def _visit_block(self, block: StmtBlock, ctx: _Ctx | None):
-        block_ctx = _Ctx.default()
+    def _visit_block(self, block: StmtBlock, ctx: list[Stmt] | None):
+        out: list[Stmt] = []
         for stmt in block.stmts:
-            stmt, _ = self._visit_statement(stmt, block_ctx)
-            block_ctx.stmts.append(stmt)
-        b = StmtBlock(block_ctx.stmts)
-        return b, None
+            s, _ = self._visit_statement(stmt, out)
+            out.append(s)
+        return StmtBlock(out), None
 
     def apply(self):
         return self._visit_function(self.func, None)
