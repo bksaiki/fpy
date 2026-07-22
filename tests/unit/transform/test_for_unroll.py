@@ -7,6 +7,7 @@ import fpy2 as fp
 from fpy2.transform import ForUnroll, ForUnrollStrategy
 
 PEEL = ForUnrollStrategy.PEEL
+STRICT = ForUnrollStrategy.STRICT
 
 
 def _check_peel(fn, inputs, times_range=(1, 2, 3, 4)):
@@ -152,6 +153,62 @@ class TestForUnrollPeel():
         assert r() == r.with_ast(out)()
 
 
+class TestForUnrollMutation():
+    """Regression: a body that mutates the iterable in place. Reads must stay
+    interleaved with their bodies (grouping reads ahead of bodies miscompiles
+    this), so both strategies must match the original."""
+
+    def test_in_place_mutation(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                xs[1] = 99.0     # in-place mutation of the iterable
+                s = s + x
+            return s
+
+        for strategy in (STRICT, PEEL):
+            for times in (1, 3):
+                # length 4 keeps STRICT's divisibility precondition satisfied
+                out = ForUnroll.apply(f.ast, times=times, strategy=strategy)
+                expect = f([10.0, 20.0, 30.0, 40.0])
+                actual = f.with_ast(out)([10.0, 20.0, 30.0, 40.0])
+                assert expect == actual, (strategy, times, expect, actual)
+
+
+class TestForUnrollStrict():
+    """STRICT strategy specifics (beyond the example round-trip tests)."""
+
+    def test_static_non_divisible_raises(self):
+        @fp.fpy
+        def r() -> fp.Real:
+            x = 0
+            for i in range(5):
+                x = x + i
+            return x
+
+        # 5 is not a multiple of k=2, and the length is statically known.
+        try:
+            ForUnroll.apply(r.ast, times=1, strategy=STRICT)
+            assert False, 'expected a ValueError for a provably-indivisible length'
+        except ValueError:
+            pass
+
+    def test_unknown_length_keeps_assert(self):
+        @fp.fpy
+        def sumlist(xs: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                acc = acc + x
+            return acc
+
+        txt = ForUnroll.apply(sumlist.ast, times=1, strategy=STRICT).format()
+        assert 'fmod(' in txt and 'len(' in txt          # runtime divisibility assert
+        # divisible input runs correctly
+        assert sumlist([1.0, 2.0, 3.0, 4.0]) == \
+            sumlist.with_ast(ForUnroll.apply(sumlist.ast, times=1, strategy=STRICT))([1.0, 2.0, 3.0, 4.0])
+
+
 class TestForUnroll():
 
     def test_example1(self):
@@ -187,16 +244,14 @@ class TestForUnroll():
         @fp.fpy
         def test_expect():
             x = 0
-            with fp.INTEGER:
-                t = range(32)
-                n = len(t)
-                assert fp.fmod(n, 2) == 0
-            for i2 in range(0, n, 2):
-                with fp.INTEGER:
-                    i = t[i2]
-                    i3 = t[i2 + 1]
+            t = range(32)                # length 32 is statically known:
+            for i2 in range(0, 32, 2):   # no len/assert, literal bound
+                with fp.INTEGER:         # offset indices grouped
+                    i3 = i2 + 1
+                i = t[i2]                # reads interleaved with bodies,
+                x += i                   # target reassigned (not renamed)
+                i = t[i3]
                 x += i
-                x += i3
             return x
 
         h = fp.transform.ForUnroll.apply(test.ast, times=1)
@@ -217,20 +272,20 @@ class TestForUnroll():
         @fp.fpy
         def test_expect():
             x = 0
-            with fp.INTEGER:
-                t = range(32)
-                n = len(t)
-                assert fp.fmod(n, 4) == 0
-            for i2 in range(0, n, 4):
+            t = range(32)
+            for i2 in range(0, 32, 4):
                 with fp.INTEGER:
-                    i = t[i2]
-                    i3 = t[i2 + 1]
-                    i4 = t[i2 + 2]
-                    i5 = t[i2 + 3]
+                    i3 = i2 + 1
+                    i4 = i2 + 2
+                    i5 = i2 + 3
+                i = t[i2]
                 x += i
-                x += i3
-                x += i4
-                x += i5
+                i = t[i3]
+                x += i
+                i = t[i4]
+                x += i
+                i = t[i5]
+                x += i
             return x
 
         h = fp.transform.ForUnroll.apply(test.ast, times=3)

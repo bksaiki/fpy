@@ -30,8 +30,6 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..number import INTEGER
 from ..utils import Gensym
 
-from .rename_target import RenameTarget
-
 class ForUnrollStrategy(enum.Enum):
     """Strategy for dealing with the loop remainder."""
 
@@ -108,20 +106,28 @@ class _ForUnroll(DefaultTransformVisitor):
     for x in <iterable>:
         BODY[x]
     ```
-    into
+    into (PEEL, unknown length; `k = times + 1`)
     ```
-    with Z:
-        t = <iterable>
+    t = <iterable>
+    with INTEGER:
         n = len(t)
-    for i in range(0, n, k):
-        with Z:
-            x_1 = t[i]
+        m = n - fmod(n, k)
+    for i in range(0, m, k):
+        with INTEGER:            # offset indices grouped here
+            i_1 = i + 1
             ...
-            x_k = t[i + k - 1]
-        BODY[x_1 -> x]
+            i_{k-1} = i + (k - 1)
+        x = t[i];     BODY       # each read stays adjacent to its body
+        x = t[i_1];   BODY
         ...
-        BODY[x_k -> x]
+    for i in range(m, n):        # remainder (peeled straight-line if static)
+        x = t[i]; BODY
     ```
+
+    The loop target is *reassigned* per copy (not renamed) and each read sits
+    immediately before its body: reordering reads ahead of bodies would be
+    unsound if a body mutates the iterable in place.  STRICT is the same main
+    loop over the whole (asserted-divisible) length, with no remainder.
     """
 
     func: FuncDef
@@ -161,24 +167,6 @@ class _ForUnroll(DefaultTransformVisitor):
         self.idx_id = idx_id
         self.array_size = array_size
 
-    def _refresh(self, target: Id | TupleBinding) -> tuple[Id | TupleBinding, dict[NamedId, NamedId]]:
-        match target:
-            case UnderscoreId():
-                return target, {}
-            case NamedId():
-                new_target = self.gensym.refresh(target)
-                return new_target, {target: new_target}
-            case TupleBinding():
-                subst: dict[NamedId, NamedId] = {}
-                new_elts: list[Id | TupleBinding] = []
-                for elt in target.elts:
-                    new_elt, elt_subst = self._refresh(elt)
-                    new_elts.append(new_elt)
-                    subst |= elt_subst
-                return TupleBinding(new_elts, target.loc), subst
-            case _:
-                raise RuntimeError(f'Unexpected target {target}')
-
     def _copy_target(self, target: Id | TupleBinding) -> Id | TupleBinding:
         """A fresh copy of a loop target with the *same* names.  ``Id``s are
         value-like and shared verbatim (as the base transform visitor does);
@@ -208,8 +196,7 @@ class _ForUnroll(DefaultTransformVisitor):
         t: NamedId,
         index: Expr,
         *,
-        body: StmtBlock,
-        loc: Location | None
+        body: StmtBlock
     ) -> list[Stmt]:
         """One unrolled iteration: bind *target* to ``t[index]`` then run a
         fresh copy of *body*.  *index* must already be exact (a bare variable
@@ -248,7 +235,7 @@ class _ForUnroll(DefaultTransformVisitor):
             main_body.append(_integer_ctx(offset_defs, loc))
         # `idx` (straight from `range`) and each `off_j` are exact integers
         for index in [_var(idx)] + [_var(off) for off in offsets]:
-            main_body.extend(self._body_copy(target, t, index, body=body, loc=loc))
+            main_body.extend(self._body_copy(target, t, index, body=body))
 
         return ForStmt(idx, _range(_int(0), bound, _int(k)), StmtBlock(main_body), loc)
 
@@ -279,42 +266,33 @@ class _ForUnroll(DefaultTransformVisitor):
             return super()._visit_for(stmt, ctx)
 
     def _build_strict(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int) -> list[Stmt]:
+        # STRICT: the length must be an exact multiple of `k`, so the whole
+        # loop is the main region with no remainder.  Reuses the shared,
+        # interleaved `_main_loop` (reads stay adjacent to their bodies).
         t = self.gensym.refresh(self.temp_id)
-        n = self.gensym.refresh(self.len_id)
-        idx = self.gensym.refresh(self.idx_id)
+        emitted: list[Stmt] = [_assign(t, iterable)]   # ambient materialize
 
-        # need to check that len(t) % k == 0
-        prelude = _integer_ctx([
-            _assign(t, iterable),
-            _assign(n, _len(_var(t))),
-            AssertStmt(_eq(_fmod(_var(n), _int(k)), _int(0)), None, None),
-        ], stmt.loc)
+        size = self._static_size(stmt.iterable)
+        if size is not None:
+            # Statically known length: verify divisibility at compile time and
+            # drop the runtime `len`/`assert` entirely.
+            if size % k != 0:
+                raise ValueError(
+                    f'STRICT unroll by {k} requires the iterable length to be '
+                    f'a multiple of {k}, but its statically-known length is {size}'
+                )
+            if size > 0:
+                emitted.append(self._main_loop(t, _int(size), k, stmt.target, body, stmt.loc))
+        else:
+            # Unknown length: assert `len(t) % k == 0` at runtime.
+            n = self.gensym.refresh(self.len_id)
+            emitted.append(_integer_ctx([
+                _assign(n, _len(_var(t))),
+                AssertStmt(_eq(_fmod(_var(n), _int(k)), _int(0)), None, None),
+            ], stmt.loc))
+            emitted.append(self._main_loop(t, _var(n), k, stmt.target, body, stmt.loc))
 
-        # original iteration uses (target, body) as is
-        body_stmts: list[Stmt] = list(body.stmts)
-        assign_stmts: list[Stmt] = [
-            _assign(stmt.target, ListRef(_var(t), _var(idx), None))
-        ]
-
-        for i in range(self.times):
-            # unrolled iteration uses (target, body) with target renamed
-            target, subst = self._refresh(stmt.target)
-            renamed_body = RenameTarget.apply_block(body, subst)
-            body_stmts.extend(renamed_body.stmts)
-            assign_stmts.append(_assign(
-                target,
-                ListRef(_var(t), _add(_var(idx), _int(i + 1)), None)
-            ))
-
-        unpack_stmt = _integer_ctx(assign_stmts, stmt.loc)
-
-        loop = ForStmt(
-            idx,
-            _range(_int(0), _var(n), _int(k)),
-            StmtBlock([unpack_stmt] + body_stmts),
-            stmt.loc
-        )
-        return [prelude, loop]
+        return emitted
 
     def _build_peel(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int) -> list[Stmt]:
         # Unroll the largest multiple-of-``k`` prefix ``[0, m)`` and run the
@@ -337,7 +315,7 @@ class _ForUnroll(DefaultTransformVisitor):
             for p in range(m, size):
                 # literal index: exact by construction, no integer context
                 emitted.extend(
-                    self._body_copy(stmt.target, t, _int(p), exact=False, body=body, loc=stmt.loc)
+                    self._body_copy(stmt.target, t, _int(p), body=body)
                 )
         else:
             # Unknown length: compute the main-region bound `m = n - n % k`
@@ -352,7 +330,7 @@ class _ForUnroll(DefaultTransformVisitor):
 
             rem_idx = self.gensym.refresh(self.idx_id)
             rem_body = self._body_copy(
-                stmt.target, t, _var(rem_idx), exact=False, body=body, loc=stmt.loc
+                stmt.target, t, _var(rem_idx), body=body
             )
             emitted.append(ForStmt(
                 rem_idx, _range(_var(m), _var(n), _int(1)), StmtBlock(rem_body), stmt.loc
