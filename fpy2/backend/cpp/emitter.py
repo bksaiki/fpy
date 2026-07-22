@@ -52,7 +52,7 @@ from ...ast.fpyast import (
     WhileStmt, Zip,
 )
 from ...ast.visitor import Visitor
-from ...number import EFloatContext, Float, MPFixedContext, MPBFixedContext, REAL, RM
+from ...number import EFloatContext, Float, MPFixedContext, MPBFixedContext, REAL, RM, RealFloat
 from ...number.context.context import Context
 
 from ...analysis.format_infer import (
@@ -1964,21 +1964,29 @@ class CppEmitter(Visitor):
             case NamedId():
                 target_def = self.def_use.find_def_from_site(target, comp_site)
                 target_name = self.storage.def_to_name[target_def]
-                target_ty = self.storage.storage_of(target_def).format()
-                decl = f'{target_ty} {target_name}'
+                # For a range counter, size to the exit-test overshoot (see
+                # :meth:`_range_counter_scalar`); the element storage would be
+                # too narrow.  Non-range iterables fall back to element storage.
+                counter_scalar = self._range_counter_scalar(iterable)
+                storage = counter_scalar or self.storage.storage_of(target_def)
+                decl = f'{storage.format()} {target_name}'
                 loop_def = target_def
             case UnderscoreId():
                 # ``_`` discards the loop variable — no SSA def, no
-                # storage class.  Synthesize a fresh name and pick
-                # the iterator type from the iterable: range
-                # iterables use the stop bound's storage; value
-                # iterables use ``auto`` and let the for-range loop
-                # deduce.
+                # storage class.  Synthesize a fresh name and pick the
+                # iterator type from the range counter's trajectory (or the
+                # stop bound's storage when the range isn't concrete); value
+                # iterables use ``auto`` and let the for-range loop deduce.
                 target_name = self._fresh_temp()
+                counter_scalar = self._range_counter_scalar(iterable)
                 match iterable:
+                    case Range1() if counter_scalar is not None:
+                        decl = f'{counter_scalar.format()} {target_name}'
                     case Range1():
                         stop_ty = self._scalar_storage_for_expr(iterable.arg)
                         decl = f'{stop_ty.format()} {target_name}'
+                    case (Range2() | Range3()) if counter_scalar is not None:
+                        decl = f'{counter_scalar.format()} {target_name}'
                     case Range2() | Range3():
                         stop_ty = self._scalar_storage_for_expr(iterable.args[1])
                         decl = f'{stop_ty.format()} {target_name}'
@@ -2150,6 +2158,50 @@ class CppEmitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
 
+    def _concrete_int_of(self, e: Expr) -> int | None:
+        """Concrete integer value of *e* per format inference, or ``None``."""
+        fmt = self.format_info.by_expr.get(e)
+        if isinstance(fmt, SetFormat) and len(fmt.values) == 1:
+            (v,) = fmt.values
+            if v.denominator == 1:
+                return v.numerator
+        return None
+
+    def _range_counter_scalar(self, iterable: Expr) -> 'CppScalar | None':
+        """Counter type for a ``range`` for-loop, or ``None`` when the bounds
+        aren't statically concrete.
+
+        The C-style counter transiently reaches the first value past ``stop``
+        (the exit-test overshoot), which the loop variable's *element* format
+        (the values actually taken) excludes — so a counter typed from the
+        element storage can overflow at a type boundary (e.g. ``range(128)``
+        would overflow ``int8_t``).  We size it to cover ``start`` and that
+        overshoot instead.
+        """
+        start: int | None
+        stop: int | None
+        step: int | None
+        match iterable:
+            case Range1():
+                start, stop, step = 0, self._concrete_int_of(iterable.arg), 1
+            case Range2():
+                start = self._concrete_int_of(iterable.first)
+                stop = self._concrete_int_of(iterable.second)
+                step = 1
+            case Range3():
+                start = self._concrete_int_of(iterable.args[0])
+                stop = self._concrete_int_of(iterable.args[1])
+                step = self._concrete_int_of(iterable.args[2])
+            case _:
+                return None
+        if start is None or stop is None or step is None or step == 0:
+            return None
+        overshoot = start + len(range(start, stop, step)) * step
+        b = RealFloat.from_int(max(abs(start), abs(overshoot)))
+        scalar = choose_storage(AbstractFormat(float('inf'), 0, b).format())
+        assert isinstance(scalar, CppScalar)
+        return scalar
+
     def _visit_for(self, stmt: ForStmt, ctx):
         match stmt.target:
             case NamedId():
@@ -2170,7 +2222,10 @@ class CppEmitter(Visitor):
         way :meth:`_open_comp_loop` does for an ``UnderscoreId``
         comprehension target."""
         target = self._fresh_temp()
-        if isinstance(stmt.iterable, Range1):
+        counter_scalar = self._range_counter_scalar(stmt.iterable)
+        if counter_scalar is not None:
+            ty = counter_scalar.format()
+        elif isinstance(stmt.iterable, Range1):
             ty = self._scalar_storage_for_expr(stmt.iterable.arg).format()
         elif isinstance(stmt.iterable, (Range2, Range3)):
             ty = self._scalar_storage_for_expr(stmt.iterable.args[1]).format()
@@ -2214,7 +2269,11 @@ class CppEmitter(Visitor):
         # single-writer class (the common case).  Otherwise the counter
         # was hoisted at the function top and we just reassign here.
         if target_def in self.storage.declare_at_assign:
-            storage = self.storage.storage_of(target_def)
+            # A range counter transiently reaches the exit-test overshoot,
+            # which the loop variable's element storage may be too narrow to
+            # hold; size it from the counter's real trajectory instead.
+            counter_scalar = self._range_counter_scalar(stmt.iterable)
+            storage = counter_scalar or self.storage.storage_of(target_def)
             decl = f'{storage.format()} {target}'
         else:
             decl = target

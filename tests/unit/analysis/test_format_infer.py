@@ -8,6 +8,8 @@ runs property tests driven by the type-directed FPy program generator.
 import fpy2 as fp
 import pytest
 
+from fpy2 import dim, size
+
 from fractions import Fraction
 from hypothesis import given, settings, strategies as st
 
@@ -1037,8 +1039,8 @@ class TestFormatInfer:
             f'expected ListFormat(INTEGER) for Range1, got {range_bounds}'
         )
 
-    def test_range2_returns_listformat_of_integer(self):
-        """``range(start, stop)`` produces a list of integers."""
+    def test_range2_returns_exact_value_set(self):
+        """A small concrete ``range(start, stop)`` pins its exact values."""
         @fp.fpy
         def f() -> list[fp.Real]:
             return [0.0 for _ in range(0, 10)]
@@ -1047,11 +1049,11 @@ class TestFormatInfer:
         range_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Range2'
         ]
-        integer_fmt = fp.INTEGER.format()
-        assert range_bounds and range_bounds[0] == ListFormat(integer_fmt)
+        expected = ListFormat(SetFormat(frozenset(Fraction(v) for v in range(0, 10))))
+        assert range_bounds and range_bounds[0] == expected
 
-    def test_range3_returns_listformat_of_integer(self):
-        """``range(start, stop, step)`` produces a list of integers."""
+    def test_range3_returns_exact_value_set(self):
+        """A small concrete ``range(start, stop, step)`` pins its exact values."""
         @fp.fpy
         def f() -> list[fp.Real]:
             return [0.0 for _ in range(0, 10, 2)]
@@ -1060,8 +1062,134 @@ class TestFormatInfer:
         range_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Range3'
         ]
-        integer_fmt = fp.INTEGER.format()
-        assert range_bounds and range_bounds[0] == ListFormat(integer_fmt)
+        expected = ListFormat(SetFormat(frozenset(Fraction(v) for v in range(0, 10, 2))))
+        assert range_bounds and range_bounds[0] == expected
+
+    def test_range_large_uses_bounded_integer(self):
+        """A range past the set threshold uses the bounded integer format."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(1000)]
+
+        info = self._run(f)
+        range_bounds = [
+            b for e, b in info.by_expr.items() if type(e).__name__ == 'Range1'
+        ]
+        # values 0..999 -> A(inf, 0, 999); quantum 1, symmetric bound
+        expected_elt = AbstractFormat(
+            float('inf'), 0, fp.RealFloat.from_int(999)
+        ).format()
+        assert range_bounds and range_bounds[0] == ListFormat(expected_elt)
+
+    def test_range_set_threshold_is_tunable(self):
+        """``range_set_threshold`` controls the set-vs-bounded split."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(100)]
+
+        # threshold below the count -> bounded integer
+        low = FormatInfer.analyze(f.ast, range_set_threshold=10)
+        bounded = [b for e, b in low.by_expr.items() if type(e).__name__ == 'Range1'][0]
+        assert isinstance(bounded, ListFormat) and not isinstance(bounded.elt, SetFormat)
+        # threshold at/above the count -> exact value set
+        high = FormatInfer.analyze(f.ast, range_set_threshold=100)
+        exact = [b for e, b in high.by_expr.items() if type(e).__name__ == 'Range1'][0]
+        assert isinstance(exact, ListFormat) and isinstance(exact.elt, SetFormat)
+
+    @staticmethod
+    def _last_acc(info):
+        return [b for e, b in info.by_expr.items()
+                if type(e).__name__ == 'Var' and str(e.name) == 'acc'][-1]
+
+    def test_set_format_threshold_caps_growth(self):
+        """A SetFormat grown past the cap collapses to a bounded format."""
+        @fp.fpy
+        def f():
+            with fp.REAL:
+                acc = 0
+                for i in range(10):
+                    acc += i
+                return acc
+
+        # accumulates to a 91-value set — kept when the cap is high
+        high = FormatInfer.analyze(f.ast, set_format_threshold=256)
+        acc_hi = self._last_acc(high)
+        assert isinstance(acc_hi, SetFormat) and len(acc_hi.values) == 91
+        # collapses to a bounded (non-Set) format when the cap is low
+        low = FormatInfer.analyze(f.ast, set_format_threshold=8)
+        assert not isinstance(self._last_acc(low), SetFormat)
+
+    def test_multiplicative_reduction_stays_bounded(self):
+        """A multiplicative reduction must not blow up into a huge SetFormat
+        (without the cap this hangs the analysis)."""
+        @fp.fpy
+        def f():
+            with fp.REAL:
+                acc = 1
+                for p in [2.0, 3.0, 5.0, 7.0, 11.0, 13.0, 17.0, 19.0]:
+                    for i in range(8):
+                        acc = acc * p
+                return acc
+
+        info = self._run(f)
+        assert not isinstance(self._last_acc(info), SetFormat)
+
+    def test_len_pins_known_size(self):
+        """``len(xs)`` pins the exact size when it is statically known."""
+        @fp.fpy
+        def f() -> fp.Real:
+            xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+            return len(xs)
+
+        info = self._run(f)
+        lens = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Len']
+        assert lens and lens[0] == SetFormat.from_value(Fraction(5))
+
+    def test_len_symbolic_size_falls_back_to_integer(self):
+        """``len(xs)`` for an unknown-size argument stays the integer format."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return len(xs)
+
+        info = self._run(f)
+        lens = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Len']
+        assert lens and lens[0] == fp.INTEGER.format()
+
+    def test_dim_pins_nesting_depth(self):
+        """``dim(xs)`` always pins the (static) nesting depth."""
+        @fp.fpy
+        def f(xs: list[list[fp.Real]]) -> fp.Real:
+            return dim(xs)
+
+        info = self._run(f)
+        dims = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Dim']
+        assert dims and dims[0] == SetFormat.from_value(Fraction(2))
+
+    def test_size_pins_known_dimension(self):
+        """``size(xs, d)`` pins the length along a statically-known dimension."""
+        @fp.fpy
+        def f() -> fp.Real:
+            xs = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+            return size(xs, 1)
+
+        info = self._run(f)
+        sizes = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Size']
+        assert sizes and sizes[0] == SetFormat.from_value(Fraction(3))
+
+    def test_enumerate_index_pinned_when_size_known(self):
+        """``enumerate(xs)`` pins the index projection to ``range(len(xs))``."""
+        @fp.fpy
+        def f() -> fp.Real:
+            xs = [1.0, 2.0, 3.0]
+            for i, x in enumerate(xs):
+                pass
+            return 0.0
+
+        info = self._run(f)
+        enums = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Enumerate']
+        assert enums and isinstance(enums[0], ListFormat)
+        idx_fmt = enums[0].elt.elts[0]
+        assert idx_fmt == SetFormat(frozenset(Fraction(v) for v in range(3)))
 
     def test_enumerate_returns_listformat_of_int_value_tuple(self):
         """

@@ -146,7 +146,7 @@ from ...types import (
     VarType,
 )
 
-from ..array_size import ArraySizeAnalysis, ArraySizeInfer, ListSize
+from ..array_size import ArraySizeAnalysis, ArraySizeInfer, ListSize, concrete_size, list_depth
 from ..call_graph import CallGraph, CallGraphError
 from ..context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextUseSite
 from ..define_use import DefineUse, DefineUseAnalysis
@@ -309,6 +309,20 @@ would be unnecessarily loose.
 """
 
 
+def _concrete_int(fmt: FormatBound) -> int | None:
+    """Returns the integer value of *fmt* iff it pins a single integer.
+
+    Used to recognise ``range`` arguments that are statically known (either
+    literals or constant-folded expressions, both of which surface as a
+    singleton :class:`SetFormat`).  Returns ``None`` otherwise.
+    """
+    if isinstance(fmt, SetFormat) and len(fmt.values) == 1:
+        (v,) = fmt.values
+        if v.denominator == 1:
+            return v.numerator
+    return None
+
+
 def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
     """
     Returns true iff every value in *values* is representable under *fmt*.
@@ -462,6 +476,8 @@ def exact_binop(
     lhs: 'FormatBound',
     rhs: 'FormatBound',
     op: Callable[[Any, Any], Any],
+    *,
+    cap: int | None = None,
 ) -> 'SetFormat | AbstractFormat | None':
     """Compute the exact unrounded result of an arithmetic binary op.
 
@@ -485,6 +501,12 @@ def exact_binop(
     consumed by downstream transforms (e.g.,
     :class:`fpy2.transform.RoundElim`) that need the unrounded
     image of a rounded operation.
+
+    When *cap* is given and the pointwise :class:`SetFormat` result would
+    exceed it, the result collapses to the covering :class:`AbstractFormat`
+    (or ``None`` if the values aren't dyadic).  This bounds the combinatorial
+    growth of repeated set arithmetic (e.g. a multiplicative reduction), which
+    is otherwise unbounded; callers pass their ``set_format_threshold``.
     """
     if not (
         isinstance(lhs, AbstractableFormatBound)
@@ -492,9 +514,11 @@ def exact_binop(
     ):
         return None
     if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
-        return SetFormat(frozenset(
-            op(va, vb) for va in lhs.values for vb in rhs.values
-        ))
+        result = frozenset(op(va, vb) for va in lhs.values for vb in rhs.values)
+        if cap is not None and len(result) > cap:
+            # collapse an over-large set to its covering AbstractFormat
+            return _setformat_to_abstract(SetFormat(result))
+        return SetFormat(result)
     lhs_zero = _is_zero_set(lhs)
     rhs_zero = _is_zero_set(rhs)
     if op is operator.mul and (lhs_zero or rhs_zero):
@@ -836,6 +860,8 @@ class _FormatInferInstance(Visitor):
     _fn_fmt: FunctionFormat | None
     _return_fmt: FormatBound | None
     _loop_iter_limit: int
+    _range_set_threshold: int
+    _set_format_threshold: int
     _widen: bool
 
     def __init__(
@@ -845,6 +871,8 @@ class _FormatInferInstance(Visitor):
         pre_cache: PreAnalysisCache,
         fn_fmt: FunctionFormat | None,
         loop_iter_limit: int,
+        range_set_threshold: int,
+        set_format_threshold: int,
     ):
         self.func = func
         self.type_info = pre.type_info
@@ -873,6 +901,8 @@ class _FormatInferInstance(Visitor):
         # mix of bool and non-bool returns in a single function.
         self._return_fmt = None
         self._loop_iter_limit = loop_iter_limit
+        self._range_set_threshold = range_set_threshold
+        self._set_format_threshold = set_format_threshold
         # When True, joins forced inside a saturated loop fixpoint widen
         # distinct scalar Formats to ``REAL_FORMAT`` instead of going through
         # an :class:`AbstractFormat` union (which has infinite ascending
@@ -901,7 +931,25 @@ class _FormatInferInstance(Visitor):
 
     def _join(self, s1: FormatBound, s2: FormatBound) -> FormatBound:
         """Join two formats, respecting the visitor's current widen state."""
-        return _join_bounds(s1, s2, widen=self._widen)
+        return self._cap_set(_join_bounds(s1, s2, widen=self._widen))
+
+    def _cap_set(self, fmt: FormatBound) -> FormatBound:
+        """Collapse an over-large :class:`SetFormat` to its covering
+        :class:`AbstractFormat`.
+
+        Set arithmetic and repeated joins can grow a :class:`SetFormat`
+        combinatorially (worst case a multiplicative reduction); once a set
+        exceeds ``set_format_threshold`` we replace it with the concrete
+        :class:`Format` covering the same values — a sound superset that keeps
+        the analysis (and its ``O(|set|)`` joins/fit-checks) from blowing up.
+        Non-``SetFormat`` bounds pass through unchanged.
+        """
+        if isinstance(fmt, SetFormat) and len(fmt.values) > self._set_format_threshold:
+            af = _setformat_to_abstract(fmt)
+            # materialize to a concrete Format (a valid FormatBound); a
+            # non-dyadic set can't be abstracted, so fall back to REAL_FORMAT
+            return af.format() if af is not None else REAL_FORMAT
+        return fmt
 
     def _resolve_active_ctx(
         self, e: ContextUseSite
@@ -1012,9 +1060,23 @@ class _FormatInferInstance(Visitor):
         # ``F ⊆ scope_af`` case collapse into this single check —
         # single-sourced via :func:`round_is_identity` so external
         # consumers (e.g. ``RoundElim``) see the same notion.
-        if round_is_identity(exact, resolved):
-            return exact if isinstance(exact, SetFormat) else exact.format()
         scope_fmt = resolved.format()
+        if round_is_identity(exact, resolved):
+            if isinstance(exact, SetFormat):
+                return exact
+            # ``exact.format()`` can over-approximate *past* the scope — e.g.
+            # a non-negative bound has no unsigned float format, so it
+            # symmetrizes into a signed one that a cast to an unsigned scope
+            # would reject.  Keep the tight materialization only when it still
+            # fits the scope; otherwise fall back to the scope format (a sound
+            # superset of ``exact`` that is emittable under the context).
+            cand = exact.format()
+            if (isinstance(cand, AbstractableFormat)
+                    and isinstance(scope_fmt, AbstractableFormat)
+                    and not AbstractFormat.from_format(cand).contained_in(
+                        AbstractFormat.from_format(scope_fmt))):
+                return scope_fmt
+            return cand
         if isinstance(exact, SetFormat):
             # TODO: we can round each value in the set individually
             # to produce a precise image even when some values exceed the scope
@@ -1124,19 +1186,33 @@ class _FormatInferInstance(Visitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:
         arg_fmt = self._visit_expr(e.arg, ctx)
         match e:
-            case Len() | Dim():
-                # len(...) / dim(...) -> result format is INTEGER regardless
-                # of the active rounding context.
+            case Len():
+                # len(xs) -> integer; pin the exact value when the size is
+                # statically known, else the unbounded integer format.
+                n = self._known_iter_count(e.arg)
+                if n is not None:
+                    return SetFormat.from_value(Fraction(n))
+                return _INTEGER_FORMAT
+            case Dim():
+                # dim(xs) -> the list's nesting depth, always statically known.
+                bound = self.array_size.by_expr.get(e.arg)
+                if isinstance(bound, ListSize):
+                    return SetFormat.from_value(Fraction(list_depth(bound)))
                 return _INTEGER_FORMAT
             case Range1():
-                # range(...) -> result is a list of integers.
+                # range(stop) -> list of integers; tighten when stop is concrete
+                stop = _concrete_int(arg_fmt)
+                if stop is not None:
+                    return self._range_format(0, stop, 1)
                 return ListFormat(_INTEGER_FORMAT)
             case Enumerate():
-                # enumerate(xs) -> list of (int, elt) tuples; the int projection
-                # is INTEGER, the original element format is preserved.
+                # enumerate(xs) -> list of (index, elt) tuples; pin the index
+                # projection to range(len(xs)) when the size is known.
                 assert isinstance(arg_fmt, ListFormat), \
                     f'expected ListFormat for argument of Enumerate, got {arg_fmt!r}'
-                return ListFormat(TupleFormat((_INTEGER_FORMAT, arg_fmt.elt)))
+                n = self._known_iter_count(e.arg)
+                idx_fmt = self._range_elt_format(0, n, 1) if n is not None else _INTEGER_FORMAT
+                return ListFormat(TupleFormat((idx_fmt, arg_fmt.elt)))
             case Fst():
                 # tuple head — the first element's format.
                 assert isinstance(arg_fmt, TupleFormat), \
@@ -1255,15 +1331,64 @@ class _FormatInferInstance(Visitor):
         fitted = self._bound_if_fits(e, af_acc)
         return fitted if fitted is not None else self._op_bound(e)
 
+    def _range_elt_format(self, start: int, stop: int, step: int) -> FormatBound:
+        """Format of the integers produced by ``range(start, stop, step)``
+        with statically-known integer arguments.
+
+        Small ranges (at most ``range_set_threshold`` elements) pin the exact
+        value set as a :class:`SetFormat`; larger ranges use the bounded
+        integer ``A(inf, 0, b)`` with ``b`` the largest magnitude attained
+        (quantum 1, i.e. ``exp = 0``).  Invalid (``step == 0``) and empty
+        ranges fall back to the unbounded integer format — a vacuous element.
+        """
+        if step == 0:
+            return _INTEGER_FORMAT
+        rng = range(start, stop, step)
+        n = len(rng)
+        if n == 0:
+            return _INTEGER_FORMAT
+        if n <= self._range_set_threshold:
+            return SetFormat(frozenset(Fraction(v) for v in rng))
+        last = start + (n - 1) * step
+        b = RealFloat.from_int(max(abs(start), abs(last)))
+        return AbstractFormat(float('inf'), 0, b).format()
+
+    def _range_format(self, start: int, stop: int, step: int) -> FormatBound:
+        """:class:`ListFormat` over :meth:`_range_elt_format`."""
+        return ListFormat(self._range_elt_format(start, stop, step))
+
+    def _static_dim_size(self, arg: Expr, d: int) -> int | None:
+        """Statically-known length of *arg* along dimension *d*, or ``None``.
+
+        Descends *d* list levels through the array-size bound (dimension 0 is
+        the outermost list, matching ``size(xs, d)``).
+        """
+        bound = self.array_size.by_expr.get(arg)
+        for _ in range(d):
+            if not isinstance(bound, ListSize):
+                return None
+            bound = bound.elt
+        if isinstance(bound, ListSize):
+            return concrete_size(bound.size)
+        return None
+
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> FormatBound:
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
         match e:
             case Size():
-                # size(...) -> result format is INTEGER regardless of scope.
+                # size(xs, d) -> the length along dimension d; pin the exact
+                # value when d is concrete and that dimension's size is known.
+                d = _concrete_int(rhs)
+                n = self._static_dim_size(e.first, d) if d is not None else None
+                if n is not None:
+                    return SetFormat.from_value(Fraction(n))
                 return _INTEGER_FORMAT
             case Range2():
-                # range(...) -> result is a list of integers.
+                # range(start, stop) -> list of integers; tighten when concrete
+                start, stop = _concrete_int(lhs), _concrete_int(rhs)
+                if start is not None and stop is not None:
+                    return self._range_format(start, stop, 1)
                 return ListFormat(_INTEGER_FORMAT)
             case Add():
                 # Exact addition.  Use the unrounded result whenever
@@ -1271,19 +1396,19 @@ class _FormatInferInstance(Visitor):
                 # :meth:`_bound_if_fits`.  Subsumes the legacy REAL-only
                 # fast path (REAL_FORMAT contains everything).
                 fitted = self._bound_if_fits(
-                    e, exact_binop(lhs, rhs, operator.add),
+                    e, exact_binop(lhs, rhs, operator.add, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
                     return fitted
             case Sub():
                 fitted = self._bound_if_fits(
-                    e, exact_binop(lhs, rhs, operator.sub),
+                    e, exact_binop(lhs, rhs, operator.sub, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
                     return fitted
             case Mul():
                 fitted = self._bound_if_fits(
-                    e, exact_binop(lhs, rhs, operator.mul),
+                    e, exact_binop(lhs, rhs, operator.mul, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
                     return fitted
@@ -1291,10 +1416,14 @@ class _FormatInferInstance(Visitor):
         return self._op_bound(e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: None) -> FormatBound:
-        self._visit_expr(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        self._visit_expr(e.third, ctx)
+        first = self._visit_expr(e.first, ctx)
+        second = self._visit_expr(e.second, ctx)
+        third = self._visit_expr(e.third, ctx)
         if isinstance(e, Range3):
+            # range(start, stop, step) -> list of integers; tighten when concrete
+            start, stop, step = _concrete_int(first), _concrete_int(second), _concrete_int(third)
+            if start is not None and stop is not None and step is not None:
+                return self._range_format(start, stop, step)
             return ListFormat(_INTEGER_FORMAT)
         return self._op_bound(e)
 
@@ -1386,6 +1515,8 @@ class _FormatInferInstance(Visitor):
             pre_cache=self._pre_cache,
             fn_fmt=callee_signature,
             loop_iter_limit=self._loop_iter_limit,
+            range_set_threshold=self._range_set_threshold,
+            set_format_threshold=self._set_format_threshold,
         ).analyze()
 
     # Comparison: produces a bool, so no numeric format
@@ -1802,6 +1933,24 @@ class FormatInfer:
     parameter of :meth:`analyze`.
     """
 
+    DEFAULT_RANGE_SET_THRESHOLD = 16
+    """
+    Default maximum element count for which a concrete ``range(...)`` pins its
+    exact value set as a :class:`SetFormat`.  Larger ranges use the bounded
+    integer format ``A(inf, 0, b)`` instead.  Tunable via the
+    ``range_set_threshold`` parameter of :meth:`analyze`.
+    """
+
+    DEFAULT_SET_FORMAT_THRESHOLD = 256
+    """
+    Default maximum size of a :class:`SetFormat` produced by set arithmetic or
+    joins.  Beyond this, the set collapses to the covering bounded
+    :class:`AbstractFormat` — a sound superset that bounds the otherwise
+    combinatorial growth of repeated set operations (e.g. a multiplicative
+    reduction).  Tunable via the ``set_format_threshold`` parameter of
+    :meth:`analyze`.
+    """
+
     @staticmethod
     def analyze(
         func: FuncDef,
@@ -1813,6 +1962,8 @@ class FormatInfer:
         pre_cache: PreAnalysisCache | None = None,
         fn_fmt: FunctionFormat | None = None,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
+        range_set_threshold: int = DEFAULT_RANGE_SET_THRESHOLD,
+        set_format_threshold: int = DEFAULT_SET_FORMAT_THRESHOLD,
     ) -> FormatAnalysis:
         """
         Performs format analysis on an FPy function.
@@ -1871,6 +2022,16 @@ class FormatInfer:
                 ``REAL_FORMAT``.  Only applies to loops without a known
                 iteration count (``while`` loops, and ``for`` loops
                 over symbolic-size iterables).
+            range_set_threshold:
+                Maximum element count for which a concrete ``range(...)``
+                pins its exact value set as a :class:`SetFormat`.  Larger
+                ranges fall back to the bounded integer format
+                ``A(inf, 0, b)``.
+            set_format_threshold:
+                Maximum size of a :class:`SetFormat` produced by set
+                arithmetic or joins before it collapses to the covering
+                bounded :class:`AbstractFormat`.  Bounds the combinatorial
+                growth of repeated set operations.
 
         Returns:
             A :class:`FormatAnalysis` whose ``by_def``, ``by_expr``,
@@ -1910,5 +2071,7 @@ class FormatInfer:
             pre_cache=pre_cache,
             fn_fmt=fn_fmt,
             loop_iter_limit=loop_iter_limit,
+            range_set_threshold=range_set_threshold,
+            set_format_threshold=set_format_threshold,
         )
         return inst.analyze()

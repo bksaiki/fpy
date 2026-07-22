@@ -127,8 +127,8 @@ class TestListComp:
         out = CppCompiler(unsafe_cast_int=True).compile(
             f, ctx=fp.FP64, arg_types=[],
         )
-        assert 'for (int64_t i = 0; i < 5; ++i) {' in out
-        assert '.push_back((i * i));' in out
+        assert 'for (int8_t i = 0; i < 5; ++i) {' in out
+        assert '.push_back((static_cast<int64_t>(i) * static_cast<int64_t>(i)));' in out
 
     def test_range2_iterable(self):
         @fp.fpy
@@ -138,9 +138,9 @@ class TestListComp:
                 return ks[0]
 
         out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
-        # ``range(3, 9)`` widens through the unbounded-integer fallback
-        # to ``int64_t`` (no tighter ladder entry covers it).
-        assert 'for (int64_t k = 3; k < 9; ++k) {' in out
+        # ``range(3, 9)`` yields ``k in {3..8}``; the counter is sized to
+        # hold the exit-test overshoot (9), which fits ``int8_t``.
+        assert 'for (int8_t k = 3; k < 9; ++k) {' in out
 
     def test_nested_comp(self):
         """Multiple ``for`` clauses produce nested loops within a
