@@ -32,6 +32,8 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..number import INTEGER
 from ..utils import Gensym
 
+from .rename_target import RenameTarget
+
 class ForUnrollStrategy(enum.Enum):
     """Strategy for dealing with a length that is not a multiple of the
     unroll factor ``k = times + 1``."""
@@ -202,16 +204,29 @@ class _ForUnroll(DefaultTransformVisitor):
         t: NamedId,
         index: Expr,
         *,
-        body: StmtBlock
+        body: StmtBlock,
+        nested_gen: set[NamedId]
     ) -> list[Stmt]:
         """One unrolled iteration: bind *target* to ``t[index]`` then run a
         fresh copy of *body*.  *index* must already be exact (a bare variable
         or a literal); any arithmetic offset is precomputed under the integer
         context by the caller, so no rounding occurs in the read itself.  The
         read must stay adjacent to its body — reordering reads ahead of bodies
-        is unsound when a body mutates the iterable in place."""
+        is unsound when a body mutates the iterable in place.
+
+        Names in *nested_gen* — introduced by the transform while unrolling
+        nested loops in *body* — are given fresh names in this copy so no
+        generated name is reused across unrolled iterations.  User variables
+        (including loop-carried accumulators, which are never generated) keep
+        their names and thread through as before."""
+        if nested_gen:
+            copy = RenameTarget.apply_block(
+                body, {g: self.gensym.refresh(g) for g in nested_gen}
+            )
+        else:
+            copy = _clone_block(body)
         stmts: list[Stmt] = [_assign(self._copy_target(target), ListRef(_var(t), index, None))]
-        stmts.extend(_clone_block(body).stmts)
+        stmts.extend(copy.stmts)
         return stmts
 
     def _main_loop(
@@ -221,7 +236,8 @@ class _ForUnroll(DefaultTransformVisitor):
         k: int,
         target: Id | TupleBinding,
         body: StmtBlock,
-        loc: Location | None
+        loc: Location | None,
+        nested_gen: set[NamedId]
     ) -> ForStmt:
         """The unrolled loop over ``range(0, bound, k)`` consuming ``k``
         consecutive elements (``t[i]``, ``t[i+1]``, …) per iteration.
@@ -241,7 +257,7 @@ class _ForUnroll(DefaultTransformVisitor):
             main_body.append(_integer_ctx(offset_defs, loc))
         # `idx` (straight from `range`) and each `off_j` are exact integers
         for index in [_var(idx)] + [_var(off) for off in offsets]:
-            main_body.extend(self._body_copy(target, t, index, body=body))
+            main_body.extend(self._body_copy(target, t, index, body=body, nested_gen=nested_gen))
 
         return ForStmt(idx, _range(_int(0), bound, _int(k)), StmtBlock(main_body), loc)
 
@@ -252,13 +268,17 @@ class _ForUnroll(DefaultTransformVisitor):
             # rewritten loop (``times`` extra copies on top of the original).
             k = self.times + 1
             iterable = self._visit_expr(stmt.iterable, ctx)
+            gen_before = set(self.gensym.generated)
             body, _ = self._visit_block(stmt.body, ctx)
+            # Names the transform minted while unrolling nested loops in this
+            # body; each unrolled copy gets fresh ones (see `_body_copy`).
+            nested_gen = set(self.gensym.generated) - gen_before
 
             match self.strategy:
                 case ForUnrollStrategy.STRICT:
-                    emitted = self._build_strict(stmt, iterable, body, k)
+                    emitted = self._build_strict(stmt, iterable, body, k, nested_gen)
                 case ForUnrollStrategy.PEEL:
-                    emitted = self._build_peel(stmt, iterable, body, k)
+                    emitted = self._build_peel(stmt, iterable, body, k, nested_gen)
                 case _:
                     raise RuntimeError(f'unknown strategy `{self.strategy}`')
 
@@ -271,7 +291,7 @@ class _ForUnroll(DefaultTransformVisitor):
             self.index += 1
             return super()._visit_for(stmt, ctx)
 
-    def _build_strict(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int) -> list[Stmt]:
+    def _build_strict(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int, nested_gen: set[NamedId]) -> list[Stmt]:
         # STRICT: the length must be an exact multiple of `k`, so the whole
         # loop is the main region with no remainder.  Reuses the shared,
         # interleaved `_main_loop` (reads stay adjacent to their bodies).
@@ -288,7 +308,7 @@ class _ForUnroll(DefaultTransformVisitor):
                     f'a multiple of {k}, but its statically-known length is {size}'
                 )
             if size > 0:
-                emitted.append(self._main_loop(t, _int(size), k, stmt.target, body, stmt.loc))
+                emitted.append(self._main_loop(t, _int(size), k, stmt.target, body, stmt.loc, nested_gen))
         else:
             # Unknown length: assert `len(t) % k == 0` at runtime.
             n = self.gensym.refresh(self.len_id)
@@ -296,11 +316,11 @@ class _ForUnroll(DefaultTransformVisitor):
                 _assign(n, _len(_var(t))),
                 AssertStmt(_eq(_fmod(_var(n), _int(k)), _int(0)), None, None),
             ], stmt.loc))
-            emitted.append(self._main_loop(t, _var(n), k, stmt.target, body, stmt.loc))
+            emitted.append(self._main_loop(t, _var(n), k, stmt.target, body, stmt.loc, nested_gen))
 
         return emitted
 
-    def _build_peel(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int) -> list[Stmt]:
+    def _build_peel(self, stmt: ForStmt, iterable: Expr, body: StmtBlock, k: int, nested_gen: set[NamedId]) -> list[Stmt]:
         # Unroll the largest multiple-of-``k`` prefix ``[0, m)`` and run the
         # remaining ``[m, n)`` elements separately.  Correct for any length.
         #
@@ -317,11 +337,11 @@ class _ForUnroll(DefaultTransformVisitor):
             # is peeled straight-line (no residual loop).
             m = (size // k) * k
             if m > 0:
-                emitted.append(self._main_loop(t, _int(m), k, stmt.target, body, stmt.loc))
+                emitted.append(self._main_loop(t, _int(m), k, stmt.target, body, stmt.loc, nested_gen))
             for p in range(m, size):
                 # literal index: exact by construction, no integer context
                 emitted.extend(
-                    self._body_copy(stmt.target, t, _int(p), body=body)
+                    self._body_copy(stmt.target, t, _int(p), body=body, nested_gen=nested_gen)
                 )
         else:
             # Unknown length: compute the main-region bound `m = n - n % k`
@@ -332,11 +352,11 @@ class _ForUnroll(DefaultTransformVisitor):
                 _assign(n, _len(_var(t))),
                 _assign(m, _sub(_var(n), _fmod(_var(n), _int(k)))),
             ], stmt.loc))
-            emitted.append(self._main_loop(t, _var(m), k, stmt.target, body, stmt.loc))
+            emitted.append(self._main_loop(t, _var(m), k, stmt.target, body, stmt.loc, nested_gen))
 
             rem_idx = self.gensym.refresh(self.idx_id)
             rem_body = self._body_copy(
-                stmt.target, t, _var(rem_idx), body=body
+                stmt.target, t, _var(rem_idx), body=body, nested_gen=nested_gen
             )
             emitted.append(ForStmt(
                 rem_idx, _range(_var(m), _var(n), _int(1)), StmtBlock(rem_body), stmt.loc
@@ -404,6 +424,8 @@ class ForUnroll:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
+        if where is not None and not isinstance(where, int):
+            raise TypeError(f"Expected an \'int\' or None for where, got {where}")
         if not isinstance(times, int):
             raise TypeError(f"Expected an \'int\' for times, got {times}")
         if times < 0:
@@ -430,5 +452,13 @@ class ForUnroll:
             temp_id, len_id, idx_id, array_size
         )
         func = unroller.apply()
+        # After traversal, `index` counts every `for` loop visited, so a
+        # `where` outside `[0, index)` names no loop: fail rather than
+        # silently returning the function unchanged.
+        if where is not None and not (0 <= where < unroller.index):
+            raise ValueError(
+                f'where={where} does not correspond to a `for` loop; '
+                f'the function has {unroller.index} `for` loop(s)'
+            )
         SyntaxCheck.check(func, ignore_unknown=True)
         return func

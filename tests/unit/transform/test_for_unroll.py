@@ -2,6 +2,9 @@
 Unit tests for loop unrolling.
 """
 
+import re
+from collections import Counter
+
 import fpy2 as fp
 
 from fpy2.transform import ForUnroll, ForUnrollStrategy
@@ -207,6 +210,116 @@ class TestForUnrollStrict():
         # divisible input runs correctly
         assert sumlist([1.0, 2.0, 3.0, 4.0]) == \
             sumlist.with_ast(ForUnroll.apply(sumlist.ast, times=1, strategy=STRICT))([1.0, 2.0, 3.0, 4.0])
+
+
+class TestForUnrollNested():
+    """Nested-loop unrolling: the inner loop's transform-generated temporaries
+    must be fresh in every copy of the outer body (no name reused across
+    unrolled iterations), while loop-carried and live-out user variables keep
+    their names."""
+
+    def test_nested_semantics(self):
+        @fp.fpy
+        def nested(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                for y in ys:
+                    s = s + x * y
+            return s
+
+        _check_peel(nested, [
+            ([1.0, 2.0, 3.0], [4.0, 5.0]),
+            ([1.0, 2.0], [3.0, 4.0, 5.0, 6.0]),
+            ([], [1.0]),
+        ])
+
+    def test_generated_temps_are_unique(self):
+        @fp.fpy
+        def nested(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                for y in ys:
+                    s = s + x * y
+            return s
+
+        txt = ForUnroll.apply(nested.ast, times=1, strategy=PEEL).format()
+        # every transform-generated temp (t*/n*/m*/i<digits>) is assigned once
+        gen = [a for a in re.findall(r'^\s*([A-Za-z_][A-Za-z0-9_]*) =', txt, re.M)
+               if re.fullmatch(r'(t|n|m|i)\d+', a)]
+        dupes = [name for name, c in Counter(gen).items() if c > 1]
+        assert not dupes, f'generated temps reused across copies: {dupes}'
+
+    def test_live_out_body_var_preserved(self):
+        # `last` is written in the body and read after the loop; it must NOT be
+        # freshened away (it is a user variable, not transform-generated).
+        @fp.fpy
+        def liveout(xs: list[fp.Real]) -> fp.Real:
+            last = 0.0
+            for x in xs:
+                last = x
+            return last
+
+        _check_peel(liveout, [([1.0, 2.0, 3.0, 4.0, 5.0],), ([9.0],), ([],)])
+
+
+class TestForUnrollWhere():
+    """`where` selects a single loop by pre-order index; an index that names
+    no loop is a caller error, not a silent no-op."""
+
+    def test_out_of_range_raises(self):
+        @fp.fpy
+        def one_loop(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:      # the only for loop -> index 0
+                s = s + x
+            return s
+
+        for bad in (1, 2, 5):
+            try:
+                ForUnroll.apply(one_loop.ast, where=bad, times=1)
+                assert False, f'expected ValueError for where={bad}'
+            except ValueError:
+                pass
+
+    def test_negative_raises(self):
+        @fp.fpy
+        def one_loop(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                s = s + x
+            return s
+
+        try:
+            ForUnroll.apply(one_loop.ast, where=-1, times=1)
+            assert False, 'expected ValueError for where=-1'
+        except ValueError:
+            pass
+
+    def test_no_loops_raises(self):
+        @fp.fpy
+        def no_loop(x: fp.Real) -> fp.Real:
+            return x + 1.0
+
+        try:
+            ForUnroll.apply(no_loop.ast, where=0, times=1)
+            assert False, 'expected ValueError: no loop at index 0'
+        except ValueError:
+            pass
+
+    def test_valid_where_selects_one_loop(self):
+        @fp.fpy
+        def two_loops(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for x in xs:
+                s = s + x
+            for x in xs:
+                s = s + x
+            return s
+
+        # where=1 is in range -> no error, and semantics preserved
+        out = ForUnroll.apply(two_loops.ast, where=1, times=1, strategy=PEEL)
+        for data in ([1.0, 2.0, 3.0, 4.0], [], [5.0]):
+            assert two_loops(data) == two_loops.with_ast(out)(data)
 
 
 class TestForUnroll():
