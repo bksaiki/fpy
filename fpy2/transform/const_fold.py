@@ -18,8 +18,9 @@ def _rational_literal(val: Fraction, loc):
     otherwise an ``fp.rational(p, q)`` call."""
     if val.denominator == 1:
         return Integer(int(val), loc)
-    func = Attribute(Var(NamedId('fp'), loc), 'rational', loc)
-    return Rational(func, val.numerator, val.denominator, loc)
+    # synthesized node: no surface reference; the pretty-printer names it
+    # per the target function's namespace (see CANONICAL_OP_NAMES).
+    return Rational(None, val.numerator, val.denominator, loc)
 
 
 def value_to_literal(val: object, loc):

@@ -27,20 +27,20 @@ def _get_constants():
         _constants_cache = {
             'TRUE': BoolVal(True, None),
             'FALSE': BoolVal(False, None),
-            'NAN': ConstNan(_func_symbol('nan'), None),
-            'INFINITY': ConstInf(_func_symbol('inf'), None),
-            'PI': ConstPi(_func_symbol('const_pi'), None),
-            'E': ConstE(_func_symbol('const_e'), None),
-            'LOG2E': ConstLog2E(_func_symbol('const_log2e'), None),
-            'LOG10E': ConstLog10E(_func_symbol('const_log10e'), None),
-            'LN2': ConstLn2(_func_symbol('const_ln2'), None),
-            'PI_2': ConstPi_2(_func_symbol('const_pi_2'), None),
-            'PI_4': ConstPi_4(_func_symbol('const_pi_4'), None),
-            'M_1_PI': Const1_Pi(_func_symbol('const_1_pi'), None),
-            'M_2_PI': Const2_Pi(_func_symbol('const_2_pi'), None),
-            'M_2_SQRTPI': Const2_SqrtPi(_func_symbol('const_2_sqrtpi'), None),
-            'SQRT2': ConstSqrt2(_func_symbol('const_sqrt2'), None),
-            'SQRT1_2': ConstSqrt1_2(_func_symbol('const_sqrt1_2'), None),
+            'NAN': ConstNan(None, None),
+            'INFINITY': ConstInf(None, None),
+            'PI': ConstPi(None, None),
+            'E': ConstE(None, None),
+            'LOG2E': ConstLog2E(None, None),
+            'LOG10E': ConstLog10E(None, None),
+            'LN2': ConstLn2(None, None),
+            'PI_2': ConstPi_2(None, None),
+            'PI_4': ConstPi_4(None, None),
+            'M_1_PI': Const1_Pi(None, None),
+            'M_2_PI': Const2_Pi(None, None),
+            'M_2_SQRTPI': Const2_SqrtPi(None, None),
+            'SQRT2': ConstSqrt2(None, None),
+            'SQRT1_2': ConstSqrt1_2(None, None),
         }
     return _constants_cache
 
@@ -121,10 +121,10 @@ def _func_symbol(name: str):
     return Var(NamedId(name), None)
 
 def _empty(ns: list[Expr]) -> Expr:
-    return Empty(_func_symbol('empty'), ns, None)
+    return Empty(None, ns, None)
 
 def _round(x: Expr) -> Expr:
-    return Round(_func_symbol('round'), x, None)
+    return Round(None, x, None)
 
 # TODO: clean this up
 class _Ctx:
@@ -188,16 +188,16 @@ class _FPCore2FPy:
         return _round(Decnum(str(e.value), None))
 
     def _visit_hexnum(self, e: fpc.Hexnum, ctx: _Ctx) -> Expr:
-        return _round(Hexnum(_func_symbol('hexnum'), str(e.value), None))
+        return _round(Hexnum(None, str(e.value), None))
 
     def _visit_integer(self, e: fpc.Integer, ctx: _Ctx) -> Expr:
         return _round(Integer(int(e.value), None))
 
     def _visit_rational(self, e: fpc.Rational, ctx: _Ctx) -> Expr:
-        return _round(Rational(_func_symbol('rational'), e.p, e.q, None))
+        return _round(Rational(None, e.p, e.q, None))
 
     def _visit_digits(self, e: fpc.Digits, ctx: _Ctx) -> Expr:
-        return _round(Digits(_func_symbol('digits'), e.m, e.e, e.b, None))
+        return _round(Digits(None, e.m, e.e, e.b, None))
 
     def _visit_unary(self, e: fpc.UnaryExpr, ctx: _Ctx) -> Expr:
         unary_table = _get_unary_table()
@@ -211,7 +211,7 @@ class _FPCore2FPy:
             cls = unary_table[e.name]
             arg = self._visit(e.children[0], ctx)
             if issubclass(cls, NamedUnaryOp):
-                return cls(_func_symbol(e.name), arg, None)
+                return cls(None, arg, None)
             else:
                 return cls(arg, None)
         else:
@@ -224,7 +224,7 @@ class _FPCore2FPy:
             left = self._visit(e.children[0], ctx)
             right = self._visit(e.children[1], ctx)
             if issubclass(cls, NamedBinaryOp):
-                return cls(_func_symbol(e.name), left, right, None)
+                return cls(None, left, right, None)
             else:
                 return cls(left, right, None)
         else:
@@ -232,11 +232,11 @@ class _FPCore2FPy:
                 case 'fmin':
                     left = self._visit(e.children[0], ctx)
                     right = self._visit(e.children[1], ctx)
-                    return Min(_func_symbol('min'), (left, right), None)
+                    return Min(None, (left, right), None)
                 case 'fmax':
                     left = self._visit(e.children[0], ctx)
                     right = self._visit(e.children[1], ctx)
-                    return Max(_func_symbol('max'), (left, right), None)
+                    return Max(None, (left, right), None)
                 case _:
                     raise NotImplementedError(f'unsupported binary operation {e.name}')
 
@@ -248,7 +248,7 @@ class _FPCore2FPy:
             arg1 = self._visit(e.children[1], ctx)
             arg2 = self._visit(e.children[2], ctx)
             if issubclass(cls, NamedTernaryOp):
-                return cls(_func_symbol(e.name), arg0, arg1, arg2, None)
+                return cls(None, arg0, arg1, arg2, None)
             else:
                 return cls(arg0, arg1, arg2, None)
         else:
@@ -299,7 +299,7 @@ class _FPCore2FPy:
                     raise ValueError('size operator expects 2 arguments')
                 arg0 = self._visit(e.children[0], ctx)
                 arg1 = self._visit(e.children[1], ctx)
-                return Size(_func_symbol('size'), arg0, arg1, None)
+                return Size(None, arg0, arg1, None)
             case fpc.UnknownOperator():
                 ident = pythonize_id(e.name)
                 exprs = [self._visit(e, ctx) for e in e.children]
@@ -448,7 +448,7 @@ class _FPCore2FPy:
             t = iter_vars[0]
             n = range_vars[0]
             inner_stmts: list[Stmt] = []
-            e = Range1(_func_symbol('range'), Var(n, None), None)
+            e = Range1(None, Var(n, None), None)
             stmt = ForStmt(t, e, StmtBlock(inner_stmts), None)
             stmts.append(stmt)
             return self._make_tensor_body(iter_vars[1:], range_vars[1:], inner_stmts)
@@ -756,7 +756,7 @@ class _FPCore2FPy:
                             case str():
                                 # named dimension
                                 dim_id = self.gensym.fresh(dim)
-                                size_e = Size(_func_symbol('size'), Var(t, None), Integer(i, None), None)
+                                size_e = Size(None, Var(t, None), Integer(i, None), None)
                                 stmt = Assign(dim_id, None, size_e, None)
                                 ctx.stmts.append(stmt)
                                 # TODO: duplicate dimension names means a runtime check
