@@ -19,10 +19,7 @@ class _FormatterInstance(Visitor):
     def __init__(self, ast: Ast):
         self.ast = ast
         self.fmt = ''
-        # name the `fpy2` package is bound to in the enclosing function's
-        # namespace, if any; used to render operators synthesized by rewrite
-        # passes (whose `func` symbol is `None`).  Set when a `FuncDef` is
-        # formatted; stays `None` for a bare expression with no environment.
+        # `fpy2`'s alias in the enclosing function's namespace; set per `FuncDef`
         self._fpy_alias = None
 
     def apply(self) -> str:
@@ -58,14 +55,19 @@ class _FormatterInstance(Visitor):
 
     @staticmethod
     def _find_fpy_alias(env: ForeignEnv | None) -> str | None:
-        """Name that the `fpy2` package is bound to in `env`, if any."""
+        """Name that the `fpy2` package is bound to in `env`, if any.
+
+        `env` iterates in nondeterministic (set-union) order, so pick the
+        lexicographically smallest match to keep formatting stable when
+        `fpy2` is bound under more than one name."""
         if env is None:
             return None
-        for name in env:
-            val = env.get(name)
-            if isinstance(val, ModuleType) and getattr(val, '__name__', None) == 'fpy2':
-                return name
-        return None
+        aliases = [
+            name for name in env
+            if isinstance(env.get(name), ModuleType)
+            and getattr(env.get(name), '__name__', None) == 'fpy2'
+        ]
+        return min(aliases, default=None)
 
     def _fpy_qualified(self, name: str) -> str:
         """Render an `fpy2` symbol as `<alias>.<name>` when the enclosing
@@ -76,14 +78,9 @@ class _FormatterInstance(Visitor):
         return name
 
     def _op_name(self, e: Expr, ctx: _Ctx) -> str:
-        """Render the surface name of a named-operator / literal node.
-
-        Uses the node's `func` symbol when present (the reference the user
-        wrote, preserved verbatim).  When `func` is `None` the node was
-        synthesized by a rewrite pass, so derive the canonical name for its
-        type and qualify it with the enclosing function's `fpy2` alias when
-        the operator lives in the `fpy2` namespace.
-        """
+        """Surface name of a named-operator / literal node: the user's `func`
+        symbol verbatim, or the canonical name when `func` is `None`
+        (synthesized by a rewrite pass)."""
         func = getattr(e, 'func', None)
         if func is not None:
             return self._visit_function_name(func, ctx)

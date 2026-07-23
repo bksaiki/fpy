@@ -599,7 +599,7 @@ class NamedUnaryOp(UnaryOp):
 
     __slots__ = ('func',)
 
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
 
     def __init__(
         self,
@@ -647,7 +647,7 @@ class NamedBinaryOp(BinaryOp):
 
     __slots__ = ('func',)
 
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
 
     def __init__(
         self,
@@ -700,7 +700,7 @@ class TernaryOp(NaryExpr):
 class NamedTernaryOp(TernaryOp):
     """FPy AST: ternary operation with a named function"""
     __slots__ = ('func',)
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
 
     def __init__(
         self,
@@ -734,7 +734,7 @@ class NaryOp(NaryExpr):
 class NamedNaryOp(NaryOp):
     """FPy AST: n-ary operation with a named function"""
     __slots__ = ('func',)
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
 
     def __init__(
         self,

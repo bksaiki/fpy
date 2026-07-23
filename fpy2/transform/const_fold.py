@@ -15,11 +15,9 @@ from ..number import Context, Float
 
 def _rational_literal(val: Fraction, loc):
     """AST literal for an exact rational: an ``Integer`` when integral,
-    otherwise an ``fp.rational(p, q)`` call."""
+    otherwise a ``rational`` literal."""
     if val.denominator == 1:
         return Integer(int(val), loc)
-    # synthesized node: no surface reference; the pretty-printer names it
-    # per the target function's namespace (see CANONICAL_OP_NAMES).
     return Rational(None, val.numerator, val.denominator, loc)
 
 
