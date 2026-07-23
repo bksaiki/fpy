@@ -753,7 +753,7 @@ class RealFloat(numbers.Rational):
         Returns the value of the digit at the `n`-th position as a boolean.
         """
         if not isinstance(n, int):
-            raise ValueError('expected an integer', n)
+            raise TypeError('expected an integer', n)
 
         # compute digit offset from `self.exp`
         offset = n - self._exp
@@ -838,7 +838,7 @@ class RealFloat(numbers.Rational):
         and including `n`.
         """
         if not isinstance(n, int):
-            raise ValueError('expected an integer', n)
+            raise TypeError('expected an integer', n)
 
         if self.is_zero():
             # special case: 0 has no precision

@@ -605,6 +605,6 @@ class ReachingDefs:
     @staticmethod
     def analyze(ast: FuncDef | StmtBlock):
         if not isinstance(ast, FuncDef | StmtBlock):
-            raise RuntimeError(f'unexpected AST node {ast}')
+            raise TypeError(f'unexpected AST node {ast}')
         def_ids = DefAnalysis.analyze(ast)
         return _ReachingDefs(ast, def_ids).analyze()

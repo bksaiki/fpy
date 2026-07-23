@@ -73,7 +73,7 @@ check_untyped_defs = true
 
 [tool.ruff.lint]
 extend-select = ["B"]
-ignore = ["F401", "F403", "F405", "B905", "TRY004", "SIM102"]
+ignore = ["F401", "F403", "F405", "B905", "SIM102"]
 
 [tool.sphinx-pyproject]
 project = "fpy2"

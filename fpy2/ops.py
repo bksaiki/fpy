@@ -1057,8 +1057,6 @@ def size(x: list, dim: Real, ctx: Context = REAL):
         # size(x, n) = size(x[0], n - 1)
         for _ in range(int(dim)):
             x = x[0]
-            if not isinstance(x, (list, tuple)):
-                raise ValueError(f'dimension `{dim}` is out of bounds for the tensor `{x}`')
         if ctx is None:
             return Float.from_int(len(x))
         else:

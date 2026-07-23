@@ -3,6 +3,10 @@ This module defines the `Float` number type,
 an arbitrary-precision floating-point number.
 """
 
+# `X | None` annotations reference names bound only under TYPE_CHECKING (e.g.
+# `Context`), so defer annotation evaluation to stay importable on Python 3.11.
+from __future__ import annotations
+
 import math
 from fractions import Fraction
 from typing import TYPE_CHECKING, Optional, Self
@@ -915,7 +919,7 @@ class Float:
             raise ValueError(f'cannot compute next_towards without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_towards: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_towards: self={self}, ctx={self._ctx}')
         return self._ctx.next_towards(self, other, allow_inf=allow_inf)
 
     def next_towards_zero(self, allow_inf: bool = False) -> 'Float':
@@ -926,7 +930,7 @@ class Float:
             raise ValueError(f'cannot compute next_towards_zero without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_towards_zero: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_towards_zero: self={self}, ctx={self._ctx}')
         return self._ctx.next_towards_zero(self, allow_inf=allow_inf)
 
     def next_away_zero(self, allow_inf: bool = False) -> 'Float':
@@ -937,7 +941,7 @@ class Float:
             raise ValueError(f'cannot compute next_away_zero without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_away_zero: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_away_zero: self={self}, ctx={self._ctx}')
         return self._ctx.next_away_zero(self, allow_inf=allow_inf)
 
     def next_up(self, allow_inf: bool = False) -> 'Float':
@@ -948,7 +952,7 @@ class Float:
             raise ValueError(f'cannot compute next_up without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_up: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_up: self={self}, ctx={self._ctx}')
         return self._ctx.next_up(self, allow_inf=allow_inf)
 
     def next_down(self, allow_inf: bool = False) -> 'Float':
@@ -959,5 +963,5 @@ class Float:
             raise ValueError(f'cannot compute next_down without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_down: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_down: self={self}, ctx={self._ctx}')
         return self._ctx.next_down(self, allow_inf=allow_inf)
