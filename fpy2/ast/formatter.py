@@ -67,6 +67,14 @@ class _FormatterInstance(Visitor):
                 return name
         return None
 
+    def _fpy_qualified(self, name: str) -> str:
+        """Render an `fpy2` symbol as `<alias>.<name>` when the enclosing
+        function imports `fpy2` under a module alias, else bare `name`."""
+        import fpy2
+        if self._fpy_alias is not None and hasattr(fpy2, name):
+            return f'{self._fpy_alias}.{name}'
+        return name
+
     def _op_name(self, e: Expr, ctx: _Ctx) -> str:
         """Render the surface name of a named-operator / literal node.
 
@@ -79,12 +87,7 @@ class _FormatterInstance(Visitor):
         func = getattr(e, 'func', None)
         if func is not None:
             return self._visit_function_name(func, ctx)
-
-        import fpy2
-        name = CANONICAL_OP_NAMES[type(e)]
-        if self._fpy_alias is not None and hasattr(fpy2, name):
-            return f'{self._fpy_alias}.{name}'
-        return name
+        return self._fpy_qualified(CANONICAL_OP_NAMES[type(e)])
 
     def _visit_var(self, e: Var, ctx: _Ctx) -> str:
         return str(e.name)
@@ -370,11 +373,12 @@ class _FormatterInstance(Visitor):
         spec = fmeta.spec
         meta = fmeta.props
 
-        num_fields = sum(x is not None for x in (rctx, spec, meta))
-        if num_fields == 0:
-            self._add_line('@fpy', ctx)
+        name = self._fpy_qualified('fpy')
+        if not (rctx or spec or meta):
+            # no keyword arguments: emit the bare decorator without `(...)`
+            self._add_line(f'@{name}', ctx)
         else:
-            self._add_line('@fpy(', ctx)
+            self._add_line(f'@{name}(', ctx)
             if rctx:
                 v = self._format_data(rctx, arg_str)
                 self._add_line(f'ctx={v},', ctx + 1)
