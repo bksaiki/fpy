@@ -5,13 +5,9 @@ Mathematical functions under rounding contexts.
 from fractions import Fraction
 from unittest import case
 
+from .number import REAL, Context, Float, Real, RealFloat
 from .number.engine import ENGINES
-from .number import Context, Float, RealFloat, Real, REAL
-
-from .utils import (
-    UNINIT,
-    digits_to_fraction, hexnum_to_fraction, is_dyadic
-)
+from .utils import UNINIT, digits_to_fraction, hexnum_to_fraction, is_dyadic
 
 __all__ = [
     # General operations

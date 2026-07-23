@@ -4,10 +4,9 @@ but with subnormalization and a maximum value, that is multi-precision
 and bounded. Hence, "MP-B."
 """
 
-from ..number import RealFloat, Float, RNG
-from ..round import RoundingMode, RoundingDirection, OverflowMode
-from ...utils import default_repr, DefaultOr, DEFAULT
-
+from ...utils import DEFAULT, DefaultOr, default_repr
+from ..number import RNG, Float, RealFloat
+from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import SizedContext
 from .format import SizedFormat
 from .mps_float import MPSFloatFormat

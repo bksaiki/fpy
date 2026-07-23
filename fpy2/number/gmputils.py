@@ -6,18 +6,18 @@ the `Float` type and the `gmpy2.mpfr` type,
 as well as wrappers for round-to-odd arithmetic.
 """
 
+from collections.abc import Callable
+
 import gmpy2 as gmp
 
-from typing import Callable
-
-from .number import RealFloat, Float
+from .number import Float, RealFloat
 
 __all__ = [
-    'MPFR_EMIN',
     'MPFR_EMAX',
+    'MPFR_EMIN',
     'float_to_mpfr',
-    'mpfr_to_float',
     'mpfr_call',
+    'mpfr_to_float',
     'mpfr_value',
 ]
 

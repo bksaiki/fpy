@@ -4,6 +4,7 @@ Bitwise operations.
 
 import struct
 
+
 def bitmask(k: int) -> int:
     """Return a bitmask of `k` bits."""
     return (1 << k) - 1

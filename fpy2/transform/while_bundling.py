@@ -6,9 +6,7 @@ into a single variable.
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
-
 from .rename_target import RenameTarget
-
 
 _Ctx = dict[NamedId, Expr]
 

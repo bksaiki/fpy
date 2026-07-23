@@ -8,18 +8,17 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import Unionfind, default_repr
-
 from .defs import DefAnalysis
 
 __all__ = [
-    'ReachingDefs',
-    'ReachingDefsAnalysis',
     'AssignDef',
-    'PhiDef',
-    'Definition',
     'DefCtx',
     'DefSite',
+    'Definition',
+    'PhiDef',
     'PhiSite',
+    'ReachingDefs',
+    'ReachingDefsAnalysis',
 ]
 
 

@@ -19,30 +19,77 @@ targets can swap in a different table without changing the emitter.
 from __future__ import annotations
 
 from ...ast.fpyast import (
-    Abs, Acos, Acosh, Add, Asin, Asinh, Atan, Atan2, Atanh, Cbrt,
-    Ceil, Copysign, Cos, Cosh, Div, Erf, Erfc, Exp, Exp2, Expm1,
-    Fdim, Fma, Floor, Fmod, Hypot, Lgamma, Log, Log10, Log1p,
-    Log2, Logb, Mul, NearbyInt, Neg, Pow, Remainder, RoundInt,
-    Sin, Sinh, Sqrt, Sub, Tan, Tanh, Tgamma, Trunc,
+    Abs,
+    Acos,
+    Acosh,
+    Add,
+    Asin,
+    Asinh,
+    Atan,
+    Atan2,
+    Atanh,
+    Cbrt,
+    Ceil,
+    Copysign,
+    Cos,
+    Cosh,
+    Div,
+    Erf,
+    Erfc,
+    Exp,
+    Exp2,
+    Expm1,
+    Fdim,
+    Floor,
+    Fma,
+    Fmod,
+    Hypot,
+    Lgamma,
+    Log,
+    Log1p,
+    Log2,
+    Log10,
+    Logb,
+    Mul,
+    NearbyInt,
+    Neg,
+    Pow,
+    Remainder,
+    RoundInt,
+    Sin,
+    Sinh,
+    Sqrt,
+    Sub,
+    Tan,
+    Tanh,
+    Tgamma,
+    Trunc,
 )
 from ...number import (
-    RM,
     INTEGER,
-    SINT8, SINT16, SINT32, SINT64,
-    UINT8, UINT16, UINT32, UINT64,
+    RM,
+    SINT8,
+    SINT16,
+    SINT32,
+    SINT64,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
 )
 from ...number.context.context import Context
 from ...number.context.ieee754 import IEEEContext
-
 from .ops import (
-    BinaryCppOp, BinaryOpTable,
+    BinaryCppOp,
+    BinaryOpTable,
     ScalarOpTable,
-    TernaryCppOp, TernaryOpTable,
-    UnaryCppOp, UnaryOpTable,
+    TernaryCppOp,
+    TernaryOpTable,
+    UnaryCppOp,
+    UnaryOpTable,
 )
 from .storage import choose_storage_scalar
 from .types import CppScalar
-
 
 # ---------------------------------------------------------------------
 # Native context inventory.

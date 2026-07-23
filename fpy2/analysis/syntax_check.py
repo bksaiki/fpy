@@ -7,9 +7,9 @@ from ..ast.fpyast import *
 from ..ast.visitor import Visitor
 from .live_vars import LiveVars
 
+
 class FPySyntaxError(Exception):
     """Syntax error for FPy programs."""
-    pass
 
 
 class _Env:

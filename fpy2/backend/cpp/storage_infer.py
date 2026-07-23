@@ -34,14 +34,13 @@ numeric suffixes (``x_1``, ``x_2``, …).
 from collections import defaultdict
 from dataclasses import dataclass
 
-from ...ast.fpyast import Argument, IndexedAssign, Stmt
 from ...analysis import Definition
-from ...analysis.format_infer import FormatBound
 from ...analysis.define_use import DefineUseAnalysis
+from ...analysis.format_infer import FormatBound
 from ...analysis.reaching_defs import AssignDef, PhiDef
+from ...ast.fpyast import Argument, IndexedAssign, Stmt
 from ...utils import Unionfind
-
-from .storage import aggregate_storage, StorageSelectionError
+from .storage import StorageSelectionError, aggregate_storage
 from .types import CppType
 
 

@@ -6,10 +6,9 @@ numbers with subnormals. Hence, "MP-S."
 
 from fractions import Fraction
 
-from ..number import Float, RealFloat, RNG
+from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+from ..number import RNG, Float, RealFloat
 from ..round import RoundingMode
-from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
-
 from .context import OrdinalContext
 from .format import OrdinalFormat
 
@@ -101,9 +100,7 @@ class MPSFloatFormat(OrdinalFormat):
 
         if x.is_nar():
             return True
-        elif x.c == 0:
-            return x.exp == self.expmin
-        elif x.e < self.emin:
+        elif x.c == 0 or x.e < self.emin:
             return x.exp == self.expmin
         else:
             return x.p == self.pmax

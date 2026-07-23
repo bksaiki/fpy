@@ -6,6 +6,7 @@ from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
 
+
 class _ForUnpackInstance(DefaultTransformVisitor):
     """Single-use instance of the ForUnpack pass."""
     func: FuncDef

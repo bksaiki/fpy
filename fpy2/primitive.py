@@ -1,10 +1,11 @@
 """FPy primitives are the result of `@fpy_prim` decorators."""
 
-from typing import Any, Callable, Generic, Iterable, ParamSpec, TypeVar
+from collections.abc import Callable, Iterable
+from typing import Any, Generic, ParamSpec, TypeVar
 
 from .ast import TypeAnn
+from .number import FP64, INTEGER, Context, Float
 from .utils import has_keyword
-from .number import Context, Float, FP64, INTEGER
 
 P = ParamSpec('P')
 R = TypeVar('R')

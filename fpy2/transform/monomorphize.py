@@ -4,11 +4,11 @@ Monomorphize pass.
 Both type and context monomorphization.
 """
 
-from typing import Collection, Iterable
+from collections.abc import Collection, Iterable
 
+from ..analysis import TypeAnalysis, TypeInfer
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
-from ..analysis import TypeInfer, TypeAnalysis
 from ..fpc_context import FPCoreContext
 from ..types import *
 

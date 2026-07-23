@@ -3,7 +3,7 @@ This module defines user-defined rewrites.
 """
 
 from .applier import Applier
-from .matcher import Matcher, LocatedMatch, ExprMatch, StmtMatch
-from .pattern import Pattern, ExprPattern, StmtPattern
+from .matcher import ExprMatch, LocatedMatch, Matcher, StmtMatch
+from .pattern import ExprPattern, Pattern, StmtPattern
 from .rewrite import Rewrite
 from .subst import Subst

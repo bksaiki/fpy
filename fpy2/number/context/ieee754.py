@@ -3,9 +3,9 @@ This module defines floating-point numbers as defined
 by the IEEE 754 standard.
 """
 
-from ..round import RoundingMode, OverflowMode
 from ...utils import DEFAULT, DefaultOr
 from ..number import RNG, Float
+from ..round import OverflowMode, RoundingMode
 from .efloat import EFloatContext, EFloatFormat, EFloatNanKind
 
 

@@ -1,10 +1,15 @@
 """Dead code elimination."""
 
-from ..ast import *
 from ..analysis import (
-    DefineUse, DefineUseAnalysis, AssignDef, PhiDef,
-    Purity, SyntaxCheck
+    AssignDef,
+    DefineUse,
+    DefineUseAnalysis,
+    PhiDef,
+    Purity,
+    SyntaxCheck,
 )
+from ..ast import *
+
 
 class _Eliminator(DefaultTransformVisitor):
     """

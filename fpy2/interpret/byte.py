@@ -7,16 +7,16 @@ import copy
 import functools
 import inspect
 import sys
-
+from collections.abc import Callable
 from fractions import Fraction
-from typing import Any, Callable, TypeAlias
+from typing import Any, TypeAlias
 
 from .. import ops
 from ..ast.fpyast import *
 from ..ast.visitor import Visitor
 from ..env import ForeignEnv
 from ..function import Function
-from ..number import Float, RealFloat, FP64, INTEGER, REAL
+from ..number import FP64, INTEGER, REAL, Float, RealFloat
 from ..primitive import Primitive
 from ..utils import Gensym, is_dyadic
 from .interpreter import Interpreter

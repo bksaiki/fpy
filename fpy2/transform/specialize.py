@@ -23,7 +23,6 @@ representations.
 """
 
 import hashlib
-
 from typing import NamedTuple
 
 from ..analysis.format_infer import (
@@ -43,7 +42,6 @@ from ..number.context.real import REAL_FORMAT
 from ..types import BoolType, ListType, RealType, TupleType, Type
 from .monomorphize import Monomorphize
 
-
 # ----------------------------------------------------------------------
 # Format -> Context recovery + FormatBound -> Type conversion (used only
 # to feed `Monomorphize` at callees — the spec key does *not* go through
@@ -60,13 +58,38 @@ def _format_to_ctx(fmt: Format) -> Context | None:
     global _FORMAT_TO_CTX
     if _FORMAT_TO_CTX is None:
         from ..libraries.base import (
-            FP16, FP32, FP64, FP128, FP256, BF16, TF32, INTEGER,
-            SINT8, SINT16, SINT32, SINT64,
-            UINT8, UINT16, UINT32, UINT64,
-            S1E5M2, S1E4M3,
-            MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
-            MX_E8M0, MX_INT8,
-            FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
+            BF16,
+            FP8P1,
+            FP8P2,
+            FP8P3,
+            FP8P4,
+            FP8P5,
+            FP8P6,
+            FP8P7,
+            FP16,
+            FP32,
+            FP64,
+            FP128,
+            FP256,
+            INTEGER,
+            MX_E2M1,
+            MX_E2M3,
+            MX_E3M2,
+            MX_E4M3,
+            MX_E5M2,
+            MX_E8M0,
+            MX_INT8,
+            S1E4M3,
+            S1E5M2,
+            SINT8,
+            SINT16,
+            SINT32,
+            SINT64,
+            TF32,
+            UINT8,
+            UINT16,
+            UINT32,
+            UINT64,
         )
         canonical = (
             FP16, FP32, FP64, FP128, FP256, BF16, TF32, INTEGER,

@@ -3,26 +3,25 @@ This module defines rounding contexts.
 """
 
 # Abstract contexts
-from .context import Context, OrdinalContext, SizedContext, EncodableContext
-
-# Abstract formats
-from .format import Format, OrdinalFormat, SizedFormat, EncodableFormat
+# Rounding
+from ..round import OV, RM
+from .context import Context, EncodableContext, OrdinalContext, SizedContext
+from .efloat import EFloatContext, EFloatFormat, EFloatNanKind
 
 # Concrete formats and contexts (each module exports one Format and one Context)
-from .exponential import ExpFormat, ExpContext
-from .efloat import EFloatFormat, EFloatContext, EFloatNanKind
-from .fixed import FixedFormat, FixedContext
-from .ieee754 import IEEEFormat, IEEEContext
-from .mp_fixed import MPFixedFormat, MPFixedContext
-from .mp_float import MPFloatFormat, MPFloatContext
-from .mpb_fixed import MPBFixedFormat, MPBFixedContext
-from .mpb_float import MPBFloatFormat, MPBFloatContext
-from .mps_float import MPSFloatFormat, MPSFloatContext
-from .real import REAL, REAL_FORMAT
-from .sm_fixed import SMFixedFormat, SMFixedContext
+from .exponential import ExpContext, ExpFormat
+from .fixed import FixedContext, FixedFormat
 
-# Rounding
-from ..round import RM, OV
+# Abstract formats
+from .format import EncodableFormat, Format, OrdinalFormat, SizedFormat
+from .ieee754 import IEEEContext, IEEEFormat
+from .mp_fixed import MPFixedContext, MPFixedFormat
+from .mp_float import MPFloatContext, MPFloatFormat
+from .mpb_fixed import MPBFixedContext, MPBFixedFormat
+from .mpb_float import MPBFloatContext, MPBFloatFormat
+from .mps_float import MPSFloatContext, MPSFloatFormat
+from .real import REAL, REAL_FORMAT
+from .sm_fixed import SMFixedContext, SMFixedFormat
 
 ###########################################################
 # Format aliases

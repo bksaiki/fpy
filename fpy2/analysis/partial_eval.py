@@ -18,8 +18,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..fpc_context import FPCoreContext
 from ..interpret import Interpreter, get_default_interpreter
-from ..number import Float, REAL
-
+from ..number import REAL, Float
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
 ScalarValue: TypeAlias = bool | Float | Fraction | Context

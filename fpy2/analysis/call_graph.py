@@ -33,7 +33,6 @@ from ..function import Function
 
 class CallGraphError(Exception):
     """Raised when the call graph is not a DAG (FPy forbids recursion)."""
-    pass
 
 
 class _CallCollector(DefaultVisitor):

@@ -8,7 +8,7 @@ inference) on a :class:`Function` and hands the result to
 surface as :class:`CppCompileError`.
 """
 
-from typing import Collection
+from collections.abc import Collection
 
 from ...analysis import (
     ArraySizeInfer,
@@ -25,7 +25,6 @@ from ...transform import FreeVarElim, RoundElim, Specialize, ZipElim
 from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
-
 from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError
 from .storage_infer import StorageInfer
@@ -34,7 +33,6 @@ from .utils import CPP_HEADERS, CPP_HELPERS
 
 class CppCompileError(CompileError):
     """Raised when cpp compilation fails."""
-    pass
 
 
 

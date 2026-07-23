@@ -3,10 +3,9 @@ This module defines fixed-pont numbers with a maximum value,
 that is, multiprecision and bounded. Hence "MP-B".
 """
 
-from ..number import RealFloat, Float, RNG
-from ..round import RoundingMode, RoundingDirection, OverflowMode
-from ...utils import default_repr, DefaultOr, DEFAULT
-
+from ...utils import DEFAULT, DefaultOr, default_repr
+from ..number import RNG, Float, RealFloat
+from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import SizedContext
 from .format import SizedFormat
 from .mp_fixed import MPFixedFormat
@@ -169,9 +168,7 @@ class MPBFixedFormat(SizedFormat):
             pos_maxord = self._pos_maxval_ord
             neg_maxord = self._neg_maxval_ord
 
-        if x > pos_maxord:
-            raise ValueError(f'Expected an \'int\' between {neg_maxord} and {pos_maxord}, got x={x}')
-        elif x < neg_maxord:
+        if x > pos_maxord or x < neg_maxord:
             raise ValueError(f'Expected an \'int\' between {neg_maxord} and {pos_maxord}, got x={x}')
         elif x > self._pos_maxval_ord:
             return Float(isinf=True)

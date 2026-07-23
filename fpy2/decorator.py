@@ -4,11 +4,11 @@ Decorators for the FPy language.
 
 import builtins
 import inspect
-
-from typing import Any, Callable, ParamSpec, TypeVar, overload
+from collections.abc import Callable
+from typing import Any, ParamSpec, TypeVar, overload
 
 from .analysis import Reachability, SyntaxCheck
-from .ast import EffectStmt, NamedId, FuncMeta
+from .ast import EffectStmt, FuncMeta, NamedId
 from .env import ForeignEnv
 from .frontend import Parser
 from .function import Function
@@ -16,7 +16,6 @@ from .number import Context
 from .primitive import Primitive
 from .rewrite import ExprPattern, StmtPattern
 from .utils import getfunclines
-
 
 P = ParamSpec('P')
 R = TypeVar('R')

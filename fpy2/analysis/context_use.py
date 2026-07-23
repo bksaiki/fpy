@@ -19,15 +19,14 @@ from ..fpc_context import FPCoreContext
 from ..number import Context
 from ..types import ContextParam
 from ..utils import Gensym, NamedId, default_repr
-
 from .define_use import DefineUse, DefineUseAnalysis
 from .partial_eval import PartialEval, PartialEvalInfo
 
 __all__ = [
-    'ContextUse',
-    'ContextUseAnalysis',
     'ContextScope',
     'ContextScopeSite',
+    'ContextUse',
+    'ContextUseAnalysis',
     'ContextUseSite',
 ]
 

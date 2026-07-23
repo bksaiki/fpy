@@ -6,17 +6,16 @@ round-to-odd arithmetic operations.
 """
 
 import enum
-import gmpy2 as gmp
 import math
-
+from collections.abc import Callable
 from fractions import Fraction
-from typing import Callable
+
+import gmpy2 as gmp
 
 from ...utils import enum_repr
 from ..context import Context
-from ..number import Float
 from ..gmputils import float_to_mpfr, mpfr_call
-
+from ..number import Float
 from .engine import Engine, EngineArg, EngineRes
 
 

@@ -3,40 +3,68 @@ This module exports all number format types.
 """
 
 from .context import (
-    # abstract formats
-    Format as Format,
-    OrdinalFormat as OrdinalFormat,
-    SizedFormat as SizedFormat,
-    EncodableFormat as EncodableFormat,
-    # concrete formats
-    ExpFormat as ExpFormat,
-    EFloatFormat as EFloatFormat,
-    FixedFormat as FixedFormat,
-    IEEEFormat as IEEEFormat,
-    MPFixedFormat as MPFixedFormat,
-    MPFloatFormat as MPFloatFormat,
-    MPBFixedFormat as MPBFixedFormat,
-    MPBFloatFormat as MPBFloatFormat,
-    MPSFloatFormat as MPSFloatFormat,
-    SMFixedFormat as SMFixedFormat,
     # format instances
     REAL_FORMAT as REAL_FORMAT,
 )
+from .context import (
+    EFloatFormat as EFloatFormat,
+)
+from .context import (
+    EncodableFormat as EncodableFormat,
+)
+from .context import (
+    # concrete formats
+    ExpFormat as ExpFormat,
+)
+from .context import (
+    FixedFormat as FixedFormat,
+)
+from .context import (
+    # abstract formats
+    Format as Format,
+)
+from .context import (
+    IEEEFormat as IEEEFormat,
+)
+from .context import (
+    MPBFixedFormat as MPBFixedFormat,
+)
+from .context import (
+    MPBFloatFormat as MPBFloatFormat,
+)
+from .context import (
+    MPFixedFormat as MPFixedFormat,
+)
+from .context import (
+    MPFloatFormat as MPFloatFormat,
+)
+from .context import (
+    MPSFloatFormat as MPSFloatFormat,
+)
+from .context import (
+    OrdinalFormat as OrdinalFormat,
+)
+from .context import (
+    SizedFormat as SizedFormat,
+)
+from .context import (
+    SMFixedFormat as SMFixedFormat,
+)
 
 __all__ = [
-    'Format',
-    'OrdinalFormat',
-    'SizedFormat',
+    'REAL_FORMAT',
+    'EFloatFormat',
     'EncodableFormat',
     'ExpFormat',
-    'EFloatFormat',
     'FixedFormat',
+    'Format',
     'IEEEFormat',
-    'MPFixedFormat',
-    'MPFloatFormat',
     'MPBFixedFormat',
     'MPBFloatFormat',
+    'MPFixedFormat',
+    'MPFloatFormat',
     'MPSFloatFormat',
+    'OrdinalFormat',
     'SMFixedFormat',
-    'REAL_FORMAT',
+    'SizedFormat',
 ]

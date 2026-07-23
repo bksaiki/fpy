@@ -3,10 +3,9 @@ This module defines floating-point numbers as implemented by MPFR,
 that is, multi-precision floating-point numbers. Hence, "MP."
 """
 
-from ..number import RealFloat, Float, RNG
+from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+from ..number import RNG, Float, RealFloat
 from ..round import RoundingMode
-from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
-
 from .context import Context
 from .format import Format
 

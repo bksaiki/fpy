@@ -35,7 +35,8 @@ the context in which the function is called (this is usually a variable).
 """
 
 from abc import ABC, abstractmethod
-from typing import Iterable, TypeAlias
+from collections.abc import Iterable
+from typing import TypeAlias
 
 from .number import Context
 from .utils import NamedId, default_repr

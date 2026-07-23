@@ -3,15 +3,15 @@ This module contains the parser for the FPy language.
 """
 
 import ast
-
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
 from types import FunctionType
+from typing import Any
 
 from ..ast.fpyast import *
 from ..env import ForeignEnv
 from ..number import Float, Real
-from ..utils import NamedId, UnderscoreId, SourceId
 from ..ops import *
+from ..utils import NamedId, SourceId, UnderscoreId
 
 _nullary_table: dict[Callable, type[NullaryOp]] = {
     nan: ConstNan,
@@ -112,7 +112,6 @@ _nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
 
 class FPyParserError(Exception):
     """Parser error for FPy"""
-    pass
 
 
 class Parser:

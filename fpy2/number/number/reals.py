@@ -5,32 +5,30 @@ an arbitrary-precision, floating-point number without infinities and NaN.
 
 import math
 import numbers
-import numpy as np
 import random
-
 from fractions import Fraction
 from typing import Self, TypeAlias, overload
 
-from ..globals import get_current_float_converter, get_current_str_converter
-from ..round import RoundingMode, RoundingDirection
+import numpy as np
+
 from ...utils import (
+    FP64_EMASK,
+    FP64_EONES,
+    FP64_EXPMIN,
+    FP64_IMPLICIT1,
+    FP64_M,
+    FP64_MMASK,
+    FP64_SMASK,
+    Ordering,
     bitmask,
     float_to_bits,
     is_dyadic,
     is_power_of_two,
     trailing_zeros,
-    Ordering,
-    FP64_M,
-    FP64_EXPMIN,
-    FP64_SMASK,
-    FP64_EMASK,
-    FP64_MMASK,
-    FP64_EONES,
-    FP64_IMPLICIT1,
 )
-
+from ..globals import get_current_float_converter, get_current_str_converter
+from ..round import RoundingDirection, RoundingMode
 from .flags import Flags
-
 
 RNG: TypeAlias = random.Random | np.random.Generator
 """Type alias for random number generators."""
@@ -55,7 +53,7 @@ class RealFloat(numbers.Rational):
     exceptional events that occured during rounding.
     """
 
-    __slots__ = ('_s', '_exp', '_c', '_flags')
+    __slots__ = ('_c', '_exp', '_flags', '_s')
 
     _s: bool
     """is the sign negative?"""
@@ -872,7 +870,7 @@ class RealFloat(numbers.Rational):
             lo = RealFloat(self._s, exp_lo, c_lo)
             return (hi, lo)
 
-    def compare(self, other: Self | int | float | Fraction) -> Ordering | None:
+    def compare(self, other: Self | float | Fraction) -> Ordering | None:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
 

@@ -33,40 +33,107 @@ Anything else raises :class:`CppEmitError`, which the public
 """
 
 import dataclasses
-
 from contextlib import contextmanager
 from fractions import Fraction
 
 from ...analysis import (
-    ContextScope, ContextScopeSite, ContextUseSite, ContextUseAnalysis,
-    DefineUseAnalysis, FormatAnalysis
+    ContextScope,
+    ContextScopeSite,
+    ContextUseAnalysis,
+    ContextUseSite,
+    DefineUseAnalysis,
+    FormatAnalysis,
+)
+from ...analysis.format_infer import (
+    AbstractableFormat,
+    AbstractFormat,
+    SetFormat,
+    round_is_identity,
 )
 from ...ast.fpyast import (
-    AMax, AMin, And, Argument, Assign, AssertStmt, Ast, BinaryOp, BoolVal,
-    Cast, Compare, ContextStmt, Decnum, Digits, Dim, EffectStmt, Empty,
-    Enumerate, Expr, ForStmt, Fst, FuncDef, Hexnum, If1Stmt, IfStmt, IndexedAssign,
-    Integer, IsFinite, IsInf, IsNan, IsNormal, Len, ListComp, ListExpr,
-    ListRef, ListSlice, Max, Min, NamedId, NaryOp, Not, Or, Range1, Range2,
-    Range3, Rational, ReturnStmt, Round, Signbit, Size, Snd, StmtBlock, Sum,
-    TernaryOp, TupleBinding, TupleExpr, UnaryOp, UnderscoreId, Var,
-    WhileStmt, Zip,
+    AMax,
+    AMin,
+    And,
+    Argument,
+    AssertStmt,
+    Assign,
+    Ast,
+    BinaryOp,
+    BoolVal,
+    Cast,
+    Compare,
+    ContextStmt,
+    Decnum,
+    Digits,
+    Dim,
+    EffectStmt,
+    Empty,
+    Enumerate,
+    Expr,
+    ForStmt,
+    Fst,
+    FuncDef,
+    Hexnum,
+    If1Stmt,
+    IfStmt,
+    IndexedAssign,
+    Integer,
+    IsFinite,
+    IsInf,
+    IsNan,
+    IsNormal,
+    Len,
+    ListComp,
+    ListExpr,
+    ListRef,
+    ListSlice,
+    Max,
+    Min,
+    NamedId,
+    NaryOp,
+    Not,
+    Or,
+    Range1,
+    Range2,
+    Range3,
+    Rational,
+    ReturnStmt,
+    Round,
+    Signbit,
+    Size,
+    Snd,
+    StmtBlock,
+    Sum,
+    TernaryOp,
+    TupleBinding,
+    TupleExpr,
+    UnaryOp,
+    UnderscoreId,
+    Var,
+    WhileStmt,
+    Zip,
 )
 from ...ast.visitor import Visitor
-from ...number import EFloatContext, Float, MPFixedContext, MPBFixedContext, REAL, RM, RealFloat
-from ...number.context.context import Context
-
-from ...analysis.format_infer import (
-    AbstractFormat, AbstractableFormat, SetFormat, round_is_identity,
+from ...number import (
+    REAL,
+    RM,
+    EFloatContext,
+    Float,
+    MPBFixedContext,
+    MPFixedContext,
+    RealFloat,
 )
-
+from ...number.context.context import Context
 from .ops import BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp
-from .target import make_op_table
 from .storage import (
-    StorageSelectionError, choose_storage, scalar_fits_in, scalar_sup,
+    StorageSelectionError,
+    choose_storage,
+    scalar_fits_in,
+    scalar_sup,
 )
 from .storage_infer import StorageAnalysis
+from .target import make_op_table
 from .types import CppList, CppScalar, CppTuple, CppType
-
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
 # in this table can be set via ``fesetround``.

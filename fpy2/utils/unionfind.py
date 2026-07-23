@@ -1,6 +1,7 @@
 """Unionfind data structure implementation."""
 
-from typing import Generic, TypeVar, Iterable
+from collections.abc import Iterable
+from typing import Generic, TypeVar
 
 _T = TypeVar("_T")
 

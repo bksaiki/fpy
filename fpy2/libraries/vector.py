@@ -4,6 +4,7 @@ Operations on vectors.
 
 from . import base as fp
 
+
 @fp.fpy
 def zeros(n: int) -> list[fp.Real]:
     """
@@ -233,8 +234,7 @@ def min_element(x: list[fp.Real]) -> fp.Real:
     assert len(x) > 0
     result = x[0]
     for xi in x[1:]:
-        if xi < result:
-            result = xi
+        result = min(result, xi)
     return result
 
 @fp.fpy
@@ -249,6 +249,5 @@ def max_element(x: list[fp.Real]) -> fp.Real:
     assert len(x) > 0
     result = x[0]
     for xi in x[1:]:
-        if xi > result:
-            result = xi
+        result = max(result, xi)
     return result

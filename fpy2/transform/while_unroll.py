@@ -6,6 +6,7 @@ from ..analysis import SyntaxCheck
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 
+
 class _WhileUnroll(DefaultTransformVisitor):
     """
     Unroll visitor.

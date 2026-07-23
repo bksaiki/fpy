@@ -6,7 +6,6 @@ class CompileError(Exception):
     """
     Base class for compilation errors.
     """
-    pass
 
 class Backend:
     """

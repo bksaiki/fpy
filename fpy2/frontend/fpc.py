@@ -7,12 +7,11 @@ from typing import Any, TypeAlias
 import titanfp.fpbench.fpcast as fpc
 from titanfp.fpbench.fpcparser import data_as_expr
 
-from ..ast.fpyast import *
 from ..analysis import SyntaxCheck
+from ..ast.fpyast import *
 from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext, NoSuchContextError
 from ..utils import Gensym, pythonize_id
-
 
 DataElt: TypeAlias = tuple['DataElt'] | fpc.ValueExpr
 

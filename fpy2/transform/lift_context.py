@@ -4,7 +4,7 @@ Transformation pass to lift context expressions to the top-level.
 
 from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import *
-from ..ast.visitor import DefaultVisitor, DefaultTransformVisitor
+from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..utils import Gensym
 
 

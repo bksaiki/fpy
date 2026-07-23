@@ -1,10 +1,11 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-from typing import Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Generic, Optional, ParamSpec, TypeVar
+
 from titanfp.fpbench.fpcast import FPCore
 
 from . import ast as fpyast
-
 from .env import ForeignEnv
 from .number import Context
 

@@ -6,8 +6,8 @@ into a single variable.
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
-
 from .rename_target import RenameTarget
+
 
 class _ForBundlingInstance(DefaultTransformVisitor):
     """Single-use instance of the ForBundling pass."""

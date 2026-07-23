@@ -5,11 +5,10 @@ Defines the abstract base class for FPy interpreters.
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..ast.fpyast import FuncDef, Expr, NamedId
+from ..ast.fpyast import Expr, FuncDef, NamedId
 from ..fpc_context import FPCoreContext
 from ..function import Function, set_default_function_call
-from ..number import Context, IEEEContext, RM
-
+from ..number import RM, Context, IEEEContext
 
 _PY_CTX = IEEEContext(11, 64, RM.RNE)
 """the native Python floating-point context"""

@@ -7,10 +7,9 @@ TODO: stochastic rounding
 
 from fractions import Fraction
 
-from ..number import Float, RealFloat
-from ..round import OverflowMode, RoundingMode, RoundingDirection
 from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
-
+from ..number import Float, RealFloat
+from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import EncodableContext
 from .format import EncodableFormat
 from .mp_float import MPFloatFormat
@@ -420,9 +419,7 @@ class ExpContext(EncodableContext):
             if self.inf_value is None:
                 return Float.nan(ctx=self)
             return Float(x=self.inf_value, ctx=self)
-        elif rounded.is_negative():
-            return Float.nan(ctx=self)
-        elif rounded.is_zero():
+        elif rounded.is_negative() or rounded.is_zero():
             return Float.nan(ctx=self)
 
         if rounded.e < self.emin:

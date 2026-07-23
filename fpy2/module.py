@@ -20,8 +20,8 @@ the new AST shape.  :meth:`Module.map` doesn't need it: it builds a
 fresh module via ``add``, which discovers from the transformed AST.
 """
 
+from collections.abc import Callable, Collection, Iterator
 from dataclasses import dataclass
-from typing import Callable, Collection, Iterator
 
 from .analysis import CallGraph
 from .ast import Call, FuncDef

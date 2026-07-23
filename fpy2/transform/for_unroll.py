@@ -30,8 +30,8 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import INTEGER
 from ..utils import Gensym
-
 from .rename_target import RenameTarget
+
 
 class ForUnrollStrategy(enum.Enum):
     """Strategy for dealing with a length that is not a multiple of the

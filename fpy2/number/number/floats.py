@@ -4,14 +4,12 @@ an arbitrary-precision floating-point number.
 """
 
 import math
-
 from fractions import Fraction
-from typing import Optional, Self, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Self
 
+from ...utils import DEFAULT, DefaultOr, Ordering, rcomparable
 from ..globals import get_current_float_converter, get_current_str_converter
-from ...utils import DefaultOr, Ordering, rcomparable, DEFAULT
 from .reals import RealFloat
-
 
 if TYPE_CHECKING:
     from ..context import Context
@@ -53,7 +51,7 @@ class Float:
     but rather through context-based constructors.
     """
 
-    __slots__ = ('_isinf', '_isnan', '_ctx', '_real')
+    __slots__ = ('_ctx', '_isinf', '_isnan', '_real')
 
     _isinf: bool
     """is this number is infinite?"""
@@ -61,7 +59,7 @@ class Float:
     _isnan: bool
     """is this number is NaN?"""
 
-    _ctx: Optional[Context]
+    _ctx: Context | None
     """rounding context during construction"""
 
     _real: RealFloat
@@ -85,7 +83,7 @@ class Float:
         tiny_post: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None,
-        ctx: DefaultOr[Optional[Context]] = DEFAULT
+        ctx: DefaultOr[Context | None] = DEFAULT
     ):
         match x:
             case None:
@@ -416,7 +414,7 @@ class Float:
         return self._isnan
 
     @property
-    def ctx(self) -> Optional[Context]:
+    def ctx(self) -> Context | None:
         """
         Rounding context under which this number was constructed.
 
@@ -662,7 +660,7 @@ class Float:
         )
 
     @staticmethod
-    def nan(s: bool = False, ctx: Optional[Context] = None):
+    def nan(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of NaN.
 
@@ -673,7 +671,7 @@ class Float:
         return Float(isnan=True, s=s, ctx=ctx)
 
     @staticmethod
-    def inf(s: bool = False, ctx: Optional[Context] = None):
+    def inf(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of infinity.
 
@@ -684,7 +682,7 @@ class Float:
         return Float(isinf=True, s=s, ctx=ctx)
 
     @staticmethod
-    def zero(s: bool = False, ctx: Optional[Context] = None):
+    def zero(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of zero.
 
@@ -695,7 +693,7 @@ class Float:
         return Float.from_real(RealFloat.zero(s), ctx)
 
     @staticmethod
-    def from_real(x: RealFloat, ctx: Optional[Context] = None, checked: bool = True):
+    def from_real(x: RealFloat, ctx: Context | None = None, checked: bool = True):
         """
         Converts a `RealFloat` number to a `Float` number.
 
@@ -716,7 +714,7 @@ class Float:
             return Float(x=x, ctx=ctx)
 
     @staticmethod
-    def from_int(x: int, ctx: Optional[Context] = None, checked: bool = True):
+    def from_int(x: int, ctx: Context | None = None, checked: bool = True):
         """
         Converts an integer to a `Float` number.
 
@@ -731,7 +729,7 @@ class Float:
         return Float.from_real(xr, ctx, checked)
 
     @staticmethod
-    def from_float(x: float, ctx: Optional[Context] = None, checked: bool = True):
+    def from_float(x: float, ctx: Context | None = None, checked: bool = True):
         """
         Converts a native Python float to a `Float` number.
 
@@ -753,7 +751,7 @@ class Float:
             return Float.from_real(xr, ctx, checked)
 
     @staticmethod
-    def from_rational(x: Fraction, ctx: Optional[Context] = None, checked: bool = True):
+    def from_rational(x: Fraction, ctx: Context | None = None, checked: bool = True):
         """
         Converts a `Fraction` to a `Float` number.
 
@@ -831,7 +829,7 @@ class Float:
 
         return hi, lo
 
-    def compare(self, other: Self | RealFloat | int | float | Fraction) -> Ordering | None:
+    def compare(self, other: Self | RealFloat | float | Fraction) -> Ordering | None:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
         """

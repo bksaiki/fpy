@@ -420,8 +420,7 @@ def max_element(A: list[list[fp.Real]]) -> fp.Real:
     max_val = A[0][0]
     for i in range(rows):
         for j in range(cols):
-            if A[i][j] > max_val:
-                max_val = A[i][j]
+            max_val = max(max_val, A[i][j])
     return max_val
 
 @fp.fpy
@@ -436,8 +435,7 @@ def min_element(A: list[list[fp.Real]]) -> fp.Real:
     min_val = A[0][0]
     for i in range(rows):
         for j in range(cols):
-            if A[i][j] < min_val:
-                min_val = A[i][j]
+            min_val = min(min_val, A[i][j])
     return min_val
 
 @fp.fpy
@@ -482,8 +480,7 @@ def norm_1(A: list[list[fp.Real]]) -> fp.Real:
         col_sum = fp.round(0)
         for i in range(rows):
             col_sum = col_sum + abs(A[i][j])
-        if col_sum > max_col_sum:
-            max_col_sum = col_sum
+        max_col_sum = max(max_col_sum, col_sum)
 
     return max_col_sum
 
@@ -502,8 +499,7 @@ def norm_inf(A: list[list[fp.Real]]) -> fp.Real:
         row_sum = fp.round(0)
         for j in range(cols):
             row_sum = row_sum + abs(A[i][j])
-        if row_sum > max_row_sum:
-            max_row_sum = row_sum
+        max_row_sum = max(max_row_sum, row_sum)
 
     return max_row_sum
 

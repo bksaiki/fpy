@@ -4,9 +4,8 @@ This module defines subsitution for FPy AST.
 
 from ..ast import *
 from ..utils import Gensym
-
-from .matcher import LocatedMatch, ExprMatch, StmtMatch
-from .pattern import Pattern, ExprPattern, StmtPattern
+from .matcher import ExprMatch, LocatedMatch, StmtMatch
+from .pattern import ExprPattern, Pattern, StmtPattern
 from .subst import Subst
 
 

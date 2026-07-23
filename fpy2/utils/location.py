@@ -4,6 +4,7 @@ This module defines a parse location.
 
 from dataclasses import dataclass
 
+
 @dataclass
 class Location:
     """Parse location: line and column number."""

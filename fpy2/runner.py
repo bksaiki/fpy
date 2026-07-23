@@ -6,7 +6,6 @@ import concurrent.futures
 import gzip
 import hashlib
 import pickle
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path

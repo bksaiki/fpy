@@ -5,18 +5,23 @@ Runtime utilities for integrating with FPCore from Titanic.
 from typing import Any
 
 from .number import (
+    FP16,
+    FP32,
+    FP64,
+    FP128,
+    INTEGER,
+    OV,
+    REAL,
+    RM,
     Context,
     FixedContext,
     IEEEContext,
     MPFixedContext,
-    RM, OV,
-    FP128, FP64, FP32, FP16,
-    REAL, INTEGER
 )
 
 __all__ = [
-    'NoSuchContextError',
     'FPCoreContext',
+    'NoSuchContextError',
 ]
 
 ###########################################################
