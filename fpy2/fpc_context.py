@@ -2,7 +2,7 @@
 Runtime utilities for integrating with FPCore from Titanic.
 """
 
-from typing import Any
+from typing import Any, Self
 
 from .number import (
     FP16,
@@ -116,7 +116,7 @@ class FPCoreContext:
     def __repr__(self):
         return self.__class__.__name__ + '(' + ', '.join(f'{k}={v!r}' for k, v in self.props.items()) + ')'
 
-    def __enter__(self) -> 'FPCoreContext':
+    def __enter__(self) -> Self:
         raise RuntimeError('do not call')
 
     def __exit__(self, exc_type, exc_val, exc_tb):

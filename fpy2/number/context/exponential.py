@@ -105,9 +105,7 @@ class ExpFormat(EncodableFormat):
             return False
         if not x.is_positive():
             return False
-        if x.e < self.emin or x.e > self.emax:
-            return False
-        return True
+        return not (x.e < self.emin or x.e > self.emax)
 
     def canonical_under(self, x: Float) -> bool:
         if not isinstance(x, Float):

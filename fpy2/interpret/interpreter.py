@@ -70,7 +70,6 @@ _default_interpreter: Interpreter | None = None
 
 def get_default_interpreter() -> Interpreter:
     """Get the default FPy interpreter."""
-    global _default_interpreter
     if _default_interpreter is None:
         raise RuntimeError('no default interpreter available')
     return _default_interpreter

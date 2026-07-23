@@ -569,7 +569,7 @@ class _ReachingDefs(DefaultVisitor):
         phis: dict[Stmt, set[PhiDef]] = {}
         for stmt, ctx in self.phis.items():
             new_phis: set[PhiDef] = set()
-            for _, idx in ctx.items():
+            for idx in ctx.values():
                 d = idx_to_repr[repr_indices[idx]]
                 assert isinstance(d, PhiDef), f'expected phi node, got {d}'
                 new_phis.add(d)

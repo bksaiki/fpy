@@ -11,9 +11,11 @@ from . import number
 Float: TypeAlias = 'number.Float'
 RealFloat: TypeAlias = 'number.RealFloat'
 
-# type of `Float` (or `RealFloat`) to `float` conversions
-_FloatCvt: TypeAlias = Callable[[Float | RealFloat], float]
-_StrCvt: TypeAlias = Callable[[Float | RealFloat], str]
+# type of `Float` (or `RealFloat`) to `float` conversions.
+# `Float`/`RealFloat` are runtime string forward-refs, so these aliases must use
+# `Union[...]` (which accepts strings); PEP 604 `|` would raise at import time.
+_FloatCvt: TypeAlias = Callable[[Union[Float, RealFloat]], float]  # noqa: UP007
+_StrCvt: TypeAlias = Callable[[Union[Float, RealFloat]], str]  # noqa: UP007
 
 _current_float_converter: _FloatCvt | None = None
 _current_str_converter: _StrCvt | None = None
@@ -21,7 +23,6 @@ _current_str_converter: _StrCvt | None = None
 
 def get_current_float_converter() -> _FloatCvt:
     """Gets the current `__float__` implementation for `Float`."""
-    global _current_float_converter
     if _current_float_converter is None:
         raise RuntimeError('float converter not set')
     return _current_float_converter
@@ -34,7 +35,6 @@ def set_current_float_converter(cvt: _FloatCvt):
 
 def get_current_str_converter() -> _StrCvt:
     """Gets the current `__str__` implementation for `Float`."""
-    global _current_str_converter
     if _current_str_converter is None:
         raise RuntimeError('str converter not set')
     return _current_str_converter

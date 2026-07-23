@@ -25,207 +25,183 @@ from ..utils import (
 )
 
 __all__ = [
-    # Re-exports
-    'Id',
-    'NamedId',
-    'SourceId',
-    'UnderscoreId',
-    'CompareOp',
-    'Location',
-    'Context',
-
-    # Base classes
-    'Ast',
-    'TypeAnn',
-    'Expr',
-    'Stmt',
-    'ValueExpr',
-    'NaryExpr',
-
+    'AMax',
+    'AMin',
+    'Abs',
+    # Trigonometric functions
+    'Acos',
+    # Hyperbolic functions
+    'Acosh',
+    # IEEE 754 arithmetic
+    'Add',
+    'And',
     # Type annotations
     'AnyTypeAnn',
-    'RealTypeAnn',
-    'BoolTypeAnn',
-    'ContextTypeAnn',
-    'TupleTypeAnn',
-    'ListTypeAnn',
-
-    # Value expressions
-    'Var',
-    'BoolVal',
-    'RealVal',
-    'RationalVal',
-    'Decnum',
-    'Hexnum',
-    'Integer',
-    'Rational',
-    'Digits',
-    'ForeignVal',
-
-    # N-ary operations
-    'NullaryOp',
-    'UnaryOp',
-    'NamedUnaryOp',
+    # Function definition
+    'Argument',
+    'Asin',
+    'Asinh',
+    'AssertStmt',
+    'Assign',
+    # Base classes
+    'Ast',
+    'Atan',
+    'Atan2',
+    'Atanh',
+    'Attribute',
+    # Formatter
+    'BaseFormatter',
     'BinaryOp',
-    'NamedBinaryOp',
-    'TernaryOp',
-    'NamedTernaryOp',
-    'NaryOp',
-    'NamedNaryOp',
-
-    # Constants
-    'ConstNan',
-    'ConstInf',
-    'ConstPi',
-    'ConstE',
-    'ConstLog2E',
-    'ConstLog10E',
-    'ConstLn2',
-    'ConstPi_2',
-    'ConstPi_4',
+    'BoolTypeAnn',
+    'BoolVal',
+    # Other expressions
+    'Call',
+    'Cast',
+    'Cbrt',
+    # Rounding and truncation
+    'Ceil',
+    'Compare',
+    'CompareOp',
     'Const1_Pi',
     'Const2_Pi',
     'Const2_SqrtPi',
-    'ConstSqrt2',
+    'ConstE',
+    'ConstInf',
+    'ConstLn2',
+    'ConstLog2E',
+    'ConstLog10E',
+    # Constants
+    'ConstNan',
+    'ConstPi',
+    'ConstPi_2',
+    'ConstPi_4',
     'ConstSqrt1_2',
-
-    # IEEE 754 arithmetic
-    'Add',
-    'Sub',
-    'Mul',
-    'Div',
-    'Abs',
-    'Sqrt',
-    'Fma',
-
-    # Sign operations
-    'Neg',
+    'ConstSqrt2',
+    'Context',
+    'ContextStmt',
+    'ContextTypeAnn',
     'Copysign',
-
-    # Composite arithmetic
-    'Fdim',
-    'Hypot',
-
-    # Other arithmetic
-    'Max',
-    'Min',
-    'AMax',
-    'AMin',
-    'Mod',
-    'Fmod',
-    'Remainder',
-    'Cbrt',
-    'Sum',
-
-    # Rounding and truncation
-    'Ceil',
-    'Floor',
-    'NearbyInt',
-    'RoundInt',
-    'Trunc',
-
-    # Trigonometric functions
-    'Acos',
-    'Asin',
-    'Atan',
-    'Atan2',
     'Cos',
-    'Sin',
-    'Tan',
-
-    # Hyperbolic functions
-    'Acosh',
-    'Asinh',
-    'Atanh',
     'Cosh',
-    'Sinh',
-    'Tanh',
-
+    'Decnum',
+    'Digits',
+    'Dim',
+    'Div',
+    'EffectStmt',
+    'Empty',
+    'Enumerate',
+    # Integral functions
+    'Erf',
+    'Erfc',
     # Exponential/logarithmic functions
     'Exp',
     'Exp2',
     'Expm1',
-    'Log',
-    'Log10',
-    'Log1p',
-    'Log2',
-    'Pow',
-
-    # Integral functions
-    'Erf',
-    'Erfc',
-    'Lgamma',
-    'Tgamma',
-
+    'Expr',
+    # Composite arithmetic
+    'Fdim',
+    'Floor',
+    'Fma',
+    'Fmod',
+    'ForStmt',
+    'ForeignVal',
+    'Fst',
+    'FuncDef',
+    'FuncMeta',
+    # Type aliases
+    'FuncSymbol',
+    'Hexnum',
+    'Hypot',
+    # Re-exports
+    'Id',
+    'If1Stmt',
+    'IfExpr',
+    'IfStmt',
+    'IndexedAssign',
+    'Integer',
     # Classification
     'IsFinite',
     'IsInf',
     'IsNan',
     'IsNormal',
-
-    # Numerical data
-    'Signbit',
-    'Logb',
-
-    # Logical operators
-    'Not',
-    'Or',
-    'And',
-
-    # Rounding operator
-    'Round',
-    'RoundAt',
-    'Cast',
-
     # Tensor operators
     'Len',
-    'Size',
+    'Lgamma',
+    'ListComp',
+    'ListExpr',
+    'ListRef',
+    'ListSlice',
+    'ListTypeAnn',
+    'Location',
+    'Log',
+    'Log1p',
+    'Log2',
+    'Log10',
+    'Logb',
+    # Other arithmetic
+    'Max',
+    'Min',
+    'Mod',
+    'Mul',
+    'NamedBinaryOp',
+    'NamedId',
+    'NamedNaryOp',
+    'NamedTernaryOp',
+    'NamedUnaryOp',
+    'NaryExpr',
+    'NaryOp',
+    'NearbyInt',
+    # Sign operations
+    'Neg',
+    # Logical operators
+    'Not',
+    # N-ary operations
+    'NullaryOp',
+    'Or',
+    'PassStmt',
+    'Pow',
     'Range1',
     'Range2',
     'Range3',
-    'Dim',
-    'Fst',
+    'Rational',
+    'RationalVal',
+    'RealTypeAnn',
+    'RealVal',
+    'Remainder',
+    'ReturnStmt',
+    # Rounding operator
+    'Round',
+    'RoundAt',
+    'RoundInt',
+    # Numerical data
+    'Signbit',
+    'Sin',
+    'Sinh',
+    'Size',
     'Snd',
-    'Empty',
-    'Zip',
-    'Enumerate',
-
-    # Other expressions
-    'Call',
-    'Compare',
-    'TupleExpr',
-    'ListExpr',
-    'TupleBinding',
-    'ListComp',
-    'ListRef',
-    'ListSlice',
-    'IfExpr',
-    'Attribute',
-
+    'SourceId',
+    'Sqrt',
+    'Stmt',
     # Statements
     'StmtBlock',
-    'Assign',
-    'IndexedAssign',
-    'If1Stmt',
-    'IfStmt',
+    'Sub',
+    'Sum',
+    'Tan',
+    'Tanh',
+    'TernaryOp',
+    'Tgamma',
+    'Trunc',
+    'TupleBinding',
+    'TupleExpr',
+    'TupleTypeAnn',
+    'TypeAnn',
+    'UnaryOp',
+    'UnderscoreId',
+    'ValueExpr',
+    # Value expressions
+    'Var',
     'WhileStmt',
-    'ForStmt',
-    'ContextStmt',
-    'AssertStmt',
-    'EffectStmt',
-    'ReturnStmt',
-    'PassStmt',
-
-    # Function definition
-    'Argument',
-    'FuncMeta',
-    'FuncDef',
-
-    # Type aliases
-    'FuncSymbol',
-
-    # Formatter
-    'BaseFormatter',
+    'Zip',
     'get_default_formatter',
     'set_default_formatter'
 ]
@@ -636,7 +612,7 @@ class NamedUnaryOp(UnaryOp):
 class BinaryOp(NaryExpr):
     """FPy AST: binary operation"""
 
-    __slots__ = ('args')
+    __slots__ = ('args',)
 
     args: tuple[Expr, Expr]
 
@@ -1862,7 +1838,6 @@ _default_formatter: BaseFormatter | None = None
 
 def get_default_formatter() -> BaseFormatter:
     """Get the default formatter for FPy AST."""
-    global _default_formatter
     if _default_formatter is None:
         raise RuntimeError('no default formatter available')
     return _default_formatter

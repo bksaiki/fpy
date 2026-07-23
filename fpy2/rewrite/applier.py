@@ -37,7 +37,7 @@ class _ExprApplierInst(DefaultTransformVisitor):
         self.pmatch = pmatch
 
     def run(self):
-        return self._visit_expr(self.pattern.expr, dict())
+        return self._visit_expr(self.pattern.expr, {})
 
     def _visit_var(self, e: Var, ctx: None):
         if e.name in self.pmatch.subst:
@@ -63,7 +63,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
     def __init__(self, pattern: StmtPattern, pmatch: StmtMatch):
         self.pattern = pattern
         self.pmatch = pmatch
-        self.free = dict()
+        self.free = {}
         for pvar in pattern.vars() - pmatch.subst.vars():
             # TODO: generate a fresh identifier
             self.free[pvar] = pvar

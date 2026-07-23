@@ -585,7 +585,7 @@ class BytecodeCompiler(Visitor):
         # add foreign values to the namespace
         namespace.update(self.foreign_vals)
         # return the function object
-        exec(code, namespace)
+        exec(code, namespace)  # noqa: S102 -- executing generated FPy bytecode is the interpreter's purpose
         return namespace[self.func.name]
 
     def _location_to_name(self, loc: Location | None) -> str:

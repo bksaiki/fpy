@@ -226,9 +226,9 @@ class Runner(ABC, Generic[C, K, R]):
                     try:
                         path = future.result()
                         samples[task.key] = path
-                    except Exception as e:
+                    except Exception:
                         self.log('run_sampling', f'sample {task.key} generated an exception')
-                        raise e
+                        raise
         else:
             # single-threaded mode
             self.log('run_sampling', f'running {len(tasks)} samples in single-threaded mode')
@@ -263,9 +263,9 @@ class Runner(ABC, Generic[C, K, R]):
                     try:
                         r = future.result()
                         results[task.config] = r
-                    except Exception as e:
+                    except Exception:
                         self.log('run', f'config {task.config} generated an exception')
-                        raise e
+                        raise
         else:
             # single-threaded mode
             self.log('run_sweep', f'running {len(tasks)} configs in single-threaded mode')

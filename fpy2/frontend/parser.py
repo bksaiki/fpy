@@ -906,9 +906,8 @@ class Parser:
             raise self._parse_error('FPy requires a return annotation', f, f.returns)
 
         # prune context argument
-        if ignore_ctx and len(pos_args) >= 1:
-            if pos_args[-1].arg == 'ctx':
-                pos_args = pos_args[:-1]
+        if ignore_ctx and len(pos_args) >= 1 and pos_args[-1].arg == 'ctx':
+            pos_args = pos_args[:-1]
 
         # parse arguments and returns
         args = self._parse_arguments(pos_args)

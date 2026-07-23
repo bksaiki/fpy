@@ -42,17 +42,17 @@ from .number import Context
 from .utils import NamedId, default_repr
 
 __all__ = [
-    'Type',
-    'ContextParam',
     'BoolType',
-    'RealType',
+    'ContextParam',
     'ContextType',
-    'VarType',
-    'TupleType',
-    'ListType',
     'FunctionType',
+    'ListType',
+    'RealType',
     # aliases
     'ScalarType',
+    'TupleType',
+    'Type',
+    'VarType',
 ]
 
 

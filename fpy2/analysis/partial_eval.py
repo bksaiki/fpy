@@ -157,7 +157,7 @@ class _PartialEvalInstance(DefaultVisitor):
         exception (PE is best-effort)."""
         try:
             return self.rt.eval_expr(e_eval, self._base_env(), ctx)
-        except Exception:
+        except Exception:  # noqa: BLE001 -- partial eval is best-effort
             return None
 
     def _record(self, e: Expr, val):

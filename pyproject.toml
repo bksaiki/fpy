@@ -73,7 +73,11 @@ check_untyped_defs = true
 
 [tool.ruff.lint]
 extend-select = ["B"]
-ignore = ["F401", "F403", "F405", "B905"]
+# TRY004 (prefer TypeError over ValueError for type checks) conflicts with the
+# codebase's consistent use of ValueError for input-type validation.
+# SIM102 (collapse nested `if`s) fights readable multi-level guards, several of
+# which are not even collapsible here (the outer `if` carries an `elif`).
+ignore = ["F401", "F403", "F405", "B905", "TRY004", "SIM102"]
 
 [tool.sphinx-pyproject]
 project = "fpy2"

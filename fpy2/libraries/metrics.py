@@ -11,9 +11,9 @@ from . import base as fp
 __all__ = [
     # relative error
     'absolute_error',
+    'ordinal_error',
     'relative_error',
     'scaled_error',
-    'ordinal_error',
     # condition numbers
     'sum_condition',
 ]

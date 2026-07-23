@@ -719,9 +719,8 @@ def _format_is_valid(
             if es == 0:
                 if p == 1 or enable_inf and p == 2:
                     return False
-            elif es == 1:
-                if enable_inf and p == 1:
-                    return False
+            elif es == 1 and enable_inf and p == 1:
+                return False
 
         case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
             if es == 0 and p == 1 and enable_inf:

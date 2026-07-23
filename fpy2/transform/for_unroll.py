@@ -420,7 +420,7 @@ class ForUnroll:
             # optimization, so never let it break the transformation.
             try:
                 array_size = ArraySizeInfer.analyze(func)
-            except Exception:
+            except Exception:  # noqa: BLE001 -- auxiliary analysis; failure only disables an optimization
                 array_size = None
         if temp_id is None:
             temp_id = NamedId('t')

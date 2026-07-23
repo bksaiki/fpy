@@ -1247,13 +1247,12 @@ class RealFloat(numbers.Rational):
                 # step 4. increment if necessary
                 if increment:
                     kept._c += 1
-                    if p is not None:
-                        if kept._c.bit_length() > p:
-                            # adjust the exponent since we exceeded precision bounds
-                            # the value is guaranteed to be a power of two
-                            kept._c >>= 1
-                            kept._exp += 1
-                            carry = True
+                    if p is not None and kept._c.bit_length() > p:
+                        # adjust the exponent since we exceeded precision bounds
+                        # the value is guaranteed to be a power of two
+                        kept._c >>= 1
+                        kept._exp += 1
+                        carry = True
 
                 # possibly need to recompute tiny_post
                 if tiny_pre:
