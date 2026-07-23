@@ -451,15 +451,15 @@ class Parser:
                 fn = self._eval_attribute(func, e.func)
             case ast.Name():
                 name = self._parse_id(e.func)
-                func = Var(name, None)
-                if isinstance(func, UnderscoreId):
+                if isinstance(name, UnderscoreId):
                     raise self._parse_error('FPy function call must begin with a named identifier', e)
+                func = Var(name, None)
                 ident = str(name)
                 if ident not in self.env:
                     raise self._parse_error(f'name \'{ident}\' not defined:', e)
                 fn = self.env[ident]
             case _:
-                raise RuntimeError('unreachable')
+                raise self._parse_error('unsupported call target in FPy', e.func, e)
 
         # parse arguments
         args = [self._parse_expr(arg) for arg in e.args]
@@ -829,10 +829,10 @@ class Parser:
     def _parse_arguments(self, pos_args: list[ast.arg]):
         args: list[Argument] = []
         for arg in pos_args:
+            loc = self._parse_location(arg)
             if arg.arg == '_':
                 ident: Id = UnderscoreId()
             else:
-                loc = self._parse_location(arg)
                 ident = SourceId(arg.arg, loc)
 
             if arg.annotation is None:
@@ -876,7 +876,7 @@ class Parser:
     def _start_parse(self):
         src = ''.join(self.lines)
         mod = ast.parse(src, self.name)
-        if len(mod.body) > 1:
+        if len(mod.body) != 1:
             raise self._parse_error('FPy only supports single function definitions', mod)
 
         ptree = mod.body[0]
