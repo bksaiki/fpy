@@ -56,6 +56,36 @@ class _FormatterInstance(Visitor):
             case _:
                 raise RuntimeError('unreachable', func)
 
+    @staticmethod
+    def _find_fpy_alias(env: ForeignEnv | None) -> str | None:
+        """Name that the `fpy2` package is bound to in `env`, if any."""
+        if env is None:
+            return None
+        for name in env:
+            val = env.get(name)
+            if isinstance(val, ModuleType) and getattr(val, '__name__', None) == 'fpy2':
+                return name
+        return None
+
+    def _op_name(self, e: Expr, ctx: _Ctx) -> str:
+        """Render the surface name of a named-operator / literal node.
+
+        Uses the node's `func` symbol when present (the reference the user
+        wrote, preserved verbatim).  When `func` is `None` the node was
+        synthesized by a rewrite pass, so derive the canonical name for its
+        type and qualify it with the enclosing function's `fpy2` alias when
+        the operator lives in the `fpy2` namespace.
+        """
+        func = getattr(e, 'func', None)
+        if func is not None:
+            return self._visit_function_name(func, ctx)
+
+        import fpy2
+        name = CANONICAL_OP_NAMES[type(e)]
+        if self._fpy_alias is not None and hasattr(fpy2, name):
+            return f'{self._fpy_alias}.{name}'
+        return name
+
     def _visit_var(self, e: Var, ctx: _Ctx) -> str:
         return str(e.name)
 
@@ -78,29 +108,29 @@ class _FormatterInstance(Visitor):
         return e.val
 
     def _visit_hexnum(self, e: Hexnum, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._op_name(e, ctx)
         return f'{name}(\'{e.val}\')'
 
     def _visit_integer(self, e: Integer, ctx: _Ctx):
         return str(e.val)
 
     def _visit_rational(self, e: Rational, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._op_name(e, ctx)
         return f'{name}({e.p}, {e.q})'
 
     def _visit_digits(self, e: Digits, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._op_name(e, ctx)
         return f'{name}({e.m}, {e.e}, {e.b})'
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._op_name(e, ctx)
         return f'{name}()'
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
         arg = self._visit_expr(e.arg, ctx)
         match e:
             case NamedUnaryOp():
-                name = self._visit_function_name(e.func, ctx)
+                name = self._op_name(e, ctx)
                 return f'{name}({arg})'
             case Abs():
                 return f'abs({arg})'
@@ -116,7 +146,7 @@ class _FormatterInstance(Visitor):
         rhs = self._visit_expr(e.second, ctx)
         match e:
             case NamedBinaryOp():
-                name = self._visit_function_name(e.func, ctx)
+                name = self._op_name(e, ctx)
                 return f'{name}({lhs}, {rhs})'
             case Add():
                 return f'({lhs} + {rhs})'
@@ -137,7 +167,7 @@ class _FormatterInstance(Visitor):
         arg2 = self._visit_expr(e.third, ctx)
         match e:
             case NamedTernaryOp():
-                name = self._visit_function_name(e.func, ctx)
+                name = self._op_name(e, ctx)
                 return f'{name}({arg0}, {arg1}, {arg2})'
             case _:
                 raise RuntimeError('unreachable', e)
@@ -146,7 +176,7 @@ class _FormatterInstance(Visitor):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case NamedNaryOp():
-                name = self._visit_function_name(e.func, ctx)
+                name = self._op_name(e, ctx)
                 return f'{name}({", ".join(args)})'
             case And():
                 return ' and '.join(args)
@@ -360,6 +390,9 @@ class _FormatterInstance(Visitor):
             self._add_line(')', ctx)
 
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
+        # record how `fpy2` is imported so synthesized operators can be named
+        self._fpy_alias = self._find_fpy_alias(func.env)
+
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)
