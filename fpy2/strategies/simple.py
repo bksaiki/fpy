@@ -9,6 +9,7 @@ from ..transform import (
     DeadCodeEliminate,
 )
 
+
 def simplify(
     func: Function, *,
     enable_const_fold: bool = True,

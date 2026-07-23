@@ -1,15 +1,17 @@
 """FPy functions are the result of `@fpy` decorators."""
 
-from typing import Callable, Generic, Optional, ParamSpec, TypeVar, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Generic, Optional, ParamSpec, TypeVar
+
 from titanfp.fpbench.fpcast import FPCore
 
 from . import ast as fpyast
-
 from .env import ForeignEnv
 from .number import Context
 
-# avoids circular dependency issues (useful for type checking)
 if TYPE_CHECKING:
+    # `interpret` imports `function`, so only import for type checking here;
+    # runtime uses do a local import (see `with_rt`).
     from .interpret import Interpreter
 
 P = ParamSpec('P')
@@ -92,6 +94,7 @@ class Function(Generic[P, R]):
         return Function(ir)
 
     def with_rt(self, rt: 'Interpreter'):
+        from .interpret import Interpreter
         if not isinstance(rt, Interpreter):
             raise TypeError(f'expected \'BaseInterpreter\', got {rt}')
         return Function(self.ast, runtime=rt)
@@ -108,7 +111,6 @@ _default_function_call: Callable | None = None
 
 def get_default_function_call() -> Callable:
     """Get the default function call."""
-    global _default_function_call
     if _default_function_call is None:
         raise RuntimeError('no default function call available')
     return _default_function_call

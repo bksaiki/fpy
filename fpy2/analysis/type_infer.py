@@ -2,16 +2,16 @@
 Type checking for FPy programs.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Callable, cast
+from typing import cast
 
 from ..ast import *
 from ..number import Context, Float, RealFloat
 from ..primitive import Primitive
-from ..utils import Gensym, NamedId, Unionfind
-
 from ..types import *
+from ..utils import Gensym, NamedId, Unionfind
 from .call_graph import CallGraph, CallGraphError
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
@@ -164,7 +164,6 @@ def _ann_to_type(ty: TypeAnn | None, fresh_var: Callable[[], VarType]) -> Type:
 
 class TypeInferError(Exception):
     """Type error for FPy programs."""
-    pass
 
 @dataclass(frozen=True)
 class TypeAnalysis:

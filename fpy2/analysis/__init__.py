@@ -11,23 +11,27 @@ from .array_size import (
 )
 from .call_graph import CallGraph, CallGraphAnalysis, CallGraphError
 from .context_use import (
-    ContextUse, ContextUseAnalysis,
-    ContextScope, ContextScopeSite, ContextUseSite
+    ContextScope,
+    ContextScopeSite,
+    ContextUse,
+    ContextUseAnalysis,
+    ContextUseSite,
 )
+from .define_use import DefCtx, DefineUse, DefineUseAnalysis, UseSite
 from .defs import DefAnalysis
-from .define_use import (
-    DefineUse, DefineUseAnalysis,
-    DefCtx, UseSite
-)
-from .format_infer import FormatInfer, FormatAnalysis
+from .format_infer import FormatAnalysis, FormatInfer
 from .live_vars import LiveVars
 from .partial_eval import PartialEval, PartialEvalInfo
 from .purity import Purity
 from .reachability import Reachability
 from .reaching_defs import (
-    ReachingDefs, ReachingDefsAnalysis,
-    AssignDef, PhiDef, Definition,
-    DefSite, PhiSite
+    AssignDef,
+    Definition,
+    DefSite,
+    PhiDef,
+    PhiSite,
+    ReachingDefs,
+    ReachingDefsAnalysis,
 )
-from .syntax_check import SyntaxCheck, FPySyntaxError
-from .type_infer import TypeInfer, TypeAnalysis, TypeInferError
+from .syntax_check import FPySyntaxError, SyntaxCheck
+from .type_infer import TypeAnalysis, TypeInfer, TypeInferError

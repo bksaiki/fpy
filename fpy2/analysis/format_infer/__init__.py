@@ -14,7 +14,7 @@ from .analysis import (
     exact_unop,
     round_is_identity,
 )
-from .format import AbstractFormat, AbstractableFormat
+from .format import AbstractableFormat, AbstractFormat
 
 __all__ = [
     'AbstractFormat',

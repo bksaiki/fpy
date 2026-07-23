@@ -3,20 +3,19 @@ This module defines the rounding context type.
 """
 
 from abc import ABC, abstractmethod
-from typing import Self
 from fractions import Fraction
+from typing import Self
 
 from ...utils import is_dyadic
 from ..gmputils import mpfr_value
 from ..number import Float, RealFloat
-
-from .format import Format, OrdinalFormat, SizedFormat, EncodableFormat
+from .format import EncodableFormat, Format, OrdinalFormat, SizedFormat
 
 __all__ = [
     'Context',
+    'EncodableContext',
     'OrdinalContext',
-    'SizedContext',
-    'EncodableContext'
+    'SizedContext'
 ]
 
 

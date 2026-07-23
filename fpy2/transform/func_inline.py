@@ -2,12 +2,17 @@
 Function inlining.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from ..analysis import (
-    AssignDef, CallGraph, DefineUse, DefineUseAnalysis, Reachability,
-    ReachingDefs, SyntaxCheck,
+    AssignDef,
+    CallGraph,
+    DefineUse,
+    DefineUseAnalysis,
+    Reachability,
+    ReachingDefs,
+    SyntaxCheck,
 )
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
@@ -15,8 +20,8 @@ from ..env import ForeignEnv
 from ..function import Function
 from ..number import REAL
 from ..utils import Gensym
-
 from .rename_target import RenameTarget
+
 
 def _replace_ret(block: StmtBlock, new_var: NamedId):
     last_stmt = block.stmts[-1]

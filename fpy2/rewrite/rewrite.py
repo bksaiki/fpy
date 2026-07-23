@@ -5,10 +5,10 @@ This module defines a rewrite rule.
 from ..ast import *
 from ..function import Function
 from ..utils import default_repr, sliding_window
-
 from .applier import Applier
-from .matcher import Matcher, ExprMatch, StmtMatch
-from .pattern import Pattern, ExprPattern, StmtPattern
+from .matcher import ExprMatch, Matcher, StmtMatch
+from .pattern import ExprPattern, Pattern, StmtPattern
+
 
 @default_repr
 class _RewriteContext:

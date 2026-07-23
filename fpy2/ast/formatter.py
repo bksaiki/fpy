@@ -1,8 +1,7 @@
 """Pretty printing of FPy ASTs"""
 
-from typing import Any
-
 from pprint import pformat
+from typing import Any
 
 from ..fpc_context import FPCoreContext
 from .fpyast import *
@@ -245,7 +244,7 @@ class _FormatterInstance(Visitor):
         val = self._visit_expr(stmt.expr, ctx)
         match stmt.target:
             case Id():
-                self._add_line(f'{str(stmt.target)} = {val}', ctx)
+                self._add_line(f'{stmt.target!s} = {val}', ctx)
             case TupleBinding():
                 vars_str = self._visit_tuple_binding(stmt.target)
                 self._add_line(f'{vars_str} = {val}', ctx)
@@ -256,7 +255,7 @@ class _FormatterInstance(Visitor):
         slices = [self._visit_expr(slice, ctx) for slice in stmt.indices]
         val = self._visit_expr(stmt.expr, ctx)
         ref_str = ''.join(f'[{slice}]' for slice in slices)
-        self._add_line(f'{str(stmt.var)}{ref_str} = {val}', ctx)
+        self._add_line(f'{stmt.var!s}{ref_str} = {val}', ctx)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -292,7 +291,7 @@ class _FormatterInstance(Visitor):
         context = self._visit_expr(stmt.ctx, ctx)
         match stmt.target:
             case NamedId():
-                self._add_line(f'with {context} as {str(stmt.target)}:', ctx)
+                self._add_line(f'with {context} as {stmt.target!s}:', ctx)
             case UnderscoreId():
                 self._add_line(f'with {context}:', ctx)
             case _:

@@ -1,9 +1,8 @@
 from enum import IntEnum
 
-from ..number import RealFloat, Float, RNG
-from ..round import RoundingMode, OverflowMode
-from ...utils import default_repr, enum_repr, bitmask, DefaultOr, DEFAULT
-
+from ...utils import DEFAULT, DefaultOr, bitmask, default_repr, enum_repr
+from ..number import RNG, Float, RealFloat
+from ..round import OverflowMode, RoundingMode
 from .context import EncodableContext
 from .format import EncodableFormat
 from .mpb_float import MPBFloatFormat
@@ -718,13 +717,10 @@ def _format_is_valid(
 
         case EFloatNanKind.MAX_VAL:
             if es == 0:
-                if p == 1:
+                if p == 1 or enable_inf and p == 2:
                     return False
-                elif enable_inf and p == 2:
-                    return False
-            elif es == 1:
-                if enable_inf and p == 1:
-                    return False
+            elif es == 1 and enable_inf and p == 1:
+                return False
 
         case EFloatNanKind.NEG_ZERO | EFloatNanKind.NONE:
             if es == 0 and p == 1 and enable_inf:

@@ -8,11 +8,11 @@ from typing import TypeAlias
 from ..utils import enum_repr
 
 __all__ = [
+    'OV',
+    'RM',
+    'OverflowMode',
     'RoundingDirection',
     'RoundingMode',
-    'OverflowMode',
-    'RM',
-    'OV',
 ]
 
 

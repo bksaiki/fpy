@@ -2,13 +2,12 @@
 This module defines the usual fixed-width, two's complement, fixed-point numbers.
 """
 
-from ..number import RealFloat, Float, RNG
-from ..round import RoundingMode, OverflowMode
-from ...utils import bitmask, default_repr, DefaultOr, DEFAULT
-
+from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
+from ..number import RNG, Float, RealFloat
+from ..round import OverflowMode, RoundingMode
 from .context import EncodableContext
 from .format import EncodableFormat
-from .mpb_fixed import MPBFixedFormat, MPBFixedContext
+from .mpb_fixed import MPBFixedContext, MPBFixedFormat
 
 
 def _fixed_to_mpb_fixed(

@@ -6,7 +6,6 @@ unique identifiers.
 """
 
 import re
-
 from abc import ABC, abstractmethod
 
 from .location import Location
@@ -78,7 +77,7 @@ class NamedId(Id):
     A named identifier consists of a base name and an optional
     count to indicate its version.
     """
-    __slots__ = ('base', 'count', '_hash')
+    __slots__ = ('_hash', 'base', 'count')
 
     base: str
     count: int | None
@@ -100,7 +99,7 @@ class NamedId(Id):
         self._hash = None
 
     def __repr__(self):
-        return f'NamedId(\'{str(self)}\')'
+        return f'NamedId(\'{self!s}\')'
 
     def __str__(self):
         if self.count is None:
@@ -140,4 +139,4 @@ class SourceId(NamedId):
         self.loc = loc
 
     def __repr__(self):
-        return f'SourceId(\'{str(self)}\')'
+        return f'SourceId(\'{self!s}\')'

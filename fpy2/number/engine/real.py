@@ -8,11 +8,10 @@ context requests exact computation (prec=None, n=None).
 
 from fractions import Fraction
 
-from ..context import Context, REAL
+from ..context import REAL, Context
 from ..gmputils import mpfr_value
 from ..number import Float
 from ..round import RoundingMode
-
 from .engine import Engine, EngineArg, EngineRes
 
 

@@ -3,223 +3,205 @@ This module contains the AST for FPy programs.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
-from typing import Any, Collection, Iterable, Self, TypeAlias
 from fractions import Fraction
+from typing import Any, Self, TypeAlias
 
 from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
 from ..number import Context, Float
 from ..utils import (
     CompareOp,
-    Id, NamedId, SourceId, UnderscoreId,
+    Id,
     Location,
+    NamedId,
+    SourceId,
+    UnderscoreId,
+    decnum_to_fraction,
     default_repr,
-    decnum_to_fraction, hexnum_to_fraction, digits_to_fraction
+    digits_to_fraction,
+    hexnum_to_fraction,
 )
 
 __all__ = [
-    # Re-exports
-    'Id',
-    'NamedId',
-    'SourceId',
-    'UnderscoreId',
-    'CompareOp',
-    'Location',
-    'Context',
-
-    # Base classes
-    'Ast',
-    'TypeAnn',
-    'Expr',
-    'Stmt',
-    'ValueExpr',
-    'NaryExpr',
-
+    'AMax',
+    'AMin',
+    'Abs',
+    # Trigonometric functions
+    'Acos',
+    # Hyperbolic functions
+    'Acosh',
+    # IEEE 754 arithmetic
+    'Add',
+    'And',
     # Type annotations
     'AnyTypeAnn',
-    'RealTypeAnn',
-    'BoolTypeAnn',
-    'ContextTypeAnn',
-    'TupleTypeAnn',
-    'ListTypeAnn',
-
-    # Value expressions
-    'Var',
-    'BoolVal',
-    'RealVal',
-    'RationalVal',
-    'Decnum',
-    'Hexnum',
-    'Integer',
-    'Rational',
-    'Digits',
-    'ForeignVal',
-
-    # N-ary operations
-    'NullaryOp',
-    'UnaryOp',
-    'NamedUnaryOp',
+    # Function definition
+    'Argument',
+    'Asin',
+    'Asinh',
+    'AssertStmt',
+    'Assign',
+    # Base classes
+    'Ast',
+    'Atan',
+    'Atan2',
+    'Atanh',
+    'Attribute',
+    # Formatter
+    'BaseFormatter',
     'BinaryOp',
-    'NamedBinaryOp',
-    'TernaryOp',
-    'NamedTernaryOp',
-    'NaryOp',
-    'NamedNaryOp',
-
-    # Constants
-    'ConstNan',
-    'ConstInf',
-    'ConstPi',
-    'ConstE',
-    'ConstLog2E',
-    'ConstLog10E',
-    'ConstLn2',
-    'ConstPi_2',
-    'ConstPi_4',
+    'BoolTypeAnn',
+    'BoolVal',
+    # Other expressions
+    'Call',
+    'Cast',
+    'Cbrt',
+    # Rounding and truncation
+    'Ceil',
+    'Compare',
+    'CompareOp',
     'Const1_Pi',
     'Const2_Pi',
     'Const2_SqrtPi',
-    'ConstSqrt2',
+    'ConstE',
+    'ConstInf',
+    'ConstLn2',
+    'ConstLog2E',
+    'ConstLog10E',
+    # Constants
+    'ConstNan',
+    'ConstPi',
+    'ConstPi_2',
+    'ConstPi_4',
     'ConstSqrt1_2',
-
-    # IEEE 754 arithmetic
-    'Add',
-    'Sub',
-    'Mul',
-    'Div',
-    'Abs',
-    'Sqrt',
-    'Fma',
-
-    # Sign operations
-    'Neg',
+    'ConstSqrt2',
+    'Context',
+    'ContextStmt',
+    'ContextTypeAnn',
     'Copysign',
-
-    # Composite arithmetic
-    'Fdim',
-    'Hypot',
-
-    # Other arithmetic
-    'Max',
-    'Min',
-    'AMax',
-    'AMin',
-    'Mod',
-    'Fmod',
-    'Remainder',
-    'Cbrt',
-    'Sum',
-
-    # Rounding and truncation
-    'Ceil',
-    'Floor',
-    'NearbyInt',
-    'RoundInt',
-    'Trunc',
-
-    # Trigonometric functions
-    'Acos',
-    'Asin',
-    'Atan',
-    'Atan2',
     'Cos',
-    'Sin',
-    'Tan',
-
-    # Hyperbolic functions
-    'Acosh',
-    'Asinh',
-    'Atanh',
     'Cosh',
-    'Sinh',
-    'Tanh',
-
+    'Decnum',
+    'Digits',
+    'Dim',
+    'Div',
+    'EffectStmt',
+    'Empty',
+    'Enumerate',
+    # Integral functions
+    'Erf',
+    'Erfc',
     # Exponential/logarithmic functions
     'Exp',
     'Exp2',
     'Expm1',
-    'Log',
-    'Log10',
-    'Log1p',
-    'Log2',
-    'Pow',
-
-    # Integral functions
-    'Erf',
-    'Erfc',
-    'Lgamma',
-    'Tgamma',
-
+    'Expr',
+    # Composite arithmetic
+    'Fdim',
+    'Floor',
+    'Fma',
+    'Fmod',
+    'ForStmt',
+    'ForeignVal',
+    'Fst',
+    'FuncDef',
+    'FuncMeta',
+    # Type aliases
+    'FuncSymbol',
+    'Hexnum',
+    'Hypot',
+    # Re-exports
+    'Id',
+    'If1Stmt',
+    'IfExpr',
+    'IfStmt',
+    'IndexedAssign',
+    'Integer',
     # Classification
     'IsFinite',
     'IsInf',
     'IsNan',
     'IsNormal',
-
-    # Numerical data
-    'Signbit',
-    'Logb',
-
-    # Logical operators
-    'Not',
-    'Or',
-    'And',
-
-    # Rounding operator
-    'Round',
-    'RoundAt',
-    'Cast',
-
     # Tensor operators
     'Len',
-    'Size',
+    'Lgamma',
+    'ListComp',
+    'ListExpr',
+    'ListRef',
+    'ListSlice',
+    'ListTypeAnn',
+    'Location',
+    'Log',
+    'Log1p',
+    'Log2',
+    'Log10',
+    'Logb',
+    # Other arithmetic
+    'Max',
+    'Min',
+    'Mod',
+    'Mul',
+    'NamedBinaryOp',
+    'NamedId',
+    'NamedNaryOp',
+    'NamedTernaryOp',
+    'NamedUnaryOp',
+    'NaryExpr',
+    'NaryOp',
+    'NearbyInt',
+    # Sign operations
+    'Neg',
+    # Logical operators
+    'Not',
+    # N-ary operations
+    'NullaryOp',
+    'Or',
+    'PassStmt',
+    'Pow',
     'Range1',
     'Range2',
     'Range3',
-    'Dim',
-    'Fst',
+    'Rational',
+    'RationalVal',
+    'RealTypeAnn',
+    'RealVal',
+    'Remainder',
+    'ReturnStmt',
+    # Rounding operator
+    'Round',
+    'RoundAt',
+    'RoundInt',
+    # Numerical data
+    'Signbit',
+    'Sin',
+    'Sinh',
+    'Size',
     'Snd',
-    'Empty',
-    'Zip',
-    'Enumerate',
-
-    # Other expressions
-    'Call',
-    'Compare',
-    'TupleExpr',
-    'ListExpr',
-    'TupleBinding',
-    'ListComp',
-    'ListRef',
-    'ListSlice',
-    'IfExpr',
-    'Attribute',
-
+    'SourceId',
+    'Sqrt',
+    'Stmt',
     # Statements
     'StmtBlock',
-    'Assign',
-    'IndexedAssign',
-    'If1Stmt',
-    'IfStmt',
+    'Sub',
+    'Sum',
+    'Tan',
+    'Tanh',
+    'TernaryOp',
+    'Tgamma',
+    'Trunc',
+    'TupleBinding',
+    'TupleExpr',
+    'TupleTypeAnn',
+    'TypeAnn',
+    'UnaryOp',
+    'UnderscoreId',
+    'ValueExpr',
+    # Value expressions
+    'Var',
     'WhileStmt',
-    'ForStmt',
-    'ContextStmt',
-    'AssertStmt',
-    'EffectStmt',
-    'ReturnStmt',
-    'PassStmt',
-
-    # Function definition
-    'Argument',
-    'FuncMeta',
-    'FuncDef',
-
-    # Type aliases
-    'FuncSymbol',
-
-    # Formatter
-    'BaseFormatter',
+    'Zip',
     'get_default_formatter',
     'set_default_formatter'
 ]
@@ -530,7 +512,7 @@ class Rational(RationalVal):
 
 class Digits(RationalVal):
     """FPy AST: scientific notation"""
-    __slots__ = ('func', 'm', 'e', 'b')
+    __slots__ = ('b', 'e', 'func', 'm')
     func: 'FuncSymbol'
     m: int
     e: int
@@ -630,7 +612,7 @@ class NamedUnaryOp(UnaryOp):
 class BinaryOp(NaryExpr):
     """FPy AST: binary operation"""
 
-    __slots__ = ('args')
+    __slots__ = ('args',)
 
     args: tuple[Expr, Expr]
 
@@ -1175,7 +1157,7 @@ class Enumerate(NamedUnaryOp):
 
 class Call(NaryExpr):
     """FPy AST: function call"""
-    __slots__ = ('func', 'fn', 'args', 'kwargs')
+    __slots__ = ('args', 'fn', 'func', 'kwargs')
     func: 'FuncSymbol'
     fn: object
     args: tuple[Expr, ...]
@@ -1217,7 +1199,7 @@ class Call(NaryExpr):
 
 class Attribute(Expr):
     """FPy AST: attribute expression `x.y`"""
-    __slots__ = ('value', 'attr')
+    __slots__ = ('attr', 'value')
 
     value: Expr
     attr: str
@@ -1237,7 +1219,7 @@ class Attribute(Expr):
 
 class Compare(Expr):
     """FPy AST: comparison chain"""
-    __slots__ = ('ops', 'args')
+    __slots__ = ('args', 'ops')
     ops: tuple[CompareOp, ...]
     args: tuple[Expr, ...]
 
@@ -1339,7 +1321,7 @@ class ListExpr(Expr):
 
 class ListComp(Expr):
     """FPy AST: list comprehension expression"""
-    __slots__ = ('targets', 'iterables', 'elt')
+    __slots__ = ('elt', 'iterables', 'targets')
 
     targets: tuple[Id | TupleBinding, ...]
     iterables: tuple[Expr, ...]
@@ -1369,7 +1351,7 @@ class ListComp(Expr):
 
 class ListRef(Expr):
     """FPy AST: list indexing expression"""
-    __slots__ = ('value', 'index')
+    __slots__ = ('index', 'value')
     value: Expr
     index: Expr
 
@@ -1387,7 +1369,7 @@ class ListRef(Expr):
 
 class ListSlice(Expr):
     """FPy AST: list slicing expression"""
-    __slots__ = ('value', 'start', 'stop')
+    __slots__ = ('start', 'stop', 'value')
     value: Expr
     start: Expr | None
     stop: Expr | None
@@ -1422,7 +1404,7 @@ class ListSlice(Expr):
 
 class IfExpr(Expr):
     """FPy AST: if expression"""
-    __slots__ = ('cond', 'ift', 'iff')
+    __slots__ = ('cond', 'iff', 'ift')
     cond: Expr
     ift: Expr
     iff: Expr
@@ -1484,7 +1466,7 @@ class StmtBlock(Ast):
 
 class Assign(Stmt):
     """FPy AST: variable assignment"""
-    __slots__ = ('target', 'type', 'expr')
+    __slots__ = ('expr', 'target', 'type')
 
     target: Id | TupleBinding
     type: TypeAnn | None
@@ -1511,7 +1493,7 @@ class Assign(Stmt):
 
 class IndexedAssign(Stmt):
     """FPy AST: assignment to tuple indexing"""
-    __slots__ = ('var', 'indices', 'expr')
+    __slots__ = ('expr', 'indices', 'var')
 
     var: NamedId
     indices: tuple[Expr, ...]
@@ -1540,7 +1522,7 @@ class IndexedAssign(Stmt):
 
 class If1Stmt(Stmt):
     """FPy AST: if statement with one branch"""
-    __slots__ = ('cond', 'body')
+    __slots__ = ('body', 'cond')
     cond: Expr
     body: StmtBlock
 
@@ -1563,7 +1545,7 @@ class If1Stmt(Stmt):
 
 class IfStmt(Stmt):
     """FPy AST: if statement (with two branches)"""
-    __slots__ = ('cond', 'ift', 'iff')
+    __slots__ = ('cond', 'iff', 'ift')
     cond: Expr
     ift: StmtBlock
     iff: StmtBlock
@@ -1590,7 +1572,7 @@ class IfStmt(Stmt):
 
 class WhileStmt(Stmt):
     """FPy AST: while statement"""
-    __slots__ = ('cond', 'body')
+    __slots__ = ('body', 'cond')
     cond: Expr
     body: StmtBlock
 
@@ -1613,7 +1595,7 @@ class WhileStmt(Stmt):
 
 class ForStmt(Stmt):
     """FPy AST: for statement"""
-    __slots__ = ('target', 'iterable', 'body')
+    __slots__ = ('body', 'iterable', 'target')
 
     target: Id | TupleBinding
     iterable: Expr
@@ -1641,7 +1623,7 @@ class ForStmt(Stmt):
 
 class ContextStmt(Stmt):
     """FPy AST: with statement"""
-    __slots__ = ('target', 'ctx', 'body')
+    __slots__ = ('body', 'ctx', 'target')
 
     target: Id
     ctx: Expr
@@ -1669,7 +1651,7 @@ class ContextStmt(Stmt):
 
 class AssertStmt(Stmt):
     """FPy AST: assert statement"""
-    __slots__ = ('test', 'msg')
+    __slots__ = ('msg', 'test')
 
     test: Expr
     msg: Expr | None
@@ -1782,7 +1764,7 @@ class FuncMeta:
 
 class FuncDef(Ast):
     """FPy AST: function definition"""
-    __slots__ = ('name', 'args', 'body', '_meta')
+    __slots__ = ('_meta', 'args', 'body', 'name')
 
     name: str
     args: tuple[Argument, ...]
@@ -1856,7 +1838,6 @@ _default_formatter: BaseFormatter | None = None
 
 def get_default_formatter() -> BaseFormatter:
     """Get the default formatter for FPy AST."""
-    global _default_formatter
     if _default_formatter is None:
         raise RuntimeError('no default formatter available')
     return _default_formatter

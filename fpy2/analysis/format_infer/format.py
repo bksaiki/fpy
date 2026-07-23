@@ -3,7 +3,6 @@ Abstract number system.
 """
 
 import math
-
 from typing import TypeAlias
 
 from ...number import Float, RealFloat
@@ -72,8 +71,8 @@ class AbstractFormat:
 
     def __init__(
         self,
-        prec: int | float,
-        exp: int | float,
+        prec: float,
+        exp: float,
         bound: RealFloat | float,
         *,
         neg_bound: RealFloat | float | None = None,

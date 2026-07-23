@@ -7,9 +7,9 @@ where storage shape is decided.  See ``docs/todos/backend-cpp.md``
 for design notes.
 """
 
-from .compiler import CppCompiler, CppCompileError
+from .compiler import CppCompileError, CppCompiler
 
 __all__ = [
-    'CppCompiler',
     'CppCompileError',
+    'CppCompiler',
 ]

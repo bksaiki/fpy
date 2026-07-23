@@ -3,15 +3,17 @@ This module defines the `Float` number type,
 an arbitrary-precision floating-point number.
 """
 
+# `X | None` annotations reference names bound only under TYPE_CHECKING (e.g.
+# `Context`), so defer annotation evaluation to stay importable on Python 3.11.
+from __future__ import annotations
+
 import math
-
 from fractions import Fraction
-from typing import Optional, Self, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Self
 
+from ...utils import DEFAULT, DefaultOr, Ordering, rcomparable
 from ..globals import get_current_float_converter, get_current_str_converter
-from ...utils import DefaultOr, Ordering, rcomparable, DEFAULT
 from .reals import RealFloat
-
 
 if TYPE_CHECKING:
     from ..context import Context
@@ -53,7 +55,7 @@ class Float:
     but rather through context-based constructors.
     """
 
-    __slots__ = ('_isinf', '_isnan', '_ctx', '_real')
+    __slots__ = ('_ctx', '_isinf', '_isnan', '_real')
 
     _isinf: bool
     """is this number is infinite?"""
@@ -61,7 +63,7 @@ class Float:
     _isnan: bool
     """is this number is NaN?"""
 
-    _ctx: Optional[Context]
+    _ctx: Context | None
     """rounding context during construction"""
 
     _real: RealFloat
@@ -85,7 +87,7 @@ class Float:
         tiny_post: bool | None = None,
         inexact: bool | None = None,
         carry: bool | None = None,
-        ctx: DefaultOr[Optional[Context]] = DEFAULT
+        ctx: DefaultOr[Context | None] = DEFAULT
     ):
         match x:
             case None:
@@ -307,19 +309,19 @@ class Float:
     def __rmul__(self, other):
         return self * other
 
-    def __truediv__(self, other: 'Real'):
+    def __truediv__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rtruediv__(self, other: 'Real'):
+    def __rtruediv__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __pow__(self, exponent: 'Real'):
+    def __pow__(self, exponent: Real):
         """
         Raising `self` by `exponent` exactly.
 
@@ -336,7 +338,7 @@ class Float:
         else:
             return Float.from_real(self._real ** exponent)
 
-    def __rpow__(self, base: 'Real'):
+    def __rpow__(self, base: Real):
         if TYPE_CHECKING:
             return Float()
         else:
@@ -362,25 +364,25 @@ class Float:
             raise ValueError('cannot round infinity or NaN')
         return self._real.__round__()
 
-    def __floordiv__(self, other: 'Real'):
+    def __floordiv__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rfloordiv__(self, other: 'Real'):
+    def __rfloordiv__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __mod__(self, other: 'Real'):
+    def __mod__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rmod__(self, other: 'Real'):
+    def __rmod__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
@@ -416,7 +418,7 @@ class Float:
         return self._isnan
 
     @property
-    def ctx(self) -> Optional[Context]:
+    def ctx(self) -> Context | None:
         """
         Rounding context under which this number was constructed.
 
@@ -645,7 +647,7 @@ class Float:
             raise ValueError(f'{self} is not representable as a rational number')
         return self._real.as_rational()
 
-    def _with_flags(self, other: 'Float'):
+    def _with_flags(self, other: Float):
         """
         Unsafe constructor: constructs a `Float` with the same value as `self`
         but with flags from `other`.
@@ -662,7 +664,7 @@ class Float:
         )
 
     @staticmethod
-    def nan(s: bool = False, ctx: Optional[Context] = None):
+    def nan(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of NaN.
 
@@ -673,7 +675,7 @@ class Float:
         return Float(isnan=True, s=s, ctx=ctx)
 
     @staticmethod
-    def inf(s: bool = False, ctx: Optional[Context] = None):
+    def inf(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of infinity.
 
@@ -684,7 +686,7 @@ class Float:
         return Float(isinf=True, s=s, ctx=ctx)
 
     @staticmethod
-    def zero(s: bool = False, ctx: Optional[Context] = None):
+    def zero(s: bool = False, ctx: Context | None = None):
         """
         Returns a `Float` representation of zero.
 
@@ -695,7 +697,7 @@ class Float:
         return Float.from_real(RealFloat.zero(s), ctx)
 
     @staticmethod
-    def from_real(x: RealFloat, ctx: Optional[Context] = None, checked: bool = True):
+    def from_real(x: RealFloat, ctx: Context | None = None, checked: bool = True):
         """
         Converts a `RealFloat` number to a `Float` number.
 
@@ -716,7 +718,7 @@ class Float:
             return Float(x=x, ctx=ctx)
 
     @staticmethod
-    def from_int(x: int, ctx: Optional[Context] = None, checked: bool = True):
+    def from_int(x: int, ctx: Context | None = None, checked: bool = True):
         """
         Converts an integer to a `Float` number.
 
@@ -731,7 +733,7 @@ class Float:
         return Float.from_real(xr, ctx, checked)
 
     @staticmethod
-    def from_float(x: float, ctx: Optional[Context] = None, checked: bool = True):
+    def from_float(x: float, ctx: Context | None = None, checked: bool = True):
         """
         Converts a native Python float to a `Float` number.
 
@@ -753,7 +755,7 @@ class Float:
             return Float.from_real(xr, ctx, checked)
 
     @staticmethod
-    def from_rational(x: Fraction, ctx: Optional[Context] = None, checked: bool = True):
+    def from_rational(x: Fraction, ctx: Context | None = None, checked: bool = True):
         """
         Converts a `Fraction` to a `Float` number.
 
@@ -831,7 +833,7 @@ class Float:
 
         return hi, lo
 
-    def compare(self, other: Self | RealFloat | int | float | Fraction) -> Ordering | None:
+    def compare(self, other: Self | RealFloat | float | Fraction) -> Ordering | None:
         """
         Compare `self` and `other` values returning an `Optional[Ordering]`.
         """
@@ -909,7 +911,7 @@ class Float:
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round_integer(self)
 
-    def next_towards(self, other: 'Float', allow_inf: bool = False) -> 'Float':
+    def next_towards(self, other: Float, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards `other`.
         """
@@ -917,10 +919,10 @@ class Float:
             raise ValueError(f'cannot compute next_towards without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_towards: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_towards: self={self}, ctx={self._ctx}')
         return self._ctx.next_towards(self, other, allow_inf=allow_inf)
 
-    def next_towards_zero(self, allow_inf: bool = False) -> 'Float':
+    def next_towards_zero(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards zero.
         """
@@ -928,10 +930,10 @@ class Float:
             raise ValueError(f'cannot compute next_towards_zero without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_towards_zero: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_towards_zero: self={self}, ctx={self._ctx}')
         return self._ctx.next_towards_zero(self, allow_inf=allow_inf)
 
-    def next_away_zero(self, allow_inf: bool = False) -> 'Float':
+    def next_away_zero(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` away from zero.
         """
@@ -939,10 +941,10 @@ class Float:
             raise ValueError(f'cannot compute next_away_zero without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_away_zero: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_away_zero: self={self}, ctx={self._ctx}')
         return self._ctx.next_away_zero(self, allow_inf=allow_inf)
 
-    def next_up(self, allow_inf: bool = False) -> 'Float':
+    def next_up(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards positive infinity.
         """
@@ -950,10 +952,10 @@ class Float:
             raise ValueError(f'cannot compute next_up without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_up: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_up: self={self}, ctx={self._ctx}')
         return self._ctx.next_up(self, allow_inf=allow_inf)
 
-    def next_down(self, allow_inf: bool = False) -> 'Float':
+    def next_down(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards negative infinity.
         """
@@ -961,5 +963,5 @@ class Float:
             raise ValueError(f'cannot compute next_down without a context: self={self}')
         from ..context import OrdinalContext
         if not isinstance(self._ctx, OrdinalContext):
-            raise ValueError(f'context must be an OrdinalContext to compute next_down: self={self}, ctx={self._ctx}')
+            raise TypeError(f'context must be an OrdinalContext to compute next_down: self={self}, ctx={self._ctx}')
         return self._ctx.next_down(self, allow_inf=allow_inf)

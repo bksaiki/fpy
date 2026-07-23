@@ -4,7 +4,6 @@ Helper methods for fractions.
 
 import numbers
 import re
-
 from fractions import Fraction
 
 from .bits import is_power_of_two

@@ -5,15 +5,14 @@ Mathematical functions under rounding contexts.
 from fractions import Fraction
 from unittest import case
 
+from .number import REAL, Context, Float, Real, RealFloat
 from .number.engine import ENGINES
-from .number import Context, Float, RealFloat, Real, REAL
-
-from .utils import (
-    UNINIT,
-    digits_to_fraction, hexnum_to_fraction, is_dyadic
-)
+from .utils import UNINIT, digits_to_fraction, hexnum_to_fraction, is_dyadic
 
 __all__ = [
+    '_cvt_to_float',
+    # utilities
+    '_cvt_to_real',
     # General operations
     'acos',
     'acosh',
@@ -23,11 +22,31 @@ __all__ = [
     'atan',
     'atan2',
     'atanh',
+    'cast',
     'cbrt',
+    # Round-to-integer operations
+    'ceil',
+    'const_1_pi',
+    'const_2_pi',
+    'const_2_sqrt_pi',
+    'const_e',
+    'const_ln2',
+    'const_log2e',
+    'const_log10e',
+    'const_pi',
+    'const_pi_2',
+    'const_pi_4',
+    'const_sqrt1_2',
+    'const_sqrt2',
     'copysign',
     'cos',
     'cosh',
+    # Constants
+    'digits',
+    'dim',
     'div',
+    # Tensor
+    'empty',
     'erf',
     'erfc',
     'exp',
@@ -36,75 +55,52 @@ __all__ = [
     'expm1',
     'fabs',
     'fdim',
+    'floor',
     'fma',
     'fmax',
     'fmin',
     'fmod',
+    # Tuple
+    'fst',
+    'hexfloat',
     'hypot',
+    'inf',
+    'isfinite',
+    'isinf',
+    # Classification
+    'isnan',
+    'isnormal',
     'lgamma',
     'log',
-    'log10',
     'log1p',
     'log2',
+    'log10',
+    'logb',
     'mod',
     'mul',
+    'nan',
+    'nearbyint',
     'neg',
     'pow',
+    'rational',
     'remainder',
+    # Rounding operations
+    'round',
+    'round_at',
+    'round_exact',
+    'roundint',
+    # Numerical data
+    'signbit',
     'sin',
     'sinh',
+    'size',
+    'snd',
     'sqrt',
     'sub',
     'tan',
     'tanh',
     'tgamma',
-    # Rounding operations
-    'round',
-    'round_exact',
-    'round_at',
-    'cast',
-    # Round-to-integer operations
-    'ceil',
-    'floor',
     'trunc',
-    'nearbyint',
-    'roundint',
-    # Classification
-    'isnan',
-    'isinf',
-    'isfinite',
-    'isnormal',
-    # Numerical data
-    'signbit',
-    'logb',
-    # Tensor
-    'empty',
-    'dim',
-    'size',
-    # Tuple
-    'fst',
-    'snd',
-    # Constants
-    'digits',
-    'hexfloat',
-    'rational',
-    'nan',
-    'inf',
-    'const_pi',
-    'const_e',
-    'const_log2e',
-    'const_log10e',
-    'const_ln2',
-    'const_pi_2',
-    'const_pi_4',
-    'const_1_pi',
-    'const_2_pi',
-    'const_2_sqrt_pi',
-    'const_sqrt2',
-    'const_sqrt1_2',
-    # utilities
-    '_cvt_to_real',
-    '_cvt_to_float',
 ]
 
 ################################################################################
@@ -1061,8 +1057,6 @@ def size(x: list, dim: Real, ctx: Context = REAL):
         # size(x, n) = size(x[0], n - 1)
         for _ in range(int(dim)):
             x = x[0]
-            if not isinstance(x, (list, tuple)):
-                raise ValueError(f'dimension `{dim}` is out of bounds for the tensor `{x}`')
         if ctx is None:
             return Float.from_int(len(x))
         else:

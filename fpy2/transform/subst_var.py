@@ -2,10 +2,11 @@
 Variable substitution. 
 """
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from ..analysis import AssignDef, DefineUseAnalysis
 from ..ast import *
+
 
 class _SubstVar(DefaultTransformVisitor):
     """Visitor for variable substitution."""

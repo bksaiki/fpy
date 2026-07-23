@@ -6,8 +6,7 @@ FPy reparses function source code to extract the original AST.
 
 import sys
 import types
-
-from importlib.machinery import SourceFileLoader, PathFinder
+from importlib.machinery import PathFinder, SourceFileLoader
 from importlib.util import source_from_cache
 
 _SOURCE: dict[str, bytes] = {}  # path -> bytes

@@ -11,8 +11,8 @@ is driven by :class:`FormatInfer` rather than concrete contexts.
 """
 
 import enum
-
-from typing import TypeAlias, Iterable
+from collections.abc import Iterable
+from typing import TypeAlias
 
 from ...utils import default_repr, enum_repr
 

@@ -1,6 +1,8 @@
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
 from types import CellType
+from typing import Any
+
 
 @dataclass
 class ForeignEnv:

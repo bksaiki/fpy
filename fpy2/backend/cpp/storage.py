@@ -32,18 +32,23 @@ from ...analysis.format_infer import (
 )
 from ...analysis.format_infer.analysis import _to_abstract
 from ...number import (
-    FP32, FP64,
+    FP32,
+    FP64,
+    SINT8,
+    SINT16,
+    SINT32,
+    SINT64,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
     RealFloat,
-    SINT8, SINT16, SINT32, SINT64,
-    UINT8, UINT16, UINT32, UINT64,
 )
 from ...number.context.format import Format
 from ...number.context.mp_fixed import MPFixedFormat
 from ...number.context.real import REAL_FORMAT
 from ...utils import is_dyadic
-
 from .types import CppList, CppScalar, CppTuple, CppType
-
 
 # ----------------------------------------------------------------------
 # The storage ladder.
@@ -92,7 +97,6 @@ def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
 
 class StorageSelectionError(Exception):
     """Raised when no storage type contains the inferred format."""
-    pass
 
 
 def choose_storage_scalar(bound: FormatBound) -> CppScalar:

@@ -7,16 +7,16 @@ import copy
 import functools
 import inspect
 import sys
-
+from collections.abc import Callable
 from fractions import Fraction
-from typing import Any, Callable, TypeAlias
+from typing import Any, TypeAlias
 
 from .. import ops
 from ..ast.fpyast import *
 from ..ast.visitor import Visitor
 from ..env import ForeignEnv
 from ..function import Function
-from ..number import Float, RealFloat, FP64, INTEGER, REAL
+from ..number import FP64, INTEGER, REAL, Float, RealFloat
 from ..primitive import Primitive
 from ..utils import Gensym, is_dyadic
 from .interpreter import Interpreter
@@ -585,7 +585,7 @@ class BytecodeCompiler(Visitor):
         # add foreign values to the namespace
         namespace.update(self.foreign_vals)
         # return the function object
-        exec(code, namespace)
+        exec(code, namespace)  # noqa: S102 -- executing generated FPy bytecode is the interpreter's purpose
         return namespace[self.func.name]
 
     def _location_to_name(self, loc: Location | None) -> str:

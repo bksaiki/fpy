@@ -8,18 +8,17 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import Unionfind, default_repr
-
 from .defs import DefAnalysis
 
 __all__ = [
-    'ReachingDefs',
-    'ReachingDefsAnalysis',
     'AssignDef',
-    'PhiDef',
-    'Definition',
     'DefCtx',
     'DefSite',
+    'Definition',
+    'PhiDef',
     'PhiSite',
+    'ReachingDefs',
+    'ReachingDefsAnalysis',
 ]
 
 
@@ -570,7 +569,7 @@ class _ReachingDefs(DefaultVisitor):
         phis: dict[Stmt, set[PhiDef]] = {}
         for stmt, ctx in self.phis.items():
             new_phis: set[PhiDef] = set()
-            for _, idx in ctx.items():
+            for idx in ctx.values():
                 d = idx_to_repr[repr_indices[idx]]
                 assert isinstance(d, PhiDef), f'expected phi node, got {d}'
                 new_phis.add(d)
@@ -606,6 +605,6 @@ class ReachingDefs:
     @staticmethod
     def analyze(ast: FuncDef | StmtBlock):
         if not isinstance(ast, FuncDef | StmtBlock):
-            raise RuntimeError(f'unexpected AST node {ast}')
+            raise TypeError(f'unexpected AST node {ast}')
         def_ids = DefAnalysis.analyze(ast)
         return _ReachingDefs(ast, def_ids).analyze()

@@ -4,7 +4,7 @@
 from .backend import Backend, CompileError
 
 # C++ backend
-from .cpp import CppCompiler, CppCompileError
+from .cpp import CppCompileError, CppCompiler
 
 # FPCore backend
-from .fpc import FPCoreCompiler, FPCoreCompileError
+from .fpc import FPCoreCompileError, FPCoreCompiler

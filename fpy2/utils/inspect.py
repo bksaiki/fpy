@@ -5,10 +5,10 @@ Extends the standard `inspect` module with additional utilities.
 """
 
 import inspect
-
-from typing import Callable
+from collections.abc import Callable
 
 from .loader import get_module_source
+
 
 def source_indent(lines: list[str]):
     return min(len(line) - len(line.lstrip()) for line in lines if line.strip() != '')

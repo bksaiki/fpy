@@ -8,10 +8,10 @@ from fractions import Fraction
 from ..number import Float, RealFloat
 
 __all__ = [
+    'EncodableFormat',
     'Format',
     'OrdinalFormat',
     'SizedFormat',
-    'EncodableFormat',
 ]
 
 

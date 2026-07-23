@@ -17,31 +17,9 @@ These number systems guarantee correct rounding via MPFR.
 """
 
 # base library
-from .libraries.base import *
-
 # standard library
-from . import libraries
-
 # submodules
-from . import ast
-from . import analysis
-from . import number
-from . import transform
-from . import strategies
-from . import types
-from . import utils
-
-# runtime support
-from .fpc_context import FPCoreContext, NoSuchContextError
-from .interpret import (
-    Interpreter,
-    BytecodeInterpreter,
-    set_default_interpreter,
-    get_default_interpreter,
-)
-
-# module
-from .module import Module, ModuleCallGraph, ModuleEntry
+from . import analysis, ast, libraries, number, strategies, transform, types, utils
 
 # compiler
 from .backend import (
@@ -49,6 +27,19 @@ from .backend import (
     CppCompiler,
     FPCoreCompiler,
 )
+
+# runtime support
+from .fpc_context import FPCoreContext, NoSuchContextError
+from .interpret import (
+    BytecodeInterpreter,
+    Interpreter,
+    get_default_interpreter,
+    set_default_interpreter,
+)
+from .libraries.base import *
+
+# module
+from .module import Module, ModuleCallGraph, ModuleEntry
 
 # runner
 from .runner import Runner, RunnerWorkerTask

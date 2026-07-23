@@ -123,44 +123,49 @@ Format inference rules
 """
 
 import operator
-
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
-from typing import Any, Callable, Iterable, TypeAlias
+from typing import Any, TypeAlias
 
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...function import Function
-from ...number import Context, Float, RealFloat, INTEGER, REAL
-from ...number.format import Format, REAL_FORMAT
-from ...utils import is_dyadic
+from ...number import INTEGER, REAL, Context, Float, RealFloat
+from ...number.format import REAL_FORMAT, Format
 from ...types import (
-    Type,
     BoolType,
-    RealType,
     ContextType,
-    TupleType,
-    ListType,
     FunctionType,
+    ListType,
+    RealType,
+    TupleType,
+    Type,
     VarType,
 )
-
-from ..array_size import ArraySizeAnalysis, ArraySizeInfer, ListSize, concrete_size, list_depth
+from ...utils import is_dyadic
+from ..array_size import (
+    ArraySizeAnalysis,
+    ArraySizeInfer,
+    ListSize,
+    concrete_size,
+    list_depth,
+)
 from ..call_graph import CallGraph, CallGraphError
-from ..context_use import ContextUse, ContextUseAnalysis, ContextScope, ContextUseSite
+from ..context_use import ContextScope, ContextUse, ContextUseAnalysis, ContextUseSite
 from ..define_use import DefineUse, DefineUseAnalysis
-from ..reaching_defs import PhiDef, Definition, DefSite
-from ..type_infer import TypeInfer, TypeAnalysis
-from .format import AbstractFormat, AbstractableFormat
+from ..reaching_defs import Definition, DefSite, PhiDef
+from ..type_infer import TypeAnalysis, TypeInfer
+from .format import AbstractableFormat, AbstractFormat
 
 __all__ = [
-    'FormatInfer',
     'FormatAnalysis',
     'FormatBound',
+    'FormatInfer',
+    'ListFormat',
     'SetFormat',
     'TupleFormat',
-    'ListFormat',
     'exact_binop',
     'exact_unop',
     'round_is_identity',
@@ -446,8 +451,7 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     # ``RealFloat.p`` is 0 for zero values; AbstractFormat requires
     # ``prec >= 1``, so floor at 1.
     prec = max((rf.p for rf in rfs), default=1)
-    if prec < 1:
-        prec = 1
+    prec = max(prec, 1)
     exp = min((rf.exp for rf in rfs), default=0)
     return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
 

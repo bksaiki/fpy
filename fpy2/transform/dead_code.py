@@ -1,10 +1,15 @@
 """Dead code elimination."""
 
-from ..ast import *
 from ..analysis import (
-    DefineUse, DefineUseAnalysis, AssignDef, PhiDef,
-    Purity, SyntaxCheck
+    AssignDef,
+    DefineUse,
+    DefineUseAnalysis,
+    PhiDef,
+    Purity,
+    SyntaxCheck,
 )
+from ..ast import *
+
 
 class _Eliminator(DefaultTransformVisitor):
     """
@@ -227,7 +232,7 @@ class _Eliminator(DefaultTransformVisitor):
             return StmtBlock(stmts), ctx
 
     def _visit_function(self, func: FuncDef, ctx: None):
-        free_vars = set(v for v in func.free_vars if v not in self.unused_fv)
+        free_vars = {v for v in func.free_vars if v not in self.unused_fv}
         body, _ = self._visit_block(func.body, ctx)
         meta = FuncMeta(free_vars, func.ctx, func.meta.spec, func.meta.props, func.env)
         return FuncDef(func.name, func.args, body, meta, loc=func.loc)

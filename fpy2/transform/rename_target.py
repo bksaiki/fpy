@@ -1,7 +1,8 @@
 """Renames targets."""
 
-from ..ast import *
 from ..analysis import SyntaxCheck
+from ..ast import *
+
 
 class _RenameTargetInstance(DefaultTransformVisitor):
     """Renames targets in a function."""

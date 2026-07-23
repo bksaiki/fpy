@@ -2,11 +2,12 @@
 This module defines the `Gensym` object that generates unique identifiers.
 """
 
-from typing import Callable, Collection
+from collections.abc import Callable, Collection
 
 from .identifier import *
 
-class Gensym(object):
+
+class Gensym:
     """
     Unique identifier generator.
 

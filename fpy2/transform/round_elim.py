@@ -74,21 +74,45 @@ hoisted operations.
 
 import dataclasses
 import operator
-
 from typing import Any
 
 from ..analysis import (
-    ContextUse, ContextUseAnalysis, ContextUseSite, DefineUse,
-    DefineUseAnalysis, SyntaxCheck,
+    ContextUse,
+    ContextUseAnalysis,
+    ContextUseSite,
+    DefineUse,
+    DefineUseAnalysis,
+    SyntaxCheck,
 )
 from ..analysis.format_infer import (
-    AbstractFormat, AbstractableFormat, FormatAnalysis, FormatInfer, SetFormat,
-    exact_binop, exact_unop, round_is_identity,
+    AbstractableFormat,
+    AbstractFormat,
+    FormatAnalysis,
+    FormatInfer,
+    SetFormat,
+    exact_binop,
+    exact_unop,
+    round_is_identity,
 )
 from ..ast.fpyast import (
-    Abs, Add, Assign, Cast, ContextStmt, Expr, ForeignVal, FuncDef, IfExpr,
-    ListComp, Mul, Neg, Round, Stmt, StmtBlock, Sub,
-    UnderscoreId, Var,
+    Abs,
+    Add,
+    Assign,
+    Cast,
+    ContextStmt,
+    Expr,
+    ForeignVal,
+    FuncDef,
+    IfExpr,
+    ListComp,
+    Mul,
+    Neg,
+    Round,
+    Stmt,
+    StmtBlock,
+    Sub,
+    UnderscoreId,
+    Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL

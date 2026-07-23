@@ -23,13 +23,13 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..function import Function
-from ..number import Float, INTEGER, REAL
+from ..number import INTEGER, REAL, Float
 from ..types import ListType, TupleType, Type
 from ..utils import Gensym, NamedId, Unionfind
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
-from .define_use import Definition, DefSite, DefineUseAnalysis
+from .define_use import DefineUseAnalysis, Definition, DefSite
 from .partial_eval import PartialEval, PartialEvalInfo, Value
-from .type_infer import TypeInfer, TypeAnalysis
+from .type_infer import TypeAnalysis, TypeInfer
 
 __all__ = [
     'ArraySize',

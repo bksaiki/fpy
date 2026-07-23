@@ -11,7 +11,6 @@ Backends that can't reference a closure environment run this first.
 from ..analysis import SyntaxCheck
 from ..ast.fpyast import Assign, Expr, FuncDef, FuncMeta, StmtBlock
 from ..number import Context
-
 from .const_fold import value_to_literal
 
 

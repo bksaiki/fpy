@@ -6,15 +6,14 @@ from ..ast import *
 from ..function import Function
 from ..number import Context
 from ..primitive import Primitive
-
 from .call_graph import CallGraph
 from .define_use import AssignDef, DefineUse, DefineUseAnalysis
+
 
 class _ImpureError(Exception):
     """
     Exception raised when an impure exception is detected.
     """
-    pass
 
 
 class _Purity(DefaultVisitor):

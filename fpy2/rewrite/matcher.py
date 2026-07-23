@@ -8,8 +8,7 @@ from ..ast import *
 from ..function import Function
 from ..number import Float
 from ..utils import default_repr, sliding_window
-
-from .pattern import Pattern, ExprPattern, StmtPattern
+from .pattern import ExprPattern, Pattern, StmtPattern
 from .subst import Subst
 
 

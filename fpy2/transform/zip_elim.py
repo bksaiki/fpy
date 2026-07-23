@@ -70,13 +70,30 @@ defeats this transform's guard.
 """
 
 import dataclasses
-
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast.fpyast import (
-    Assign, Attribute, Expr, ForStmt, Fst, FuncDef, Integer, Len, ListComp, ListRef,
-    NamedId, Range1, Snd, Stmt, StmtBlock, TupleBinding, UnderscoreId, Var, Zip,
+    Assign,
+    Attribute,
+    Expr,
+    ForStmt,
+    Fst,
+    FuncDef,
+    Integer,
+    Len,
+    ListComp,
+    ListRef,
+    NamedId,
+    Range1,
+    Snd,
+    Stmt,
+    StmtBlock,
+    TupleBinding,
+    UnderscoreId,
+    Var,
+    Zip,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym, Id

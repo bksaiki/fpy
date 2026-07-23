@@ -3,40 +3,40 @@ This module exports all number format types.
 """
 
 from .context import (
-    # abstract formats
-    Format as Format,
-    OrdinalFormat as OrdinalFormat,
-    SizedFormat as SizedFormat,
-    EncodableFormat as EncodableFormat,
-    # concrete formats
-    ExpFormat as ExpFormat,
-    EFloatFormat as EFloatFormat,
-    FixedFormat as FixedFormat,
-    IEEEFormat as IEEEFormat,
-    MPFixedFormat as MPFixedFormat,
-    MPFloatFormat as MPFloatFormat,
-    MPBFixedFormat as MPBFixedFormat,
-    MPBFloatFormat as MPBFloatFormat,
-    MPSFloatFormat as MPSFloatFormat,
-    SMFixedFormat as SMFixedFormat,
     # format instances
-    REAL_FORMAT as REAL_FORMAT,
+    REAL_FORMAT,
+    EFloatFormat,
+    EncodableFormat,
+    # concrete formats
+    ExpFormat,
+    FixedFormat,
+    # abstract formats
+    Format,
+    IEEEFormat,
+    MPBFixedFormat,
+    MPBFloatFormat,
+    MPFixedFormat,
+    MPFloatFormat,
+    MPSFloatFormat,
+    OrdinalFormat,
+    SizedFormat,
+    SMFixedFormat,
 )
 
 __all__ = [
-    'Format',
-    'OrdinalFormat',
-    'SizedFormat',
+    'REAL_FORMAT',
+    'EFloatFormat',
     'EncodableFormat',
     'ExpFormat',
-    'EFloatFormat',
     'FixedFormat',
+    'Format',
     'IEEEFormat',
-    'MPFixedFormat',
-    'MPFloatFormat',
     'MPBFixedFormat',
     'MPBFloatFormat',
+    'MPFixedFormat',
+    'MPFloatFormat',
     'MPSFloatFormat',
+    'OrdinalFormat',
     'SMFixedFormat',
-    'REAL_FORMAT',
+    'SizedFormat',
 ]

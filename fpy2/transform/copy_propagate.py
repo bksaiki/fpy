@@ -4,8 +4,8 @@ Copy propagation.
 
 from ..analysis import AssignDef, DefineUse, SyntaxCheck
 from ..ast.fpyast import *
-
 from .subst_var import SubstVar
+
 
 class CopyPropagate:
     """

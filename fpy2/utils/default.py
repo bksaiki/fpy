@@ -1,5 +1,5 @@
-from typing import TypeVar, Union, Literal, TypeAlias
 from enum import Enum
+from typing import Literal, TypeAlias, TypeVar, Union
 
 """
 Default value instead of `None`
@@ -21,4 +21,4 @@ DEFAULT = Default.DEFAULT
 
 
 T = TypeVar('T')
-DefaultOr: TypeAlias = Union[T, Literal[Default.DEFAULT]]
+DefaultOr: TypeAlias = T | Literal[Default.DEFAULT]

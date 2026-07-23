@@ -39,7 +39,6 @@ from typing import TypeAlias
 
 from ...ast.fpyast import Expr
 from ...number.context.context import Context
-
 from .storage import choose_storage_scalar
 from .types import CppScalar
 

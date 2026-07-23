@@ -2,9 +2,8 @@
 This module defines the rounding context for real numbers.
 """
 
-from ..number import Float, RealFloat
 from ...utils import default_repr
-
+from ..number import Float, RealFloat
 from .context import Context
 from .format import Format
 

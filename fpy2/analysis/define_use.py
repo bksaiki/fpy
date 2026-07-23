@@ -5,21 +5,25 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import default_repr
-
 from .reaching_defs import (
-    ReachingDefs, ReachingDefsAnalysis,
-    AssignDef, PhiDef, Definition, DefCtx, DefSite, PhiSite
+    AssignDef,
+    DefCtx,
+    Definition,
+    DefSite,
+    PhiDef,
+    PhiSite,
+    ReachingDefs,
+    ReachingDefsAnalysis,
 )
 
 __all__ = [
-    'DefineUse',
-    'DefineUseAnalysis',
     'AssignDef',
-    'PhiDef',
-    'Definition',
-    'UseSite',
     'DefCtx',
     'DefSite',
+    'DefineUse',
+    'DefineUseAnalysis',
+    'Definition',
+    'PhiDef',
     'PhiSite',
     'UseSite',
 ]
@@ -93,7 +97,7 @@ class _DefineUseInstance(DefaultVisitor):
     ast: FuncDef | StmtBlock
     reaching_defs: ReachingDefsAnalysis
 
-    uses: dict[Definition, set[UseSite]] = {}
+    uses: dict[Definition, set[UseSite]]
     """mapping from definition id to use sites"""
 
     def __init__(self, ast: FuncDef | StmtBlock, reaching_defs: ReachingDefsAnalysis):

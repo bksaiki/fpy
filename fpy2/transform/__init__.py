@@ -2,8 +2,8 @@
 This module defines compiler transforms over FPy IR.
 """
 
-from .copy_propagate import CopyPropagate
 from .const_fold import ConstFold
+from .copy_propagate import CopyPropagate
 from .dead_code import DeadCodeEliminate
 from .for_bundling import ForBundling
 from .for_unpack import ForUnpack

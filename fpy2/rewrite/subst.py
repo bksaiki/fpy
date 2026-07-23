@@ -2,7 +2,7 @@
 This module defines a substitution for FPy IR.
 """
 
-from ..ast import NamedId, Expr
+from ..ast import Expr, NamedId
 from ..utils import default_repr
 
 

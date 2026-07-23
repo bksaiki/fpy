@@ -6,10 +6,9 @@ Hence, "MP-F".
 
 from fractions import Fraction
 
+from ...utils import DEFAULT, DefaultOr, default_repr
+from ..number import RNG, Float, RealFloat
 from ..round import RoundingMode
-from ..number import Float, RealFloat, RNG
-from ...utils import default_repr, DEFAULT, DefaultOr
-
 from .context import OrdinalContext
 from .format import OrdinalFormat
 

@@ -2,15 +2,15 @@
 Engine interface for round-to-odd arithmetic implementations.
 """
 
-from .engine import Engine, ENGINES, register_engine
+from .engine import ENGINES, Engine, register_engine
 from .gmp import MPFREngine
 from .real import RealEngine
 
 __all__ = [
+    'ENGINES',
     'Engine',
     'MPFREngine',
     'RealEngine',
-    'ENGINES',
     'register_engine',
 ]
 

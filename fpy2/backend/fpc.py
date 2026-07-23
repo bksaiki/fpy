@@ -1,22 +1,27 @@
 """Compilation from FPy to FPCore."""
 
 import dataclasses
-
-from typing import Callable
+from collections.abc import Callable
 
 import titanfp.fpbench.fpcast as fpc
 
-from ..analysis import DefineUse, DefineUseAnalysis, TypeInfer, TypeAnalysis
+from ..analysis import DefineUse, DefineUseAnalysis, TypeAnalysis, TypeInfer
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
 from ..module import Module, ModuleEntry
 from ..number import Context
-from ..transform import ConstFold, ForBundling, ForUnpack, FreeVarElim, IfBundling, WhileBundling
+from ..transform import (
+    ConstFold,
+    ForBundling,
+    ForUnpack,
+    FreeVarElim,
+    IfBundling,
+    WhileBundling,
+)
 from ..transform.free_var_elim import unclosed_data_free_vars
 from ..types import TupleType, Type
 from ..utils import Gensym
-
 from .backend import Backend, CompileError
 
 
@@ -154,7 +159,6 @@ def _get_nary_table() -> dict[type[NaryOp], type[fpc.Expr]]:
 
 class FPCoreCompileError(CompileError):
     """Any FPCore compilation error"""
-    pass
 
 def _nary_mul(args: list[fpc.Expr]):
     assert args != [], 'must be at least 1 argument'

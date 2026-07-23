@@ -6,6 +6,7 @@ import dataclasses
 
 from ..ast import *
 
+
 @dataclasses.dataclass
 class _ReachabilityCtx:
     is_reachable: bool
@@ -17,7 +18,6 @@ class _ReachabilityCtx:
 
 class ReachabilityError(Exception):
     """Assertion error from a `Reachability` analysis."""
-    pass
 
 @dataclasses.dataclass
 class ReachabilityAnalysis:

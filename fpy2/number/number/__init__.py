@@ -5,14 +5,14 @@ This module defines number types.
 from fractions import Fraction
 from typing import TypeAlias
 
-from .reals import RealFloat, RNG
 from .floats import Float
+from .reals import RNG, RealFloat
 
 __all__ = [
-    'Real',
+    'RNG',
     'Float',
-    'RealFloat',
-    'RNG'
+    'Real',
+    'RealFloat'
 ]
 
 Real: TypeAlias = int | float | Float | Fraction

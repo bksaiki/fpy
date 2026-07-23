@@ -2,8 +2,8 @@
 Abstract Syntax Tree (AST) for the FPy language.
 """
 
+from .formatter import BaseFormatter, Formatter
 from .fpyast import *
-from .formatter import Formatter, BaseFormatter
-from .visitor import Visitor, DefaultVisitor, DefaultTransformVisitor
+from .visitor import DefaultTransformVisitor, DefaultVisitor, Visitor
 
 set_default_formatter(Formatter())
