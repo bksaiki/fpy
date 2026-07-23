@@ -542,12 +542,6 @@ class Parser:
             if kwargs:
                 raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
             return self._parse_digits(e, func)
-        elif fn == len:
-            if len(args) != 1:
-                raise self._parse_error('FPy expects 1 argument for `len`', e)
-            if kwargs:
-                raise self._parse_error('FPy does not support keyword arguments for `len`', e)
-            return Size(func, args[0], Integer(0, None), loc)
         elif fn is range:
             if kwargs:
                 raise self._parse_error('FPy does not support keyword arguments for `range`', e)
@@ -596,15 +590,6 @@ class Parser:
         slices.reverse()
 
         return target, slices
-
-    def _is_foreign_val(self, e: ast.expr):
-        match e:
-            case ast.Name() | ast.Constant():
-                return True
-            case ast.Attribute():
-                return self._is_foreign_val(e.value)
-            case _:
-                return False
 
     def _parse_attribute(self, e: ast.Attribute):
         loc = self._parse_location(e)
@@ -658,7 +643,6 @@ class Parser:
                 return IfExpr(cond, ift, iff, loc)
             case _:
                 raise self._parse_error('expression is unsupported in FPy', e)
-                raise RuntimeError('unreachable')
 
     def _parse_tuple_target(self, target: ast.expr, e: ast.AST):
         loc = self._parse_location(target)
