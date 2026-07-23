@@ -156,13 +156,20 @@ class Parser:
 
     def _parse_error(self, why: str, where: ast.AST, ctx: ast.AST | None = None):
         msg_lines = [why]
-        if isinstance(where, ast.expr | ast.stmt | ast.arg):
-            loc = self._parse_location(where)
+        # Operator nodes (`ast.operator`, `ast.cmpop`, `ast.boolop`, ...) carry
+        # no source position, so fall back to the containing expression `ctx`
+        # rather than reporting an unhelpful `?:?`.
+        loc_node = where if isinstance(where, ast.expr | ast.stmt | ast.arg) else ctx
+        if isinstance(loc_node, ast.expr | ast.stmt | ast.arg):
+            loc = self._parse_location(loc_node)
             msg_lines.append(f' at: {self.name}:{loc.start_line}:{loc.start_column}')
         else:
             msg_lines.append(f' at: {self.name}:?:?')
 
-        msg_lines.append(f' where: {ast.unparse(where)}')
+        # `ast.unparse` of a bare operator node is empty; omit the noise.
+        where_src = ast.unparse(where)
+        if where_src:
+            msg_lines.append(f' where: {where_src}')
         if ctx is not None:
             msg_lines.append(f' in: {ast.unparse(ctx)}')
 
@@ -215,7 +222,7 @@ class Parser:
                     raise self._parse_error('FPy function call must begin with a named identifier', ann)
                 ident_str = str(ident)
                 if ident_str not in self.env:
-                    raise self._parse_error(f'name \'{ident_str}\' not defined:', ann)
+                    raise self._parse_error(f'name \'{ident_str}\' not defined', ann)
                 return self.env[ident_str]
             case ast.Subscript():
                 ctor = self._eval_type_annotation(ann.value)
@@ -422,7 +429,7 @@ class Parser:
     def _eval_var(self, v: Var, e: ast.expr):
         ident = str(v.name)
         if ident not in self.env:
-            raise self._parse_error(f'name \'{ident}\' not defined:', e)
+            raise self._parse_error(f'name \'{ident}\' not defined', e)
         return self.env[ident]
 
     def _eval_attribute(self, a: Attribute, e: ast.expr):
@@ -456,7 +463,7 @@ class Parser:
                 func = Var(name, None)
                 ident = str(name)
                 if ident not in self.env:
-                    raise self._parse_error(f'name \'{ident}\' not defined:', e)
+                    raise self._parse_error(f'name \'{ident}\' not defined', e)
                 fn = self.env[ident]
             case _:
                 raise self._parse_error('unsupported call target in FPy', e.func, e)
