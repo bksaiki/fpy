@@ -309,19 +309,19 @@ class Float:
     def __rmul__(self, other):
         return self * other
 
-    def __truediv__(self, other: 'Real'):
+    def __truediv__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rtruediv__(self, other: 'Real'):
+    def __rtruediv__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __pow__(self, exponent: 'Real'):
+    def __pow__(self, exponent: Real):
         """
         Raising `self` by `exponent` exactly.
 
@@ -338,7 +338,7 @@ class Float:
         else:
             return Float.from_real(self._real ** exponent)
 
-    def __rpow__(self, base: 'Real'):
+    def __rpow__(self, base: Real):
         if TYPE_CHECKING:
             return Float()
         else:
@@ -364,25 +364,25 @@ class Float:
             raise ValueError('cannot round infinity or NaN')
         return self._real.__round__()
 
-    def __floordiv__(self, other: 'Real'):
+    def __floordiv__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rfloordiv__(self, other: 'Real'):
+    def __rfloordiv__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __mod__(self, other: 'Real'):
+    def __mod__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
             raise RuntimeError('FPy runtime: do not call directly')
 
-    def __rmod__(self, other: 'Real'):
+    def __rmod__(self, other: Real):
         if TYPE_CHECKING:
             return Float()
         else:
@@ -647,7 +647,7 @@ class Float:
             raise ValueError(f'{self} is not representable as a rational number')
         return self._real.as_rational()
 
-    def _with_flags(self, other: 'Float'):
+    def _with_flags(self, other: Float):
         """
         Unsafe constructor: constructs a `Float` with the same value as `self`
         but with flags from `other`.
@@ -911,7 +911,7 @@ class Float:
             raise TypeError(f'expected Context, got {type(ctx)}')
         return ctx.round_integer(self)
 
-    def next_towards(self, other: 'Float', allow_inf: bool = False) -> 'Float':
+    def next_towards(self, other: Float, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards `other`.
         """
@@ -922,7 +922,7 @@ class Float:
             raise TypeError(f'context must be an OrdinalContext to compute next_towards: self={self}, ctx={self._ctx}')
         return self._ctx.next_towards(self, other, allow_inf=allow_inf)
 
-    def next_towards_zero(self, allow_inf: bool = False) -> 'Float':
+    def next_towards_zero(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards zero.
         """
@@ -933,7 +933,7 @@ class Float:
             raise TypeError(f'context must be an OrdinalContext to compute next_towards_zero: self={self}, ctx={self._ctx}')
         return self._ctx.next_towards_zero(self, allow_inf=allow_inf)
 
-    def next_away_zero(self, allow_inf: bool = False) -> 'Float':
+    def next_away_zero(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` away from zero.
         """
@@ -944,7 +944,7 @@ class Float:
             raise TypeError(f'context must be an OrdinalContext to compute next_away_zero: self={self}, ctx={self._ctx}')
         return self._ctx.next_away_zero(self, allow_inf=allow_inf)
 
-    def next_up(self, allow_inf: bool = False) -> 'Float':
+    def next_up(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards positive infinity.
         """
@@ -955,7 +955,7 @@ class Float:
             raise TypeError(f'context must be an OrdinalContext to compute next_up: self={self}, ctx={self._ctx}')
         return self._ctx.next_up(self, allow_inf=allow_inf)
 
-    def next_down(self, allow_inf: bool = False) -> 'Float':
+    def next_down(self, allow_inf: bool = False) -> Float:
         """
         Returns the next representable `Float` value after `self` towards negative infinity.
         """
