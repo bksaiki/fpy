@@ -1,8 +1,9 @@
 """Pretty printing of FPy ASTs"""
 
 from pprint import pformat
-from typing import Any
+from types import ModuleType
 
+from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
 from .fpyast import *
 from .visitor import Visitor
@@ -13,10 +14,16 @@ class _FormatterInstance(Visitor):
     """Single-instance visitor for pretty printing FPy ASTs"""
     ast: Ast
     fmt: str
+    _fpy_alias: str | None
 
     def __init__(self, ast: Ast):
         self.ast = ast
         self.fmt = ''
+        # name the `fpy2` package is bound to in the enclosing function's
+        # namespace, if any; used to render operators synthesized by rewrite
+        # passes (whose `func` symbol is `None`).  Set when a `FuncDef` is
+        # formatted; stays `None` for a bare expression with no environment.
+        self._fpy_alias = None
 
     def apply(self) -> str:
         match self.ast:
