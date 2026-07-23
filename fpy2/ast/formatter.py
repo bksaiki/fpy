@@ -1,8 +1,10 @@
 """Pretty printing of FPy ASTs"""
 
 from pprint import pformat
+from types import ModuleType
 from typing import Any
 
+from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
 from .fpyast import *
 from .visitor import Visitor
@@ -13,10 +15,13 @@ class _FormatterInstance(Visitor):
     """Single-instance visitor for pretty printing FPy ASTs"""
     ast: Ast
     fmt: str
+    _fpy_alias: str | None
 
     def __init__(self, ast: Ast):
         self.ast = ast
         self.fmt = ''
+        # `fpy2`'s alias in the enclosing function's namespace; set per `FuncDef`
+        self._fpy_alias = None
 
     def apply(self) -> str:
         match self.ast:
@@ -49,6 +54,39 @@ class _FormatterInstance(Visitor):
             case _:
                 raise RuntimeError('unreachable', func)
 
+    @staticmethod
+    def _find_fpy_alias(env: ForeignEnv | None) -> str | None:
+        """Name that the `fpy2` package is bound to in `env`, if any.
+
+        `env` iterates in nondeterministic (set-union) order, so pick the
+        lexicographically smallest match to keep formatting stable when
+        `fpy2` is bound under more than one name."""
+        if env is None:
+            return None
+        aliases = [
+            name for name in env
+            if isinstance(env.get(name), ModuleType)
+            and getattr(env.get(name), '__name__', None) == 'fpy2'
+        ]
+        return min(aliases, default=None)
+
+    def _fpy_qualified(self, name: str) -> str:
+        """Render an `fpy2` symbol as `<alias>.<name>` when the enclosing
+        function imports `fpy2` under a module alias, else bare `name`."""
+        import fpy2
+        if self._fpy_alias is not None and hasattr(fpy2, name):
+            return f'{self._fpy_alias}.{name}'
+        return name
+
+    def _op_name(self, e: Expr, ctx: _Ctx) -> str:
+        """Surface name of a named-operator / literal node: the user's `func`
+        symbol verbatim, or the canonical name when `func` is `None`
+        (synthesized by a rewrite pass)."""
+        func = getattr(e, 'func', None)
+        if func is not None:
+            return self._visit_function_name(func, ctx)
+        return self._fpy_qualified(CANONICAL_OP_NAMES[type(e)])
+
     def _visit_var(self, e: Var, ctx: _Ctx) -> str:
         return str(e.name)
 
@@ -71,29 +109,29 @@ class _FormatterInstance(Visitor):
         return e.val
 
     def _visit_hexnum(self, e: Hexnum, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._op_name(e, ctx)
         return f'{name}(\'{e.val}\')'
 
     def _visit_integer(self, e: Integer, ctx: _Ctx):
         return str(e.val)
 
     def _visit_rational(self, e: Rational, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._op_name(e, ctx)
         return f'{name}({e.p}, {e.q})'
 
     def _visit_digits(self, e: Digits, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._op_name(e, ctx)
         return f'{name}({e.m}, {e.e}, {e.b})'
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: _Ctx):
-        name = self._visit_function_name(e.func, ctx)
+        name = self._op_name(e, ctx)
         return f'{name}()'
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
         arg = self._visit_expr(e.arg, ctx)
         match e:
             case NamedUnaryOp():
-                name = self._visit_function_name(e.func, ctx)
+                name = self._op_name(e, ctx)
                 return f'{name}({arg})'
             case Abs():
                 return f'abs({arg})'
@@ -109,7 +147,7 @@ class _FormatterInstance(Visitor):
         rhs = self._visit_expr(e.second, ctx)
         match e:
             case NamedBinaryOp():
-                name = self._visit_function_name(e.func, ctx)
+                name = self._op_name(e, ctx)
                 return f'{name}({lhs}, {rhs})'
             case Add():
                 return f'({lhs} + {rhs})'
@@ -130,7 +168,7 @@ class _FormatterInstance(Visitor):
         arg2 = self._visit_expr(e.third, ctx)
         match e:
             case NamedTernaryOp():
-                name = self._visit_function_name(e.func, ctx)
+                name = self._op_name(e, ctx)
                 return f'{name}({arg0}, {arg1}, {arg2})'
             case _:
                 raise RuntimeError('unreachable', e)
@@ -139,7 +177,7 @@ class _FormatterInstance(Visitor):
         args = [self._visit_expr(arg, ctx) for arg in e.args]
         match e:
             case NamedNaryOp():
-                name = self._visit_function_name(e.func, ctx)
+                name = self._op_name(e, ctx)
                 return f'{name}({", ".join(args)})'
             case And():
                 return ' and '.join(args)
@@ -333,11 +371,12 @@ class _FormatterInstance(Visitor):
         spec = fmeta.spec
         meta = fmeta.props
 
-        num_fields = sum(x is not None for x in (rctx, spec, meta))
-        if num_fields == 0:
-            self._add_line('@fpy', ctx)
+        name = self._fpy_qualified('fpy')
+        if not (rctx or spec or meta):
+            # no keyword arguments: emit the bare decorator without `(...)`
+            self._add_line(f'@{name}', ctx)
         else:
-            self._add_line('@fpy(', ctx)
+            self._add_line(f'@{name}(', ctx)
             if rctx:
                 v = self._format_data(rctx, arg_str)
                 self._add_line(f'ctx={v},', ctx + 1)
@@ -353,6 +392,9 @@ class _FormatterInstance(Visitor):
             self._add_line(')', ctx)
 
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
+        # record how `fpy2` is imported so synthesized operators can be named
+        self._fpy_alias = self._find_fpy_alias(func.env)
+
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]
         arg_str = ', '.join(arg_strs)

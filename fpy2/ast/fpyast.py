@@ -25,6 +25,7 @@ from ..utils import (
 )
 
 __all__ = [
+    'CANONICAL_OP_NAMES',
     'AMax',
     'AMin',
     'Abs',
@@ -455,10 +456,10 @@ class Decnum(RationalVal):
 class Hexnum(RationalVal):
     """FPy AST: hexadecimal number"""
     __slots__ = ('func', 'val')
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
     val: str
 
-    def __init__(self, func: 'FuncSymbol', val: str, loc: Location | None):
+    def __init__(self, func: 'FuncSymbol | None', val: str, loc: Location | None):
         super().__init__(loc)
         self.func = func
         self.val = val
@@ -494,11 +495,11 @@ class Integer(RationalVal):
 class Rational(RationalVal):
     """FPy AST: rational number"""
     __slots__ = ('func', 'p', 'q')
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
     p: int
     q: int
 
-    def __init__(self, func: 'FuncSymbol', p: int, q: int, loc: Location | None):
+    def __init__(self, func: 'FuncSymbol | None', p: int, q: int, loc: Location | None):
         super().__init__(loc)
         self.func = func
         self.p = p
@@ -513,12 +514,12 @@ class Rational(RationalVal):
 class Digits(RationalVal):
     """FPy AST: scientific notation"""
     __slots__ = ('b', 'e', 'func', 'm')
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
     m: int
     e: int
     b: int
 
-    def __init__(self, func: 'FuncSymbol', m: int, e: int, b: int, loc: Location | None):
+    def __init__(self, func: 'FuncSymbol | None', m: int, e: int, b: int, loc: Location | None):
         super().__init__(loc)
         self.func = func
         self.m = m
@@ -557,10 +558,10 @@ class NullaryOp(NaryExpr):
 
     __slots__ = ('func',)
 
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
     args: tuple[Expr, ...] = ()
 
-    def __init__(self, func: 'FuncSymbol', loc: Location | None):
+    def __init__(self, func: 'FuncSymbol | None', loc: Location | None):
         super().__init__(loc)
         self.func = func
 
@@ -598,11 +599,11 @@ class NamedUnaryOp(UnaryOp):
 
     __slots__ = ('func',)
 
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
 
     def __init__(
         self,
-        func: 'FuncSymbol',
+        func: 'FuncSymbol | None',
         arg: Expr,
         loc: Location | None
     ):
@@ -646,11 +647,11 @@ class NamedBinaryOp(BinaryOp):
 
     __slots__ = ('func',)
 
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
 
     def __init__(
         self,
-        func: 'FuncSymbol',
+        func: 'FuncSymbol | None',
         first: Expr,
         second: Expr,
         loc: Location | None
@@ -699,11 +700,11 @@ class TernaryOp(NaryExpr):
 class NamedTernaryOp(TernaryOp):
     """FPy AST: ternary operation with a named function"""
     __slots__ = ('func',)
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
 
     def __init__(
         self,
-        func: 'FuncSymbol',
+        func: 'FuncSymbol | None',
         first: Expr,
         second: Expr,
         third: Expr,
@@ -733,11 +734,11 @@ class NaryOp(NaryExpr):
 class NamedNaryOp(NaryOp):
     """FPy AST: n-ary operation with a named function"""
     __slots__ = ('func',)
-    func: 'FuncSymbol'
+    func: 'FuncSymbol | None'
 
     def __init__(
         self,
-        func: 'FuncSymbol',
+        func: 'FuncSymbol | None',
         args: Iterable[Expr],
         loc: Location | None
     ):
@@ -1822,6 +1823,108 @@ symbol ::= Var ( symbol )
          | Attribute ( symbol, _ )
 
 This type alias only shallowly checks the type
+"""
+
+
+###########################################################
+# Canonical operator names
+
+CANONICAL_OP_NAMES: dict[type, str] = {
+    # nullary constants
+    ConstNan: 'nan',
+    ConstInf: 'inf',
+    ConstPi: 'const_pi',
+    ConstE: 'const_e',
+    ConstLog2E: 'const_log2e',
+    ConstLog10E: 'const_log10e',
+    ConstLn2: 'const_ln2',
+    ConstPi_2: 'const_pi_2',
+    ConstPi_4: 'const_pi_4',
+    Const1_Pi: 'const_1_pi',
+    Const2_Pi: 'const_2_pi',
+    Const2_SqrtPi: 'const_2_sqrt_pi',
+    ConstSqrt2: 'const_sqrt2',
+    ConstSqrt1_2: 'const_sqrt1_2',
+    # unary
+    Sqrt: 'sqrt',
+    Cbrt: 'cbrt',
+    Ceil: 'ceil',
+    Floor: 'floor',
+    NearbyInt: 'nearbyint',
+    RoundInt: 'roundint',
+    Trunc: 'trunc',
+    Acos: 'acos',
+    Asin: 'asin',
+    Atan: 'atan',
+    Cos: 'cos',
+    Sin: 'sin',
+    Tan: 'tan',
+    Acosh: 'acosh',
+    Asinh: 'asinh',
+    Atanh: 'atanh',
+    Cosh: 'cosh',
+    Sinh: 'sinh',
+    Tanh: 'tanh',
+    Exp: 'exp',
+    Exp2: 'exp2',
+    Expm1: 'expm1',
+    Log: 'log',
+    Log10: 'log10',
+    Log1p: 'log1p',
+    Log2: 'log2',
+    Erf: 'erf',
+    Erfc: 'erfc',
+    Lgamma: 'lgamma',
+    Tgamma: 'tgamma',
+    IsFinite: 'isfinite',
+    IsInf: 'isinf',
+    IsNan: 'isnan',
+    IsNormal: 'isnormal',
+    Signbit: 'signbit',
+    Round: 'round',
+    Cast: 'cast',
+    Len: 'len',
+    Dim: 'dim',
+    Fst: 'fst',
+    Snd: 'snd',
+    Enumerate: 'enumerate',
+    Sum: 'sum',
+    Logb: 'logb',
+    AMin: 'min',
+    AMax: 'max',
+    Range1: 'range',
+    # binary
+    Copysign: 'copysign',
+    Fdim: 'fdim',
+    Fmod: 'fmod',
+    Remainder: 'remainder',
+    Hypot: 'hypot',
+    Atan2: 'atan2',
+    Pow: 'pow',
+    Size: 'size',
+    RoundAt: 'round_at',
+    Range2: 'range',
+    # ternary
+    Fma: 'fma',
+    Range3: 'range',
+    # n-ary
+    Zip: 'zip',
+    Max: 'max',
+    Min: 'min',
+    Empty: 'empty',
+    # literals
+    Hexnum: 'hexfloat',
+    Rational: 'rational',
+    Digits: 'digits',
+}
+"""
+Canonical FPy surface name for each named-operator / literal node type.
+
+Used by the pretty-printer to render a node whose `func` symbol is `None`
+(i.e. a node synthesized by a rewrite pass rather than parsed from user
+source). The name is the operator's public attribute name in the ``fpy2``
+package (or, for :class:`Len`/:class:`Range1` etc., the Python builtin the
+parser resolves against). See :meth:`Formatter._op_name`.
 """
 
 ###########################################################

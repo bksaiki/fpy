@@ -172,14 +172,12 @@ def _index_access(arg: Expr, idx: NamedId) -> Callable[[], Expr]:
 
 def _fst(arg: Expr) -> Expr:
     """Build ``fst(arg)``."""
-    name = Attribute(Var(NamedId('fp'), None), 'fst', None)
-    return Fst(name, arg, None)
+    return Fst(None, arg, None)
 
 
 def _snd(arg: Expr) -> Expr:
     """Build ``snd(arg)``."""
-    name = Attribute(Var(NamedId('fp'), None), 'snd', None)
-    return Snd(name, arg, None)
+    return Snd(None, arg, None)
 
 
 def _comp_nesting_is_pairs(target: TupleBinding) -> bool:
@@ -365,12 +363,12 @@ class _ZipElimInstance(DefaultTransformVisitor):
         new_body_stmts: list[Stmt] = per_iter + list(new_body.stmts)
         # Iterable: ``range(len(_src0))``.
         size_expr = Len(
-            Var(NamedId('len'), None),
+            None,
             Var(src_names[0], None),
             None,
         )
         range_expr = Range1(
-            Var(NamedId('range'), None),
+            None,
             size_expr,
             None,
         )
@@ -421,13 +419,13 @@ class _ZipElimInstance(DefaultTransformVisitor):
                     )
                 # New target/iterable: ``_i in range(len(arg0))``.
                 len_expr = Len(
-                    Var(NamedId('len'), None),
+                    None,
                     _clone(new_iter.args[0]),
                     None,
                 )
                 new_targets.append(idx)
                 new_iterables.append(
-                    Range1(Var(NamedId('range'), None), len_expr, None)
+                    Range1(None, len_expr, None)
                 )
             else:
                 new_targets.append(self._visit_binding(target, ctx))

@@ -144,34 +144,52 @@ class SyntaxCheckInstance(Visitor):
     def _visit_decnum(self, e: Decnum, ctx: _Ctx):
         pass
 
+    @staticmethod
+    def _check_op_nameable(e: Expr):
+        """A synthesized operator (`func is None`) must have a canonical
+        name, or the pretty-printer cannot render it."""
+        if getattr(e, 'func', None) is None and type(e) not in CANONICAL_OP_NAMES:
+            raise FPySyntaxError(
+                f'operator `{type(e).__name__}` has no surface reference '
+                f'and no entry in CANONICAL_OP_NAMES'
+            )
+
     def _visit_hexnum(self, e: Hexnum, ctx: _Ctx):
-        pass
+        self._check_op_nameable(e)
 
     def _visit_integer(self, e: Integer, ctx: _Ctx):
         pass
 
     def _visit_rational(self, e: Rational, ctx: _Ctx):
-        pass
+        self._check_op_nameable(e)
 
     def _visit_digits(self, e: Digits, ctx: _Ctx):
-        pass
+        self._check_op_nameable(e)
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: _Ctx):
-        pass
+        self._check_op_nameable(e)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: _Ctx):
+        if isinstance(e, NamedUnaryOp):
+            self._check_op_nameable(e)
         self._visit_expr(e.arg, ctx)
 
     def _visit_binaryop(self, e: BinaryOp, ctx: _Ctx):
+        if isinstance(e, NamedBinaryOp):
+            self._check_op_nameable(e)
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx: _Ctx):
+        if isinstance(e, NamedTernaryOp):
+            self._check_op_nameable(e)
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
+        if isinstance(e, NamedNaryOp):
+            self._check_op_nameable(e)
         for c in e.args:
             self._visit_expr(c, ctx)
 

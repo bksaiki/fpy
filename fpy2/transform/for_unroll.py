@@ -69,13 +69,13 @@ def _sub(a: Expr, b: Expr) -> Sub:
     return Sub(a, b, None)
 
 def _len(xs: Expr) -> Len:
-    return Len(_var(NamedId('len')), xs, None)
+    return Len(None, xs, None)
 
 def _fmod(a: Expr, b: Expr) -> Fmod:
-    return Fmod(_var(NamedId('fmod')), a, b, None)
+    return Fmod(None, a, b, None)
 
 def _range(start: Expr, stop: Expr, step: Expr) -> Range3:
-    return Range3(_var(NamedId('range')), start, stop, step, None)
+    return Range3(None, start, stop, step, None)
 
 def _eq(a: Expr, b: Expr) -> Compare:
     return Compare([CompareOp.EQ], [a, b], None)

@@ -96,12 +96,12 @@ class _SplitLoop(DefaultTransformVisitor):
                         UnderscoreId(),
                         ForeignVal(INTEGER, None),
                         StmtBlock([
-                            Assign(n, None, Len(Var(NamedId('len'), None), Var(t1, None), None), None),
+                            Assign(n, None, Len(None, Var(t1, None), None), None),
                             AssertStmt(
                                 Compare(
                                     [CompareOp.EQ], 
                                     [
-                                        Fmod(Var(NamedId('fmod'), None), Var(n, None), Var(t2, None), None),
+                                        Fmod(None, Var(n, None), Var(t2, None), None),
                                         Integer(0, None)
                                     ],
                                     None
@@ -140,7 +140,7 @@ class _SplitLoop(DefaultTransformVisitor):
             # outer loop
             stmt = ForStmt(
                 outer,
-                Range3(Var(NamedId('range'), None), Integer(0, None), Var(n, None), Var(t2, None), None),
+                Range3(None, Integer(0, None), Var(n, None), Var(t2, None), None),
                 StmtBlock([slice_ctx, inner_loop]),
                 stmt.loc
             )

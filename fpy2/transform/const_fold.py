@@ -15,11 +15,10 @@ from ..number import Context, Float
 
 def _rational_literal(val: Fraction, loc):
     """AST literal for an exact rational: an ``Integer`` when integral,
-    otherwise an ``fp.rational(p, q)`` call."""
+    otherwise a ``rational`` literal."""
     if val.denominator == 1:
         return Integer(int(val), loc)
-    func = Attribute(Var(NamedId('fp'), loc), 'rational', loc)
-    return Rational(func, val.numerator, val.denominator, loc)
+    return Rational(None, val.numerator, val.denominator, loc)
 
 
 def value_to_literal(val: object, loc):
