@@ -26,6 +26,7 @@ class TestHeaders:
         headers = cc.headers()
         # Each entry is a full ``#include`` line.
         for required in (
+            '<algorithm>',
             '<cassert>',
             '<cfenv>',
             '<cmath>',

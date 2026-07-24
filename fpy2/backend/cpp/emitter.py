@@ -51,9 +51,11 @@ from ...analysis.format_infer import (
     round_is_identity,
 )
 from ...ast.fpyast import (
+    AllOf,
     AMax,
     AMin,
     And,
+    AnyOf,
     Argument,
     AssertStmt,
     Assign,
@@ -1266,6 +1268,8 @@ class CppEmitter(Visitor):
                 )
             case AMin() | AMax():
                 return self._emit_amin_amax(e, arg)
+            case AnyOf() | AllOf():
+                return self._emit_any_all(e, arg)
             case Enumerate():
                 return self._emit_enumerate(e, arg)
             case UnaryOp() if type(e) in self.op_table.unary:
@@ -1753,6 +1757,46 @@ class CppEmitter(Visitor):
         for nxt in casted[1:]:
             result = f'{fn}({result}, {nxt})'
         return result
+
+    def _emit_any_all(self, e: 'AnyOf | AllOf', arg_str: str) -> str:
+        """Reduce ``any(bs)`` / ``all(bs)`` to ``std::any_of`` / ``std::all_of``.
+
+        Unlike :meth:`_emit_amin_amax` this needs no hoisted loop and no
+        casting: the operand is ``std::vector<bool>`` and the result is
+        ``bool``, so the standard algorithm applies directly with an identity
+        predicate.  It also short-circuits, matching Python — and unlike the
+        FPCore lowering, whose ``for`` has a fixed trip count.
+
+        The empty range is well defined and agrees with FPy: ``std::all_of``
+        yields ``true`` and ``std::any_of`` yields ``false``.  No UB here, in
+        contrast to the ``xs[0]`` that ``min``/``max`` index unguarded.
+
+        As with ``Sum``, the operand is bound to ``auto&&`` first: on a prvalue
+        operand (a list literal, say) ``arg.begin()`` and ``arg.end()`` would
+        name iterators into *different* temporaries — an invalid range.
+        """
+        result_ty = self._storage_for_expr(e)
+        if result_ty is not CppScalar.BOOL:
+            raise CppEmitError(
+                f'expected bool result for {type(e).__name__}, got {result_ty!r}',
+                at=e,
+            )
+        arg_storage = self._storage_for_expr(e.arg)
+        if arg_storage != CppList(CppScalar.BOOL):
+            raise CppEmitError(
+                f'expected list[bool] arg for {type(e).__name__}, '
+                f'got {arg_storage!r}',
+                at=e,
+            )
+        fn = 'std::any_of' if isinstance(e, AnyOf) else 'std::all_of'
+        src = self._fresh_temp()
+        # source read only (iterated) -> reference, no copy
+        self.writer.add_line(f'auto&& {src} = {arg_str};')
+        pred = self._fresh_temp()
+        return (
+            f'{fn}({src}.begin(), {src}.end(), '
+            f'[](bool {pred}) {{ return {pred}; }})'
+        )
 
     def _emit_amin_amax(self, e: 'AMin | AMax', arg_str: str) -> str:
         """Reduce ``min(xs)`` / ``max(xs)`` to a hoisted for-loop.
