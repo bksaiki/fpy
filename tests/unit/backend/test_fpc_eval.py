@@ -2,7 +2,7 @@
 Differential evaluation tests for the FPCore backend.
 
 The other ``test_fpc_*`` modules compare *emitted text*, which cannot catch a
-core that prints correctly but does not evaluate — the failure mode of three
+core that prints correctly but does not evaluate — the failure mode of four
 bugs in list-reduce and ``for``-loop lowering:
 
 - a ``for`` accumulator init that referenced the loop index, which FPCore
@@ -16,6 +16,11 @@ bugs in list-reduce and ``for``-loop lowering:
 
 So these tests run each program twice — once through the FPy interpreter, once
 through titanfp's interpreter on the compiled core — and require agreement.
+
+The same differential harness now also covers the boolean reductions
+(``any`` / ``all``), which are new rather than fixed — booleans are the values
+most easily lost across the titanfp boundary, so they want executing rather
+than string-matching too.
 """
 
 import math
@@ -61,6 +66,23 @@ def _both(fn, *args):
 def _agree(fn, *args):
     want, got = _both(fn, *args)
     assert want == got, f'FPy {want} != FPCore {got}\n  {_compile(fn).e}'
+    return want
+
+
+def _agree_bool(fn, *args):
+    """``_agree`` for bool-returning programs.
+
+    Kept separate because ``_both`` coerces through ``float``, which would let
+    a numeric ``1.0`` masquerade as ``True`` — exactly the confusion that makes
+    boolean values delicate on the titanfp boundary (see ``_to_mpmf``).  Both
+    sides are required to be genuine ``bool``.
+    """
+    core = _compile(fn)
+    got = Interpreter().interpret(core, [_to_mpmf(a) for a in args])
+    want = fn(*args)
+    assert isinstance(want, bool), f'expected bool from FPy, got {want!r}'
+    assert isinstance(got, bool), f'expected bool from FPCore, got {got!r}'
+    assert want == got, f'FPy {want} != FPCore {got}\n  {core.e}'
     return want
 
 
@@ -287,3 +309,83 @@ class TestForLoopBindsElements:
 
         # (1+2) * (10+100) = 330
         assert _agree(_size(f, 2, 2), [1.0, 2.0], [10.0, 100.0]) == 330.0
+
+
+class TestBooleanReduce:
+    """``any`` / ``all`` lower to a ``for``-fold seeded with the operator's
+    identity (``FALSE`` / ``TRUE``), combining with ``or`` / ``and``.
+
+    The boolean list is built *inside* each program rather than passed in: a
+    boolean tensor does not survive titanfp's argument conversion, which turns
+    a Python ``bool`` into a numeric ``MPMF``, and ``MPMF`` has no
+    ``__bool__`` — so every element would read as truthy and the fold would
+    return ``True`` regardless.  That is a limitation of the interop, not of
+    the lowering.
+    """
+
+    @staticmethod
+    def _any():
+        @fp.fpy
+        def f(xs: list[fp.Real], y: fp.Real) -> bool:
+            with fp.FP64:
+                return any([x < y for x in xs])
+        return f
+
+    @staticmethod
+    def _all():
+        @fp.fpy
+        def f(xs: list[fp.Real], y: fp.Real) -> bool:
+            with fp.FP64:
+                return all([x < y for x in xs])
+        return f
+
+    def test_any_some_true(self):
+        assert _agree_bool(_size(self._any(), 3), [1.0, -2.0, 3.0], 0.0) is True
+
+    def test_any_none_true(self):
+        assert _agree_bool(_size(self._any(), 3), [1.0, 2.0, 3.0], 0.0) is False
+
+    def test_any_all_true(self):
+        assert _agree_bool(_size(self._any(), 3), [-1.0, -2.0, -3.0], 0.0) is True
+
+    def test_all_all_true(self):
+        assert _agree_bool(_size(self._all(), 3), [-1.0, -2.0, -3.0], 0.0) is True
+
+    def test_all_one_false(self):
+        assert _agree_bool(_size(self._all(), 3), [-1.0, 2.0, -3.0], 0.0) is False
+
+    def test_all_none_true(self):
+        assert _agree_bool(_size(self._all(), 3), [1.0, 2.0, 3.0], 0.0) is False
+
+    def test_any_single_element(self):
+        assert _agree_bool(_size(self._any(), 1), [-1.0], 0.0) is True
+        assert _agree_bool(_size(self._any(), 1), [1.0], 0.0) is False
+
+    def test_all_single_element(self):
+        assert _agree_bool(_size(self._all(), 1), [-1.0], 0.0) is True
+        assert _agree_bool(_size(self._all(), 1), [1.0], 0.0) is False
+
+    def test_fold_seeds_with_the_identity(self):
+        """The accumulator init is the identity constant, not ``(ref t 0)``.
+
+        This is what makes the empty list correct by construction, and it is
+        why the boolean fold needs no ``n - 1`` bound or ``(+ i 1)`` index
+        arithmetic.  (The empty case itself is unreachable through titanfp,
+        which cannot build a zero-length tensor, so assert on the shape.)
+        """
+        core = _compile(_size(self._all(), 3))
+        fors = [e for e in _operands(core.e) + [core.e] if isinstance(e, fpc.For)]
+        assert len(fors) == 1
+        _, init, _ = fors[0].while_bindings[0]
+        assert isinstance(init, fpc.Constant) and str(init) == 'TRUE'
+
+        core = _compile(_size(self._any(), 3))
+        fors = [e for e in _operands(core.e) + [core.e] if isinstance(e, fpc.For)]
+        _, init, _ = fors[0].while_bindings[0]
+        assert isinstance(init, fpc.Constant) and str(init) == 'FALSE'
+
+    def test_operands_are_exprs(self):
+        """No bare ``str`` in operand position (see TestNoBareStringOperands)."""
+        for fn in (_size(self._any(), 3), _size(self._all(), 3)):
+            bad = [o for o in _operands(_compile(fn).e) if isinstance(o, str)]
+            assert not bad, f'bare str operands in emitted core: {bad}'

@@ -624,6 +624,62 @@ class _FPCoreCompileInstance(Visitor):
             )
         )
 
+    def _visit_any(self, arg: Expr, ctx: None) -> fpc.Expr:
+        # any(bs) → fold over the list with `or`, seeded FALSE.
+        return self._visit_bool_reduce(arg, fpc.Or, 'FALSE', ctx)
+
+    def _visit_all(self, arg: Expr, ctx: None) -> fpc.Expr:
+        # all(bs) → fold over the list with `and`, seeded TRUE.
+        return self._visit_bool_reduce(arg, fpc.And, 'TRUE', ctx)
+
+    def _visit_bool_reduce(
+        self,
+        arg: Expr,
+        combine: Callable[[fpc.Expr, fpc.Expr], fpc.Expr],
+        identity: str,
+        ctx: None,
+    ) -> fpc.Expr:
+        """Shared lowering for the boolean list reductions
+        (``any``/``all``).  Builds::
+
+            (let ([t <tuple>])
+              (for ([i (! :precision integer (size t 0))]
+                    [accum <identity> (<combine> accum (ref t i))])
+                accum))
+
+        Simpler than :meth:`_visit_list_reduce` because the accumulator is
+        seeded with the operator's *identity* (``FALSE`` for ``or``, ``TRUE``
+        for ``and``) rather than with the first element: the loop runs over
+        all ``n`` indices, so there is no ``n - 1`` bound and no ``(+ i 1)``
+        index arithmetic.  The empty list is then correct by construction —
+        the ``for`` body never runs and the identity is returned — where the
+        arithmetic reductions leave it out of contract.
+
+        The fold is eager, while Python's ``any``/``all`` short-circuit.  That
+        is unobservable here: the operand is an already-materialized list and
+        FPy is pure, so visiting every element cannot change the result.
+        (FPCore's ``for`` has a fixed trip count and could not short-circuit
+        regardless; expressing that would need a ``while``.)
+        """
+        tuple_id = str(self.gensym.fresh('t'))
+        iter_id = str(self.gensym.fresh('i'))
+        accum_id = str(self.gensym.fresh('accum'))
+        idx_ctx = { 'precision': 'integer' }
+
+        tup = self._visit_expr(arg, ctx)
+        return fpc.Let(
+            [(tuple_id, tup)],
+            fpc.For(
+                [(iter_id, fpc.Ctx(idx_ctx, _size0_expr(tuple_id)))],
+                [(
+                    accum_id,
+                    fpc.Constant(identity),
+                    combine(fpc.Var(accum_id), fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))
+                )],
+                fpc.Var(accum_id)
+            )
+        )
+
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
         nullary_table = _get_nullary_table()
@@ -666,6 +722,12 @@ class _FPCoreCompileInstance(Visitor):
                 case AMax():
                     # max(xs) reduce-form
                     return self._visit_amax(e.arg, ctx)
+                case AnyOf():
+                    # any(bs) boolean reduce-form
+                    return self._visit_any(e.arg, ctx)
+                case AllOf():
+                    # all(bs) boolean reduce-form
+                    return self._visit_all(e.arg, ctx)
                 case _:
                     raise NotImplementedError('no FPCore operator for', e)
 
