@@ -17,7 +17,7 @@ from hypothesis import given, settings, strategies as st
 from fpy2.analysis import TypeInfer
 from fpy2.analysis.type_infer import TypeInfer as _TI
 from fpy2.analysis.type_infer import TypeInferError
-from fpy2.ast.fpyast import Ast, Expr, Fst, FuncDef, Snd
+from fpy2.ast.fpyast import AllOf, AnyOf, Ast, Expr, Fst, FuncDef, Snd
 from fpy2.types import BoolType, RealType, TupleType, Type
 
 from ..generators import (
@@ -341,6 +341,87 @@ class TestTupleAccessors:
         @fp.fpy
         def f(x: list[fp.Real]) -> fp.Real:
             return fp.snd(x)
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
+
+
+class TestBooleanReductions:
+    """``any`` / ``all`` are ``list[bool] -> bool``.
+
+    Unlike ``fst``/``snd`` these are monomorphic: the element type is pinned to
+    ``bool``, so a ``list[real]`` operand is rejected by unification rather than
+    silently accepted via truthiness (FPy has no truthiness).
+    """
+
+    @staticmethod
+    def _return_type(f) -> Type:
+        return TypeInfer.check(f.ast).fn_type.return_type
+
+    def test_any_parses_to_anyof_node(self):
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            return any(bs)
+
+        assert isinstance(f.ast.body.stmts[-1].expr, AnyOf)
+
+    def test_all_parses_to_allof_node(self):
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            return all(bs)
+
+        assert isinstance(f.ast.body.stmts[-1].expr, AllOf)
+
+    def test_any_of_bool_list_is_bool(self):
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            return any(bs)
+
+        assert isinstance(self._return_type(f), BoolType)
+
+    def test_all_of_bool_list_is_bool(self):
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            return all(bs)
+
+        assert isinstance(self._return_type(f), BoolType)
+
+    def test_any_of_comprehension_of_comparisons_is_bool(self):
+        # the idiomatic use: the element type is inferred, not annotated
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> bool:
+            return any([x < 0 for x in xs])
+
+        assert isinstance(self._return_type(f), BoolType)
+
+    def test_any_of_real_list_errors(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> bool:
+            return any(xs)
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
+
+    def test_all_of_real_list_errors(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> bool:
+            return all(xs)
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
+
+    def test_any_of_scalar_errors(self):
+        @fp.fpy
+        def f(b: bool) -> bool:
+            return any(b)
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
+
+    def test_any_of_tuple_errors(self):
+        @fp.fpy
+        def f(t: tuple[bool, bool]) -> bool:
+            return any(t)
 
         with pytest.raises(TypeInferError):
             TypeInfer.check(f.ast)

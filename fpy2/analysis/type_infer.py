@@ -423,6 +423,14 @@ class _TypeInferInstance(Visitor):
                     # list-reduce operators: list[real] -> real
                     self._unify(arg_ty, ListType(RealType(None)))
                     return RealType(None)
+                case AnyOf() | AllOf():
+                    # boolean list-reduce operators: list[bool] -> bool.
+                    # Built here rather than in `_unary_table` because `_unify`
+                    # unions the `ListType` it is handed into `tvars` (and
+                    # merges its length), so a shared table entry would leak
+                    # unification state across call sites.
+                    self._unify(arg_ty, ListType(BoolType()))
+                    return BoolType()
                 case _:
                     raise ValueError(f'unknown unary operator: {cls}')
 

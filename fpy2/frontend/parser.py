@@ -76,6 +76,8 @@ _unary_table: dict[Callable, type[UnaryOp] | type[NamedUnaryOp]] = {
     snd: Snd,
     enumerate: Enumerate,
     sum: Sum,
+    any: AnyOf,
+    all: AllOf,
     logb: Logb,
 }
 

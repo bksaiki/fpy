@@ -35,7 +35,9 @@ __all__ = [
     'Acosh',
     # IEEE 754 arithmetic
     'Add',
+    'AllOf',
     'And',
+    'AnyOf',
     # Type annotations
     'AnyTypeAnn',
     # Function definition
@@ -1096,6 +1098,21 @@ class And(NaryOp):
     """FPy node: logical conjunction"""
     __slots__ = ()
 
+class AnyOf(NamedUnaryOp):
+    """FPy node: ``any(bs)`` reduce-form over ``bs : list[bool]``.
+
+    The list-fold counterpart of :class:`Or`, as :class:`AMax` is to
+    :class:`Max`.  Named ``AnyOf`` rather than ``Any`` so the class does not
+    shadow :data:`typing.Any`, which this module and its star-importers
+    (notably :mod:`fpy2.frontend.parser`) both use in annotations.
+    """
+    __slots__ = ()
+
+class AllOf(NamedUnaryOp):
+    """FPy node: ``all(bs)`` reduce-form — the :class:`And` counterpart of
+    :class:`AnyOf`."""
+    __slots__ = ()
+
 # Rounding operator
 
 class Round(NamedUnaryOp):
@@ -1892,6 +1909,8 @@ CANONICAL_OP_NAMES: dict[type, str] = {
     Logb: 'logb',
     AMin: 'min',
     AMax: 'max',
+    AnyOf: 'any',
+    AllOf: 'all',
     Range1: 'range',
     # binary
     Copysign: 'copysign',
