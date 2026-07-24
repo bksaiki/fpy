@@ -4,7 +4,6 @@ This module contains the parser for the FPy language.
 
 import ast
 from collections.abc import Callable, Mapping
-from types import FunctionType
 from typing import Any
 
 from ..ast.fpyast import *
@@ -109,6 +108,36 @@ _nary_table: dict[Callable, type[NaryOp] | type[NamedNaryOp]] = {
     empty: Empty,
 }
 
+# Dispatch for fixed-arity builtin operators: (table, arg count, `func`-carrying base).
+# `NullaryOp` always takes `func`, so it is its own "named" base.
+_fixed_arity_tables: list[tuple[Mapping[Callable, type], int, type]] = [
+    (_nullary_table, 0, NullaryOp),
+    (_unary_table, 1, NamedUnaryOp),
+    (_binary_table, 2, NamedBinaryOp),
+    (_ternary_table, 3, NamedTernaryOp),
+]
+
+# Python binary operators, shared by `_parse_binop` and `_parse_augassign`.
+# `**` is not here: it is handled specially in `_parse_binop` and unsupported
+# as an augmented assignment.
+_binop_table: dict[type[ast.operator], type[BinaryOp]] = {
+    ast.Add: Add,
+    ast.Sub: Sub,
+    ast.Mult: Mul,
+    ast.Div: Div,
+    ast.Mod: Mod,
+}
+
+# Python comparison operators.
+_cmpop_table: dict[type[ast.cmpop], CompareOp] = {
+    ast.Lt: CompareOp.LT,
+    ast.LtE: CompareOp.LE,
+    ast.GtE: CompareOp.GE,
+    ast.Gt: CompareOp.GT,
+    ast.Eq: CompareOp.EQ,
+    ast.NotEq: CompareOp.NE,
+}
+
 
 class FPyParserError(Exception):
     """Parser error for FPy"""
@@ -129,7 +158,7 @@ class Parser:
 
     def __init__(
         self,
-        name: str, 
+        name: str,
         lines: list[str],
         env: ForeignEnv,
         start_line: int = 1,
@@ -156,13 +185,20 @@ class Parser:
 
     def _parse_error(self, why: str, where: ast.AST, ctx: ast.AST | None = None):
         msg_lines = [why]
-        if isinstance(where, ast.expr | ast.stmt | ast.arg):
-            loc = self._parse_location(where)
+        # Operator nodes (`ast.operator`, `ast.cmpop`, `ast.boolop`, ...) carry
+        # no source position, so fall back to the containing expression `ctx`
+        # rather than reporting an unhelpful `?:?`.
+        loc_node = where if isinstance(where, ast.expr | ast.stmt | ast.arg) else ctx
+        if isinstance(loc_node, ast.expr | ast.stmt | ast.arg):
+            loc = self._parse_location(loc_node)
             msg_lines.append(f' at: {self.name}:{loc.start_line}:{loc.start_column}')
         else:
             msg_lines.append(f' at: {self.name}:?:?')
 
-        msg_lines.append(f' where: {ast.unparse(where)}')
+        # `ast.unparse` of a bare operator node is empty; omit the noise.
+        where_src = ast.unparse(where)
+        if where_src:
+            msg_lines.append(f' where: {where_src}')
         if ctx is not None:
             msg_lines.append(f' in: {ast.unparse(ctx)}')
 
@@ -215,7 +251,7 @@ class Parser:
                     raise self._parse_error('FPy function call must begin with a named identifier', ann)
                 ident_str = str(ident)
                 if ident_str not in self.env:
-                    raise self._parse_error(f'name \'{ident_str}\' not defined:', ann)
+                    raise self._parse_error(f'name \'{ident_str}\' not defined', ann)
                 return self.env[ident_str]
             case ast.Subscript():
                 ctor = self._eval_type_annotation(ann.value)
@@ -334,10 +370,10 @@ class Parser:
         loc = self._parse_location(e)
         match e.op:
             case ast.And():
-                args = [self._parse_expr(e) for e in e.values]
+                args = [self._parse_expr(v) for v in e.values]
                 return And(args, loc)
             case ast.Or():
-                args = [self._parse_expr(e) for e in e.values]
+                args = [self._parse_expr(v) for v in e.values]
                 return Or(args, loc)
             case _:
                 raise self._parse_error('Not a valid FPy operator', e.op, e)
@@ -366,63 +402,38 @@ class Parser:
 
     def _parse_binop(self, e: ast.BinOp):
         loc = self._parse_location(e)
-        match e.op:
-            case ast.Add():
-                lhs = self._parse_expr(e.left)
-                rhs = self._parse_expr(e.right)
-                return Add(lhs, rhs, loc)
-            case ast.Sub():
-                lhs = self._parse_expr(e.left)
-                rhs = self._parse_expr(e.right)
-                return Sub(lhs, rhs, loc)
-            case ast.Mult():
-                lhs = self._parse_expr(e.left)
-                rhs = self._parse_expr(e.right)
-                return Mul(lhs, rhs, loc)
-            case ast.Div():
-                lhs = self._parse_expr(e.left)
-                rhs = self._parse_expr(e.right)
-                return Div(lhs, rhs, loc)
-            case ast.Mod():
-                lhs = self._parse_expr(e.left)
-                rhs = self._parse_expr(e.right)
-                return Mod(lhs, rhs, loc)
-            case ast.Pow():
-                base = self._parse_expr(e.left)
-                exp = self._parse_expr(e.right)
-                if not isinstance(exp, Integer) or exp.val < 0:
-                    raise self._parse_error('FPy only supports `**` for small integer exponent, use `pow()` instead', e.op, e)
-                return self._ipow(base, exp.val, loc)
-            case _:
-                raise self._parse_error('Not a valid FPy operator', e.op, e)
+        # `**` folds into repeated multiplication and only accepts a small
+        # non-negative integer exponent, so it is handled apart from the table.
+        if isinstance(e.op, ast.Pow):
+            base = self._parse_expr(e.left)
+            exp = self._parse_expr(e.right)
+            if not isinstance(exp, Integer) or exp.val < 0:
+                raise self._parse_error('FPy only supports `**` for small integer exponent, use `pow()` instead', e.op, e)
+            return self._ipow(base, exp.val, loc)
+
+        cls = _binop_table.get(type(e.op))
+        if cls is None:
+            raise self._parse_error('Not a valid FPy operator', e.op, e)
+        lhs = self._parse_expr(e.left)
+        rhs = self._parse_expr(e.right)
+        return cls(lhs, rhs, loc)
 
     def _parse_cmpop(self, op: ast.cmpop, e: ast.Compare):
-        match op:
-            case ast.Lt():
-                return CompareOp.LT
-            case ast.LtE():
-                return CompareOp.LE
-            case ast.GtE():
-                return CompareOp.GE
-            case ast.Gt():
-                return CompareOp.GT
-            case ast.Eq():
-                return CompareOp.EQ
-            case ast.NotEq():
-                return CompareOp.NE
-            case _:
-                raise self._parse_error('Not a valid FPy comparator', op, e)
+        result = _cmpop_table.get(type(op))
+        if result is None:
+            raise self._parse_error('Not a valid FPy comparator', op, e)
+        return result
 
     def _parse_compare(self, e: ast.Compare):
         loc = self._parse_location(e)
         ops = [self._parse_cmpop(op, e) for op in e.ops]
-        args = [self._parse_expr(e) for e in [e.left, *e.comparators]]
+        args = [self._parse_expr(operand) for operand in [e.left, *e.comparators]]
         return Compare(ops, args, loc)
 
     def _eval_var(self, v: Var, e: ast.expr):
         ident = str(v.name)
         if ident not in self.env:
-            raise self._parse_error(f'name \'{ident}\' not defined:', e)
+            raise self._parse_error(f'name \'{ident}\' not defined', e)
         return self.env[ident]
 
     def _eval_attribute(self, a: Attribute, e: ast.expr):
@@ -442,6 +453,34 @@ class Parser:
 
         return getattr(base, a.attr)
 
+    def _check_no_kwargs(self, fn, kwargs: list, e: ast.Call):
+        if kwargs:
+            raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
+
+    def _check_arity(self, fn, args: list, arity: int, e: ast.Call):
+        if len(args) != arity:
+            noun = 'argument' if arity == 1 else 'arguments'
+            raise self._parse_error(f'FPy expects {arity} {noun} for `{fn}`, got {len(args)}', e)
+
+    def _parse_nary(self, fn, func: Var, args: list[Expr], kwargs: list, loc: Location, e: ast.Call):
+        cls = _nary_table[fn]
+        # min/max/fmin/fmax split at parse time by arity: 1 arg →
+        # reduce-form (AMin/AMax over a list), ≥ 2 args → variadic
+        # scalar form.  See AMin/AMax docstrings for the rationale.
+        if cls is Min and len(args) == 1:
+            return AMin(func, args[0], loc)
+        if cls is Max and len(args) == 1:
+            return AMax(func, args[0], loc)
+        if (cls is Min or cls is Max) and len(args) == 0:
+            raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
+        if cls is Empty and len(args) < 1:
+            raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
+        self._check_no_kwargs(fn, kwargs, e)
+        if issubclass(cls, NamedNaryOp):
+            return cls(func, args, loc)
+        else:
+            return cls(args, loc)
+
     def _parse_call(self, e: ast.Call):
         """Parse a Python call function."""
         # parse function expression
@@ -451,15 +490,15 @@ class Parser:
                 fn = self._eval_attribute(func, e.func)
             case ast.Name():
                 name = self._parse_id(e.func)
-                func = Var(name, None)
-                if isinstance(func, UnderscoreId):
+                if isinstance(name, UnderscoreId):
                     raise self._parse_error('FPy function call must begin with a named identifier', e)
+                func = Var(name, None)
                 ident = str(name)
                 if ident not in self.env:
-                    raise self._parse_error(f'name \'{ident}\' not defined:', e)
+                    raise self._parse_error(f'name \'{ident}\' not defined', e)
                 fn = self.env[ident]
             case _:
-                raise RuntimeError('unreachable')
+                raise self._parse_error('unsupported call target in FPy', e.func, e)
 
         # parse arguments
         args = [self._parse_expr(arg) for arg in e.args]
@@ -472,88 +511,36 @@ class Parser:
             kwarg_val = self._parse_expr(kwarg.value)
             kwargs.append((kwarg.arg, kwarg_val))
 
-        # lookup builtin symbols
         loc = self._parse_location(e.func)
-        if fn in _nullary_table:
-            cls0 = _nullary_table[fn]
-            if len(e.args) != 0:
-                raise self._parse_error(f'FPy expects 0 arguments for `{fn}`, got {len(e.args)}', e)
-            if kwargs:
-                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
-            return cls0(func, loc)
-        elif fn in _unary_table:
-            cls1 = _unary_table[fn]
-            if len(args) != 1:
-                raise self._parse_error(f'FPy expects 1 argument for `{fn}`, got {len(e.args)}', e)
-            if kwargs:
-                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
-            if issubclass(cls1, NamedUnaryOp):
-                return cls1(func, args[0], loc)
-            else:
-                return cls1(args[0], loc)
-        elif fn in _binary_table:
-            cls2 = _binary_table[fn]
-            if len(args) != 2:
-                raise self._parse_error(f'FPy expects 2 arguments for `{fn}`, got {len(e.args)}', e)
-            if kwargs:
-                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
-            if issubclass(cls2, NamedBinaryOp):
-                return cls2(func, args[0], args[1], loc)
-            else:
-                return cls2(args[0], args[1], loc)
-        elif fn in _ternary_table:
-            cls3 = _ternary_table[fn]
-            if len(args) != 3:
-                raise self._parse_error(f'FPy expects 3 arguments for `{fn}`, got {len(e.args)}', e)
-            if kwargs:
-                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
-            if issubclass(cls3, NamedTernaryOp):
-                return cls3(func, args[0], args[1], args[2], loc)
-            else:
-                return cls3(args[0], args[1], args[2], loc)
-        elif fn in _nary_table:
-            cls = _nary_table[fn]
-            # min/max/fmin/fmax split at parse time by arity: 1 arg →
-            # reduce-form (AMin/AMax over a list), ≥ 2 args → variadic
-            # scalar form.  See AMin/AMax docstrings for the rationale.
-            if cls is Min and len(args) == 1:
-                return AMin(func, args[0], loc)
-            if cls is Max and len(args) == 1:
-                return AMax(func, args[0], loc)
-            if (cls is Min or cls is Max) and len(args) == 0:
-                raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
-            if cls is Empty and len(args) < 1:
-                raise self._parse_error(f'FPy expects at least 1 argument for `{fn}`', e)
-            if kwargs:
-                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
-            if issubclass(cls, NamedNaryOp):
-                return cls(func, args, loc)
-            else:
-                return cls(args, loc)
-        elif fn == rational:
-            if kwargs:
-                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
-            return self._parse_rational(e, func)
-        elif fn == hexfloat:
-            if kwargs:
-                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
-            return self._parse_hexfloat(e, func)
-        elif fn == digits:
-            if kwargs:
-                raise self._parse_error(f'FPy does not support keyword arguments for `{fn}`', e)
-            return self._parse_digits(e, func)
-        elif fn == len:
-            if len(args) != 1:
-                raise self._parse_error('FPy expects 1 argument for `len`', e)
-            if kwargs:
-                raise self._parse_error('FPy does not support keyword arguments for `len`', e)
-            return Size(func, args[0], Integer(0, None), loc)
-        elif fn is range:
-            if kwargs:
-                raise self._parse_error('FPy does not support keyword arguments for `range`', e)
-            return self._parse_range(e, func)
-        else:
-            return Call(func, fn, args, kwargs, loc)
+
+        # fixed-arity builtin operators
+        for table, arity, named_base in _fixed_arity_tables:
+            if fn in table:
+                cls: Any = table[fn]
+                self._check_arity(fn, args, arity, e)
+                self._check_no_kwargs(fn, kwargs, e)
+                if issubclass(cls, named_base):
+                    return cls(func, *args, loc)
+                else:
+                    return cls(*args, loc)
+
+        # variadic builtin operators (min/max/empty/zip/...) with bespoke arity rules
+        if fn in _nary_table:
+            return self._parse_nary(fn, func, args, kwargs, loc, e)
+
+        # builtins with bespoke argument parsing
+        bespoke = {
+            rational: self._parse_rational,
+            hexfloat: self._parse_hexfloat,
+            digits: self._parse_digits,
+            range: self._parse_range,
+        }
+        if fn in bespoke:
+            self._check_no_kwargs(fn, kwargs, e)
+            return bespoke[fn](e, func)
+
+        # user-defined / foreign call
+        return Call(func, fn, args, kwargs, loc)
 
     def _parse_slice(self, e: ast.Slice):
         """Parse a Python slice expression."""
@@ -596,15 +583,6 @@ class Parser:
         slices.reverse()
 
         return target, slices
-
-    def _is_foreign_val(self, e: ast.expr):
-        match e:
-            case ast.Name() | ast.Constant():
-                return True
-            case ast.Attribute():
-                return self._is_foreign_val(e.value)
-            case _:
-                return False
 
     def _parse_attribute(self, e: ast.Attribute):
         loc = self._parse_location(e)
@@ -658,7 +636,6 @@ class Parser:
                 return IfExpr(cond, ift, iff, loc)
             case _:
                 raise self._parse_error('expression is unsupported in FPy', e)
-                raise RuntimeError('unreachable')
 
     def _parse_tuple_target(self, target: ast.expr, e: ast.AST):
         loc = self._parse_location(target)
@@ -669,7 +646,7 @@ class Parser:
                 elts = [self._parse_tuple_target(elt, e) for elt in target.elts]
                 return TupleBinding(elts, loc)
             case _:
-                raise self._parse_error('FPy expects an identifier', target, e)       
+                raise self._parse_error('FPy expects an identifier', target, e)
 
     def _parse_comprehension(self, gen: ast.comprehension):
         if gen.is_async:
@@ -713,25 +690,12 @@ class Parser:
         if not isinstance(ident, NamedId):
             raise self._parse_error('Not a valid FPy identifier', stmt)
 
-        match stmt.op:
-            case ast.Add():
-                value = self._parse_expr(stmt.value)
-                e: Expr = Add(Var(ident, loc), value, loc)
-            case ast.Sub():
-                value = self._parse_expr(stmt.value)
-                e = Sub(Var(ident, loc), value, loc)
-            case ast.Mult():
-                value = self._parse_expr(stmt.value)
-                e = Mul(Var(ident, loc), value, loc)
-            case ast.Div():
-                value = self._parse_expr(stmt.value)
-                e = Div(Var(ident, loc), value, loc)
-            case ast.Mod():
-                value = self._parse_expr(stmt.value)
-                e = Mod(Var(ident, loc), value, loc)
-            case _:
-                raise self._parse_error('Unsupported operator-assignment in FPy', stmt)
+        cls = _binop_table.get(type(stmt.op))
+        if cls is None:
+            raise self._parse_error('Unsupported operator-assignment in FPy', stmt)
 
+        value = self._parse_expr(stmt.value)
+        e: Expr = cls(Var(ident, loc), value, loc)
         return Assign(ident, None, e, loc)
 
     def _parse_statement(self, stmt: ast.stmt) -> Stmt:
@@ -829,10 +793,10 @@ class Parser:
     def _parse_arguments(self, pos_args: list[ast.arg]):
         args: list[Argument] = []
         for arg in pos_args:
+            loc = self._parse_location(arg)
             if arg.arg == '_':
                 ident: Id = UnderscoreId()
             else:
-                loc = self._parse_location(arg)
                 ident = SourceId(arg.arg, loc)
 
             if arg.annotation is None:
@@ -876,7 +840,7 @@ class Parser:
     def _start_parse(self):
         src = ''.join(self.lines)
         mod = ast.parse(src, self.name)
-        if len(mod.body) > 1:
+        if len(mod.body) != 1:
             raise self._parse_error('FPy only supports single function definitions', mod)
 
         ptree = mod.body[0]
