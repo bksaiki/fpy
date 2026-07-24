@@ -508,15 +508,16 @@ class _FPCoreCompileInstance(Visitor):
         """
         a_id = str(self.gensym.fresh('a'))
         b_id = str(self.gensym.fresh('b'))
+        a_var, b_var = fpc.Var(a_id), fpc.Var(b_id)
         return fpc.Let(
             [(a_id, a), (b_id, b)],
             fpc.If(
-                fpc.Or(fpc.Isnan(a_id), fpc.Isnan(b_id)),
+                fpc.Or(fpc.Isnan(a_var), fpc.Isnan(b_var)),
                 fpc.Constant('NAN'),
                 fpc.If(
-                    fpc.EQ(a_id, b_id),
-                    fpc.If(fpc.Signbit(a_id), a_id, b_id),
-                    fpc.If(fpc.LT(a_id, b_id), a_id, b_id),
+                    fpc.EQ(a_var, b_var),
+                    fpc.If(fpc.Signbit(a_var), a_var, b_var),
+                    fpc.If(fpc.LT(a_var, b_var), a_var, b_var),
                 ),
             ),
         )
@@ -527,15 +528,16 @@ class _FPCoreCompileInstance(Visitor):
         and the inequality branch picks the larger operand."""
         a_id = str(self.gensym.fresh('a'))
         b_id = str(self.gensym.fresh('b'))
+        a_var, b_var = fpc.Var(a_id), fpc.Var(b_id)
         return fpc.Let(
             [(a_id, a), (b_id, b)],
             fpc.If(
-                fpc.Or(fpc.Isnan(a_id), fpc.Isnan(b_id)),
+                fpc.Or(fpc.Isnan(a_var), fpc.Isnan(b_var)),
                 fpc.Constant('NAN'),
                 fpc.If(
-                    fpc.EQ(a_id, b_id),
-                    fpc.If(fpc.Signbit(a_id), b_id, a_id),
-                    fpc.If(fpc.LT(a_id, b_id), b_id, a_id),
+                    fpc.EQ(a_var, b_var),
+                    fpc.If(fpc.Signbit(a_var), b_var, a_var),
+                    fpc.If(fpc.LT(a_var, b_var), b_var, a_var),
                 ),
             ),
         )
@@ -583,12 +585,24 @@ class _FPCoreCompileInstance(Visitor):
 
             (let ([t <tuple>])
               (for ([i (! :precision integer (- (size t 0) 1))]
-                    [accum (ref t i) (<combine> accum (ref t (! :precision integer (+ i 1))))])
+                    [accum (ref t 0) (<combine> accum (ref t (! :precision integer (+ i 1))))])
                 accum))
 
-        Empty-input semantics are inherited from FPCore's ``for`` over a
-        zero count (the init expression still runs at ``i = 0`` — same
-        UB as the interpreter / cpp emitter contract).
+        Two details the shape depends on:
+
+        - The accumulator's *init* is ``(ref t 0)``, not ``(ref t i)``.
+          FPCore evaluates a ``for``'s while-binding inits in the
+          enclosing scope, **before** the dimension variables are bound,
+          so an init mentioning ``i`` is an unbound reference.
+        - Only the index arithmetic ``(+ i 1)`` carries
+          ``:precision integer``.  Annotating the whole ``<combine>``
+          would round every partial result to an integer — for ``sum``
+          that silently truncates the fold.
+
+        Empty input is out of contract: the init reads element 0, matching
+        the interpreter's ``min([]) -> ValueError`` and the cpp emitter's
+        unguarded ``xs[0]``.  (An empty FPCore tensor is not
+        constructible anyway.)
         """
         tuple_id = str(self.gensym.fresh('t'))
         iter_id = str(self.gensym.fresh('i'))
@@ -596,14 +610,15 @@ class _FPCoreCompileInstance(Visitor):
         idx_ctx = { 'precision': 'integer' }
 
         tup = self._visit_expr(arg, ctx)
+        next_idx = fpc.Ctx(idx_ctx, fpc.Add(fpc.Var(iter_id), fpc.Integer(1)))
         return fpc.Let(
             [(tuple_id, tup)],
             fpc.For(
-                [(iter_id, fpc.Ctx(idx_ctx, fpc.Sub(fpc.Size(fpc.Var(tuple_id), fpc.Integer(0)), fpc.Integer(1))))],
+                [(iter_id, fpc.Ctx(idx_ctx, fpc.Sub(_size0_expr(tuple_id), fpc.Integer(1))))],
                 [(
                     accum_id,
-                    fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)),
-                    fpc.Ctx(idx_ctx, combine(accum_id, fpc.Ref(fpc.Var(tuple_id), fpc.Add(fpc.Var(iter_id), fpc.Integer(1)))))
+                    fpc.Ref(fpc.Var(tuple_id), fpc.Integer(0)),
+                    combine(fpc.Var(accum_id), fpc.Ref(fpc.Var(tuple_id), next_idx))
                 )],
                 fpc.Var(accum_id)
             )
@@ -1107,6 +1122,18 @@ class _FPCoreCompileInstance(Visitor):
 
 
     def _visit_for(self, stmt: ForStmt, ret: fpc.Expr):
+        """Lower ``for <x> in <iterable>: <body>``.
+
+        FPy's loop target ranges over the iterable's *elements*, while an
+        FPCore ``for``'s dimension variable ranges over *indices*.  So the
+        dimension variable is a fresh ``i`` and the target is bound to
+        ``(ref t i)`` in a ``let`` wrapping the body — using the target
+        itself as the dimension variable would silently bind it to the
+        index (``for x in [1, 2, 4]`` would walk ``0, 1, 2``).
+
+        ``for i in range(n)`` is unaffected: ``range`` lowers to the tensor
+        ``(tensor ([j n]) j)``, whose element at ``i`` *is* ``i``.
+        """
         # check that only one variable is mutated in the loop
         # the `ForBundling` pass is required to ensure this
         mutated = self.def_use.mutated_in(stmt.body)
@@ -1114,42 +1141,48 @@ class _FPCoreCompileInstance(Visitor):
 
         if not isinstance(stmt.target, Id):
             raise FPCoreCompileError(f'for loops must have a single target: {stmt.target} ')
-        idx_id = str(stmt.target)
+        elt_id = str(stmt.target)
+
+        tuple_id = str(self.gensym.fresh('t'))
+        iter_id = str(self.gensym.fresh('i'))
+        iterable = self._visit_expr(stmt.iterable, None)
+
+        def _with_elt(body: fpc.Expr) -> fpc.Expr:
+            # (let ([<x> (ref <t> <i>)]) <body>)
+            return fpc.Let(
+                [(elt_id, fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))],
+                body
+            )
 
         if num_mutated == 0:
             # no mutated variables (loop with no side effect)
             # still want to return a valid FPCore
             # (let ([<t> <iterable>])
             #   (for ([<i> (size <t> 0)])
-            #        ([<i> 0 (! :precision integer :round toZero (+ i 1)_])
-            #         [_ 0 (let ([_ <body>]) 0)])))
-            #        <ret>))
-            tuple_id = str(self.gensym.fresh('t'))
-            iterable = self._visit_expr(stmt.iterable, None)
+            #        ([_ 0 (let ([<x> (ref <t> <i>)]) <body>)])
+            #     <ret>))
             body = self._visit_block(stmt.body, fpc.Integer(0))
             return fpc.Let(
                 [(tuple_id, iterable)],
                 fpc.For(
-                    [(idx_id, _size0_expr(tuple_id))],
-                    [('_', fpc.Integer(0), body)],
+                    [(iter_id, _size0_expr(tuple_id))],
+                    [('_', fpc.Integer(0), _with_elt(body))],
                     ret
             ))
         else:
             # exactly one mutated variable
-            # the mutated variable is the loop variable
+            # the mutated variable is the accumulator
             # (let ([<t> <iterable>])
             #   (for ([<i> (size <t> 0)])
-            #         [<loop> <loop> (let ([_ <body>]) <loop>)])))
-            #        <ret>))
+            #        ([<loop> <loop> (let ([<x> (ref <t> <i>)]) <body>)])
+            #     <ret>))
             loop_id = str(mutated.pop())
-            tuple_id = str(self.gensym.fresh('t'))
-            iterable = self._visit_expr(stmt.iterable, None)
             body = self._visit_block(stmt.body, fpc.Var(loop_id))
             return fpc.Let(
                 [(tuple_id, iterable)],
                 fpc.For(
-                    [(idx_id, _size0_expr(tuple_id))],
-                    [(loop_id, fpc.Var(loop_id), body)],
+                    [(iter_id, _size0_expr(tuple_id))],
+                    [(loop_id, fpc.Var(loop_id), _with_elt(body))],
                     ret
             ))
 
