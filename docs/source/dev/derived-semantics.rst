@@ -127,14 +127,24 @@ Reductions
 ----------
 
 * ``Sum`` — ``sum(xs)`` is a left fold with ``+`` (rounding each step; the empty
-  sum is exact ``0``)::
+  sum is exact ``0``).  The accumulator is *seeded with the first element*, so
+  a list of ``n`` elements performs ``n - 1`` additions::
 
     @fp.fpy
     def sum(xs: list[fp.Real]) -> fp.Real:
-        acc = 0
-        for x in xs:
+        if len(xs) == 0:
+            return 0
+        acc = xs[0]
+        for x in xs[1:]:
             acc = acc + x
         return acc
+
+  Seeding with ``0`` instead would *not* be equivalent: ``0 + xs[0]`` is itself
+  a rounded operation, so it would round the first element before the fold
+  begins.  Under ``fp.FP16``, summing the exact values
+  ``[1 + 2**-11, 2**-11]`` gives ``1 + 2**-10`` as written above, but ``1.0``
+  with a zero seed — ``2**-11`` is half of FP16's spacing above ``1.0``, so
+  rounding the first element on its own is a tie that resolves down.
 
 The *boolean* reductions fold a ``list[bool]`` with the logical operators, so
 no rounding occurs and the active context is irrelevant.  Each is seeded with
