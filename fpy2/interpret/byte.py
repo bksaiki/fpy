@@ -418,6 +418,22 @@ def _eval_len(x):
         raise TypeError(f'len() expects a list, got {x}')
     return len(x)
 
+def _check_bool_list(x, who: str) -> list[bool]:
+    # `any`/`all` are list-of-bool only (matches `TypeInfer`); the native
+    # builtins would accept a tuple and coerce reals via truthiness.
+    if not isinstance(x, list):
+        raise TypeError(f'{who} expects a list, got {x}')
+    for b in x:
+        if not isinstance(b, bool):
+            raise TypeError(f'{who} expects a list of booleans, got {b}')
+    return x
+
+def _eval_any(x):
+    return any(_check_bool_list(x, 'any()'))
+
+def _eval_all(x):
+    return all(_check_bool_list(x, 'all()'))
+
 ###########################################################
 # Operator tables
 
@@ -531,6 +547,8 @@ def make_namespace() -> dict[str, object]:
         '__fpy_min': _eval_min,
         '__fpy_max': _eval_max,
         '__fpy_len': _eval_len,
+        '__fpy_any': _eval_any,
+        '__fpy_all': _eval_all,
         REAL_NAME: REAL,
     }
 
@@ -707,6 +725,11 @@ class BytecodeCompiler(Visitor):
                 # Reduce-form lowers to Python's built-in min/max on the
                 # list, matching the n-ary Min/Max emit.
                 builtin = '__fpy_min' if isinstance(e, AMin) else '__fpy_max'
+                func = pyast.Name(id=builtin, ctx=pyast.Load(), **attrs)
+                return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
+            case AnyOf() | AllOf():
+                # Boolean reduce-form; no `ctx` keyword — neither op rounds.
+                builtin = '__fpy_any' if isinstance(e, AnyOf) else '__fpy_all'
                 func = pyast.Name(id=builtin, ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
             case _:

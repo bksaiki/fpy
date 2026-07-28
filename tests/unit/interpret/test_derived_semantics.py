@@ -451,6 +451,72 @@ class TestReductions:
         assert float(amax_(xs, ctx=FP64)) == 3.0
         assert float(amin_(xs, ctx=FP64)) == 1.0
 
+    def test_any_all_are_folds_across_contexts(self):
+        """``any``/``all`` fold with ``or``/``and`` — the doc's desugaring."""
+        @fp.fpy
+        def any_node(bs: list[bool]) -> bool:
+            return any(bs)
+        @fp.fpy
+        def any_desugar(bs: list[bool]) -> bool:
+            acc = False
+            for b in bs:
+                acc = acc or b
+            return acc
+
+        @fp.fpy
+        def all_node(bs: list[bool]) -> bool:
+            return all(bs)
+        @fp.fpy
+        def all_desugar(bs: list[bool]) -> bool:
+            acc = True
+            for b in bs:
+                acc = acc and b
+            return acc
+
+        # exhaustive over lists of length 0..3, so the empty case and every
+        # true/false arrangement are covered
+        for n in range(4):
+            for i in range(2 ** n):
+                bs = [bool(i >> k & 1) for k in range(n)]
+                _agree(any_node, any_desugar, (bs,))
+                _agree(all_node, all_desugar, (bs,))
+
+    def test_any_all_empty_is_the_identity(self):
+        """``any([])`` is ``False`` and ``all([])`` is ``True`` — unlike
+        ``min``/``max``, both are total on the empty list."""
+        @fp.fpy
+        def any_(bs: list[bool]) -> bool:
+            return any(bs)
+        @fp.fpy
+        def all_(bs: list[bool]) -> bool:
+            return all(bs)
+        assert any_([], ctx=FP64) is False
+        assert all_([], ctx=FP64) is True
+
+    def test_any_all_over_comparisons(self):
+        """The idiomatic use: a comprehension of comparisons."""
+        @fp.fpy
+        def any_neg(xs: list[fp.Real]) -> bool:
+            return any([x < 0 for x in xs])
+        @fp.fpy
+        def all_neg(xs: list[fp.Real]) -> bool:
+            return all([x < 0 for x in xs])
+        assert any_neg([1.0, -2.0, 3.0], ctx=FP64) is True
+        assert any_neg([1.0, 2.0, 3.0], ctx=FP64) is False
+        assert all_neg([-1.0, -2.0], ctx=FP64) is True
+        assert all_neg([-1.0, 2.0], ctx=FP64) is False
+
+    def test_any_all_reject_non_bool_operands(self):
+        """FPy has no truthiness, so a real element is an error rather than a
+        zero test (Python's builtins would accept both of these)."""
+        @fp.fpy
+        def any_(bs: list[bool]) -> bool:
+            return any(bs)
+        with pytest.raises(TypeError):
+            any_([1.0, 0.0], ctx=FP64)      # real elements
+        with pytest.raises(TypeError):
+            any_((True, False), ctx=FP64)   # tuple, not list
+
 
 # ---------------------------------------------------------------------------
 # Classification / inspection  (IsFinite, IsInf, IsNan, IsNormal, Signbit,

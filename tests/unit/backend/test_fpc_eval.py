@@ -2,7 +2,7 @@
 Differential evaluation tests for the FPCore backend.
 
 The other ``test_fpc_*`` modules compare *emitted text*, which cannot catch a
-core that prints correctly but does not evaluate — the failure mode of three
+core that prints correctly but does not evaluate — the failure mode of four
 bugs in list-reduce and ``for``-loop lowering:
 
 - a ``for`` accumulator init that referenced the loop index, which FPCore
@@ -16,9 +16,15 @@ bugs in list-reduce and ``for``-loop lowering:
 
 So these tests run each program twice — once through the FPy interpreter, once
 through titanfp's interpreter on the compiled core — and require agreement.
+
+The same harness covers the boolean reductions (``any`` / ``all``): booleans
+are the values most easily lost across the titanfp boundary, so they want
+executing rather than string-matching too.
 """
 
 import math
+
+import pytest
 
 import titanfp.fpbench.fpcast as fpc
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
@@ -61,6 +67,19 @@ def _both(fn, *args):
 def _agree(fn, *args):
     want, got = _both(fn, *args)
     assert want == got, f'FPy {want} != FPCore {got}\n  {_compile(fn).e}'
+    return want
+
+
+def _agree_bool(fn, *args):
+    """``_agree`` for bool-returning programs.  Separate from ``_both``, which
+    coerces through ``float`` and would let a numeric ``1.0`` pass as ``True``;
+    here both sides must be a genuine ``bool``."""
+    core = _compile(fn)
+    got = Interpreter().interpret(core, [_to_mpmf(a) for a in args])
+    want = fn(*args)
+    assert isinstance(want, bool), f'expected bool from FPy, got {want!r}'
+    assert isinstance(got, bool), f'expected bool from FPCore, got {got!r}'
+    assert want == got, f'FPy {want} != FPCore {got}\n  {core.e}'
     return want
 
 
@@ -287,3 +306,63 @@ class TestForLoopBindsElements:
 
         # (1+2) * (10+100) = 330
         assert _agree(_size(f, 2, 2), [1.0, 2.0], [10.0, 100.0]) == 330.0
+
+
+class TestBooleanReduce:
+    """``any`` / ``all`` lower to a ``for``-fold seeded with the operator's
+    identity (``FALSE`` / ``TRUE``), combining with ``or`` / ``and``.
+
+    Each program builds its boolean list *internally*: a boolean tensor does
+    not survive titanfp's argument conversion (Python ``bool`` becomes a
+    numeric ``MPMF``, which has no ``__bool__``, so every element reads
+    truthy).  Passing a ``list[bool]`` in would make these tests vacuous.
+    """
+
+    @staticmethod
+    def _reduce(op, n: int):
+        """``op([x < y for x in xs])`` with ``xs`` pinned to length *n*."""
+        if op is any:
+            @fp.fpy
+            def f(xs: list[fp.Real], y: fp.Real) -> bool:
+                with fp.FP64:
+                    return any([x < y for x in xs])
+        else:
+            @fp.fpy
+            def f(xs: list[fp.Real], y: fp.Real) -> bool:
+                with fp.FP64:
+                    return all([x < y for x in xs])
+        return _size(f, n)
+
+    @pytest.mark.parametrize('op,xs,want', [
+        (any, [1.0, -2.0, 3.0], True),      # some true
+        (any, [1.0, 2.0, 3.0], False),      # none true
+        (any, [-1.0, -2.0, -3.0], True),    # all true
+        (all, [-1.0, -2.0, -3.0], True),    # all true
+        (all, [-1.0, 2.0, -3.0], False),    # one false
+        (all, [1.0, 2.0, 3.0], False),      # none true
+        (any, [-1.0], True),                # single element
+        (any, [1.0], False),
+        (all, [-1.0], True),
+        (all, [1.0], False),
+    ])
+    def test_matches_interpreter(self, op, xs, want):
+        assert _agree_bool(self._reduce(op, len(xs)), xs, 0.0) is want
+
+    @pytest.mark.parametrize('op,identity', [(any, 'FALSE'), (all, 'TRUE')])
+    def test_fold_seeds_with_the_identity(self, op, identity):
+        """The accumulator init is the identity constant, not ``(ref t 0)`` —
+        which is what makes the empty list correct by construction.  (Empty
+        itself is unreachable through titanfp, which cannot build a
+        zero-length tensor, so assert on the shape.)"""
+        core = _compile(self._reduce(op, 3))
+        fors = [e for e in _operands(core.e) + [core.e] if isinstance(e, fpc.For)]
+        assert len(fors) == 1
+        _, init, _ = fors[0].while_bindings[0]
+        assert isinstance(init, fpc.Constant) and str(init) == identity
+
+    @pytest.mark.parametrize('op', [any, all])
+    def test_operands_are_exprs(self, op):
+        """No bare ``str`` in operand position (see TestNoBareStringOperands)."""
+        bad = [o for o in _operands(_compile(self._reduce(op, 3)).e)
+               if isinstance(o, str)]
+        assert not bad, f'bare str operands in emitted core: {bad}'

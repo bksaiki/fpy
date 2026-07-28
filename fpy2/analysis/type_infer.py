@@ -423,6 +423,10 @@ class _TypeInferInstance(Visitor):
                     # list-reduce operators: list[real] -> real
                     self._unify(arg_ty, ListType(RealType(None)))
                     return RealType(None)
+                case AnyOf() | AllOf():
+                    # boolean list-reduce operators: list[bool] -> bool
+                    self._unify(arg_ty, ListType(BoolType()))
+                    return BoolType()
                 case _:
                     raise ValueError(f'unknown unary operator: {cls}')
 

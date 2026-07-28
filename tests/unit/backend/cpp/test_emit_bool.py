@@ -2,10 +2,12 @@
 Phase 3b tests for the cpp emitter — booleans and comparisons.
 """
 
+import re
+
 import fpy2 as fp
 
 from fpy2.backend.cpp import CppCompiler
-from fpy2.types import RealType
+from fpy2.types import BoolType, ListType, RealType
 
 
 class TestBoolAndCompare:
@@ -79,3 +81,73 @@ class TestBoolAndCompare:
             arg_types=[RealType(fp.FP64)] * 3,
         )
         assert '((x < y) && (y < z))' in out
+
+
+class TestBooleanReduce:
+    """``any`` / ``all`` lower to ``std::any_of`` / ``std::all_of`` with an
+    identity predicate — no hoisted loop and no casting, unlike ``AMin`` /
+    ``AMax``."""
+
+    @staticmethod
+    def _compile(f, elt_ty):
+        return CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(elt_ty)],
+        )
+
+    def test_any_over_bool_list_arg(self):
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            with fp.FP64:
+                return any(bs)
+
+        out = self._compile(f, BoolType())
+        assert out.startswith('bool f(const std::vector<bool>& bs)')
+        assert 'std::any_of(' in out
+
+    def test_all_over_bool_list_arg(self):
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            with fp.FP64:
+                return all(bs)
+
+        out = self._compile(f, BoolType())
+        assert out.startswith('bool f(const std::vector<bool>& bs)')
+        assert 'std::all_of(' in out
+
+    def test_identity_predicate_is_a_bool_lambda(self):
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            with fp.FP64:
+                return all(bs)
+
+        out = self._compile(f, BoolType())
+        m = re.search(r'\[\]\(bool (\w+)\) \{ return (\w+); \}', out)
+        assert m, f'no identity predicate in:\n{out}'
+        assert m.group(1) == m.group(2), 'predicate must return its parameter'
+
+    def test_operand_bound_before_iterating(self):
+        """``begin()``/``end()`` on a prvalue would name iterators into two
+        different temporaries — an invalid range.  Same reason ``Sum`` binds."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> bool:
+            with fp.FP64:
+                return any([x < 0 for x in xs])
+
+        out = self._compile(f, RealType(fp.FP64))
+        bound = re.search(r'auto&& (\w+) = ', out)
+        assert bound, out
+        t = bound.group(1)
+        assert f'std::any_of({t}.begin(), {t}.end()' in out
+
+    def test_over_comprehension_of_comparisons(self):
+        """The comprehension materializes a ``std::vector<bool>``, which the
+        algorithm then scans."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> bool:
+            with fp.FP64:
+                return all([x < 0 for x in xs])
+
+        out = self._compile(f, RealType(fp.FP64))
+        assert 'std::vector<bool>' in out
+        assert 'push_back(' in out
+        assert 'std::all_of(' in out

@@ -51,9 +51,11 @@ from ...analysis.format_infer import (
     round_is_identity,
 )
 from ...ast.fpyast import (
+    AllOf,
     AMax,
     AMin,
     And,
+    AnyOf,
     Argument,
     AssertStmt,
     Assign,
@@ -1266,6 +1268,8 @@ class CppEmitter(Visitor):
                 )
             case AMin() | AMax():
                 return self._emit_amin_amax(e, arg)
+            case AnyOf() | AllOf():
+                return self._emit_any_all(e, arg)
             case Enumerate():
                 return self._emit_enumerate(e, arg)
             case UnaryOp() if type(e) in self.op_table.unary:
@@ -1753,6 +1757,29 @@ class CppEmitter(Visitor):
         for nxt in casted[1:]:
             result = f'{fn}({result}, {nxt})'
         return result
+
+    def _emit_any_all(self, e: 'AnyOf | AllOf', arg_str: str) -> str:
+        """``any(bs)`` / ``all(bs)`` -> ``std::any_of`` / ``std::all_of`` with an
+        identity predicate.  The empty range agrees with FPy (``all_of`` is
+        ``true``, ``any_of`` is ``false``), so unlike ``min``/``max`` there is
+        no unguarded ``xs[0]``."""
+        arg_storage = self._storage_for_expr(e.arg)
+        if arg_storage != CppList(CppScalar.BOOL):
+            raise CppEmitError(
+                f'expected list[bool] arg for {type(e).__name__}, '
+                f'got {arg_storage!r}',
+                at=e,
+            )
+        fn = 'std::any_of' if isinstance(e, AnyOf) else 'std::all_of'
+        # Bind first, as ``Sum`` does: on a prvalue operand ``begin()`` and
+        # ``end()`` would name iterators into different temporaries.
+        src = self._fresh_temp()
+        self.writer.add_line(f'auto&& {src} = {arg_str};')
+        pred = self._fresh_temp()
+        return (
+            f'{fn}({src}.begin(), {src}.end(), '
+            f'[](bool {pred}) {{ return {pred}; }})'
+        )
 
     def _emit_amin_amax(self, e: 'AMin | AMax', arg_str: str) -> str:
         """Reduce ``min(xs)`` / ``max(xs)`` to a hoisted for-loop.

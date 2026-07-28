@@ -624,6 +624,41 @@ class _FPCoreCompileInstance(Visitor):
             )
         )
 
+    def _visit_bool_reduce(self, e: 'AnyOf | AllOf', ctx: None) -> fpc.Expr:
+        """``any``/``all`` — fold the list with ``or``/``and``.  Builds::
+
+            (let ([t <tuple>])
+              (for ([i (! :precision integer (size t 0))]
+                    [accum <identity> (<combine> accum (ref t i))])
+                accum))
+
+        Unlike :meth:`_visit_list_reduce` the accumulator is seeded with the
+        operator's identity rather than element 0, so the loop covers all ``n``
+        indices: no ``n - 1`` bound, no ``(+ i 1)`` arithmetic, and the empty
+        list is correct by construction rather than out of contract.
+        """
+        is_any = isinstance(e, AnyOf)
+        combine = fpc.Or if is_any else fpc.And
+        identity = 'FALSE' if is_any else 'TRUE'
+
+        tuple_id = str(self.gensym.fresh('t'))
+        iter_id = str(self.gensym.fresh('i'))
+        accum_id = str(self.gensym.fresh('accum'))
+        idx_ctx = { 'precision': 'integer' }
+
+        tup = self._visit_expr(e.arg, ctx)
+        return fpc.Let(
+            [(tuple_id, tup)],
+            fpc.For(
+                [(iter_id, fpc.Ctx(idx_ctx, _size0_expr(tuple_id)))],
+                [(
+                    accum_id,
+                    fpc.Constant(identity),
+                    combine(fpc.Var(accum_id), fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))
+                )],
+                fpc.Var(accum_id)
+            )
+        )
 
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> fpc.Expr:
         nullary_table = _get_nullary_table()
@@ -666,6 +701,9 @@ class _FPCoreCompileInstance(Visitor):
                 case AMax():
                     # max(xs) reduce-form
                     return self._visit_amax(e.arg, ctx)
+                case AnyOf() | AllOf():
+                    # any(bs) / all(bs) boolean reduce-forms
+                    return self._visit_bool_reduce(e, ctx)
                 case _:
                     raise NotImplementedError('no FPCore operator for', e)
 
