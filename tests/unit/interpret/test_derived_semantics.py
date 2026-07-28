@@ -433,12 +433,48 @@ class TestReductions:
             return sum(xs)
         @fp.fpy
         def sum_desugar(xs: list[fp.Real]) -> fp.Real:
-            acc = 0
-            for x in xs:
+            if len(xs) == 0:
+                return 0
+            acc = xs[0]
+            for x in xs[1:]:
                 acc = acc + x
             return acc
         # values that round differently at each step under a finite context
         _agree(sum_node, sum_desugar, ([0.1, 0.2, 0.3, 0.4],))
+        # ...plus the boundary cases the fold shape depends on
+        _agree(sum_node, sum_desugar, ([],))
+        _agree(sum_node, sum_desugar, ([1.0],))
+        _agree(sum_node, sum_desugar, ([1024.0, 1.0, 1.0],))
+
+    def test_sum_seeds_with_first_element_not_zero(self):
+        """``sum`` seeds the accumulator with ``xs[0]``, unrounded — it does
+        *not* start from ``0``.  ``0 + xs[0]`` is itself a rounded operation, so
+        a zero seed would round the first element before the fold begins.
+
+        The two shapes differ whenever that extra rounding is lossy.  Here the
+        elements are exact under ``REAL`` and ``2**-11`` is half of FP16's
+        spacing above ``1.0``, so rounding ``1 + 2**-11`` on its own is a tie
+        that resolves down to ``1.0`` and the second element cannot recover it.
+        """
+        @fp.fpy
+        def node() -> fp.Real:
+            with REAL:
+                ys = [1 + fp.rational(1, 2048), fp.rational(1, 2048)]
+            with FP16:
+                return sum(ys)
+
+        @fp.fpy
+        def seed_zero() -> fp.Real:
+            with REAL:
+                ys = [1 + fp.rational(1, 2048), fp.rational(1, 2048)]
+            with FP16:
+                acc = fp.round(0)
+                for y in ys:
+                    acc = acc + y
+                return acc
+
+        assert float(node()) == 1.0 + 2 ** -10
+        assert float(seed_zero()) == 1.0     # the shape the doc used to claim
 
     def test_amax_amin_reduce_form(self):
         @fp.fpy

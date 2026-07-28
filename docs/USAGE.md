@@ -205,6 +205,21 @@ def example_builtin():
     ...
 ```
 
+FPy also supports the reductions `sum`, `min`, and `max` over a list of numbers,
+and `any` and `all` over a list of booleans.
+
+```python
+@fp.fpy
+def example_reductions(xs: list[fp.Real]) -> bool:
+    total = sum(xs)                            # sum of the elements
+    return any([x < 0 for x in xs]) and all([x < total for x in xs])
+```
+
+`any` and `all` require a list of **booleans** — FPy has no truthiness, so
+`any([1.0, 0.0])` is a type error rather than a test against zero. Both are
+defined on the empty list: `any([])` is `False` and `all([])` is `True`
+(`min([])` and `max([])`, by contrast, are errors).
+
 #### Slicing
 
 FPy supports list slicing `xs[start:stop]`, but its semantics **differ

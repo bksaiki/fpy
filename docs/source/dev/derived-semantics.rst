@@ -127,14 +127,63 @@ Reductions
 ----------
 
 * ``Sum`` — ``sum(xs)`` is a left fold with ``+`` (rounding each step; the empty
-  sum is exact ``0``)::
+  sum is exact ``0``).  The accumulator is *seeded with the first element*, so
+  a list of ``n`` elements performs ``n - 1`` additions::
 
     @fp.fpy
     def sum(xs: list[fp.Real]) -> fp.Real:
-        acc = 0
-        for x in xs:
+        if len(xs) == 0:
+            return 0
+        acc = xs[0]
+        for x in xs[1:]:
             acc = acc + x
         return acc
+
+  Seeding with ``0`` instead would *not* be equivalent: ``0 + xs[0]`` is itself
+  a rounded operation, so it would round the first element before the fold
+  begins.  Under ``fp.FP16``, summing the exact values
+  ``[1 + 2**-11, 2**-11]`` gives ``1 + 2**-10`` as written above, but ``1.0``
+  with a zero seed — ``2**-11`` is half of FP16's spacing above ``1.0``, so
+  rounding the first element on its own is a tie that resolves down.
+
+The *boolean* reductions fold a ``list[bool]`` with the logical operators, so
+no rounding occurs and the active context is irrelevant.  Each is seeded with
+its operator's identity, which is also the value of the empty case — unlike
+``min``/``max``, both are total on the empty list.
+
+* ``AnyOf`` — ``any(bs)`` is a left fold with ``or``, seeded ``False``
+  (so ``any([])`` is ``False``)::
+
+    @fp.fpy
+    def any_(bs: list[bool]) -> bool:
+        acc = False
+        for b in bs:
+            acc = acc or b
+        return acc
+
+* ``AllOf`` — ``all(bs)`` is a left fold with ``and``, seeded ``True``
+  (so ``all([])`` is ``True``)::
+
+    @fp.fpy
+    def all_(bs: list[bool]) -> bool:
+        acc = True
+        for b in bs:
+            acc = acc and b
+        return acc
+
+``AnyOf``/``AllOf`` are to ``Or``/``And`` what ``AMax``/``AMin`` are to
+``Max``/``Min``: the list-fold form of a scalar operator, and a distinct node so
+typing stays syntax-directed (``list[bool] -> bool`` rather than
+``bool -> ... -> bool``).  The element type is exactly ``bool``: FPy has no
+truthiness, so ``any([1.0, 0.0])`` is a type error rather than a zero test.
+
+The fold is eager, and this **matches** Python for the syntax FPy supports.
+Python's ``any``/``all`` short-circuit their *iterable*, but a list
+comprehension is fully built before ``any`` is called, so
+``any([pred(x) for x in xs])`` evaluates ``pred`` on every element in CPython
+too; only a generator expression — which FPy does not have — makes the
+short-circuit skip work.  Evaluating every element is therefore faithful, not a
+simplification.
 
 Classification and inspection
 -----------------------------
