@@ -1,5 +1,27 @@
 # Version History
 
+## [0.2.0] - 2026-07-27
+### Features:
+ - Analyses:
+   - format inference:
+     - add support for special values
+     - more precise list operations
+ - Backend
+   - C++: differential testing
+ - Language:
+   - support `any`/`all` Python builtins
+   - remove `declcontext` operator
+ - Transforms:
+   - add `ReduceFusion` program transformation
+
+### Fixes:
+ - Analyses:
+   - format infer: fix for free variables
+   - purity: multiple fixes
+   - type infer: fix for free variables
+ - Transforms:
+   - for loop unrolling: fix unrolling of loops
+
 ## [0.1.11] - 2026-06-30
 ### Features:
  - Analyses:
