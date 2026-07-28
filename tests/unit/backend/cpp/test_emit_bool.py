@@ -89,8 +89,8 @@ class TestBooleanReduce:
     ``AMax``."""
 
     @staticmethod
-    def _compile(f, elt_ty):
-        return CppCompiler().compile(
+    def _compile(f, elt_ty, **kwargs):
+        return CppCompiler(**kwargs).compile(
             f, ctx=fp.FP64, arg_types=[ListType(elt_ty)],
         )
 
@@ -129,25 +129,40 @@ class TestBooleanReduce:
         """``begin()``/``end()`` on a prvalue would name iterators into two
         different temporaries — an invalid range.  Same reason ``Sum`` binds."""
         @fp.fpy
-        def f(xs: list[fp.Real]) -> bool:
+        def f(bs: list[bool]) -> bool:
             with fp.FP64:
-                return any([x < 0 for x in xs])
+                return any(bs)
 
-        out = self._compile(f, RealType(fp.FP64))
+        out = self._compile(f, BoolType())
         bound = re.search(r'auto&& (\w+) = ', out)
         assert bound, out
         t = bound.group(1)
         assert f'std::any_of({t}.begin(), {t}.end()' in out
 
-    def test_over_comprehension_of_comparisons(self):
-        """The comprehension materializes a ``std::vector<bool>``, which the
-        algorithm then scans."""
+    def test_comprehension_operand_is_fused_away(self):
+        """``ReduceFusion`` runs in the default (optimizing) pipeline, so the
+        idiomatic form emits an accumulator loop with no intermediate
+        vector."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
             with fp.FP64:
                 return all([x < 0 for x in xs])
 
         out = self._compile(f, RealType(fp.FP64))
+        assert 'std::vector<bool>' not in out
+        assert 'std::all_of(' not in out
+        assert '&&' in out          # folded with `and` in the loop body
+
+    def test_comprehension_operand_unfused_without_optimize(self):
+        """With ``optimize=False`` the surface AST compiles verbatim: the
+        comprehension materializes a ``std::vector<bool>`` that
+        ``std::all_of`` then scans."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> bool:
+            with fp.FP64:
+                return all([x < 0 for x in xs])
+
+        out = self._compile(f, RealType(fp.FP64), optimize=False)
         assert 'std::vector<bool>' in out
         assert 'push_back(' in out
         assert 'std::all_of(' in out

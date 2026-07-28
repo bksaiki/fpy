@@ -21,7 +21,13 @@ from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
 from ...number import Context
-from ...transform import FreeVarElim, RoundElim, Specialize, ZipElim
+from ...transform import (
+    FreeVarElim,
+    ReduceFusion,
+    RoundElim,
+    Specialize,
+    ZipElim,
+)
 from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
@@ -80,6 +86,9 @@ class CppCompiler(Backend):
             - :class:`fpy2.transform.ZipElim` (pre-monomorphize):
               skips materializing intermediate
               ``std::vector<std::tuple<...>>``s for ``zip`` iterables.
+            - :class:`fpy2.transform.ReduceFusion` (pre-monomorphize):
+              folds ``any``/``all`` over a comprehension into one loop,
+              skipping the intermediate ``std::vector<bool>``.
             - :class:`fpy2.transform.RoundElim` (post-monomorphize):
               hoists eliminable rounded operations into
               ``with fp.REAL:`` blocks so the cpp emitter's
@@ -153,8 +162,8 @@ class CppCompiler(Backend):
         """Compile a :class:`~fpy2.Module` to a single C++ translation unit.
 
         Pipeline:
-          1. **Pre-spec optimizations** (``ZipElim``) on every function in
-             the module via ``map``.
+          1. **Pre-spec optimizations** (``ZipElim``, ``ReduceFusion``) on
+             every function in the module via ``map``.
           2. **Specialize** the module: each ``(FuncDef, ctx, arg_fmts)``
              becomes one entry; cross-function calls rewire to the
              appropriate spec.
@@ -171,6 +180,8 @@ class CppCompiler(Backend):
 
         if self._optimize:
             module = module.map(lambda _m, fd: ZipElim.apply(fd))
+            # after ZipElim, so a `zip` comp is already an indexed comp
+            module = module.map(lambda _m, fd: ReduceFusion.apply(fd))
 
         # Translate ``Monomorphize``'s bare ``RuntimeError`` (e.g. arg-type
         # mismatches) into ``CppCompileError`` so callers iterating over
