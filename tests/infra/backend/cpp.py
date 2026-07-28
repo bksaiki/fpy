@@ -891,11 +891,10 @@ def _regression_all_bool_list(bs: list[bool]) -> bool:
 def _regression_any_over_comprehension(xs: list[fp.Real]) -> bool:
     """The idiomatic ``any([pred for x in xs])``.
 
-    Exercises the two-pass shape the reduction has today: the comprehension
-    materializes a ``std::vector<bool>``, which the algorithm then scans.  Pins
-    that the intermediate's storage is selected as ``bool`` (not a numeric
-    type) and that the scan reads the ``auto&&``-bound reference rather than a
-    dangling temporary.
+    ``ReduceFusion`` rewrites this to an accumulator loop in the default
+    pipeline, so what runs here is the *fused* form — this is the differential
+    check that fusion preserves behaviour on generated code, empty list
+    included (``_LIST_LENS`` covers 0).
     """
     with fp.FP64:
         return any([x < 0 for x in xs])

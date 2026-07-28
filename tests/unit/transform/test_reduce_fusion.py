@@ -1,7 +1,7 @@
 """
 Unit tests for the :class:`fpy2.transform.ReduceFusion` transform.
 
-The rewrite mints fresh ``_acc`` / ``_b`` names via ``Gensym``, so an
+The rewrite mints fresh ``acc`` / ``b`` names via ``Gensym``, so an
 ``is_equiv`` comparison against a hand-written golden AST is brittle.  As in
 ``test_zip_elim``, the tests assert:
 
@@ -109,7 +109,7 @@ class TestRewriteFires:
         assert isinstance(seed.expr, BoolVal) and seed.expr.val is True
 
     def test_loop_body_binds_element_before_folding(self):
-        """The body must be ``_b = <elt>; _acc = _acc or _b`` — folding
+        """The body must be ``b = <elt>; acc = acc or b`` — folding
         ``<elt>`` inline would let ``or`` short-circuit it away."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
@@ -164,7 +164,7 @@ class TestSemanticsPreserved:
 
         ``xs[i]`` walks off the end.  Unfused, the comprehension evaluates
         every element and raises.  If the rewrite inlined the element into
-        ``_acc or <elt>``, ``or`` would short-circuit once ``_acc`` is True
+        ``acc or <elt>``, ``or`` would short-circuit once ``acc`` is True
         and the program would return instead of raising.
         """
         @fp.fpy

@@ -6,11 +6,11 @@ eliminating the intermediate ``list[bool]``::
     r = any([<elt> for <t> in <iter>])
 
     # After
-    _acc = False
+    acc = False
     for <t> in <iter>:
-        _b = <elt>
-        _acc = _acc or _b
-    r = _acc
+        b = <elt>
+        acc = acc or b
+    r = acc
 
 (``all`` seeds ``True`` and combines with ``and``.)
 
@@ -19,9 +19,9 @@ scans it.  In C++ that is a ``std::vector<bool>`` — the bit-packed
 specialization, so a heap allocation plus per-element bit twiddling — which
 ``-O2`` does not elide; the fused form measures 2-4x faster.
 
-``_b`` is bound rather than inlined into ``_acc or <elt>``, and the bind is
+``b`` is bound rather than inlined into ``acc or <elt>``, and the bind is
 load-bearing: FPy's ``or`` short-circuits, so an inlined element would stop
-being evaluated once ``_acc`` is ``True``.  Element expressions are not total
+being evaluated once ``acc`` is ``True``.  Element expressions are not total
 (an out-of-bounds ``xs[i]``, a stuck ``fp.cast``), so skipping them is
 observable.  Binding forces every element, matching both the unfused program
 and CPython — whose ``any`` short-circuits the *iterable*, but is handed an
@@ -111,24 +111,24 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
         return super()._visit_expr(e, ctx)
 
     def _fuse(self, e: 'AnyOf | AllOf', comp: ListComp, ctx: _Ctx) -> Expr:
-        """Emit the seed + loop into *ctx* and return ``Var(_acc)``."""
+        """Emit the seed + loop into *ctx* and return ``Var(acc)``."""
         is_any = isinstance(e, AnyOf)
-        acc = self.gensym.fresh('_acc')
-        elt_tmp = self.gensym.fresh('_b')
+        acc = self.gensym.fresh('acc')
+        elt = self.gensym.fresh('b')
 
         # The iterable is evaluated once, before the loop, so it keeps `ctx`
         # and a fusable reduction inside it hoists to this block too.  The
         # element sees the loop target, so it gets no statement slot.
         iterable = self._visit_expr(comp.iterables[0], ctx)
         target = self._visit_binding(comp.targets[0], ctx)
-        elt = self._visit_expr(comp.elt, None)
+        elt_expr = self._visit_expr(comp.elt, None)
 
         op = Or if is_any else And
-        combine = op([Var(acc, e.loc), Var(elt_tmp, e.loc)], e.loc)
+        combine = op([Var(acc, e.loc), Var(elt, e.loc)], e.loc)
         body = StmtBlock([
-            # binding `_b` preserves the unfused evaluation count -- see the
+            # binding `b` preserves the unfused evaluation count -- see the
             # module docstring; folding `elt` inline would short-circuit it
-            Assign(elt_tmp, None, elt, e.loc),
+            Assign(elt, None, elt_expr, e.loc),
             Assign(acc, None, combine, e.loc),
         ])
 
