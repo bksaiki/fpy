@@ -11,8 +11,7 @@ explicitly and concatenate them — same shape as the legacy
 Header coverage tracks what the emitter actually uses:
 
 - ``<algorithm>``: ``std::any_of`` / ``std::all_of`` for ``AnyOf`` / ``AllOf``,
-  and ``std::min`` / ``std::max`` for the integer ``min``/``max`` paths (which
-  previously resolved only transitively through another header).
+  and ``std::min`` / ``std::max`` for the integer ``min``/``max`` paths.
 - ``<cassert>``: ``assert(...)`` from ``Cast``.
 - ``<cfenv>``: ``std::fegetround`` / ``std::fesetround`` and the
   ``FE_*`` rounding-mode macros.

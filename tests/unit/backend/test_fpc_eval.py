@@ -17,13 +17,14 @@ bugs in list-reduce and ``for``-loop lowering:
 So these tests run each program twice — once through the FPy interpreter, once
 through titanfp's interpreter on the compiled core — and require agreement.
 
-The same differential harness now also covers the boolean reductions
-(``any`` / ``all``), which are new rather than fixed — booleans are the values
-most easily lost across the titanfp boundary, so they want executing rather
-than string-matching too.
+The same harness covers the boolean reductions (``any`` / ``all``): booleans
+are the values most easily lost across the titanfp boundary, so they want
+executing rather than string-matching too.
 """
 
 import math
+
+import pytest
 
 import titanfp.fpbench.fpcast as fpc
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
@@ -70,13 +71,9 @@ def _agree(fn, *args):
 
 
 def _agree_bool(fn, *args):
-    """``_agree`` for bool-returning programs.
-
-    Kept separate because ``_both`` coerces through ``float``, which would let
-    a numeric ``1.0`` masquerade as ``True`` — exactly the confusion that makes
-    boolean values delicate on the titanfp boundary (see ``_to_mpmf``).  Both
-    sides are required to be genuine ``bool``.
-    """
+    """``_agree`` for bool-returning programs.  Separate from ``_both``, which
+    coerces through ``float`` and would let a numeric ``1.0`` pass as ``True``;
+    here both sides must be a genuine ``bool``."""
     core = _compile(fn)
     got = Interpreter().interpret(core, [_to_mpmf(a) for a in args])
     want = fn(*args)
@@ -315,77 +312,57 @@ class TestBooleanReduce:
     """``any`` / ``all`` lower to a ``for``-fold seeded with the operator's
     identity (``FALSE`` / ``TRUE``), combining with ``or`` / ``and``.
 
-    The boolean list is built *inside* each program rather than passed in: a
-    boolean tensor does not survive titanfp's argument conversion, which turns
-    a Python ``bool`` into a numeric ``MPMF``, and ``MPMF`` has no
-    ``__bool__`` — so every element would read as truthy and the fold would
-    return ``True`` regardless.  That is a limitation of the interop, not of
-    the lowering.
+    Each program builds its boolean list *internally*: a boolean tensor does
+    not survive titanfp's argument conversion (Python ``bool`` becomes a
+    numeric ``MPMF``, which has no ``__bool__``, so every element reads
+    truthy).  Passing a ``list[bool]`` in would make these tests vacuous.
     """
 
     @staticmethod
-    def _any():
-        @fp.fpy
-        def f(xs: list[fp.Real], y: fp.Real) -> bool:
-            with fp.FP64:
-                return any([x < y for x in xs])
-        return f
+    def _reduce(op, n: int):
+        """``op([x < y for x in xs])`` with ``xs`` pinned to length *n*."""
+        if op is any:
+            @fp.fpy
+            def f(xs: list[fp.Real], y: fp.Real) -> bool:
+                with fp.FP64:
+                    return any([x < y for x in xs])
+        else:
+            @fp.fpy
+            def f(xs: list[fp.Real], y: fp.Real) -> bool:
+                with fp.FP64:
+                    return all([x < y for x in xs])
+        return _size(f, n)
 
-    @staticmethod
-    def _all():
-        @fp.fpy
-        def f(xs: list[fp.Real], y: fp.Real) -> bool:
-            with fp.FP64:
-                return all([x < y for x in xs])
-        return f
+    @pytest.mark.parametrize('op,xs,want', [
+        (any, [1.0, -2.0, 3.0], True),      # some true
+        (any, [1.0, 2.0, 3.0], False),      # none true
+        (any, [-1.0, -2.0, -3.0], True),    # all true
+        (all, [-1.0, -2.0, -3.0], True),    # all true
+        (all, [-1.0, 2.0, -3.0], False),    # one false
+        (all, [1.0, 2.0, 3.0], False),      # none true
+        (any, [-1.0], True),                # single element
+        (any, [1.0], False),
+        (all, [-1.0], True),
+        (all, [1.0], False),
+    ])
+    def test_matches_interpreter(self, op, xs, want):
+        assert _agree_bool(self._reduce(op, len(xs)), xs, 0.0) is want
 
-    def test_any_some_true(self):
-        assert _agree_bool(_size(self._any(), 3), [1.0, -2.0, 3.0], 0.0) is True
-
-    def test_any_none_true(self):
-        assert _agree_bool(_size(self._any(), 3), [1.0, 2.0, 3.0], 0.0) is False
-
-    def test_any_all_true(self):
-        assert _agree_bool(_size(self._any(), 3), [-1.0, -2.0, -3.0], 0.0) is True
-
-    def test_all_all_true(self):
-        assert _agree_bool(_size(self._all(), 3), [-1.0, -2.0, -3.0], 0.0) is True
-
-    def test_all_one_false(self):
-        assert _agree_bool(_size(self._all(), 3), [-1.0, 2.0, -3.0], 0.0) is False
-
-    def test_all_none_true(self):
-        assert _agree_bool(_size(self._all(), 3), [1.0, 2.0, 3.0], 0.0) is False
-
-    def test_any_single_element(self):
-        assert _agree_bool(_size(self._any(), 1), [-1.0], 0.0) is True
-        assert _agree_bool(_size(self._any(), 1), [1.0], 0.0) is False
-
-    def test_all_single_element(self):
-        assert _agree_bool(_size(self._all(), 1), [-1.0], 0.0) is True
-        assert _agree_bool(_size(self._all(), 1), [1.0], 0.0) is False
-
-    def test_fold_seeds_with_the_identity(self):
-        """The accumulator init is the identity constant, not ``(ref t 0)``.
-
-        This is what makes the empty list correct by construction, and it is
-        why the boolean fold needs no ``n - 1`` bound or ``(+ i 1)`` index
-        arithmetic.  (The empty case itself is unreachable through titanfp,
-        which cannot build a zero-length tensor, so assert on the shape.)
-        """
-        core = _compile(_size(self._all(), 3))
+    @pytest.mark.parametrize('op,identity', [(any, 'FALSE'), (all, 'TRUE')])
+    def test_fold_seeds_with_the_identity(self, op, identity):
+        """The accumulator init is the identity constant, not ``(ref t 0)`` —
+        which is what makes the empty list correct by construction.  (Empty
+        itself is unreachable through titanfp, which cannot build a
+        zero-length tensor, so assert on the shape.)"""
+        core = _compile(self._reduce(op, 3))
         fors = [e for e in _operands(core.e) + [core.e] if isinstance(e, fpc.For)]
         assert len(fors) == 1
         _, init, _ = fors[0].while_bindings[0]
-        assert isinstance(init, fpc.Constant) and str(init) == 'TRUE'
+        assert isinstance(init, fpc.Constant) and str(init) == identity
 
-        core = _compile(_size(self._any(), 3))
-        fors = [e for e in _operands(core.e) + [core.e] if isinstance(e, fpc.For)]
-        _, init, _ = fors[0].while_bindings[0]
-        assert isinstance(init, fpc.Constant) and str(init) == 'FALSE'
-
-    def test_operands_are_exprs(self):
+    @pytest.mark.parametrize('op', [any, all])
+    def test_operands_are_exprs(self, op):
         """No bare ``str`` in operand position (see TestNoBareStringOperands)."""
-        for fn in (_size(self._any(), 3), _size(self._all(), 3)):
-            bad = [o for o in _operands(_compile(fn).e) if isinstance(o, str)]
-            assert not bad, f'bare str operands in emitted core: {bad}'
+        bad = [o for o in _operands(_compile(self._reduce(op, 3)).e)
+               if isinstance(o, str)]
+        assert not bad, f'bare str operands in emitted core: {bad}'

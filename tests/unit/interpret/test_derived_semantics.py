@@ -506,21 +506,16 @@ class TestReductions:
         assert all_neg([-1.0, -2.0], ctx=FP64) is True
         assert all_neg([-1.0, 2.0], ctx=FP64) is False
 
-    def test_any_all_reject_non_bool_elements(self):
+    def test_any_all_reject_non_bool_operands(self):
         """FPy has no truthiness, so a real element is an error rather than a
-        zero test (Python's builtins would accept it)."""
+        zero test (Python's builtins would accept both of these)."""
         @fp.fpy
         def any_(bs: list[bool]) -> bool:
             return any(bs)
         with pytest.raises(TypeError):
-            any_([1.0, 0.0], ctx=FP64)
-
-    def test_any_all_reject_non_list(self):
-        @fp.fpy
-        def any_(bs: list[bool]) -> bool:
-            return any(bs)
+            any_([1.0, 0.0], ctx=FP64)      # real elements
         with pytest.raises(TypeError):
-            any_((True, False), ctx=FP64)
+            any_((True, False), ctx=FP64)   # tuple, not list
 
 
 # ---------------------------------------------------------------------------

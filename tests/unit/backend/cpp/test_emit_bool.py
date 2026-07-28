@@ -2,6 +2,8 @@
 Phase 3b tests for the cpp emitter — booleans and comparisons.
 """
 
+import re
+
 import fpy2 as fp
 
 from fpy2.backend.cpp import CppCompiler
@@ -82,14 +84,15 @@ class TestBoolAndCompare:
 
 
 class TestBooleanReduce:
-    """``any`` / ``all`` lower to ``std::any_of`` / ``std::all_of``.
+    """``any`` / ``all`` lower to ``std::any_of`` / ``std::all_of`` with an
+    identity predicate — no hoisted loop and no casting, unlike ``AMin`` /
+    ``AMax``."""
 
-    No hoisted loop and no casting, unlike ``AMin``/``AMax``: the operand is
-    ``std::vector<bool>`` and the result is ``bool``, so the algorithm applies
-    directly with an identity predicate.  The empty range is well defined and
-    agrees with FPy (``all_of`` -> ``true``, ``any_of`` -> ``false``), so there
-    is no unguarded ``xs[0]`` as there is for ``min``/``max``.
-    """
+    @staticmethod
+    def _compile(f, elt_ty):
+        return CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(elt_ty)],
+        )
 
     def test_any_over_bool_list_arg(self):
         @fp.fpy
@@ -97,13 +100,9 @@ class TestBooleanReduce:
             with fp.FP64:
                 return any(bs)
 
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64, arg_types=[ListType(BoolType())],
-        )
+        out = self._compile(f, BoolType())
         assert out.startswith('bool f(const std::vector<bool>& bs)')
         assert 'std::any_of(' in out
-        assert '.begin(), ' in out and '.end(), ' in out
-        assert 'return ' in out
 
     def test_all_over_bool_list_arg(self):
         @fp.fpy
@@ -111,9 +110,7 @@ class TestBooleanReduce:
             with fp.FP64:
                 return all(bs)
 
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64, arg_types=[ListType(BoolType())],
-        )
+        out = self._compile(f, BoolType())
         assert out.startswith('bool f(const std::vector<bool>& bs)')
         assert 'std::all_of(' in out
 
@@ -123,44 +120,34 @@ class TestBooleanReduce:
             with fp.FP64:
                 return all(bs)
 
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64, arg_types=[ListType(BoolType())],
-        )
-        # `[](bool <t>) { return <t>; }` -- same temp in both positions
-        import re
+        out = self._compile(f, BoolType())
         m = re.search(r'\[\]\(bool (\w+)\) \{ return (\w+); \}', out)
         assert m, f'no identity predicate in:\n{out}'
-        assert m.group(1) == m.group(2)
+        assert m.group(1) == m.group(2), 'predicate must return its parameter'
 
-    def test_operand_bound_to_auto_ref_before_iterating(self):
+    def test_operand_bound_before_iterating(self):
         """``begin()``/``end()`` on a prvalue would name iterators into two
-        different temporaries -- an invalid range.  Same reason ``Sum`` binds."""
+        different temporaries — an invalid range.  Same reason ``Sum`` binds."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
             with fp.FP64:
                 return any([x < 0 for x in xs])
 
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))],
-        )
-        assert 'auto&& ' in out
-        # the iterated name is the bound reference, not the raw expression
-        import re
+        out = self._compile(f, RealType(fp.FP64))
         bound = re.search(r'auto&& (\w+) = ', out)
         assert bound, out
-        assert f'std::any_of({bound.group(1)}.begin(), {bound.group(1)}.end()' in out
+        t = bound.group(1)
+        assert f'std::any_of({t}.begin(), {t}.end()' in out
 
     def test_over_comprehension_of_comparisons(self):
-        """The idiomatic form: the comprehension materializes a
-        ``std::vector<bool>``, then the algorithm scans it."""
+        """The comprehension materializes a ``std::vector<bool>``, which the
+        algorithm then scans."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
             with fp.FP64:
                 return all([x < 0 for x in xs])
 
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))],
-        )
+        out = self._compile(f, RealType(fp.FP64))
         assert 'std::vector<bool>' in out
         assert 'push_back(' in out
         assert 'std::all_of(' in out

@@ -347,81 +347,68 @@ class TestTupleAccessors:
 
 
 class TestBooleanReductions:
-    """``any`` / ``all`` are ``list[bool] -> bool``.
-
-    Unlike ``fst``/``snd`` these are monomorphic: the element type is pinned to
-    ``bool``, so a ``list[real]`` operand is rejected by unification rather than
-    silently accepted via truthiness (FPy has no truthiness).
-    """
+    """``any`` / ``all`` are ``list[bool] -> bool`` — monomorphic, so a
+    ``list[real]`` operand is rejected by unification rather than accepted via
+    truthiness (FPy has none)."""
 
     @staticmethod
     def _return_type(f) -> Type:
         return TypeInfer.check(f.ast).fn_type.return_type
 
-    def test_any_parses_to_anyof_node(self):
+    def test_parses_to_reduce_nodes(self):
         @fp.fpy
         def f(bs: list[bool]) -> bool:
             return any(bs)
+
+        @fp.fpy
+        def g(bs: list[bool]) -> bool:
+            return all(bs)
 
         assert isinstance(f.ast.body.stmts[-1].expr, AnyOf)
+        assert isinstance(g.ast.body.stmts[-1].expr, AllOf)
 
-    def test_all_parses_to_allof_node(self):
-        @fp.fpy
-        def f(bs: list[bool]) -> bool:
-            return all(bs)
-
-        assert isinstance(f.ast.body.stmts[-1].expr, AllOf)
-
-    def test_any_of_bool_list_is_bool(self):
+    def test_bool_list_is_bool(self):
         @fp.fpy
         def f(bs: list[bool]) -> bool:
             return any(bs)
 
-        assert isinstance(self._return_type(f), BoolType)
-
-    def test_all_of_bool_list_is_bool(self):
         @fp.fpy
-        def f(bs: list[bool]) -> bool:
+        def g(bs: list[bool]) -> bool:
             return all(bs)
 
         assert isinstance(self._return_type(f), BoolType)
+        assert isinstance(self._return_type(g), BoolType)
 
-    def test_any_of_comprehension_of_comparisons_is_bool(self):
-        # the idiomatic use: the element type is inferred, not annotated
+    def test_comprehension_element_type_is_inferred(self):
+        # the idiomatic use: `bool` comes from the comparison, not an annotation
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
             return any([x < 0 for x in xs])
 
         assert isinstance(self._return_type(f), BoolType)
 
-    def test_any_of_real_list_errors(self):
+    def test_real_list_errors(self):
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
             return any(xs)
 
-        with pytest.raises(TypeInferError):
-            TypeInfer.check(f.ast)
-
-    def test_all_of_real_list_errors(self):
         @fp.fpy
-        def f(xs: list[fp.Real]) -> bool:
+        def g(xs: list[fp.Real]) -> bool:
             return all(xs)
 
-        with pytest.raises(TypeInferError):
-            TypeInfer.check(f.ast)
+        for fn in (f, g):
+            with pytest.raises(TypeInferError):
+                TypeInfer.check(fn.ast)
 
-    def test_any_of_scalar_errors(self):
+    def test_non_list_operand_errors(self):
         @fp.fpy
-        def f(b: bool) -> bool:
+        def scalar(b: bool) -> bool:
             return any(b)
 
-        with pytest.raises(TypeInferError):
-            TypeInfer.check(f.ast)
-
-    def test_any_of_tuple_errors(self):
         @fp.fpy
-        def f(t: tuple[bool, bool]) -> bool:
+        def tup(t: tuple[bool, bool]) -> bool:
             return any(t)
 
-        with pytest.raises(TypeInferError):
-            TypeInfer.check(f.ast)
+        for fn in (scalar, tup):
+            with pytest.raises(TypeInferError):
+                TypeInfer.check(fn.ast)

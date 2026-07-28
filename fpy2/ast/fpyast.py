@@ -1101,16 +1101,15 @@ class And(NaryOp):
 class AnyOf(NamedUnaryOp):
     """FPy node: ``any(bs)`` reduce-form over ``bs : list[bool]``.
 
-    The list-fold counterpart of :class:`Or`, as :class:`AMax` is to
-    :class:`Max`.  Named ``AnyOf`` rather than ``Any`` so the class does not
-    shadow :data:`typing.Any`, which this module and its star-importers
-    (notably :mod:`fpy2.frontend.parser`) both use in annotations.
+    List-fold counterpart of :class:`Or`, as :class:`AMax` is to :class:`Max`.
+    Not named ``Any``: that would shadow :data:`typing.Any`, which this module
+    and its star-importers use in annotations.
     """
     __slots__ = ()
 
 class AllOf(NamedUnaryOp):
-    """FPy node: ``all(bs)`` reduce-form — the :class:`And` counterpart of
-    :class:`AnyOf`."""
+    """FPy node: ``all(bs)`` reduce-form — :class:`And` to :class:`AnyOf`'s
+    :class:`Or`."""
     __slots__ = ()
 
 # Rounding operator

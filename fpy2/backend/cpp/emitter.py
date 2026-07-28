@@ -1759,28 +1759,10 @@ class CppEmitter(Visitor):
         return result
 
     def _emit_any_all(self, e: 'AnyOf | AllOf', arg_str: str) -> str:
-        """Reduce ``any(bs)`` / ``all(bs)`` to ``std::any_of`` / ``std::all_of``.
-
-        Unlike :meth:`_emit_amin_amax` this needs no hoisted loop and no
-        casting: the operand is ``std::vector<bool>`` and the result is
-        ``bool``, so the standard algorithm applies directly with an identity
-        predicate.  It also short-circuits, matching Python — and unlike the
-        FPCore lowering, whose ``for`` has a fixed trip count.
-
-        The empty range is well defined and agrees with FPy: ``std::all_of``
-        yields ``true`` and ``std::any_of`` yields ``false``.  No UB here, in
-        contrast to the ``xs[0]`` that ``min``/``max`` index unguarded.
-
-        As with ``Sum``, the operand is bound to ``auto&&`` first: on a prvalue
-        operand (a list literal, say) ``arg.begin()`` and ``arg.end()`` would
-        name iterators into *different* temporaries — an invalid range.
-        """
-        result_ty = self._storage_for_expr(e)
-        if result_ty is not CppScalar.BOOL:
-            raise CppEmitError(
-                f'expected bool result for {type(e).__name__}, got {result_ty!r}',
-                at=e,
-            )
+        """``any(bs)`` / ``all(bs)`` -> ``std::any_of`` / ``std::all_of`` with an
+        identity predicate.  The empty range agrees with FPy (``all_of`` is
+        ``true``, ``any_of`` is ``false``), so unlike ``min``/``max`` there is
+        no unguarded ``xs[0]``."""
         arg_storage = self._storage_for_expr(e.arg)
         if arg_storage != CppList(CppScalar.BOOL):
             raise CppEmitError(
@@ -1789,8 +1771,9 @@ class CppEmitter(Visitor):
                 at=e,
             )
         fn = 'std::any_of' if isinstance(e, AnyOf) else 'std::all_of'
+        # Bind first, as ``Sum`` does: on a prvalue operand ``begin()`` and
+        # ``end()`` would name iterators into different temporaries.
         src = self._fresh_temp()
-        # source read only (iterated) -> reference, no copy
         self.writer.add_line(f'auto&& {src} = {arg_str};')
         pred = self._fresh_temp()
         return (

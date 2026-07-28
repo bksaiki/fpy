@@ -419,10 +419,8 @@ def _eval_len(x):
     return len(x)
 
 def _check_bool_list(x, who: str) -> list[bool]:
-    # `any`/`all` take a list of booleans only (matches `TypeInfer`).  The
-    # native builtins would accept a tuple and coerce reals via truthiness;
-    # FPy has no truthiness, so a non-bool element is an error rather than a
-    # zero test.
+    # `any`/`all` are list-of-bool only (matches `TypeInfer`); the native
+    # builtins would accept a tuple and coerce reals via truthiness.
     if not isinstance(x, list):
         raise TypeError(f'{who} expects a list, got {x}')
     for b in x:
@@ -730,8 +728,7 @@ class BytecodeCompiler(Visitor):
                 func = pyast.Name(id=builtin, ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
             case AnyOf() | AllOf():
-                # Boolean reduce-form: the guards delegate to Python's
-                # `any`/`all`.  No `ctx` keyword — neither operator rounds.
+                # Boolean reduce-form; no `ctx` keyword — neither op rounds.
                 builtin = '__fpy_any' if isinstance(e, AnyOf) else '__fpy_all'
                 func = pyast.Name(id=builtin, ctx=pyast.Load(), **attrs)
                 return pyast.Call(func=func, args=[arg], keywords=[], **attrs)
