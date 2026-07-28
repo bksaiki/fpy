@@ -13,6 +13,7 @@ from .func_inline import FuncInline
 from .if_bundling import IfBundling
 from .lift_context import LiftContext
 from .monomorphize import Monomorphize
+from .reduce_fusion import ReduceFusion
 from .rename_target import RenameTarget
 from .round_elim import RoundElim
 from .simplify_if import SimplifyIf

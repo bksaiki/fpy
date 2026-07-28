@@ -136,6 +136,45 @@ Reductions
             acc = acc + x
         return acc
 
+The *boolean* reductions fold a ``list[bool]`` with the logical operators, so
+no rounding occurs and the active context is irrelevant.  Each is seeded with
+its operator's identity, which is also the value of the empty case — unlike
+``min``/``max``, both are total on the empty list.
+
+* ``AnyOf`` — ``any(bs)`` is a left fold with ``or``, seeded ``False``
+  (so ``any([])`` is ``False``)::
+
+    @fp.fpy
+    def any_(bs: list[bool]) -> bool:
+        acc = False
+        for b in bs:
+            acc = acc or b
+        return acc
+
+* ``AllOf`` — ``all(bs)`` is a left fold with ``and``, seeded ``True``
+  (so ``all([])`` is ``True``)::
+
+    @fp.fpy
+    def all_(bs: list[bool]) -> bool:
+        acc = True
+        for b in bs:
+            acc = acc and b
+        return acc
+
+``AnyOf``/``AllOf`` are to ``Or``/``And`` what ``AMax``/``AMin`` are to
+``Max``/``Min``: the list-fold form of a scalar operator, and a distinct node so
+typing stays syntax-directed (``list[bool] -> bool`` rather than
+``bool -> ... -> bool``).  The element type is exactly ``bool``: FPy has no
+truthiness, so ``any([1.0, 0.0])`` is a type error rather than a zero test.
+
+The fold is eager, and this **matches** Python for the syntax FPy supports.
+Python's ``any``/``all`` short-circuit their *iterable*, but a list
+comprehension is fully built before ``any`` is called, so
+``any([pred(x) for x in xs])`` evaluates ``pred`` on every element in CPython
+too; only a generator expression — which FPy does not have — makes the
+short-circuit skip work.  Evaluating every element is therefore faithful, not a
+simplification.
+
 Classification and inspection
 -----------------------------
 

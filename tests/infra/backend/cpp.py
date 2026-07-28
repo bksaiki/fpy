@@ -863,10 +863,51 @@ def _regression_calls_user_fn(x: fp.Real, y: fp.Real) -> fp.Real:
         return _regression_call_helper(x) + _regression_call_helper(y)
 
 
+@fp.fpy
+def _regression_any_bool_list(bs: list[bool]) -> bool:
+    """``any(bs)`` over a ``list[bool]`` argument -> ``std::any_of``.
+
+    Pins the boolean reduction end to end: a ``std::vector<bool>`` parameter
+    (whose proxy-reference specialization is easy to get wrong), and the empty
+    case — ``_LIST_LENS`` includes ``0``, so ``any([]) == false`` is checked
+    against the interpreter on every run rather than by hand.
+    """
+    return any(bs)
+
+
+@fp.fpy
+def _regression_all_bool_list(bs: list[bool]) -> bool:
+    """``all(bs)`` over a ``list[bool]`` argument -> ``std::all_of``.
+
+    The ``all`` half of :func:`_regression_any_bool_list`; separate because a
+    single boolean result cannot distinguish a bug in one operator from a bug
+    in the other.  Also pins the *other* empty-list identity,
+    ``all([]) == true``.
+    """
+    return all(bs)
+
+
+@fp.fpy
+def _regression_any_over_comprehension(xs: list[fp.Real]) -> bool:
+    """The idiomatic ``any([pred for x in xs])``.
+
+    Exercises the two-pass shape the reduction has today: the comprehension
+    materializes a ``std::vector<bool>``, which the algorithm then scans.  Pins
+    that the intermediate's storage is selected as ``bool`` (not a numeric
+    type) and that the scan reads the ``auto&&``-bound reference rather than a
+    dangling temporary.
+    """
+    with fp.FP64:
+        return any([x < 0 for x in xs])
+
+
 _regression_funcs: list[fp.Function] = [
     _regression_quant_dot_real_widen,
     _regression_empty_range,
     _regression_calls_user_fn,
+    _regression_any_bool_list,
+    _regression_all_bool_list,
+    _regression_any_over_comprehension,
 ]
 
 
