@@ -19,7 +19,7 @@ from ..function import Function
 from ..number import FP64, INTEGER, REAL, Float, RealFloat
 from ..primitive import Primitive
 from ..utils import Gensym, is_dyadic
-from .interpreter import Interpreter
+from .interpreter import Interpreter, get_default_interpreter
 
 ###########################################################
 # Runtime
@@ -46,8 +46,16 @@ def _is_integer(x: Float | Fraction) -> bool:
             raise TypeError(f'expected a real number, got `{x}`')
 
 def _is_value(x):
+    """Is *x* already an FPy runtime value, needing no conversion?
+
+    ``Fraction`` is included because it *is* one — :data:`RealValue` is
+    ``Float | Fraction``, and an unrounded literal (``xs[0] = 77``) legitimately
+    stores a ``Fraction``.  Omitting it made ``_arg_to_value`` rebuild any list
+    holding one, which silently broke object identity across a call boundary
+    even though ``_cvt_arg`` leaves the elements untouched.
+    """
     match x:
-        case bool() | Float() | Context():
+        case bool() | Float() | Fraction() | Context():
             return True
         case tuple() | list():
             return all(_is_value(v) for v in x)
@@ -167,13 +175,25 @@ def _construct_context(cls: type[Context], args: tuple, kwargs: dict[str, object
     return cls(*ctor_args, **ctor_kwargs)
 
 
+def _call_fpy(fn: Function, args, ctx):
+    """Invoke an FPy function from *inside* the interpreter.
+
+    Bypasses ``Function.__call__`` so the Python-boundary conversions are
+    skipped: they normalise representations for Python callers and rebuild
+    containers, and rebuilding is what breaks list sharing between an FPy caller
+    and its callee.
+    """
+    rt = fn.runtime if fn.runtime is not None else get_default_interpreter()
+    return rt.eval(fn, args, ctx, convert=False)
+
+
 def _eval_call(fn, ctx, *args, **kwargs):
     match fn:
         case Function():
             # calling FPy function
             if kwargs:
                 raise RuntimeError('FPy functions do not support keyword arguments')
-            return fn(*args, ctx=ctx)
+            return _call_fpy(fn, args, ctx)
         case Primitive():
             # calling FPy primitive
             if kwargs:
@@ -1147,7 +1167,15 @@ class BytecodeInterpreter(Interpreter):
         ast = FuncDef(name='<expr>', args=args, body=body, meta=meta, loc=loc)
         return ast, names
 
-    def eval(self, func: Function, args, ctx: Context | None = None):
+    def eval(
+        self, func: Function, args, ctx: Context | None = None,
+        *, convert: bool = True,
+    ):
+        """*convert* applies the Python-boundary conversions.  Leave it ``True``
+        for a call arriving from Python; pass ``False`` for an FPy-to-FPy call,
+        where they are not merely unnecessary but wrong — they rebuild lists and
+        tuples, which breaks the object identity FPy's sharing semantics rely
+        on."""
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got `{func}`')
         # compile the function to bytecode
@@ -1159,11 +1187,12 @@ class BytecodeInterpreter(Interpreter):
             self.func_cache[func.ast] = fn
         # compute the context to use during evaluation
         ctx = self._func_ctx(func.ast, ctx)
-        # convert arguments to FPy values
-        args = tuple(_arg_to_value(arg) for arg in args)
+        # convert arguments to FPy values (Python boundary only)
+        if convert:
+            args = tuple(_arg_to_value(arg) for arg in args)
         # call the function with the given arguments
         res = fn(*args, __ctx__=ctx)
-        return _cvt_return(res)
+        return _cvt_return(res) if convert else res
 
     def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
         if not isinstance(expr, Expr):
