@@ -24,11 +24,19 @@ class Interpreter(ABC):
         self.ctx = ctx
 
     @abstractmethod
-    def eval(self, func: Function, args, ctx: Context | None = None):
+    def eval(
+        self, func: Function, args, ctx: Context | None = None,
+        *, convert: bool = True,
+    ):
         """
         Evaluates a function `func` on arguments `args` under
         a rounding context `ctx`. If `ctx` is None, the rounding
         context is the native Python floating-point context.
+
+        `convert` applies the Python-boundary conversions that normalise
+        argument and result representations. Pass `False` when calling one FPy
+        function from another: those conversions rebuild lists and tuples,
+        which would break the object identity FPy's list sharing relies on.
         """
         ...
 

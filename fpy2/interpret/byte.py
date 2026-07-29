@@ -19,7 +19,7 @@ from ..function import Function
 from ..number import FP64, INTEGER, REAL, Float, RealFloat
 from ..primitive import Primitive
 from ..utils import Gensym, is_dyadic
-from .interpreter import Interpreter
+from .interpreter import Interpreter, get_default_interpreter
 
 ###########################################################
 # Runtime
@@ -45,15 +45,6 @@ def _is_integer(x: Float | Fraction) -> bool:
         case _:
             raise TypeError(f'expected a real number, got `{x}`')
 
-def _is_value(x):
-    match x:
-        case bool() | Float() | Context():
-            return True
-        case tuple() | list():
-            return all(_is_value(v) for v in x)
-        case _:
-            return False
-
 def _cvt_arg(arg):
     match arg:
         case bool() | Float() | Context():
@@ -72,7 +63,17 @@ def _cvt_arg(arg):
             return arg
 
 def _arg_to_value(arg: Any):
-    return arg if _is_value(arg) else _cvt_arg(arg)
+    """Convert a value crossing the *Python* boundary into an FPy value.
+
+    Containers are rebuilt unconditionally so the caller is isolated: FPy lists
+    are shared, so an FPy callee's ``xs[i] = e`` would otherwise write the Python
+    caller's own list.  Skipping the rebuild when the elements were already FPy
+    values made that isolation depend on how the caller built the list.
+
+    One deep copy per *outer* call only — FPy-to-FPy calls bypass this entirely
+    (``eval(..., convert=False)``) and keep sharing.
+    """
+    return _cvt_arg(arg)
 
 def _is_return_value(x) -> bool:
     match x:
@@ -167,13 +168,21 @@ def _construct_context(cls: type[Context], args: tuple, kwargs: dict[str, object
     return cls(*ctor_args, **ctor_kwargs)
 
 
+def _call_fpy(fn: Function, args, ctx):
+    """Invoke an FPy function from *inside* the interpreter, bypassing
+    ``Function.__call__`` so the Python-boundary conversions are skipped —
+    rebuilding containers there would break list sharing with the callee."""
+    rt = fn.runtime if fn.runtime is not None else get_default_interpreter()
+    return rt.eval(fn, args, ctx, convert=False)
+
+
 def _eval_call(fn, ctx, *args, **kwargs):
     match fn:
         case Function():
             # calling FPy function
             if kwargs:
                 raise RuntimeError('FPy functions do not support keyword arguments')
-            return fn(*args, ctx=ctx)
+            return _call_fpy(fn, args, ctx)
         case Primitive():
             # calling FPy primitive
             if kwargs:
@@ -1147,7 +1156,13 @@ class BytecodeInterpreter(Interpreter):
         ast = FuncDef(name='<expr>', args=args, body=body, meta=meta, loc=loc)
         return ast, names
 
-    def eval(self, func: Function, args, ctx: Context | None = None):
+    def eval(
+        self, func: Function, args, ctx: Context | None = None,
+        *, convert: bool = True,
+    ):
+        """``convert`` applies the Python-boundary conversions: ``True`` for a
+        call from Python, ``False`` for FPy-to-FPy, where rebuilding containers
+        would break list sharing."""
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got `{func}`')
         # compile the function to bytecode
@@ -1159,13 +1174,16 @@ class BytecodeInterpreter(Interpreter):
             self.func_cache[func.ast] = fn
         # compute the context to use during evaluation
         ctx = self._func_ctx(func.ast, ctx)
-        # convert arguments to FPy values
-        args = tuple(_arg_to_value(arg) for arg in args)
+        if convert:
+            args = tuple(_arg_to_value(arg) for arg in args)
         # call the function with the given arguments
         res = fn(*args, __ctx__=ctx)
-        return _cvt_return(res)
+        return _cvt_return(res) if convert else res
 
     def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
+        # Always converts: the only caller is `PartialEval`, whose environment
+        # holds analysis-time values rather than a running FPy program's, so
+        # this is a boundary like the Python one.
         if not isinstance(expr, Expr):
             raise TypeError(f'Expected Expr, got `{expr}`')
         # convert the expression to a function definition
