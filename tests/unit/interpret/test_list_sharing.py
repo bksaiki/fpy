@@ -1,22 +1,19 @@
 """
 Interpreter behaviour of list sharing across an FPy call boundary.
 
-FPy lists are **shared**: assignment aliases, ``xs[i] = e`` mutates the list
-object, and passing or returning a list carries the identity with it.
+FPy lists are shared: assignment aliases, ``xs[i] = e`` mutates the list object,
+and passing or returning a list carries the identity with it.
 
-``Interpreter.eval`` broke that by applying the Python-boundary conversions to
-*every* call, FPy-to-FPy included.  Those conversions rebuild lists and tuples,
-which severs the alias.  They fire only when an element isn't already a
-``Float``/``bool``/``Context``, so an unrounded literal (``xs[0] = 77`` stores a
-``Fraction``) was enough to trigger them — making sharing depend on whether the
-last store was a literal or a computed value.  That is why the tests below cover
-*both* spellings of the same program.
+``Interpreter.eval`` broke that by applying its Python-boundary conversions to
+*every* call, FPy-to-FPy included; those rebuild containers, severing the alias.
+They fired only when an element wasn't already a ``Float``/``bool``/``Context``,
+so an unrounded literal (``xs[0] = 77`` stores a ``Fraction``) was enough to
+trigger one — making sharing depend on whether the last store was a literal or a
+computed value.  Hence the tests covering both spellings of one program.
 
-The last class covers the Python edge, where the conversions remain: a caller
-still gets canonical values, and its container is now rebuilt *unconditionally* so
-an FPy callee can never write it.  That rebuild used to be skipped whenever every
-element already happened to be an FPy value — the same representation-dependence,
-from the other direction.
+The conversions remain at the Python edge, where the container is now rebuilt
+*unconditionally*: skipping it whenever the elements happened to already be FPy
+values made caller isolation representation-dependent in the same way.
 """
 
 from fractions import Fraction
@@ -82,9 +79,7 @@ class TestReturnSharing:
 
     def test_mutate_then_return_aliases(self):
         """The case that revealed the bug: the callee's write was visible to the
-        caller *and* the returned list was a copy — an incoherent pair.  The
-        write turned an element into a ``Fraction``, which tripped the return
-        conversion into rebuilding the list."""
+        caller *and* the returned list was a copy — an incoherent pair."""
         @fp.fpy
         def bump(zs: list[fp.Real]) -> list[fp.Real]:
             with FP64:
@@ -156,13 +151,9 @@ class TestNestedSharing:
 
 
 class TestPythonBoundary:
-    """The fix narrows the boundary conversions to the Python edge rather than
-    removing them, so a Python caller still gets canonical values.  Over-applying
-    it would have started handing raw ``Fraction``\ s back to Python code.
-
-    The last two tests cover caller isolation, which the same conflation of
-    "is a value" with "needs no copy" had made representation-dependent.
-    """
+    """Conversions remain at the Python edge, so a caller still gets canonical
+    values; over-applying the fix would have handed raw ``Fraction`` values
+    back to Python.  The last two tests cover caller isolation."""
 
     def test_returned_literal_is_a_float_not_a_fraction(self):
         @fp.fpy
@@ -199,14 +190,9 @@ class TestPythonBoundary:
 
     def test_python_caller_list_is_always_isolated(self):
         """A Python caller's container is rebuilt unconditionally, so an FPy
-        callee's ``xs[i] = e`` never reaches back into it.
-
-        This used to depend on the element representation: the rebuild was
-        skipped when every element was already an FPy value, so a list of Python
-        ``float``\ s was copied while a list of :class:`Float` was passed by
-        identity and written through.  Every representation below is checked
-        because that is exactly what differed.
-        """
+        callee's ``xs[i] = e`` never reaches back into it.  All four
+        representations are checked because that is exactly what used to
+        differ — ``Float`` and ``Fraction`` lists were passed by identity."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with FP64:

@@ -34,10 +34,9 @@ class Interpreter(ABC):
         context is the native Python floating-point context.
 
         `convert` applies the Python-boundary conversions that normalise
-        argument and result representations. Leave it `True` for a call
-        arriving from Python. An interpreter calling one FPy function from
-        another must pass `False`: those conversions rebuild lists and tuples,
-        which would break the object identity FPy's sharing semantics rely on.
+        argument and result representations. Pass `False` when calling one FPy
+        function from another: those conversions rebuild lists and tuples,
+        which would break the object identity FPy's list sharing relies on.
         """
         ...
 

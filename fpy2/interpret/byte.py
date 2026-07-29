@@ -65,18 +65,13 @@ def _cvt_arg(arg):
 def _arg_to_value(arg: Any):
     """Convert a value crossing the *Python* boundary into an FPy value.
 
-    Containers are rebuilt **unconditionally**, which isolates the caller: FPy
-    lists are shared, so an FPy callee's ``xs[i] = e`` would otherwise reach back
-    into the Python caller's own list.
+    Containers are rebuilt unconditionally so the caller is isolated: FPy lists
+    are shared, so an FPy callee's ``xs[i] = e`` would otherwise write the Python
+    caller's own list.  Skipping the rebuild when the elements were already FPy
+    values made that isolation depend on how the caller built the list.
 
-    The rebuild used to be skipped when every element was already an FPy value,
-    which made isolation depend on how the caller happened to build the list —
-    a list of Python ``float``\\ s was copied, a list of :class:`Float` was not.
-    Same program, opposite effect on the caller's data.
-
-    This costs one deep copy per *outer* call.  Calls between FPy functions skip
-    this path entirely (``eval(..., convert=False)``) and keep sharing, so the
-    cost is not per-call.
+    One deep copy per *outer* call only — FPy-to-FPy calls bypass this entirely
+    (``eval(..., convert=False)``) and keep sharing.
     """
     return _cvt_arg(arg)
 
@@ -174,13 +169,9 @@ def _construct_context(cls: type[Context], args: tuple, kwargs: dict[str, object
 
 
 def _call_fpy(fn: Function, args, ctx):
-    """Invoke an FPy function from *inside* the interpreter.
-
-    Bypasses ``Function.__call__`` so the Python-boundary conversions are
-    skipped: they normalise representations for Python callers and rebuild
-    containers, and rebuilding is what breaks list sharing between an FPy caller
-    and its callee.
-    """
+    """Invoke an FPy function from *inside* the interpreter, bypassing
+    ``Function.__call__`` so the Python-boundary conversions are skipped —
+    rebuilding containers there would break list sharing with the callee."""
     rt = fn.runtime if fn.runtime is not None else get_default_interpreter()
     return rt.eval(fn, args, ctx, convert=False)
 
@@ -1169,11 +1160,9 @@ class BytecodeInterpreter(Interpreter):
         self, func: Function, args, ctx: Context | None = None,
         *, convert: bool = True,
     ):
-        """*convert* applies the Python-boundary conversions.  Leave it ``True``
-        for a call arriving from Python; pass ``False`` for an FPy-to-FPy call,
-        where they are not merely unnecessary but wrong — they rebuild lists and
-        tuples, which breaks the object identity FPy's sharing semantics rely
-        on."""
+        """``convert`` applies the Python-boundary conversions: ``True`` for a
+        call from Python, ``False`` for FPy-to-FPy, where rebuilding containers
+        would break list sharing."""
         if not isinstance(func, Function):
             raise TypeError(f'Expected Function, got `{func}`')
         # compile the function to bytecode
@@ -1185,7 +1174,6 @@ class BytecodeInterpreter(Interpreter):
             self.func_cache[func.ast] = fn
         # compute the context to use during evaluation
         ctx = self._func_ctx(func.ast, ctx)
-        # convert arguments to FPy values (Python boundary only)
         if convert:
             args = tuple(_arg_to_value(arg) for arg in args)
         # call the function with the given arguments
@@ -1193,6 +1181,9 @@ class BytecodeInterpreter(Interpreter):
         return _cvt_return(res) if convert else res
 
     def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
+        # Always converts: the only caller is `PartialEval`, whose environment
+        # holds analysis-time values rather than a running FPy program's, so
+        # this is a boundary like the Python one.
         if not isinstance(expr, Expr):
             raise TypeError(f'Expected Expr, got `{expr}`')
         # convert the expression to a function definition
