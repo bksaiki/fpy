@@ -7,6 +7,7 @@ import fpy2 as fp
 import hashlib
 import math
 import random
+import re
 import shutil
 import signal
 import struct
@@ -115,6 +116,28 @@ _run_ignore: list[str] = [
     # numerically equal, a signed-zero-from-reduction edge.  This function
     # exists to pin widening codegen (which compiles), not exact execution.
     '_regression_quant_dot_real_widen',
+
+    # --- known list-aliasing divergences -----------------------------------
+    # FPy lists are shared; `std::vector` is a value type, so the backend
+    # copies where FPy would alias and these produce wrong answers rather
+    # than errors.  Each names a distinct route by which a list reaches a
+    # copy; see the "List-aliasing regressions" section below for what each
+    # one does.  They are compiled and `cc`-checked on every run — only the
+    # execution comparison is suppressed.
+    #
+    # This list is the acceptance criterion for fixing the representation:
+    # when it is empty, the backend and the interpreter agree about sharing.
+    '_regression_alias_then_mutate',
+    '_regression_callee_mutates_param',
+    '_regression_returned_list_aliases',
+    '_regression_projected_element',
+    '_regression_loop_variable',
+    '_regression_list_into_list',
+    '_regression_list_into_tuple',
+    '_regression_comprehension_of_rows',
+    '_regression_nested_slice',
+    '_regression_one_list_two_indices',
+    '_regression_enumerate_row_write',
 ]
 
 
@@ -632,7 +655,7 @@ def _test_unit_tests(
     compiler = fp.CppCompiler(unsafe_cast_int=True)
     failures: list[tuple[str, str, str]] = []
     for func in funcs:
-        if func.name in ignore:
+        if func.name in ignore or not _selected(func.name):
             continue
 
         try:
@@ -744,7 +767,11 @@ def _test_library(
     # into the combined module that we emit.
     accepted: list[tuple[fp.Function, list]] = []
     for func in mod.__dict__.values():
-        if isinstance(func, fp.Function) and func.name not in ignore:
+        if (
+            isinstance(func, fp.Function)
+            and func.name not in ignore
+            and _selected(func.name)
+        ):
             ty_info = fp.analysis.TypeInfer.check(func.ast)
             arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
             probe = fp.Module()
@@ -756,6 +783,9 @@ def _test_library(
                 failures.append((group, func.name, str(e)))
                 continue
             accepted.append((func, arg_types))
+
+    if not accepted:
+        return failures
 
     combined = fp.Module()
     for func, arg_types in accepted:
@@ -900,6 +930,239 @@ def _regression_any_over_comprehension(xs: list[fp.Real]) -> bool:
         return any([x < 0 for x in xs])
 
 
+###########################################################
+# List-aliasing regressions
+#
+# FPy lists are shared: assignment aliases, `xs[i] = e` mutates the object, and
+# passing/returning/projecting carries the identity along.  `std::vector` is a
+# value type, so every place the backend copies a list is a place the generated
+# code can disagree with the interpreter.
+#
+# One function per *route* by which a list can reach a copy.  Those that
+# currently diverge are listed in `_run_ignore` with a pointer back here; the
+# rest are pins — they are correct today and must stay correct.  Each guards the
+# empty case because `_LIST_LENS` includes 0.
+
+
+@fp.fpy
+def _regression_alias_then_mutate(xs: list[fp.Real]) -> fp.Real:
+    """Route: a bare `ys = xs` alias, then a write through the alias."""
+    with fp.FP64:
+        if len(xs) == 0:
+            return 0
+        ys = xs
+        ys[0] = 99
+        return xs[0]
+
+
+@fp.fpy
+def _regression_alias_readonly(xs: list[fp.Real]) -> fp.Real:
+    """Pin: a read-only alias.  Nothing is written, so a copy is unobservable
+    and the backend is free to pick `const&`.  Guards against a fix for the
+    route above that pessimizes this one."""
+    with fp.FP64:
+        if len(xs) == 0:
+            return 0
+        ys = xs
+        return ys[0] + xs[0]
+
+
+@fp.fpy
+def _regression_writes_its_arg(zs: list[fp.Real]) -> fp.Real:
+    """Callee for :func:`_regression_callee_mutates_param`."""
+    with fp.FP64:
+        zs[0] = 99
+        return 0
+
+
+@fp.fpy
+def _regression_callee_mutates_param(xs: list[fp.Real]) -> fp.Real:
+    """Route: a callee writes its list parameter; FPy shares, so the caller
+    must see it."""
+    with fp.FP64:
+        if len(xs) == 0:
+            return 0
+        v = _regression_writes_its_arg(xs)
+        return xs[0] + v
+
+
+@fp.fpy
+def _regression_returns_its_argument(zs: list[fp.Real]) -> list[fp.Real]:
+    """Callee for :func:`_regression_returned_list_aliases`."""
+    return zs
+
+
+@fp.fpy
+def _regression_returned_list_aliases(xs: list[fp.Real]) -> fp.Real:
+    """Route: a returned list keeps its identity, so the caller's binding
+    aliases the list it passed in."""
+    with fp.FP64:
+        if len(xs) == 0:
+            return 0
+        ys = _regression_returns_its_argument(xs)
+        ys[0] = 99
+        return xs[0]
+
+
+@fp.fpy
+def _regression_projected_element(xss: list[list[fp.Real]]) -> fp.Real:
+    """Route: projection *out of* a container.  An element lives inside its
+    container, so `inner` is that element, not a copy of it."""
+    with fp.FP64:
+        if len(xss) == 0:
+            return 0
+        inner = xss[0]
+        inner[0] = 99
+        return xss[0][0]
+
+
+@fp.fpy
+def _regression_loop_variable(xss: list[list[fp.Real]]) -> fp.Real:
+    """Route: the same projection through a loop variable."""
+    with fp.FP64:
+        if len(xss) == 0:
+            return 0
+        for row in xss:
+            row[0] = 99
+        return xss[0][0]
+
+
+@fp.fpy
+def _regression_list_into_list(xs: list[fp.Real]) -> fp.Real:
+    """Route: construction *into* a container.  `std::vector` owns its
+    elements, so the copy happens at construction, before any name exists that
+    could have been a reference instead."""
+    with fp.FP64:
+        if len(xs) == 0:
+            return 0
+        zss = [xs]
+        zss[0][0] = 99
+        return xs[0]
+
+
+@fp.fpy
+def _regression_list_into_tuple(xs: list[fp.Real]) -> fp.Real:
+    """Route: the same construction into a tuple.  Tuples are immutable, so
+    copying one is normally unobservable — but not when it holds a list."""
+    with fp.FP64:
+        if len(xs) == 0:
+            return 0
+        t = (xs, 1.0)
+        ys = fp.fst(t)
+        ys[0] = 99
+        return xs[0]
+
+
+@fp.fpy
+def _regression_comprehension_of_rows(xss: list[list[fp.Real]]) -> fp.Real:
+    """Route: `[row for row in xss]` is a new *outer* list over the *same*
+    inner lists.  Contrast `_regression_comprehension_deep_copy`."""
+    with fp.FP64:
+        if len(xss) == 0:
+            return 0
+        yss = [row for row in xss]
+        yss[0][0] = 99
+        return xss[0][0]
+
+
+@fp.fpy
+def _regression_comprehension_deep_copy(xss: list[list[fp.Real]]) -> fp.Real:
+    """Pin: one character of difference from the route above — the element is a
+    fresh comprehension, so this really is a deep copy and `xss` is untouched."""
+    with fp.FP64:
+        if len(xss) == 0:
+            return 0
+        yss = [[x for x in row] for row in xss]
+        yss[0][0] = 99
+        return xss[0][0]
+
+
+@fp.fpy
+def _regression_nested_slice(xss: list[list[fp.Real]]) -> fp.Real:
+    """Route: slicing is *shallow* — a fresh outer list over the same inner
+    lists.  The C++ range constructor copies every element."""
+    with fp.FP64:
+        if len(xss) == 0:
+            return 0
+        yss = xss[0:1]
+        yss[0][0] = 99
+        return xss[0][0]
+
+
+@fp.fpy
+def _regression_flat_slice(xs: list[fp.Real]) -> fp.Real:
+    """Pin: a slice of a *flat* list has scalar elements, so one level of copy
+    is all there is and C++ agrees."""
+    with fp.FP64:
+        if len(xs) == 0:
+            return 0
+        ys = xs[0:1]
+        ys[0] = 99
+        return xs[0]
+
+
+@fp.fpy
+def _regression_one_list_two_indices(xs: list[fp.Real]) -> fp.Real:
+    """Route: one list placed at two indices.  `x[0]` and `x[1]` are one object
+    in FPy and two independent vectors in C++."""
+    with fp.FP64:
+        if len(xs) == 0:
+            return 0
+        a = [xs[0], xs[0]]
+        x = [a, a]
+        x[0][0] = 99
+        return x[1][0]
+
+
+@fp.fpy
+def _regression_enumerate_row_write(xss: list[list[fp.Real]]) -> fp.Real:
+    """Route: `enumerate` lowers to a materialized `vector<tuple<I, T>>`, which
+    deep-copies every row.  Notable because that copy site is synthesized by
+    codegen and appears nowhere in the AST."""
+    with fp.FP64:
+        if len(xss) == 0:
+            return 0
+        acc = 0.0
+        for (i, row) in enumerate(xss):
+            row[0] = 99
+            acc = acc + 1.0
+        return xss[0][0] + acc
+
+
+@fp.fpy
+def _regression_conditional_alias(
+    xs: list[fp.Real], zs: list[fp.Real], c: fp.Real,
+) -> fp.Real:
+    """Pin: one name aliasing a *different* list on each path.  No C++
+    reference can stand for both, so the backend must either hoist a variable
+    (as it does today) or refuse — but never silently rename one to the
+    other."""
+    with fp.FP64:
+        if len(xs) == 0 or len(zs) == 0:
+            return 0
+        if c > 0:
+            ys = xs
+        else:
+            ys = zs
+        return ys[0]
+
+
+@fp.fpy
+def _regression_replaced_slot(
+    xss: list[list[fp.Real]], ys: list[fp.Real],
+) -> fp.Real:
+    """Pin: a projection names an *object*, not a slot.  After `xss[0] = ys`,
+    `row` is still the detached old list — a C++ reference would follow the
+    slot instead."""
+    with fp.FP64:
+        if len(xss) == 0 or len(ys) == 0:
+            return 0
+        row = xss[0]
+        xss[0] = ys
+        row[0] = 99
+        return xss[0][0] + ys[0]
+
+
 _regression_funcs: list[fp.Function] = [
     _regression_quant_dot_real_widen,
     _regression_empty_range,
@@ -907,6 +1170,22 @@ _regression_funcs: list[fp.Function] = [
     _regression_any_bool_list,
     _regression_all_bool_list,
     _regression_any_over_comprehension,
+    _regression_alias_then_mutate,
+    _regression_alias_readonly,
+    _regression_callee_mutates_param,
+    _regression_returned_list_aliases,
+    _regression_projected_element,
+    _regression_loop_variable,
+    _regression_list_into_list,
+    _regression_list_into_tuple,
+    _regression_comprehension_of_rows,
+    _regression_comprehension_deep_copy,
+    _regression_nested_slice,
+    _regression_flat_slice,
+    _regression_one_list_two_indices,
+    _regression_enumerate_row_write,
+    _regression_conditional_alias,
+    _regression_replaced_slot,
 ]
 
 
@@ -955,6 +1234,8 @@ def _test_typed_regressions(
     compiler = fp.CppCompiler(unsafe_cast_int=True)
     failures: list[tuple[str, str, str]] = []
     for func, arg_types in _typed_regression_funcs:
+        if not _selected(func.name):
+            continue
         try:
             cpp_path = _compile(
                 output_dir, 'typed_regressions', compiler, func, arg_types,
@@ -982,6 +1263,20 @@ def _test_regressions(
         output_dir, 'regressions', _regression_funcs, ignore=[],
         mode=mode, cov=cov,
     )
+
+###########################################################
+# Name filter
+
+_select: 're.Pattern[str] | None' = None
+"""``-k`` filter set by the CLI.  ``None`` — the default, and what the pytest
+entry point uses — tests everything."""
+
+
+def _selected(name: str) -> bool:
+    """Whether *name* passes the ``-k`` filter (a regex, searched not anchored,
+    so a plain substring works)."""
+    return _select is None or _select.search(name) is not None
+
 
 ###########################################################
 # Main tester
@@ -1065,7 +1360,15 @@ if __name__ == '__main__':
              "run: also execute eligible functions and bit-compare vs. the interpreter",
     )
     parser.add_argument('--no-cc', action='store_true', help="Alias for --mode emit (emit C++ only)")
+    parser.add_argument(
+        '-k', dest='select', metavar='PATTERN', default=None,
+        help="Only test functions whose name matches PATTERN (a regex, searched "
+             "anywhere in the name), like pytest's -k",
+    )
     args = parser.parse_args()
+    if args.select is not None:
+        _select = re.compile(args.select)
+        print(f'Filtering to function names matching `{args.select}`')
 
     # arguments
     delete: bool = not args.keep
