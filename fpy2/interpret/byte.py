@@ -45,23 +45,6 @@ def _is_integer(x: Float | Fraction) -> bool:
         case _:
             raise TypeError(f'expected a real number, got `{x}`')
 
-def _is_value(x):
-    """Is *x* already an FPy runtime value, needing no conversion?
-
-    ``Fraction`` is included because it *is* one — :data:`RealValue` is
-    ``Float | Fraction``, and an unrounded literal (``xs[0] = 77``) legitimately
-    stores a ``Fraction``.  Omitting it made ``_arg_to_value`` rebuild any list
-    holding one, which silently broke object identity across a call boundary
-    even though ``_cvt_arg`` leaves the elements untouched.
-    """
-    match x:
-        case bool() | Float() | Fraction() | Context():
-            return True
-        case tuple() | list():
-            return all(_is_value(v) for v in x)
-        case _:
-            return False
-
 def _cvt_arg(arg):
     match arg:
         case bool() | Float() | Context():
@@ -80,7 +63,22 @@ def _cvt_arg(arg):
             return arg
 
 def _arg_to_value(arg: Any):
-    return arg if _is_value(arg) else _cvt_arg(arg)
+    """Convert a value crossing the *Python* boundary into an FPy value.
+
+    Containers are rebuilt **unconditionally**, which isolates the caller: FPy
+    lists are shared, so an FPy callee's ``xs[i] = e`` would otherwise reach back
+    into the Python caller's own list.
+
+    The rebuild used to be skipped when every element was already an FPy value,
+    which made isolation depend on how the caller happened to build the list —
+    a list of Python ``float``\\ s was copied, a list of :class:`Float` was not.
+    Same program, opposite effect on the caller's data.
+
+    This costs one deep copy per *outer* call.  Calls between FPy functions skip
+    this path entirely (``eval(..., convert=False)``) and keep sharing, so the
+    cost is not per-call.
+    """
+    return _cvt_arg(arg)
 
 def _is_return_value(x) -> bool:
     match x:

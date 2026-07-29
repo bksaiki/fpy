@@ -12,10 +12,11 @@ which severs the alias.  They fire only when an element isn't already a
 last store was a literal or a computed value.  That is why the tests below cover
 *both* spellings of the same program.
 
-The last class pins what must survive: the conversions still apply at the Python
-edge, so a Python caller keeps getting canonical values.  Its final test records a
-*separate*, pre-existing gap this work surfaced but did not change — whether that
-edge isolates a caller's list at all is representation-dependent.
+The last class covers the Python edge, where the conversions remain: a caller
+still gets canonical values, and its container is now rebuilt *unconditionally* so
+an FPy callee can never write it.  That rebuild used to be skipped whenever every
+element already happened to be an FPy value — the same representation-dependence,
+from the other direction.
 """
 
 from fractions import Fraction
@@ -159,8 +160,8 @@ class TestPythonBoundary:
     removing them, so a Python caller still gets canonical values.  Over-applying
     it would have started handing raw ``Fraction``\ s back to Python code.
 
-    The last test pins a separate, pre-existing gap that this work surfaced but
-    did not change.
+    The last two tests cover caller isolation, which the same conflation of
+    "is a value" with "needs no copy" had made representation-dependent.
     """
 
     def test_returned_literal_is_a_float_not_a_fraction(self):
@@ -196,23 +197,15 @@ class TestPythonBoundary:
 
         assert f() == Fraction(1, 3)
 
-    def test_python_list_isolation_is_representation_dependent(self):
-        """**Known gap, pinned deliberately.**
+    def test_python_caller_list_is_always_isolated(self):
+        """A Python caller's container is rebuilt unconditionally, so an FPy
+        callee's ``xs[i] = e`` never reaches back into it.
 
-        Whether a Python caller's list is isolated from an FPy callee's writes
-        depends on the element representation, because ``_arg_to_value`` uses
-        "is every element already an FPy value?" to decide whether to rebuild the
-        container.  Those are different questions:
-
-        - a list of Python ``float``\ s needs conversion, so it is rebuilt and
-          the caller is isolated;
-        - a list of ``Float``\ s (or ``Fraction``\ s) needs none, so it is
-          passed by identity and the callee's write reaches the caller.
-
-        Both are asserted below so the inconsistency is visible rather than
-        latent.  Deciding it needs a call on whether the Python boundary should
-        isolate at all; if it should, the boundary must copy unconditionally
-        instead of only when a conversion happens to be required.
+        This used to depend on the element representation: the rebuild was
+        skipped when every element was already an FPy value, so a list of Python
+        ``float``\ s was copied while a list of :class:`Float` was passed by
+        identity and written through.  Every representation below is checked
+        because that is exactly what differed.
         """
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -220,12 +213,25 @@ class TestPythonBoundary:
                 xs[0] = 99
                 return xs[0]
 
-        # needs conversion -> rebuilt -> caller isolated
-        py_floats = [1.0, 2.0]
-        assert float(f(py_floats, ctx=FP64)) == 99.0
-        assert py_floats == [1.0, 2.0]
+        for src, label in (
+            ([1.0, 2.0], 'Python float'),
+            ([1, 2], 'Python int'),
+            ([Fraction(1), Fraction(2)], 'Fraction'),
+            ([fp.Float.from_float(1.0), fp.Float.from_float(2.0)], 'Float'),
+        ):
+            before = [float(v) for v in src]
+            assert float(f(src, ctx=FP64)) == 99.0
+            assert [float(v) for v in src] == before, f'leaked for {label}'
 
-        # needs no conversion -> passed by identity -> caller is written
-        fpy_floats = [fp.Float.from_float(1.0), fp.Float.from_float(2.0)]
-        assert float(f(fpy_floats, ctx=FP64)) == 99.0
-        assert float(fpy_floats[0]) == 99.0
+    def test_nested_python_caller_list_is_isolated(self):
+        """Isolation is deep — an inner list must be rebuilt too, or a callee
+        writing ``xss[0][0]`` would reach the caller's inner list."""
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with FP64:
+                xss[0][0] = 99
+                return xss[0][0]
+
+        src = [[fp.Float.from_float(1.0)], [fp.Float.from_float(2.0)]]
+        assert float(f(src, ctx=FP64)) == 99.0
+        assert float(src[0][0]) == 1.0
