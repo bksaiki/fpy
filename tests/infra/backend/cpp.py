@@ -809,6 +809,106 @@ def _test_library(
     return failures
 
 
+def _test_runtime(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
+    """Compile and run a self-test of the emitted runtime prelude (``fpy::``).
+
+    The prelude is handwritten C++ that every emitted unit depends on, so it is
+    worth checking directly rather than only through generated code.  Asserts
+    the sharing contract ``fpy::list`` exists to provide: copying a list shares
+    its elements, an element of a nested list is the same object, and
+    ``clone()`` is the opt-out.
+    """
+    group = 'runtime'
+    compiler = fp.CppCompiler()
+    cpp_path = output_dir / 'runtime_selftest.cpp'
+    print(f'Compiling runtime self-test to `{cpp_path}`')
+    with open(cpp_path, 'w') as f:
+        print('\n'.join(compiler.headers()), file=f)
+        print(compiler.helpers(), file=f)
+        print(_RUNTIME_SELFTEST, file=f)
+
+    if mode == 'emit':
+        return []
+    if _CXX is None:
+        print('  SKIPPED (no C++ compiler driver)')
+        return []
+
+    exe = cpp_path.with_suffix('.exe')
+    cmd = [_CXX] + _CPP_OPTIONS + ['-o', str(exe), str(cpp_path)]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        print(f'  FAILED to build: {e.stderr[-400:]}')
+        return [(group, 'runtime_selftest', f'build failed: {e.stderr[-200:]}')]
+
+    r = subprocess.run([str(exe)], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
+        return [(group, 'runtime_selftest', f'assertion failed: {r.stdout.strip()}')]
+    return []
+
+
+_RUNTIME_SELFTEST: str = """\
+#include <cstdio>
+
+int main() {
+    // copying a handle shares the elements
+    fpy::list<double> xs = fpy::make_list<double>({1.0, 2.0, 3.0});
+    fpy::list<double> ys = xs;
+    (*ys)[0] = 99.0;
+    assert((*xs)[0] == 99.0);
+
+    // ...and clone() is the opt-out
+    fpy::list<double> zs = fpy::clone(xs);
+    (*zs)[0] = 7.0;
+    assert((*xs)[0] == 99.0);
+
+    // an element of a nested list is the same object, at every slot
+    fpy::list<fpy::list<double> > m =
+        fpy::make_list<fpy::list<double> >({xs, xs});
+    (*(*m)[0])[1] = 42.0;
+    assert((*xs)[1] == 42.0);
+    assert((*(*m)[1])[1] == 42.0);
+
+    // a projection shares, and survives its container's slot being replaced
+    fpy::list<double> row = (*m)[0];
+    (*m)[0] = zs;
+    (*row)[2] = 5.0;
+    assert((*xs)[2] == 5.0);
+    assert((*(*m)[0])[2] != 5.0);
+
+    // range-for over the pointee, and size
+    fpy::list<double> acc = fpy::make_list<double>(3);
+    std::size_t i = 0;
+    for (double v : *xs) { (*acc)[i] = v; ++i; }
+    assert(i == 3 && acc->size() == 3);
+
+    // contiguous storage for C interop
+    double* raw = xs->data();
+    raw[0] = -1.0;
+    assert((*xs)[0] == -1.0);
+
+    // borrow(): a non-owning handle writes through to the caller's vector
+    std::vector<double> owned(2, 1.0);
+    {
+        fpy::list<double> h = fpy::borrow(owned);
+        (*h)[0] = 8.0;
+    }
+    assert(owned[0] == 8.0);
+
+    // refcounting: the last owner keeps the elements alive
+    {
+        fpy::list<double> tmp = xs;
+        (*tmp)[0] = 3.5;
+    }
+    assert((*xs)[0] == 3.5);
+
+    std::printf("runtime self-test OK\\n");
+    return 0;
+}
+"""
+
+
 def _test_libraries(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
     failures: list[tuple[str, str, str]] = []
     for mod in _modules:
@@ -1328,6 +1428,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     print(f"Running C++ tests (mode={mode}) with output under `{output_dir}`")
     failures: list[tuple[str, str, str]] = []
     cov: Counter[str] = Counter()
+    failures += _test_runtime(output_dir, mode=mode)
     failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)
     failures += _test_regressions(output_dir, mode=mode, cov=cov)

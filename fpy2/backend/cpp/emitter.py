@@ -296,12 +296,15 @@ class CppEmitter(Visitor):
         Used by visitors that need to emit setup statements alongside
         an expression result — comprehensions, slices, tuple-binding
         destructure sources, ``enumerate``, ``zip``, etc.  The
-        ``__cpp_tmp`` prefix keeps these distinct from any identifier
-        the source program could introduce (FPy doesn't allow leading
-        underscores in user-visible names).
+        The ``_tmp`` prefix keeps these distinct from any identifier the
+        source program could introduce (FPy doesn't allow leading underscores
+        in user-visible names).  A single leading underscore is deliberate: an
+        identifier containing ``__`` is reserved to the implementation at every
+        scope, and ``__cpp_`` in particular is the standard's feature-test-macro
+        prefix.
         """
         self._tmp_counter += 1
-        return f'__cpp_tmp{self._tmp_counter}'
+        return f'_tmp{self._tmp_counter}'
 
     # ------------------------------------------------------------------
     # Public entry
@@ -1750,7 +1753,7 @@ class CppEmitter(Visitor):
             # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``
             # (see :data:`CPP_HELPERS`).  ±0 ordering is delegated to the
             # underlying ``std::fmin`` / ``std::fmax``.
-            fn = '__fpy_min' if isinstance(e, Min) else '__fpy_max'
+            fn = 'fpy::min' if isinstance(e, Min) else 'fpy::max'
         else:
             fn = 'std::min' if isinstance(e, Min) else 'std::max'
         result = casted[0]
@@ -1812,7 +1815,7 @@ class CppEmitter(Visitor):
         if result_ty.is_float():
             # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``;
             # see :meth:`_emit_min_max` and :data:`CPP_HELPERS`.
-            fn = '__fpy_min' if isinstance(e, AMin) else '__fpy_max'
+            fn = 'fpy::min' if isinstance(e, AMin) else 'fpy::max'
         else:
             fn = 'std::min' if isinstance(e, AMin) else 'std::max'
 
@@ -2150,9 +2153,9 @@ class CppEmitter(Visitor):
 
     def _visit_list_slice(self, e: ListSlice, ctx) -> str:
         # ``xs[start:stop]`` →
-        #   auto&& __cpp_tmpN = <xs>;
-        #   <result_ty>(__cpp_tmpN.begin() + start,
-        #               __cpp_tmpN.begin() + stop)
+        #   auto&& _tmpN = <xs>;
+        #   <result_ty>(_tmpN.begin() + start,
+        #               _tmpN.begin() + stop)
         #
         # Binding the value to a reference avoids re-evaluating ``<xs>``
         # when it isn't a simple lvalue (and matches the interpreter,

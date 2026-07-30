@@ -37,7 +37,7 @@ class TestIndexedAssign:
             '(xs[static_cast<size_t>(i)] * static_cast<double>(2));'
         ) in out
         # No copy temp inside the loop body.
-        assert '__cpp_tmp' not in out
+        assert '_tmp' not in out
 
     def test_alias_rebind_is_still_in_place(self):
         """``ys = xs; ys[0] = 99`` mutates ``ys`` in place after the
@@ -60,7 +60,7 @@ class TestIndexedAssign:
         assert 'std::vector<double> ys = xs;' in out
         assert 'ys[static_cast<size_t>(0)] = 99;' in out
         # No copy temp for the mutation.
-        assert '__cpp_tmp' not in out
+        assert '_tmp' not in out
 
     def test_sequential_mutations_in_place(self):
         """Sequential mutations of a freshly-built list reuse the
@@ -81,7 +81,7 @@ class TestIndexedAssign:
         # No suffixed copy variables.
         assert 'xs_1' not in out
         assert 'xs_2' not in out
-        assert '__cpp_tmp' not in out
+        assert '_tmp' not in out
 
     def test_indexed_assign_arg(self):
         """A function-arg list mutated directly compiles to a direct
@@ -106,4 +106,4 @@ class TestIndexedAssign:
         assert 'return xs[static_cast<size_t>(0)];' in out
         # No SSA-suffix variable, no copy temp.
         assert 'xs_1' not in out
-        assert '__cpp_tmp' not in out
+        assert '_tmp' not in out

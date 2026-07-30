@@ -11,7 +11,7 @@ lists that lower to standard C++ idioms:
 - ``zip(xs, ys, ...)`` → a ``std::vector<std::tuple<T1, T2, ...>>``
   populated similarly.
 
-The temporaries the emitter allocates use ``__cpp_tmpN`` names.
+The temporaries the emitter allocates use ``_tmpN`` names.
 """
 
 import fpy2 as fp
@@ -65,8 +65,8 @@ class TestEnumerate:
         assert 'std::vector<std::tuple<int64_t, double>>' in out
         # Loop populates the result with (size_t-cast index, source elt).
         assert (
-            'std::make_tuple(static_cast<int64_t>(__cpp_tmp3), '
-            '__cpp_tmp1[__cpp_tmp3]);'
+            'std::make_tuple(static_cast<int64_t>(_tmp3), '
+            '_tmp1[_tmp3]);'
         ) in out
         # Then the outer for-loop destructures into ``i``/``x``.
         assert 'int64_t i = std::get<0>' in out
@@ -97,12 +97,12 @@ class TestZip:
             ],
         )
         # Both iterables bound to temps.
-        assert 'auto&& __cpp_tmp1 = xs;' in out
-        assert 'auto&& __cpp_tmp2 = ys;' in out
+        assert 'auto&& _tmp1 = xs;' in out
+        assert 'auto&& _tmp2 = ys;' in out
         # Per-element tuple draws from both temps.
         assert (
-            'std::make_tuple(__cpp_tmp1[__cpp_tmp4], '
-            '__cpp_tmp2[__cpp_tmp4]);'
+            'std::make_tuple(_tmp1[_tmp4], '
+            '_tmp2[_tmp4]);'
         ) in out
         # Loop body destructures back to ``x``/``y``.
         assert 'double x = std::get<0>' in out
@@ -125,9 +125,9 @@ class TestZip:
         )
         assert 'std::vector<std::tuple<double, double, double>>' in out
         # Three iterables bound, three subscript reads in make_tuple.
-        assert 'auto&& __cpp_tmp1 = xs;' in out
-        assert 'auto&& __cpp_tmp2 = ys;' in out
-        assert 'auto&& __cpp_tmp3 = zs;' in out
+        assert 'auto&& _tmp1 = xs;' in out
+        assert 'auto&& _tmp2 = ys;' in out
+        assert 'auto&& _tmp3 = zs;' in out
 
     def test_zip_optimized_skips_tuple_vector(self):
         """Default ``CppCompiler()`` has ``optimize=True``, so
