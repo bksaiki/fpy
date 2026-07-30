@@ -424,8 +424,11 @@ class CppEmitter(Visitor):
 
     @staticmethod
     def _is_aggregate(storage: CppType) -> bool:
-        """A ``std::vector`` / ``std::tuple`` — copying it is O(n), unlike
-        a scalar (where a copy is free and by-value is idiomatic)."""
+        """A list or a tuple — worth binding by reference rather than copying.
+
+        For a tuple because a copy is O(size); for a list because a copy of the
+        handle touches the refcount.  A scalar copy is free.
+        """
         return isinstance(storage, (CppList, CppTuple))
 
     def _is_rebound(self, d: Definition) -> bool:
@@ -433,11 +436,14 @@ class CppEmitter(Visitor):
 
         ``xs[i] = e`` is not a rebind — it mutates the list the handle already
         points at, and ``storage_infer`` keeps that def in the same class.  Only
-        an ``Assign`` to the same name is.
+        an ``Assign`` to the same name is, and *d*'s own defining assignment does
+        not count: a local bound once by ``x = y`` is not rebound.
         """
         cls = self.storage.def_class[d]
         return any(
-            isinstance(m, AssignDef) and isinstance(m.site, Assign)
+            m is not d
+            and isinstance(m, AssignDef)
+            and isinstance(m.site, Assign)
             for m in self.storage.class_members[cls]
         )
 
@@ -477,26 +483,28 @@ class CppEmitter(Visitor):
             return f'const {storage.format()}& {name}'
         return f'{storage.format()} {name}'
 
-    def _is_readonly_alias(self, stmt: Assign, target_def, target_storage: CppType) -> bool:
-        """Whether ``x = y`` can bind a ``const`` reference to ``y`` instead
-        of copying it.
+    def _is_readonly_alias(
+        self, stmt: Assign, target_def, target_storage: CppType,
+    ) -> bool:
+        """Whether ``x = y`` can bind a ``const`` reference instead of copying.
 
-        Safe iff the RHS is a bare variable, the value is an aggregate, and
-        *both* the target and the source are written exactly once (single
-        storage classes).  Then neither side can observe a mutation through
-        the other, so a reference is indistinguishable from a copy — minus
-        the O(n) copy.  (This is the local-variable analog of the const-ref
-        parameter and loop-variable bindings.)"""
+        A list is a handle now, so copying one is O(1) and *shares* the elements
+        — the correctness argument this used to need is gone, and what is left is
+        a small saving: a reference skips a refcount bump.  The condition is the
+        same as :meth:`_arg_decl`'s, for the same reason — a ``const`` reference
+        cannot be rebound.
+
+        Still worth it for a tuple, where a copy is O(size).
+        """
         if not isinstance(stmt.expr, Var):
             return False
         if not self._is_aggregate(target_storage):
             return False
         if target_def not in self.storage.declare_at_assign:
             return False
-        if not self.storage.is_single_def(target_def):
+        if self._is_rebound(target_def):
             return False
-        src_def = self.def_use.find_def_from_use(stmt.expr)
-        return self.storage.is_single_def(src_def)
+        return not self._is_rebound(self.def_use.find_def_from_use(stmt.expr))
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
         """Emit a single ``T name = rhs;`` (declare-on-assign) or

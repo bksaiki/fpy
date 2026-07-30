@@ -890,6 +890,103 @@ int main() {
 """
 
 
+@fp.fpy
+def _abi_scale_in_place(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    """Kernel for the ABI test: mutates its argument and returns a value."""
+    with fp.FP64:
+        acc = 0.0
+        for i in range(len(xs)):
+            xs[i] = xs[i] * k
+            acc = acc + xs[i]
+        return acc
+
+
+def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
+    """Compile a kernel and call it the way an embedding program would.
+
+    The differential driver builds each argument as a fresh ``fpy::list``, which
+    mirrors the interpreter's Python-boundary isolation — so nothing in the
+    corpus exercises handing a kernel storage the *caller* owns.  That is the
+    case that matters for embedding a generated kernel in a larger system, so it
+    is pinned here:
+
+    - ``fpy::borrow`` passes a caller's ``std::vector`` with no copy, and the
+      kernel's writes land in it;
+    - ``fpy::make_list`` copies, and the caller's vector is untouched.
+
+    Both are one line at the call site, which is the whole claim: a host needs
+    no dependency on anything of ours beyond ``std::shared_ptr``.
+    """
+    group = 'abi'
+    compiler = fp.CppCompiler()
+    cpp_path = output_dir / 'abi_boundary.cpp'
+    print(f'Compiling ABI boundary test to `{cpp_path}`')
+    arg_types = [
+        fp.types.ListType(fp.types.RealType(fp.FP64)),
+        fp.types.RealType(fp.FP64),
+    ]
+    with open(cpp_path, 'w') as f:
+        print('\n'.join(compiler.headers()), file=f)
+        print('#include <cstdio>', file=f)
+        print(compiler.helpers(), file=f)
+        print(
+            compiler.compile(
+                _abi_scale_in_place, ctx=fp.FP64, arg_types=arg_types,
+            ),
+            file=f,
+        )
+        print(_ABI_MAIN, file=f)
+
+    if mode == 'emit':
+        return []
+    if _CXX is None:
+        print('  SKIPPED (no C++ compiler driver)')
+        return []
+
+    exe = cpp_path.with_suffix('.exe')
+    try:
+        subprocess.run(
+            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f'  FAILED to build: {e.stderr[-400:]}')
+        return [(group, 'abi_boundary', f'build failed: {e.stderr[-200:]}')]
+
+    r = subprocess.run([str(exe)], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
+        return [(group, 'abi_boundary', f'assertion failed: {r.stdout.strip()}')]
+    return []
+
+
+_ABI_MAIN: str = """\
+int main() {
+    // borrow: the kernel writes through to storage the caller owns
+    {
+        std::vector<double> owned;
+        owned.push_back(1.0);
+        owned.push_back(2.0);
+        double acc = _abi_scale_in_place(fpy::borrow(owned), 3.0);
+        assert(acc == 9.0);
+        assert(owned[0] == 3.0 && owned[1] == 6.0);
+    }
+    // make_list: copies, so the caller's vector is untouched
+    {
+        std::vector<double> owned;
+        owned.push_back(1.0);
+        owned.push_back(2.0);
+        double acc = _abi_scale_in_place(
+            fpy::make_list<double>({owned[0], owned[1]}), 3.0);
+        assert(acc == 9.0);
+        assert(owned[0] == 1.0 && owned[1] == 2.0);
+    }
+    std::printf("abi boundary OK\\n");
+    return 0;
+}
+"""
+
+
 def _test_libraries(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
     failures: list[tuple[str, str, str]] = []
     for mod in _modules:
@@ -1410,6 +1507,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     failures: list[tuple[str, str, str]] = []
     cov: Counter[str] = Counter()
     failures += _test_runtime(output_dir, mode=mode)
+    failures += _test_abi(output_dir, mode=mode)
     failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)
     failures += _test_regressions(output_dir, mode=mode, cov=cov)
