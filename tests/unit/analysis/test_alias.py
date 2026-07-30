@@ -160,9 +160,15 @@ class TestAliasingRoutes:
 
 
 class TestEscape:
-    """A list handed outside the function is not decidable here."""
+    """The two routes out of a function, which mean opposite things.
 
-    def test_returned_list_escapes(self):
+    A ``return`` transfers ownership; a call argument shares it.  Collapsing them
+    would forgo every returned value, which is a large share of all allocations.
+    """
+
+    def test_returned_fresh_list_transfers_ownership(self):
+        """The value moves to the caller and nothing here keeps it, so a copy at
+        the boundary is unobservable."""
         @fp.fpy
         def f(x: fp.Real) -> list[fp.Real]:
             with fp.FP64:
@@ -170,8 +176,84 @@ class TestEscape:
                 return xs
 
         a, owned, _ = _sites(f)
+        assert [s.kind for s in owned] == ['literal']
+        site, = a.sites
+        assert a.escapes(site), 'it does leave the function'
+        assert a.is_returned(site) and a.transfers_ownership(site)
+
+    def test_returning_a_parameter_is_sharing_not_transfer(self):
+        """``return xs`` leaves the caller holding two handles to one list, so the
+        ``param`` site in the class blocks the transfer."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return xs
+
+        a, owned, _ = _sites(f)
         assert not owned
-        assert all(a.escapes(s) for s in a.sites)
+        site, = a.sites
+        assert a.is_returned(site) and not a.transfers_ownership(site)
+
+    def test_returning_a_row_of_a_parameter_is_sharing(self):
+        """The indirect route: the row's class carries the depth-1 ``param``
+        site, so the guard catches it without a special case.
+
+        Only the row, though.  The outer list is not what left, and a shallow copy
+        of it would hold the same rows — so it stays owned, and a consumer may
+        represent it by value while keeping the rows boxed.
+        """
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
+            with fp.FP64:
+                return xss[0]
+
+        a, owned, _ = _sites(f)
+        row, = (s for s in a.sites if s.depth == 1)
+        assert a.is_returned(row) and not a.transfers_ownership(row)
+        assert [s.depth for s in owned] == [0]
+
+    def test_returning_a_local_stored_into_a_parameter_is_sharing(self):
+        """The other indirect route: fresh, but the caller can reach it through
+        ``xss`` after the store."""
+        @fp.fpy
+        def f(xss: list[list[fp.Real]], x: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                ys = [x, x]
+                xss[0] = ys
+                return ys
+
+        a, _, _ = _sites(f)
+        assert not any(a.transfers_ownership(s) for s in a.sites)
+
+    def test_returned_and_also_passed_to_a_call_is_not_owned(self):
+        """Shared outward beats a transfer: the callee may still hold it."""
+        @fp.fpy
+        def g(zs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return zs[0]
+
+        @fp.fpy
+        def f(x: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                ys = [x, x]
+                n = g(ys)
+                return ys
+
+        a, owned, _ = _sites(f)
+        assert not owned
+        assert not any(a.transfers_ownership(s) for s in a.sites)
+
+    def test_nested_transfer_carries_its_rows(self):
+        """A returned fresh nested list transfers at every level: the rows go with
+        the outer list, so neither has to stay boxed."""
+        @fp.fpy
+        def f(x: fp.Real) -> list[list[fp.Real]]:
+            with fp.FP64:
+                yss = [[x, x], [x, x]]
+                return yss
+
+        a, owned, _ = _sites(f)
+        assert owned, 'a fresh nested list transfers whole'
 
     def test_call_argument_escapes(self):
         @fp.fpy

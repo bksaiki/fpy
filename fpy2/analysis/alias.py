@@ -50,18 +50,38 @@ known depth.
 
 An expression kind not in the table above is handled conservatively rather than
 optimistically: it gets its own allocation site, and every list-carrying variable
-inside it is marked escaping, so an unmodelled route cannot make a list *look*
-uniquely owned.
+inside it is marked shared outward, so an unmodelled route cannot make a list
+*look* uniquely owned.
+
+Leaving the function
+--------------------
+
+Two routes out, and they mean opposite things for ownership:
+
+*Shared outward* — handed to a call, or to an operation this analysis does not
+model.  Something else may hold the list *while this function still holds it*, so
+nothing about its fate is decidable here.
+
+*Returned* — handed to the caller, which is a **transfer**: the value moves out and
+this function keeps nothing, so a copy at the boundary is unobservable, exactly as
+for a value that never leaves.  Unless the caller already holds it — ``return xs``
+on a parameter leaves the caller with two handles to one list, which is sharing
+however it is spelled.  A ``param`` site anywhere in the class blocks the transfer,
+which catches the indirect routes too, since a class's site set is the union over
+everything merged into it.
+
+Collapsing the two would forgo every returned value: 37 of the corpus's 299
+allocation sites are fresh values that are returned and nothing else.
 
 Limitations
 -----------
 
 Flow-insensitive: ``ys = xs`` marks ``xs`` shared even if ``ys`` is dead
 immediately afterwards, and a container part counts as a referrer even if the
-container itself is never read.  Intraprocedural: a list handed to a call is
-treated as escaping, without asking whether the callee retains it.  A list index is
-not tracked, so ``xs[0]`` and ``xs[1]`` are the same part.  All three cost
-precision rather than soundness.
+container itself is never read.  Intraprocedural: a list handed to a call is shared
+outward, without asking whether the callee retains it.  A list index is not
+tracked, so ``xs[0]`` and ``xs[1]`` are the same part.  All three cost precision
+rather than soundness.
 """
 
 from dataclasses import dataclass
@@ -181,8 +201,16 @@ class _Cells:
         # cell for an allocation does not, so `xs = [x, x]` has one referrer
         # rather than two.
         self._refs: dict[_Cell, int] = {}
-        self._escaping: set[_Cell] = set()
+        # Two ways out of the function, distinguished because they mean opposite
+        # things for ownership -- see `AliasAnalysis.transfers_ownership`.
+        self._shared_out: set[_Cell] = set()
+        self._returned: set[_Cell] = set()
         self._parts: dict[_Cell, dict[_PartKey, _Cell]] = {}
+
+    @property
+    def _flags(self) -> tuple[set[_Cell], ...]:
+        """Every downward-propagating class flag, so each is handled alike."""
+        return (self._shared_out, self._returned)
 
     def new(self, kind: str, *, is_ref: bool = True) -> _Cell:
         cell = _Cell(kind)
@@ -200,9 +228,10 @@ class _Cells:
         parts = self._parts.setdefault(root, {})
         if key not in parts:
             parts[key] = self.new('part')
-            if root in self._escaping:
-                # created after the container escaped -- see `mark_escaping`
-                self.mark_escaping(parts[key])
+            for flag in self._flags:
+                # created after the container left -- see `_spread`
+                if root in flag:
+                    self._spread(flag, parts[key])
         return self.find(parts[key])
 
     def merge(self, a: _Cell, b: _Cell) -> _Cell:
@@ -226,8 +255,9 @@ class _Cells:
                 self._sites.pop(root, set()) | self._sites.pop(other, set())
             )
             self._refs[root] = self._refs.pop(root, 0) + self._refs.pop(other, 0)
-            escaping = root in self._escaping or other in self._escaping
-            self._escaping.discard(other)
+            carry = [f for f in self._flags if root in f or other in f]
+            for flag in self._flags:
+                flag.discard(other)
             mine = self._parts.pop(root, {})
             theirs = self._parts.pop(other, {})
             self._parts[root] = mine
@@ -236,9 +266,10 @@ class _Cells:
                     pending.append((mine[key], cell))
                 else:
                     mine[key] = cell
-            if escaping:
-                # a class merged into an escaping one escapes, parts and all
-                self.mark_escaping(root)
+            for flag in carry:
+                # a class merged into one that left the function left too, parts
+                # and all
+                self._spread(flag, root)
         return self.find(a)
 
     def add_site(self, c: _Cell, site: AllocSite) -> None:
@@ -250,12 +281,13 @@ class _Cells:
     def referrers(self, c: _Cell) -> int:
         return self._refs.get(self.find(c), 0)
 
-    def mark_escaping(self, c: _Cell) -> None:
-        """Mark *c* escaping, and everything reachable inside it.
+    def _spread(self, flag: set[_Cell], c: _Cell) -> None:
+        """Add *c* to *flag*, and everything reachable inside it.
 
-        Escape is transitive downward: handing out a ``list[list[Real]]`` hands
-        out its rows too.  Parts created *afterwards* inherit the flag in
-        :meth:`part`, so the two directions together are order-independent.
+        Leaving the function is transitive downward: handing out a
+        ``list[list[Real]]`` hands out its rows too.  Parts created *afterwards*
+        inherit the flag in :meth:`part`, so the two directions together are
+        order-independent.
         """
         pending, seen = [self.find(c)], set()
         while pending:
@@ -263,11 +295,26 @@ class _Cells:
             if root in seen:
                 continue
             seen.add(root)
-            self._escaping.add(root)
+            flag.add(root)
             pending.extend(self._parts.get(root, {}).values())
 
-    def escapes(self, c: _Cell) -> bool:
-        return self.find(c) in self._escaping
+    def mark_shared_out(self, c: _Cell) -> None:
+        """*c* may be held by something outside while this function holds it."""
+        self._spread(self._shared_out, c)
+
+    def mark_returned(self, c: _Cell) -> None:
+        """*c* is handed to the caller by a ``return``."""
+        self._spread(self._returned, c)
+
+    def is_shared_out(self, c: _Cell) -> bool:
+        return self.find(c) in self._shared_out
+
+    def is_returned(self, c: _Cell) -> bool:
+        return self.find(c) in self._returned
+
+    def has_param_site(self, c: _Cell) -> bool:
+        """Whether the caller already holds something in *c*'s class."""
+        return any(s.kind == 'param' for s in self.sites_at(c))
 
 
 @dataclass
@@ -297,18 +344,52 @@ class AliasAnalysis:
         return self._cells.referrers(self._site_cell[site]) > 1
 
     def escapes(self, site: AllocSite) -> bool:
-        """Whether *site*, or a container holding it, is returned or handed to a
-        call.
+        """Whether *site*, or a container holding it, leaves the function at all —
+        handed to a call, or returned.
 
-        Either way something outside this function may hold it, so what becomes
-        of it is not decidable here.
+        Says nothing about *which* route; :meth:`transfers_ownership` is what
+        separates the two, and they mean opposite things for ownership.
         """
-        return self._cells.escapes(self._site_cell[site])
+        cell = self._site_cell[site]
+        return self._cells.is_shared_out(cell) or self._cells.is_returned(cell)
+
+    def is_returned(self, site: AllocSite) -> bool:
+        """Whether *site*, or a container holding it, is handed to the caller by a
+        ``return``."""
+        return self._cells.is_returned(self._site_cell[site])
+
+    def transfers_ownership(self, site: AllocSite) -> bool:
+        """Whether returning *site* hands out *sole* ownership of it.
+
+        A ``return`` is a transfer, not sharing: the value moves to the caller and
+        this function keeps nothing — so a copy at the boundary is unobservable,
+        exactly as for a value that never leaves.
+
+        Unless the caller already holds it.  ``return xs`` on a parameter leaves
+        the caller with two handles to one list, which is sharing however it is
+        spelled, so a ``param`` site anywhere in the class blocks the transfer.
+        The site set of a class is the union over everything merged into it, so
+        this catches the indirect routes too — returning a row of a parameter, or
+        returning a local that was stored into one.
+        """
+        cell = self._site_cell[site]
+        return (
+            self._cells.is_returned(cell)
+            and not self._cells.has_param_site(cell)
+            and not self._cells.is_shared_out(cell)
+            and not self.is_shared(site)
+        )
 
     def is_uniquely_owned(self, site: AllocSite) -> bool:
-        """Whether *site* has exactly one referrer and does not escape — the
-        condition under which copying the list is unobservable."""
-        return not self.is_shared(site) and not self.escapes(site)
+        """Whether nothing else may observe *site* — the condition under which
+        copying, or representing it by value, is unobservable.
+
+        One referrer, never shared outward, and if it is returned then the return
+        transfers ownership.
+        """
+        if self.is_shared(site) or self._cells.is_shared_out(self._site_cell[site]):
+            return False
+        return not self.is_returned(site) or self.transfers_ownership(site)
 
     def may_alias(self, a: Definition, b: Definition) -> bool:
         """Whether *a* and *b* may refer to the same list."""
@@ -319,7 +400,7 @@ class AliasAnalysis:
 
 
 class _EscapeVars(DefaultVisitor):
-    """Marks every list-carrying variable inside an expression as escaping.
+    """Marks every list-carrying variable inside an expression as shared outward.
 
     Used for expression kinds :meth:`_Builder._build_cell` does not model: if an
     unmodelled operation might retain one of its operands, the sound answer is
@@ -333,7 +414,7 @@ class _EscapeVars(DefaultVisitor):
     def _visit_var(self, e: Var, ctx):
         cell = self.builder._cell_for(e)
         if cell is not None:
-            self.builder.cells.mark_escaping(cell)
+            self.builder.cells.mark_shared_out(cell)
 
 
 class _Builder(DefaultVisitor):
@@ -541,7 +622,7 @@ class _Builder(DefaultVisitor):
         for a in e.args:
             ac = self._cell_for(a)
             if ac is not None:
-                self.cells.mark_escaping(ac)
+                self.cells.mark_shared_out(ac)
 
     # -- constraint-generating hooks ---------------------------------------
     #
@@ -587,7 +668,7 @@ class _Builder(DefaultVisitor):
     def _visit_return(self, stmt: ReturnStmt, ctx):
         rhs = self._cell_for(stmt.expr)
         if rhs is not None:
-            self.cells.mark_escaping(rhs)
+            self.cells.mark_returned(rhs)
         super()._visit_return(stmt, ctx)
 
 
