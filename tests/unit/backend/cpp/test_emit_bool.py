@@ -101,7 +101,7 @@ class TestBooleanReduce:
                 return any(bs)
 
         out = self._compile(f, BoolType())
-        assert out.startswith('bool f(const std::vector<bool>& bs)')
+        assert out.startswith('bool f(const fpy::list<bool>& bs)')
         assert 'std::any_of(' in out
 
     def test_all_over_bool_list_arg(self):
@@ -111,7 +111,7 @@ class TestBooleanReduce:
                 return all(bs)
 
         out = self._compile(f, BoolType())
-        assert out.startswith('bool f(const std::vector<bool>& bs)')
+        assert out.startswith('bool f(const fpy::list<bool>& bs)')
         assert 'std::all_of(' in out
 
     def test_identity_predicate_is_a_bool_lambda(self):
@@ -125,19 +125,31 @@ class TestBooleanReduce:
         assert m, f'no identity predicate in:\n{out}'
         assert m.group(1) == m.group(2), 'predicate must return its parameter'
 
-    def test_operand_bound_before_iterating(self):
+    def test_prvalue_operand_is_bound_before_iterating(self):
         """``begin()``/``end()`` on a prvalue would name iterators into two
         different temporaries — an invalid range.  Same reason ``Sum`` binds."""
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            with fp.FP64:
+                return any(bs[1:])
+
+        out = self._compile(f, BoolType())
+        bound = re.search(r'auto&& (\w+) = fpy::make_list', out)
+        assert bound, out
+        t = bound.group(1)
+        assert f'std::any_of({t}->begin(), {t}->end()' in out
+
+    def test_named_operand_is_not_bound(self):
+        """A name is evaluated once already, so there is nothing to bind — and
+        a list is a handle, so there was never a copy to avoid either."""
         @fp.fpy
         def f(bs: list[bool]) -> bool:
             with fp.FP64:
                 return any(bs)
 
         out = self._compile(f, BoolType())
-        bound = re.search(r'auto&& (\w+) = ', out)
-        assert bound, out
-        t = bound.group(1)
-        assert f'std::any_of({t}.begin(), {t}.end()' in out
+        assert 'std::any_of(bs->begin(), bs->end()' in out
+        assert 'auto&&' not in out
 
     def test_comprehension_operand_is_fused_away(self):
         """``ReduceFusion`` runs in the default (optimizing) pipeline, so the
@@ -149,13 +161,13 @@ class TestBooleanReduce:
                 return all([x < 0 for x in xs])
 
         out = self._compile(f, RealType(fp.FP64))
-        assert 'std::vector<bool>' not in out
+        assert 'fpy::list<bool>' not in out
         assert 'std::all_of(' not in out
         assert '&&' in out          # folded with `and` in the loop body
 
     def test_comprehension_operand_unfused_without_optimize(self):
         """With ``optimize=False`` the surface AST compiles verbatim: the
-        comprehension materializes a ``std::vector<bool>`` that
+        comprehension materializes a ``fpy::list<bool>`` that
         ``std::all_of`` then scans."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
@@ -163,6 +175,6 @@ class TestBooleanReduce:
                 return all([x < 0 for x in xs])
 
         out = self._compile(f, RealType(fp.FP64), optimize=False)
-        assert 'std::vector<bool>' in out
+        assert 'fpy::list<bool>' in out
         assert 'push_back(' in out
         assert 'std::all_of(' in out

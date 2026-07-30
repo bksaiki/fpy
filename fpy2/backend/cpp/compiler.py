@@ -226,6 +226,14 @@ class CppCompiler(Backend):
             raise CppCompileError(
                 f'storage selection failed for `{func.name}`: {e}'
             ) from e
+        except Exception as e:
+            # An internal invariant failure in `storage.py` (e.g. an `assert`
+            # in `_supremum`) would otherwise reach the caller as a bare
+            # AssertionError naming neither the function nor the backend.
+            raise CppCompileError(
+                f'storage selection failed for `{func.name}`: '
+                f'internal error: {e!r}'
+            ) from e
 
         # Call.fn → emitted name.  ``Specialize`` rewired each Call.fn at
         # the source so call.fn.ast.name is the target spec's emit name.

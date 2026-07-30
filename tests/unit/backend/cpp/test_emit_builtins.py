@@ -6,12 +6,12 @@ lists that lower to standard C++ idioms:
 
 - ``sum(xs)`` → ``std::accumulate`` with the result type inferred
   by format inference.
-- ``enumerate(xs)`` → a ``std::vector<std::tuple<I, T>>`` populated
+- ``enumerate(xs)`` → a ``fpy::list<std::tuple<I, T>>`` populated
   by an indexed for-loop.
-- ``zip(xs, ys, ...)`` → a ``std::vector<std::tuple<T1, T2, ...>>``
+- ``zip(xs, ys, ...)`` → a ``fpy::list<std::tuple<T1, T2, ...>>``
   populated similarly.
 
-The temporaries the emitter allocates use ``__cpp_tmpN`` names.
+The temporaries the emitter allocates use ``_tmpN`` names.
 """
 
 import fpy2 as fp
@@ -33,17 +33,18 @@ class TestSum:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        # The operand is bound to a reference (``auto&&``) so begin()/end()
-        # name the same object — required when the operand is a prvalue;
-        # ``accumulate`` then folds over that binding.
-        assert 'auto&& ' in out and '= xs;' in out
-        assert 'std::accumulate(' in out
-        assert '.begin(), ' in out
-        assert '.end(), static_cast<double>(0))' in out
+        # A named operand is read directly; only a prvalue needs binding so
+        # that begin()/end() name the same object (see
+        # ``test_prvalue_operand_is_bound_before_iterating`` in test_emit_bool).
+        assert 'auto&&' not in out
+        assert (
+            'std::accumulate(xs->begin(), xs->end(), '
+            'static_cast<double>(0))'
+        ) in out
 
 
 class TestEnumerate:
-    """``enumerate(xs)`` builds a ``std::vector<std::tuple<I, T>>``."""
+    """``enumerate(xs)`` builds a ``fpy::list<std::tuple<I, T>>``."""
 
     def test_enumerate_in_for_loop(self):
         @fp.fpy
@@ -62,11 +63,11 @@ class TestEnumerate:
             arg_types=[ListType(RealType(fp.FP64))],
         )
         # Result-vector type and per-element tuple shape.
-        assert 'std::vector<std::tuple<int64_t, double>>' in out
+        assert 'fpy::list<std::tuple<int64_t, double>>' in out
         # Loop populates the result with (size_t-cast index, source elt).
         assert (
-            'std::make_tuple(static_cast<int64_t>(__cpp_tmp3), '
-            '__cpp_tmp1[__cpp_tmp3]);'
+            'std::make_tuple(static_cast<int64_t>(_tmp2), '
+            '(*xs)[_tmp2]);'
         ) in out
         # Then the outer for-loop destructures into ``i``/``x``.
         assert 'int64_t i = std::get<0>' in out
@@ -74,7 +75,7 @@ class TestEnumerate:
 
 
 class TestZip:
-    """``zip(xs, ys, ...)`` lowers to a ``std::vector<std::tuple<...>>``
+    """``zip(xs, ys, ...)`` lowers to a ``fpy::list<std::tuple<...>>``
     by default when optimizations are disabled.  With the default
     ``optimize=True``, :class:`ZipElim` rewrites the pattern to a
     plain indexed loop instead — see :meth:`test_zip_optimized_skips_tuple_vector`.
@@ -96,14 +97,10 @@ class TestZip:
                 ListType(RealType(fp.FP64)),
             ],
         )
-        # Both iterables bound to temps.
-        assert 'auto&& __cpp_tmp1 = xs;' in out
-        assert 'auto&& __cpp_tmp2 = ys;' in out
-        # Per-element tuple draws from both temps.
-        assert (
-            'std::make_tuple(__cpp_tmp1[__cpp_tmp4], '
-            '__cpp_tmp2[__cpp_tmp4]);'
-        ) in out
+        # Both iterables are names, so neither needs a temp; the per-element
+        # tuple indexes them directly.
+        assert 'auto&&' not in out
+        assert 'std::make_tuple((*xs)[_tmp2], (*ys)[_tmp2]);' in out
         # Loop body destructures back to ``x``/``y``.
         assert 'double x = std::get<0>' in out
         assert 'double y = std::get<1>' in out
@@ -123,17 +120,17 @@ class TestZip:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))] * 3,
         )
-        assert 'std::vector<std::tuple<double, double, double>>' in out
-        # Three iterables bound, three subscript reads in make_tuple.
-        assert 'auto&& __cpp_tmp1 = xs;' in out
-        assert 'auto&& __cpp_tmp2 = ys;' in out
-        assert 'auto&& __cpp_tmp3 = zs;' in out
+        assert 'fpy::list<std::tuple<double, double, double>>' in out
+        # Three named iterables, so three direct subscript reads in make_tuple.
+        assert 'auto&&' not in out
+        assert 'std::make_tuple((*xs)[' in out
+        assert '(*ys)[' in out and '(*zs)[' in out
 
     def test_zip_optimized_skips_tuple_vector(self):
         """Default ``CppCompiler()`` has ``optimize=True``, so
         :class:`ZipElim` runs first and ``for ... in zip(...)``
         lowers to a plain indexed loop — no intermediate
-        ``std::vector<std::tuple<...>>``."""
+        ``fpy::list<std::tuple<...>>``."""
 
         @fp.fpy
         def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:

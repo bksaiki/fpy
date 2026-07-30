@@ -119,5 +119,5 @@ class TestForRange:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        assert 'for (double x : xs) {' in out
+        assert 'for (double x : *xs) {' in out
         assert 'acc = (acc + x);' in out

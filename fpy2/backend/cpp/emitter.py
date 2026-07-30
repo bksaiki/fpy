@@ -37,11 +37,13 @@ from contextlib import contextmanager
 from fractions import Fraction
 
 from ...analysis import (
+    AssignDef,
     ContextScope,
     ContextScopeSite,
     ContextUseAnalysis,
     ContextUseSite,
     DefineUseAnalysis,
+    Definition,
     FormatAnalysis,
 )
 from ...analysis.format_infer import (
@@ -290,18 +292,114 @@ class CppEmitter(Visitor):
         # under an FP64-RNE function free of fenv noise.
         self._current_rm: RM | None = None
 
+    # ------------------------------------------------------------------
+    # List representation
+    #
+    # Purely syntactic: these take and return emitted C++ strings.  The point is
+    # that how a list is stored and accessed is spelled out here and nowhere
+    # else, so changing the representation is a change to this block plus
+    # ``fpy::list`` in ``.utils``.
+
+    @staticmethod
+    def _elt_of(ty: CppType) -> str:
+        """The element type of a list storage type."""
+        assert isinstance(ty, CppList), f'not a list storage type: {ty!r}'
+        return ty.elt.format()
+
+    @staticmethod
+    def _list_len(base: str) -> str:
+        """``len(xs)``."""
+        return f'{base}->size()'
+
+    @staticmethod
+    def _list_at(base: str, idx: str) -> str:
+        """``xs[i]``.  The cast belongs here because C++ ``operator[]`` takes an
+        unsigned index while FPy indices are signed."""
+        return f'(*{base})[static_cast<size_t>({idx})]'
+
+    @staticmethod
+    def _list_at_raw(base: str, idx: str) -> str:
+        """``xs[i]`` where *idx* is already a ``size_t`` — an emitter-internal
+        loop counter rather than an FPy index, so no cast is needed."""
+        return f'(*{base})[{idx}]'
+
+    def _bind_operand(self, expr: str) -> str:
+        """A name for *expr*, so it can be read more than once.
+
+        Already a name — evaluated once, no side effects — so nothing to bind.
+        Otherwise bind it to a temp; a list is a handle, so this costs nothing.
+        """
+        if expr.isidentifier():
+            return expr
+        tmp = self._fresh_temp()
+        self.writer.add_line(f'auto&& {tmp} = {expr};')
+        return tmp
+
+    def _list_range(self, base: str) -> str:
+        """The operand of a range-``for`` over a list.
+
+        A temporary handle must be bound to a name: range-``for`` extends the
+        lifetime of the range-init's own result, and ``*handle`` is a reference
+        to the pointee, so the handle would be freed before the first iteration.
+        """
+        return f'*{self._bind_operand(base)}'
+
+    @staticmethod
+    def _list_begin(base: str) -> str:
+        return f'{base}->begin()'
+
+    @staticmethod
+    def _list_end(base: str) -> str:
+        return f'{base}->end()'
+
+    @staticmethod
+    def _list_push(base: str, elt: str) -> str:
+        """Append to a list under construction."""
+        return f'{base}->push_back({elt})'
+
+    @classmethod
+    def _list_new_sized(cls, ty: CppType, n: str) -> str:
+        """A new list of *n* default-initialised elements."""
+        return f'fpy::make_list<{cls._elt_of(ty)}>({n})'
+
+    @classmethod
+    def _list_empty(cls, ty: CppType) -> str:
+        """A new empty list.  Never emit a bare declaration for a list: an
+        uninitialised ``fpy::list`` is a *null* handle, unlike an empty
+        ``std::vector``."""
+        return cls._list_new_sized(ty, '0')
+
+    @classmethod
+    def _list_new_filled(cls, ty: CppType, n: str, fill: str) -> str:
+        """A new list of *n* copies of *fill*."""
+        return f'fpy::make_list<{cls._elt_of(ty)}>({n}, {fill})'
+
+    @classmethod
+    def _list_new_init(cls, ty: CppType, parts: list[str]) -> str:
+        """A new list of the given elements."""
+        elt = cls._elt_of(ty)
+        return f'fpy::make_list<{elt}>({{{", ".join(parts)}}})'
+
+    @classmethod
+    def _list_new_range(cls, ty: CppType, first: str, last: str) -> str:
+        """A new list copying the half-open iterator range."""
+        return f'fpy::make_list<{cls._elt_of(ty)}>({first}, {last})'
+
     def _fresh_temp(self) -> str:
         """Allocate a fresh emitter-only temporary identifier.
 
         Used by visitors that need to emit setup statements alongside
         an expression result — comprehensions, slices, tuple-binding
         destructure sources, ``enumerate``, ``zip``, etc.  The
-        ``__cpp_tmp`` prefix keeps these distinct from any identifier
-        the source program could introduce (FPy doesn't allow leading
-        underscores in user-visible names).
+        The ``_tmp`` prefix keeps these distinct from any identifier the
+        source program could introduce (FPy doesn't allow leading underscores
+        in user-visible names).  A single leading underscore is deliberate: an
+        identifier containing ``__`` is reserved to the implementation at every
+        scope, and ``__cpp_`` in particular is the standard's feature-test-macro
+        prefix.
         """
         self._tmp_counter += 1
-        return f'__cpp_tmp{self._tmp_counter}'
+        return f'_tmp{self._tmp_counter}'
 
     # ------------------------------------------------------------------
     # Public entry
@@ -328,55 +426,87 @@ class CppEmitter(Visitor):
 
     @staticmethod
     def _is_aggregate(storage: CppType) -> bool:
-        """A ``std::vector`` / ``std::tuple`` — copying it is O(n), unlike
-        a scalar (where a copy is free and by-value is idiomatic)."""
+        """A list or a tuple — worth binding by reference rather than copying.
+
+        For a tuple because a copy is O(size); for a list because a copy of the
+        handle touches the refcount.  A scalar copy is free.
+        """
         return isinstance(storage, (CppList, CppTuple))
 
+    def _is_rebound(self, d: Definition) -> bool:
+        """Is the name *d* introduces ever bound to a different value?
+
+        ``xs[i] = e`` is not a rebind — it mutates the list the handle already
+        points at, and ``storage_infer`` keeps that def in the same class.  Only
+        an ``Assign`` to the same name is, and *d*'s own defining assignment does
+        not count: a local bound once by ``x = y`` is not rebound.
+        """
+        cls = self.storage.def_class[d]
+        return any(
+            m is not d
+            and isinstance(m, AssignDef)
+            and isinstance(m.site, Assign)
+            for m in self.storage.class_members[cls]
+        )
+
     def _arg_decl(self, arg: Argument, storage: CppType) -> str:
-        """Parameter declaration.  An aggregate parameter the body never
-        writes (its storage class has a single member — no reassignment,
-        no in-place mutation) is taken by ``const&`` to avoid copying it on
-        every call; everything else stays by value, faithful to FPy's
-        value semantics (a written parameter needs its own copy)."""
+        """Parameter declaration.
+
+        A list parameter is ``const fpy::list<T>&`` unless the body *rebinds*
+        the name.  ``const`` applies to the handle, not the elements — a callee
+        can still write ``xs[i] = e`` and the caller sees it, which is exactly
+        FPy's parameter semantics.  A reference also leaves the refcount
+        untouched, which measurement showed is the only case where the atomic
+        control block costs anything.
+
+        Rebinding is different: it must stay local to the callee, so such a
+        parameter takes its own copy of the handle.  A tuple follows the same
+        rule (copying one is O(size)); a scalar is always by value.
+        """
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
-        if self._is_aggregate(storage) and self.storage.is_single_def(d):
+        if self._is_aggregate(storage) and not self._is_rebound(d):
             return f'const {storage.format()}& {arg.name}'
         return f'{storage.format()} {arg.name}'
 
     def _foreach_decl(self, target_def, name: str) -> str:
-        """Loop-variable declaration for a range-for over a container.  A
-        non-scalar element bound read-only is taken by ``const&`` to avoid
-        copying every element; scalars and mutated elements stay by value.
-        ``target_def is None`` marks a discarded/anonymous element (always
-        read-only) — ``const auto&`` lets the element type deduce."""
+        """Loop-variable declaration for a range-for over a container.
+
+        Same rule as :meth:`_arg_decl`: an element that is never rebound binds
+        by ``const&``, which shares the element and skips a refcount bump per
+        iteration.  Writing ``row[i] = e`` through it still reaches the
+        container.  ``target_def is None`` marks a discarded element — always
+        read-only, and ``const auto&`` lets the type deduce.
+        """
         if target_def is None:
             return f'const auto& {name}'
         storage = self.storage.storage_of(target_def)
-        if self._is_aggregate(storage) and self.storage.is_single_def(target_def):
+        if self._is_aggregate(storage) and not self._is_rebound(target_def):
             return f'const {storage.format()}& {name}'
         return f'{storage.format()} {name}'
 
-    def _is_readonly_alias(self, stmt: Assign, target_def, target_storage: CppType) -> bool:
-        """Whether ``x = y`` can bind a ``const`` reference to ``y`` instead
-        of copying it.
+    def _is_readonly_alias(
+        self, stmt: Assign, target_def, target_storage: CppType,
+    ) -> bool:
+        """Whether ``x = y`` can bind a ``const`` reference instead of copying.
 
-        Safe iff the RHS is a bare variable, the value is an aggregate, and
-        *both* the target and the source are written exactly once (single
-        storage classes).  Then neither side can observe a mutation through
-        the other, so a reference is indistinguishable from a copy — minus
-        the O(n) copy.  (This is the local-variable analog of the const-ref
-        parameter and loop-variable bindings.)"""
+        A list is a handle now, so copying one is O(1) and *shares* the elements
+        — the correctness argument this used to need is gone, and what is left is
+        a small saving: a reference skips a refcount bump.  The condition is the
+        same as :meth:`_arg_decl`'s, for the same reason — a ``const`` reference
+        cannot be rebound.
+
+        Still worth it for a tuple, where a copy is O(size).
+        """
         if not isinstance(stmt.expr, Var):
             return False
         if not self._is_aggregate(target_storage):
             return False
         if target_def not in self.storage.declare_at_assign:
             return False
-        if not self.storage.is_single_def(target_def):
+        if self._is_rebound(target_def):
             return False
-        src_def = self.def_use.find_def_from_use(stmt.expr)
-        return self.storage.is_single_def(src_def)
+        return not self._is_rebound(self.def_use.find_def_from_use(stmt.expr))
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
         """Emit a single ``T name = rhs;`` (declare-on-assign) or
@@ -518,7 +648,14 @@ class CppEmitter(Visitor):
         # Zero-initialise via ``T name{};`` so reads-before-writes
         # are well-defined (FPy analyses ensure this can't happen,
         # but the initialiser also serves as a paper-trail).
-        self.writer.add_line(f'{storage.format()} {name}{{}};')
+        if isinstance(storage, CppList):
+            # a bare ``fpy::list`` is a *null* handle, not an empty list, so a
+            # hoisted list must be given one
+            self.writer.add_line(
+                f'{storage.format()} {name} = {self._list_empty(storage)};'
+            )
+        else:
+            self.writer.add_line(f'{storage.format()} {name}{{}};')
 
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
         """Pull the storage type for the function's return value from
@@ -638,7 +775,7 @@ class CppEmitter(Visitor):
                 ):
                     elt_str = self._explicit_cast(elt_str, elt_target)
             parts.append(elt_str)
-        return f'{wrapper_ty.format()}{{{", ".join(parts)}}}'
+        return self._list_new_init(wrapper_ty, parts)
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         rhs = self._visit_expr(stmt.expr, ctx)
@@ -1249,7 +1386,7 @@ class CppEmitter(Visitor):
                 # type stable across platforms where ``size_t``
                 # differs from ``int64_t``.
                 result_ty = self._storage_for_expr(e)
-                return f'static_cast<{result_ty.format()}>({arg}.size())'
+                return f'static_cast<{result_ty.format()}>({self._list_len(arg)})'
             case Sum():
                 # ``sum(xs)`` → ``std::accumulate(begin, end, T(0))``
                 # with ``T`` taken from format inference.  Bind the operand
@@ -1260,10 +1397,10 @@ class CppEmitter(Visitor):
                 # lifetime-extends a temporary and binds an lvalue without
                 # copying.
                 result_ty = self._storage_for_expr(e)
-                src = self._fresh_temp()
-                self.writer.add_line(f'auto&& {src} = {arg};')
+                src = self._bind_operand(arg)
                 return (
-                    f'std::accumulate({src}.begin(), {src}.end(), '
+                    f'std::accumulate({self._list_begin(src)}, '
+                    f'{self._list_end(src)}, '
                     f'static_cast<{result_ty.format()}>(0))'
                 )
             case AMin() | AMax():
@@ -1296,9 +1433,7 @@ class CppEmitter(Visitor):
         # Unconsumed tail: materialize the remaining elements as a new tuple,
         # binding the base to a temp so it is evaluated once across the gets.
         assert isinstance(acc.ty, CppTuple)
-        tmp = self._fresh_temp()
-        # base read only via the gets below -> reference, no copy
-        self.writer.add_line(f'auto&& {tmp} = {acc.s};')
+        tmp = self._bind_operand(acc.s)
         gets = ', '.join(
             f'std::get<{i}>({tmp})' for i in range(acc.off, len(acc.ty.elts))
         )
@@ -1335,7 +1470,7 @@ class CppEmitter(Visitor):
         return acc.s, acc.ty
 
     def _emit_enumerate(self, e: Enumerate, src_str: str) -> str:
-        """``enumerate(xs)`` builds a ``std::vector<std::tuple<I, T>>``
+        """``enumerate(xs)`` builds a ``fpy::list<std::tuple<I, T>>``
         where ``I`` is the index integer type and ``T`` is the source
         element type — both come from format inference on the
         Enumerate node itself.
@@ -1350,21 +1485,21 @@ class CppEmitter(Visitor):
             )
         idx_ty = result_ty.elt.elts[0]
 
-        src = self._fresh_temp()
-        # source read only (size + indexing) -> reference, no copy
-        self.writer.add_line(f'auto&& {src} = {src_str};')
+        src = self._bind_operand(src_str)
         result = self._fresh_temp()
         self.writer.add_line(
-            f'{result_ty.format()} {result}({src}.size());'
+            f'{result_ty.format()} {result} = '
+            f'{self._list_new_sized(result_ty, self._list_len(src))};'
         )
         i = self._fresh_temp()
         self.writer.add_line(
-            f'for (size_t {i} = 0; {i} < {src}.size(); ++{i}) {{'
+            f'for (size_t {i} = 0; {i} < {self._list_len(src)}; ++{i}) {{'
         )
         self.writer.indent()
         self.writer.add_line(
-            f'{result}[{i}] = std::make_tuple('
-            f'static_cast<{idx_ty.format()}>({i}), {src}[{i}]);'
+            f'{self._list_at_raw(result, i)} = std::make_tuple('
+            f'static_cast<{idx_ty.format()}>({i}), '
+            f'{self._list_at_raw(src, i)});'
         )
         self.writer.dedent()
         self.writer.add_line('}')
@@ -1437,10 +1572,12 @@ class CppEmitter(Visitor):
                     f'static_cast<size_t>({stop_cast} > 0 ? {stop_cast} : 0)'
                 )
                 self.writer.add_line(
-                    f'{result_ty.format()} {tmp}({size_expr});'
+                    f'{result_ty.format()} {tmp} = '
+                    f'{self._list_new_sized(result_ty, size_expr)};'
                 )
                 self.writer.add_line(
-                    f'std::iota({tmp}.begin(), {tmp}.end(), '
+                    f'std::iota({self._list_begin(tmp)}, '
+                    f'{self._list_end(tmp)}, '
                     f'static_cast<{int_ty}>(0));'
                 )
                 return tmp
@@ -1456,10 +1593,12 @@ class CppEmitter(Visitor):
                     f'? ({stop_cast} - {start_cast}) : 0)'
                 )
                 self.writer.add_line(
-                    f'{result_ty.format()} {tmp}({size_expr});'
+                    f'{result_ty.format()} {tmp} = '
+                    f'{self._list_new_sized(result_ty, size_expr)};'
                 )
                 self.writer.add_line(
-                    f'std::iota({tmp}.begin(), {tmp}.end(), {start_cast});'
+                    f'std::iota({self._list_begin(tmp)}, '
+                    f'{self._list_end(tmp)}, {start_cast});'
                 )
                 return tmp
             case Range3():
@@ -1474,13 +1613,16 @@ class CppEmitter(Visitor):
                 stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
                 step_cast = self._maybe_cast(step, step_ty, result_ty.elt)
                 ctr = self._fresh_temp()
-                self.writer.add_line(f'{result_ty.format()} {tmp};')
+                self.writer.add_line(
+                    f'{result_ty.format()} {tmp} = '
+                    f'{self._list_empty(result_ty)};'
+                )
                 self.writer.add_line(
                     f'for ({int_ty} {ctr} = {start_cast}; '
                     f'{ctr} < {stop_cast}; {ctr} += {step_cast}) {{'
                 )
                 self.writer.indent()
-                self.writer.add_line(f'{tmp}.push_back({ctr});')
+                self.writer.add_line(f'{self._list_push(tmp, ctr)};')
                 self.writer.dedent()
                 self.writer.add_line('}')
                 return tmp
@@ -1527,10 +1669,11 @@ class CppEmitter(Visitor):
                 f'(type `{xs_ty!r}`)',
                 at=e,
             )
-        xs = self._visit_expr(e.first, ctx)
-        access = xs + ''.join(['[0]'] * d)
+        access = self._visit_expr(e.first, ctx)
+        for _ in range(d):
+            access = self._list_at(access, '0')
         result_ty = self._storage_for_expr(e)
-        return f'static_cast<{result_ty.format()}>({access}.size())'
+        return f'static_cast<{result_ty.format()}>({self._list_len(access)})'
 
     # ------------------------------------------------------------------
     # Stubs for AST nodes not yet handled — classification ops
@@ -1750,7 +1893,7 @@ class CppEmitter(Visitor):
             # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``
             # (see :data:`CPP_HELPERS`).  ±0 ordering is delegated to the
             # underlying ``std::fmin`` / ``std::fmax``.
-            fn = '__fpy_min' if isinstance(e, Min) else '__fpy_max'
+            fn = 'fpy::min' if isinstance(e, Min) else 'fpy::max'
         else:
             fn = 'std::min' if isinstance(e, Min) else 'std::max'
         result = casted[0]
@@ -1773,11 +1916,10 @@ class CppEmitter(Visitor):
         fn = 'std::any_of' if isinstance(e, AnyOf) else 'std::all_of'
         # Bind first, as ``Sum`` does: on a prvalue operand ``begin()`` and
         # ``end()`` would name iterators into different temporaries.
-        src = self._fresh_temp()
-        self.writer.add_line(f'auto&& {src} = {arg_str};')
+        src = self._bind_operand(arg_str)
         pred = self._fresh_temp()
         return (
-            f'{fn}({src}.begin(), {src}.end(), '
+            f'{fn}({self._list_begin(src)}, {self._list_end(src)}, '
             f'[](bool {pred}) {{ return {pred}; }})'
         )
 
@@ -1812,22 +1954,22 @@ class CppEmitter(Visitor):
         if result_ty.is_float():
             # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``;
             # see :meth:`_emit_min_max` and :data:`CPP_HELPERS`.
-            fn = '__fpy_min' if isinstance(e, AMin) else '__fpy_max'
+            fn = 'fpy::min' if isinstance(e, AMin) else 'fpy::max'
         else:
             fn = 'std::min' if isinstance(e, AMin) else 'std::max'
 
-        src = self._fresh_temp()
-        # source read only (indexing + size) -> reference, no copy
-        self.writer.add_line(f'auto&& {src} = {arg_str};')
+        src = self._bind_operand(arg_str)
         acc = self._fresh_temp()
         init = self._maybe_cast(f'{src}[0]', elt_ty, result_ty, at=e)
         self.writer.add_line(f'{result_ty.format()} {acc} = {init};')
         i = self._fresh_temp()
         self.writer.add_line(
-            f'for (size_t {i} = 1; {i} < {src}.size(); ++{i}) {{'
+            f'for (size_t {i} = 1; {i} < {self._list_len(src)}; ++{i}) {{'
         )
         self.writer.indent()
-        elt = self._maybe_cast(f'{src}[{i}]', elt_ty, result_ty, at=e)
+        elt = self._maybe_cast(
+            self._list_at_raw(src, i), elt_ty, result_ty, at=e,
+        )
         self.writer.add_line(f'{acc} = {fn}({acc}, {elt});')
         self.writer.dedent()
         self.writer.add_line('}')
@@ -1837,7 +1979,7 @@ class CppEmitter(Visitor):
         """``empty(d1, ..., dN)`` builds an ``N``-dimensional zero-
         initialised vector.  The result's storage shape comes from
         format inference; we read the dimension sizes off the call
-        site and emit nested ``std::vector<T>(d, ...)`` constructors
+        site and emit nested ``fpy::make_list<T>(d, ...)`` calls
         right-to-left so the innermost element type bubbles out.
 
         ``empty()`` with zero args returns ``T()`` — a scalar, which
@@ -1874,12 +2016,12 @@ class CppEmitter(Visitor):
         # ``ty`` is now the scalar / tuple leaf.
         inner = f'{ty.format()}{{}}'
         for layer, d in zip(reversed(peeled), reversed(dim_strs)):
-            inner = f'{layer.format()}({d}, {inner})'
+            inner = self._list_new_filled(layer, d, inner)
         return inner
 
     def _emit_zip(self, e: Zip, ctx) -> str:
         """``zip(xs1, …, xsN)`` builds a
-        ``std::vector<std::tuple<T1, …, TN>>`` whose length matches the
+        ``fpy::list<std::tuple<T1, …, TN>>`` whose length matches the
         first iterable.  Each iterable is bound to a temp once to
         evaluate side-effects in source order; the tuple type comes
         from format inference on the Zip node."""
@@ -1894,22 +2036,23 @@ class CppEmitter(Visitor):
         srcs: list[str] = []
         for arg in e.args:
             arg_str = self._visit_expr(arg, ctx)
-            s = self._fresh_temp()
-            # source read only (size + indexing) -> reference, no copy
-            self.writer.add_line(f'auto&& {s} = {arg_str};')
+            s = self._bind_operand(arg_str)
             srcs.append(s)
 
         result = self._fresh_temp()
         self.writer.add_line(
-            f'{result_ty.format()} {result}({srcs[0]}.size());'
+            f'{result_ty.format()} {result} = '
+            f'{self._list_new_sized(result_ty, self._list_len(srcs[0]))};'
         )
         i = self._fresh_temp()
         self.writer.add_line(
-            f'for (size_t {i} = 0; {i} < {srcs[0]}.size(); ++{i}) {{'
+            f'for (size_t {i} = 0; {i} < {self._list_len(srcs[0])}; ++{i}) {{'
         )
         self.writer.indent()
-        elts = ', '.join(f'{s}[{i}]' for s in srcs)
-        self.writer.add_line(f'{result}[{i}] = std::make_tuple({elts});')
+        elts = ', '.join(self._list_at_raw(s, i) for s in srcs)
+        self.writer.add_line(
+            f'{self._list_at_raw(result, i)} = std::make_tuple({elts});'
+        )
         self.writer.dedent()
         self.writer.add_line('}')
         return result
@@ -2003,16 +2146,15 @@ class CppEmitter(Visitor):
         return f'std::make_tuple({elts})'
 
     def _visit_list_expr(self, e: ListExpr, ctx) -> str:
-        # ``[a, b, c]`` → ``std::vector<T>{a, b, c}`` where ``T`` comes
+        # ``[a, b, c]`` → ``fpy::make_list<T>({a, b, c})`` where ``T`` comes
         # from format inference on the list expression.
-        elts = ', '.join(self._visit_expr(elt, ctx) for elt in e.elts)
-        result_ty = self._storage_for_expr(e)
-        return f'{result_ty.format()}{{{elts}}}'
+        parts = [self._visit_expr(elt, ctx) for elt in e.elts]
+        return self._list_new_init(self._storage_for_expr(e), parts)
 
     def _visit_list_comp(self, e: ListComp, ctx) -> str:
         # ``[elt for x1 in iter1 [for x2 in iter2 ...]]``
         #
-        # Emitted as a temporary ``std::vector<T> tmp;`` followed by
+        # Emitted as a temporary ``fpy::list<T> tmp;`` followed by
         # nested for-loops that ``push_back`` the element expression
         # into ``tmp``.  Returns the temp's name as the comprehension's
         # value.  The temp shape mirrors the cpp/ backend; future
@@ -2020,13 +2162,16 @@ class CppEmitter(Visitor):
         # the temp + copy.
         result_ty = self._storage_for_expr(e)
         tmp = self._fresh_temp()
-        self.writer.add_line(f'{result_ty.format()} {tmp};')
+        self.writer.add_line(
+                    f'{result_ty.format()} {tmp} = '
+                    f'{self._list_empty(result_ty)};'
+                )
 
         for target, iterable in zip(e.targets, e.iterables):
             self._open_comp_loop(target, iterable, e, ctx)
 
         elt = self._visit_expr(e.elt, ctx)
-        self.writer.add_line(f'{tmp}.push_back({elt});')
+        self.writer.add_line(f'{self._list_push(tmp, elt)};')
 
         for _ in e.targets:
             self.writer.dedent()
@@ -2100,7 +2245,7 @@ class CppEmitter(Visitor):
                 tmp = self._fresh_temp()
                 iter_str = self._visit_expr(iterable, ctx)
                 # element read-only (only destructured) -> bind by const&
-                self.writer.add_line(f'for (const auto& {tmp} : {iter_str}) {{')
+                self.writer.add_line(f'for (const auto& {tmp} : {self._list_range(iter_str)}) {{')
                 self.writer.indent()
                 self._destructure(target, tmp, comp_site)
                 return
@@ -2135,7 +2280,7 @@ class CppEmitter(Visitor):
             case _:
                 iter_str = self._visit_expr(iterable, ctx)
                 decl = self._foreach_decl(loop_def, target_name)
-                self.writer.add_line(f'for ({decl} : {iter_str}) {{')
+                self.writer.add_line(f'for ({decl} : {self._list_range(iter_str)}) {{')
         self.writer.indent()
 
     def _visit_list_ref(self, e: ListRef, ctx) -> str:
@@ -2146,13 +2291,13 @@ class CppEmitter(Visitor):
         # C++'s undefined-behaviour-on-out-of-range).
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
-        return f'{value}[static_cast<size_t>({index})]'
+        return self._list_at(value, index)
 
     def _visit_list_slice(self, e: ListSlice, ctx) -> str:
         # ``xs[start:stop]`` →
-        #   auto&& __cpp_tmpN = <xs>;
-        #   <result_ty>(__cpp_tmpN.begin() + start,
-        #               __cpp_tmpN.begin() + stop)
+        #   auto&& _tmpN = <xs>;
+        #   <result_ty>(_tmpN.begin() + start,
+        #               _tmpN.begin() + stop)
         #
         # Binding the value to a reference avoids re-evaluating ``<xs>``
         # when it isn't a simple lvalue (and matches the interpreter,
@@ -2162,24 +2307,24 @@ class CppEmitter(Visitor):
         # Indices are cast to ``size_t`` to match the iterator-arithmetic
         # API.  Strict bounds-checking against the interpreter's behaviour
         # is a TODO (slice-out-of-range, negative-index handling, etc.).
-        arr_tmp = self._fresh_temp()
-        arr_str = self._visit_expr(e.value, ctx)
-        self.writer.add_line(f'auto&& {arr_tmp} = {arr_str};')
+        arr_tmp = self._bind_operand(self._visit_expr(e.value, ctx))
 
         if e.start is None:
             start = '0'
         else:
             start = f'static_cast<size_t>({self._visit_expr(e.start, ctx)})'
         if e.stop is None:
-            stop = f'{arr_tmp}.size()'
+            stop = self._list_len(arr_tmp)
         else:
             stop = f'static_cast<size_t>({self._visit_expr(e.stop, ctx)})'
 
         result_ty = self._storage_for_expr(e)
         return (
-            f'{result_ty.format()}('
-            f'{arr_tmp}.begin() + {start}, '
-            f'{arr_tmp}.begin() + {stop})'
+            self._list_new_range(
+                result_ty,
+                f'{self._list_begin(arr_tmp)} + {start}',
+                f'{self._list_begin(arr_tmp)} + {stop}',
+            )
         )
     def _visit_if_expr(self, e, ctx) -> str:
         # ``cond ? ift : iff`` — both branches must share a C++ type,
@@ -2216,11 +2361,10 @@ class CppEmitter(Visitor):
         # sides — emit a direct subscript-store.
         target_def = self.def_use.find_def_from_site(stmt.var, stmt)
         target_name = self.storage.def_to_name[target_def]
-        idx_strs = [
-            f'static_cast<size_t>({self._visit_expr(idx, ctx)})'
-            for idx in stmt.indices
-        ]
-        chain = target_name + ''.join(f'[{i}]' for i in idx_strs)
+        idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
+        chain = target_name
+        for idx in idxs:
+            chain = self._list_at(chain, idx)
         rhs = self._visit_expr(stmt.expr, ctx)
         self.writer.add_line(f'{chain} = {rhs};')
 
@@ -2348,7 +2492,10 @@ class CppEmitter(Visitor):
             case _:
                 # discarded element -> bind by const& (no per-element copy)
                 iter_str = self._visit_expr(stmt.iterable, ctx)
-                header = f'for ({self._foreach_decl(None, target)} : {iter_str})'
+                header = (
+                    f'for ({self._foreach_decl(None, target)} : '
+                    f'{self._list_range(iter_str)})'
+                )
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)
@@ -2394,7 +2541,10 @@ class CppEmitter(Visitor):
                 # range-for over a container: bind the element (const& for
                 # read-only aggregates — no per-element copy).
                 iter_str = self._visit_expr(stmt.iterable, ctx)
-                header = f'for ({self._foreach_decl(target_def, target)} : {iter_str})'
+                header = (
+                    f'for ({self._foreach_decl(target_def, target)} : '
+                    f'{self._list_range(iter_str)})'
+                )
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)
@@ -2414,7 +2564,7 @@ class CppEmitter(Visitor):
         iter_str = self._visit_expr(stmt.iterable, ctx)
         tmp = self._fresh_temp()
         # element read-only (only destructured) -> bind by const&
-        self.writer.add_line(f'for (const auto& {tmp} : {iter_str}) {{')
+        self.writer.add_line(f'for (const auto& {tmp} : {self._list_range(iter_str)}) {{')
         self.writer.indent()
         assert isinstance(stmt.target, TupleBinding)
         self._destructure(stmt.target, tmp, stmt)

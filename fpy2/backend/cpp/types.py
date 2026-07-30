@@ -67,7 +67,11 @@ class CppScalar(enum.Enum):
 
 @default_repr
 class CppList:
-    """``std::vector<T>``."""
+    """``fpy::list<T>`` — a handle to a shared, mutable sequence.
+
+    FPy lists alias on assignment, which a bare ``std::vector`` (a value type)
+    cannot express; see the ``fpy::list`` comment in :mod:`.utils`.
+    """
     elt: 'CppType'
 
     def __init__(self, elt: 'CppType'):
@@ -80,7 +84,7 @@ class CppList:
         return hash((CppList, self.elt))
 
     def format(self) -> str:
-        return f'std::vector<{self.elt.format()}>'
+        return f'fpy::list<{self.elt.format()}>'
 
 
 @default_repr

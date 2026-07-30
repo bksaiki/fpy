@@ -33,18 +33,25 @@ class TestIndexedAssign:
             arg_types=[ListType(RealType(fp.FP64))],
         )
         assert (
-            'xs[static_cast<size_t>(i)] = '
-            '(xs[static_cast<size_t>(i)] * static_cast<double>(2));'
+            '(*xs)[static_cast<size_t>(i)] = '
+            '((*xs)[static_cast<size_t>(i)] * static_cast<double>(2));'
         ) in out
         # No copy temp inside the loop body.
-        assert '__cpp_tmp' not in out
+        assert '_tmp' not in out
 
-    def test_alias_rebind_is_still_in_place(self):
-        """``ys = xs; ys[0] = 99`` mutates ``ys`` in place after the
-        copy — ``ys[0] = 99`` is a direct subscript-store on ``ys``.
-        (C++ value semantics means the prior ``ys = xs;`` already
-        copies, so ``xs`` is unaffected — no second copy is
-        introduced for the mutation itself.)"""
+    def test_alias_then_mutate_is_observable_through_the_original(self):
+        """``ys = xs`` aliases in FPy, so ``ys[0] = 99`` is observable through
+        ``xs`` — and now through the generated C++ too.
+
+        ``ys`` binds a ``const`` reference to the *handle*: it cannot be
+        rebound, but the elements it points at are mutable, so the
+        subscript-store lands on the list ``xs`` also names.  The parameter
+        stays ``const&`` for the same reason — ``const`` applies to the handle,
+        not the elements.
+
+        Executed end to end by ``_regression_alias_then_mutate`` in the infra
+        corpus; this only pins the shape.
+        """
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
@@ -57,10 +64,12 @@ class TestIndexedAssign:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        assert 'std::vector<double> ys = xs;' in out
-        assert 'ys[static_cast<size_t>(0)] = 99;' in out
-        # No copy temp for the mutation.
-        assert '__cpp_tmp' not in out
+        assert 'const fpy::list<double>& xs' in out
+        assert 'const auto& ys = xs;' in out
+        assert '(*ys)[static_cast<size_t>(0)] = 99;' in out
+        # Nothing is copied: no temp, and no fresh list.
+        assert '_tmp' not in out
+        assert 'make_list' not in out
 
     def test_sequential_mutations_in_place(self):
         """Sequential mutations of a freshly-built list reuse the
@@ -76,12 +85,12 @@ class TestIndexedAssign:
 
         out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
         # Single ``xs`` declaration; both mutations are direct stores.
-        assert 'xs[static_cast<size_t>(0)] = 5;' in out
-        assert 'xs[static_cast<size_t>(1)] = 10;' in out
+        assert '(*xs)[static_cast<size_t>(0)] = 5;' in out
+        assert '(*xs)[static_cast<size_t>(1)] = 10;' in out
         # No suffixed copy variables.
         assert 'xs_1' not in out
         assert 'xs_2' not in out
-        assert '__cpp_tmp' not in out
+        assert '_tmp' not in out
 
     def test_indexed_assign_arg(self):
         """A function-arg list mutated directly compiles to a direct
@@ -102,8 +111,8 @@ class TestIndexedAssign:
                 RealType(fp.FP64),
             ],
         )
-        assert 'xs[static_cast<size_t>(i)] = v;' in out
-        assert 'return xs[static_cast<size_t>(0)];' in out
+        assert '(*xs)[static_cast<size_t>(i)] = v;' in out
+        assert 'return (*xs)[static_cast<size_t>(0)];' in out
         # No SSA-suffix variable, no copy temp.
         assert 'xs_1' not in out
-        assert '__cpp_tmp' not in out
+        assert '_tmp' not in out
