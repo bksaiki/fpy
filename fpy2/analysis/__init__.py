@@ -1,5 +1,6 @@
 """Program analyses for FPy programs"""
 
+from .alias import Alias, AliasAnalysis, AllocSite
 from .array_size import (
     ArraySize,
     ArraySizeAnalysis,
