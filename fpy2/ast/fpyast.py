@@ -332,6 +332,17 @@ class ListTypeAnn(TypeAnn):
             and self.length == other.length
         )
 
+def _opt_is_equiv(a: "Expr | None", b: "Expr | None") -> bool:
+    """Structural equivalence for an optional sub-expression.
+
+    Both absent is equivalent; one absent is not.  Never use ``==`` for this:
+    ``Expr`` defines no ``__eq__``, so it compares by identity and two
+    structurally-equal expressions would be reported different.
+    """
+    if a is None or b is None:
+        return a is None and b is None
+    return a.is_equiv(b)
+
 class Expr(Ast):
     """FPy AST: expression"""
     __slots__ = ()
@@ -1406,17 +1417,12 @@ class ListSlice(Expr):
     def is_equiv(self, other) -> bool:
         if not isinstance(other, ListSlice):
             return False
-
         if not self.value.is_equiv(other.value):
             return False
-
-        match self.start, other.start:
-            case Expr(), Expr():
-                return self.start.is_equiv(other.start)
-            case None, None:
-                return True
-            case _:
-                return False
+        return (
+            _opt_is_equiv(self.start, other.start)
+            and _opt_is_equiv(self.stop, other.stop)
+        )
 
 
 class IfExpr(Expr):
@@ -1687,7 +1693,11 @@ class AssertStmt(Stmt):
         return (
             isinstance(other, AssertStmt)
             and self.test.is_equiv(other.test)
-            and self.msg == other.msg
+            # ``==`` on an ``Expr`` is identity, so structurally-equal messages
+            # on distinct objects would compare unequal — which every
+            # ``DefaultTransformVisitor`` pass produces, since it rebuilds
+            # every node.
+            and _opt_is_equiv(self.msg, other.msg)
         )
 
 class EffectStmt(Stmt):

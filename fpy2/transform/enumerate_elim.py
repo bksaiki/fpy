@@ -78,7 +78,6 @@ target defeats the guard below.  See :mod:`fpy2.transform.iter_elim` for the
 machinery shared with :class:`fpy2.transform.ZipElim`.
 """
 
-import dataclasses
 from typing import Any
 
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
@@ -105,21 +104,21 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym, Id
 from .iter_elim import (
     Ctx,
+    Plan,
+    Slot,
     SubstNames,
     clone,
     comp_binding_is_pairs,
     destructure_subst,
     index_access,
     is_access_path,
+    plan_for_zip,
 )
-
-# An element binding slot: a name, a discard, or a nested destructure.
-_Slot = Id | TupleBinding
 
 
 def _split_target(
     target: Id | TupleBinding, iterable: Expr,
-) -> tuple[Id, _Slot] | None:
+) -> tuple[Id, Slot] | None:
     """Split ``for i, x in enumerate(src)``'s target into its index and
     element slots, or ``None`` if *target* / *iterable* aren't that pattern.
 
@@ -138,45 +137,18 @@ def _split_target(
     return idx, elt
 
 
-@dataclasses.dataclass
-class _Plan:
-    """Which sources to index, and which bindings read them.
-
-    ``args[0]`` also supplies the loop bound.  With ``tupled``, one slot reads
-    the whole element — rebuilt as ``(args[0][i], ..., args[n][i])``; without
-    it, each slot reads its own ``args[k][i]``.
-    """
-    args: list[Expr]
-    slots: list[_Slot]
-    tupled: bool
-
-    def __post_init__(self):
-        assert self.args, 'need a source for the bound'
-        assert len(self.slots) == (1 if self.tupled else len(self.args))
-
-
-def _plan(src: Expr, elt: _Slot) -> _Plan:
+def _plan(src: Expr, elt: Slot) -> Plan:
     """How to reach the element bound by *elt* when iterating ``enumerate(src)``.
 
-    A ``zip`` source decomposes into its own arguments, so neither
-    intermediate list is built.  Anything else is indexed whole.
+    A ``zip`` source decomposes into its own arguments, so neither intermediate
+    list is built.  Anything else — including a ``zip`` whose slot arity
+    disagrees — is indexed whole.
     """
-    # ``zip()`` has no source to take the bound from.
-    if isinstance(src, Zip) and src.args:
-        if (
-            isinstance(elt, TupleBinding)
-            and len(elt.elts) == len(src.args)
-            and all(
-                isinstance(e, (NamedId, UnderscoreId, TupleBinding))
-                for e in elt.elts
-            )
-        ):
-            return _Plan(list(src.args), list(elt.elts), tupled=False)
-        if isinstance(elt, (NamedId, UnderscoreId)):
-            return _Plan(list(src.args), [elt], tupled=True)
-        # A `TupleBinding` of mismatched arity falls through: see the module
-        # docstring on why the `zip` is left materialized.
-    return _Plan([src], [elt], tupled=False)
+    if isinstance(src, Zip):
+        plan = plan_for_zip(list(src.args), elt)
+        if plan is not None:
+            return plan
+    return Plan([src], [elt], tupled=False)
 
 
 class _EnumerateElimInstance(DefaultTransformVisitor):
@@ -223,7 +195,7 @@ class _EnumerateElimInstance(DefaultTransformVisitor):
     def _rewrite_for(
         self,
         stmt: ForStmt,
-        split: tuple[Id, _Slot],
+        split: tuple[Id, Slot],
         new_body: StmtBlock,
         ctx: Ctx,
     ) -> ForStmt:

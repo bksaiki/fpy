@@ -57,6 +57,54 @@ class Ctx:
         return Ctx(stmts=[])
 
 
+# A binding slot: a name, a discard, or a nested destructure.
+Slot = Id | TupleBinding
+
+
+@dataclasses.dataclass
+class Plan:
+    """Which sources to index, and which bindings read them.
+
+    ``args[0]`` also supplies the loop bound.  With ``tupled``, one slot reads
+    the whole element — rebuilt as ``(args[0][i], ..., args[n][i])``; without
+    it, each slot reads its own ``args[k][i]``.
+    """
+    args: list[Expr]
+    slots: list[Slot]
+    tupled: bool
+
+    def __post_init__(self):
+        assert self.args, 'need a source for the bound'
+        assert len(self.slots) == (1 if self.tupled else len(self.args))
+
+
+def plan_for_zip(args: list[Expr], slot: Slot) -> Plan | None:
+    """How *slot* reads one element of ``zip(*args)`` while indexing *args*
+    directly, or ``None`` if it cannot.
+
+    A slot destructuring the tuple positionally reads one source each; a slot
+    bound to the whole tuple has it rebuilt per iteration.  ``None`` means the
+    slot's arity disagrees with the ``zip``'s — an already ill-typed program,
+    where leaving the ``zip`` in place keeps its diagnostic rather than trading
+    it for an arity-mismatched destructure.
+    """
+    if not args:
+        # ``zip()`` has no source to take the bound from.
+        return None
+    if (
+        isinstance(slot, TupleBinding)
+        and len(slot.elts) == len(args)
+        and all(
+            isinstance(e, (NamedId, UnderscoreId, TupleBinding))
+            for e in slot.elts
+        )
+    ):
+        return Plan(list(args), list(slot.elts), tupled=False)
+    if isinstance(slot, (NamedId, UnderscoreId)):
+        return Plan(list(args), [slot], tupled=True)
+    return None
+
+
 def is_access_path(e: Expr) -> bool:
     """Whether *e* is safe to inline into a comprehension body, which
     re-evaluates it once per iteration.
