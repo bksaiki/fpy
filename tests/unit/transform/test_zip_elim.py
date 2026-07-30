@@ -22,7 +22,7 @@ import fpy2 as fp
 
 from fpy2.ast.fpyast import (
     Assign, ForStmt, Fst, Len, ListComp, ListRef, NamedId, Range1, Snd,
-    TupleBinding, Var, Zip,
+    TupleBinding, TupleExpr, Var, Zip,
 )
 from fpy2.transform import ZipElim
 
@@ -235,6 +235,113 @@ class TestListCompRewrite:
         before = list(f(xs, ys))
         after = list(_eval(new_ast, f, xs, ys))
         assert before == after
+
+
+class TestWholeTupleTarget:
+    """A target bound to the *whole* zipped tuple, rather than destructuring it.
+
+    Previously the guard required a ``TupleBinding`` of matching arity, so a
+    single-name target left the ``zip`` materialized.  The tuple is now rebuilt
+    per iteration from the indexed sources instead — one stack tuple rather than
+    an n-element list of them.
+    """
+
+    def test_for_loop_builds_tuple_per_iteration(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for p in zip(xs, ys):
+                    acc = acc + fp.fst(p) * fp.snd(p)
+                return acc
+
+        new_ast = ZipElim.apply(f.ast)
+        loop = _find_for(new_ast)
+        assert isinstance(loop.target, NamedId)
+        assert isinstance(loop.iterable, Range1)
+        # ``p = (_src0[_i], _src1[_i])`` — a tuple expression, not a ListRef.
+        first = loop.body.stmts[0]
+        assert isinstance(first, Assign)
+        assert isinstance(first.expr, TupleExpr)
+        assert len(first.expr.elts) == 2
+        assert all(isinstance(x, ListRef) for x in first.expr.elts)
+        assert not _contains(new_ast, Zip)
+        xs, ys = [1.0, 2.0, 3.0], [10.0, 20.0, 30.0]
+        assert _eval(new_ast, f, xs, ys) == f(xs, ys)
+
+    def test_list_comp_substitutes_a_tuple(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [fp.fst(p) * fp.snd(p) for p in zip(xs, ys)]
+
+        new_ast = ZipElim.apply(f.ast)
+        comp = _find_listcomp(new_ast)
+        assert isinstance(comp.targets[0], NamedId)
+        assert isinstance(comp.iterables[0], Range1)
+        assert _contains(new_ast, TupleExpr)
+        assert not _contains(new_ast, Zip)
+        xs, ys = [1.0, 2.0, 3.0], [10.0, 20.0, 30.0]
+        assert list(_eval(new_ast, f, xs, ys)) == list(f(xs, ys))
+
+    def test_discarded_target_builds_nothing(self):
+        """Nothing reads the element, so no tuple is constructed — previously
+        this materialized the whole ``zip`` list purely to ask its length."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for _ in zip(xs, ys):
+                    acc = acc + 1
+                return acc
+
+        new_ast = ZipElim.apply(f.ast)
+        loop = _find_for(new_ast)
+        # Nothing prepended: the body is exactly the original statement.
+        assert len(loop.body.stmts) == len(_find_for(f.ast).body.stmts)
+        assert not _contains(new_ast, (Zip, TupleExpr))
+        xs, ys = [1.0, 2.0, 3.0], [10.0, 20.0, 30.0]
+        assert _eval(new_ast, f, xs, ys) == f(xs, ys)
+
+    def test_single_argument_zip_still_yields_a_one_tuple(self):
+        """``zip(xs)`` produces 1-tuples, so the whole-tuple slot must build a
+        1-element ``TupleExpr`` — not the bare element.  Keying the decision on
+        the source count rather than the plan would get this wrong."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for p in zip(xs):
+                    acc = acc + 1
+                return acc
+
+        new_ast = ZipElim.apply(f.ast)
+        loop = _find_for(new_ast)
+        first = loop.body.stmts[0]
+        assert isinstance(first, Assign)
+        assert isinstance(first.expr, TupleExpr)
+        assert len(first.expr.elts) == 1
+        assert not _contains(new_ast, Zip)
+        assert _eval(new_ast, f, [1.0, 2.0]) == f([1.0, 2.0])
+
+    def test_mismatched_arity_keeps_the_zip(self):
+        """Shape-only: a 2-slot binding over a 3-argument ``zip`` is ill-typed,
+        so it cannot be evaluated.  Leaving the ``zip`` keeps its diagnostic
+        rather than trading it for an arity-mismatched destructure."""
+
+        @fp.fpy
+        def f(
+            xs: list[fp.Real], ys: list[fp.Real], zs: list[fp.Real]
+        ) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for a, b in zip(xs, ys, zs):  # type: ignore[misc]
+                    acc = acc + a * b
+                return acc
+
+        assert ZipElim.apply(f.ast).is_equiv(f.ast)
 
 
 class TestProperties:
