@@ -198,12 +198,11 @@ class TestListSlice:
                 return ys[0]
 
         out = _compile_list_arg(f)
-        # Value bound to a reference (no copy), then both endpoints emit as
-        # iterator arithmetic with size_t casts.
-        assert 'auto&& _tmp1 = xs;' in out
+        # A named operand needs no temp; both endpoints emit as iterator
+        # arithmetic with size_t casts.
         assert (
-            '_tmp1->begin() + static_cast<size_t>(1), '
-            '_tmp1->begin() + static_cast<size_t>(4)'
+            'xs->begin() + static_cast<size_t>(1), '
+            'xs->begin() + static_cast<size_t>(4)'
         ) in out
 
     def test_open_stop(self):
@@ -217,8 +216,8 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            '_tmp1->begin() + static_cast<size_t>(2), '
-            '_tmp1->begin() + _tmp1->size()'
+            'xs->begin() + static_cast<size_t>(2), '
+            'xs->begin() + xs->size()'
         ) in out
 
     def test_open_start(self):
@@ -232,8 +231,8 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            '_tmp1->begin() + 0, '
-            '_tmp1->begin() + static_cast<size_t>(3)'
+            'xs->begin() + 0, '
+            'xs->begin() + static_cast<size_t>(3)'
         ) in out
 
     def test_full_slice(self):
@@ -247,6 +246,6 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            '_tmp1->begin() + 0, '
-            '_tmp1->begin() + _tmp1->size()'
+            'xs->begin() + 0, '
+            'xs->begin() + xs->size()'
         ) in out

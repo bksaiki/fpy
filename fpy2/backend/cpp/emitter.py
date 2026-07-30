@@ -295,17 +295,15 @@ class CppEmitter(Visitor):
     # ------------------------------------------------------------------
     # List representation
     #
-    # Every emission that spells out how a list is stored or accessed goes
-    # through one of these.  They take (and return) already-emitted C++
-    # strings, so they are purely syntactic -- the point is that the mapping
-    # from "an FPy list" to C++ lives here and nowhere else, and changing the
-    # representation is a change to this block.
+    # Purely syntactic: these take and return emitted C++ strings.  The point is
+    # that how a list is stored and accessed is spelled out here and nowhere
+    # else, so changing the representation is a change to this block plus
+    # ``fpy::list`` in ``.utils``.
 
     @staticmethod
     def _elt_of(ty: CppType) -> str:
         """The element type of a list storage type."""
-        if not isinstance(ty, CppList):
-            raise CppEmitError(f'expected a list storage type, got {ty!r}')
+        assert isinstance(ty, CppList), f'not a list storage type: {ty!r}'
         return ty.elt.format()
 
     @staticmethod
@@ -325,20 +323,26 @@ class CppEmitter(Visitor):
         loop counter rather than an FPy index, so no cast is needed."""
         return f'(*{base})[{idx}]'
 
+    def _bind_operand(self, expr: str) -> str:
+        """A name for *expr*, so it can be read more than once.
+
+        Already a name — evaluated once, no side effects — so nothing to bind.
+        Otherwise bind it to a temp; a list is a handle, so this costs nothing.
+        """
+        if expr.isidentifier():
+            return expr
+        tmp = self._fresh_temp()
+        self.writer.add_line(f'auto&& {tmp} = {expr};')
+        return tmp
+
     def _list_range(self, base: str) -> str:
         """The operand of a range-``for`` over a list.
 
-        A temporary handle is bound to a name first.  Range-``for`` extends the
-        lifetime of the range-init's *own* result, and ``*handle`` is a
-        reference to the pointee — so the handle itself would be destroyed at
-        the end of the range-init, freeing the elements before the first
-        iteration.
+        A temporary handle must be bound to a name: range-``for`` extends the
+        lifetime of the range-init's own result, and ``*handle`` is a reference
+        to the pointee, so the handle would be freed before the first iteration.
         """
-        if base.isidentifier():
-            return f'*{base}'
-        tmp = self._fresh_temp()
-        self.writer.add_line(f'auto&& {tmp} = {base};')
-        return f'*{tmp}'
+        return f'*{self._bind_operand(base)}'
 
     @staticmethod
     def _list_begin(base: str) -> str:
@@ -368,8 +372,7 @@ class CppEmitter(Visitor):
     @classmethod
     def _list_new_filled(cls, ty: CppType, n: str, fill: str) -> str:
         """A new list of *n* copies of *fill*."""
-        elt = cls._elt_of(ty)
-        return f'std::make_shared<std::vector<{elt}> >({n}, {fill})'
+        return f'fpy::make_list<{cls._elt_of(ty)}>({n}, {fill})'
 
     @classmethod
     def _list_new_init(cls, ty: CppType, parts: list[str]) -> str:
@@ -380,8 +383,7 @@ class CppEmitter(Visitor):
     @classmethod
     def _list_new_range(cls, ty: CppType, first: str, last: str) -> str:
         """A new list copying the half-open iterator range."""
-        elt = cls._elt_of(ty)
-        return f'std::make_shared<std::vector<{elt}> >({first}, {last})'
+        return f'fpy::make_list<{cls._elt_of(ty)}>({first}, {last})'
 
     def _fresh_temp(self) -> str:
         """Allocate a fresh emitter-only temporary identifier.
@@ -1395,8 +1397,7 @@ class CppEmitter(Visitor):
                 # lifetime-extends a temporary and binds an lvalue without
                 # copying.
                 result_ty = self._storage_for_expr(e)
-                src = self._fresh_temp()
-                self.writer.add_line(f'auto&& {src} = {arg};')
+                src = self._bind_operand(arg)
                 return (
                     f'std::accumulate({self._list_begin(src)}, '
                     f'{self._list_end(src)}, '
@@ -1432,9 +1433,7 @@ class CppEmitter(Visitor):
         # Unconsumed tail: materialize the remaining elements as a new tuple,
         # binding the base to a temp so it is evaluated once across the gets.
         assert isinstance(acc.ty, CppTuple)
-        tmp = self._fresh_temp()
-        # base read only via the gets below -> reference, no copy
-        self.writer.add_line(f'auto&& {tmp} = {acc.s};')
+        tmp = self._bind_operand(acc.s)
         gets = ', '.join(
             f'std::get<{i}>({tmp})' for i in range(acc.off, len(acc.ty.elts))
         )
@@ -1471,7 +1470,7 @@ class CppEmitter(Visitor):
         return acc.s, acc.ty
 
     def _emit_enumerate(self, e: Enumerate, src_str: str) -> str:
-        """``enumerate(xs)`` builds a ``std::vector<std::tuple<I, T>>``
+        """``enumerate(xs)`` builds a ``fpy::list<std::tuple<I, T>>``
         where ``I`` is the index integer type and ``T`` is the source
         element type — both come from format inference on the
         Enumerate node itself.
@@ -1486,9 +1485,7 @@ class CppEmitter(Visitor):
             )
         idx_ty = result_ty.elt.elts[0]
 
-        src = self._fresh_temp()
-        # source read only (size + indexing) -> reference, no copy
-        self.writer.add_line(f'auto&& {src} = {src_str};')
+        src = self._bind_operand(src_str)
         result = self._fresh_temp()
         self.writer.add_line(
             f'{result_ty.format()} {result} = '
@@ -1919,8 +1916,7 @@ class CppEmitter(Visitor):
         fn = 'std::any_of' if isinstance(e, AnyOf) else 'std::all_of'
         # Bind first, as ``Sum`` does: on a prvalue operand ``begin()`` and
         # ``end()`` would name iterators into different temporaries.
-        src = self._fresh_temp()
-        self.writer.add_line(f'auto&& {src} = {arg_str};')
+        src = self._bind_operand(arg_str)
         pred = self._fresh_temp()
         return (
             f'{fn}({self._list_begin(src)}, {self._list_end(src)}, '
@@ -1962,9 +1958,7 @@ class CppEmitter(Visitor):
         else:
             fn = 'std::min' if isinstance(e, AMin) else 'std::max'
 
-        src = self._fresh_temp()
-        # source read only (indexing + size) -> reference, no copy
-        self.writer.add_line(f'auto&& {src} = {arg_str};')
+        src = self._bind_operand(arg_str)
         acc = self._fresh_temp()
         init = self._maybe_cast(f'{src}[0]', elt_ty, result_ty, at=e)
         self.writer.add_line(f'{result_ty.format()} {acc} = {init};')
@@ -1985,7 +1979,7 @@ class CppEmitter(Visitor):
         """``empty(d1, ..., dN)`` builds an ``N``-dimensional zero-
         initialised vector.  The result's storage shape comes from
         format inference; we read the dimension sizes off the call
-        site and emit nested ``std::vector<T>(d, ...)`` constructors
+        site and emit nested ``fpy::make_list<T>(d, ...)`` calls
         right-to-left so the innermost element type bubbles out.
 
         ``empty()`` with zero args returns ``T()`` — a scalar, which
@@ -2027,7 +2021,7 @@ class CppEmitter(Visitor):
 
     def _emit_zip(self, e: Zip, ctx) -> str:
         """``zip(xs1, …, xsN)`` builds a
-        ``std::vector<std::tuple<T1, …, TN>>`` whose length matches the
+        ``fpy::list<std::tuple<T1, …, TN>>`` whose length matches the
         first iterable.  Each iterable is bound to a temp once to
         evaluate side-effects in source order; the tuple type comes
         from format inference on the Zip node."""
@@ -2042,9 +2036,7 @@ class CppEmitter(Visitor):
         srcs: list[str] = []
         for arg in e.args:
             arg_str = self._visit_expr(arg, ctx)
-            s = self._fresh_temp()
-            # source read only (size + indexing) -> reference, no copy
-            self.writer.add_line(f'auto&& {s} = {arg_str};')
+            s = self._bind_operand(arg_str)
             srcs.append(s)
 
         result = self._fresh_temp()
@@ -2154,7 +2146,7 @@ class CppEmitter(Visitor):
         return f'std::make_tuple({elts})'
 
     def _visit_list_expr(self, e: ListExpr, ctx) -> str:
-        # ``[a, b, c]`` → ``std::vector<T>{a, b, c}`` where ``T`` comes
+        # ``[a, b, c]`` → ``fpy::make_list<T>({a, b, c})`` where ``T`` comes
         # from format inference on the list expression.
         parts = [self._visit_expr(elt, ctx) for elt in e.elts]
         return self._list_new_init(self._storage_for_expr(e), parts)
@@ -2162,7 +2154,7 @@ class CppEmitter(Visitor):
     def _visit_list_comp(self, e: ListComp, ctx) -> str:
         # ``[elt for x1 in iter1 [for x2 in iter2 ...]]``
         #
-        # Emitted as a temporary ``std::vector<T> tmp;`` followed by
+        # Emitted as a temporary ``fpy::list<T> tmp;`` followed by
         # nested for-loops that ``push_back`` the element expression
         # into ``tmp``.  Returns the temp's name as the comprehension's
         # value.  The temp shape mirrors the cpp/ backend; future
@@ -2315,9 +2307,7 @@ class CppEmitter(Visitor):
         # Indices are cast to ``size_t`` to match the iterator-arithmetic
         # API.  Strict bounds-checking against the interpreter's behaviour
         # is a TODO (slice-out-of-range, negative-index handling, etc.).
-        arr_tmp = self._fresh_temp()
-        arr_str = self._visit_expr(e.value, ctx)
-        self.writer.add_line(f'auto&& {arr_tmp} = {arr_str};')
+        arr_tmp = self._bind_operand(self._visit_expr(e.value, ctx))
 
         if e.start is None:
             start = '0'

@@ -125,19 +125,31 @@ class TestBooleanReduce:
         assert m, f'no identity predicate in:\n{out}'
         assert m.group(1) == m.group(2), 'predicate must return its parameter'
 
-    def test_operand_bound_before_iterating(self):
+    def test_prvalue_operand_is_bound_before_iterating(self):
         """``begin()``/``end()`` on a prvalue would name iterators into two
         different temporaries — an invalid range.  Same reason ``Sum`` binds."""
+        @fp.fpy
+        def f(bs: list[bool]) -> bool:
+            with fp.FP64:
+                return any(bs[1:])
+
+        out = self._compile(f, BoolType())
+        bound = re.search(r'auto&& (\w+) = fpy::make_list', out)
+        assert bound, out
+        t = bound.group(1)
+        assert f'std::any_of({t}->begin(), {t}->end()' in out
+
+    def test_named_operand_is_not_bound(self):
+        """A name is evaluated once already, so there is nothing to bind — and
+        a list is a handle, so there was never a copy to avoid either."""
         @fp.fpy
         def f(bs: list[bool]) -> bool:
             with fp.FP64:
                 return any(bs)
 
         out = self._compile(f, BoolType())
-        bound = re.search(r'auto&& (\w+) = ', out)
-        assert bound, out
-        t = bound.group(1)
-        assert f'std::any_of({t}->begin(), {t}->end()' in out
+        assert 'std::any_of(bs->begin(), bs->end()' in out
+        assert 'auto&&' not in out
 
     def test_comprehension_operand_is_fused_away(self):
         """``ReduceFusion`` runs in the default (optimizing) pipeline, so the

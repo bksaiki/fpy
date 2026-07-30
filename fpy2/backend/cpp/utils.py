@@ -19,17 +19,34 @@ Header coverage tracks what the emitter actually uses:
   ``std::isnan`` / etc. dispatched through the op table.
 - ``<cstddef>``: ``size_t`` for vector indexing.
 - ``<cstdint>``: fixed-width ``int8_t`` … ``uint64_t``.
+- ``<initializer_list>``: ``fpy::make_list`` from a braced list.
+- ``<limits>``: ``quiet_NaN`` in ``fpy::min`` / ``fpy::max``.
+- ``<memory>``: ``std::shared_ptr`` behind ``fpy::list``.
 - ``<numeric>``: ``std::accumulate`` for ``Sum``.
-- ``<vector>``: ``std::vector<T>`` for FPy lists.
+- ``<vector>``: the element storage inside ``fpy::list``.
 - ``<tuple>``: ``std::tuple`` / ``std::make_tuple`` / ``std::get`` for
   tuples and tuple-binding destructuring.
 
-Helpers is currently empty — cpp doesn't yet need any custom
-runtime support beyond what ``<cmath>`` / ``std::vector`` already
-give us.  The slot exists so future additions (e.g., an RAII
-``fenv`` guard to fix the function-level fesetround leak, or
-bounds-checked subscript helpers for strict slice semantics) have a
-home.
+``fpy::list`` is why the runtime exists.  FPy lists alias on assignment, so a
+``std::vector`` — a value — cannot represent one; the handle supplies the
+indirection.  Notes on the choices, kept here rather than in the emitted code:
+
+- A plain alias for ``std::shared_ptr``, not a wrapper class: the standard type
+  already has the required semantics, and a program embedding a generated kernel
+  can then handle a list without depending on anything of ours.
+- The control block is atomic, so copying a handle is an atomic increment.  The
+  emitter passes ``const list<T>&`` wherever a name is not rebound (see
+  ``_arg_decl``); a reference does no refcounting, which is what keeps the atomic
+  off the hot path.
+- Reference counting suffices with no collector: FPy has no recursive list type,
+  so no location can be stored within itself and no cycle is constructible.
+
+Only what the emitter emits is shipped.  A program embedding a generated kernel
+therefore builds a list with ``std::make_shared`` — or, to pass storage it
+already owns without copying, a ``shared_ptr`` with a no-op deleter.  That
+borrowed handle must not outlive the vector, which holds because a callee cannot
+retain one: FPy has no globals, and captures are materialized before
+compilation.  See ``_test_abi`` in ``tests/infra/backend/cpp.py``.
 """
 
 
@@ -79,26 +96,8 @@ inline T max(T a, T b) {
     return (a < b) ? b : a;
 }
 
-// An FPy list: a reference to a shared, mutable sequence.
-//
-// FPy list semantics are Python's -- assignment aliases, `xs[i] = e` mutates
-// the object, and passing / returning / projecting carries the identity along.
-// A bare `std::vector` is a *value*, so it cannot express that; the shared
-// pointer adds the level of indirection that can.  Copying a `list` shares the
-// elements; only `make_list` / `clone` allocate new ones.
-//
-// Deliberately a plain alias rather than a wrapper class: `std::shared_ptr`
-// already has exactly the required semantics, and a host program embedding a
-// generated kernel can handle one without depending on anything of ours.
-//
-// The control block is atomic, so a handle copy is an atomic increment.  The
-// emitter therefore passes handles by `const list<T>&` wherever the name is not
-// rebound -- a reference does no refcounting, and measurement showed that
-// passing by value in a hot call chain is the only case where the atomic cost is
-// visible at all.
-//
-// No cycle can be constructed -- FPy's type syntax cannot express a recursive
-// list type -- so reference counting never leaks and no collector is needed.
+// An FPy list: a handle to a shared, mutable sequence.  Copying a `list` shares
+// its elements; only `make_list` allocates.
 template <typename T>
 using list = std::shared_ptr<std::vector<T> >;
 
@@ -108,24 +107,18 @@ inline list<T> make_list(std::size_t n) {
 }
 
 template <typename T>
+inline list<T> make_list(std::size_t n, const T& x) {
+    return std::make_shared<std::vector<T> >(n, x);
+}
+
+template <typename T>
 inline list<T> make_list(std::initializer_list<T> il) {
     return std::make_shared<std::vector<T> >(il);
 }
 
-// An independent list with the same elements -- FPy's `xs[:]`, and the explicit
-// opt-out from sharing.
-template <typename T>
-inline list<T> clone(const list<T>& xs) {
-    return std::make_shared<std::vector<T> >(*xs);
-}
-
-// A non-owning handle onto storage someone else owns, for passing a caller's
-// vector into a kernel without copying it.  Sound only because the handle
-// cannot outlive the call: FPy has no globals and `FreeVarElim` materializes
-// captures, so a callee cannot retain it.
-template <typename T>
-inline list<T> borrow(std::vector<T>& v) {
-    return list<T>(&v, [](std::vector<T>*) {});
+template <typename T, typename It>
+inline list<T> make_list(It first, It last) {
+    return std::make_shared<std::vector<T> >(first, last);
 }
 
 }  // namespace fpy

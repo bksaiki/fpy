@@ -86,10 +86,6 @@ class CppList:
     def format(self) -> str:
         return f'fpy::list<{self.elt.format()}>'
 
-    def elt_format(self) -> str:
-        """The element type, for the ``fpy::`` constructors."""
-        return self.elt.format()
-
 
 @default_repr
 class CppTuple:

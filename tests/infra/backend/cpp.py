@@ -116,7 +116,6 @@ _run_ignore: list[str] = [
     # numerically equal, a signed-zero-from-reduction edge.  This function
     # exists to pin widening codegen (which compiles), not exact execution.
     '_regression_quant_dot_real_widen',
-
 ]
 
 
@@ -796,8 +795,8 @@ def _test_runtime(output_dir: Path, mode: str = 'compile') -> list[tuple[str, st
     The prelude is handwritten C++ that every emitted unit depends on, so it is
     worth checking directly rather than only through generated code.  Asserts
     the sharing contract ``fpy::list`` exists to provide: copying a list shares
-    its elements, an element of a nested list is the same object, and
-    ``clone()`` is the opt-out.
+    its elements, an element of a nested list is the same object, and copying
+    the range is the opt-out.
     """
     group = 'runtime'
     compiler = fp.CppCompiler()
@@ -839,8 +838,9 @@ int main() {
     (*ys)[0] = 99.0;
     assert((*xs)[0] == 99.0);
 
-    // ...and clone() is the opt-out
-    fpy::list<double> zs = fpy::clone(xs);
+    // ...and an explicit copy is the opt-out -- the idiom the emitter emits
+    // for `xs[:]`
+    fpy::list<double> zs = fpy::make_list<double>(xs->begin(), xs->end());
     (*zs)[0] = 7.0;
     assert((*xs)[0] == 99.0);
 
@@ -869,14 +869,6 @@ int main() {
     raw[0] = -1.0;
     assert((*xs)[0] == -1.0);
 
-    // borrow(): a non-owning handle writes through to the caller's vector
-    std::vector<double> owned(2, 1.0);
-    {
-        fpy::list<double> h = fpy::borrow(owned);
-        (*h)[0] = 8.0;
-    }
-    assert(owned[0] == 8.0);
-
     // refcounting: the last owner keeps the elements alive
     {
         fpy::list<double> tmp = xs;
@@ -904,18 +896,13 @@ def _abi_scale_in_place(xs: list[fp.Real], k: fp.Real) -> fp.Real:
 def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
     """Compile a kernel and call it the way an embedding program would.
 
-    The differential driver builds each argument as a fresh ``fpy::list``, which
-    mirrors the interpreter's Python-boundary isolation — so nothing in the
-    corpus exercises handing a kernel storage the *caller* owns.  That is the
-    case that matters for embedding a generated kernel in a larger system, so it
-    is pinned here:
-
-    - ``fpy::borrow`` passes a caller's ``std::vector`` with no copy, and the
-      kernel's writes land in it;
-    - ``fpy::make_list`` copies, and the caller's vector is untouched.
-
-    Both are one line at the call site, which is the whole claim: a host needs
-    no dependency on anything of ours beyond ``std::shared_ptr``.
+    The differential driver builds each argument as a fresh ``fpy::list``, so
+    nothing in the corpus covers handing a kernel storage the *caller* owns —
+    which is the case that matters for embedding.  ``fpy::borrow`` passes a
+    A ``shared_ptr`` with a no-op deleter passes a vector with no copy and the
+    kernel's writes land in it; constructing from the values copies instead, and
+    the caller's vector is untouched.  Both are plain standard C++ — the runtime
+    ships only what the emitter emits.
     """
     group = 'abi'
     compiler = fp.CppCompiler()
@@ -962,16 +949,21 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
 
 _ABI_MAIN: str = """\
 int main() {
-    // borrow: the kernel writes through to storage the caller owns
+    // A `shared_ptr` with a no-op deleter hands the kernel storage the caller
+    // owns: no copy, and the kernel's writes land in it.  Safe because the
+    // handle cannot outlive the call -- FPy has no globals, and captures are
+    // materialized before compilation, so a callee cannot retain one.
     {
         std::vector<double> owned;
         owned.push_back(1.0);
         owned.push_back(2.0);
-        double acc = _abi_scale_in_place(fpy::borrow(owned), 3.0);
+        fpy::list<double> borrowed(&owned, [](std::vector<double>*) {});
+        double acc = _abi_scale_in_place(borrowed, 3.0);
         assert(acc == 9.0);
         assert(owned[0] == 3.0 && owned[1] == 6.0);
     }
-    // make_list: copies, so the caller's vector is untouched
+    // Constructing a list from the values instead copies, so the caller's
+    // vector is untouched.
     {
         std::vector<double> owned;
         owned.push_back(1.0);
@@ -1116,10 +1108,11 @@ def _regression_any_over_comprehension(xs: list[fp.Real]) -> bool:
 # value type, so every place the backend copies a list is a place the generated
 # code can disagree with the interpreter.
 #
-# One function per *route* by which a list can reach a copy.  Those that
-# currently diverge are listed in `_run_ignore` with a pointer back here; the
-# rest are pins — they are correct today and must stay correct.  Each guards the
-# empty case because `_LIST_LENS` includes 0.
+# One function per *route* by which a list can reach a copy.  All of them are
+# executed and bit-compared against the interpreter on every `--mode run`; the
+# eleven that once diverged were the acceptance criterion for representing a
+# list as `fpy::list`.  Each guards the empty case because `_LIST_LENS`
+# includes 0.
 
 
 @fp.fpy

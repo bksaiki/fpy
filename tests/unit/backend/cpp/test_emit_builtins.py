@@ -33,13 +33,14 @@ class TestSum:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        # The operand is bound to a reference (``auto&&``) so begin()/end()
-        # name the same object — required when the operand is a prvalue;
-        # ``accumulate`` then folds over that binding.
-        assert 'auto&& ' in out and '= xs;' in out
-        assert 'std::accumulate(' in out
-        assert '->begin(), ' in out
-        assert '->end(), static_cast<double>(0))' in out
+        # A named operand is read directly; only a prvalue needs binding so
+        # that begin()/end() name the same object (see
+        # ``test_prvalue_operand_is_bound_before_iterating`` in test_emit_bool).
+        assert 'auto&&' not in out
+        assert (
+            'std::accumulate(xs->begin(), xs->end(), '
+            'static_cast<double>(0))'
+        ) in out
 
 
 class TestEnumerate:
@@ -65,8 +66,8 @@ class TestEnumerate:
         assert 'fpy::list<std::tuple<int64_t, double>>' in out
         # Loop populates the result with (size_t-cast index, source elt).
         assert (
-            'std::make_tuple(static_cast<int64_t>(_tmp3), '
-            '(*_tmp1)[_tmp3]);'
+            'std::make_tuple(static_cast<int64_t>(_tmp2), '
+            '(*xs)[_tmp2]);'
         ) in out
         # Then the outer for-loop destructures into ``i``/``x``.
         assert 'int64_t i = std::get<0>' in out
@@ -96,14 +97,10 @@ class TestZip:
                 ListType(RealType(fp.FP64)),
             ],
         )
-        # Both iterables bound to temps.
-        assert 'auto&& _tmp1 = xs;' in out
-        assert 'auto&& _tmp2 = ys;' in out
-        # Per-element tuple draws from both temps.
-        assert (
-            'std::make_tuple((*_tmp1)[_tmp4], '
-            '(*_tmp2)[_tmp4]);'
-        ) in out
+        # Both iterables are names, so neither needs a temp; the per-element
+        # tuple indexes them directly.
+        assert 'auto&&' not in out
+        assert 'std::make_tuple((*xs)[_tmp2], (*ys)[_tmp2]);' in out
         # Loop body destructures back to ``x``/``y``.
         assert 'double x = std::get<0>' in out
         assert 'double y = std::get<1>' in out
@@ -124,10 +121,10 @@ class TestZip:
             arg_types=[ListType(RealType(fp.FP64))] * 3,
         )
         assert 'fpy::list<std::tuple<double, double, double>>' in out
-        # Three iterables bound, three subscript reads in make_tuple.
-        assert 'auto&& _tmp1 = xs;' in out
-        assert 'auto&& _tmp2 = ys;' in out
-        assert 'auto&& _tmp3 = zs;' in out
+        # Three named iterables, so three direct subscript reads in make_tuple.
+        assert 'auto&&' not in out
+        assert 'std::make_tuple((*xs)[' in out
+        assert '(*ys)[' in out and '(*zs)[' in out
 
     def test_zip_optimized_skips_tuple_vector(self):
         """Default ``CppCompiler()`` has ``optimize=True``, so
