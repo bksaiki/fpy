@@ -290,6 +290,59 @@ class CppEmitter(Visitor):
         # under an FP64-RNE function free of fenv noise.
         self._current_rm: RM | None = None
 
+    # ------------------------------------------------------------------
+    # List representation
+    #
+    # Every emission that spells out how a list is stored or accessed goes
+    # through one of these.  They take (and return) already-emitted C++
+    # strings, so they are purely syntactic -- the point is that the mapping
+    # from "an FPy list" to C++ lives here and nowhere else, and changing the
+    # representation is a change to this block.
+
+    @staticmethod
+    def _list_len(base: str) -> str:
+        """``len(xs)``."""
+        return f'{base}.size()'
+
+    @staticmethod
+    def _list_at(base: str, idx: str) -> str:
+        """``xs[i]``.  The cast belongs here because C++ ``operator[]`` takes an
+        unsigned index while FPy indices are signed."""
+        return f'{base}[static_cast<size_t>({idx})]'
+
+    @staticmethod
+    def _list_begin(base: str) -> str:
+        return f'{base}.begin()'
+
+    @staticmethod
+    def _list_end(base: str) -> str:
+        return f'{base}.end()'
+
+    @staticmethod
+    def _list_push(base: str, elt: str) -> str:
+        """Append to a list under construction."""
+        return f'{base}.push_back({elt})'
+
+    @staticmethod
+    def _list_new_sized(ty: CppType, n: str) -> str:
+        """An initialiser for a list of *n* default-initialised elements."""
+        return f'{ty.format()}({n})'
+
+    @staticmethod
+    def _list_new_filled(ty: CppType, n: str, fill: str) -> str:
+        """An initialiser for a list of *n* copies of *fill*."""
+        return f'{ty.format()}({n}, {fill})'
+
+    @staticmethod
+    def _list_new_init(ty: CppType, parts: list[str]) -> str:
+        """An initialiser for a list of the given elements."""
+        return f'{ty.format()}{{{", ".join(parts)}}}'
+
+    @staticmethod
+    def _list_new_range(ty: CppType, first: str, last: str) -> str:
+        """An initialiser copying the half-open iterator range."""
+        return f'{ty.format()}({first}, {last})'
+
     def _fresh_temp(self) -> str:
         """Allocate a fresh emitter-only temporary identifier.
 
@@ -641,7 +694,7 @@ class CppEmitter(Visitor):
                 ):
                     elt_str = self._explicit_cast(elt_str, elt_target)
             parts.append(elt_str)
-        return f'{wrapper_ty.format()}{{{", ".join(parts)}}}'
+        return self._list_new_init(wrapper_ty, parts)
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         rhs = self._visit_expr(stmt.expr, ctx)
@@ -1252,7 +1305,7 @@ class CppEmitter(Visitor):
                 # type stable across platforms where ``size_t``
                 # differs from ``int64_t``.
                 result_ty = self._storage_for_expr(e)
-                return f'static_cast<{result_ty.format()}>({arg}.size())'
+                return f'static_cast<{result_ty.format()}>({self._list_len(arg)})'
             case Sum():
                 # ``sum(xs)`` → ``std::accumulate(begin, end, T(0))``
                 # with ``T`` taken from format inference.  Bind the operand
@@ -1266,7 +1319,8 @@ class CppEmitter(Visitor):
                 src = self._fresh_temp()
                 self.writer.add_line(f'auto&& {src} = {arg};')
                 return (
-                    f'std::accumulate({src}.begin(), {src}.end(), '
+                    f'std::accumulate({self._list_begin(src)}, '
+                    f'{self._list_end(src)}, '
                     f'static_cast<{result_ty.format()}>(0))'
                 )
             case AMin() | AMax():
@@ -1358,11 +1412,12 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'auto&& {src} = {src_str};')
         result = self._fresh_temp()
         self.writer.add_line(
-            f'{result_ty.format()} {result}({src}.size());'
+            f'{result_ty.format()} {result}'
+            f'({self._list_len(src)});'
         )
         i = self._fresh_temp()
         self.writer.add_line(
-            f'for (size_t {i} = 0; {i} < {src}.size(); ++{i}) {{'
+            f'for (size_t {i} = 0; {i} < {self._list_len(src)}; ++{i}) {{'
         )
         self.writer.indent()
         self.writer.add_line(
@@ -1443,7 +1498,8 @@ class CppEmitter(Visitor):
                     f'{result_ty.format()} {tmp}({size_expr});'
                 )
                 self.writer.add_line(
-                    f'std::iota({tmp}.begin(), {tmp}.end(), '
+                    f'std::iota({self._list_begin(tmp)}, '
+                    f'{self._list_end(tmp)}, '
                     f'static_cast<{int_ty}>(0));'
                 )
                 return tmp
@@ -1462,7 +1518,8 @@ class CppEmitter(Visitor):
                     f'{result_ty.format()} {tmp}({size_expr});'
                 )
                 self.writer.add_line(
-                    f'std::iota({tmp}.begin(), {tmp}.end(), {start_cast});'
+                    f'std::iota({self._list_begin(tmp)}, '
+                    f'{self._list_end(tmp)}, {start_cast});'
                 )
                 return tmp
             case Range3():
@@ -1483,7 +1540,7 @@ class CppEmitter(Visitor):
                     f'{ctr} < {stop_cast}; {ctr} += {step_cast}) {{'
                 )
                 self.writer.indent()
-                self.writer.add_line(f'{tmp}.push_back({ctr});')
+                self.writer.add_line(f'{self._list_push(tmp, ctr)};')
                 self.writer.dedent()
                 self.writer.add_line('}')
                 return tmp
@@ -1533,7 +1590,7 @@ class CppEmitter(Visitor):
         xs = self._visit_expr(e.first, ctx)
         access = xs + ''.join(['[0]'] * d)
         result_ty = self._storage_for_expr(e)
-        return f'static_cast<{result_ty.format()}>({access}.size())'
+        return f'static_cast<{result_ty.format()}>({self._list_len(access)})'
 
     # ------------------------------------------------------------------
     # Stubs for AST nodes not yet handled — classification ops
@@ -1780,7 +1837,7 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'auto&& {src} = {arg_str};')
         pred = self._fresh_temp()
         return (
-            f'{fn}({src}.begin(), {src}.end(), '
+            f'{fn}({self._list_begin(src)}, {self._list_end(src)}, '
             f'[](bool {pred}) {{ return {pred}; }})'
         )
 
@@ -1827,7 +1884,7 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'{result_ty.format()} {acc} = {init};')
         i = self._fresh_temp()
         self.writer.add_line(
-            f'for (size_t {i} = 1; {i} < {src}.size(); ++{i}) {{'
+            f'for (size_t {i} = 1; {i} < {self._list_len(src)}; ++{i}) {{'
         )
         self.writer.indent()
         elt = self._maybe_cast(f'{src}[{i}]', elt_ty, result_ty, at=e)
@@ -1877,7 +1934,7 @@ class CppEmitter(Visitor):
         # ``ty`` is now the scalar / tuple leaf.
         inner = f'{ty.format()}{{}}'
         for layer, d in zip(reversed(peeled), reversed(dim_strs)):
-            inner = f'{layer.format()}({d}, {inner})'
+            inner = self._list_new_filled(layer, d, inner)
         return inner
 
     def _emit_zip(self, e: Zip, ctx) -> str:
@@ -1904,11 +1961,12 @@ class CppEmitter(Visitor):
 
         result = self._fresh_temp()
         self.writer.add_line(
-            f'{result_ty.format()} {result}({srcs[0]}.size());'
+            f'{result_ty.format()} {result}'
+            f'({self._list_len(srcs[0])});'
         )
         i = self._fresh_temp()
         self.writer.add_line(
-            f'for (size_t {i} = 0; {i} < {srcs[0]}.size(); ++{i}) {{'
+            f'for (size_t {i} = 0; {i} < {self._list_len(srcs[0])}; ++{i}) {{'
         )
         self.writer.indent()
         elts = ', '.join(f'{s}[{i}]' for s in srcs)
@@ -2008,9 +2066,8 @@ class CppEmitter(Visitor):
     def _visit_list_expr(self, e: ListExpr, ctx) -> str:
         # ``[a, b, c]`` → ``std::vector<T>{a, b, c}`` where ``T`` comes
         # from format inference on the list expression.
-        elts = ', '.join(self._visit_expr(elt, ctx) for elt in e.elts)
-        result_ty = self._storage_for_expr(e)
-        return f'{result_ty.format()}{{{elts}}}'
+        parts = [self._visit_expr(elt, ctx) for elt in e.elts]
+        return self._list_new_init(self._storage_for_expr(e), parts)
 
     def _visit_list_comp(self, e: ListComp, ctx) -> str:
         # ``[elt for x1 in iter1 [for x2 in iter2 ...]]``
@@ -2029,7 +2086,7 @@ class CppEmitter(Visitor):
             self._open_comp_loop(target, iterable, e, ctx)
 
         elt = self._visit_expr(e.elt, ctx)
-        self.writer.add_line(f'{tmp}.push_back({elt});')
+        self.writer.add_line(f'{self._list_push(tmp, elt)};')
 
         for _ in e.targets:
             self.writer.dedent()
@@ -2149,7 +2206,7 @@ class CppEmitter(Visitor):
         # C++'s undefined-behaviour-on-out-of-range).
         value = self._visit_expr(e.value, ctx)
         index = self._visit_expr(e.index, ctx)
-        return f'{value}[static_cast<size_t>({index})]'
+        return self._list_at(value, index)
 
     def _visit_list_slice(self, e: ListSlice, ctx) -> str:
         # ``xs[start:stop]`` →
@@ -2174,15 +2231,17 @@ class CppEmitter(Visitor):
         else:
             start = f'static_cast<size_t>({self._visit_expr(e.start, ctx)})'
         if e.stop is None:
-            stop = f'{arr_tmp}.size()'
+            stop = self._list_len(arr_tmp)
         else:
             stop = f'static_cast<size_t>({self._visit_expr(e.stop, ctx)})'
 
         result_ty = self._storage_for_expr(e)
         return (
-            f'{result_ty.format()}('
-            f'{arr_tmp}.begin() + {start}, '
-            f'{arr_tmp}.begin() + {stop})'
+            self._list_new_range(
+                result_ty,
+                f'{self._list_begin(arr_tmp)} + {start}',
+                f'{self._list_begin(arr_tmp)} + {stop}',
+            )
         )
     def _visit_if_expr(self, e, ctx) -> str:
         # ``cond ? ift : iff`` — both branches must share a C++ type,
@@ -2219,11 +2278,10 @@ class CppEmitter(Visitor):
         # sides — emit a direct subscript-store.
         target_def = self.def_use.find_def_from_site(stmt.var, stmt)
         target_name = self.storage.def_to_name[target_def]
-        idx_strs = [
-            f'static_cast<size_t>({self._visit_expr(idx, ctx)})'
-            for idx in stmt.indices
-        ]
-        chain = target_name + ''.join(f'[{i}]' for i in idx_strs)
+        idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
+        chain = target_name
+        for idx in idxs:
+            chain = self._list_at(chain, idx)
         rhs = self._visit_expr(stmt.expr, ctx)
         self.writer.add_line(f'{chain} = {rhs};')
 
