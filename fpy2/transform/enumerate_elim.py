@@ -79,13 +79,28 @@ Taking the length from the first ``zip`` argument matches ``ZipElim`` and is
 faithful because FPy's ``zip`` is strict — it requires every input to have
 the same length.
 
-When the element slot does *not* destructure the ``zip`` positionally — it is
-a single name bound to the whole tuple, or a binding of mismatched arity —
-only the ``enumerate`` is eliminated (``_src0 = zip(xs, ys)``) and the
-``zip``'s list is still materialized.  That is no worse than before:
-``ZipElim`` does not fire on such a pattern either.  The comp path skips the
-fallback entirely, since a ``zip`` is not an access path and inlining it
-would make every iteration rebuild the whole list.
+An element slot bound to the *whole* tuple keeps the same treatment — the
+tuple is simply rebuilt per iteration from the indexed sources, which costs
+one stack tuple instead of an n-element list of them::
+
+   for i, p in enumerate(zip(xs, ys)):   ->   _src0 = xs
+       BODY                                   _src1 = ys
+                                              for i in range(len(_src0)):
+                                                  p = (_src0[i], _src1[i])
+                                                  BODY
+
+and when the slot is a discard there is nothing to rebuild at all: the
+sources stay bound for their side-effects and their length, and the loop body
+is untouched.  The comp path does the same by substituting
+``p -> (xs[i], ys[i])``.  Note this never inlines the ``zip`` itself — it
+inlines one access path per source plus a tuple construction, so it stays
+pure and O(1) per element.
+
+The one shape left materialized is an element slot that is a
+``TupleBinding`` of arity *different* from the ``zip``'s: only the
+``enumerate`` is eliminated and ``_src0 = zip(xs, ys)`` survives.  Such a
+program is already ill-typed, and keeping the ``zip`` keeps its diagnostic
+rather than trading it for an arity-mismatched destructure.
 
 Nested binding slots
 --------------------
@@ -108,6 +123,7 @@ See :mod:`fpy2.transform.iter_elim` for the machinery this shares with
 :class:`fpy2.transform.ZipElim`.
 """
 
+import dataclasses
 from typing import Any
 
 from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
@@ -125,6 +141,7 @@ from ..ast.fpyast import (
     Stmt,
     StmtBlock,
     TupleBinding,
+    TupleExpr,
     UnderscoreId,
     Var,
     Zip,
@@ -166,27 +183,57 @@ def _split_target(
     return idx, elt
 
 
-def _sources(src: Expr, elt: _Slot) -> tuple[list[Expr], list[_Slot]]:
-    """The per-slot sources to index, paired with the slots reading them.
+@dataclasses.dataclass
+class _Plan:
+    """How each iteration's element is reached from the indexed sources.
 
-    For ``enumerate(zip(a, b))`` whose element slot destructures the ``zip``
-    positionally, these are the ``zip``'s own arguments — so neither
-    intermediate list is built.  Otherwise it is the ``enumerate`` argument
-    itself, read by the element slot as a whole.
+    ``args`` are the expressions to index; ``args[0]`` also supplies the loop
+    bound.  ``slots`` are the bindings to assign.  Two shapes:
+
+    * ``tupled=False`` — one slot per source, read as ``args[k][i]``.  Covers
+      plain ``enumerate(xs)`` (one source, one slot) and an
+      ``enumerate(zip(...))`` whose element slot destructures the ``zip``
+      positionally (N of each).
+    * ``tupled=True`` — a single slot reading the whole element, rebuilt per
+      iteration as ``(args[0][i], ..., args[n][i])``.
     """
-    if (
-        isinstance(src, Zip)
-        # ``zip()`` has no source to take the length from.
-        and src.args
-        and isinstance(elt, TupleBinding)
-        and len(elt.elts) == len(src.args)
-        and all(
-            isinstance(e, (NamedId, UnderscoreId, TupleBinding))
-            for e in elt.elts
-        )
-    ):
-        return list(src.args), list(elt.elts)
-    return [src], [elt]
+    args: list[Expr]
+    slots: list[_Slot]
+    tupled: bool
+
+    def __post_init__(self):
+        assert self.args, 'a plan needs a source to take the bound from'
+        assert len(self.slots) == (1 if self.tupled else len(self.args))
+
+
+def _plan(src: Expr, elt: _Slot) -> _Plan:
+    """How to reach the element bound by *elt* when iterating ``enumerate(src)``.
+
+    For ``enumerate(zip(a, b))`` the sources are the ``zip``'s own arguments,
+    so neither intermediate list is built: an element slot that destructures
+    the ``zip`` positionally reads one source each, and a slot bound to the
+    whole tuple has it rebuilt per iteration.  Otherwise the source is the
+    ``enumerate`` argument itself, read by the element slot as a whole.
+    """
+    # ``zip()`` has no source to take the length from.
+    if isinstance(src, Zip) and src.args:
+        if (
+            isinstance(elt, TupleBinding)
+            and len(elt.elts) == len(src.args)
+            and all(
+                isinstance(e, (NamedId, UnderscoreId, TupleBinding))
+                for e in elt.elts
+            )
+        ):
+            return _Plan(list(src.args), list(elt.elts), tupled=False)
+        if isinstance(elt, (NamedId, UnderscoreId)):
+            # One name (or a discard) standing for the whole zipped tuple.
+            # A `TupleBinding` of *mismatched* arity deliberately falls
+            # through instead: that program is already ill-typed, and
+            # materializing the `zip` keeps its diagnostic rather than
+            # trading it for an arity-mismatched destructure.
+            return _Plan(list(src.args), [elt], tupled=True)
+    return _Plan([src], [elt], tupled=False)
 
 
 class _EnumerateElimInstance(DefaultTransformVisitor):
@@ -246,43 +293,56 @@ class _EnumerateElimInstance(DefaultTransformVisitor):
     ) -> ForStmt:
         assert isinstance(stmt.iterable, Enumerate)
         idx_slot, elt_slot = split
-        args, slots = _sources(stmt.iterable.arg, elt_slot)
+        plan = _plan(stmt.iterable.arg, elt_slot)
 
         # Bind each source to a fresh ``_srcK`` before the loop.  Even a
         # discarded slot's source gets a temp, so any side-effect in it fires
         # exactly once.
         src_names: list[NamedId] = []
-        for arg in args:
+        for arg in plan.args:
             src = self.gensym.fresh('_src')
             ctx.stmts.append(Assign(src, None, arg, None))
             src_names.append(src)
 
         idx = self._index_name(idx_slot)
-        # One per-iteration assignment per non-discarded slot.
         per_iter: list[Stmt] = []
-        for slot, src in zip(slots, src_names):
-            match slot:
-                case UnderscoreId():
-                    continue
-                case NamedId() | TupleBinding():
-                    # ``NamedId`` -> ``x = src[i]``; a nested ``TupleBinding``
-                    # -> ``(a, b) = src[i]``, whose destructuring the backends
-                    # already lower (a statement context needs no
-                    # ``fst``/``snd``).
-                    per_iter.append(
-                        Assign(
-                            slot, None,
-                            ListRef(Var(src, None), Var(idx, None), None),
-                            None,
+        if plan.tupled:
+            # One slot for the whole zipped element: rebuild it per iteration
+            # from the indexed sources, so the list of tuples is never built.
+            # A discard reads nothing — the sources stay bound only for their
+            # side-effects and their length.
+            slot = plan.slots[0]
+            if isinstance(slot, NamedId):
+                elts = [
+                    ListRef(Var(src, None), Var(idx, None), None)
+                    for src in src_names
+                ]
+                per_iter.append(Assign(slot, None, TupleExpr(elts, None), None))
+        else:
+            # One per-iteration assignment per non-discarded slot.
+            for slot, src in zip(plan.slots, src_names):
+                match slot:
+                    case UnderscoreId():
+                        continue
+                    case NamedId() | TupleBinding():
+                        # ``NamedId`` -> ``x = src[i]``; a nested
+                        # ``TupleBinding`` -> ``(a, b) = src[i]``, whose
+                        # destructuring the backends already lower (a statement
+                        # context needs no ``fst``/``snd``).
+                        per_iter.append(
+                            Assign(
+                                slot, None,
+                                ListRef(Var(src, None), Var(idx, None), None),
+                                None,
+                            )
                         )
-                    )
-                case _:
-                    # Ruled out by `_split_target` / `_sources`, but stay
-                    # defensive.
-                    raise RuntimeError(
-                        'unexpected binding element in enumerate target: '
-                        f'{slot!r}'
-                    )
+                    case _:
+                        # Ruled out by `_split_target` / `_plan`, but stay
+                        # defensive.
+                        raise RuntimeError(
+                            'unexpected binding element in enumerate target: '
+                            f'{slot!r}'
+                        )
 
         # Iterable: ``range(len(_src0))``.
         size_expr = Len(None, Var(src_names[0], None), None)
@@ -342,28 +402,42 @@ class _EnumerateElimInstance(DefaultTransformVisitor):
             return None
         assert isinstance(iterable, Enumerate)
         idx_slot, elt_slot = split
-        args, slots = _sources(iterable.arg, elt_slot)
+        plan = _plan(iterable.arg, elt_slot)
 
         # Every source is inlined into the comp body and re-evaluated per
         # iteration (no preamble to bind it once), so it must be pure and
-        # O(1).  This also rules out the ``enumerate(zip(...))`` fallback,
-        # whose single source is the ``zip`` itself.
-        if not all(is_access_path(a) for a in args):
-            return None
-        # ``fst``/``snd`` are pair-only, so a destructuring slot of arity != 2
-        # can't be reached by the comp path's accessor chains; leave the stage
-        # alone rather than emit an ill-typed ``snd``-of-non-pair.
-        if not all(comp_binding_is_pairs(slot) for slot in slots):
+        # O(1).  This is also what rules out a `zip` source that `_plan` left
+        # un-decomposed: inlining it would rebuild the whole list per element.
+        if not all(is_access_path(a) for a in plan.args):
             return None
 
         idx = self._index_name(idx_slot)
-        # Substitute each element slot with an accessor into its source:
-        # ``name -> arg[idx]`` for a plain slot, and the ``fst``/``snd`` chain
-        # for a nested tuple binding (whose element is itself a tuple).
-        for slot, arg in zip(slots, args):
-            destructure_subst(slot, index_access(arg, idx), subst)
+        if plan.tupled:
+            # The whole zipped element, rebuilt per iteration.  This is *not*
+            # inlining the `zip` — it is a tuple over one access path per
+            # source, so it stays pure and O(1).  `comp_binding_is_pairs` has
+            # nothing to say here: a whole-element slot is a name or a discard,
+            # reached without any `fst`/`snd` chain.
+            slot = plan.slots[0]
+            if isinstance(slot, NamedId):
+                subst[slot] = TupleExpr(
+                    [index_access(arg, idx)() for arg in plan.args], None,
+                )
+        else:
+            # ``fst``/``snd`` are pair-only, so a destructuring slot of
+            # arity != 2 can't be reached by the comp path's accessor chains;
+            # leave the stage alone rather than emit an ill-typed
+            # ``snd``-of-non-pair.
+            if not all(comp_binding_is_pairs(slot) for slot in plan.slots):
+                return None
+            # Substitute each element slot with an accessor into its source:
+            # ``name -> arg[idx]`` for a plain slot, and the ``fst``/``snd``
+            # chain for a nested tuple binding (whose element is itself a
+            # tuple).
+            for slot, arg in zip(plan.slots, plan.args):
+                destructure_subst(slot, index_access(arg, idx), subst)
         # New target/iterable: ``i in range(len(arg0))``.
-        len_expr = Len(None, clone(args[0]), None)
+        len_expr = Len(None, clone(plan.args[0]), None)
         return idx, Range1(None, len_expr, None)
 
 
