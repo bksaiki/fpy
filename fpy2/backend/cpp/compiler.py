@@ -22,6 +22,7 @@ from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...transform import (
+    EnumerateElim,
     FreeVarElim,
     ReduceFusion,
     RoundElim,
@@ -83,6 +84,15 @@ class CppCompiler(Backend):
             transformations to each :class:`FuncDef` before the rest
             of the pipeline runs:
 
+            - :class:`fpy2.transform.EnumerateElim` (pre-monomorphize):
+              skips materializing intermediate
+              ``std::vector<std::tuple<...>>``s for ``enumerate``
+              iterables.  Runs before ``ZipElim`` because it also
+              handles ``enumerate(zip(...))``, where both intermediate
+              vectors collapse into direct indexing at once — a
+              ``zip`` left on the right-hand side of the
+              ``_src0 = zip(...)`` binding an ``enumerate`` rewrite
+              would produce is out of ``ZipElim``'s reach.
             - :class:`fpy2.transform.ZipElim` (pre-monomorphize):
               skips materializing intermediate
               ``std::vector<std::tuple<...>>``s for ``zip`` iterables.
@@ -162,8 +172,8 @@ class CppCompiler(Backend):
         """Compile a :class:`~fpy2.Module` to a single C++ translation unit.
 
         Pipeline:
-          1. **Pre-spec optimizations** (``ZipElim``, ``ReduceFusion``) on
-             every function in the module via ``map``.
+          1. **Pre-spec optimizations** (``EnumerateElim``, ``ZipElim``,
+             ``ReduceFusion``) on every function in the module via ``map``.
           2. **Specialize** the module: each ``(FuncDef, ctx, arg_fmts)``
              becomes one entry; cross-function calls rewire to the
              appropriate spec.
@@ -179,8 +189,11 @@ class CppCompiler(Backend):
         module = module.map(lambda _m, fd: FreeVarElim.apply(fd))
 
         if self._optimize:
+            # before ZipElim: `enumerate(zip(...))` must be matched while the
+            # `zip` is still in an iterable position
+            module = module.map(lambda _m, fd: EnumerateElim.apply(fd))
             module = module.map(lambda _m, fd: ZipElim.apply(fd))
-            # after ZipElim, so a `zip` comp is already an indexed comp
+            # after both, so a `zip`/`enumerate` comp is already an indexed comp
             module = module.map(lambda _m, fd: ReduceFusion.apply(fd))
 
         # Translate ``Monomorphize``'s bare ``RuntimeError`` (e.g. arg-type

@@ -44,9 +44,14 @@ class TestSum:
 
 
 class TestEnumerate:
-    """``enumerate(xs)`` builds a ``fpy::list<std::tuple<I, T>>``."""
+    """``enumerate(xs)`` lowers to a ``fpy::list<std::tuple<I, T>>``
+    by default when optimizations are disabled.  With the default
+    ``optimize=True``, :class:`EnumerateElim` rewrites the pattern to a
+    plain indexed loop instead — see
+    :meth:`test_enumerate_optimized_skips_tuple_vector`.
+    """
 
-    def test_enumerate_in_for_loop(self):
+    def test_enumerate_in_for_loop_unoptimized(self):
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -58,7 +63,7 @@ class TestEnumerate:
                     acc = acc + x
                 return acc
 
-        out = CppCompiler().compile(
+        out = CppCompiler(optimize=False).compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
@@ -72,6 +77,90 @@ class TestEnumerate:
         # Then the outer for-loop destructures into ``i``/``x``.
         assert 'int64_t i = std::get<0>' in out
         assert 'double x = std::get<1>' in out
+
+    def test_enumerate_optimized_skips_tuple_vector(self):
+        """Default ``CppCompiler()`` has ``optimize=True``, so
+        :class:`EnumerateElim` runs first and ``for i, x in enumerate(...)``
+        lowers to a plain indexed loop — no intermediate
+        ``fpy::list<std::tuple<...>>``, and the user's ``i`` becomes the
+        loop counter rather than a destructured tuple element."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for i, x in enumerate(xs):
+                    acc = acc + x
+                return acc
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(RealType(fp.FP64))],
+        )
+        # No tuple machinery at all.
+        assert 'std::tuple' not in out
+        assert 'std::make_tuple' not in out
+        # The source is bound to a read-only ``_src`` alias (a const
+        # reference — no copy) and indexed directly.
+        assert 'const auto& _src' in out
+        # ``i`` is the loop counter itself.
+        assert 'for (int64_t i = 0;' in out
+
+    def test_enumerate_of_zip_optimized_skips_both_vectors(self):
+        """``enumerate(zip(...))`` materializes *two* vectors unoptimized —
+        the zip's tuples and the enumerate's (index, tuple) pairs.
+        :class:`EnumerateElim` collapses both into direct indexing of the
+        zip's own arguments, which is why it must run before
+        :class:`ZipElim` (which cannot reach a ``zip`` that an enumerate
+        rewrite has already moved into an assignment)."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for i, (a, b) in enumerate(zip(xs, ys)):
+                    acc = acc + a * b
+                return acc
+
+        arg_types = [ListType(RealType(fp.FP64))] * 2
+        unopt = CppCompiler(optimize=False).compile(
+            f, ctx=fp.FP64, arg_types=arg_types,
+        )
+        # Unoptimized: both intermediate vectors, the outer one nesting the
+        # inner tuple type.
+        assert 'fpy::list<std::tuple<double, double>>' in unopt
+        assert (
+            'fpy::list<std::tuple<int64_t, std::tuple<double, double>>>'
+        ) in unopt
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=arg_types)
+        # Optimized: neither vector, and both sources indexed directly.
+        assert 'std::tuple' not in out
+        assert 'std::make_tuple' not in out
+        assert 'for (int64_t i = 0;' in out
+        assert out.count('const auto& _src') == 2
+
+    def test_enumerate_of_zip_whole_tuple_slot(self):
+        """An element slot bound to the whole zipped tuple still avoids both
+        vectors: the tuple is rebuilt per iteration from the indexed
+        sources, so only a stack tuple is ever constructed."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0
+                for i, p in enumerate(zip(xs, ys)):
+                    acc = acc + fp.fst(p) * fp.snd(p)
+                return acc
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))] * 2,
+        )
+        # No list-of-tuples anywhere ...
+        assert 'fpy::list<std::tuple' not in out
+        # ... just the one per-iteration tuple.
+        assert out.count('std::make_tuple') == 1
+        assert 'for (int64_t i = 0;' in out
 
 
 class TestZip:
