@@ -137,7 +137,7 @@ class TestTupleDestructure:
             f, ctx=fp.FP64,
             arg_types=[ListType(TupleType(RealType(fp.FP64), RealType(fp.FP64)))],
         )
-        assert 'for (const auto& _tmp1 : xs) {' in out
+        assert 'for (const auto& _tmp1 : *xs) {' in out
         assert '        double a = std::get<0>(_tmp1);' in out
         assert '        double b = std::get<1>(_tmp1);' in out
         assert 'acc = (acc + (a * b));' in out
@@ -156,10 +156,10 @@ class TestTupleDestructure:
         )
         # Comprehension iterates a tuple-typed temp, destructures, then
         # ``push_back``s the element expression.
-        assert 'for (const auto& _tmp2 : xs) {' in out
+        assert 'for (const auto& _tmp2 : *xs) {' in out
         assert '        double a = std::get<0>(_tmp2);' in out
         assert '        double b = std::get<1>(_tmp2);' in out
-        assert '.push_back((a + b));' in out
+        assert '->push_back((a + b));' in out
 
 
 

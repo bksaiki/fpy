@@ -95,7 +95,7 @@ class TestStaticResolution:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        assert 'return xs[' in out
+        assert 'return (*xs)[' in out
 
 
 class TestDefaultRmIsImplicit:

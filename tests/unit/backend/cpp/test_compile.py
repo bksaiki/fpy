@@ -77,7 +77,7 @@ class TestCppCompilerStub:
                 RealType(fp.FP64), RealType(fp.FP64),
             ))],
         )
-        assert 'std::vector<std::tuple<double, double>>' in out
+        assert 'fpy::list<std::tuple<double, double>>' in out
 
     def test_real_accumulator_loop_terminates(self):
         """A loop that accumulates into a literal-initialized scalar

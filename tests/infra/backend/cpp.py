@@ -117,27 +117,6 @@ _run_ignore: list[str] = [
     # exists to pin widening codegen (which compiles), not exact execution.
     '_regression_quant_dot_real_widen',
 
-    # --- known list-aliasing divergences -----------------------------------
-    # FPy lists are shared; `std::vector` is a value type, so the backend
-    # copies where FPy would alias and these produce wrong answers rather
-    # than errors.  Each names a distinct route by which a list reaches a
-    # copy; see the "List-aliasing regressions" section below for what each
-    # one does.  They are compiled and `cc`-checked on every run — only the
-    # execution comparison is suppressed.
-    #
-    # This list is the acceptance criterion for fixing the representation:
-    # when it is empty, the backend and the interpreter agree about sharing.
-    '_regression_alias_then_mutate',
-    '_regression_callee_mutates_param',
-    '_regression_returned_list_aliases',
-    '_regression_projected_element',
-    '_regression_loop_variable',
-    '_regression_list_into_list',
-    '_regression_list_into_tuple',
-    '_regression_comprehension_of_rows',
-    '_regression_nested_slice',
-    '_regression_one_list_two_indices',
-    '_regression_enumerate_row_write',
 ]
 
 
@@ -203,14 +182,14 @@ def _emit_print(expr: str, value, lines: list[str], counter: list[int]) -> None:
     if isinstance(value, bool):
         lines.append(f'  std::printf("%d ", (int)({expr}));')
     elif isinstance(value, list):
-        lines.append(f'  std::printf("%zu ", (size_t)(({expr}).size()));')
+        lines.append(f'  std::printf("%zu ", (size_t)(({expr})->size()));')
         if value:  # homogeneous: one representative element shape
             i = counter[0]
             counter[0] += 1
             elt = f'__e{i}'
             # ``auto`` (by value), not ``auto&``: ``std::vector<bool>`` yields
             # proxy rvalues that a non-const reference cannot bind to.
-            lines.append(f'  for (auto {elt} : ({expr})) {{')
+            lines.append(f'  for (auto {elt} : *({expr})) {{')
             _emit_print(elt, value[0], lines, counter)
             lines.append('  }')
     elif isinstance(value, tuple):
@@ -398,7 +377,9 @@ def _cpp_type(ty) -> str:
         case fp.types.BoolType():
             return 'bool'
         case fp.types.ListType():
-            return f'std::vector<{_cpp_type(ty.elt)}>'
+            # must match `CppList.format()`: a list is a shared handle, not a
+            # bare vector
+            return f'fpy::list<{_cpp_type(ty.elt)}>'
         case fp.types.TupleType():
             return f'std::tuple<{", ".join(_cpp_type(elt) for elt in ty.elts)}>'
         case _:
@@ -424,7 +405,7 @@ def _cpp_literal(value, ty) -> str:
             return 'true' if value else 'false'
         case fp.types.ListType():
             elts = ', '.join(_cpp_literal(v, ty.elt) for v in value)
-            return f'{_cpp_type(ty)}{{{elts}}}'
+            return f'fpy::make_list<{_cpp_type(ty.elt)}>({{{elts}}})'
         case fp.types.TupleType():
             elts = ', '.join(_cpp_literal(v, e) for v, e in zip(value, ty.elts))
             return f'std::make_tuple({elts})'
