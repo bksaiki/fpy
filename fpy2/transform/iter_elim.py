@@ -1,31 +1,24 @@
 """
 Machinery shared by the *iterable-elimination* transforms —
 :class:`fpy2.transform.ZipElim` and :class:`fpy2.transform.EnumerateElim`.
-
 Both rewrite iteration over a *derived* sequence (``zip(...)``,
-``enumerate(...)``) into an indexed traversal of the underlying source
-vectors, so no backend has to materialize the intermediate list of tuples.
-They differ only in which pattern they match and which sources they index;
-everything below is common to both.
+``enumerate(...)``) into an indexed traversal of the underlying source vectors,
+differing only in which pattern they match and which sources they index.
 
-Two shapes of rewrite show up in each transform, and they have different
-capabilities:
+Each has two paths, with different capabilities:
 
-*Statement (for-loop) path.*  There is a statement slot before the loop, so
-each source can be bound to a fresh ``_srcK`` temporary — evaluated exactly
-once, and immune to the loop body rebinding the name it came from.  A binding
-slot of any arity lowers to a destructuring assignment ``(a, b) = _srcK[_i]``,
-which the backends already handle.  :class:`Ctx` is the accumulator that lets
-a statement visitor emit that preamble.
+*Statement (for-loop) path.*  A statement slot exists before the loop, so each
+source binds to a fresh ``_srcK`` temp — evaluated once, and immune to the body
+rebinding the name it came from.  A binding slot of any arity lowers to a
+destructuring assign the backends already handle.  :class:`Ctx` is what lets a
+statement visitor emit that preamble.
 
-*Expression (comprehension) path.*  A comprehension has no statement slot, so
-every source is instead *inlined* into the element expression and re-evaluated
-once per iteration.  That forces two restrictions: a source must be an
-:func:`is_access_path` (pure and O(1), so re-evaluation is neither observable
-nor asymptotically costly), and a binding slot that destructures is reached by
-an ``fst``/``snd`` chain — pair-only accessors, hence
+*Expression (comprehension) path.*  No statement slot, so sources are *inlined*
+into the element expression and re-evaluated per iteration.  Hence two
+restrictions: a source must be an :func:`is_access_path`, and a destructuring
+slot is reached by a pair-only ``fst``/``snd`` chain — see
 :func:`comp_binding_is_pairs`.  :func:`destructure_subst` builds the
-substitution and :class:`SubstNames` applies it scope-aware.
+substitution, :class:`SubstNames` applies it scope-aware.
 
 Anything failing a guard is left alone for the backend to materialize.
 """
@@ -53,11 +46,10 @@ from ..utils import Id
 
 @dataclasses.dataclass
 class Ctx:
-    """Block-walk accumulator.  When a statement visitor decides to rewrite a
-    statement, it appends the ``_srcK = ...`` preamble assignments to ``stmts``
-    and returns the rewritten statement; the block visitor then appends that,
-    producing one-to-many statement expansion without a custom statement
-    visitor."""
+    """Block-walk accumulator: a rewriting statement visitor appends its
+    ``_srcK = ...`` preamble here and returns the rewritten statement, which
+    the block visitor then appends — one-to-many statement expansion without a
+    custom statement visitor."""
     stmts: list[Stmt]
 
     @staticmethod
@@ -66,14 +58,13 @@ class Ctx:
 
 
 def is_access_path(e: Expr) -> bool:
-    """Whether *e* is safe to inline into a comprehension body (re-evaluated
-    once per iteration, since a comp has no preamble to bind it once).
+    """Whether *e* is safe to inline into a comprehension body, which
+    re-evaluates it once per iteration.
 
-    True for a ``Var`` or a pure, O(1) projection/index chain rooted at one
-    (``fst``/``snd``/``arg[i]``): no side effects, same value each time.
-    Excludes allocating/expensive args (slices, calls, a nested ``zip``) whose
-    re-evaluation would turn O(n) into O(n^2); those are left for the backend
-    to materialize.
+    True for a ``Var`` or a pure, O(1) projection/index chain rooted at one: no
+    side effects, same value each time.  Excludes allocating arguments (slices,
+    calls, a nested ``zip``) whose re-evaluation would turn O(n) into O(n^2);
+    those are left for the backend to materialize.
     """
     match e:
         case Var():
@@ -101,27 +92,16 @@ def index_access(arg: Expr, idx: NamedId) -> Callable[[], Expr]:
     return lambda: ListRef(clone(arg), Var(idx, None), None)
 
 
-def fst(arg: Expr) -> Expr:
-    """Build ``fst(arg)``."""
-    return Fst(None, arg, None)
-
-
-def snd(arg: Expr) -> Expr:
-    """Build ``snd(arg)``."""
-    return Snd(None, arg, None)
-
-
 def comp_binding_is_pairs(binding: Id | TupleBinding) -> bool:
-    """Whether the comprehension path can lower the binding *slot* *binding*.
+    """Whether the comprehension path can lower the binding slot *binding*.
 
     A slot's own value is reached by direct indexing (``srcK[_i]``), but a slot
-    that *destructures* has its leaves reached by an ``fst``/``snd`` chain (see
-    :func:`destructure_subst`), and those accessors are pair-only.  So a
-    ``TupleBinding`` slot — and every binding nested within it — must have
-    arity 2.  A plain name or an underscore needs no accessor at all.
+    that *destructures* has its leaves reached by a pair-only ``fst``/``snd``
+    chain (see :func:`destructure_subst`), so it — and everything nested within
+    it — must have arity 2.  A name or underscore needs no accessor at all.
 
-    The enclosing target is not a slot and is exempt: its elements *are* the
-    slots, each reached by its own ``srcK[_i]``.
+    The enclosing target is exempt: its elements *are* the slots, each reached
+    by its own ``srcK[_i]``.
     """
     match binding:
         case TupleBinding():
@@ -150,65 +130,55 @@ def destructure_subst(
         case UnderscoreId():
             pass
         case TupleBinding():
-            # The comp path only reaches a nested slot that is a pair
-            # (guaranteed by `comp_binding_is_pairs`); `fst`/`snd` are its two
-            # projections.
+            # Guaranteed a pair by `comp_binding_is_pairs`; `fst`/`snd` are its
+            # two projections.
             assert len(binding.elts) == 2, 'comp-path nested slot must be a pair'
             head, tail = binding.elts
-            destructure_subst(head, lambda: fst(make_access()), subst)
-            destructure_subst(tail, lambda: snd(make_access()), subst)
+            destructure_subst(head, lambda: Fst(None, make_access(), None), subst)
+            destructure_subst(tail, lambda: Snd(None, make_access(), None), subst)
         case _:
             raise RuntimeError(f'unexpected binding element: {binding!r}')
 
 
+def _binding_names(target: Id | TupleBinding) -> list[NamedId]:
+    """The named identifiers *target* binds; underscores contribute none."""
+    match target:
+        case NamedId():
+            return [target]
+        case TupleBinding():
+            out: list[NamedId] = []
+            for elt in target.elts:
+                out.extend(_binding_names(elt))
+            return out
+        case _:
+            return []
+
+
 class SubstNames(DefaultTransformVisitor):
-    """Replace every :class:`Var` reference to a name in *subst*
-    with the corresponding expression.  Scope-aware: comprehension
-    targets that shadow a substituted name disable the substitution
-    inside that comprehension's ``elt`` (the inner uses bind to the
-    shadowing iteration variable, not to the outer one).
+    """Replace every :class:`Var` reference to a name in *subst* with the
+    corresponding expression.  Scope-aware: a comprehension target that shadows
+    a substituted name disables the substitution inside that comprehension, so
+    the inner uses bind to the shadowing iteration variable.
     """
 
     def __init__(self, subst: dict[NamedId, Expr]):
         super().__init__()
-        # Active substitutions; `_visit_list_comp` shadows/restores entries
-        # around a nested comp that rebinds a substituted name.
         self._subst = dict(subst)
 
     def _visit_var(self, e: Var, ctx: Any):
-        # Substitution targets are ``NamedId``s, keyed by structural equality.
         replacement = self._subst.get(e.name)
         if replacement is not None:
             return replacement
         return super()._visit_var(e, ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx: Any):
-        # A target NamedId inside this comp shadows any outer
-        # substitution for the same name.  Save the shadowed entries,
-        # disable them, recurse, then restore.
+        # Disable any substitution this comp's targets shadow, then restore.
         shadowed: dict[NamedId, Expr] = {}
         for target in e.targets:
-            for name in binding_names(target):
+            for name in _binding_names(target):
                 if name in self._subst:
                     shadowed[name] = self._subst.pop(name)
         try:
             return super()._visit_list_comp(e, ctx)
         finally:
             self._subst.update(shadowed)
-
-
-def binding_names(target: Id | TupleBinding) -> list[NamedId]:
-    """Flatten a binding into the named identifiers it binds.  Underscore
-    slots and nested bindings contribute zero or more names."""
-    match target:
-        case NamedId():
-            return [target]
-        case UnderscoreId():
-            return []
-        case TupleBinding():
-            out: list[NamedId] = []
-            for elt in target.elts:
-                out.extend(binding_names(elt))
-            return out
-        case _:
-            return []

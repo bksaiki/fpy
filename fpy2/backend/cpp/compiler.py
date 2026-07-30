@@ -87,12 +87,10 @@ class CppCompiler(Backend):
             - :class:`fpy2.transform.EnumerateElim` (pre-monomorphize):
               skips materializing intermediate
               ``std::vector<std::tuple<...>>``s for ``enumerate``
-              iterables.  Runs before ``ZipElim`` because it also
-              handles ``enumerate(zip(...))``, where both intermediate
-              vectors collapse into direct indexing at once — a
-              ``zip`` left on the right-hand side of the
-              ``_src0 = zip(...)`` binding an ``enumerate`` rewrite
-              would produce is out of ``ZipElim``'s reach.
+              iterables.  Must run before ``ZipElim``: it also handles
+              ``enumerate(zip(...))``, collapsing both intermediate
+              vectors at once, which ``ZipElim`` could no longer do
+              once the ``zip`` sits in an assignment.
             - :class:`fpy2.transform.ZipElim` (pre-monomorphize):
               skips materializing intermediate
               ``std::vector<std::tuple<...>>``s for ``zip`` iterables.

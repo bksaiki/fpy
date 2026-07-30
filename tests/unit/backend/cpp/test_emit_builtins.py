@@ -44,11 +44,9 @@ class TestSum:
 
 
 class TestEnumerate:
-    """``enumerate(xs)`` lowers to a ``fpy::list<std::tuple<I, T>>``
-    by default when optimizations are disabled.  With the default
-    ``optimize=True``, :class:`EnumerateElim` rewrites the pattern to a
-    plain indexed loop instead — see
-    :meth:`test_enumerate_optimized_skips_tuple_vector`.
+    """``enumerate(xs)`` lowers to a ``fpy::list<std::tuple<I, T>>`` when
+    optimizations are disabled.  With the default ``optimize=True``,
+    :class:`EnumerateElim` rewrites it to a plain indexed loop instead.
     """
 
     def test_enumerate_in_for_loop_unoptimized(self):
@@ -79,11 +77,10 @@ class TestEnumerate:
         assert 'double x = std::get<1>' in out
 
     def test_enumerate_optimized_skips_tuple_vector(self):
-        """Default ``CppCompiler()`` has ``optimize=True``, so
-        :class:`EnumerateElim` runs first and ``for i, x in enumerate(...)``
-        lowers to a plain indexed loop — no intermediate
-        ``fpy::list<std::tuple<...>>``, and the user's ``i`` becomes the
-        loop counter rather than a destructured tuple element."""
+        """With the default ``optimize=True``, :class:`EnumerateElim` lowers
+        this to a plain indexed loop: no intermediate
+        ``fpy::list<std::tuple<...>>``, and ``i`` becomes the loop counter
+        rather than a destructured tuple element."""
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -107,12 +104,10 @@ class TestEnumerate:
         assert 'for (int64_t i = 0;' in out
 
     def test_enumerate_of_zip_optimized_skips_both_vectors(self):
-        """``enumerate(zip(...))`` materializes *two* vectors unoptimized —
-        the zip's tuples and the enumerate's (index, tuple) pairs.
-        :class:`EnumerateElim` collapses both into direct indexing of the
-        zip's own arguments, which is why it must run before
-        :class:`ZipElim` (which cannot reach a ``zip`` that an enumerate
-        rewrite has already moved into an assignment)."""
+        """Unoptimized this materializes *two* vectors — the zip's tuples and
+        the enumerate's (index, tuple) pairs.  :class:`EnumerateElim` collapses
+        both into direct indexing of the zip's own arguments, which is why it
+        must run before :class:`ZipElim`."""
 
         @fp.fpy
         def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:

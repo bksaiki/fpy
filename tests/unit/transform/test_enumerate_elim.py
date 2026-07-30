@@ -3,23 +3,15 @@ Unit tests for the :class:`fpy2.transform.EnumerateElim` transform.
 
 Structured like ``test_zip_elim.py``, and for the same reason: the rewrite
 mints fresh ``_srcK`` / ``_iK`` names via ``Gensym``, whose suffix counts
-depend on the existing in-scope names, so an ``is_equiv`` comparison against a
-hand-written golden AST is too brittle.  Each positive test instead asserts
+depend on the existing in-scope names, so comparing against a hand-written
+golden AST is too brittle.  Each positive test instead asserts both the
+**structural shape** of the output (did the rewrite fire, and is it
+well-formed?) and **semantic equivalence** via the FPy interpreter on sample
+inputs (which catches errors that pass the shape checks).  For the negative
+tests, ``is_equiv`` against the original AST is sufficient and stable.
 
-1. **Structural shape** of the rewritten AST (the iterable became a
-   ``range(len(...))``, the body opens with the expected per-iteration
-   assigns, no ``Enumerate`` / ``Zip`` survives) — "did the rewrite fire and
-   is it well-formed?"
-2. **Semantic equivalence** via the FPy interpreter on concrete sample
-   inputs — this catches subtle errors that pass the shape checks.
-
-For the negative tests (unchanged inputs), ``is_equiv`` against the original
-AST is sufficient and stable.
-
-One case is deliberately shape-only: an element slot whose arity disagrees
-with the ``zip``'s is already ill-typed, so it cannot be evaluated.  The
-transform is asserted to leave the ``zip`` in place rather than trade the
-type error for an arity-mismatched destructure.
+One case is shape-only of necessity: an element slot whose arity disagrees
+with the ``zip``'s is already ill-typed, so it cannot be evaluated.
 """
 
 import fpy2 as fp

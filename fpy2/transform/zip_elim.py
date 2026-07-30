@@ -27,7 +27,7 @@ Two patterns are recognized:
    assignment but their source is still bound to a temp so its
    side-effects fire exactly once.
 
-2. **List comp over zip** *with* ``Var`` arguments only.
+2. **List comp over zip**, when every argument is an access path.
 
    .. code-block:: python
 
@@ -41,12 +41,13 @@ Two patterns are recognized:
    comprehension or other construct that re-binds ``a`` or ``b``,
    the shadowed uses are not rewritten.
 
-   Restriction: every ``zip`` argument must be a :class:`Var`.  A
-   list comprehension is an expression and has no statement-level
-   "preamble" to host the ``_srcK = ...`` bindings, so we can't
-   safely cache a non-pure ``zip`` argument across iterations.
-   The transform leaves non-``Var``-argument zip comps alone; the
-   cpp backend's emit-time fast path still optimizes them.
+   Restriction: every ``zip`` argument must be an
+   :func:`fpy2.transform.iter_elim.is_access_path` — a ``Var`` or a pure,
+   O(1) index/projection chain over one.  A list comprehension is an
+   expression with no statement-level "preamble" to host the
+   ``_srcK = ...`` bindings, so arguments are inlined and re-evaluated
+   per iteration, which is only sound when they are pure and cheap.
+   Comps with any other argument are left alone.
 
 A binding slot may itself be a nested ``TupleBinding`` (e.g.
 ``for (a, b), c in zip(pairs, xs)``).  In the for-loop path the nested
@@ -60,7 +61,7 @@ is left unchanged for the backend to materialize (see
 :func:`fpy2.transform.iter_elim.comp_binding_is_pairs`).
 
 Patterns that don't match the guards (range iterables, mismatched
-arity, non-``Var`` list-comp zip args) are left unchanged.
+arity, non-access-path list-comp zip args) are left unchanged.
 
 Ordering note: run :class:`ZipElim` *before*
 :class:`fpy2.transform.ForUnpack`.  ``ForUnpack`` rewrites
