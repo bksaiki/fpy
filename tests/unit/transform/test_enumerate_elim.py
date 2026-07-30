@@ -350,7 +350,9 @@ class TestEnumerateOfZip:
         ) -> fp.Real:
             with fp.FP64:
                 acc = 0
-                for i, (a, b) in enumerate(zip(xs, ys, zs)):
+                # The arity disagreement is the point of the test, so the
+                # type error below is deliberate.
+                for i, (a, b) in enumerate(zip(xs, ys, zs)):  # type: ignore[misc]
                     acc = acc + a * b
                 return acc
 
