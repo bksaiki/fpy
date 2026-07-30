@@ -1320,9 +1320,14 @@ def _regression_one_list_two_indices(xs: list[fp.Real]) -> fp.Real:
 
 @fp.fpy
 def _regression_enumerate_row_write(xss: list[list[fp.Real]]) -> fp.Real:
-    """Route: `enumerate` lowers to a materialized `vector<tuple<I, T>>`, which
-    deep-copies every row.  Notable because that copy site is synthesized by
-    codegen and appears nowhere in the AST."""
+    """Route: a row aliased out of an `enumerate` and written through.  Both
+    lowerings must keep that write visible in `xss`, for different reasons, so
+    this pins the pair rather than one code path: `optimize=False` materializes
+    a `vector<tuple<I, T>>` and reaches the row through a copy synthesized by
+    codegen that appears nowhere in the AST, while `optimize=True` (the
+    default) rewrites to an ordinary `row = _src0[i]`.  A `fpy::list` is a
+    handle, so both copies share elements.
+    """
     with fp.FP64:
         if len(xss) == 0:
             return 0

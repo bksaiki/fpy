@@ -106,6 +106,10 @@ Transformations
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.transform.EnumerateElim
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.transform.ForBundling
    :members:
    :show-inheritance:
