@@ -3,7 +3,8 @@ Rewrite ``zip(...)`` iterables into indexed loops over the source
 vectors, removing the need for any backend to materialize an
 intermediate list of tuples.
 
-Two patterns are recognized:
+Two positions are recognized — a ``for``-loop iterable and a comprehension
+iterable:
 
 1. **For-loop over zip.**
 
@@ -49,6 +50,29 @@ Two patterns are recognized:
    per iteration, which is only sound when they are pure and cheap.
    Comps with any other argument are left alone.
 
+Whole-tuple targets
+-------------------
+
+A target need not destructure.  Bound to one name, the tuple is rebuilt per
+iteration from the indexed sources — one stack tuple rather than an n-element
+list of them::
+
+   for p in zip(xs, ys):   ->   _src0 = xs
+       BODY                     _src1 = ys
+                                for _i in range(len(_src0)):
+                                    p = (_src0[_i], _src1[_i])
+                                    BODY
+
+and the comp path substitutes ``p -> (xs[_i], ys[_i])``.  A discarded target
+(``for _ in zip(xs, ys)``) builds nothing at all — its sources stay bound only
+for their side-effects and their length.
+
+Note ``zip(xs)`` yields *1-tuples*, so the decision to build a tuple keys on
+the plan rather than on the number of sources.
+
+Nested binding slots
+--------------------
+
 A binding slot may itself be a nested ``TupleBinding`` (e.g.
 ``for (a, b), c in zip(pairs, xs)``).  In the for-loop path the nested
 slot lowers to a destructuring assignment ``(a, b) = _srcK[_i]`` (any arity;
@@ -60,8 +84,10 @@ binding nested within it) is a pair; a comp with a nested slot of arity != 2
 is left unchanged for the backend to materialize (see
 :func:`fpy2.transform.iter_elim.comp_binding_is_pairs`).
 
-Patterns that don't match the guards (range iterables, mismatched
-arity, non-access-path list-comp zip args) are left unchanged.
+Patterns that don't match the guards are left unchanged: a range iterable, a
+destructuring target whose arity disagrees with the ``zip``'s (already
+ill-typed, so keeping the ``zip`` keeps its diagnostic), and non-access-path
+arguments in the comp path.
 
 Ordering note: run :class:`ZipElim` *before*
 :class:`fpy2.transform.ForUnpack`.  ``ForUnpack`` rewrites
