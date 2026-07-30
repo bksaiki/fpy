@@ -270,8 +270,7 @@ class TestCapturedByNonLists:
 
     def test_list_in_a_tuple_is_shared(self):
         """A tuple is not list-typed, so the list inside it is only reachable if
-        tuple-valued expressions are walked.  Components are not modelled, so it
-        is conservatively shared."""
+        tuple-valued expressions are given cells too."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -280,5 +279,117 @@ class TestCapturedByNonLists:
                 ys[0] = 99
                 return xs[0]
 
-        _, owned, shared = _sites(f)
-        assert any(s.kind == 'param' for s in shared)
+        a, _, shared = _sites(f)
+        param = [s for s in a.sites if s.kind == 'param']
+        assert param and all(s in shared for s in param)
+        # a *local* tuple is not a way out of the function
+        assert not any(a.escapes(s) for s in param)
+
+
+class TestTupleFields:
+    """Tuple fields are kept apart: arity is static, so an index is known."""
+
+    def test_fields_do_not_alias_each_other(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, ys)
+                a = fp.fst(t)
+                b = fp.snd(t)
+                return a[0] + b[0]
+
+        from fpy2.analysis import DefineUse
+
+        du = DefineUse.analyze(f.ast)
+        al = Alias.analyze(f.ast, def_use=du)
+        d = {str(x.name): x for x in du.defs}
+        assert al.may_alias(d['a'], d['xs'])
+        assert al.may_alias(d['b'], d['ys'])
+        assert not al.may_alias(d['a'], d['ys']), 'fields must stay apart'
+
+    def test_destructuring_binds_field_by_field(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, ys)
+                a, b = t
+                return a[0] + b[0]
+
+        from fpy2.analysis import DefineUse
+
+        du = DefineUse.analyze(f.ast)
+        al = Alias.analyze(f.ast, def_use=du)
+        d = {str(x.name): x for x in du.defs}
+        assert al.may_alias(d['a'], d['xs'])
+        assert not al.may_alias(d['a'], d['ys'])
+
+
+class TestConservativeRoutes:
+    """Routes that reported a list uniquely owned until they were modelled.
+
+    Each of these silently authorised an unobservable-copy claim that a consumer
+    would have acted on, so they are pinned individually.
+    """
+
+    def test_escape_reaches_nested_elements(self):
+        """Returning a ``list[list[Real]]`` hands out its rows as well, so a copy
+        of a row would be observable through the caller."""
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> list[list[fp.Real]]:
+            with fp.FP64:
+                return xss
+
+        a, owned, _ = _sites(f)
+        assert not owned, 'every level of a returned nested list escapes'
+        assert all(a.escapes(s) for s in a.sites)
+
+    def test_conditional_expression_aliases_both_branches(self):
+        """``xs if c else ys`` *is* one of them, so writing through the result
+        writes through both."""
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real], c: bool) -> fp.Real:
+            with fp.FP64:
+                zs = xs if c else ys
+                zs[0] = 99
+                return xs[0]
+
+        a, owned, _ = _sites(f)
+        assert not [s for s in owned if s.kind == 'param']
+        assert f([1.0, 2.0], [7.0, 8.0], True, ctx=fp.FP64) == 99
+
+    def test_enumerate_element_is_a_tuple_over_the_rows(self):
+        """The loop variable of ``for i, row in enumerate(xss)`` is a row of xss,
+        one level up from where a blanket element merge would put it."""
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                other = xss[0]
+                acc = 0.0
+                for i, row in enumerate(xss):
+                    acc = acc + row[0]
+                return acc + other[0]
+
+        from fpy2.analysis import DefineUse
+
+        du = DefineUse.analyze(f.ast)
+        al = Alias.analyze(f.ast, def_use=du)
+        d = {str(x.name): x for x in du.defs}
+        assert al.may_alias(d['row'], d['other'])
+
+    def test_zip_takes_field_i_from_argument_i(self):
+        @fp.fpy
+        def f(xss: list[list[fp.Real]], yss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                a = xss[0]
+                acc = 0.0
+                for p, q in zip(xss, yss):
+                    acc = acc + p[0] + q[0]
+                return acc + a[0]
+
+        from fpy2.analysis import DefineUse
+
+        du = DefineUse.analyze(f.ast)
+        al = Alias.analyze(f.ast, def_use=du)
+        d = {str(x.name): x for x in du.defs}
+        assert al.may_alias(d['p'], d['a'])
+        assert not al.may_alias(d['q'], d['a'])
