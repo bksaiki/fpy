@@ -884,7 +884,7 @@ int main() {
 
 @fp.fpy
 def _abi_scale_in_place(xs: list[fp.Real], k: fp.Real) -> fp.Real:
-    """Kernel for the ABI test: mutates its argument and returns a value."""
+    """Mutates its argument and returns a value."""
     with fp.FP64:
         acc = 0.0
         for i in range(len(xs)):
@@ -893,35 +893,48 @@ def _abi_scale_in_place(xs: list[fp.Real], k: fp.Real) -> fp.Real:
         return acc
 
 
-def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
-    """Compile a kernel and call it the way an embedding program would.
+@fp.fpy
+def _abi_fresh_result(xs: list[fp.Real]) -> list[fp.Real]:
+    """Returns a new list, so its handle is the sole owner."""
+    with fp.FP64:
+        return [x * 2 for x in xs]
 
-    The differential driver builds each argument as a fresh ``fpy::list``, so
-    nothing in the corpus covers handing a kernel storage the *caller* owns —
-    which is the case that matters for embedding.  ``fpy::borrow`` passes a
-    A ``shared_ptr`` with a no-op deleter passes a vector with no copy and the
-    kernel's writes land in it; constructing from the values copies instead, and
-    the caller's vector is untouched.  Both are plain standard C++ — the runtime
-    ships only what the emitter emits.
+
+@fp.fpy
+def _abi_row_element_write(xss: list[list[fp.Real]]) -> fp.Real:
+    """Writes an *element* of a row: reaches the caller's buffer directly."""
+    with fp.FP64:
+        for row in xss:
+            row[0] = 99
+        return xss[0][0]
+
+
+def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
+    """Compile kernels and call them the way an embedding program would.
+
+    Nothing in the corpus covers handing a kernel storage the *caller* owns —
+    the differential driver builds fresh ``fpy::list`` arguments — so the
+    ``fpy::`` conversions are pinned here: ``borrow`` shares a flat vector,
+    ``copy_in`` does not, ``copy_out`` reads a result back, and a
+    ``vector<vector<T>>`` can only be copied, so a kernel's write must *not*
+    reach the caller.
     """
     group = 'abi'
     compiler = fp.CppCompiler()
     cpp_path = output_dir / 'abi_boundary.cpp'
     print(f'Compiling ABI boundary test to `{cpp_path}`')
-    arg_types = [
-        fp.types.ListType(fp.types.RealType(fp.FP64)),
-        fp.types.RealType(fp.FP64),
-    ]
+    lst = fp.types.ListType(fp.types.RealType(fp.FP64))
+    real = fp.types.RealType(fp.FP64)
+    nested = fp.types.ListType(lst)
+    module = fp.Module()
+    module.add(_abi_scale_in_place, ctx=fp.FP64, arg_types=[lst, real])
+    module.add(_abi_fresh_result, ctx=fp.FP64, arg_types=[lst])
+    module.add(_abi_row_element_write, ctx=fp.FP64, arg_types=[nested])
     with open(cpp_path, 'w') as f:
         print('\n'.join(compiler.headers()), file=f)
         print('#include <cstdio>', file=f)
         print(compiler.helpers(), file=f)
-        print(
-            compiler.compile(
-                _abi_scale_in_place, ctx=fp.FP64, arg_types=arg_types,
-            ),
-            file=f,
-        )
+        print(compiler.compile_module(module), file=f)
         print(_ABI_MAIN, file=f)
 
     if mode == 'emit':
@@ -949,29 +962,49 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
 
 _ABI_MAIN: str = """\
 int main() {
-    // A `shared_ptr` with a no-op deleter hands the kernel storage the caller
-    // owns: no copy, and the kernel's writes land in it.  Safe because the
-    // handle cannot outlive the call -- FPy has no globals, and captures are
-    // materialized before compilation, so a callee cannot retain one.
+    // borrow: shares the caller's buffer, so the kernel's writes land in it
     {
-        std::vector<double> owned;
-        owned.push_back(1.0);
-        owned.push_back(2.0);
-        fpy::list<double> borrowed(&owned, [](std::vector<double>*) {});
-        double acc = _abi_scale_in_place(borrowed, 3.0);
+        std::vector<double> v(2, 1.0);
+        v[1] = 2.0;
+        const double* buf = v.data();
+        double acc = _abi_scale_in_place(fpy::borrow(v), 3.0);
         assert(acc == 9.0);
-        assert(owned[0] == 3.0 && owned[1] == 6.0);
+        assert(v[0] == 3.0 && v[1] == 6.0);
+        assert(v.data() == buf);          // shared, not reallocated
     }
-    // Constructing a list from the values instead copies, so the caller's
-    // vector is untouched.
+    // copy_in: the caller's vector is untouched
     {
-        std::vector<double> owned;
-        owned.push_back(1.0);
-        owned.push_back(2.0);
-        double acc = _abi_scale_in_place(
-            fpy::make_list<double>({owned[0], owned[1]}), 3.0);
+        std::vector<double> v(2, 1.0);
+        v[1] = 2.0;
+        double acc = _abi_scale_in_place(fpy::copy_in(v), 3.0);
         assert(acc == 9.0);
-        assert(owned[0] == 1.0 && owned[1] == 2.0);
+        assert(v[0] == 1.0 && v[1] == 2.0);
+    }
+    // copy_out: read a result back into a native vector
+    {
+        std::vector<double> v(2, 1.0);
+        v[1] = 2.0;
+        std::vector<double> out = fpy::copy_out(_abi_fresh_result(fpy::borrow(v)));
+        assert(out.size() == 2 && out[0] == 2.0 && out[1] == 4.0);
+    }
+    // A nested vector is copied in, so the kernel's write does *not* reach the
+    // caller -- there is no faithful way to share rows, so none is offered.
+    {
+        std::vector<std::vector<double> > m(2, std::vector<double>(2, 1.0));
+        m[1][0] = 2.0;
+        double got = _abi_row_element_write(fpy::copy_in(m));
+        assert(got == 99.0);
+        assert(m[0][0] == 1.0 && m[1][0] == 2.0);
+    }
+    // ...and copied out row by row.
+    {
+        std::vector<std::vector<double> > m(1, std::vector<double>(2, 1.0));
+        fpy::list<fpy::list<double> > h = fpy::copy_in(m);
+        double got = _abi_row_element_write(h);
+        assert(got == 99.0);
+        std::vector<std::vector<double> > out = fpy::copy_out(h);
+        assert(out.size() == 1 && out[0][0] == 99.0);
+        assert(m[0][0] == 1.0);
     }
     std::printf("abi boundary OK\\n");
     return 0;

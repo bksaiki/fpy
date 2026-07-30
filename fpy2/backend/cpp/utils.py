@@ -41,12 +41,19 @@ indirection.  Notes on the choices, kept here rather than in the emitted code:
 - Reference counting suffices with no collector: FPy has no recursive list type,
   so no location can be stored within itself and no cycle is constructible.
 
-Only what the emitter emits is shipped.  A program embedding a generated kernel
-therefore builds a list with ``std::make_shared`` — or, to pass storage it
-already owns without copying, a ``shared_ptr`` with a no-op deleter.  That
-borrowed handle must not outlive the vector, which holds because a callee cannot
-retain one: FPy has no globals, and captures are materialized before
-compilation.  See ``_test_abi`` in ``tests/infra/backend/cpp.py``.
+Interop is by conversion at the call site (``borrow`` / ``copy_in`` /
+``copy_out``) rather than by emitting a wrapper per function, so the choice
+between sharing and copying stays with the caller and the emitted signature is
+the only signature.  Two consequences worth knowing:
+
+- A ``vector<vector<T>>`` can only be copied.  The caller stores rows by value
+  where a list stores handles, so no arrangement makes a write through either
+  side visible to the other.
+- A borrowed handle must not outlive its vector.  That holds because a callee
+  cannot retain one: FPy has no globals, and captures are materialized before
+  compilation.
+
+Pinned by ``_test_abi`` in ``tests/infra/backend/cpp.py``.
 """
 
 
@@ -119,6 +126,41 @@ inline list<T> make_list(std::initializer_list<T> il) {
 template <typename T, typename It>
 inline list<T> make_list(It first, It last) {
     return std::make_shared<std::vector<T> >(first, last);
+}
+
+// Interop: a program holding `std::vector` converts here.  A flat vector can be
+// shared or copied; a nested one can only be copied.
+
+// Must not outlive `v`.
+template <typename T>
+inline list<T> borrow(std::vector<T>& v) {
+    return list<T>(&v, [](std::vector<T>*) {});
+}
+
+template <typename T>
+inline list<T> copy_in(const std::vector<T>& v) {
+    return std::make_shared<std::vector<T> >(v);
+}
+
+template <typename T>
+inline list<list<T> > copy_in(const std::vector<std::vector<T> >& vs) {
+    list<list<T> > out = make_list<list<T> >(vs.size());
+    for (std::size_t i = 0; i < vs.size(); ++i)
+        (*out)[i] = copy_in(vs[i]);
+    return out;
+}
+
+template <typename T>
+inline std::vector<T> copy_out(const list<T>& xs) {
+    return *xs;
+}
+
+template <typename T>
+inline std::vector<std::vector<T> > copy_out(const list<list<T> >& xss) {
+    std::vector<std::vector<T> > out(xss->size());
+    for (std::size_t i = 0; i < xss->size(); ++i)
+        out[i] = *(*xss)[i];
+    return out;
 }
 
 }  // namespace fpy
