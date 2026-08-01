@@ -9,6 +9,7 @@ surface as :class:`CppCompileError`.
 """
 
 from collections.abc import Collection
+from dataclasses import dataclass
 
 from ...analysis import (
     ArraySizeInfer,
@@ -16,6 +17,9 @@ from ...analysis import (
     DefineUse,
     FormatInfer,
 )
+from ...analysis.context_use import ContextUseAnalysis
+from ...analysis.define_use import DefineUseAnalysis
+from ...analysis.format_infer import FormatAnalysis
 from ...ast.fpyast import Call, FuncDef
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
@@ -34,12 +38,27 @@ from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError
-from .storage_infer import StorageInfer
+from .storage_infer import StorageAnalysis, StorageInfer
 from .utils import CPP_HEADERS, CPP_HELPERS
 
 
 class CppCompileError(CompileError):
     """Raised when cpp compilation fails."""
+
+
+@dataclass
+class SpecAnalyses:
+    """The analyses one fully-specialized function is emitted from.
+
+    ``ast`` is post-specialization, so its types are concrete — which is why a
+    consumer cannot simply re-run the analyses on the user's original function.
+    """
+
+    ast: FuncDef
+    def_use: DefineUseAnalysis
+    ctx_use: ContextUseAnalysis
+    format_info: FormatAnalysis
+    storage: StorageAnalysis
 
 
 
@@ -179,6 +198,18 @@ class CppCompiler(Backend):
              monomorphic format inference is now available.
           4. **Per-spec codegen**, leaves-first, one C++ definition per entry.
         """
+        return '\n\n'.join(
+            self._compile_function(f) for f in self.specialize(module)
+        )
+
+    def specialize(self, module: Module) -> list[Function]:
+        """Steps 1-3 of the pipeline: the fully-specialized functions, in
+        leaves-first emission order.
+
+        Separate from :meth:`compile_module` so a consumer of the per-spec
+        analyses can reach them — the analyses only make sense on a spec, whose
+        types are concrete.
+        """
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
 
@@ -205,19 +236,21 @@ class CppCompiler(Backend):
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
 
-        cg = specialized.call_graph()
-        return '\n\n'.join(self._compile_function(f) for f in cg.order)
+        return list(specialized.call_graph().order)
 
-    def _compile_function(self, func: Function) -> str:
-        """Emit one C++ function definition for a fully-specialized
-        :class:`Function`.  ``func.ast.name`` is the final emitted name
-        (set by :class:`Specialize` — public entries keep their user-given
-        name, private specs get a mangled one)."""
+    def analyze(self, func: Function) -> SpecAnalyses:
+        """The per-spec analyses one fully-specialized function is emitted from.
+
+        Separate from :meth:`_compile_function` so a consumer of the analyses —
+        notably the representation decision in :mod:`.unbox` — can be exercised
+        without going through emission.
+        """
         ast = func.ast
         if bad := unclosed_data_free_vars(ast):
-            raise CppCompileError(f'unbound data free variable(s): {", ".join(bad)}')
+            raise CppCompileError(
+                f'unbound data free variable(s): {", ".join(bad)}'
+            )
 
-        # Per-spec analyses.
         def_use = DefineUse.analyze(ast)
         ctx_use = ContextUse.analyze(ast, def_use=def_use)
         array_size = ArraySizeInfer.analyze(ast)
@@ -228,7 +261,6 @@ class CppCompiler(Backend):
             array_size=array_size,
         )
 
-        # Per-spec storage selection.
         try:
             storage = StorageInfer.infer(
                 format_info.type_info.def_use, format_info.by_def,
@@ -246,16 +278,32 @@ class CppCompiler(Backend):
                 f'internal error: {e!r}'
             ) from e
 
+        return SpecAnalyses(
+            ast=ast,
+            def_use=def_use,
+            ctx_use=ctx_use,
+            format_info=format_info,
+            storage=storage,
+        )
+
+    def _compile_function(self, func: Function) -> str:
+        """Emit one C++ function definition for a fully-specialized
+        :class:`Function`.  ``func.ast.name`` is the final emitted name
+        (set by :class:`Specialize` — public entries keep their user-given
+        name, private specs get a mangled one)."""
+        a = self.analyze(func)
+        ast = a.ast
+
         # Call.fn → emitted name.  ``Specialize`` rewired each Call.fn at
         # the source so call.fn.ast.name is the target spec's emit name.
         call_names = _collect_call_names(ast)
 
         emitter = CppEmitter(
             ast=ast,
-            storage=storage,
-            def_use=def_use,
-            format_info=format_info,
-            ctx_use=ctx_use,
+            storage=a.storage,
+            def_use=a.def_use,
+            format_info=a.format_info,
+            ctx_use=a.ctx_use,
             call_names=call_names,
             unsafe_cast_int=self._unsafe_cast_int,
         )

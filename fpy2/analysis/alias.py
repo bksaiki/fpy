@@ -85,6 +85,7 @@ rather than soundness.
 """
 
 from dataclasses import dataclass
+from typing import Literal, overload
 
 from ..ast import (
     Argument,
@@ -126,6 +127,9 @@ because a tuple's arity is static.
 """
 
 _PartKey = int | None
+
+_Missing = Literal['raise', 'create', 'none']
+"""What :meth:`_Cells.part` should do when the part does not exist yet."""
 
 
 def _carries_list(ty: Type | None) -> bool:
@@ -222,11 +226,43 @@ class _Cells:
     def find(self, c: _Cell) -> _Cell:
         return self._uf.find(c)
 
-    def part(self, c: _Cell, key: _PartKey = ELTS) -> _Cell:
-        """The cell standing for part *key* of *c*: its elements, or a field."""
+    @overload
+    def part(
+        self, c: _Cell, key: _PartKey = ...,
+        *, missing: Literal['raise', 'create'] = ...,
+    ) -> _Cell:
+        ...
+
+    @overload
+    def part(
+        self, c: _Cell, key: _PartKey = ..., *, missing: Literal['none'],
+    ) -> _Cell | None:
+        ...
+
+    def part(
+        self, c: _Cell, key: _PartKey = ELTS,
+        *, missing: _Missing = 'raise',
+    ) -> _Cell | None:
+        """The cell standing for part *key* of *c*: its elements, or a field.
+
+        *missing* says what to do when that part does not exist yet, and has no
+        default that silently does either thing:
+
+        - ``'raise'`` — a caller that expects a part has a bug if there is none,
+          and quietly making one would hide it.
+        - ``'create'`` — make it; what building constraints wants.
+        - ``'none'`` — return ``None``; what a *query* wants.  A query must not
+          extend the structure it reads, and "nothing ever looked inside this
+          list" is itself an answer.
+        """
         root = self.find(c)
-        parts = self._parts.setdefault(root, {})
-        if key not in parts:
+        parts = self._parts.get(root)
+        if parts is None or key not in parts:
+            if missing == 'none':
+                return None
+            if missing == 'raise':
+                raise KeyError(f'{c!r} has no part {key!r}')
+            parts = self._parts.setdefault(root, {})
             parts[key] = self.new('part')
             for flag in self._flags:
                 # created after the container left -- see `_spread`
@@ -330,9 +366,21 @@ class AliasAnalysis:
     _cell_of: dict[Definition, _Cell]
     _site_cell: dict[AllocSite, _Cell]
 
-    def sites_of(self, d: Definition) -> frozenset[AllocSite]:
-        """The allocations *d* may refer to.  Empty if *d* carries no list."""
+    def sites_of(self, d: Definition, depth: int = 0) -> frozenset[AllocSite]:
+        """The allocations *d* may refer to, *depth* list levels in.
+
+        ``depth=0`` is *d* itself; ``depth=1`` is the lists held in its
+        elements, and so on — which is what a consumer deciding a
+        representation per level of a nested type needs.
+
+        An empty result means *no information*, not *nothing there*: the level
+        may simply never have been looked inside.  Read it conservatively.
+        """
         cell = self._cell_of.get(d)
+        for _ in range(depth):
+            if cell is None:
+                return frozenset()
+            cell = self._cells.part(cell, missing='none')
         return frozenset() if cell is None else self._cells.sites_at(cell)
 
     def is_shared(self, site: AllocSite) -> bool:
@@ -449,6 +497,15 @@ class _Builder(DefaultVisitor):
 
     # -- cells --------------------------------------------------------------
 
+    def _part(self, c: _Cell, key: _PartKey = ELTS) -> _Cell:
+        """A part of *c*, created on first mention.
+
+        Building constraints always wants creation: it is *describing* the
+        structure, not querying it.  Queries go through
+        :meth:`_Cells.part` directly, which has no default.
+        """
+        return self.cells.part(c, key, missing='create')
+
     def _cell(self, d: Definition) -> _Cell:
         if d not in self.cell_of:
             self.cell_of[d] = self.cells.new('name')
@@ -484,11 +541,11 @@ class _Builder(DefaultVisitor):
             case ListType():
                 self._site('param', arg, cell, depth)
                 if _carries_list(ty.elt):
-                    self._seed(self.cells.part(cell), ty.elt, arg, depth + 1)
+                    self._seed(self._part(cell), ty.elt, arg, depth + 1)
             case TupleType():
                 for i, elt in enumerate(ty.elts):
                     if _carries_list(elt):
-                        self._seed(self.cells.part(cell, i), elt, arg, depth)
+                        self._seed(self._part(cell, i), elt, arg, depth)
 
     # -- the value-returning half ------------------------------------------
 
@@ -516,7 +573,7 @@ class _Builder(DefaultVisitor):
             case Fst() | Snd():
                 base = self._cell_for(e.args[0])
                 field = 0 if isinstance(e, Fst) else 1
-                return None if base is None else self.cells.part(base, field)
+                return None if base is None else self._part(base, field)
             case IfExpr():
                 # the result *is* one branch or the other, so it aliases both
                 cell = self.cells.new('branch', is_ref=False)
@@ -531,7 +588,7 @@ class _Builder(DefaultVisitor):
                 base = self._cell_for(e.value)
                 if base is not None:
                     self.cells.merge(
-                        self.cells.part(cell), self.cells.part(base),
+                        self._part(cell), self._part(base),
                     )
                 return cell
             case ListExpr():
@@ -539,21 +596,21 @@ class _Builder(DefaultVisitor):
                 for x in e.elts:
                     xc = self._cell_for(x)
                     if xc is not None:
-                        self.cells.merge(self.cells.part(cell), xc)
+                        self.cells.merge(self._part(cell), xc)
                 return cell
             case TupleExpr():
                 cell = self._alloc('literal', e)
                 for i, x in enumerate(e.elts):
                     xc = self._cell_for(x)
                     if xc is not None:
-                        self.cells.merge(self.cells.part(cell, i), xc)
+                        self.cells.merge(self._part(cell, i), xc)
                 return cell
             case ListComp():
                 cell = self._alloc('comprehension', e)
                 self._bind_comp_targets(e)
                 xc = self._cell_for(e.elt)
                 if xc is not None:
-                    self.cells.merge(self.cells.part(cell), xc)
+                    self.cells.merge(self._part(cell), xc)
                 return cell
             case Enumerate() | Zip():
                 # Each element is a *tuple* over the sources' elements, so the
@@ -564,13 +621,13 @@ class _Builder(DefaultVisitor):
                 # putting a loop variable one level too deep -- conservative for
                 # the site verdicts, but wrong for `may_alias`.
                 cell = self._alloc('builtin', e)
-                elts = self.cells.part(cell)
+                elts = self._part(cell)
                 for i, a in enumerate(e.args):
                     ac = self._cell_for(a)
                     if ac is not None:
                         field = 1 if isinstance(e, Enumerate) else i
                         self.cells.merge(
-                            self.cells.part(elts, field), self.cells.part(ac),
+                            self._part(elts, field), self._part(ac),
                         )
                 return cell
             case Call():
@@ -591,13 +648,13 @@ class _Builder(DefaultVisitor):
             return None
         base_ty = self.types.by_expr.get(e.value)
         if not isinstance(base_ty, TupleType):
-            return self.cells.part(base)
+            return self._part(base)
         if isinstance(e.index, Integer):
-            return self.cells.part(base, e.index.val)
+            return self._part(base, e.index.val)
         # a tuple index that is not a literal: could be any field
-        cell = self.cells.part(base, 0)
+        cell = self._part(base, 0)
         for i in range(1, len(base_ty.elts)):
-            cell = self.cells.merge(cell, self.cells.part(base, i))
+            cell = self.cells.merge(cell, self._part(base, i))
         return cell
 
     def _bind_comp_targets(self, e: ListComp) -> None:
@@ -605,7 +662,7 @@ class _Builder(DefaultVisitor):
         for target, iterable in zip(e.targets, e.iterables):
             it = self._cell_for(iterable)
             if it is not None:
-                self._bind(target, self.cells.part(it), e)
+                self._bind(target, self._part(it), e)
 
     def _bind(self, target, cell: _Cell, site) -> None:
         """Bind a name or a tuple pattern to *cell*, field by field."""
@@ -616,7 +673,7 @@ class _Builder(DefaultVisitor):
                     self.cells.merge(self._cell(d), cell)
             case TupleBinding():
                 for i, elt in enumerate(target.elts):
-                    self._bind(elt, self.cells.part(cell, i), site)
+                    self._bind(elt, self._part(cell, i), site)
 
     def _escape_args(self, e: Call) -> None:
         for a in e.args:
@@ -655,14 +712,14 @@ class _Builder(DefaultVisitor):
                     self.def_use.find_def_from_site(stmt.var, stmt),
                 )
                 for _ in stmt.indices[:-1]:
-                    cur = self.cells.part(cur)
-                self.cells.merge(self.cells.part(cur), rhs)
+                    cur = self._part(cur)
+                self.cells.merge(self._part(cur), rhs)
         super()._visit_indexed_assign(stmt, ctx)
 
     def _visit_for(self, stmt: ForStmt, ctx):
         it = self._cell_for(stmt.iterable)
         if it is not None:
-            self._bind(stmt.target, self.cells.part(it), stmt)
+            self._bind(stmt.target, self._part(it), stmt)
         super()._visit_for(stmt, ctx)
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
