@@ -31,7 +31,7 @@ def _decide(f: fp.Function, arg_types):
     m.add(f, ctx=fp.FP64, arg_types=list(arg_types))
     a = cc.analyze(cc.specialize(m)[-1])
     alias = Alias.analyze(a.ast, def_use=a.def_use)
-    ub = Unbox.decide(a.storage, alias)
+    ub = Unbox.decide(a.ast, a.storage, alias)
     by_name = {
         a.storage.def_to_name[cls]: ty for cls, ty in ub.storage.items()
     }

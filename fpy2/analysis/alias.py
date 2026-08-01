@@ -115,7 +115,7 @@ from ..ast import (
 from ..types import ListType, TupleType, Type
 from ..utils import Unionfind
 from .define_use import DefineUse, DefineUseAnalysis
-from .reaching_defs import Definition
+from .reaching_defs import AssignDef, Definition
 from .type_infer import TypeAnalysis, TypeInfer
 
 ELTS = None
@@ -187,6 +187,16 @@ class _Cell:
 
     def __repr__(self) -> str:
         return f'<cell {self._kind}>'
+
+
+Region = _Cell
+"""What may be the same list.
+
+An opaque, hashable identity for one equivalence class.  A consumer that has to
+give a single answer to everything that may alias — a representation, say — keys
+on this rather than on individual definitions, so that two names the analysis
+unified cannot be answered differently.
+"""
 
 
 class _Cells:
@@ -364,24 +374,49 @@ class AliasAnalysis:
     sites: list[AllocSite]
     _cells: _Cells
     _cell_of: dict[Definition, _Cell]
+    _cell_of_expr: dict[Expr, _Cell]
     _site_cell: dict[AllocSite, _Cell]
+
+    def region_of(self, d: Definition, depth: int = 0) -> Region | None:
+        """What may be the same list as *d*, *depth* levels in.
+
+        ``depth=0`` is *d* itself; ``depth=1`` is the lists held in its
+        elements, and so on.  ``None`` when nothing is known about that level.
+        """
+        return self._walk(self._cell_of.get(d), depth)
+
+    def region_of_expr(self, e: Expr, depth: int = 0) -> Region | None:
+        """As :meth:`region_of`, for an expression.
+
+        An expression that names a definition shares its region — the analysis
+        gives both the same cell — so a consumer keying on regions cannot answer
+        a variable and its uses inconsistently.
+        """
+        return self._walk(self._cell_of_expr.get(e), depth)
+
+    def _walk(self, cell: _Cell | None, depth: int) -> _Cell | None:
+        for _ in range(depth):
+            if cell is None:
+                return None
+            cell = self._cells.part(cell, missing='none')
+        return None if cell is None else self._cells.find(cell)
+
+    def region_of_site(self, site: AllocSite) -> Region | None:
+        """Which region *site*'s allocation lives in."""
+        cell = self._site_cell.get(site)
+        return None if cell is None else self._cells.find(cell)
+
+    def sites_at(self, region: Region | None) -> frozenset[AllocSite]:
+        """The allocations that may live in *region*."""
+        return frozenset() if region is None else self._cells.sites_at(region)
 
     def sites_of(self, d: Definition, depth: int = 0) -> frozenset[AllocSite]:
         """The allocations *d* may refer to, *depth* list levels in.
 
-        ``depth=0`` is *d* itself; ``depth=1`` is the lists held in its
-        elements, and so on — which is what a consumer deciding a
-        representation per level of a nested type needs.
-
         An empty result means *no information*, not *nothing there*: the level
         may simply never have been looked inside.  Read it conservatively.
         """
-        cell = self._cell_of.get(d)
-        for _ in range(depth):
-            if cell is None:
-                return frozenset()
-            cell = self._cells.part(cell, missing='none')
-        return frozenset() if cell is None else self._cells.sites_at(cell)
+        return self.sites_at(self.region_of(d, depth))
 
     def is_shared(self, site: AllocSite) -> bool:
         """Whether more than one place may refer to *site*.
@@ -492,7 +527,8 @@ class _Builder(DefaultVisitor):
         self._seed_params()
         self._visit_function(self.func, None)
         return AliasAnalysis(
-            self.sites, self.cells, self.cell_of, self.site_cell,
+            self.sites, self.cells, self.cell_of, self._by_expr,
+            self.site_cell,
         )
 
     # -- cells --------------------------------------------------------------
@@ -508,7 +544,13 @@ class _Builder(DefaultVisitor):
 
     def _cell(self, d: Definition) -> _Cell:
         if d not in self.cell_of:
-            self.cell_of[d] = self.cells.new('name')
+            # `xs[i] = e` gives `xs` a fresh SSA def, but it is the same list as
+            # the def it mutates -- one place, not a second one, so it must not
+            # count as another referrer.  `_visit_indexed_assign` unifies them.
+            in_place = (
+                isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign)
+            )
+            self.cell_of[d] = self.cells.new('name', is_ref=not in_place)
         return self.cells.find(self.cell_of[d])
 
     def _site(self, kind: str, node: Expr | Argument, cell: _Cell,
@@ -706,11 +748,13 @@ class _Builder(DefaultVisitor):
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         if isinstance(stmt.var, NamedId):
+            d = self.def_use.find_def_from_site(stmt.var, stmt)
+            cur = self._cell(d)
+            # the mutated list is the one that was already there
+            if isinstance(d, AssignDef) and d.prev is not None:
+                cur = self.cells.merge(cur, self._cell(self.def_use.defs[d.prev]))
             rhs = self._cell_for(stmt.expr)
             if rhs is not None:
-                cur = self._cell(
-                    self.def_use.find_def_from_site(stmt.var, stmt),
-                )
                 for _ in stmt.indices[:-1]:
                     cur = self._part(cur)
                 self.cells.merge(self._part(cur), rhs)

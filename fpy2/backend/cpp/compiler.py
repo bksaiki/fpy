@@ -41,7 +41,7 @@ from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
-from .unbox import Unbox
+from .unbox import Unbox, UnboxAnalysis
 from .utils import CPP_HEADERS, CPP_HELPERS
 
 
@@ -63,6 +63,7 @@ class SpecAnalyses:
     format_info: FormatAnalysis
     storage: StorageAnalysis
     alias: AliasAnalysis
+    unbox: UnboxAnalysis | None
 
 
 
@@ -81,6 +82,20 @@ def _collect_call_names(ast: FuncDef) -> dict[Call, str]:
         def _visit_call(self, e: Call, ctx):
             if isinstance(e.fn, Function):
                 out[e] = e.fn.ast.name
+            super()._visit_call(e, ctx)
+
+    _Collector()._visit_function(ast, None)
+    return out
+
+
+def _callees(ast: FuncDef) -> list[Function]:
+    """Every :class:`Function` *ast* calls."""
+    out: list[Function] = []
+
+    class _Collector(DefaultVisitor):
+        def _visit_call(self, e: Call, ctx):
+            if isinstance(e.fn, Function):
+                out.append(e.fn)
             super()._visit_call(e, ctx)
 
     _Collector()._visit_function(ast, None)
@@ -212,8 +227,13 @@ class CppCompiler(Backend):
              monomorphic format inference is now available.
           4. **Per-spec codegen**, leaves-first, one C++ definition per entry.
         """
+        specs = self.specialize(module)
+        # A function compiled code calls cannot unbox its parameters; see
+        # `unbox.Unbox.decide`.
+        called = {id(c.ast) for f in specs for c in _callees(f.ast)}
         return '\n\n'.join(
-            self._compile_function(f) for f in self.specialize(module)
+            self._compile_function(f, is_called=id(f.ast) in called)
+            for f in specs
         )
 
     def specialize(self, module: Module) -> list[Function]:
@@ -252,7 +272,9 @@ class CppCompiler(Backend):
 
         return list(specialized.call_graph().order)
 
-    def analyze(self, func: Function) -> SpecAnalyses:
+    def analyze(
+        self, func: Function, *, is_called: bool = False,
+    ) -> SpecAnalyses:
         """The per-spec analyses one fully-specialized function is emitted from.
 
         Separate from :meth:`_compile_function` so a consumer of the analyses —
@@ -293,11 +315,12 @@ class CppCompiler(Backend):
             ) from e
 
         alias = Alias.analyze(ast, def_use=def_use)
+        unbox = None
         if self._unbox:
-            # Rewrite each class's storage in place: the emitter reads the
-            # representation off the type, so nothing downstream has to ask.
-            decided = Unbox.decide(storage, alias)
-            storage.class_storage.update(decided.storage)
+            unbox = Unbox.decide(ast, storage, alias, is_called=is_called)
+            # Rewrite each class's storage in place: the emitter reads a
+            # declaration's representation straight off the type.
+            storage.class_storage.update(unbox.storage)
 
         return SpecAnalyses(
             ast=ast,
@@ -306,14 +329,17 @@ class CppCompiler(Backend):
             format_info=format_info,
             storage=storage,
             alias=alias,
+            unbox=unbox,
         )
 
-    def _compile_function(self, func: Function) -> str:
+    def _compile_function(
+        self, func: Function, *, is_called: bool = False,
+    ) -> str:
         """Emit one C++ function definition for a fully-specialized
         :class:`Function`.  ``func.ast.name`` is the final emitted name
         (set by :class:`Specialize` — public entries keep their user-given
         name, private specs get a mangled one)."""
-        a = self.analyze(func)
+        a = self.analyze(func, is_called=is_called)
         ast = a.ast
 
         # Call.fn → emitted name.  ``Specialize`` rewired each Call.fn at
@@ -328,6 +354,7 @@ class CppCompiler(Backend):
             ctx_use=a.ctx_use,
             call_names=call_names,
             unsafe_cast_int=self._unsafe_cast_int,
+            unbox=a.unbox,
         )
         try:
             return emitter.emit()

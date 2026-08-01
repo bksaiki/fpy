@@ -35,6 +35,7 @@ Anything else raises :class:`CppEmitError`, which the public
 import dataclasses
 from contextlib import contextmanager
 from fractions import Fraction
+from typing import TYPE_CHECKING
 
 from ...analysis import (
     AssignDef,
@@ -138,6 +139,9 @@ from .storage import (
 from .storage_infer import StorageAnalysis
 from .target import make_op_table
 from .types import CppList, CppScalar, CppTuple, CppType
+
+if TYPE_CHECKING:
+    from .unbox import UnboxAnalysis
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
 # in this table can be set via ``fesetround``.
@@ -248,12 +252,15 @@ class CppEmitter(Visitor):
         func_name_override: str | None = None,
         call_names: dict | None = None,
         unsafe_cast_int: bool = False,
+        unbox: 'UnboxAnalysis | None' = None,
     ):
         self.ast = ast
         self.storage = storage
         self.def_use = def_use
         self.format_info = format_info
         self.ctx_use = ctx_use
+        # How each list is represented, or ``None`` to keep every handle.
+        self.unbox = unbox
         # Optional C++ name to emit at the function-signature site
         # — used by the compiler to differentiate specializations of
         # the same callee at distinct rounding contexts (template-
@@ -597,12 +604,17 @@ class CppEmitter(Visitor):
         """
         fmt = self.format_info.by_expr.get(e)
         try:
-            return choose_storage(fmt)
+            ty = choose_storage(fmt)
         except StorageSelectionError as err:
             raise CppEmitError(
                 f'cannot pick storage for {type(e).__name__}: {err}',
                 at=e,
             ) from err
+        # `choose_storage` knows a list's *shape*, not how it is represented:
+        # that is decided per alias region (see `.unbox`), and reading it from
+        # the same table the declarations used is what keeps an expression and
+        # the variable it initializes in agreement.
+        return ty if self.unbox is None else self.unbox.annotate(e, ty)
 
     # ------------------------------------------------------------------
     # Function emission
@@ -710,9 +722,11 @@ class CppEmitter(Visitor):
         decoration time, so we don't distinguish that case here."""
         fmt = self.format_info.fn_fmt.ret_fmt
         try:
-            return choose_storage(fmt)
+            ty = choose_storage(fmt)
         except StorageSelectionError as e:
             raise CppEmitError(f'return type: {e}', at=func) from e
+        # the return type is another place that admits one representation
+        return ty if self.unbox is None else self.unbox.annotate_return(ty)
 
     # ------------------------------------------------------------------
     # Statement visitors
