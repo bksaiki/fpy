@@ -965,6 +965,25 @@ def _abi_row_element_write(xss: list[list[fp.Real]]) -> fp.Real:
         return xss[0][0]
 
 
+@fp.fpy
+def _abi_nested_sum(xss: list[list[fp.Real]]) -> fp.Real:
+    """Reads a nested list without ever *naming* a row, so both levels unbox."""
+    with fp.FP64:
+        acc = 0.0
+        for i in range(len(xss)):
+            for j in range(len(xss[i])):
+                acc = acc + xss[i][j]
+        return acc
+
+
+@fp.fpy
+def _abi_nested_write(xss: list[list[fp.Real]]) -> fp.Real:
+    """Writes through a fully-unboxed nested parameter."""
+    with fp.FP64:
+        xss[0][0] = 99
+        return xss[0][0]
+
+
 def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
     """Compile kernels and call them the way an embedding program would.
 
@@ -976,7 +995,10 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
     reach the caller.
     """
     group = 'abi'
-    compiler = fp.CppCompiler()
+    # Boxed on purpose, whatever the default: these helpers exist to convert
+    # *to* a handle, so a signature that has no handle has nothing to pin.  The
+    # native path is `_test_abi_native`.
+    compiler = fp.CppCompiler(unbox=False)
     cpp_path = output_dir / 'abi_boundary.cpp'
     print(f'Compiling ABI boundary test to `{cpp_path}`')
     lst = fp.types.ListType(fp.types.RealType(fp.FP64))
@@ -1063,6 +1085,88 @@ int main() {
         assert(m[0][0] == 1.0);
     }
     std::printf("abi boundary OK\\n");
+    return 0;
+}
+"""
+
+
+def _test_abi_native(
+    output_dir: Path, mode: str = 'compile',
+) -> list[tuple[str, str, str]]:
+    """The other boundary: a kernel whose lists are proven unshared takes the
+    caller's ``std::vector`` directly.
+
+    This is the whole point of :mod:`fpy2.backend.cpp.unbox` — no ``copy_in``,
+    no ``copy_out``, no per-row conversion, which is where the cost was.  Pinned
+    separately from :func:`_test_abi` because the two are opposites: there the
+    caller's data is *protected* from the kernel by a copy, here it is handed
+    over, and FPy's semantics say the write lands.
+    """
+    group = 'abi'
+    compiler = fp.CppCompiler(unbox=True)
+    cpp_path = output_dir / 'abi_native.cpp'
+    print(f'Compiling native ABI test to `{cpp_path}`')
+    nested = fp.types.ListType(fp.types.ListType(fp.types.RealType(fp.FP64)))
+    module = fp.Module()
+    module.add(_abi_nested_sum, ctx=fp.FP64, arg_types=[nested])
+    module.add(_abi_nested_write, ctx=fp.FP64, arg_types=[nested])
+
+    # the claim under test, checked rather than assumed
+    for f in (_abi_nested_sum, _abi_nested_write):
+        params, _ = compiler.signature(f, ctx=fp.FP64, arg_types=[nested])
+        got = params[0].format()
+        if got != 'std::vector<std::vector<double>>':
+            return [(
+                group, 'abi_native',
+                f'{f.name} did not unbox: took `{got}`',
+            )]
+
+    with open(cpp_path, 'w') as f:
+        print('\n'.join(compiler.headers()), file=f)
+        print('#include <cstdio>', file=f)
+        print(compiler.helpers(), file=f)
+        print(compiler.compile_module(module), file=f)
+        print(_ABI_NATIVE_MAIN, file=f)
+
+    if mode == 'emit':
+        return []
+    if _CXX is None:
+        print('  SKIPPED (no C++ compiler driver)')
+        return []
+
+    exe = cpp_path.with_suffix('.exe')
+    try:
+        subprocess.run(
+            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f'  FAILED to build: {e.stderr[-400:]}')
+        return [(group, 'abi_native', f'build failed: {e.stderr[-200:]}')]
+
+    r = subprocess.run([str(exe)], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
+        return [(group, 'abi_native', f'assertion failed: {r.stdout.strip()}')]
+    return []
+
+
+_ABI_NATIVE_MAIN: str = """\
+int main() {
+    // The caller's own nested vector, passed with no conversion whatsoever.
+    std::vector<std::vector<double> > m(2, std::vector<double>(2, 1.0));
+    m[1][1] = 2.0;
+    const std::vector<double>* row0 = m.data();
+
+    assert(_abi_nested_sum(m) == 5.0);
+    assert(m.data() == row0);          // read-only: nothing was copied
+
+    // ...and a write reaches the caller, which is FPy's semantics and the
+    // opposite of what `copy_in` gives you.
+    assert(_abi_nested_write(m) == 99.0);
+    assert(m[0][0] == 99.0);
+
+    std::printf("abi native OK\\n");
     return 0;
 }
 """
@@ -1595,6 +1699,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     cov: Counter[str] = Counter()
     failures += _test_runtime(output_dir, mode=mode)
     failures += _test_abi(output_dir, mode=mode)
+    failures += _test_abi_native(output_dir, mode=mode)
     failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)
     failures += _test_regressions(output_dir, mode=mode, cov=cov)

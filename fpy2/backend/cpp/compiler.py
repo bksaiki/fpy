@@ -145,12 +145,14 @@ class CppCompiler(Backend):
             The pipeline is sound either way.  Set ``False`` to
             compile the surface AST verbatim.
         unbox:
-            When ``True``, represent a list as a plain ``std::vector``
-            wherever :mod:`fpy2.analysis.alias` proves nothing can
-            observe the difference (see :mod:`.unbox`).  Off by default
-            while the codegen obligations it creates are being worked
-            through -- notably that a parameter's representation is
-            part of a function's signature, so callers must agree.
+            When ``True`` (default), represent a list as a plain
+            ``std::vector`` wherever :mod:`fpy2.analysis.alias` proves
+            nothing can observe the difference (see :mod:`.unbox`).
+            A list that *is* shared keeps its ``fpy::list`` handle, so
+            the choice is per list and per nesting level, not per
+            program.  Set ``False`` to keep every handle -- which is
+            always correct, just slower at a native boundary, where
+            converting a nested list dominated the call.
     """
 
     _unsafe_cast_int: bool
@@ -159,7 +161,7 @@ class CppCompiler(Backend):
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
-        unbox: bool = False,
+        unbox: bool = True,
     ):
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize

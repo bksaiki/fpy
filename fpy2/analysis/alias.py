@@ -92,6 +92,7 @@ from ..ast import (
     Assign,
     Call,
     DefaultVisitor,
+    Empty,
     Enumerate,
     Expr,
     ForStmt,
@@ -105,6 +106,9 @@ from ..ast import (
     ListRef,
     ListSlice,
     NamedId,
+    Range1,
+    Range2,
+    Range3,
     ReturnStmt,
     Snd,
     TupleBinding,
@@ -713,6 +717,13 @@ class _Builder(DefaultVisitor):
                 cell = self._alloc('call', e)
                 self._escape_args(e)
                 return cell
+            case Range1() | Range2() | Range3() | Empty():
+                # A fresh sequence over *integer* arguments: there is nothing
+                # list-shaped for it to retain, so unlike the catch-all below it
+                # must not escape what its operands mention.  `range(len(xs))`
+                # is a common enough shape that treating it conservatively
+                # would box most parameters for no reason.
+                return self._alloc('builtin', e)
             case _:
                 # An unmodelled expression: assume it allocates, and that it may
                 # retain anything named inside it.

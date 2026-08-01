@@ -26,7 +26,7 @@ class TestListLiteral:
                 return xs[0]
 
         out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
-        assert 'fpy::list<uint8_t>' in out
+        assert 'std::vector<uint8_t>' in out
         assert '{1, 2, 3}' in out
 
     def test_list_passed_through_args(self):
@@ -40,7 +40,7 @@ class TestListLiteral:
 
         out = _compile_list_arg(f)
         # read-only aggregate parameter -> passed by const reference
-        assert out.startswith('double f(const fpy::list<double>& xs)')
+        assert out.startswith('double f(const std::vector<double>& xs)')
 
 
 class TestListRef:
@@ -53,8 +53,8 @@ class TestListRef:
                 return xs[0] + xs[1]
 
         out = _compile_list_arg(f)
-        assert '(*xs)[static_cast<size_t>(0)]' in out
-        assert '(*xs)[static_cast<size_t>(1)]' in out
+        assert 'xs[static_cast<size_t>(0)]' in out
+        assert 'xs[static_cast<size_t>(1)]' in out
 
     def test_variable_index(self):
         @fp.fpy
@@ -67,7 +67,7 @@ class TestListRef:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64)), RealType(fp.FP64)],
         )
-        assert '(*xs)[static_cast<size_t>(i)]' in out
+        assert 'xs[static_cast<size_t>(i)]' in out
 
 
 class TestLen:
@@ -90,7 +90,7 @@ class TestLen:
             arg_types=[ListType(RealType(fp.FP64))],
         )
         # ``len`` lowers to ``size()`` cast to the inferred integer type.
-        assert 'static_cast<int64_t>(xs->size())' in out
+        assert 'static_cast<int64_t>(xs.size())' in out
 
 
 class TestListComp:
@@ -107,8 +107,8 @@ class TestListComp:
                 return ys[0]
 
         out = _compile_list_arg(f)
-        assert 'for (double x : *xs) {' in out
-        assert '->push_back((x + static_cast<double>(1)));' in out
+        assert 'for (double x : xs) {' in out
+        assert '.push_back((x + static_cast<double>(1)));' in out
 
     def test_range_iterable(self):
         """``range(...)`` in a comprehension expands to a counter loop.
@@ -128,7 +128,7 @@ class TestListComp:
             f, ctx=fp.FP64, arg_types=[],
         )
         assert 'for (int8_t i = 0; i < 5; ++i) {' in out
-        assert '->push_back((static_cast<int64_t>(i) * static_cast<int64_t>(i)));' in out
+        assert '.push_back((static_cast<int64_t>(i) * static_cast<int64_t>(i)));' in out
 
     def test_range2_iterable(self):
         @fp.fpy
@@ -158,10 +158,10 @@ class TestListComp:
         )
         # Inner loop nested directly inside outer loop's body.
         assert (
-            'for (double x : *xs) {\n'
-            '        for (double y : *ys) {'
+            'for (double x : xs) {\n'
+            '        for (double y : ys) {'
         ) in out
-        assert '->push_back((x * y));' in out
+        assert '.push_back((x * y));' in out
 
     def test_tuple_binding_target(self):
         """Tuple-binding targets in the for-clause destructure each
@@ -184,7 +184,7 @@ class TestListComp:
         )
         assert 'std::get<0>' in out
         assert 'std::get<1>' in out
-        assert '->push_back((a + b));' in out
+        assert '.push_back((a + b));' in out
 
 
 class TestListSlice:
@@ -201,12 +201,12 @@ class TestListSlice:
         # A named operand needs no temp; both endpoints emit as iterator
         # arithmetic with size_t casts.
         assert (
-            'xs->begin() + static_cast<size_t>(1), '
-            'xs->begin() + static_cast<size_t>(4)'
+            'xs.begin() + static_cast<size_t>(1), '
+            'xs.begin() + static_cast<size_t>(4)'
         ) in out
 
     def test_open_stop(self):
-        """``xs[a:]`` defaults the stop endpoint to ``__tmp->size()``."""
+        """``xs[a:]`` defaults the stop endpoint to ``__tmp.size()``."""
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -216,8 +216,8 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            'xs->begin() + static_cast<size_t>(2), '
-            'xs->begin() + xs->size()'
+            'xs.begin() + static_cast<size_t>(2), '
+            'xs.begin() + xs.size()'
         ) in out
 
     def test_open_start(self):
@@ -231,8 +231,8 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            'xs->begin() + 0, '
-            'xs->begin() + static_cast<size_t>(3)'
+            'xs.begin() + 0, '
+            'xs.begin() + static_cast<size_t>(3)'
         ) in out
 
     def test_full_slice(self):
@@ -246,6 +246,6 @@ class TestListSlice:
 
         out = _compile_list_arg(f)
         assert (
-            'xs->begin() + 0, '
-            'xs->begin() + xs->size()'
+            'xs.begin() + 0, '
+            'xs.begin() + xs.size()'
         ) in out
