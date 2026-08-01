@@ -115,7 +115,7 @@ from ..ast import (
 from ..types import ListType, TupleType, Type
 from ..utils import Unionfind
 from .define_use import DefineUse, DefineUseAnalysis
-from .reaching_defs import AssignDef, Definition
+from .reaching_defs import AssignDef, Definition, PhiDef
 from .type_infer import TypeAnalysis, TypeInfer
 
 ELTS = None
@@ -209,12 +209,14 @@ class _Cells:
     def __init__(self):
         self._uf: Unionfind[_Cell] = Unionfind()
         self._sites: dict[_Cell, set[AllocSite]] = {}
-        # How many *referrers* a class has: somewhere a reference can still be
-        # held, i.e. a name or a container part.  Parts have to count -- that is
-        # exactly how `[xs]` shares `xs`, and it is not a name.  The transient
-        # cell for an allocation does not, so `xs = [x, x]` has one referrer
-        # rather than two.
-        self._refs: dict[_Cell, int] = {}
+        # A class's *referrers*: the places a reference to it can still be
+        # held.  Counted as distinct source names plus container slots, not as
+        # cells -- a variable's SSA definitions are one place, however many
+        # times `xs[i] = e` or a branch merge redefines it.  Slots have to count
+        # separately: that is exactly how `[xs]` shares `xs`, and it is not a
+        # name.  An allocation is neither, so `xs = [x, x]` has one referrer.
+        self._names: dict[_Cell, set[NamedId]] = {}
+        self._slots: dict[_Cell, int] = {}
         # Two ways out of the function, distinguished because they mean opposite
         # things for ownership -- see `AliasAnalysis.transfers_ownership`.
         self._shared_out: set[_Cell] = set()
@@ -226,11 +228,16 @@ class _Cells:
         """Every downward-propagating class flag, so each is handled alike."""
         return (self._shared_out, self._returned)
 
-    def new(self, kind: str, *, is_ref: bool = True) -> _Cell:
+    def new(
+        self, kind: str, *, name: NamedId | None = None, slot: bool = False,
+    ) -> _Cell:
+        """A fresh cell.  *name* is the source variable it stands for, if any;
+        *slot* marks a cell that is a place inside a container."""
         cell = _Cell(kind)
         self._uf.add(cell)
         self._sites[cell] = set()
-        self._refs[cell] = 1 if is_ref else 0
+        self._names[cell] = {name} if name is not None else set()
+        self._slots[cell] = 1 if slot else 0
         return cell
 
     def find(self, c: _Cell) -> _Cell:
@@ -273,7 +280,7 @@ class _Cells:
             if missing == 'raise':
                 raise KeyError(f'{c!r} has no part {key!r}')
             parts = self._parts.setdefault(root, {})
-            parts[key] = self.new('part')
+            parts[key] = self.new('part', slot=True)
             for flag in self._flags:
                 # created after the container left -- see `_spread`
                 if root in flag:
@@ -300,7 +307,12 @@ class _Cells:
             self._sites[root] = (
                 self._sites.pop(root, set()) | self._sites.pop(other, set())
             )
-            self._refs[root] = self._refs.pop(root, 0) + self._refs.pop(other, 0)
+            self._names[root] = (
+                self._names.pop(root, set()) | self._names.pop(other, set())
+            )
+            self._slots[root] = (
+                self._slots.pop(root, 0) + self._slots.pop(other, 0)
+            )
             carry = [f for f in self._flags if root in f or other in f]
             for flag in self._flags:
                 flag.discard(other)
@@ -325,7 +337,8 @@ class _Cells:
         return frozenset(self._sites.get(self.find(c), ()))
 
     def referrers(self, c: _Cell) -> int:
-        return self._refs.get(self.find(c), 0)
+        root = self.find(c)
+        return len(self._names.get(root, ())) + self._slots.get(root, 0)
 
     def _spread(self, flag: set[_Cell], c: _Cell) -> None:
         """Add *c* to *flag*, and everything reachable inside it.
@@ -524,6 +537,7 @@ class _Builder(DefaultVisitor):
         self._by_expr: dict[Expr, _Cell] = {}
 
     def run(self) -> AliasAnalysis:
+        self._merge_redefinitions()
         self._seed_params()
         self._visit_function(self.func, None)
         return AliasAnalysis(
@@ -544,13 +558,7 @@ class _Builder(DefaultVisitor):
 
     def _cell(self, d: Definition) -> _Cell:
         if d not in self.cell_of:
-            # `xs[i] = e` gives `xs` a fresh SSA def, but it is the same list as
-            # the def it mutates -- one place, not a second one, so it must not
-            # count as another referrer.  `_visit_indexed_assign` unifies them.
-            in_place = (
-                isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign)
-            )
-            self.cell_of[d] = self.cells.new('name', is_ref=not in_place)
+            self.cell_of[d] = self.cells.new('name', name=d.name)
         return self.cells.find(self.cell_of[d])
 
     def _site(self, kind: str, node: Expr | Argument, cell: _Cell,
@@ -562,9 +570,38 @@ class _Builder(DefaultVisitor):
 
     def _alloc(self, kind: str, node: Expr) -> _Cell:
         # transient: an allocation is not itself a place a reference is held
-        cell = self.cells.new(kind, is_ref=False)
+        cell = self.cells.new(kind)
         self._site(kind, node, cell)
         return cell
+
+    def _merge_redefinitions(self) -> None:
+        """Unify the definitions of a variable that are the *same* list.
+
+        Two of SSA's fresh definitions allocate nothing: ``xs[i] = e`` mutates
+        the list that was already there, and a branch merge names whichever of
+        its operands arrived.  Both are the same object, so both are unified —
+        which matters beyond precision, because a C++ storage class is formed
+        over exactly these two edges, and mirroring them here is what keeps one
+        variable from spanning regions that could answer differently.
+
+        A plain rebinding is *not* included: ``ys = zs`` has a ``prev`` too, and
+        it is a different list.
+
+        Sound to unify because referrers are counted by source name, so a
+        variable's definitions do not read as several places.
+        """
+        for d in self.def_use.defs:
+            if not _carries_list(self.types.by_def.get(d)):
+                continue
+            match d:
+                case AssignDef(site=IndexedAssign()) if d.prev is not None:
+                    prevs = [d.prev]
+                case PhiDef():
+                    prevs = [d.lhs, d.rhs]
+                case _:
+                    continue
+            for i in prevs:
+                self.cells.merge(self._cell(d), self._cell(self.def_use.defs[i]))
 
     def _seed_params(self) -> None:
         for arg in self.func.args:
@@ -618,7 +655,7 @@ class _Builder(DefaultVisitor):
                 return None if base is None else self._part(base, field)
             case IfExpr():
                 # the result *is* one branch or the other, so it aliases both
-                cell = self.cells.new('branch', is_ref=False)
+                cell = self.cells.new('branch')
                 for branch in (e.ift, e.iff):
                     bc = self._cell_for(branch)
                     if bc is not None:
@@ -750,9 +787,6 @@ class _Builder(DefaultVisitor):
         if isinstance(stmt.var, NamedId):
             d = self.def_use.find_def_from_site(stmt.var, stmt)
             cur = self._cell(d)
-            # the mutated list is the one that was already there
-            if isinstance(d, AssignDef) and d.prev is not None:
-                cur = self.cells.merge(cur, self._cell(self.def_use.defs[d.prev]))
             rhs = self._cell_for(stmt.expr)
             if rhs is not None:
                 for _ in stmt.indices[:-1]:

@@ -508,8 +508,26 @@ class CppEmitter(Visitor):
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
         if self._is_aggregate(storage) and not self._is_rebound(d):
+            if self._writes_through(d, storage):
+                return f'{storage.format()}& {arg.name}'
             return f'const {storage.format()}& {arg.name}'
         return f'{storage.format()} {arg.name}'
+
+    def _writes_through(self, d: Definition, storage: CppType) -> bool:
+        """Whether a ``const`` reference to *d* would reject a write FPy allows.
+
+        ``const fpy::list<T>&`` does not: ``const`` qualifies the handle, and
+        ``xs[i] = e`` through one is exactly FPy's parameter semantics.  An
+        unboxed list has no such indirection, so ``const std::vector<T>&`` makes
+        its elements const too and the same store stops compiling.
+        """
+        if not (isinstance(storage, CppList) and not storage.boxed):
+            return False
+        cls = self.storage.def_class[d]
+        return any(
+            isinstance(m, AssignDef) and isinstance(m.site, IndexedAssign)
+            for m in self.storage.class_members[cls]
+        )
 
     def _foreach_decl(self, target_def, name: str) -> str:
         """Loop-variable declaration for a range-for over a container.

@@ -39,11 +39,12 @@ terminates because verdicts only ever move one way.
 Callers must agree
 ------------------
 
-A parameter's representation is part of the signature, so a function called from
-compiled code keeps its handles: the caller passes a list it has marked shared
-outward, which is boxed.  Measured over the corpus this costs 5 of the 50
-functions with a list parameter — the kernels worth unboxing are entry points a
-*native* caller invokes.
+A signature's representation is part of the contract, so a function that compiled
+code calls keeps its handles on *both* sides of it: an argument the caller passes
+is one it has marked shared outward, and a value it receives back is one the
+caller must have somewhere to put.  Measured over the corpus this costs 5 of the
+50 functions with a list parameter — the kernels worth unboxing are entry points
+a *native* caller invokes, and a native caller is not bound by this.
 
 Refusal means keeping the handle, never failing a compile — unboxing is an
 optimization.  Reasons are recorded in :attr:`UnboxAnalysis.boxed_because` so a
@@ -78,6 +79,7 @@ class UnboxAnalysis:
     own_boxed: dict[Region, bool] = field(default_factory=dict)
     storage: dict[Definition, CppType] = field(default_factory=dict)
     ret_regions: list[set[Region]] = field(default_factory=list)
+    at_boundary: set[Region] = field(default_factory=set)
     boxed_because: dict[tuple[Definition, int], str] = field(
         default_factory=dict,
     )
@@ -155,6 +157,24 @@ class Unbox:
         ]
         out.ret_regions = _return_regions(ast, alias)
         groups = [p for _c, per in classes for p in per] + out.ret_regions
+
+        # 2a. Both sides of a compiled-to-compiled boundary keep their
+        #     handles, because the other side of it does.  For a callee that is
+        #     its whole signature; for a caller it is what a call hands back.
+        for site in alias.sites:
+            if site.kind == 'call':
+                r = alias.region_of_site(site)
+                if r is not None:
+                    out.at_boundary.add(r)
+        if is_called:
+            for regions in out.ret_regions:
+                out.at_boundary |= regions
+            for cls, per_depth in classes:
+                if _has_parameter(storage.class_members[cls]):
+                    for regions in per_depth:
+                        out.at_boundary |= regions
+        for r in out.at_boundary:
+            out.boxed[r] = True
         changed = True
         while changed:
             changed = False
@@ -170,7 +190,7 @@ class Unbox:
         # 3. read the decision back out per class
         for cls, per_depth in classes:
             ty = storage.class_storage[cls]
-            out.storage[cls] = _read(ty, per_depth, cls, out, 0, is_called)
+            out.storage[cls] = _read(ty, per_depth, cls, out, 0)
         return out
 
 
@@ -197,19 +217,16 @@ def _read(
     cls: Definition,
     out: UnboxAnalysis,
     depth: int,
-    is_called: bool,
 ) -> CppType:
     if not isinstance(ty, CppList):
         return ty
-    elt = _read(ty.elt, per_depth, cls, out, depth + 1, is_called)
+    elt = _read(ty.elt, per_depth, cls, out, depth + 1)
     regions = per_depth[depth]
     if not regions:
         out.boxed_because[(cls, depth)] = 'no alias information'
         return CppList(elt, boxed=True)
-    if is_called and _is_parameter(cls):
-        for r in regions:
-            out.boxed[r] = True
-        out.boxed_because[(cls, depth)] = 'a caller holds a handle'
+    if regions & out.at_boundary:
+        out.boxed_because[(cls, depth)] = 'a compiled callee holds a handle'
         return CppList(elt, boxed=True)
     if any(out.boxed.get(r, True) for r in regions):
         # distinguish "this list really is shared" from "one C++ variable spans
@@ -222,8 +239,17 @@ def _read(
     return CppList(elt, boxed=False)
 
 
-def _is_parameter(cls: Definition) -> bool:
-    return isinstance(cls, AssignDef) and isinstance(cls.site, Argument)
+def _has_parameter(members: list[Definition]) -> bool:
+    """Whether this storage class is a function parameter.
+
+    Asks every member, not the class representative: which def represents a
+    class is an artifact of union order, and the argument-sited one need not be
+    it.
+    """
+    return any(
+        isinstance(d, AssignDef) and isinstance(d.site, Argument)
+        for d in members
+    )
 
 
 def _return_regions(ast: FuncDef, alias: AliasAnalysis) -> list[set[Region]]:

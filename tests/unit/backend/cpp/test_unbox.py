@@ -52,12 +52,19 @@ def _levels(ty) -> list[bool]:
 
 
 class TestTheJoin:
-    """A storage class can span sites the alias analysis kept apart."""
+    """One C++ variable admits one representation.
+
+    The alias analysis now mirrors both edges ``storage_infer`` unions on — a
+    phi merge and an in-place store — so a storage class maps to a single region
+    and these come out right *inside* the analysis.  The conjunction in
+    :mod:`~fpy2.backend.cpp.unbox` is kept as a guard: if it ever reports
+    ``sites disagree`` again, the backend has grown a third kind of edge.
+    """
 
     def test_disagreeing_class_stays_boxed(self):
-        """One C++ variable, two sites: a fresh literal (owned) and a parameter
-        (shared).  Unboxing ``ys`` while ``xs`` stays boxed would make ``ys = xs``
-        a silent conversion and lose the write."""
+        """One C++ variable, two values: a fresh literal and a parameter.
+        Unboxing ``ys`` while ``xs`` stays boxed would make ``ys = xs`` a silent
+        conversion and lose the write."""
         @fp.fpy
         def f(xs: list[fp.Real], c: bool, x: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -70,7 +77,6 @@ class TestTheJoin:
 
         storage, reasons = _decide(f, [ListType(R), BoolType(), R])
         assert _levels(storage['ys']) == [True]
-        assert reasons[('ys', 0)] == 'sites disagree'
         assert _levels(storage['xs']) == [True]
 
     def test_no_class_is_unboxed_against_one_it_reads(self):
