@@ -12,11 +12,13 @@ from collections.abc import Collection
 from dataclasses import dataclass
 
 from ...analysis import (
+    Alias,
     ArraySizeInfer,
     ContextUse,
     DefineUse,
     FormatInfer,
 )
+from ...analysis.alias import AliasAnalysis
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.format_infer import FormatAnalysis
@@ -39,6 +41,7 @@ from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
+from .unbox import Unbox
 from .utils import CPP_HEADERS, CPP_HELPERS
 
 
@@ -59,6 +62,7 @@ class SpecAnalyses:
     ctx_use: ContextUseAnalysis
     format_info: FormatAnalysis
     storage: StorageAnalysis
+    alias: AliasAnalysis
 
 
 
@@ -124,16 +128,26 @@ class CppCompiler(Backend):
 
             The pipeline is sound either way.  Set ``False`` to
             compile the surface AST verbatim.
+        unbox:
+            When ``True``, represent a list as a plain ``std::vector``
+            wherever :mod:`fpy2.analysis.alias` proves nothing can
+            observe the difference (see :mod:`.unbox`).  Off by default
+            while the codegen obligations it creates are being worked
+            through -- notably that a parameter's representation is
+            part of a function's signature, so callers must agree.
     """
 
     _unsafe_cast_int: bool
     _optimize: bool
+    _unbox: bool
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
+        unbox: bool = False,
     ):
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize
+        self._unbox = unbox
 
     # ------------------------------------------------------------------
     # Translation-unit preamble
@@ -278,12 +292,20 @@ class CppCompiler(Backend):
                 f'internal error: {e!r}'
             ) from e
 
+        alias = Alias.analyze(ast, def_use=def_use)
+        if self._unbox:
+            # Rewrite each class's storage in place: the emitter reads the
+            # representation off the type, so nothing downstream has to ask.
+            decided = Unbox.decide(storage, alias)
+            storage.class_storage.update(decided.storage)
+
         return SpecAnalyses(
             ast=ast,
             def_use=def_use,
             ctx_use=ctx_use,
             format_info=format_info,
             storage=storage,
+            alias=alias,
         )
 
     def _compile_function(self, func: Function) -> str:
