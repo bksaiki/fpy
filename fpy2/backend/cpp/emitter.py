@@ -1989,7 +1989,12 @@ class CppEmitter(Visitor):
         ``true``, ``any_of`` is ``false``), so unlike ``min``/``max`` there is
         no unguarded ``xs[0]``."""
         arg_storage = self._storage_for_expr(e.arg)
-        if arg_storage != CppList(CppScalar.BOOL):
+        # element type only: a bool list qualifies whichever way it is
+        # represented, and `CppList.__eq__` distinguishes those
+        if not (
+            isinstance(arg_storage, CppList)
+            and arg_storage.elt == CppScalar.BOOL
+        ):
             raise CppEmitError(
                 f'expected list[bool] arg for {type(e).__name__}, '
                 f'got {arg_storage!r}',

@@ -22,7 +22,7 @@ from ...analysis.alias import AliasAnalysis
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.format_infer import FormatAnalysis
-from ...ast.fpyast import Call, FuncDef
+from ...ast.fpyast import Call, FuncDef, NamedId
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
@@ -39,8 +39,9 @@ from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
-from .storage import StorageSelectionError
+from .storage import StorageSelectionError, choose_storage
 from .storage_infer import StorageAnalysis, StorageInfer
+from .types import CppType
 from .unbox import Unbox, UnboxAnalysis
 from .utils import CPP_HEADERS, CPP_HELPERS
 
@@ -331,6 +332,42 @@ class CppCompiler(Backend):
             alias=alias,
             unbox=unbox,
         )
+
+    def signature(
+        self,
+        func: Function,
+        *,
+        ctx: Context | None = None,
+        arg_types: Collection[Type | None] | None = None,
+    ) -> tuple[list[CppType], CppType]:
+        """The C++ storage types of *func*'s parameters and result.
+
+        A caller cannot derive these from FPy types alone: how a list is
+        represented depends on :mod:`.unbox`, and with ``unbox=True`` the same
+        FPy signature can compile to ``fpy::list<T>`` or ``std::vector<T>``.
+        Anything constructing arguments for a generated function — a test
+        harness, or a program embedding a kernel — has to ask.
+        """
+        m = Module()
+        m.add(func, ctx=ctx, arg_types=arg_types)
+        specs = self.specialize(m)
+        called = {id(c.ast) for s in specs for c in _callees(s.ast)}
+        # emission order is leaves-first, so the entry is last
+        entry = specs[-1]
+        a = self.analyze(entry, is_called=id(entry.ast) in called)
+
+        params = []
+        for arg in a.ast.args:
+            if not isinstance(arg.name, NamedId):
+                raise CppCompileError(f'unnamed parameter in `{func.name}`')
+            d = a.def_use.find_def_from_site(arg.name, arg)
+            params.append(a.storage.storage_of(d))
+
+        # same rule as `CppEmitter._infer_return_storage`
+        ret = choose_storage(a.format_info.fn_fmt.ret_fmt)
+        if a.unbox is not None:
+            ret = a.unbox.annotate_return(ret)
+        return params, ret
 
     def _compile_function(
         self, func: Function, *, is_called: bool = False,

@@ -174,26 +174,35 @@ def _exec_skip_reason(func: fp.Function) -> str | None:
     return None
 
 
-def _emit_print(expr: str, value, lines: list[str], counter: list[int]) -> None:
+def _emit_print(
+    expr: str, value, cty, lines: list[str], counter: list[int],
+) -> None:
     """Emit C++ statements that print *expr* — whose runtime value mirrors
     the interpreter *value* — as a whitespace-separated token stream that
-    :func:`_compare` reads back structurally."""
+    :func:`_compare` reads back structurally.
+
+    *cty* is the emitted storage type, which says whether a list is reached
+    through a handle or directly.
+    """
     if isinstance(value, bool):
         lines.append(f'  std::printf("%d ", (int)({expr}));')
     elif isinstance(value, list):
-        lines.append(f'  std::printf("%zu ", (size_t)(({expr})->size()));')
+        seq = f'(*({expr}))' if getattr(cty, 'boxed', False) else f'({expr})'
+        lines.append(f'  std::printf("%zu ", (size_t){seq}.size());')
         if value:  # homogeneous: one representative element shape
             i = counter[0]
             counter[0] += 1
             elt = f'__e{i}'
             # ``auto`` (by value), not ``auto&``: ``std::vector<bool>`` yields
             # proxy rvalues that a non-const reference cannot bind to.
-            lines.append(f'  for (auto {elt} : *({expr})) {{')
-            _emit_print(elt, value[0], lines, counter)
+            lines.append(f'  for (auto {elt} : {seq}) {{')
+            _emit_print(elt, value[0], cty.elt, lines, counter)
             lines.append('  }')
     elif isinstance(value, tuple):
         for i, elt in enumerate(value):
-            _emit_print(f'std::get<{i}>({expr})', elt, lines, counter)
+            _emit_print(
+                f'std::get<{i}>({expr})', elt, cty.elts[i], lines, counter,
+            )
     else:  # real scalar
         lines.append(f'  std::printf("%a ", (double)({expr}));')
 
@@ -385,6 +394,40 @@ def _cpp_type(ty) -> str:
             raise ValueError(f'no C++ type for: {ty.format()}')
 
 
+def _cpp_value(value, cty) -> str:
+    """C++ initializer for *value* at emitted storage type *cty*.
+
+    Built from the *storage* type rather than the FPy type: whether a list is a
+    handle or a bare vector is the backend's choice (see
+    ``fpy2.backend.cpp.unbox``), and the driver has to match it exactly.
+    """
+    from fpy2.backend.cpp.types import CppList, CppScalar, CppTuple
+    match cty:
+        case CppList():
+            elts = ', '.join(_cpp_value(v, cty.elt) for v in value)
+            if cty.boxed:
+                return f'fpy::make_list<{cty.elt.format()}>({{{elts}}})'
+            return f'{cty.format()}{{{elts}}}'
+        case CppTuple():
+            elts = ', '.join(
+                _cpp_value(v, e) for v, e in zip(value, cty.elts)
+            )
+            return f'std::make_tuple({elts})'
+        case CppScalar.BOOL:
+            return 'true' if value else 'false'
+        case _:
+            v = float(value)
+            if math.isnan(v):
+                return 'std::numeric_limits<double>::quiet_NaN()'
+            if math.isinf(v):
+                inf = 'std::numeric_limits<double>::infinity()'
+                return f'-{inf}' if v < 0 else inf
+            # ``repr`` is the shortest round-tripping decimal; C++ parses it
+            # (correctly-rounded) to the identical double.  Decimal — not a
+            # hex-float literal — keeps the driver valid under C++11.
+            return repr(v)
+
+
 def _cpp_literal(value, ty) -> str:
     """C++ literal for *value* of (instantiated) type *ty*."""
     match ty:
@@ -426,14 +469,27 @@ def _emit_driver(
     name = hashlib.md5(func.name.encode()).hexdigest()
     cpp_path = output_dir / f'{prefix}_{name}_run.cpp'
     body = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
+    params, ret_ty = compiler.signature(
+        func, ctx=fp.FP64, arg_types=arg_types,
+    )
     counter = [0]
     main_lines = ['int main() {']
     for inputs, expected in samples:
-        args = ', '.join(_cpp_literal(v, t) for v, t in zip(inputs, arg_types))
         # Each sample in its own scope; one printed line per sample.
         main_lines.append('  {')
-        main_lines.append(f'    auto __ret = {func.name}({args});')
-        _emit_print('__ret', expected, main_lines, counter)
+        # Bind every argument to a named local: a parameter taken by
+        # non-const reference — which an unboxed list whose elements are
+        # written must be — cannot bind to a prvalue.
+        names = []
+        for i, (v, cty) in enumerate(zip(inputs, params)):
+            names.append(f'__a{i}')
+            main_lines.append(
+                f'    {cty.format()} __a{i} = {_cpp_value(v, cty)};'
+            )
+        main_lines.append(
+            f'    auto __ret = {func.name}({", ".join(names)});'
+        )
+        _emit_print('__ret', expected, ret_ty, main_lines, counter)
         main_lines.append(r'    std::printf("\n");')
         main_lines.append('  }')
     main_lines.append('  return 0;')
