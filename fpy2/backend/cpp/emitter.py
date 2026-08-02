@@ -1059,50 +1059,57 @@ class CppEmitter(Visitor):
         return self._name_for_var_use(e)
 
     def _visit_decnum(self, e: Decnum, ctx) -> str:
-        return self._emit_real_literal(e.as_real())
+        return self._emit_real_literal(e.as_real(), at=e)
 
     def _visit_hexnum(self, e: Hexnum, ctx) -> str:
-        return self._emit_real_literal(e.as_real())
+        return self._emit_real_literal(e.as_real(), at=e)
 
     def _visit_integer(self, e: Integer, ctx) -> str:
         # Integer literals print directly.
         return str(e.val)
 
     def _visit_rational(self, e: Rational, ctx) -> str:
-        return self._emit_numeric_literal(e.as_rational())
+        return self._emit_numeric_literal(e.as_rational(), at=e)
 
     def _visit_digits(self, e: Digits, ctx) -> str:
-        return self._emit_numeric_literal(e.as_rational())
+        return self._emit_numeric_literal(e.as_rational(), at=e)
 
-    def _emit_real_literal(self, v: 'Fraction | Float') -> str:
+    def _emit_real_literal(self, v: 'Fraction | Float', *, at: Expr) -> str:
         """Emit an exact-real literal, preserving the sign of a negative zero
         (which has no `Fraction` form; see `RationalVal.as_real`)."""
         if isinstance(v, Float):
             # negative zero is the only non-`Fraction` real `as_real` produces
             return '-0.0'
-        return self._emit_numeric_literal(v)
+        return self._emit_numeric_literal(v, at=at)
 
-    def _emit_numeric_literal(self, v: Fraction) -> str:
+    def _emit_numeric_literal(self, v: Fraction, *, at: Expr) -> str:
         """
         Emit a numeric literal as a C++ expression.
 
         An FPy literal is an exact rational, rounded where it is *used* and
-        under the context in force there.  A value binary64 holds exactly needs
-        no rounding and prints as itself.
+        under the context in force there.  C++ has no such thing: every literal
+        it can spell is a value of some format.  So a value binary64 holds
+        exactly prints as itself, and one it cannot is refused.
 
-        One it cannot hold still becomes ``num / denom``, which is wrong in a
-        way worth knowing: that is an *operation* where FPy has a constant, so
-        it rounds under whatever mode happens to be set, and ``-O2`` folds it at
-        compile time to nearest regardless.  Rejecting such a literal outright
-        would be more honest, but three corpus functions rely on it today —
-        see ``docs/todos/cpp-literals-and-returns.md``.
+        The alternative — ``num / denom`` — is an *operation* where FPy has a
+        constant.  It rounds under whatever mode happens to be set rather than
+        the one the program asked for, and ``-O2`` folds it to nearest
+        regardless, so it is not even that.  ``fp.round`` is how a program says
+        which format the constant is in; :meth:`_fold_rounded_literal` folds it
+        here rather than emitting a cast of something unspellable.
         """
         if v.denominator == 1:
             return str(v.numerator)
         exact = _as_exact_double(v)
         if exact is not None:
             return repr(exact)
-        return f'((double){v.numerator} / (double){v.denominator})'
+        raise CppEmitError(
+            f'unsupported literal: `{v.numerator}/{v.denominator}` is not '
+            f'exactly representable as a double, and C++ has no exact-real '
+            f'literal to round at the point of use.  Wrap it in `fp.round` to '
+            f'say which format the constant is in.',
+            at=at,
+        )
 
     def _scalar_storage_for_expr(self, e: Expr) -> CppScalar:
         """Like :meth:`_storage_for_expr` but asserts the result is a
@@ -2214,6 +2221,38 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'assert({check});')
         return tmp
 
+    def _fold_rounded_literal(self, e) -> str | None:
+        """``Round(<literal>)`` as a C++ literal, or ``None`` to emit a cast.
+
+        This is the only way an inexact constant reaches C++ at all: the
+        argument has no representation of its own (see
+        :meth:`_emit_numeric_literal`), and rounding it here is what the
+        program asked for.  Doing it at compile time also gets the mode the
+        program asked for rather than whatever ``fesetround`` left behind, and
+        is immune to ``-O2`` folding the division to nearest.
+        """
+        if not isinstance(e.arg, Decnum | Hexnum | Rational | Digits | Integer):
+            return None
+        active = self._active_ctx_for(e)
+        if not isinstance(active, EFloatContext):
+            return None
+        rounded = active.round(e.arg.as_rational())
+        if rounded.isinf or rounded.isnan:
+            # An overflowing literal is a value the target format does have,
+            # but ``HUGE_VAL``/``NAN`` are a separate spelling; leave it.
+            return None
+        v = rounded.as_rational()
+        if _as_exact_double(v) is None:
+            return None
+        lit = self._emit_numeric_literal(v, at=e)
+        # The literal prints as a ``double``.  A narrower target still needs
+        # its cast, but not a rounding one: the value is already in that
+        # format, so no mode can change it.
+        target_ty = self._scalar_for_ctx(active, at=e)
+        if target_ty == CppScalar.F64:
+            return lit
+        return self._explicit_cast(lit, target_ty)
+
     def _visit_round(self, e, ctx) -> str:
         # ``Round(arg)`` rounds ``arg`` to the active rounding
         # context — emitted as a plain ``static_cast`` (the cast's
@@ -2221,7 +2260,10 @@ class CppEmitter(Visitor):
         # Phase 5b at the surrounding ``with`` boundary).  The user
         # explicitly asked to round into the active context, so the
         # cast is emitted even when lossy.  Same-type short-circuits
-        # to a no-op.
+        # to a no-op.  A literal argument is rounded here instead.
+        folded = self._fold_rounded_literal(e)
+        if folded is not None:
+            return folded
         arg = self._visit_expr(e.arg, ctx)
         arg_ty, target_ty = self._scalar_cast_types(e)
         if arg_ty == target_ty:

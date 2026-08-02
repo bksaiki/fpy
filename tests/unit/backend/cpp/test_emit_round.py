@@ -10,9 +10,12 @@ Phase 5c tests for the cpp emitter — ``Round`` and ``Cast``.
   so no cast and no assertion are emitted.
 """
 
+import pytest
+
 import fpy2 as fp
 
 from fpy2.backend.cpp import CppCompiler
+from fpy2.backend.cpp.compiler import CppCompileError
 from fpy2.types import RealType
 
 
@@ -46,6 +49,64 @@ class TestRound:
         # Same-type round → no static_cast.
         assert 'static_cast' not in out
         assert 'return x;' in out
+
+
+class TestInexactLiterals:
+    """An FPy literal is an exact rational; C++ has no such thing.
+
+    So the only inexact constant that can be emitted is one the program
+    rounded, and ``fp.round`` is where the rounding happens — at compile time,
+    under the context that asked for it.
+    """
+
+    def test_a_literal_the_program_never_rounded_is_refused(self):
+        """``num / denom`` would be an *operation* where FPy has a constant:
+        it rounds under whatever mode is set rather than the program's, and
+        ``-O2`` folds it to nearest regardless."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x * fp.rational(1, 3)
+
+        with pytest.raises(CppCompileError, match='unsupported literal'):
+            CppCompiler().compile(
+                f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+            )
+
+    def test_round_of_an_inexact_literal_is_folded(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                return fp.round(3.14159265359)
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        assert 'return 3.14159265359;' in out
+        assert 'static_cast' not in out
+
+    def test_the_fold_uses_the_contexts_rounding_mode(self):
+        """The reason to fold rather than cast: ``static_cast<double>(1/3)``
+        gets the mode that happens to be set, and at ``-O2`` not even that."""
+        toward_zero = fp.IEEEContext(11, 64, fp.RM.RTZ)
+
+        @fp.fpy
+        def f() -> fp.Real:
+            with toward_zero:
+                return fp.round(0.1)
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        # 0x1.9999999999999p-4, one ulp below the nearest double to 0.1.
+        assert 'return 0.09999999999999999;' in out
+
+    def test_a_narrower_target_still_gets_its_cast(self):
+        """Rounded at FP32, printed as the double that holds it exactly, then
+        cast — a conversion no mode can change."""
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP32:
+                return fp.round(0.1)
+
+        out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[])
+        assert 'static_cast<float>(0.10000000149011612)' in out
 
 
 class TestRoundExact:
