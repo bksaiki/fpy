@@ -208,8 +208,12 @@ class Unbox:
                 and a result can be given the representation each declares.
         """
         out = UnboxAnalysis(alias)
-        slot_replaced = _slot_replaced_regions(ast, alias, def_use)
-        out.slot_replaced = slot_replaced
+        scan = _Scan(alias, def_use, callees or {})
+        scan._visit_function(ast, None)
+        out.slot_replaced = scan.slot_replaced
+        out.ret_regions = scan.returned
+        out.written = scan.written
+        out.at_boundary = scan.at_boundary
 
         # 1. each region on its own evidence
         for site in alias.sites:
@@ -218,31 +222,19 @@ class Unbox:
                 continue
             escapes = alias.escapes(site) and not alias.transfers_ownership(site)
             shared = escapes or _shares_storage(
-                region, alias, storage, def_use, slot_replaced,
+                region, alias, storage, def_use, scan.slot_replaced,
             )
             out.boxed[region] = out.boxed.get(region, False) or shared
 
+        # 2. a called function keeps a parameter's handle only where it
+        #    *retains* it; its callers read the same summary, so both ends
+        #    reach the same answer.
         classes = [
             (cls, _regions(cls, storage, alias))
             for cls, ty in storage.class_storage.items()
             if isinstance(ty, CppList)
         ]
-        out.ret_regions = _return_regions(ast, alias)
-
-        # 3. Both sides of a compiled-to-compiled boundary keep their handles,
-        #    because the other side of it does.  For a callee that is its whole
-        #    signature; for a caller it is what a call hands back.
-        # An argument keeps its handle when the callee's parameter has one, and
-        # a result when the callee returns one.
-        # Deciding this here rather than in `alias` keeps that analysis free of
-        # C++ representations: it answers whether the callee *retains* the list,
-        # which is what lets the callee unbox in the first place; this is the
-        # separate question of matching what it then declared.
-        out.at_boundary |= _boxed_by_callees(ast, alias, callees or {})
-        out.written = _written_regions(ast, alias, callees or {})
         if is_called:
-            # A parameter only keeps its handle if this function *retains* it.
-            # Its callers read the same summary, so both ends agree.
             for cls, per_depth in classes:
                 i = _parameter_index(ast, storage.class_members[cls])
                 if i is not None and (summary is None or summary.retains(i)):
@@ -250,7 +242,7 @@ class Unbox:
         for r in out.at_boundary:
             out.boxed[r] = True
 
-        # 4. A function has one return type but may have several ``return``
+        # 3. A function has one return type but may have several ``return``
         #    statements, and unlike a storage class nothing unifies their
         #    regions.  So this group really can hold more than one, and the
         #    conjunction has to be written back or `annotate_return` and
@@ -347,125 +339,91 @@ def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:
     return None
 
 
-def _slot_replaced_regions(
-    ast: FuncDef, alias: AliasAnalysis, def_use: DefineUseAnalysis,
-) -> set[Region]:
-    """Element regions that a store puts a different list into.
+class _Scan(DefaultVisitor):
+    """One walk collecting everything ``decide`` reads off the syntax.
 
-    Conservative and function-wide: one such store anywhere means no name
-    projected out of that level may bind by reference, whatever the order.
+    Four facts, all about where a list can be reached from, and all needing the
+    same traversal:
+
+    ``slot_replaced``
+        Element regions some ``xss[i] = <list>`` puts a *different* list into.
+        A C++ reference binds to the slot, so a name projected out of one would
+        follow the replacement while FPy keeps referring to the list that was
+        there.
+
+    ``written``
+        Regions whose elements are stored into, here or in a callee.  A
+        ``const`` reference to an unboxed one would reject the store.
+
+    ``at_boundary``
+        Regions passed to, or received from, a callee that declared a handle.
+        An unknown callee counts as declaring one everywhere: its signature is
+        not ours to match.
+
+    ``returned``
+        What each ``return`` hands back, by list depth.
     """
-    out: set[Region] = set()
 
-    class _Stores(DefaultVisitor):
-        def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
-            if (
-                isinstance(stmt.var, NamedId)
-                and alias.region_of_expr(stmt.expr) is not None
-            ):
-                d = def_use.find_def_from_site(stmt.var, stmt)
-                r = alias.region_of(d, len(stmt.indices))
-                if r is not None:
-                    out.add(r)
-            super()._visit_indexed_assign(stmt, ctx)
+    def __init__(
+        self,
+        alias: AliasAnalysis,
+        def_use: DefineUseAnalysis,
+        callees: 'dict[FuncDef, CalleeAbi]',
+    ):
+        self.alias = alias
+        self.def_use = def_use
+        self.callees = callees
+        self.slot_replaced: set[Region] = set()
+        self.written: set[Region] = set()
+        self.at_boundary: set[Region] = set()
+        self.returned: list[set[Region]] = []
+        for d in alias.all_defs():
+            if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
+                if (r := alias.region_of(d)) is not None:
+                    self.written.add(r)
 
-    _Stores()._visit_function(ast, None)
-    return out
-
-
-def _written_regions(
-    ast: FuncDef,
-    alias: AliasAnalysis,
-    callees: 'dict[FuncDef, CalleeAbi]',
-) -> set[Region]:
-    """Regions whose elements are stored into, here or in a callee.
-
-    The interprocedural half matters for the same reason the representation
-    does: a callee that writes its parameter needs a non-const reference, and
-    the caller's argument has to be one too.
-    """
-    out: set[Region] = set()
-    for d in alias.all_defs():
-        if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
-            r = alias.region_of(d)
-            if r is not None:
-                out.add(r)
-
-    class _Args(DefaultVisitor):
-        def _visit_call(self, e: Call, ctx):
-            abi = callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
-            for i, a in enumerate(e.args):
-                if abi is None or i >= len(abi.params):
-                    continue
-                if not abi.params[i].written:
-                    continue
-                r = alias.region_of_expr(a)
-                if r is not None:
-                    out.add(r)
-            super()._visit_call(e, ctx)
-
-    _Args()._visit_function(ast, None)
-    return out
-
-
-def _boxed_by_callees(
-    ast: FuncDef,
-    alias: AliasAnalysis,
-    callees: 'dict[FuncDef, CalleeAbi]',
-) -> set[Region]:
-    """Regions passed to, or received from, a callee that declared a handle.
-
-    An unknown callee counts as declaring one everywhere: its signature is not
-    ours to match, so the safe assumption is the general representation.
-    """
-    out: set[Region] = set()
-
-    def mark(e: Expr) -> None:
-        depth = 0
-        while (r := alias.region_of_expr(e, depth)) is not None:
+    def _levels(self, e: Expr) -> set[Region]:
+        out, depth = set(), 0
+        while (r := self.alias.region_of_expr(e, depth)) is not None:
             out.add(r)
             depth += 1
+        return out
 
-    def unboxed(ty: CppType | None) -> bool:
-        return isinstance(ty, CppList) and not ty.boxed
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+        if (
+            isinstance(stmt.var, NamedId)
+            and self.alias.region_of_expr(stmt.expr) is not None
+        ):
+            d = self.def_use.find_def_from_site(stmt.var, stmt)
+            if (r := self.alias.region_of(d, len(stmt.indices))) is not None:
+                self.slot_replaced.add(r)
+        super()._visit_indexed_assign(stmt, ctx)
 
-    class _Args(DefaultVisitor):
-        def _visit_call(self, e: Call, ctx):
-            abi = callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
-            for i, a in enumerate(e.args):
-                want = abi.params[i].ty if abi and i < len(abi.params) else None
-                if not unboxed(want):
-                    mark(a)
-            if abi is None or not unboxed(abi.ret):
-                mark(e)
-            super()._visit_call(e, ctx)
+    def _visit_call(self, e: Call, ctx):
+        abi = self.callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
+        for i, a in enumerate(e.args):
+            param = abi.params[i] if abi and i < len(abi.params) else None
+            if param is None or not _unboxed(param.ty):
+                self.at_boundary |= self._levels(a)
+            if param is not None and param.written:
+                if (r := self.alias.region_of_expr(a)) is not None:
+                    self.written.add(r)
+        if abi is None or not _unboxed(abi.ret):
+            self.at_boundary |= self._levels(e)
+        super()._visit_call(e, ctx)
 
-    _Args()._visit_function(ast, None)
-    return out
+    def _visit_return(self, stmt: ReturnStmt, ctx):
+        depth = 0
+        while (r := self.alias.region_of_expr(stmt.expr, depth)) is not None:
+            while len(self.returned) <= depth:
+                self.returned.append(set())
+            self.returned[depth].add(r)
+            depth += 1
+        super()._visit_return(stmt, ctx)
 
 
-def _return_regions(ast: FuncDef, alias: AliasAnalysis) -> list[set[Region]]:
-    """The regions every ``return`` in *ast* may hand back, by depth."""
-    returned: list[Expr] = []
-
-    class _Returns(DefaultVisitor):
-        def _visit_return(self, stmt: ReturnStmt, ctx):
-            returned.append(stmt.expr)
-            super()._visit_return(stmt, ctx)
-
-    _Returns()._visit_function(ast, None)
-
-    out: list[set[Region]] = []
-    depth = 0
-    while True:
-        found = {
-            r for e in returned
-            if (r := alias.region_of_expr(e, depth)) is not None
-        }
-        if not found:
-            return out
-        out.append(found)
-        depth += 1
+def _unboxed(ty: CppType | None) -> bool:
+    return isinstance(ty, CppList) and not ty.boxed
 
 
 def _shares_storage(

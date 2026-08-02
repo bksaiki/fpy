@@ -396,22 +396,6 @@ class AliasAnalysis:
             cell = self._cells.part(cell, missing='none')
         return None if cell is None else self._cells.find(cell)
 
-    def regions_in_a_tuple(self) -> frozenset[Region]:
-        """Every region reachable through a tuple field, and everything inside
-        those in turn."""
-        pending = [
-            inner for parts in self._cells._parts.values()
-            for key, inner in parts.items() if key is not ELTS
-        ]
-        seen: set[Region] = set()
-        while pending:
-            root = self._cells.find(pending.pop())
-            if root in seen:
-                continue
-            seen.add(root)
-            pending.extend(self._cells._parts.get(root, {}).values())
-        return frozenset(seen)
-
     def all_defs(self) -> frozenset[Definition]:
         """Every definition the analysis gave a cell to."""
         return frozenset(self._cell_of)
@@ -457,14 +441,6 @@ class AliasAnalysis:
         """The allocations that may live in *region*."""
         return frozenset() if region is None else self._cells.sites_at(region)
 
-    def sites_of(self, d: Definition, depth: int = 0) -> frozenset[AllocSite]:
-        """The allocations *d* may refer to, *depth* list levels in.
-
-        An empty result means *no information*, not *nothing there*: the level
-        may simply never have been looked inside.  Read it conservatively.
-        """
-        return self.sites_at(self.region_of(d, depth))
-
     def is_shared(self, site: AllocSite) -> bool:
         """Whether more than one place may refer to *site*."""
         return self._cells.referrers(self._site_cell[site]) > 1
@@ -504,6 +480,11 @@ class AliasAnalysis:
     def is_uniquely_owned(self, site: AllocSite) -> bool:
         """Whether nothing else may observe *site* — the condition under which
         copying, or representing it by value, is unobservable.
+
+        The analysis-level answer, which counts every name.  A consumer that
+        knows its own bindings can refine it: the C++ backend discounts a name
+        it will bind by reference, so it unboxes some sites this calls shared.
+        Refining in that direction is safe; the reverse would not be.
 
         One referrer, never shared outward, and if it is returned then the return
         transfers ownership.
@@ -588,18 +569,24 @@ class _Builder(DefaultVisitor):
         self.cells.add_site(cell, site)
         self.site_cell[site] = self.cells.find(cell)
 
-    def _alloc(self, kind: str, node: Expr) -> _Cell:
+    def _alloc(self, kind: str, node: Expr, *, deep: bool = False) -> _Cell:
         """A cell for a value *node* brings into existence.
 
-        One site per *level* of a nested list, not just the outermost: the rows
-        of a fresh ``list[list[T]]`` are freshly allocated too.  Without them
-        that level has no site at all, and a consumer cannot tell "nothing owns
-        this" from "nothing is known about it" — same shape as
-        :meth:`_seed_params`, for the same reason.
+        *deep* also records a site for each nested level, which an expression
+        needs when nothing else describes its elements — ``empty(r, c)`` or a
+        call result.  Without one, that level has no site at all and a consumer
+        cannot tell "nothing owns this" from "nothing is known about it".
+
+        Off by default, because a literal or a comprehension *does* describe its
+        elements: those are expressions of their own, and each allocates its own
+        cell.  Seeding on top of them would give one place two parts, which
+        merge into two referrers and read as shared.
         """
         # transient: an allocation is not itself a place a reference is held
         cell = self.cells.new(kind)
         self._site(kind, node, cell)
+        if not deep:
+            return cell
         ty = self.types.by_expr.get(node)
         cur, depth = cell, 0
         while isinstance(ty, ListType) and isinstance(ty.elt, ListType):
@@ -734,7 +721,7 @@ class _Builder(DefaultVisitor):
                         )
                 return cell
             case Call():
-                cell = self._alloc('call', e)
+                cell = self._alloc('call', e, deep=True)
                 self._escape_args(e)
                 return cell
             case Range1() | Range2() | Range3() | Empty():
@@ -743,11 +730,11 @@ class _Builder(DefaultVisitor):
                 # must not escape what its operands mention.  `range(len(xs))`
                 # is a common enough shape that treating it conservatively
                 # would box most parameters for no reason.
-                return self._alloc('builtin', e)
+                return self._alloc('builtin', e, deep=True)
             case _:
                 # An unmodelled expression: assume it allocates, and that it may
                 # retain anything named inside it.
-                cell = self._alloc('builtin', e)
+                cell = self._alloc('builtin', e, deep=True)
                 _EscapeVars(self)._visit_expr(e, None)
                 return cell
 

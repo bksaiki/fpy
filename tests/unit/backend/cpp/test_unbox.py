@@ -586,6 +586,36 @@ class TestProjectionByReference:
         assert 'auto& row' not in out, out
 
 
+    def test_a_literal_nested_three_deep_unboxes_at_every_level(self):
+        """Seeding a site per level is only right where nothing else describes
+        the elements.
+
+        A literal's elements are expressions that allocate cells of their own,
+        so seeding on top of them gave one place two parts — which merge into
+        two referrers and read as shared.  It showed only at depth three,
+        because at depth two the inner literal has no parts to collide with.
+        """
+        @fp.fpy
+        def f() -> list[list[list[fp.Real]]]:
+            with fp.FP64:
+                x = [[[1.0, 2.0]]]
+                x[0][0][0] = 0
+                return x
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        assert 'fpy::list' not in out, out
+
+    def test_a_call_result_still_seeds_its_levels(self):
+        """The other half of the rule: nothing local describes the elements of
+        a value a callee hands back, so those levels do need seeding."""
+        import fpy2.libraries.matrix as M
+
+        _p, ret = CppCompiler().signature(
+            M.identity, ctx=fp.FP64, arg_types=[R],
+        )
+        assert _levels(ret) == [False, False], ret.format()
+
+
 class TestListsInsideTuples:
     """A list held in a tuple is decided like any other.
 
