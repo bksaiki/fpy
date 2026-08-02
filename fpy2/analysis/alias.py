@@ -438,6 +438,15 @@ class AliasAnalysis:
         cell = self._site_cell.get(site)
         return None if cell is None else self._cells.find(cell)
 
+    def escapes_at(self, region: Region) -> bool:
+        """Whether *region* is held by something outside while this function
+        still holds it — handed to a call, or to an unmodelled operation."""
+        return self._cells.is_shared_out(region)
+
+    def returned_at(self, region: Region) -> bool:
+        """Whether *region* is handed to the caller by a ``return``."""
+        return self._cells.is_returned(region)
+
     def sites_at(self, region: Region | None) -> frozenset[AllocSite]:
         """The allocations that may live in *region*."""
         return frozenset() if region is None else self._cells.sites_at(region)

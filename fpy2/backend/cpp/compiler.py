@@ -66,6 +66,7 @@ class SpecAnalyses:
     format_info: FormatAnalysis
     storage: StorageAnalysis
     alias: AliasAnalysis
+    summary: EscapeSummary
     unbox: UnboxAnalysis | None
 
 
@@ -284,27 +285,15 @@ class CppCompiler(Backend):
         was an ABI bug rather than a missed optimization.
         """
         called = {id(c.ast) for f in specs for c in _callees(f.ast)}
-        summaries = self._summaries(specs)
+        summaries: dict[FuncDef, EscapeSummary] = {}
         for f in specs:
             a = self.analyze(
                 f, is_called=id(f.ast) in called, summaries=summaries,
                 callee_params=params,
             )
             yield f, a
+            summaries[f.ast] = a.summary
             params[f.ast] = _param_storage(a)
-
-    def _summaries(
-        self, specs: list[Function],
-    ) -> dict[FuncDef, EscapeSummary]:
-        """Escape summaries for every spec, leaves-first.
-
-        A caller needs its callees' summaries to know which arguments it can
-        stop treating as shared; :meth:`specialize` already orders them.
-        """
-        out: dict[FuncDef, EscapeSummary] = {}
-        for f in specs:
-            out[f.ast] = Escape.analyze(f.ast, out)
-        return out
 
     def specialize(self, module: Module) -> list[Function]:
         """Steps 1-3 of the pipeline: the fully-specialized functions, in
@@ -381,12 +370,19 @@ class CppCompiler(Backend):
             ) from e
 
         alias = Alias.analyze(ast, def_use=def_use, summaries=summaries)
+        # This function's own summary, from the alias analysis it already has.
+        # Its callers read it to decide whether they can stop treating an
+        # argument as shared; it reads its own to decide the same about its
+        # parameters, so both ends reach the same answer.
+        summary = Escape.analyze(
+            ast, summaries, def_use=def_use, alias=alias,
+        )
         unbox = None
         if self._unbox:
             unbox = Unbox.decide(
                 ast, storage, alias, def_use,
                 is_called=is_called,
-                summary=(summaries or {}).get(ast),
+                summary=summary,
                 callee_params=callee_params,
             )
             # Rewrite each class's storage in place: the emitter reads a
@@ -400,6 +396,7 @@ class CppCompiler(Backend):
             format_info=format_info,
             storage=storage,
             alias=alias,
+            summary=summary,
             unbox=unbox,
         )
 
