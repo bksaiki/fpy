@@ -58,8 +58,20 @@ from dataclasses import dataclass, field
 
 from ...analysis import Definition
 from ...analysis.alias import AliasAnalysis, Region
+from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.reaching_defs import AssignDef
-from ...ast.fpyast import Argument, Expr, FuncDef, ReturnStmt
+from ...ast.fpyast import (
+    Argument,
+    Assign,
+    Expr,
+    ForStmt,
+    FuncDef,
+    IndexedAssign,
+    ListComp,
+    NamedId,
+    ReturnStmt,
+    Var,
+)
 from ...ast.visitor import DefaultVisitor
 from .storage_infer import StorageAnalysis
 from .types import CppList, CppType
@@ -123,6 +135,7 @@ class Unbox:
         ast: FuncDef,
         storage: StorageAnalysis,
         alias: AliasAnalysis,
+        def_use: DefineUseAnalysis,
         *,
         is_called: bool = False,
     ) -> UnboxAnalysis:
@@ -132,6 +145,7 @@ class Unbox:
             ast: the function, for its ``return`` statements.
             storage: the storage classes to decide.
             alias: what may refer to what.
+            def_use: to tell a binding that copies from one that references.
             is_called: whether compiled code calls this function.  If so its
                 parameters keep their handles, since a caller passing a list has
                 marked it shared outward and will hold a handle.
@@ -143,8 +157,9 @@ class Unbox:
             region = alias.region_of_site(site)
             if region is None:
                 continue
-            owned = alias.is_uniquely_owned(site)
-            out.boxed[region] = out.boxed.get(region, False) or not owned
+            escapes = alias.escapes(site) and not alias.transfers_ownership(site)
+            shared = escapes or _shares_storage(region, alias, storage, def_use)
+            out.boxed[region] = out.boxed.get(region, False) or shared
         out.own_boxed = dict(out.boxed)
 
         # 2. a storage class must have one representation per level, so every
@@ -274,3 +289,80 @@ def _return_regions(ast: FuncDef, alias: AliasAnalysis) -> list[set[Region]]:
             return out
         out.append(found)
         depth += 1
+
+
+def _shares_storage(
+    region: Region,
+    alias: AliasAnalysis,
+    storage: StorageAnalysis,
+    def_use: DefineUseAnalysis,
+) -> bool:
+    """Whether more than one place in this function holds *region* separately.
+
+    Not the same question as ``AliasAnalysis.is_shared``, which counts every
+    name.  What decides a representation is whether a second name gets its own
+    *storage*: a name the emitter binds by reference copies nothing, so a value
+    representation stays unobservable through it.  ``for row in xss`` and the
+    ``_src = xs`` aliases ``ZipElim`` introduces are both of that kind, and both
+    are common enough that counting them would box most idiomatic programs.
+
+    Deliberately mirrors the emitter's binding rules rather than approximating
+    them: discounting a name the emitter then *copies* would be a
+    miscompilation, not a lost optimization.
+    """
+    by_name: dict[NamedId, list[AssignDef]] = {}
+    for d in alias.defs_in(region):
+        # Only definitions that *bind* a name count.  A phi and an
+        # `xs[i] = e` are redefinitions of one already there: SSA gives them
+        # their own def, but neither introduces a place.
+        if isinstance(d, AssignDef) and not isinstance(d.site, IndexedAssign):
+            by_name.setdefault(d.name, []).append(d)
+    slots = alias.referrers(region) - len(by_name)
+    owned_separately = 0
+    for ds in by_name.values():
+        if not all(_binds_by_reference(d, storage, def_use) for d in ds):
+            owned_separately += 1
+    return slots + owned_separately > 1
+
+
+def _binds_by_reference(
+    d: AssignDef, storage: StorageAnalysis, def_use: DefineUseAnalysis,
+) -> bool:
+    """Whether the emitter binds *d* as a reference to storage that exists
+    already.
+
+    Mirrors ``_arg_decl``, ``_foreach_decl`` and ``_is_readonly_alias``.  All
+    three require that the name is never rebound, since a ``const`` reference
+    cannot be.
+    """
+    if _is_rebound(d, storage):
+        return False
+    match d.site:
+        case Argument():
+            # Never: a parameter's reference points at the *caller's* storage,
+            # which is a place of its own.  Discounting it would let
+            # `zss = [xs]` look unshared -- the slot would be the only holder
+            # counted, and the caller would vanish.
+            return False
+        case ForStmt() | ListComp():
+            return True
+        case Assign(expr=Var() as src_var):
+            # `_is_readonly_alias`: the target must declare at this assign, and
+            # the source must not be rebound either
+            src = def_use.find_def_from_use(src_var)
+            return (
+                d in storage.declare_at_assign
+                and isinstance(src, AssignDef)
+                and not _is_rebound(src, storage)
+            )
+        case _:
+            return False
+
+
+def _is_rebound(d: Definition, storage: StorageAnalysis) -> bool:
+    """As ``CppEmitter._is_rebound``: is the name ever bound to another value?"""
+    cls = storage.def_class[d]
+    return any(
+        m is not d and isinstance(m, AssignDef) and isinstance(m.site, Assign)
+        for m in storage.class_members[cls]
+    )

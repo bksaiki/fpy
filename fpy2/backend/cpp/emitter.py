@@ -521,13 +521,28 @@ class CppEmitter(Visitor):
         unboxed list has no such indirection, so ``const std::vector<T>&`` makes
         its elements const too and the same store stops compiling.
         """
-        if not (isinstance(storage, CppList) and not storage.boxed):
+        if self.unbox is None:
             return False
-        cls = self.storage.def_class[d]
-        return any(
-            isinstance(m, AssignDef) and isinstance(m.site, IndexedAssign)
-            for m in self.storage.class_members[cls]
-        )
+        # Every *unboxed* level, not just the outermost: `const` reaches through
+        # a value container, so a write to a row of a
+        # `vector<vector<T>>` needs the whole thing non-const.  A boxed level
+        # stops the walk -- `const fpy::list<T>&` still yields mutable
+        # elements, which is the indirection's whole point.
+        #
+        # Region-wide at each level, not class-wide: `ys = xs; ys[0] = e`
+        # writes through a *different* storage class than the one declared.
+        ty, depth = storage, 0
+        while isinstance(ty, CppList) and not ty.boxed:
+            region = self.unbox.alias.region_of(d, depth)
+            if region is None:
+                return True
+            if any(
+                isinstance(m, AssignDef) and isinstance(m.site, IndexedAssign)
+                for m in self.unbox.alias.defs_in(region)
+            ):
+                return True
+            ty, depth = ty.elt, depth + 1
+        return False
 
     def _foreach_decl(self, target_def, name: str) -> str:
         """Loop-variable declaration for a range-for over a container.
@@ -542,6 +557,10 @@ class CppEmitter(Visitor):
             return f'const auto& {name}'
         storage = self.storage.storage_of(target_def)
         if self._is_aggregate(storage) and not self._is_rebound(target_def):
+            # same rule as `_arg_decl`: an unboxed element that is written
+            # cannot be reached through a const reference
+            if self._writes_through(target_def, storage):
+                return f'{storage.format()}& {name}'
             return f'const {storage.format()}& {name}'
         return f'{storage.format()} {name}'
 
@@ -772,7 +791,14 @@ class CppEmitter(Visitor):
                     # const reference instead of copying the whole value.
                     src = self._visit_expr(stmt.expr, ctx)
                     target_name = self.storage.def_to_name[target_def]
-                    self.writer.add_line(f'const auto& {target_name} = {src};')
+                    # `auto&` when the alias must stay writable: an unboxed
+                    # list reached through a const reference has const elements
+                    ref = (
+                        'auto&'
+                        if self._writes_through(target_def, target_storage)
+                        else 'const auto&'
+                    )
+                    self.writer.add_line(f'{ref} {target_name} = {src};')
                 else:
                     rhs = self._emit_assign_rhs(stmt.expr, target_storage, ctx)
                     self._emit_bind(stmt.target, stmt, rhs)

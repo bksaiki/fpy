@@ -320,7 +320,9 @@ class CppCompiler(Backend):
         alias = Alias.analyze(ast, def_use=def_use)
         unbox = None
         if self._unbox:
-            unbox = Unbox.decide(ast, storage, alias, is_called=is_called)
+            unbox = Unbox.decide(
+                ast, storage, alias, def_use, is_called=is_called,
+            )
             # Rewrite each class's storage in place: the emitter reads a
             # declaration's representation straight off the type.
             storage.class_storage.update(unbox.storage)

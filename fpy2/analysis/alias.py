@@ -418,6 +418,23 @@ class AliasAnalysis:
             cell = self._cells.part(cell, missing='none')
         return None if cell is None else self._cells.find(cell)
 
+    def defs_in(self, region: Region) -> frozenset[Definition]:
+        """Every definition whose value may live in *region*.
+
+        A consumer that wants to reason about the *bindings* sharing a list —
+        rather than just how many there are — needs these.
+        """
+        out = {
+            d for d, c in self._cell_of.items()
+            if self._cells.find(c) is region
+        }
+        return frozenset(out)
+
+    def referrers(self, region: Region) -> int:
+        """How many places may hold a reference into *region*: distinct source
+        names plus container slots."""
+        return self._cells.referrers(region)
+
     def region_of_site(self, site: AllocSite) -> Region | None:
         """Which region *site*'s allocation lives in."""
         cell = self._site_cell.get(site)

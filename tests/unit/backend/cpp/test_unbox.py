@@ -31,7 +31,7 @@ def _decide(f: fp.Function, arg_types):
     m.add(f, ctx=fp.FP64, arg_types=list(arg_types))
     a = cc.analyze(cc.specialize(m)[-1])
     alias = Alias.analyze(a.ast, def_use=a.def_use)
-    ub = Unbox.decide(a.ast, a.storage, alias)
+    ub = Unbox.decide(a.ast, a.storage, alias, a.def_use)
     by_name = {
         a.storage.def_to_name[cls]: ty for cls, ty in ub.storage.items()
     }
@@ -126,13 +126,24 @@ class TestUnboxed:
 class TestStaysBoxed:
     """The conservative direction, one reason at a time."""
 
-    def test_shared_parameter(self):
+    def test_parameter_handed_to_a_call(self):
+        """Conservative: a callee may retain its argument, so the caller keeps
+        a handle — and the callee's parameter has to match it.
+
+        (``ys = xs`` is *not* an example any more: both names bind references
+        to one vector, so nothing is copied.  See
+        :class:`TestReferenceBoundNames`.)
+        """
+        @fp.fpy
+        def g(zs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                zs[0] = 99
+                return zs[0]
+
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
-                ys = xs
-                ys[0] = 99
-                return xs[0]
+                return g(xs)
 
         storage, reasons = _decide(f, [ListType(R)])
         assert _levels(storage['xs']) == [True]
@@ -149,3 +160,117 @@ class TestStaysBoxed:
         storage, reasons = _decide(f, [ListType(ListType(R))])
         assert _levels(storage['xss']) == [False, True]
         assert reasons[('xss', 1)] == 'shared'
+
+
+class TestReferenceBoundNames:
+    """A name the emitter binds by reference is not a second place.
+
+    ``AliasAnalysis`` counts every name, which is the right answer to *what
+    aliases*.  But a ``const&`` binding copies nothing, so a value
+    representation stays unobservable through it — and the two idioms that hit
+    this, ``for row in xss`` and the aliases ``ZipElim`` introduces, cover most
+    of what an FPy program looks like.
+    """
+
+    def test_named_loop_variable_does_not_box_the_rows(self):
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for xs in xss:
+                    for x in xs:
+                        acc = acc + x
+                return acc
+
+        storage, _ = _decide(f, [ListType(ListType(R))])
+        assert _levels(storage['xss']) == [False, False]
+
+    def test_zip_elim_does_not_box_its_operands(self):
+        """An *optimization* must not cost a representation.  ``ZipElim``
+        rewrites ``zip(xs, ys)`` into ``_src = xs`` aliases plus indexed
+        access; those are reference bindings, so nothing is copied."""
+        @fp.fpy
+        def g(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for x, y in zip(xs, ys):
+                    acc = acc + x * y
+                return acc
+
+        args = [ListType(R), ListType(R)]
+        opt, _ = _decide(g, args)
+        assert _levels(opt['xs']) == [False]
+        assert _levels(opt['ys']) == [False]
+
+        # ...and it agrees with the unoptimized pipeline, which is the property
+        # that actually matters: the two must not disagree about storage.
+        unopt = CppCompiler(optimize=False).compile(
+            g, ctx=fp.FP64, arg_types=args,
+        )
+        assert 'const std::vector<double>& xs' in unopt
+
+
+class TestDiscountHasLimits:
+    """Where discounting a reference-bound name would be *wrong*.
+
+    Both of these were miscompiled by the first version of the discount, so
+    they are pinned rather than left to the differential harness.
+    """
+
+    def test_a_parameter_is_never_discounted(self):
+        """``zss = [xs]`` puts the caller's list in a container.  The parameter
+        binds by reference — but to the *caller's* storage, which is a place of
+        its own, so discounting it would leave the slot as the only holder
+        counted and the list would look unshared."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                zss = [xs]
+                zss[0][0] = 99
+                return xs[0]
+
+        storage, _ = _decide(f, [ListType(R)])
+        assert _levels(storage['xs']) == [True]
+
+    def test_alias_that_writes_stays_writable(self):
+        """``ys = xs; ys[0] = 99`` may unbox — both names reference one vector
+        — but then neither may be ``const``, and the write is on a *different*
+        storage class than the parameter, so const-ness is a question about the
+        whole alias region."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                ys = xs
+                ys[0] = 99
+                return xs[0]
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        assert 'std::vector<double>& xs' in out
+        assert 'const std::vector<double>& xs' not in out
+        assert 'auto& ys = xs;' in out
+        assert 'const auto& ys' not in out
+        assert f([1.0, 2.0], ctx=fp.FP64) == 99
+
+    def test_const_propagates_out_through_unboxed_levels(self):
+        """A write to a *row* makes the whole nested parameter non-const.
+
+        ``const`` reaches through a value container, so a
+        ``const std::vector<std::vector<T>>&`` has const rows and a mutable
+        loop variable cannot bind to one.  A boxed level would stop this — the
+        indirection is exactly what lets ``const fpy::list<T>&`` yield mutable
+        elements.
+        """
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                for row in xss:
+                    row[0] = 99
+                return xss[0][0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(ListType(R))],
+        )
+        assert 'std::vector<std::vector<double>>& xss' in out
+        assert 'const std::vector<std::vector<double>>&' not in out
+        assert 'std::vector<double>& row' in out
+        assert f([[1.0, 2.0]], ctx=fp.FP64) == 99
