@@ -583,9 +583,22 @@ class _Builder(DefaultVisitor):
         self.site_cell[site] = self.cells.find(cell)
 
     def _alloc(self, kind: str, node: Expr) -> _Cell:
+        """A cell for a value *node* brings into existence.
+
+        One site per *level* of a nested list, not just the outermost: the rows
+        of a fresh ``list[list[T]]`` are freshly allocated too.  Without them
+        that level has no site at all, and a consumer cannot tell "nothing owns
+        this" from "nothing is known about it" — same shape as
+        :meth:`_seed_params`, for the same reason.
+        """
         # transient: an allocation is not itself a place a reference is held
         cell = self.cells.new(kind)
         self._site(kind, node, cell)
+        ty = self.types.by_expr.get(node)
+        cur, depth = cell, 0
+        while isinstance(ty, ListType) and isinstance(ty.elt, ListType):
+            cur, ty, depth = self._part(cur), ty.elt, depth + 1
+            self._site(kind, node, cur, depth)
         return cell
 
     def _merge_redefinitions(self) -> None:

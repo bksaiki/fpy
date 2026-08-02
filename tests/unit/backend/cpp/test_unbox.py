@@ -411,3 +411,46 @@ class TestAcrossACall:
         assert 'const std::vector<double>& zs' in out
         assert 'const fpy::list<double>& xs' in out
         assert re.search(r'reads__\w+\(\*xs\)', out), out
+
+
+class TestFreshNestedAllocations:
+    """A fresh ``list[list[T]]`` allocates its rows too.
+
+    Without a site at each level, the inner one has no allocation recorded
+    against it, and a consumer cannot tell "nothing owns this" from "nothing is
+    known about it" — so it kept its handle.  Every nested-returning matrix
+    kernel was affected.
+    """
+
+    def test_a_returned_nested_result_unboxes_at_every_level(self):
+        import fpy2.libraries.matrix as M
+
+        N = ListType(ListType(R))
+        _params, ret = CppCompiler().signature(
+            M.add, ctx=fp.FP64, arg_types=[N, N],
+        )
+        assert _levels(ret) == [False, False], ret.format()
+
+    def test_rows_of_a_fresh_nested_list_are_owned(self):
+        @fp.fpy
+        def f(n: fp.Real) -> list[list[fp.Real]]:
+            with fp.FP64:
+                m = [[n, n], [n, n]]
+                m[0][0] = n + 1
+                return m
+
+        storage, _ = _decide(f, [R])
+        assert _levels(storage['m']) == [False, False]
+
+    def test_rows_that_are_shared_still_keep_their_handles(self):
+        """The seeding must not paper over real sharing: here the rows of the
+        fresh outer list *are* the caller's."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                m = [xs, xs]
+                m[0][0] = 99
+                return xs[0]
+
+        storage, _ = _decide(f, [ListType(R)])
+        assert _levels(storage['m']) == [False, True]
