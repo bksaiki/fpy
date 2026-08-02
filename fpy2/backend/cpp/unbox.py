@@ -37,10 +37,12 @@ from dataclasses import dataclass, field
 from ...analysis import Definition
 from ...analysis.alias import AliasAnalysis, Region
 from ...analysis.define_use import DefineUseAnalysis
+from ...analysis.escape import EscapeSummary
 from ...analysis.reaching_defs import AssignDef
 from ...ast.fpyast import (
     Argument,
     Assign,
+    Call,
     Expr,
     ForStmt,
     FuncDef,
@@ -51,6 +53,7 @@ from ...ast.fpyast import (
     Var,
 )
 from ...ast.visitor import DefaultVisitor
+from ...function import Function
 from .storage_infer import (
     StorageAnalysis,
     binds_by_reference,
@@ -72,10 +75,33 @@ class UnboxAnalysis:
     boxed: dict[Region, bool] = field(default_factory=dict)
     storage: dict[Definition, CppType] = field(default_factory=dict)
     ret_regions: list[set[Region]] = field(default_factory=list)
+    written: set[Region] = field(default_factory=set)
     at_boundary: set[Region] = field(default_factory=set)
     boxed_because: dict[tuple[Definition, int], str] = field(
         default_factory=dict,
     )
+
+    def writes_through(self, region: Region | None, ty: CppType) -> bool:
+        """Whether a ``const`` reference to this would reject a write FPy allows.
+
+        ``const fpy::list<T>&`` does not — ``const`` qualifies the handle, and
+        ``xs[i] = e`` through one is FPy's parameter semantics.  An unboxed list
+        has no such indirection, so ``const std::vector<T>&`` makes its elements
+        const too.
+
+        Walks every *unboxed* level: ``const`` reaches through a value
+        container, so a write to a row needs the whole thing non-const.  A boxed
+        level stops it.
+        """
+        depth = 0
+        while isinstance(ty, CppList) and not ty.boxed:
+            if region is None:
+                return True
+            if region in self.written:
+                return True
+            region = self.alias.region_at(region)
+            ty, depth = ty.elt, depth + 1
+        return False
 
     def annotate(self, e: Expr, ty: CppType) -> CppType:
         """*ty* with each list level's representation as decided for *e*.
@@ -119,6 +145,8 @@ class Unbox:
         def_use: DefineUseAnalysis,
         *,
         is_called: bool = False,
+        summary: 'EscapeSummary | None' = None,
+        callee_params: 'dict[FuncDef, list[tuple[CppType, bool]]] | None' = None,
     ) -> UnboxAnalysis:
         """Which lists may drop the handle.
 
@@ -127,9 +155,13 @@ class Unbox:
             storage: the storage classes to decide.
             alias: what may refer to what.
             def_use: to tell a binding that copies from one that references.
-            is_called: whether compiled code calls this function.  If so its
-                parameters keep their handles, since a caller passing a list has
-                marked it shared outward and will hold a handle.
+            is_called: whether compiled code calls this function.
+            summary: this function's own escape summary.  A parameter it does
+                not retain can drop its handle even when it is called, because
+                the caller reads that same summary and stops treating the
+                argument as shared.  Absent means retains everything.
+            callee_params: emitted parameter types of the callees, so an
+                argument can be given the representation the callee declares.
         """
         out = UnboxAnalysis(alias)
 
@@ -163,11 +195,23 @@ class Unbox:
                 r = alias.region_of_site(site)
                 if r is not None:
                     out.at_boundary.add(r)
+        # An argument keeps its handle when the callee's parameter has one.
+        # Deciding this here rather than in `alias` keeps that analysis free of
+        # C++ representations: it answers whether the callee *retains* the list,
+        # which is what lets the callee unbox in the first place; this is the
+        # separate question of matching what it then declared.
+        out.at_boundary |= _boxed_by_callees(ast, alias, callee_params or {})
+        out.written = _written_regions(ast, alias, callee_params or {})
         if is_called:
+            # The return still does: a caller stores the result somewhere, and
+            # nothing yet tells it what representation to expect back.
             for regions in out.ret_regions:
                 out.at_boundary |= regions
+            # A parameter only keeps its handle if this function *retains* it.
+            # Its callers read the same summary, so both ends agree.
             for cls, per_depth in classes:
-                if _has_parameter(storage.class_members[cls]):
+                i = _parameter_index(ast, storage.class_members[cls])
+                if i is not None and (summary is None or summary.retains(i)):
                     out.at_boundary |= {r for r in per_depth if r is not None}
         for r in out.at_boundary:
             out.boxed[r] = True
@@ -248,16 +292,81 @@ def _read(
     return CppList(elt, boxed=True)
 
 
-def _has_parameter(members: list[Definition]) -> bool:
-    """Whether this storage class is a function parameter.
+def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:
+    """Which parameter this storage class is, if any.
 
     Asks every member: which def represents a class is an artifact of union
     order, so the argument-sited one need not be it.
     """
-    return any(
-        isinstance(d, AssignDef) and isinstance(d.site, Argument)
-        for d in members
-    )
+    for d in members:
+        if isinstance(d, AssignDef) and isinstance(d.site, Argument):
+            for i, arg in enumerate(ast.args):
+                if arg is d.site:
+                    return i
+    return None
+
+
+def _written_regions(
+    ast: FuncDef,
+    alias: AliasAnalysis,
+    callee_params: 'dict[FuncDef, list[tuple[CppType, bool]]]',
+) -> set[Region]:
+    """Regions whose elements are stored into, here or in a callee.
+
+    The interprocedural half matters for the same reason the representation
+    does: a callee that writes its parameter needs a non-const reference, and
+    the caller's argument has to be one too.
+    """
+    out: set[Region] = set()
+    for d in alias.all_defs():
+        if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
+            r = alias.region_of(d)
+            if r is not None:
+                out.add(r)
+
+    class _Args(DefaultVisitor):
+        def _visit_call(self, e: Call, ctx):
+            params = None
+            if isinstance(e.fn, Function):
+                params = callee_params.get(e.fn.ast)
+            for i, a in enumerate(e.args):
+                if not params or i >= len(params) or not params[i][1]:
+                    continue
+                r = alias.region_of_expr(a)
+                if r is not None:
+                    out.add(r)
+            super()._visit_call(e, ctx)
+
+    _Args()._visit_function(ast, None)
+    return out
+
+
+def _boxed_by_callees(
+    ast: FuncDef,
+    alias: AliasAnalysis,
+    callee_params: 'dict[FuncDef, list[tuple[CppType, bool]]]',
+) -> set[Region]:
+    """Regions passed where the callee declared a handle."""
+    out: set[Region] = set()
+
+    class _Args(DefaultVisitor):
+        def _visit_call(self, e: Call, ctx):
+            params = None
+            if isinstance(e.fn, Function):
+                params = callee_params.get(e.fn.ast)
+            for i, a in enumerate(e.args):
+                want = params[i][0] if params and i < len(params) else None
+                unboxed_there = isinstance(want, CppList) and not want.boxed
+                if unboxed_there:
+                    continue
+                depth = 0
+                while (r := alias.region_of_expr(a, depth)) is not None:
+                    out.add(r)
+                    depth += 1
+            super()._visit_call(e, ctx)
+
+    _Args()._visit_function(ast, None)
+    return out
 
 
 def _return_regions(ast: FuncDef, alias: AliasAnalysis) -> list[set[Region]]:
