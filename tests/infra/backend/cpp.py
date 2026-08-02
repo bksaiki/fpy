@@ -174,26 +174,35 @@ def _exec_skip_reason(func: fp.Function) -> str | None:
     return None
 
 
-def _emit_print(expr: str, value, lines: list[str], counter: list[int]) -> None:
+def _emit_print(
+    expr: str, value, cty, lines: list[str], counter: list[int],
+) -> None:
     """Emit C++ statements that print *expr* — whose runtime value mirrors
     the interpreter *value* — as a whitespace-separated token stream that
-    :func:`_compare` reads back structurally."""
+    :func:`_compare` reads back structurally.
+
+    *cty* is the emitted storage type: whether a list is reached through a
+    handle.
+    """
     if isinstance(value, bool):
         lines.append(f'  std::printf("%d ", (int)({expr}));')
     elif isinstance(value, list):
-        lines.append(f'  std::printf("%zu ", (size_t)(({expr})->size()));')
+        seq = f'(*({expr}))' if getattr(cty, 'boxed', False) else f'({expr})'
+        lines.append(f'  std::printf("%zu ", (size_t){seq}.size());')
         if value:  # homogeneous: one representative element shape
             i = counter[0]
             counter[0] += 1
             elt = f'__e{i}'
             # ``auto`` (by value), not ``auto&``: ``std::vector<bool>`` yields
             # proxy rvalues that a non-const reference cannot bind to.
-            lines.append(f'  for (auto {elt} : *({expr})) {{')
-            _emit_print(elt, value[0], lines, counter)
+            lines.append(f'  for (auto {elt} : {seq}) {{')
+            _emit_print(elt, value[0], cty.elt, lines, counter)
             lines.append('  }')
     elif isinstance(value, tuple):
         for i, elt in enumerate(value):
-            _emit_print(f'std::get<{i}>({expr})', elt, lines, counter)
+            _emit_print(
+                f'std::get<{i}>({expr})', elt, cty.elts[i], lines, counter,
+            )
     else:  # real scalar
         lines.append(f'  std::printf("%a ", (double)({expr}));')
 
@@ -385,6 +394,40 @@ def _cpp_type(ty) -> str:
             raise ValueError(f'no C++ type for: {ty.format()}')
 
 
+def _cpp_value(value, cty) -> str:
+    """C++ initializer for *value* at emitted storage type *cty*.
+
+    Built from the *storage* type rather than the FPy type: whether a list is a
+    handle or a bare vector is the backend's choice (see
+    ``fpy2.backend.cpp.unbox``), and the driver has to match it exactly.
+    """
+    from fpy2.backend.cpp.types import CppList, CppScalar, CppTuple
+    match cty:
+        case CppList():
+            elts = ', '.join(_cpp_value(v, cty.elt) for v in value)
+            if cty.boxed:
+                return f'fpy::make_list<{cty.elt.format()}>({{{elts}}})'
+            return f'{cty.format()}{{{elts}}}'
+        case CppTuple():
+            elts = ', '.join(
+                _cpp_value(v, e) for v, e in zip(value, cty.elts)
+            )
+            return f'std::make_tuple({elts})'
+        case CppScalar.BOOL:
+            return 'true' if value else 'false'
+        case _:
+            v = float(value)
+            if math.isnan(v):
+                return 'std::numeric_limits<double>::quiet_NaN()'
+            if math.isinf(v):
+                inf = 'std::numeric_limits<double>::infinity()'
+                return f'-{inf}' if v < 0 else inf
+            # ``repr`` is the shortest round-tripping decimal; C++ parses it
+            # (correctly-rounded) to the identical double.  Decimal — not a
+            # hex-float literal — keeps the driver valid under C++11.
+            return repr(v)
+
+
 def _cpp_literal(value, ty) -> str:
     """C++ literal for *value* of (instantiated) type *ty*."""
     match ty:
@@ -426,14 +469,26 @@ def _emit_driver(
     name = hashlib.md5(func.name.encode()).hexdigest()
     cpp_path = output_dir / f'{prefix}_{name}_run.cpp'
     body = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
+    params, ret_ty = compiler.signature(
+        func, ctx=fp.FP64, arg_types=arg_types,
+    )
     counter = [0]
     main_lines = ['int main() {']
     for inputs, expected in samples:
-        args = ', '.join(_cpp_literal(v, t) for v, t in zip(inputs, arg_types))
         # Each sample in its own scope; one printed line per sample.
         main_lines.append('  {')
-        main_lines.append(f'    auto __ret = {func.name}({args});')
-        _emit_print('__ret', expected, main_lines, counter)
+        # Bind every argument to a named local: a non-const reference
+        # parameter cannot bind to a prvalue.
+        names = []
+        for i, (v, cty) in enumerate(zip(inputs, params)):
+            names.append(f'__a{i}')
+            main_lines.append(
+                f'    {cty.format()} __a{i} = {_cpp_value(v, cty)};'
+            )
+        main_lines.append(
+            f'    auto __ret = {func.name}({", ".join(names)});'
+        )
+        _emit_print('__ret', expected, ret_ty, main_lines, counter)
         main_lines.append(r'    std::printf("\n");')
         main_lines.append('  }')
     main_lines.append('  return 0;')
@@ -909,6 +964,25 @@ def _abi_row_element_write(xss: list[list[fp.Real]]) -> fp.Real:
         return xss[0][0]
 
 
+@fp.fpy
+def _abi_nested_sum(xss: list[list[fp.Real]]) -> fp.Real:
+    """Reads a nested list without ever *naming* a row, so both levels unbox."""
+    with fp.FP64:
+        acc = 0.0
+        for i in range(len(xss)):
+            for j in range(len(xss[i])):
+                acc = acc + xss[i][j]
+        return acc
+
+
+@fp.fpy
+def _abi_nested_write(xss: list[list[fp.Real]]) -> fp.Real:
+    """Writes through a fully-unboxed nested parameter."""
+    with fp.FP64:
+        xss[0][0] = 99
+        return xss[0][0]
+
+
 def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
     """Compile kernels and call them the way an embedding program would.
 
@@ -920,7 +994,10 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
     reach the caller.
     """
     group = 'abi'
-    compiler = fp.CppCompiler()
+    # Boxed on purpose, whatever the default: these helpers exist to convert
+    # *to* a handle, so a signature that has no handle has nothing to pin.  The
+    # native path is `_test_abi_native`.
+    compiler = fp.CppCompiler(unbox=False)
     cpp_path = output_dir / 'abi_boundary.cpp'
     print(f'Compiling ABI boundary test to `{cpp_path}`')
     lst = fp.types.ListType(fp.types.RealType(fp.FP64))
@@ -1007,6 +1084,84 @@ int main() {
         assert(m[0][0] == 1.0);
     }
     std::printf("abi boundary OK\\n");
+    return 0;
+}
+"""
+
+
+def _test_abi_native(
+    output_dir: Path, mode: str = 'compile',
+) -> list[tuple[str, str, str]]:
+    """The other boundary: a kernel whose lists are proven unshared takes the
+    caller's ``std::vector`` directly — no ``copy_in``, no per-row conversion.
+
+    Opposite of :func:`_test_abi`, where a copy protects the caller's data;
+    here the write lands.
+    """
+    group = 'abi'
+    compiler = fp.CppCompiler(unbox=True)
+    cpp_path = output_dir / 'abi_native.cpp'
+    print(f'Compiling native ABI test to `{cpp_path}`')
+    nested = fp.types.ListType(fp.types.ListType(fp.types.RealType(fp.FP64)))
+    module = fp.Module()
+    module.add(_abi_nested_sum, ctx=fp.FP64, arg_types=[nested])
+    module.add(_abi_nested_write, ctx=fp.FP64, arg_types=[nested])
+
+    # the claim under test, checked rather than assumed
+    for f in (_abi_nested_sum, _abi_nested_write):
+        params, _ = compiler.signature(f, ctx=fp.FP64, arg_types=[nested])
+        got = params[0].format()
+        if got != 'std::vector<std::vector<double>>':
+            return [(
+                group, 'abi_native',
+                f'{f.name} did not unbox: took `{got}`',
+            )]
+
+    with open(cpp_path, 'w') as f:
+        print('\n'.join(compiler.headers()), file=f)
+        print('#include <cstdio>', file=f)
+        print(compiler.helpers(), file=f)
+        print(compiler.compile_module(module), file=f)
+        print(_ABI_NATIVE_MAIN, file=f)
+
+    if mode == 'emit':
+        return []
+    if _CXX is None:
+        print('  SKIPPED (no C++ compiler driver)')
+        return []
+
+    exe = cpp_path.with_suffix('.exe')
+    try:
+        subprocess.run(
+            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f'  FAILED to build: {e.stderr[-400:]}')
+        return [(group, 'abi_native', f'build failed: {e.stderr[-200:]}')]
+
+    r = subprocess.run([str(exe)], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
+        return [(group, 'abi_native', f'assertion failed: {r.stdout.strip()}')]
+    return []
+
+
+_ABI_NATIVE_MAIN: str = """\
+int main() {
+    // The caller's own nested vector, passed with no conversion whatsoever.
+    std::vector<std::vector<double> > m(2, std::vector<double>(2, 1.0));
+    m[1][1] = 2.0;
+    const std::vector<double>* row0 = m.data();
+
+    assert(_abi_nested_sum(m) == 5.0);
+    assert(m.data() == row0);          // read-only: nothing was copied
+
+    // a write reaches the caller -- FPy's semantics
+    assert(_abi_nested_write(m) == 99.0);
+    assert(m[0][0] == 99.0);
+
+    std::printf("abi native OK\\n");
     return 0;
 }
 """
@@ -1539,6 +1694,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     cov: Counter[str] = Counter()
     failures += _test_runtime(output_dir, mode=mode)
     failures += _test_abi(output_dir, mode=mode)
+    failures += _test_abi_native(output_dir, mode=mode)
     failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)
     failures += _test_regressions(output_dir, mode=mode, cov=cov)

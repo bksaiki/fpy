@@ -67,24 +67,41 @@ class CppScalar(enum.Enum):
 
 @default_repr
 class CppList:
-    """``fpy::list<T>`` — a handle to a shared, mutable sequence.
+    """An FPy list, in one of two representations.
 
-    FPy lists alias on assignment, which a bare ``std::vector`` (a value type)
-    cannot express; see the ``fpy::list`` comment in :mod:`.utils`.
+    ``fpy::list<T>`` — a handle to a shared, mutable sequence — is the general
+    one: FPy lists alias on assignment, which a bare ``std::vector`` (a value
+    type) cannot express; see the ``fpy::list`` comment in :mod:`.utils`.
+
+    ``std::vector<T>`` (``boxed=False``) is for a list that
+    :mod:`fpy2.analysis.alias` proves nothing else can observe — no sharing to
+    represent, so the indirection is pure cost, and the type is one a native
+    caller already has.
+
+    The flag is part of the type's identity, so two lists differing only in
+    representation compare unequal and ``storage_infer`` cannot merge them into
+    one class.
     """
     elt: 'CppType'
+    boxed: bool
 
-    def __init__(self, elt: 'CppType'):
+    def __init__(self, elt: 'CppType', boxed: bool = True):
         self.elt = elt
+        self.boxed = boxed
 
     def __eq__(self, other):
-        return isinstance(other, CppList) and self.elt == other.elt
+        return (
+            isinstance(other, CppList)
+            and self.elt == other.elt
+            and self.boxed == other.boxed
+        )
 
     def __hash__(self):
-        return hash((CppList, self.elt))
+        return hash((CppList, self.elt, self.boxed))
 
     def format(self) -> str:
-        return f'fpy::list<{self.elt.format()}>'
+        elt = self.elt.format()
+        return f'fpy::list<{elt}>' if self.boxed else f'std::vector<{elt}>'
 
 
 @default_repr

@@ -32,6 +32,8 @@ class TestIndexedAssign:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
+        # `xs` is a parameter *and* the result, so the caller ends up with
+        # two handles to one list: shared, and it keeps its handle.
         assert (
             '(*xs)[static_cast<size_t>(i)] = '
             '((*xs)[static_cast<size_t>(i)] * static_cast<double>(2));'
@@ -85,8 +87,8 @@ class TestIndexedAssign:
 
         out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
         # Single ``xs`` declaration; both mutations are direct stores.
-        assert '(*xs)[static_cast<size_t>(0)] = 5;' in out
-        assert '(*xs)[static_cast<size_t>(1)] = 10;' in out
+        assert 'xs[static_cast<size_t>(0)] = 5;' in out
+        assert 'xs[static_cast<size_t>(1)] = 10;' in out
         # No suffixed copy variables.
         assert 'xs_1' not in out
         assert 'xs_2' not in out
@@ -111,8 +113,8 @@ class TestIndexedAssign:
                 RealType(fp.FP64),
             ],
         )
-        assert '(*xs)[static_cast<size_t>(i)] = v;' in out
-        assert 'return (*xs)[static_cast<size_t>(0)];' in out
+        assert 'xs[static_cast<size_t>(i)] = v;' in out
+        assert 'return xs[static_cast<size_t>(0)];' in out
         # No SSA-suffix variable, no copy temp.
         assert 'xs_1' not in out
         assert '_tmp' not in out

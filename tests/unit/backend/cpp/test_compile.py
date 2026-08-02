@@ -77,7 +77,9 @@ class TestCppCompilerStub:
                 RealType(fp.FP64), RealType(fp.FP64),
             ))],
         )
-        assert 'fpy::list<std::tuple<double, double>>' in out
+        # `_src`/`_src5` are reference bindings, so nothing is copied and
+        # the parameter unboxes despite the aliases ZipElim introduces
+        assert 'const std::vector<std::tuple<double, double>>& x' in out
 
     def test_real_accumulator_loop_terminates(self):
         """A loop that accumulates into a literal-initialized scalar
