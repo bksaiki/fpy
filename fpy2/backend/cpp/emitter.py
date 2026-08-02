@@ -33,6 +33,7 @@ Anything else raises :class:`CppEmitError`, which the public
 """
 
 import dataclasses
+import math
 from contextlib import contextmanager
 from fractions import Fraction
 from typing import TYPE_CHECKING
@@ -156,6 +157,17 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTP: 'FE_UPWARD',
     RM.RTN: 'FE_DOWNWARD',
 }
+
+
+def _as_exact_double(v: Fraction) -> float | None:
+    """*v* as a ``double`` when binary64 holds it exactly, else ``None``."""
+    try:
+        x = float(v)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(x):
+        return None
+    return x if Fraction(x) == v else None
 
 
 def _list_depth(ty: CppType) -> int:
@@ -1074,11 +1086,22 @@ class CppEmitter(Visitor):
         """
         Emit a numeric literal as a C++ expression.
 
-        Integer-valued rationals → integer literal.
-        Otherwise → ``(double)num / denom`` to force float division.
+        An FPy literal is an exact rational, rounded where it is *used* and
+        under the context in force there.  A value binary64 holds exactly needs
+        no rounding and prints as itself.
+
+        One it cannot hold still becomes ``num / denom``, which is wrong in a
+        way worth knowing: that is an *operation* where FPy has a constant, so
+        it rounds under whatever mode happens to be set, and ``-O2`` folds it at
+        compile time to nearest regardless.  Rejecting such a literal outright
+        would be more honest, but three corpus functions rely on it today —
+        see ``docs/todos/cpp-literals-and-returns.md``.
         """
         if v.denominator == 1:
             return str(v.numerator)
+        exact = _as_exact_double(v)
+        if exact is not None:
+            return repr(exact)
         return f'((double){v.numerator} / (double){v.denominator})'
 
     def _scalar_storage_for_expr(self, e: Expr) -> CppScalar:
