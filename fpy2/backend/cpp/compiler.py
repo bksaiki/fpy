@@ -16,11 +16,13 @@ from ...analysis import (
     ArraySizeInfer,
     ContextUse,
     DefineUse,
+    Escape,
     FormatInfer,
 )
 from ...analysis.alias import AliasAnalysis
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.define_use import DefineUseAnalysis
+from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatAnalysis
 from ...ast.fpyast import Call, FuncDef, NamedId
 from ...ast.visitor import DefaultVisitor
@@ -103,6 +105,25 @@ def _find_spec(specs: list[Function], func: Function) -> Function:
     raise CppCompileError(
         f'`{func.name}` has no specialization in this module'
     )
+
+
+def _param_storage(a: SpecAnalyses) -> list[tuple[CppType, bool]]:
+    """Each parameter's emitted type, and whether its elements are written.
+
+    Both cross a call edge: an argument must have the representation the callee
+    declared, and must be non-const if the callee writes it.
+    """
+    out: list[tuple[CppType, bool]] = []
+    for arg in a.ast.args:
+        if not isinstance(arg.name, NamedId):
+            raise CppCompileError(f'unnamed parameter in `{a.ast.name}`')
+        d = a.def_use.find_def_from_site(arg.name, arg)
+        ty = a.storage.storage_of(d)
+        written = a.unbox is not None and a.unbox.writes_through(
+            a.alias.region_of(d), ty,
+        )
+        out.append((ty, written))
+    return out
 
 
 def _callees(ast: FuncDef) -> list[Function]:
@@ -245,13 +266,45 @@ class CppCompiler(Backend):
           4. **Per-spec codegen**, leaves-first, one C++ definition per entry.
         """
         specs = self.specialize(module)
-        # A function compiled code calls cannot unbox its parameters; see
-        # `unbox.Unbox.decide`.
-        called = {id(c.ast) for f in specs for c in _callees(f.ast)}
+        params: dict[FuncDef, list[tuple[CppType, bool]]] = {}
         return '\n\n'.join(
-            self._compile_function(f, is_called=id(f.ast) in called)
-            for f in specs
+            self._emit(f, a, params)
+            for f, a in self._analyze_all(specs, params)
         )
+
+    def _analyze_all(
+        self,
+        specs: list[Function],
+        params: dict[FuncDef, list[tuple[CppType, bool]]],
+    ):
+        """Analyze every spec leaves-first, filling *params* as it goes.
+
+        One path, so :meth:`compile_module` and :meth:`signature` cannot reach
+        different conclusions about the same function — they did once, and it
+        was an ABI bug rather than a missed optimization.
+        """
+        called = {id(c.ast) for f in specs for c in _callees(f.ast)}
+        summaries = self._summaries(specs)
+        for f in specs:
+            a = self.analyze(
+                f, is_called=id(f.ast) in called, summaries=summaries,
+                callee_params=params,
+            )
+            yield f, a
+            params[f.ast] = _param_storage(a)
+
+    def _summaries(
+        self, specs: list[Function],
+    ) -> dict[FuncDef, EscapeSummary]:
+        """Escape summaries for every spec, leaves-first.
+
+        A caller needs its callees' summaries to know which arguments it can
+        stop treating as shared; :meth:`specialize` already orders them.
+        """
+        out: dict[FuncDef, EscapeSummary] = {}
+        for f in specs:
+            out[f.ast] = Escape.analyze(f.ast, out)
+        return out
 
     def specialize(self, module: Module) -> list[Function]:
         """Steps 1-3 of the pipeline: the fully-specialized functions, in
@@ -285,7 +338,12 @@ class CppCompiler(Backend):
         return list(specialized.call_graph().order)
 
     def analyze(
-        self, func: Function, *, is_called: bool = False,
+        self,
+        func: Function,
+        *,
+        is_called: bool = False,
+        summaries: dict[FuncDef, EscapeSummary] | None = None,
+        callee_params: dict[FuncDef, list[tuple[CppType, bool]]] | None = None,
     ) -> SpecAnalyses:
         """The per-spec analyses one fully-specialized function is emitted
         from."""
@@ -322,11 +380,14 @@ class CppCompiler(Backend):
                 f'internal error: {e!r}'
             ) from e
 
-        alias = Alias.analyze(ast, def_use=def_use)
+        alias = Alias.analyze(ast, def_use=def_use, summaries=summaries)
         unbox = None
         if self._unbox:
             unbox = Unbox.decide(
-                ast, storage, alias, def_use, is_called=is_called,
+                ast, storage, alias, def_use,
+                is_called=is_called,
+                summary=(summaries or {}).get(ast),
+                callee_params=callee_params,
             )
             # Rewrite each class's storage in place: the emitter reads a
             # declaration's representation straight off the type.
@@ -361,22 +422,17 @@ class CppCompiler(Backend):
             module = Module()
             module.add(func, ctx=ctx, arg_types=arg_types)
         specs = self.specialize(module)
-        called = {id(c.ast) for s in specs for c in _callees(s.ast)}
         entry = _find_spec(specs, func)
-        a = self.analyze(entry, is_called=id(entry.ast) in called)
-
-        params = []
-        for arg in a.ast.args:
-            if not isinstance(arg.name, NamedId):
-                raise CppCompileError(f'unnamed parameter in `{func.name}`')
-            d = a.def_use.find_def_from_site(arg.name, arg)
-            params.append(a.storage.storage_of(d))
+        emitted: dict[FuncDef, list[tuple[CppType, bool]]] = {}
+        a = next(
+            an for f, an in self._analyze_all(specs, emitted) if f is entry
+        )
 
         # same rule as `CppEmitter._infer_return_storage`
         ret = choose_storage(a.format_info.fn_fmt.ret_fmt)
         if a.unbox is not None:
             ret = a.unbox.annotate_return(ret)
-        return params, ret
+        return [ty for ty, _written in _param_storage(a)], ret
 
     def _compile_function(
         self, func: Function, *, is_called: bool = False,
@@ -385,7 +441,14 @@ class CppCompiler(Backend):
         :class:`Function`.  ``func.ast.name`` is the final emitted name
         (set by :class:`Specialize` — public entries keep their user-given
         name, private specs get a mangled one)."""
-        a = self.analyze(func, is_called=is_called)
+        return self._emit(func, self.analyze(func, is_called=is_called), {})
+
+    def _emit(
+        self,
+        func: Function,
+        a: SpecAnalyses,
+        callee_params: dict[FuncDef, list[tuple[CppType, bool]]],
+    ) -> str:
         ast = a.ast
 
         # Call.fn → emitted name.  ``Specialize`` rewired each Call.fn at
@@ -401,6 +464,7 @@ class CppCompiler(Backend):
             call_names=call_names,
             unsafe_cast_int=self._unsafe_cast_int,
             unbox=a.unbox,
+            callee_params=callee_params,
         )
         try:
             return emitter.emit()

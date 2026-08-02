@@ -119,6 +119,7 @@ from ...ast.fpyast import (
     Zip,
 )
 from ...ast.visitor import Visitor
+from ...function import Function
 from ...number import (
     REAL,
     RM,
@@ -257,6 +258,7 @@ class CppEmitter(Visitor):
         call_names: dict | None = None,
         unsafe_cast_int: bool = False,
         unbox: 'UnboxAnalysis | None' = None,
+        callee_params: dict | None = None,
     ):
         self.ast = ast
         self.storage = storage
@@ -265,6 +267,8 @@ class CppEmitter(Visitor):
         self.ctx_use = ctx_use
         # How each list is represented, or ``None`` to keep every handle.
         self.unbox = unbox
+        # Emitted parameter types of the callees, so a call site can adapt.
+        self._callee_params: dict = callee_params or {}
         # Optional C++ name to emit at the function-signature site
         # — used by the compiler to differentiate specializations of
         # the same callee at distinct rounding contexts (template-
@@ -506,27 +510,15 @@ class CppEmitter(Visitor):
     def _writes_through(self, d: Definition, storage: CppType) -> bool:
         """Whether a ``const`` reference to *d* would reject a write FPy allows.
 
-        ``const fpy::list<T>&`` does not: ``const`` qualifies the handle, and
-        ``xs[i] = e`` through one is exactly FPy's parameter semantics.  An
-        unboxed list has no such indirection, so ``const std::vector<T>&`` makes
-        its elements const too and the same store stops compiling.
+        Region-wide, and across calls: ``ys = xs; ys[0] = e`` writes through a
+        different storage class than the one declared, and a callee that writes
+        its parameter makes the caller's argument non-const too.
         """
         if self.unbox is None:
             return False
-        # Region-wide at each level, not class-wide: `ys = xs; ys[0] = e`
-        # writes through a *different* storage class than the one declared.
-        ty, depth = storage, 0
-        while isinstance(ty, CppList) and not ty.boxed:
-            region = self.unbox.alias.region_of(d, depth)
-            if region is None:
-                return True
-            if any(
-                isinstance(m, AssignDef) and isinstance(m.site, IndexedAssign)
-                for m in self.unbox.alias.defs_in(region)
-            ):
-                return True
-            ty, depth = ty.elt, depth + 1
-        return False
+        return self.unbox.writes_through(
+            self.unbox.alias.region_of(d), storage,
+        )
 
     def _foreach_decl(self, target_def, name: str) -> str:
         """Loop-variable declaration for a range-for over a container.
@@ -2229,9 +2221,43 @@ class CppEmitter(Visitor):
                 f'(call to `{e.func}`)',
                 at=e,
             )
-        args = ', '.join(self._visit_expr(a, ctx) for a in e.args)
+        params = None
+        if isinstance(e.fn, Function):
+            params = self._callee_params.get(e.fn.ast)
+        parts = []
+        for i, a in enumerate(e.args):
+            want = params[i][0] if params and i < len(params) else None
+            parts.append(self._adapt_arg(self._visit_expr(a, ctx), a, want))
         target = self._call_names.get(e, str(e.func))
-        return f'{target}({args})'
+        return f'{target}({", ".join(parts)})'
+
+    def _adapt_arg(self, emitted: str, e: Expr, want: CppType | None) -> str:
+        """*emitted* as the callee spelled its parameter.
+
+        A callee's signature is fixed by its own body, so a caller that keeps a
+        handle for a local reason the callee does not share must hand over the
+        pointee.  That names the same elements — no copy, and a write through it
+        still reaches the caller.
+
+        Only this direction arises: ``unbox`` gives an argument a handle whenever
+        the callee declared one, so a caller never holds a bare vector where a
+        handle is wanted.  Which is just as well — the reverse needs
+        ``fpy::borrow``, and that cannot take the ``const`` reference a read-only
+        parameter is.
+        """
+        if want is None or self.unbox is None:
+            return emitted
+        have = self._storage_for_expr(e)
+        if not (isinstance(have, CppList) and isinstance(want, CppList)):
+            return emitted
+        if have.boxed == want.boxed:
+            return emitted
+        if not have.boxed:
+            raise CppEmitError(
+                f'passing an unboxed list where `{want.format()}` is declared',
+                at=e,
+            )
+        return f'*{self._bind_operand(emitted)}'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
         # ``(a, b, c)`` → ``std::make_tuple(a, b, c)``.  Type deduction

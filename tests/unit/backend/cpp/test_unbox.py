@@ -5,6 +5,8 @@ becomes a miscompilation rather than a missed optimization.  See
 :mod:`fpy2.backend.cpp.unbox`.
 """
 
+import re
+
 import fpy2 as fp
 
 from fpy2.analysis import Alias
@@ -122,23 +124,27 @@ class TestUnboxed:
 class TestStaysBoxed:
     """The conservative direction, one reason at a time."""
 
-    def test_parameter_handed_to_a_call(self):
-        """Conservative: a callee may retain its argument, so the caller keeps
-        a handle — and the callee's parameter has to match it."""
+    def test_parameter_handed_to_a_retaining_call(self):
+        """A callee that *keeps* its argument shares it.
+
+        Writing does not: ``zs[0] = 99`` holds nothing once the call returns,
+        which is why the callee here returns the list instead.  See
+        :mod:`fpy2.analysis.escape`.
+        """
         @fp.fpy
-        def g(zs: list[fp.Real]) -> fp.Real:
+        def g(zs: list[fp.Real]) -> list[fp.Real]:
             with fp.FP64:
-                zs[0] = 99
-                return zs[0]
+                return zs
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
-                return g(xs)
+                ys = g(xs)
+                return ys[0]
 
         storage, reasons = _decide(f, [ListType(R)])
         assert _levels(storage['xs']) == [True]
-        assert reasons[('xs', 0)] == 'shared'
+        assert reasons[('xs', 0)] == 'reached across a boundary'
 
     def test_levels_are_decided_independently(self):
         """Returning a row hands out the row, not the outer list — so the outer
@@ -309,4 +315,99 @@ class TestInvisibleToTheHarness:
         params, _ = cc.signature(
             callee, ctx=fp.FP64, arg_types=[ListType(R)], module=m,
         )
-        assert f'const {params[0].format()}& zs' in cc.compile_module(m)
+        # const-ness is a separate question; what must agree is the type
+        assert f'{params[0].format()}& zs' in cc.compile_module(m)
+
+
+class TestAcrossACall:
+    """What a summary buys, and what it must not.
+
+    A compiled-to-compiled boundary used to keep its handles unconditionally.
+    With :mod:`fpy2.analysis.escape` it keeps them only where the callee really
+    holds on to the list.
+    """
+
+    def test_both_ends_unbox_when_the_callee_keeps_nothing(self):
+        @fp.fpy
+        def inner(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for i in range(len(xs)):
+                    acc = acc + xs[i]
+                return acc
+
+        @fp.fpy
+        def outer(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for i in range(len(xss)):
+                    acc = acc + inner(xss[i])
+                return acc
+
+        m = Module()
+        m.add(outer, ctx=fp.FP64, arg_types=[ListType(ListType(R))])
+        out = CppCompiler().compile_module(m)
+        assert 'const std::vector<double>& xs' in out
+        assert 'const std::vector<std::vector<double>>& xss' in out
+        assert 'fpy::list' not in out
+
+    def test_a_retaining_callee_keeps_both_ends_boxed(self):
+        @fp.fpy
+        def keep(zs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return zs
+
+        @fp.fpy
+        def hand_over(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                ys = keep(xs)
+                return ys[0]
+
+        m = Module()
+        m.add(hand_over, ctx=fp.FP64, arg_types=[ListType(R)])
+        out = CppCompiler().compile_module(m)
+        assert 'std::vector<double>& xs' not in out
+        assert 'fpy::list<double>' in out
+
+    def test_a_writing_callee_makes_both_ends_non_const(self):
+        """Writing is not retaining, so both unbox — but ``const`` has to cross
+        the call edge or the argument will not bind."""
+        @fp.fpy
+        def bump(zs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                zs[0] = 99
+                return zs[0]
+
+        @fp.fpy
+        def call_it(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return bump(xs)
+
+        m = Module()
+        m.add(call_it, ctx=fp.FP64, arg_types=[ListType(R)])
+        out = CppCompiler().compile_module(m)
+        assert 'std::vector<double>& zs' in out
+        assert 'std::vector<double>& xs' in out
+        assert 'const std::vector<double>&' not in out
+
+    def test_a_boxed_caller_hands_over_the_pointee(self):
+        """The callee's signature is fixed by its own body, so a caller that
+        keeps a handle for a local reason passes ``*handle`` — same elements,
+        no copy."""
+        @fp.fpy
+        def reads(zs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return zs[0]
+
+        @fp.fpy
+        def shares(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, 1.0)          # a tuple keeps `xs` boxed
+                return reads(xs) + fp.fst(t)[0]
+
+        m = Module()
+        m.add(shares, ctx=fp.FP64, arg_types=[ListType(R)])
+        out = CppCompiler().compile_module(m)
+        assert 'const std::vector<double>& zs' in out
+        assert 'const fpy::list<double>& xs' in out
+        assert re.search(r'reads__\w+\(\*xs\)', out), out

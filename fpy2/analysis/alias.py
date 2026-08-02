@@ -61,7 +61,7 @@ rather than soundness.
 """
 
 from dataclasses import dataclass
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 from ..ast import (
     Argument,
@@ -92,11 +92,17 @@ from ..ast import (
     Var,
     Zip,
 )
+from ..function import Function
 from ..types import ListType, TupleType, Type
 from ..utils import Unionfind
 from .define_use import DefineUse, DefineUseAnalysis
 from .reaching_defs import AssignDef, Definition, PhiDef
 from .type_infer import TypeAnalysis, TypeInfer
+
+if TYPE_CHECKING:
+    # `escape` builds on this module; the dependency only goes the other way
+    # at type-check time
+    from .escape import EscapeSummary
 
 ELTS = None
 """Part key for the elements of a list.
@@ -406,6 +412,14 @@ class AliasAnalysis:
             pending.extend(self._cells._parts.get(root, {}).values())
         return frozenset(seen)
 
+    def all_defs(self) -> frozenset[Definition]:
+        """Every definition the analysis gave a cell to."""
+        return frozenset(self._cell_of)
+
+    def region_at(self, region: Region, depth: int = 1) -> Region | None:
+        """The region *depth* levels inside *region*."""
+        return self._walk(region, depth)
+
     def defs_in(self, region: Region) -> frozenset[Definition]:
         """Every definition whose value may live in *region*."""
         out = {
@@ -520,10 +534,12 @@ class _Builder(DefaultVisitor):
     """
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis,
-                 type_info: TypeAnalysis):
+                 type_info: TypeAnalysis,
+                 summaries: 'dict[FuncDef, EscapeSummary]'):
         self.func = func
         self.def_use = def_use
         self.types = type_info
+        self.summaries = summaries
         self.cells = _Cells()
         self.sites: list[AllocSite] = []
         self.cell_of: dict[Definition, _Cell] = {}
@@ -742,9 +758,21 @@ class _Builder(DefaultVisitor):
                     self._bind(elt, self._part(cell, i), site)
 
     def _escape_args(self, e: Call) -> None:
-        for a in e.args:
+        """A list handed to a call may be kept by the callee.
+
+        Unless its summary says otherwise: a callee that only reads or writes
+        its argument holds nothing once it returns, so the caller's list is no
+        more shared than before the call.  No summary — a foreign function, or
+        one not yet analyzed — means the conservative answer.
+        """
+        summary = None
+        if isinstance(e.fn, Function):
+            summary = self.summaries.get(e.fn.ast)
+        for i, a in enumerate(e.args):
             ac = self._cell_for(a)
-            if ac is not None:
+            if ac is None:
+                continue
+            if summary is None or summary.retains(i):
                 self.cells.mark_shared_out(ac)
 
     # -- constraint-generating hooks ---------------------------------------
@@ -802,6 +830,7 @@ class Alias:
         func: FuncDef,
         def_use: DefineUseAnalysis | None = None,
         type_info: TypeAnalysis | None = None,
+        summaries: 'dict[FuncDef, EscapeSummary] | None' = None,
     ) -> AliasAnalysis:
         """Compute what may refer to each list in *func*.
 
@@ -810,6 +839,9 @@ class Alias:
             def_use: reuse an existing def-use analysis.
             type_info: reuse an existing type analysis (needed to tell which
                 expressions carry lists).
+            summaries: escape summaries for the callees, so an argument a callee
+                does not retain is not treated as shared.  A callee absent from
+                it is assumed to retain everything.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got {func}")
@@ -817,4 +849,4 @@ class Alias:
             def_use = DefineUse.analyze(func)
         if type_info is None:
             type_info = TypeInfer.check(func, def_use=def_use)
-        return _Builder(func, def_use, type_info).run()
+        return _Builder(func, def_use, type_info, summaries or {}).run()
