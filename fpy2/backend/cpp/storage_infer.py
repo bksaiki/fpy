@@ -46,6 +46,7 @@ from ...ast.fpyast import (
     IndexedAssign,
     ListComp,
     ListRef,
+    NamedId,
     Stmt,
     Var,
 )
@@ -159,6 +160,8 @@ def binds_by_reference(
         return False
     if is_rebound(storage, d):
         return False
+    if not _binds_the_whole_value(d):
+        return False
     match d.site:
         case Argument() | ForStmt() | ListComp():
             return True
@@ -176,6 +179,23 @@ def binds_by_reference(
             )
         case _:
             return False
+
+
+def _binds_the_whole_value(d: Definition) -> bool:
+    """Whether *d*'s binding hands it the whole value.
+
+    A name destructured out of a tuple does not qualify however the tuple
+    arrived: the emitter reads it with ``std::get``, which copies.  Harmless
+    while the component is a handle — the copy still shares — but a copy of a
+    value is a second place, and treating it as a reference would lose writes.
+    """
+    match d.site:
+        case Assign(target=target) | ForStmt(target=target):
+            return isinstance(target, NamedId)
+        case ListComp(targets=targets):
+            return any(t is d.name for t in targets)
+        case _:
+            return True
 
 
 def _root_var(e: Expr) -> Var | None:

@@ -584,3 +584,67 @@ class TestProjectionByReference:
             f, ctx=fp.FP64, arg_types=[ListType(ListType(R)), ListType(R)],
         )
         assert 'auto& row' not in out, out
+
+
+class TestListsInsideTuples:
+    """A list held in a tuple is decided like any other.
+
+    It used to be forced boxed, because ``Unbox`` walked only the ``CppList``
+    spine and stopping there is not the same as deciding.
+    """
+
+    def test_a_destructured_component_is_not_a_reference(self):
+        """The precondition, and the reason this could not be done earlier.
+
+        ``a, b = t`` reads ``a`` with ``std::get``, which *copies*.  Discounting
+        it as a reference binding is harmless while the component is a handle —
+        the copy still shares — but the moment tuples unbox it is a copy of a
+        value, and the write below would be lost.
+        """
+        from fpy2.backend.cpp.storage_infer import binds_by_reference
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, 1.0)
+                a, b = t
+                a[0] = 99
+                return xs[0]
+
+        cc = CppCompiler()
+        m = Module()
+        m.add(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        a = cc.analyze(cc.specialize(m)[-1])
+        component = next(
+            d for d in a.def_use.defs
+            if str(d.name) == 'a' and type(d.site).__name__ == 'Assign'
+        )
+        assert not binds_by_reference(a.storage, a.def_use, component)
+        assert f([1.0, 2.0], ctx=fp.FP64) == 99
+
+    def test_a_fresh_list_in_a_returned_tuple_unboxes(self):
+        @fp.fpy
+        def f(n: fp.Real) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                return ([n, n], 1.0)
+
+        cc = CppCompiler()
+        m = Module()
+        m.add(f, ctx=fp.FP64, arg_types=[R])
+        _p, ret = cc.signature(f, ctx=fp.FP64, arg_types=[R], module=m)
+        assert ret.format() == 'std::tuple<std::vector<double>, uint8_t>', (
+            ret.format()
+        )
+
+    def test_a_shared_list_in_a_tuple_still_keeps_its_handle(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, 1.0)
+                w = fp.fst(t)
+                w[0] = 55
+                return xs[0]
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        assert 'std::tuple<fpy::list<double>, uint8_t>' in out, out
+        assert f([1.0, 2.0], ctx=fp.FP64) == 55

@@ -417,8 +417,14 @@ class AliasAnalysis:
         return frozenset(self._cell_of)
 
     def region_at(self, region: Region, depth: int = 1) -> Region | None:
-        """The region *depth* levels inside *region*."""
+        """The region *depth* list levels inside *region*."""
         return self._walk(region, depth)
+
+    def region_field(self, region: Region | None, i: int) -> Region | None:
+        """The region held by field *i* of *region*'s tuple."""
+        if region is None:
+            return None
+        return self._cells.part(region, i, missing='none')
 
     def defs_in(self, region: Region) -> frozenset[Definition]:
         """Every definition whose value may live in *region*."""

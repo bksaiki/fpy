@@ -59,7 +59,7 @@ from .storage_infer import (
     binds_by_reference,
     is_rebound,
 )
-from .types import CppList, CppType
+from .types import CppList, CppTuple, CppType
 
 
 @dataclass(frozen=True)
@@ -160,6 +160,16 @@ class UnboxAnalysis:
         return self._stamp(ty, at, 0)
 
     def _stamp(self, ty: CppType, regions_at, depth: int) -> CppType:
+        """*ty* with a representation for each list level, following tuple
+        fields too — a list inside a tuple is decided like any other."""
+        if isinstance(ty, CppTuple):
+            return CppTuple(
+                self._stamp(
+                    e, lambda d, i=i: _fields(self.alias, regions_at(d), i),
+                    depth,
+                )
+                for i, e in enumerate(ty.elts)
+            )
         if not isinstance(ty, CppList):
             return ty
         elt = self._stamp(ty.elt, regions_at, depth + 1)
@@ -218,12 +228,6 @@ class Unbox:
             if isinstance(ty, CppList)
         ]
         out.ret_regions = _return_regions(ast, alias)
-
-        # 2. A list inside a tuple keeps its handle: `_read` walks only the
-        #     `CppList` spine, and undecided is not the same as boxed -- an
-        #     expression of bare list type would still be stamped `std::vector`.
-        for region in alias.regions_in_a_tuple():
-            out.at_boundary.add(region)
 
         # 3. Both sides of a compiled-to-compiled boundary keep their handles,
         #    because the other side of it does.  For a callee that is its whole
@@ -298,6 +302,13 @@ def _regions(
         per_depth.append(found.pop() if found else None)
         ty, depth = ty.elt, depth + 1
     return per_depth
+
+
+def _fields(alias: AliasAnalysis, regions: set[Region], i: int) -> set[Region]:
+    """Field *i* of each of *regions*."""
+    return {
+        f for r in regions if (f := alias.region_field(r, i)) is not None
+    }
 
 
 def _read(
