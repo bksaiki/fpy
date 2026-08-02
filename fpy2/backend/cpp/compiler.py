@@ -44,7 +44,7 @@ from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError, choose_storage
 from .storage_infer import StorageAnalysis, StorageInfer
 from .types import CppType
-from .unbox import Unbox, UnboxAnalysis
+from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis
 from .utils import CPP_HEADERS, CPP_HELPERS
 
 
@@ -108,13 +108,14 @@ def _find_spec(specs: list[Function], func: Function) -> Function:
     )
 
 
-def _param_storage(a: SpecAnalyses) -> list[tuple[CppType, bool]]:
-    """Each parameter's emitted type, and whether its elements are written.
+def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
+    """One spec's signature, as its callers must see it.
 
-    Both cross a call edge: an argument must have the representation the callee
-    declared, and must be non-const if the callee writes it.
+    All three facts cross a call edge: an argument must have the representation
+    the callee declared and must be non-const if the callee writes it, and a
+    result must have the representation the callee returns.
     """
-    out: list[tuple[CppType, bool]] = []
+    params: list[ParamAbi] = []
     for arg in a.ast.args:
         if not isinstance(arg.name, NamedId):
             raise CppCompileError(f'unnamed parameter in `{a.ast.name}`')
@@ -123,8 +124,14 @@ def _param_storage(a: SpecAnalyses) -> list[tuple[CppType, bool]]:
         written = a.unbox is not None and a.unbox.writes_through(
             a.alias.region_of(d), ty,
         )
-        out.append((ty, written))
-    return out
+        params.append(ParamAbi(ty, written))
+    return CalleeAbi(params, _return_storage(a))
+
+
+def _return_storage(a: SpecAnalyses) -> CppType:
+    """Same rule as ``CppEmitter._infer_return_storage``."""
+    ret = choose_storage(a.format_info.fn_fmt.ret_fmt)
+    return ret if a.unbox is None else a.unbox.annotate_return(ret)
 
 
 def _callees(ast: FuncDef) -> list[Function]:
@@ -267,7 +274,7 @@ class CppCompiler(Backend):
           4. **Per-spec codegen**, leaves-first, one C++ definition per entry.
         """
         specs = self.specialize(module)
-        params: dict[FuncDef, list[tuple[CppType, bool]]] = {}
+        params: dict[FuncDef, CalleeAbi] = {}
         return '\n\n'.join(
             self._emit(f, a, params)
             for f, a in self._analyze_all(specs, params)
@@ -276,7 +283,7 @@ class CppCompiler(Backend):
     def _analyze_all(
         self,
         specs: list[Function],
-        params: dict[FuncDef, list[tuple[CppType, bool]]],
+        params: dict[FuncDef, CalleeAbi],
     ):
         """Analyze every spec leaves-first, filling *params* as it goes.
 
@@ -289,11 +296,11 @@ class CppCompiler(Backend):
         for f in specs:
             a = self.analyze(
                 f, is_called=id(f.ast) in called, summaries=summaries,
-                callee_params=params,
+                callee_abis=params,
             )
             yield f, a
             summaries[f.ast] = a.summary
-            params[f.ast] = _param_storage(a)
+            params[f.ast] = _callee_abi(a)
 
     def specialize(self, module: Module) -> list[Function]:
         """Steps 1-3 of the pipeline: the fully-specialized functions, in
@@ -332,7 +339,7 @@ class CppCompiler(Backend):
         *,
         is_called: bool = False,
         summaries: dict[FuncDef, EscapeSummary] | None = None,
-        callee_params: dict[FuncDef, list[tuple[CppType, bool]]] | None = None,
+        callee_abis: dict[FuncDef, CalleeAbi] | None = None,
     ) -> SpecAnalyses:
         """The per-spec analyses one fully-specialized function is emitted
         from."""
@@ -383,7 +390,7 @@ class CppCompiler(Backend):
                 ast, storage, alias, def_use,
                 is_called=is_called,
                 summary=summary,
-                callee_params=callee_params,
+                callees=callee_abis,
             )
             # Rewrite each class's storage in place: the emitter reads a
             # declaration's representation straight off the type.
@@ -420,16 +427,13 @@ class CppCompiler(Backend):
             module.add(func, ctx=ctx, arg_types=arg_types)
         specs = self.specialize(module)
         entry = _find_spec(specs, func)
-        emitted: dict[FuncDef, list[tuple[CppType, bool]]] = {}
+        emitted: dict[FuncDef, CalleeAbi] = {}
         a = next(
             an for f, an in self._analyze_all(specs, emitted) if f is entry
         )
 
-        # same rule as `CppEmitter._infer_return_storage`
-        ret = choose_storage(a.format_info.fn_fmt.ret_fmt)
-        if a.unbox is not None:
-            ret = a.unbox.annotate_return(ret)
-        return [ty for ty, _written in _param_storage(a)], ret
+        abi = _callee_abi(a)
+        return [p.ty for p in abi.params], abi.ret
 
     def _compile_function(
         self, func: Function, *, is_called: bool = False,
@@ -444,7 +448,7 @@ class CppCompiler(Backend):
         self,
         func: Function,
         a: SpecAnalyses,
-        callee_params: dict[FuncDef, list[tuple[CppType, bool]]],
+        callee_params: dict[FuncDef, CalleeAbi],
     ) -> str:
         ast = a.ast
 

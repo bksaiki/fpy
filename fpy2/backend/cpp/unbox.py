@@ -62,6 +62,24 @@ from .storage_infer import (
 from .types import CppList, CppType
 
 
+@dataclass(frozen=True)
+class ParamAbi:
+    """What a caller must match about one parameter of a compiled callee."""
+
+    ty: CppType
+    written: bool
+    """Whether the callee stores into its elements, which makes a ``const``
+    reference at the *caller* reject the call."""
+
+
+@dataclass(frozen=True)
+class CalleeAbi:
+    """A compiled function's signature, as its callers must see it."""
+
+    params: list[ParamAbi]
+    ret: CppType
+
+
 @dataclass
 class UnboxAnalysis:
     """Result of :class:`Unbox`.
@@ -146,7 +164,7 @@ class Unbox:
         *,
         is_called: bool = False,
         summary: 'EscapeSummary | None' = None,
-        callee_params: 'dict[FuncDef, list[tuple[CppType, bool]]] | None' = None,
+        callees: 'dict[FuncDef, CalleeAbi] | None' = None,
     ) -> UnboxAnalysis:
         """Which lists may drop the handle.
 
@@ -160,8 +178,8 @@ class Unbox:
                 not retain can drop its handle even when it is called, because
                 the caller reads that same summary and stops treating the
                 argument as shared.  Absent means retains everything.
-            callee_params: emitted parameter types of the callees, so an
-                argument can be given the representation the callee declares.
+            callees: the emitted signatures of the callees, so an argument
+                and a result can be given the representation each declares.
         """
         out = UnboxAnalysis(alias)
 
@@ -190,23 +208,15 @@ class Unbox:
         # 3. Both sides of a compiled-to-compiled boundary keep their handles,
         #    because the other side of it does.  For a callee that is its whole
         #    signature; for a caller it is what a call hands back.
-        for site in alias.sites:
-            if site.kind == 'call':
-                r = alias.region_of_site(site)
-                if r is not None:
-                    out.at_boundary.add(r)
-        # An argument keeps its handle when the callee's parameter has one.
+        # An argument keeps its handle when the callee's parameter has one, and
+        # a result when the callee returns one.
         # Deciding this here rather than in `alias` keeps that analysis free of
         # C++ representations: it answers whether the callee *retains* the list,
         # which is what lets the callee unbox in the first place; this is the
         # separate question of matching what it then declared.
-        out.at_boundary |= _boxed_by_callees(ast, alias, callee_params or {})
-        out.written = _written_regions(ast, alias, callee_params or {})
+        out.at_boundary |= _boxed_by_callees(ast, alias, callees or {})
+        out.written = _written_regions(ast, alias, callees or {})
         if is_called:
-            # The return still does: a caller stores the result somewhere, and
-            # nothing yet tells it what representation to expect back.
-            for regions in out.ret_regions:
-                out.at_boundary |= regions
             # A parameter only keeps its handle if this function *retains* it.
             # Its callers read the same summary, so both ends agree.
             for cls, per_depth in classes:
@@ -309,7 +319,7 @@ def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:
 def _written_regions(
     ast: FuncDef,
     alias: AliasAnalysis,
-    callee_params: 'dict[FuncDef, list[tuple[CppType, bool]]]',
+    callees: 'dict[FuncDef, CalleeAbi]',
 ) -> set[Region]:
     """Regions whose elements are stored into, here or in a callee.
 
@@ -326,11 +336,11 @@ def _written_regions(
 
     class _Args(DefaultVisitor):
         def _visit_call(self, e: Call, ctx):
-            params = None
-            if isinstance(e.fn, Function):
-                params = callee_params.get(e.fn.ast)
+            abi = callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
             for i, a in enumerate(e.args):
-                if not params or i >= len(params) or not params[i][1]:
+                if abi is None or i >= len(abi.params):
+                    continue
+                if not abi.params[i].written:
                     continue
                 r = alias.region_of_expr(a)
                 if r is not None:
@@ -344,25 +354,33 @@ def _written_regions(
 def _boxed_by_callees(
     ast: FuncDef,
     alias: AliasAnalysis,
-    callee_params: 'dict[FuncDef, list[tuple[CppType, bool]]]',
+    callees: 'dict[FuncDef, CalleeAbi]',
 ) -> set[Region]:
-    """Regions passed where the callee declared a handle."""
+    """Regions passed to, or received from, a callee that declared a handle.
+
+    An unknown callee counts as declaring one everywhere: its signature is not
+    ours to match, so the safe assumption is the general representation.
+    """
     out: set[Region] = set()
+
+    def mark(e: Expr) -> None:
+        depth = 0
+        while (r := alias.region_of_expr(e, depth)) is not None:
+            out.add(r)
+            depth += 1
+
+    def unboxed(ty: CppType | None) -> bool:
+        return isinstance(ty, CppList) and not ty.boxed
 
     class _Args(DefaultVisitor):
         def _visit_call(self, e: Call, ctx):
-            params = None
-            if isinstance(e.fn, Function):
-                params = callee_params.get(e.fn.ast)
+            abi = callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
             for i, a in enumerate(e.args):
-                want = params[i][0] if params and i < len(params) else None
-                unboxed_there = isinstance(want, CppList) and not want.boxed
-                if unboxed_there:
-                    continue
-                depth = 0
-                while (r := alias.region_of_expr(a, depth)) is not None:
-                    out.add(r)
-                    depth += 1
+                want = abi.params[i].ty if abi and i < len(abi.params) else None
+                if not unboxed(want):
+                    mark(a)
+            if abi is None or not unboxed(abi.ret):
+                mark(e)
             super()._visit_call(e, ctx)
 
     _Args()._visit_function(ast, None)

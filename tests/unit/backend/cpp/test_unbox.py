@@ -454,3 +454,53 @@ class TestFreshNestedAllocations:
 
         storage, _ = _decide(f, [ListType(R)])
         assert _levels(storage['m']) == [False, True]
+
+
+class TestCalleeReturn:
+    """The return half of a compiled-to-compiled boundary.
+
+    A callee used to keep a handle on its result purely because it was called.
+    Now its callers read the representation off its signature, the way they
+    already do for its parameters.
+    """
+
+    def test_a_fresh_result_crosses_the_boundary_unboxed(self):
+        @fp.fpy
+        def make(n: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                return [n, n]
+
+        @fp.fpy
+        def use(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                v = make(n)
+                return v[0] + v[1]
+
+        m = Module()
+        m.add(use, ctx=fp.FP64, arg_types=[R])
+        out = CppCompiler().compile_module(m)
+        assert 'fpy::list' not in out, out
+
+    def test_a_caller_that_needs_a_handle_makes_one(self):
+        """The callee's signature is fixed by its own body, so a caller with a
+        local reason to hold a handle wraps the result.  The value is a prvalue
+        whose ownership was handed over, so this moves rather than copies."""
+        @fp.fpy
+        def make(n: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                return [n, n]
+
+        @fp.fpy
+        def boxes_it(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                v = make(n)
+                t = (v, 1.0)       # a tuple keeps `v` boxed
+                w = fp.fst(t)
+                w[0] = 9
+                return v[0]
+
+        m = Module()
+        m.add(boxes_it, ctx=fp.FP64, arg_types=[R])
+        out = CppCompiler().compile_module(m)
+        assert 'std::make_shared<std::vector<double>>(make' in out, out
+        assert boxes_it(3.0, ctx=fp.FP64) == 9

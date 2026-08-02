@@ -2221,15 +2221,43 @@ class CppEmitter(Visitor):
                 f'(call to `{e.func}`)',
                 at=e,
             )
-        params = None
+        abi = None
         if isinstance(e.fn, Function):
-            params = self._callee_params.get(e.fn.ast)
+            abi = self._callee_params.get(e.fn.ast)
+        params = abi.params if abi is not None else None
         parts = []
         for i, a in enumerate(e.args):
-            want = params[i][0] if params and i < len(params) else None
+            want = params[i].ty if params and i < len(params) else None
             parts.append(self._adapt_arg(self._visit_expr(a, ctx), a, want))
         target = self._call_names.get(e, str(e.func))
-        return f'{target}({", ".join(parts)})'
+        call = f'{target}({", ".join(parts)})'
+        return self._adapt_result(call, e, abi.ret if abi is not None else None)
+
+    def _adapt_result(self, emitted: str, e: Expr, got: CppType | None) -> str:
+        """*emitted* as the caller needs the result.
+
+        A callee's return representation is fixed by its own body, so a caller
+        that keeps a handle for a local reason has to make one.  The result is a
+        prvalue whose ownership the callee handed over — that is why it unboxed
+        — so this moves the elements rather than copying them.
+
+        Only this direction: :func:`~fpy2.backend.cpp.unbox._boxed_by_callees`
+        gives the caller a handle whenever the callee returns one.
+        """
+        if got is None or self.unbox is None:
+            return emitted
+        want = self._storage_for_expr(e)
+        if not (isinstance(got, CppList) and isinstance(want, CppList)):
+            return emitted
+        if got.boxed == want.boxed and got.elt == want.elt:
+            return emitted
+        if got.boxed or got.elt != want.elt:
+            raise CppEmitError(
+                f'cannot hand back `{got.format()}` where `{want.format()}` '
+                f'is wanted',
+                at=e,
+            )
+        return f'std::make_shared<{got.format()}>({emitted})'
 
     def _adapt_arg(self, emitted: str, e: Expr, want: CppType | None) -> str:
         """*emitted* as the callee spelled its parameter.
