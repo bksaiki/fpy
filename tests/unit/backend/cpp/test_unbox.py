@@ -504,3 +504,83 @@ class TestCalleeReturn:
         out = CppCompiler().compile_module(m)
         assert 'std::make_shared<std::vector<double>>(make' in out, out
         assert boxes_it(3.0, ctx=fp.FP64) == 9
+
+
+class TestProjectionByReference:
+    """``row = xss[i]`` binds a reference where it safely can.
+
+    It used to always copy, which made the row a second place and boxed it.
+    ``ZipElim`` manufactures exactly this shape, so `for a, b in zip(...)` over
+    nested lists was paying for it.
+    """
+
+    def test_a_projection_binds_a_reference(self):
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                row = xss[0]
+                return row[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(ListType(R))],
+        )
+        assert 'const auto& row =' in out, out
+        assert 'fpy::list' not in out, out
+
+    def test_zip_over_nested_lists_unboxes(self):
+        """The shape from the report: `ZipElim` lowers the loop variable to a
+        projection, and the rows used to keep their handles because of it."""
+        @fp.fpy
+        def inner(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for x, y in zip(xs, ys):
+                    acc = acc + x * y
+                return acc
+
+        @fp.fpy
+        def outer(
+            xss: list[list[fp.Real]], yss: list[list[fp.Real]],
+        ) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for xs, ys in zip(xss, yss):
+                    acc = acc + inner(xs, ys)
+                return acc
+
+        N = ListType(ListType(R))
+        m = Module()
+        m.add(outer, ctx=fp.FP64, arg_types=[N, N])
+        out = CppCompiler().compile_module(m)
+        assert 'fpy::list' not in out, out
+
+    def test_a_replaced_slot_still_copies(self):
+        """The guard.  A C++ reference follows the slot; FPy keeps referring to
+        the list that was in it, so a store of a *different* list anywhere in
+        the function rules the reference out.
+        """
+        import tests.infra.backend.cpp as corpus
+
+        out = CppCompiler().compile(
+            corpus._regression_replaced_slot, ctx=fp.FP64,
+            arg_types=[ListType(ListType(R)), ListType(R)],
+        )
+        assert 'fpy::list<double> row = ' in out, out
+        assert 'auto& row' not in out, out
+
+    def test_the_guard_is_function_wide(self):
+        """Conservative on purpose: the store is *after* the last read here, so
+        a flow-sensitive guard would allow the reference.  Deliberately not —
+        nothing else in the analysis is flow-sensitive."""
+        @fp.fpy
+        def f(xss: list[list[fp.Real]], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                row = xss[0]
+                n = row[0]
+                xss[0] = ys
+                return n
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(ListType(R)), ListType(R)],
+        )
+        assert 'auto& row' not in out, out

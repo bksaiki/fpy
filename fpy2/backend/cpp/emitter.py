@@ -552,8 +552,12 @@ class CppEmitter(Visitor):
 
         Still worth it for a tuple, where a copy is O(size).
         """
-        return isinstance(stmt.expr, Var) and binds_by_reference(
+        return binds_by_reference(
             self.storage, self.def_use, target_def,
+            allow_projection=(
+                self.unbox is not None
+                and self.unbox.may_reference_projection(target_def)
+            ),
         )
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:

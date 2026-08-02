@@ -94,10 +94,26 @@ class UnboxAnalysis:
     storage: dict[Definition, CppType] = field(default_factory=dict)
     ret_regions: list[set[Region]] = field(default_factory=list)
     written: set[Region] = field(default_factory=set)
+    slot_replaced: set[Region] = field(default_factory=set)
+    """Element regions some ``xss[i] = <list>`` puts a *different* list into.
+
+    A C++ reference binds to the slot, so a name projected out of one of these
+    would follow the replacement; FPy keeps referring to the list that was
+    there.  ``_regression_replaced_slot`` is exactly that.
+    """
     at_boundary: set[Region] = field(default_factory=set)
     boxed_because: dict[tuple[Definition, int], str] = field(
         default_factory=dict,
     )
+
+    def may_reference_projection(self, d: Definition) -> bool:
+        """Whether ``row = xss[i]`` may bind a reference rather than copy.
+
+        Only when nothing replaces that slot: a reference follows the slot, and
+        FPy keeps referring to the list that was in it.
+        """
+        region = self.alias.region_of(d)
+        return region is not None and region not in self.slot_replaced
 
     def writes_through(self, region: Region | None, ty: CppType) -> bool:
         """Whether a ``const`` reference to this would reject a write FPy allows.
@@ -182,6 +198,8 @@ class Unbox:
                 and a result can be given the representation each declares.
         """
         out = UnboxAnalysis(alias)
+        slot_replaced = _slot_replaced_regions(ast, alias, def_use)
+        out.slot_replaced = slot_replaced
 
         # 1. each region on its own evidence
         for site in alias.sites:
@@ -189,7 +207,9 @@ class Unbox:
             if region is None:
                 continue
             escapes = alias.escapes(site) and not alias.transfers_ownership(site)
-            shared = escapes or _shares_storage(region, alias, storage, def_use)
+            shared = escapes or _shares_storage(
+                region, alias, storage, def_use, slot_replaced,
+            )
             out.boxed[region] = out.boxed.get(region, False) or shared
 
         classes = [
@@ -316,6 +336,32 @@ def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:
     return None
 
 
+def _slot_replaced_regions(
+    ast: FuncDef, alias: AliasAnalysis, def_use: DefineUseAnalysis,
+) -> set[Region]:
+    """Element regions that a store puts a different list into.
+
+    Conservative and function-wide: one such store anywhere means no name
+    projected out of that level may bind by reference, whatever the order.
+    """
+    out: set[Region] = set()
+
+    class _Stores(DefaultVisitor):
+        def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+            if (
+                isinstance(stmt.var, NamedId)
+                and alias.region_of_expr(stmt.expr) is not None
+            ):
+                d = def_use.find_def_from_site(stmt.var, stmt)
+                r = alias.region_of(d, len(stmt.indices))
+                if r is not None:
+                    out.add(r)
+            super()._visit_indexed_assign(stmt, ctx)
+
+    _Stores()._visit_function(ast, None)
+    return out
+
+
 def _written_regions(
     ast: FuncDef,
     alias: AliasAnalysis,
@@ -416,6 +462,7 @@ def _shares_storage(
     alias: AliasAnalysis,
     storage: StorageAnalysis,
     def_use: DefineUseAnalysis,
+    slot_replaced: set[Region],
 ) -> bool:
     """Whether more than one place in this function holds *region* separately.
 
@@ -449,13 +496,20 @@ def _shares_storage(
     slots = alias.referrers(region) - len(by_name)
     owned_separately = 0
     for ds in by_name.values():
-        if not all(_binds_by_reference(d, storage, def_use) for d in ds):
+        if not all(
+            _binds_by_reference(d, storage, def_use, alias, slot_replaced)
+            for d in ds
+        ):
             owned_separately += 1
     return slots + owned_separately > 1
 
 
 def _binds_by_reference(
-    d: AssignDef, storage: StorageAnalysis, def_use: DefineUseAnalysis,
+    d: AssignDef,
+    storage: StorageAnalysis,
+    def_use: DefineUseAnalysis,
+    alias: AliasAnalysis,
+    slot_replaced: set[Region],
 ) -> bool:
     """Whether *d* is a reference to storage that exists already, *and* that
     storage is inside this function.
@@ -466,7 +520,11 @@ def _binds_by_reference(
     extra term so the divergence stays visible rather than becoming a second
     copy of the rule to keep in sync.
     """
+    region = alias.region_of(d)
     return (
-        binds_by_reference(storage, def_use, d)
+        binds_by_reference(
+            storage, def_use, d,
+            allow_projection=region is not None and region not in slot_replaced,
+        )
         and not isinstance(d.site, Argument)
     )
