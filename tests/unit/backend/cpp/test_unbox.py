@@ -411,3 +411,270 @@ class TestAcrossACall:
         assert 'const std::vector<double>& zs' in out
         assert 'const fpy::list<double>& xs' in out
         assert re.search(r'reads__\w+\(\*xs\)', out), out
+
+
+class TestFreshNestedAllocations:
+    """A fresh ``list[list[T]]`` allocates its rows too.
+
+    Without a site at each level, the inner one has no allocation recorded
+    against it, and a consumer cannot tell "nothing owns this" from "nothing is
+    known about it" — so it kept its handle.  Every nested-returning matrix
+    kernel was affected.
+    """
+
+    def test_a_returned_nested_result_unboxes_at_every_level(self):
+        import fpy2.libraries.matrix as M
+
+        N = ListType(ListType(R))
+        _params, ret = CppCompiler().signature(
+            M.add, ctx=fp.FP64, arg_types=[N, N],
+        )
+        assert _levels(ret) == [False, False], ret.format()
+
+    def test_rows_of_a_fresh_nested_list_are_owned(self):
+        @fp.fpy
+        def f(n: fp.Real) -> list[list[fp.Real]]:
+            with fp.FP64:
+                m = [[n, n], [n, n]]
+                m[0][0] = n + 1
+                return m
+
+        storage, _ = _decide(f, [R])
+        assert _levels(storage['m']) == [False, False]
+
+    def test_rows_that_are_shared_still_keep_their_handles(self):
+        """The seeding must not paper over real sharing: here the rows of the
+        fresh outer list *are* the caller's."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                m = [xs, xs]
+                m[0][0] = 99
+                return xs[0]
+
+        storage, _ = _decide(f, [ListType(R)])
+        assert _levels(storage['m']) == [False, True]
+
+
+class TestCalleeReturn:
+    """The return half of a compiled-to-compiled boundary.
+
+    A callee used to keep a handle on its result purely because it was called.
+    Now its callers read the representation off its signature, the way they
+    already do for its parameters.
+    """
+
+    def test_a_fresh_result_crosses_the_boundary_unboxed(self):
+        @fp.fpy
+        def make(n: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                return [n, n]
+
+        @fp.fpy
+        def use(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                v = make(n)
+                return v[0] + v[1]
+
+        m = Module()
+        m.add(use, ctx=fp.FP64, arg_types=[R])
+        out = CppCompiler().compile_module(m)
+        assert 'fpy::list' not in out, out
+
+    def test_a_caller_that_needs_a_handle_makes_one(self):
+        """The callee's signature is fixed by its own body, so a caller with a
+        local reason to hold a handle wraps the result.  The value is a prvalue
+        whose ownership was handed over, so this moves rather than copies."""
+        @fp.fpy
+        def make(n: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                return [n, n]
+
+        @fp.fpy
+        def boxes_it(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                v = make(n)
+                t = (v, 1.0)       # a tuple keeps `v` boxed
+                w = fp.fst(t)
+                w[0] = 9
+                return v[0]
+
+        m = Module()
+        m.add(boxes_it, ctx=fp.FP64, arg_types=[R])
+        out = CppCompiler().compile_module(m)
+        assert 'std::make_shared<std::vector<double>>(make' in out, out
+        assert boxes_it(3.0, ctx=fp.FP64) == 9
+
+
+class TestProjectionByReference:
+    """``row = xss[i]`` binds a reference where it safely can.
+
+    It used to always copy, which made the row a second place and boxed it.
+    ``ZipElim`` manufactures exactly this shape, so `for a, b in zip(...)` over
+    nested lists was paying for it.
+    """
+
+    def test_a_projection_binds_a_reference(self):
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                row = xss[0]
+                return row[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(ListType(R))],
+        )
+        assert 'const auto& row =' in out, out
+        assert 'fpy::list' not in out, out
+
+    def test_zip_over_nested_lists_unboxes(self):
+        """The shape from the report: `ZipElim` lowers the loop variable to a
+        projection, and the rows used to keep their handles because of it."""
+        @fp.fpy
+        def inner(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for x, y in zip(xs, ys):
+                    acc = acc + x * y
+                return acc
+
+        @fp.fpy
+        def outer(
+            xss: list[list[fp.Real]], yss: list[list[fp.Real]],
+        ) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for xs, ys in zip(xss, yss):
+                    acc = acc + inner(xs, ys)
+                return acc
+
+        N = ListType(ListType(R))
+        m = Module()
+        m.add(outer, ctx=fp.FP64, arg_types=[N, N])
+        out = CppCompiler().compile_module(m)
+        assert 'fpy::list' not in out, out
+
+    def test_a_replaced_slot_still_copies(self):
+        """The guard.  A C++ reference follows the slot; FPy keeps referring to
+        the list that was in it, so a store of a *different* list anywhere in
+        the function rules the reference out.
+        """
+        import tests.infra.backend.cpp as corpus
+
+        out = CppCompiler().compile(
+            corpus._regression_replaced_slot, ctx=fp.FP64,
+            arg_types=[ListType(ListType(R)), ListType(R)],
+        )
+        assert 'fpy::list<double> row = ' in out, out
+        assert 'auto& row' not in out, out
+
+    def test_the_guard_is_function_wide(self):
+        """Conservative on purpose: the store is *after* the last read here, so
+        a flow-sensitive guard would allow the reference.  Deliberately not —
+        nothing else in the analysis is flow-sensitive."""
+        @fp.fpy
+        def f(xss: list[list[fp.Real]], ys: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                row = xss[0]
+                n = row[0]
+                xss[0] = ys
+                return n
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(ListType(R)), ListType(R)],
+        )
+        assert 'auto& row' not in out, out
+
+
+    def test_a_literal_nested_three_deep_unboxes_at_every_level(self):
+        """Seeding a site per level is only right where nothing else describes
+        the elements.
+
+        A literal's elements are expressions that allocate cells of their own,
+        so seeding on top of them gave one place two parts — which merge into
+        two referrers and read as shared.  It showed only at depth three,
+        because at depth two the inner literal has no parts to collide with.
+        """
+        @fp.fpy
+        def f() -> list[list[list[fp.Real]]]:
+            with fp.FP64:
+                x = [[[1.0, 2.0]]]
+                x[0][0][0] = 0
+                return x
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        assert 'fpy::list' not in out, out
+
+    def test_a_call_result_still_seeds_its_levels(self):
+        """The other half of the rule: nothing local describes the elements of
+        a value a callee hands back, so those levels do need seeding."""
+        import fpy2.libraries.matrix as M
+
+        _p, ret = CppCompiler().signature(
+            M.identity, ctx=fp.FP64, arg_types=[R],
+        )
+        assert _levels(ret) == [False, False], ret.format()
+
+
+class TestListsInsideTuples:
+    """A list held in a tuple is decided like any other.
+
+    It used to be forced boxed, because ``Unbox`` walked only the ``CppList``
+    spine and stopping there is not the same as deciding.
+    """
+
+    def test_a_destructured_component_is_not_a_reference(self):
+        """The precondition, and the reason this could not be done earlier.
+
+        ``a, b = t`` reads ``a`` with ``std::get``, which *copies*.  Discounting
+        it as a reference binding is harmless while the component is a handle —
+        the copy still shares — but the moment tuples unbox it is a copy of a
+        value, and the write below would be lost.
+        """
+        from fpy2.backend.cpp.storage_infer import binds_by_reference
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, 1.0)
+                a, b = t
+                a[0] = 99
+                return xs[0]
+
+        cc = CppCompiler()
+        m = Module()
+        m.add(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        a = cc.analyze(cc.specialize(m)[-1])
+        component = next(
+            d for d in a.def_use.defs
+            if str(d.name) == 'a' and type(d.site).__name__ == 'Assign'
+        )
+        assert not binds_by_reference(a.storage, a.def_use, component)
+        assert f([1.0, 2.0], ctx=fp.FP64) == 99
+
+    def test_a_fresh_list_in_a_returned_tuple_unboxes(self):
+        @fp.fpy
+        def f(n: fp.Real) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                return ([n, n], 1.0)
+
+        cc = CppCompiler()
+        m = Module()
+        m.add(f, ctx=fp.FP64, arg_types=[R])
+        _p, ret = cc.signature(f, ctx=fp.FP64, arg_types=[R], module=m)
+        assert ret.format() == 'std::tuple<std::vector<double>, uint8_t>', (
+            ret.format()
+        )
+
+    def test_a_shared_list_in_a_tuple_still_keeps_its_handle(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, 1.0)
+                w = fp.fst(t)
+                w[0] = 55
+                return xs[0]
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        assert 'std::tuple<fpy::list<double>, uint8_t>' in out, out
+        assert f([1.0, 2.0], ctx=fp.FP64) == 55

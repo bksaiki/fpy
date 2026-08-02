@@ -154,23 +154,23 @@ def test_signature_matches_the_module_for_every_function(func):
         )
 
 
-def test_a_called_functions_result_keeps_its_handle():
-    """`g_fresh` returns a list nothing else refers to -- alone, that is a
-    transfer of ownership and the result may be a value.  Called by compiled
-    code it is the *caller's* storage, and the caller holds a handle.
+def test_a_called_functions_result_is_what_its_caller_expects():
+    """`g_fresh` returns a list nothing else refers to, so it hands back a
+    value — in a module too, since the callers now read that from its
+    signature rather than assuming a handle.
 
-    Regression class: the return half of the boundary rule is dropped, the
-    callee returns `std::vector<double>` and the caller declares
-    `fpy::list<double>`.  A hard error, but only at C++ compile time.
+    Regression class: the two ends disagree about the return type.  Whether
+    they settle on a value or a handle matters less than that they settle on
+    the same one, so this asserts agreement and typechecks the result.
     """
     cc = CppCompiler()
     _p, alone = cc.signature(g_fresh, ctx=fp.FP64, arg_types=[R])
     assert isinstance(alone, CppList) and not alone.boxed, alone.format()
 
-    _p, in_module = cc.signature(
-        g_fresh, ctx=fp.FP64, arg_types=[R], module=_module(),
-    )
-    assert isinstance(in_module, CppList) and in_module.boxed, in_module.format()
+    m = _module()
+    _p, in_module = cc.signature(g_fresh, ctx=fp.FP64, arg_types=[R], module=m)
+    out = _typecheck(cc, m)
+    assert f'{in_module.format()} g_fresh(' in out, out
 
 
 def test_signature_without_a_module_still_describes_a_lone_function():

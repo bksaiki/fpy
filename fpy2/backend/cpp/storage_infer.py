@@ -41,9 +41,12 @@ from ...analysis.reaching_defs import AssignDef, PhiDef
 from ...ast.fpyast import (
     Argument,
     Assign,
+    Expr,
     ForStmt,
     IndexedAssign,
     ListComp,
+    ListRef,
+    NamedId,
     Stmt,
     Var,
 )
@@ -130,7 +133,11 @@ def is_rebound(storage: 'StorageAnalysis', d: Definition) -> bool:
 
 
 def binds_by_reference(
-    storage: 'StorageAnalysis', def_use: DefineUseAnalysis, d: Definition,
+    storage: 'StorageAnalysis',
+    def_use: DefineUseAnalysis,
+    d: Definition,
+    *,
+    allow_projection: bool = False,
 ) -> bool:
     """Whether the emitter binds *d*'s name as a reference to storage that
     already exists, rather than giving it a place of its own.
@@ -142,10 +149,18 @@ def binds_by_reference(
 
     All three emitter sites require the name never be rebound, since a ``const``
     reference cannot be.
+
+    *allow_projection* enables ``row = xss[i]``, which a reference can bind only
+    where nothing replaces that slot — a caller establishes that from
+    :meth:`UnboxAnalysis.may_reference_projection` and passes the answer, so the
+    rule stays in one place while the fact it needs comes from the alias
+    analysis.
     """
     if not isinstance(storage.storage_of(d), (CppList, CppTuple)):
         return False
     if is_rebound(storage, d):
+        return False
+    if not _binds_the_whole_value(d):
         return False
     match d.site:
         case Argument() | ForStmt() | ListComp():
@@ -155,8 +170,43 @@ def binds_by_reference(
                 d in storage.declare_at_assign
                 and not is_rebound(storage, def_use.find_def_from_use(src))
             )
+        case Assign(expr=ListRef() as ref) if allow_projection:
+            root = _root_var(ref)
+            return (
+                root is not None
+                and d in storage.declare_at_assign
+                and not is_rebound(storage, def_use.find_def_from_use(root))
+            )
         case _:
             return False
+
+
+def _binds_the_whole_value(d: Definition) -> bool:
+    """Whether *d*'s binding hands it the whole value.
+
+    A name destructured out of a tuple does not qualify however the tuple
+    arrived: the emitter reads it with ``std::get``, which copies.  Harmless
+    while the component is a handle — the copy still shares — but a copy of a
+    value is a second place, and treating it as a reference would lose writes.
+    """
+    match d.site:
+        case Assign(target=target) | ForStmt(target=target):
+            return isinstance(target, NamedId)
+        case ListComp(targets=targets):
+            return any(t is d.name for t in targets)
+        case _:
+            return True
+
+
+def _root_var(e: Expr) -> Var | None:
+    """The variable a chain of subscripts is rooted at.
+
+    A slice is not one: it materializes a new list, so a reference into it
+    would outlive nothing.
+    """
+    while isinstance(e, ListRef):
+        e = e.value
+    return e if isinstance(e, Var) else None
 
 
 def _is_external(members: list[Definition]) -> bool:
