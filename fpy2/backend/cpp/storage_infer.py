@@ -38,10 +38,18 @@ from ...analysis import Definition
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.format_infer import FormatBound
 from ...analysis.reaching_defs import AssignDef, PhiDef
-from ...ast.fpyast import Argument, IndexedAssign, Stmt
+from ...ast.fpyast import (
+    Argument,
+    Assign,
+    ForStmt,
+    IndexedAssign,
+    ListComp,
+    Stmt,
+    Var,
+)
 from ...utils import Unionfind
 from .storage import StorageSelectionError, aggregate_storage
-from .types import CppType
+from .types import CppList, CppTuple, CppType
 
 
 @dataclass
@@ -105,6 +113,50 @@ class StorageAnalysis:
         nor mutated in place).  Such a binding can be a ``const`` reference
         to its initializer instead of an owning copy."""
         return len(self.class_members[self.def_class[d]]) == 1
+
+
+def is_rebound(storage: 'StorageAnalysis', d: Definition) -> bool:
+    """Is the name *d* introduces ever bound to a different value?
+
+    ``xs[i] = e`` is not a rebind — it mutates the list the name already refers
+    to, and that def stays in the same class.  Only an ``Assign`` to the same
+    name is, and *d*'s own defining assignment does not count.
+    """
+    cls = storage.def_class[d]
+    return any(
+        m is not d and isinstance(m, AssignDef) and isinstance(m.site, Assign)
+        for m in storage.class_members[cls]
+    )
+
+
+def binds_by_reference(
+    storage: 'StorageAnalysis', def_use: DefineUseAnalysis, d: Definition,
+) -> bool:
+    """Whether the emitter binds *d*'s name as a reference to storage that
+    already exists, rather than giving it a place of its own.
+
+    One definition for a question two modules ask: the emitter, to choose
+    between a reference and a copy, and :mod:`.unbox`, to decide whether a name
+    is a second *place*.  They must agree — discounting a name the emitter then
+    copies is a miscompilation — so they share this rather than mirror it.
+
+    All three emitter sites require the name never be rebound, since a ``const``
+    reference cannot be.
+    """
+    if not isinstance(storage.storage_of(d), (CppList, CppTuple)):
+        return False
+    if is_rebound(storage, d):
+        return False
+    match d.site:
+        case Argument() | ForStmt() | ListComp():
+            return True
+        case Assign(expr=Var() as src):
+            return (
+                d in storage.declare_at_assign
+                and not is_rebound(storage, def_use.find_def_from_use(src))
+            )
+        case _:
+            return False
 
 
 def _is_external(members: list[Definition]) -> bool:

@@ -181,8 +181,8 @@ def _emit_print(
     the interpreter *value* — as a whitespace-separated token stream that
     :func:`_compare` reads back structurally.
 
-    *cty* is the emitted storage type, which says whether a list is reached
-    through a handle or directly.
+    *cty* is the emitted storage type: whether a list is reached through a
+    handle.
     """
     if isinstance(value, bool):
         lines.append(f'  std::printf("%d ", (int)({expr}));')
@@ -477,9 +477,8 @@ def _emit_driver(
     for inputs, expected in samples:
         # Each sample in its own scope; one printed line per sample.
         main_lines.append('  {')
-        # Bind every argument to a named local: a parameter taken by
-        # non-const reference — which an unboxed list whose elements are
-        # written must be — cannot bind to a prvalue.
+        # Bind every argument to a named local: a non-const reference
+        # parameter cannot bind to a prvalue.
         names = []
         for i, (v, cty) in enumerate(zip(inputs, params)):
             names.append(f'__a{i}')
@@ -1094,13 +1093,10 @@ def _test_abi_native(
     output_dir: Path, mode: str = 'compile',
 ) -> list[tuple[str, str, str]]:
     """The other boundary: a kernel whose lists are proven unshared takes the
-    caller's ``std::vector`` directly.
+    caller's ``std::vector`` directly — no ``copy_in``, no per-row conversion.
 
-    This is the whole point of :mod:`fpy2.backend.cpp.unbox` — no ``copy_in``,
-    no ``copy_out``, no per-row conversion, which is where the cost was.  Pinned
-    separately from :func:`_test_abi` because the two are opposites: there the
-    caller's data is *protected* from the kernel by a copy, here it is handed
-    over, and FPy's semantics say the write lands.
+    Opposite of :func:`_test_abi`, where a copy protects the caller's data;
+    here the write lands.
     """
     group = 'abi'
     compiler = fp.CppCompiler(unbox=True)
@@ -1161,8 +1157,7 @@ int main() {
     assert(_abi_nested_sum(m) == 5.0);
     assert(m.data() == row0);          // read-only: nothing was copied
 
-    // ...and a write reaches the caller, which is FPy's semantics and the
-    // opposite of what `copy_in` gives you.
+    // a write reaches the caller -- FPy's semantics
     assert(_abi_nested_write(m) == 99.0);
     assert(m[0][0] == 99.0);
 

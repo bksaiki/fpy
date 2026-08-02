@@ -6,11 +6,6 @@ place, and passing, returning or projecting carries the identity along.  This
 analysis answers, for each list a function creates or receives, *what else may
 refer to it*.
 
-The question is backend-independent: it is a fact about the FPy program, not about
-any target.  A backend whose native sequence is a value type (``std::vector``, an
-FPCore tensor) needs it to decide where a copy would be observable; the
-interpreter needs no such decision, but the fact is the same either way.
-
 Formulation
 -----------
 
@@ -18,9 +13,8 @@ A *cell* is a place a list reference can sit: one per list-carrying
 :class:`~fpy2.analysis.Definition`, one per list-carrying expression, and — created
 lazily — one per *part* of a cell.  A part is either the elements of a list (index
 not tracked, since it is rarely a constant) or field *i* of a tuple (arity is
-static, so fields are kept apart).  Parts are what make nesting work: the outer
-list of a ``list[list[Real]]`` holds references, so its elements are cells in their
-own right, and so is the list inside a ``tuple[list[Real], Real]``.
+static, so fields are kept apart).  Parts are what make nesting work: the rows of
+a ``list[list[Real]]`` are cells in their own right.
 
 Aliasing routes generate *equality* constraints between cells, solved with
 union-find (``elts(c)`` is the elements part, ``fld(c, i)`` field *i*):
@@ -40,38 +34,20 @@ union-find (``elts(c)`` is the elements part, ``fld(c, i)`` field *i*):
 =========================  ==========================================
 
 Equality rather than inclusion (unification rather than a subset-based solver) is
-deliberate.  Unification over-approximates aliasing, which is the safe direction
-for every consumer: one that wrongly believes a list is shared merely forgoes an
-optimization.  It is also adequate here — measured over the test corpus, only
-three merges anywhere lose precision relative to a subset-based solver, because
-FPy's one form of indirection is "a container part holds a reference", and neither
-list nor tuple types can recurse, so the part chain terminates at a statically
-known depth.
+deliberate: it over-approximates aliasing, which is the safe direction for every
+consumer, and it is adequate here — measured over the test corpus, only three
+merges anywhere lose precision relative to a subset-based solver.
 
-An expression kind not in the table above is handled conservatively rather than
-optimistically: it gets its own allocation site, and every list-carrying variable
-inside it is marked shared outward, so an unmodelled route cannot make a list
-*look* uniquely owned.
+An expression kind not in the table is handled conservatively: it gets its own
+allocation site, and every list-carrying variable inside it is marked shared
+outward, so an unmodelled route cannot make a list *look* uniquely owned.
 
-Leaving the function
---------------------
-
-Two routes out, and they mean opposite things for ownership:
-
-*Shared outward* — handed to a call, or to an operation this analysis does not
-model.  Something else may hold the list *while this function still holds it*, so
-nothing about its fate is decidable here.
-
-*Returned* — handed to the caller, which is a **transfer**: the value moves out and
-this function keeps nothing, so a copy at the boundary is unobservable, exactly as
-for a value that never leaves.  Unless the caller already holds it — ``return xs``
-on a parameter leaves the caller with two handles to one list, which is sharing
-however it is spelled.  A ``param`` site anywhere in the class blocks the transfer,
-which catches the indirect routes too, since a class's site set is the union over
-everything merged into it.
-
-Collapsing the two would forgo every returned value: 37 of the corpus's 299
-allocation sites are fresh values that are returned and nothing else.
+Two routes leave the function, and they mean opposite things for ownership.
+*Shared outward* — handed to a call, or to an unmodelled operation — means
+something else may hold the list while this function still does.  *Returned* is a
+transfer; see :meth:`AliasAnalysis.transfers_ownership`.  Collapsing the two would
+forgo every returned value: 37 of the corpus's 299 allocation sites are fresh
+values that are returned and nothing else.
 
 Limitations
 -----------
@@ -125,9 +101,8 @@ from .type_infer import TypeAnalysis, TypeInfer
 ELTS = None
 """Part key for the elements of a list.
 
-A single key for the whole list: an index is rarely a constant, so tracking one
-part per index would buy almost nothing.  Tuple fields use their integer index,
-because a tuple's arity is static.
+A single key for the whole list: an index is rarely a constant, so one part per
+index would buy almost nothing.
 """
 
 _PartKey = int | None
@@ -213,12 +188,10 @@ class _Cells:
     def __init__(self):
         self._uf: Unionfind[_Cell] = Unionfind()
         self._sites: dict[_Cell, set[AllocSite]] = {}
-        # A class's *referrers*: the places a reference to it can still be
-        # held.  Counted as distinct source names plus container slots, not as
-        # cells -- a variable's SSA definitions are one place, however many
-        # times `xs[i] = e` or a branch merge redefines it.  Slots have to count
-        # separately: that is exactly how `[xs]` shares `xs`, and it is not a
-        # name.  An allocation is neither, so `xs = [x, x]` has one referrer.
+        # A class's *referrers*: distinct source names plus container slots,
+        # not cells.  A variable's SSA definitions are one place however many
+        # times it is redefined; a slot is not a name but is how `[xs]` shares
+        # `xs`; an allocation is neither, so `xs = [x, x]` has one referrer.
         self._names: dict[_Cell, set[NamedId]] = {}
         self._slots: dict[_Cell, int] = {}
         # Two ways out of the function, distinguished because they mean opposite
@@ -405,9 +378,8 @@ class AliasAnalysis:
     def region_of_expr(self, e: Expr, depth: int = 0) -> Region | None:
         """As :meth:`region_of`, for an expression.
 
-        An expression that names a definition shares its region — the analysis
-        gives both the same cell — so a consumer keying on regions cannot answer
-        a variable and its uses inconsistently.
+        An expression that names a definition shares its cell, and so its
+        region.
         """
         return self._walk(self._cell_of_expr.get(e), depth)
 
@@ -418,12 +390,24 @@ class AliasAnalysis:
             cell = self._cells.part(cell, missing='none')
         return None if cell is None else self._cells.find(cell)
 
-    def defs_in(self, region: Region) -> frozenset[Definition]:
-        """Every definition whose value may live in *region*.
+    def regions_in_a_tuple(self) -> frozenset[Region]:
+        """Every region reachable through a tuple field, and everything inside
+        those in turn."""
+        pending = [
+            inner for parts in self._cells._parts.values()
+            for key, inner in parts.items() if key is not ELTS
+        ]
+        seen: set[Region] = set()
+        while pending:
+            root = self._cells.find(pending.pop())
+            if root in seen:
+                continue
+            seen.add(root)
+            pending.extend(self._cells._parts.get(root, {}).values())
+        return frozenset(seen)
 
-        A consumer that wants to reason about the *bindings* sharing a list —
-        rather than just how many there are — needs these.
-        """
+    def defs_in(self, region: Region) -> frozenset[Definition]:
+        """Every definition whose value may live in *region*."""
         out = {
             d for d, c in self._cell_of.items()
             if self._cells.find(c) is region
@@ -453,19 +437,14 @@ class AliasAnalysis:
         return self.sites_at(self.region_of(d, depth))
 
     def is_shared(self, site: AllocSite) -> bool:
-        """Whether more than one place may refer to *site*.
-
-        ``True`` means a consumer cannot treat the list as uniquely owned: a copy
-        of it would be observable through the other referrer.
-        """
+        """Whether more than one place may refer to *site*."""
         return self._cells.referrers(self._site_cell[site]) > 1
 
     def escapes(self, site: AllocSite) -> bool:
-        """Whether *site*, or a container holding it, leaves the function at all —
-        handed to a call, or returned.
+        """Whether *site*, or a container holding it, leaves the function at all
+        — handed to a call, or returned.
 
-        Says nothing about *which* route; :meth:`transfers_ownership` is what
-        separates the two, and they mean opposite things for ownership.
+        Says nothing about *which*; :meth:`transfers_ownership` separates them.
         """
         cell = self._site_cell[site]
         return self._cells.is_shared_out(cell) or self._cells.is_returned(cell)
@@ -478,16 +457,12 @@ class AliasAnalysis:
     def transfers_ownership(self, site: AllocSite) -> bool:
         """Whether returning *site* hands out *sole* ownership of it.
 
-        A ``return`` is a transfer, not sharing: the value moves to the caller and
-        this function keeps nothing — so a copy at the boundary is unobservable,
-        exactly as for a value that never leaves.
-
-        Unless the caller already holds it.  ``return xs`` on a parameter leaves
-        the caller with two handles to one list, which is sharing however it is
-        spelled, so a ``param`` site anywhere in the class blocks the transfer.
-        The site set of a class is the union over everything merged into it, so
-        this catches the indirect routes too — returning a row of a parameter, or
-        returning a local that was stored into one.
+        A ``return`` is a transfer, not sharing: the value moves to the caller
+        and this function keeps nothing, so a copy at the boundary is
+        unobservable.  Unless the caller already holds it — ``return xs`` on a
+        parameter leaves two handles to one list — so a ``param`` site anywhere
+        in the class blocks the transfer.  A class's site set is the union over
+        everything merged into it, so this catches the indirect routes too.
         """
         cell = self._site_cell[site]
         return (
@@ -538,12 +513,10 @@ class _Builder(DefaultVisitor):
     """Generates the constraints for one function.
 
     A :class:`DefaultVisitor` so traversal is the framework's job: a node this
-    analysis does not care about is still descended into, and one it *should*
-    care about cannot be silently skipped by a hand-written walk.  Only the
-    value-returning half is explicit recursion — :meth:`_cell_for` maps an
-    expression to the cell it denotes, memoized so that reaching the same
-    expression twice (once through a hook, once through traversal) does not
-    allocate twice.
+    analysis should care about cannot be silently skipped by a hand-written
+    walk.  Only :meth:`_cell_for` is explicit recursion, because it returns a
+    value; it is memoized so reaching an expression twice does not allocate
+    twice.
     """
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis,
@@ -569,12 +542,7 @@ class _Builder(DefaultVisitor):
     # -- cells --------------------------------------------------------------
 
     def _part(self, c: _Cell, key: _PartKey = ELTS) -> _Cell:
-        """A part of *c*, created on first mention.
-
-        Building constraints always wants creation: it is *describing* the
-        structure, not querying it.  Queries go through
-        :meth:`_Cells.part` directly, which has no default.
-        """
+        """A part of *c*, created on first mention."""
         return self.cells.part(c, key, missing='create')
 
     def _cell(self, d: Definition) -> _Cell:
@@ -600,13 +568,8 @@ class _Builder(DefaultVisitor):
 
         Two of SSA's fresh definitions allocate nothing: ``xs[i] = e`` mutates
         the list that was already there, and a branch merge names whichever of
-        its operands arrived.  Both are the same object, so both are unified —
-        which matters beyond precision, because a C++ storage class is formed
-        over exactly these two edges, and mirroring them here is what keeps one
-        variable from spanning regions that could answer differently.
-
-        A plain rebinding is *not* included: ``ys = zs`` has a ``prev`` too, and
-        it is a different list.
+        its operands arrived.  A plain rebinding is *not* included: ``ys = zs``
+        has a ``prev`` too, and it is a different list.
 
         Sound to unify because referrers are counted by source name, so a
         variable's definitions do not read as several places.
@@ -650,11 +613,7 @@ class _Builder(DefaultVisitor):
     # -- the value-returning half ------------------------------------------
 
     def _cell_for(self, e: Expr) -> _Cell | None:
-        """The cell *e* denotes, or ``None`` if *e* carries no list.
-
-        Explicit recursion rather than a visitor hook because it returns a value.
-        Traversal of everything *else* is left to :class:`DefaultVisitor`.
-        """
+        """The cell *e* denotes, or ``None`` if *e* carries no list."""
         if not _carries_list(self.types.by_expr.get(e)):
             return None
         if e not in self._by_expr:

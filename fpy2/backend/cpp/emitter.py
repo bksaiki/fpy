@@ -136,7 +136,11 @@ from .storage import (
     scalar_fits_in,
     scalar_sup,
 )
-from .storage_infer import StorageAnalysis
+from .storage_infer import (
+    StorageAnalysis,
+    binds_by_reference,
+    is_rebound,
+)
 from .target import make_op_table
 from .types import CppList, CppScalar, CppTuple, CppType
 
@@ -369,8 +373,7 @@ class CppEmitter(Visitor):
         A temporary must be bound to a name: range-``for`` extends the lifetime
         of the range-init's own result, and the dereference of a handle is a
         reference to the pointee, so the handle would be freed before the first
-        iteration.  Binding an unboxed prvalue is unnecessary but harmless, and
-        keeps one shape for both.
+        iteration.
 
         No parenthesis, unlike :meth:`_list_seq`: the range-init is a complete
         expression and the bound operand is always an identifier.
@@ -476,20 +479,7 @@ class CppEmitter(Visitor):
         return isinstance(storage, (CppList, CppTuple))
 
     def _is_rebound(self, d: Definition) -> bool:
-        """Is the name *d* introduces ever bound to a different value?
-
-        ``xs[i] = e`` is not a rebind — it mutates the list the handle already
-        points at, and ``storage_infer`` keeps that def in the same class.  Only
-        an ``Assign`` to the same name is, and *d*'s own defining assignment does
-        not count: a local bound once by ``x = y`` is not rebound.
-        """
-        cls = self.storage.def_class[d]
-        return any(
-            m is not d
-            and isinstance(m, AssignDef)
-            and isinstance(m.site, Assign)
-            for m in self.storage.class_members[cls]
-        )
+        return is_rebound(self.storage, d)
 
     def _arg_decl(self, arg: Argument, storage: CppType) -> str:
         """Parameter declaration.
@@ -507,7 +497,7 @@ class CppEmitter(Visitor):
         """
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
-        if self._is_aggregate(storage) and not self._is_rebound(d):
+        if binds_by_reference(self.storage, self.def_use, d):
             if self._writes_through(d, storage):
                 return f'{storage.format()}& {arg.name}'
             return f'const {storage.format()}& {arg.name}'
@@ -523,12 +513,6 @@ class CppEmitter(Visitor):
         """
         if self.unbox is None:
             return False
-        # Every *unboxed* level, not just the outermost: `const` reaches through
-        # a value container, so a write to a row of a
-        # `vector<vector<T>>` needs the whole thing non-const.  A boxed level
-        # stops the walk -- `const fpy::list<T>&` still yields mutable
-        # elements, which is the indirection's whole point.
-        #
         # Region-wide at each level, not class-wide: `ys = xs; ys[0] = e`
         # writes through a *different* storage class than the one declared.
         ty, depth = storage, 0
@@ -556,9 +540,8 @@ class CppEmitter(Visitor):
         if target_def is None:
             return f'const auto& {name}'
         storage = self.storage.storage_of(target_def)
-        if self._is_aggregate(storage) and not self._is_rebound(target_def):
-            # same rule as `_arg_decl`: an unboxed element that is written
-            # cannot be reached through a const reference
+        if binds_by_reference(self.storage, self.def_use, target_def):
+            # same rule as `_arg_decl`
             if self._writes_through(target_def, storage):
                 return f'{storage.format()}& {name}'
             return f'const {storage.format()}& {name}'
@@ -577,15 +560,9 @@ class CppEmitter(Visitor):
 
         Still worth it for a tuple, where a copy is O(size).
         """
-        if not isinstance(stmt.expr, Var):
-            return False
-        if not self._is_aggregate(target_storage):
-            return False
-        if target_def not in self.storage.declare_at_assign:
-            return False
-        if self._is_rebound(target_def):
-            return False
-        return not self._is_rebound(self.def_use.find_def_from_use(stmt.expr))
+        return isinstance(stmt.expr, Var) and binds_by_reference(
+            self.storage, self.def_use, target_def,
+        )
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
         """Emit a single ``T name = rhs;`` (declare-on-assign) or
@@ -647,10 +624,8 @@ class CppEmitter(Visitor):
                 f'cannot pick storage for {type(e).__name__}: {err}',
                 at=e,
             ) from err
-        # `choose_storage` knows a list's *shape*, not how it is represented:
-        # that is decided per alias region (see `.unbox`), and reading it from
-        # the same table the declarations used is what keeps an expression and
-        # the variable it initializes in agreement.
+        # `choose_storage` knows a list's *shape*, not its representation:
+        # that is decided per alias region (see `.unbox`).
         return ty if self.unbox is None else self.unbox.annotate(e, ty)
 
     # ------------------------------------------------------------------
@@ -762,7 +737,6 @@ class CppEmitter(Visitor):
             ty = choose_storage(fmt)
         except StorageSelectionError as e:
             raise CppEmitError(f'return type: {e}', at=func) from e
-        # the return type is another place that admits one representation
         return ty if self.unbox is None else self.unbox.annotate_return(ty)
 
     # ------------------------------------------------------------------
@@ -791,8 +765,7 @@ class CppEmitter(Visitor):
                     # const reference instead of copying the whole value.
                     src = self._visit_expr(stmt.expr, ctx)
                     target_name = self.storage.def_to_name[target_def]
-                    # `auto&` when the alias must stay writable: an unboxed
-                    # list reached through a const reference has const elements
+                    # `auto&` when the alias must stay writable
                     ref = (
                         'auto&'
                         if self._writes_through(target_def, target_storage)

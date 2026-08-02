@@ -1,11 +1,8 @@
-"""The join between allocation-site ownership and C++ storage classes.
+"""Where allocation-site ownership meets C++ storage classes.
 
-:mod:`fpy2.analysis.alias` decides per *allocation site*; the emitter declares one
-variable per *storage class*.  Neither partition refines the other, so the join is
-where an optimistic answer would become a miscompilation rather than a missed
-optimization.  These tests pin the conservative direction at each shape.
-
-Nothing consumes the decision yet — that is the point of testing it first.
+Neither partition refines the other, so this is where an optimistic answer
+becomes a miscompilation rather than a missed optimization.  See
+:mod:`fpy2.backend.cpp.unbox`.
 """
 
 import fpy2 as fp
@@ -54,11 +51,10 @@ def _levels(ty) -> list[bool]:
 class TestTheJoin:
     """One C++ variable admits one representation.
 
-    The alias analysis now mirrors both edges ``storage_infer`` unions on — a
-    phi merge and an in-place store — so a storage class maps to a single region
-    and these come out right *inside* the analysis.  The conjunction in
-    :mod:`~fpy2.backend.cpp.unbox` is kept as a guard: if it ever reports
-    ``sites disagree`` again, the backend has grown a third kind of edge.
+    ``alias`` mirrors both edges ``storage_infer`` unions on, so a class
+    normally maps to a single region.  The conjunction in
+    :mod:`~fpy2.backend.cpp.unbox` is a guard: a ``sites disagree`` verdict
+    means the backend has grown a third kind of edge.
     """
 
     def test_disagreeing_class_stays_boxed(self):
@@ -128,12 +124,7 @@ class TestStaysBoxed:
 
     def test_parameter_handed_to_a_call(self):
         """Conservative: a callee may retain its argument, so the caller keeps
-        a handle — and the callee's parameter has to match it.
-
-        (``ys = xs`` is *not* an example any more: both names bind references
-        to one vector, so nothing is copied.  See
-        :class:`TestReferenceBoundNames`.)
-        """
+        a handle — and the callee's parameter has to match it."""
         @fp.fpy
         def g(zs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -165,11 +156,7 @@ class TestStaysBoxed:
 class TestReferenceBoundNames:
     """A name the emitter binds by reference is not a second place.
 
-    ``AliasAnalysis`` counts every name, which is the right answer to *what
-    aliases*.  But a ``const&`` binding copies nothing, so a value
-    representation stays unobservable through it — and the two idioms that hit
-    this, ``for row in xss`` and the aliases ``ZipElim`` introduces, cover most
-    of what an FPy program looks like.
+    See ``unbox._shares_storage``.
     """
 
     def test_named_loop_variable_does_not_box_the_rows(self):
@@ -211,17 +198,12 @@ class TestReferenceBoundNames:
 
 
 class TestDiscountHasLimits:
-    """Where discounting a reference-bound name would be *wrong*.
-
-    Both of these were miscompiled by the first version of the discount, so
-    they are pinned rather than left to the differential harness.
-    """
+    """Where discounting a reference-bound name would be *wrong*."""
 
     def test_a_parameter_is_never_discounted(self):
-        """``zss = [xs]`` puts the caller's list in a container.  The parameter
-        binds by reference — but to the *caller's* storage, which is a place of
-        its own, so discounting it would leave the slot as the only holder
-        counted and the list would look unshared."""
+        """``zss = [xs]`` puts the caller's list in a container; the parameter's
+        reference points at the caller's storage, which is a place of its
+        own."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -252,14 +234,8 @@ class TestDiscountHasLimits:
         assert f([1.0, 2.0], ctx=fp.FP64) == 99
 
     def test_const_propagates_out_through_unboxed_levels(self):
-        """A write to a *row* makes the whole nested parameter non-const.
-
-        ``const`` reaches through a value container, so a
-        ``const std::vector<std::vector<T>>&`` has const rows and a mutable
-        loop variable cannot bind to one.  A boxed level would stop this — the
-        indirection is exactly what lets ``const fpy::list<T>&`` yield mutable
-        elements.
-        """
+        """A write to a *row* makes the whole nested parameter non-const:
+        ``const`` reaches through a value container, unlike a handle."""
         @fp.fpy
         def f(xss: list[list[fp.Real]]) -> fp.Real:
             with fp.FP64:
@@ -274,3 +250,63 @@ class TestDiscountHasLimits:
         assert 'const std::vector<std::vector<double>>&' not in out
         assert 'std::vector<double>& row' in out
         assert f([[1.0, 2.0]], ctx=fp.FP64) == 99
+
+
+class TestInvisibleToTheHarness:
+    """Wrong answers the differential harness cannot detect."""
+
+    def test_a_rebound_parameter_keeps_its_handle(self):
+        """Silent if got wrong: the return value is right either way, and the
+        interpreter cannot see it because Python-level calls copy list
+        arguments.  See ``unbox._shares_storage``."""
+        @fp.fpy
+        def k(xs: list[fp.Real], c: fp.Real) -> fp.Real:
+            with fp.FP64:
+                xs[0] = 99.0
+                if c > 0:
+                    xs = [7.0]
+                return xs[0]
+
+        storage, _ = _decide(k, [ListType(R), R])
+        assert _levels(storage['xs']) == [True]
+
+    def test_a_list_inside_a_tuple_keeps_its_handle(self):
+        """``Unbox`` walks the ``CppList`` spine and stops at a tuple.
+        Undecided is not the same as boxed — the two representations then do
+        not compile together."""
+        from fpy2.types import TupleType
+
+        @fp.fpy
+        def f(t: tuple[list[fp.Real], fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return fp.fst(t)[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[TupleType(ListType(R), R)],
+        )
+        assert 'std::tuple<fpy::list<double>, double>' in out
+        assert 'std::vector' not in out
+
+    def test_signature_agrees_with_what_the_module_emits(self):
+        """A function another compiled function calls keeps its handles, so a
+        signature computed for it *alone* is not the one it gets in company —
+        and ``signature`` is what an embedding program builds arguments from."""
+        @fp.fpy
+        def callee(zs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                zs[0] = 1
+                return zs[0]
+
+        @fp.fpy
+        def caller(ws: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return callee(ws)
+
+        cc = CppCompiler()
+        m = Module()
+        m.add(caller, ctx=fp.FP64, arg_types=[ListType(R)])
+        m.add(callee, ctx=fp.FP64, arg_types=[ListType(R)])
+        params, _ = cc.signature(
+            callee, ctx=fp.FP64, arg_types=[ListType(R)], module=m,
+        )
+        assert f'const {params[0].format()}& zs' in cc.compile_module(m)

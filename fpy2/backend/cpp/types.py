@@ -80,8 +80,7 @@ class CppList:
 
     The flag is part of the type's identity, so two lists differing only in
     representation compare unequal and ``storage_infer`` cannot merge them into
-    one class.  Nesting is independent: a ``std::vector`` of handles and a handle
-    to a vector of vectors are both expressible.
+    one class.
     """
     elt: 'CppType'
     boxed: bool

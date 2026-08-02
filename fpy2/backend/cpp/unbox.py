@@ -7,51 +7,29 @@ indirection buys nothing and it can be a plain ``std::vector<T>`` instead: no
 allocation, no refcount, and a type a native caller already holds.
 
 The decision is per **alias region** — the analysis's own equivalence class —
-because that is the only unit at which one answer is guaranteed to satisfy
-everything that reads it.  Deciding per definition, or per expression, would let
-two things that must share a C++ type get different answers.
+because that is the only unit at which one answer satisfies everything that
+reads it.
 
-Two partitions, and neither refines the other
----------------------------------------------
+One answer per storage class
+----------------------------
 
-- :mod:`fpy2.analysis.alias` groups by what may refer to what.
-- :mod:`.storage_infer` groups by phi edges and in-place-mutation edges, giving
-  one C++ variable per class — reasons the alias analysis knows nothing about.
-
-So a storage class can hold defs from different alias regions::
-
-    if c:  ys = [x, x]      # fresh: nothing else refers to it
-    else:  ys = xs          # the caller's list
-    ys[0] = 99
-
-``ys`` is one C++ variable spanning a literal (owned) and a parameter (shared).
-There is no representation satisfying both, and taking the optimistic one makes
-``ys = xs`` a silent conversion that loses the write.
-
-Hence: **a storage class is unboxed only if every region it touches is uniquely
-owned, and that verdict is then written back onto all of them.** The write-back
-is what keeps expressions honest — without it, the literal above would still
-report itself owned, and be emitted as a ``std::vector`` initialising an
-``fpy::list``.  Since a class can drag a region to *boxed* and that region may
-belong to another class, the write-back is iterated to a fixed point; it
-terminates because verdicts only ever move one way.
+:mod:`.storage_infer` gives one C++ variable per class, coalescing on phi and
+in-place-mutation edges; :func:`~fpy2.analysis.alias.Alias` unions on exactly
+those two.  So a class maps to a single region per level, and :func:`_regions`
+asserts it rather than taking a conjunction that would silently repair a
+violation.
 
 Callers must agree
 ------------------
 
 A signature's representation is part of the contract, so a function that compiled
-code calls keeps its handles on *both* sides of it: an argument the caller passes
-is one it has marked shared outward, and a value it receives back is one the
-caller must have somewhere to put.  Measured over the corpus this costs 5 of the
-50 functions with a list parameter — the kernels worth unboxing are entry points
-a *native* caller invokes, and a native caller is not bound by this.
+code calls keeps its handles on *both* sides of it.  Measured over the corpus this
+costs 5 of the 50 functions with a list parameter — the kernels worth unboxing are
+entry points a *native* caller invokes, and a native caller is not bound by this.
 
-Refusal means keeping the handle, never failing a compile — unboxing is an
-optimization.  Reasons are recorded in :attr:`UnboxAnalysis.boxed_because` so a
-missed case is inspectable rather than invisible.
-
-Not decided here: a list inside a tuple.  Storage for a ``CppTuple`` is left
-alone, so such a list stays boxed.
+Refusal means keeping the handle, never failing a compile; reasons are recorded in
+:attr:`UnboxAnalysis.boxed_because`.  A list inside a tuple is always refused:
+:func:`_read` walks only the ``CppList`` spine and cannot reach one.
 """
 
 from dataclasses import dataclass, field
@@ -73,7 +51,11 @@ from ...ast.fpyast import (
     Var,
 )
 from ...ast.visitor import DefaultVisitor
-from .storage_infer import StorageAnalysis
+from .storage_infer import (
+    StorageAnalysis,
+    binds_by_reference,
+    is_rebound,
+)
 from .types import CppList, CppType
 
 
@@ -88,7 +70,6 @@ class UnboxAnalysis:
 
     alias: AliasAnalysis
     boxed: dict[Region, bool] = field(default_factory=dict)
-    own_boxed: dict[Region, bool] = field(default_factory=dict)
     storage: dict[Definition, CppType] = field(default_factory=dict)
     ret_regions: list[set[Region]] = field(default_factory=list)
     at_boundary: set[Region] = field(default_factory=set)
@@ -160,22 +141,23 @@ class Unbox:
             escapes = alias.escapes(site) and not alias.transfers_ownership(site)
             shared = escapes or _shares_storage(region, alias, storage, def_use)
             out.boxed[region] = out.boxed.get(region, False) or shared
-        out.own_boxed = dict(out.boxed)
 
-        # 2. a storage class must have one representation per level, so every
-        #    region it touches takes the conjunction.  Iterated: dragging a
-        #    region to boxed can make another class conservative in turn.
         classes = [
             (cls, _regions(cls, storage, alias))
             for cls, ty in storage.class_storage.items()
             if isinstance(ty, CppList)
         ]
         out.ret_regions = _return_regions(ast, alias)
-        groups = [p for _c, per in classes for p in per] + out.ret_regions
 
-        # 2a. Both sides of a compiled-to-compiled boundary keep their
-        #     handles, because the other side of it does.  For a callee that is
-        #     its whole signature; for a caller it is what a call hands back.
+        # 2. A list inside a tuple keeps its handle: `_read` walks only the
+        #     `CppList` spine, and undecided is not the same as boxed -- an
+        #     expression of bare list type would still be stamped `std::vector`.
+        for region in alias.regions_in_a_tuple():
+            out.at_boundary.add(region)
+
+        # 3. Both sides of a compiled-to-compiled boundary keep their handles,
+        #    because the other side of it does.  For a callee that is its whole
+        #    signature; for a caller it is what a call hands back.
         for site in alias.sites:
             if site.kind == 'call':
                 r = alias.region_of_site(site)
@@ -186,23 +168,29 @@ class Unbox:
                 out.at_boundary |= regions
             for cls, per_depth in classes:
                 if _has_parameter(storage.class_members[cls]):
-                    for regions in per_depth:
-                        out.at_boundary |= regions
+                    out.at_boundary |= {r for r in per_depth if r is not None}
         for r in out.at_boundary:
             out.boxed[r] = True
+
+        # 4. A function has one return type but may have several ``return``
+        #    statements, and unlike a storage class nothing unifies their
+        #    regions.  So this group really can hold more than one, and the
+        #    conjunction has to be written back or `annotate_return` and
+        #    `annotate` disagree: `if c: return xs else: return [y, y]` would
+        #    declare `fpy::list` and hand back a `std::vector`.
         changed = True
         while changed:
             changed = False
-            for regions in groups:
-                if not regions:
+            for regions in out.ret_regions:
+                if len(regions) < 2:
                     continue
-                boxed = any(out.boxed.get(r, True) for r in regions)
-                for r in regions:
-                    if out.boxed.get(r) != boxed:
-                        out.boxed[r] = boxed
-                        changed = True
+                if any(out.boxed.get(r, True) for r in regions):
+                    for r in regions:
+                        if not out.boxed.get(r, True):
+                            out.boxed[r] = True
+                            changed = True
 
-        # 3. read the decision back out per class
+        # 5. read the decision back out per class
         for cls, per_depth in classes:
             ty = storage.class_storage[cls]
             out.storage[cls] = _read(ty, per_depth, cls, out, 0)
@@ -211,24 +199,36 @@ class Unbox:
 
 def _regions(
     cls: Definition, storage: StorageAnalysis, alias: AliasAnalysis,
-) -> list[set[Region]]:
-    """The alias regions each level of *cls*'s storage may hold, by depth."""
+) -> list[Region | None]:
+    """The alias region each level of *cls*'s storage holds, by depth.
+
+    At most one per level, and the assertion is the point: ``storage_infer``
+    coalesces on phi and in-place-mutation edges, and
+    ``alias._merge_redefinitions`` unions on exactly those two, so a class
+    cannot span regions that could answer differently.  Taking a conjunction
+    over several would silently repair a violation of that; this reports it.
+    """
     ty = storage.class_storage[cls]
-    per_depth: list[set[Region]] = []
+    per_depth: list[Region | None] = []
     depth = 0
     while isinstance(ty, CppList):
         found = {
             r for d in storage.class_members[cls]
             if (r := alias.region_of(d, depth)) is not None
         }
-        per_depth.append(found)
+        assert len(found) <= 1, (
+            f'storage class `{cls.name}` spans {len(found)} alias regions at '
+            f'depth {depth}: the backend has a coalescing edge the alias '
+            f'analysis does not mirror'
+        )
+        per_depth.append(found.pop() if found else None)
         ty, depth = ty.elt, depth + 1
     return per_depth
 
 
 def _read(
     ty: CppType,
-    per_depth: list[set[Region]],
+    per_depth: list[Region | None],
     cls: Definition,
     out: UnboxAnalysis,
     depth: int,
@@ -236,30 +236,23 @@ def _read(
     if not isinstance(ty, CppList):
         return ty
     elt = _read(ty.elt, per_depth, cls, out, depth + 1)
-    regions = per_depth[depth]
-    if not regions:
+    region = per_depth[depth]
+    if region is None:
         out.boxed_because[(cls, depth)] = 'no alias information'
-        return CppList(elt, boxed=True)
-    if regions & out.at_boundary:
-        out.boxed_because[(cls, depth)] = 'a compiled callee holds a handle'
-        return CppList(elt, boxed=True)
-    if any(out.boxed.get(r, True) for r in regions):
-        # distinguish "this list really is shared" from "one C++ variable spans
-        # regions that answered differently, and it admits a single answer"
-        own = [out.own_boxed.get(r, True) for r in regions]
-        out.boxed_because[(cls, depth)] = (
-            'shared' if all(own) else 'sites disagree'
-        )
-        return CppList(elt, boxed=True)
-    return CppList(elt, boxed=False)
+    elif region in out.at_boundary:
+        out.boxed_because[(cls, depth)] = 'reached across a boundary'
+    elif out.boxed.get(region, True):
+        out.boxed_because[(cls, depth)] = 'shared'
+    else:
+        return CppList(elt, boxed=False)
+    return CppList(elt, boxed=True)
 
 
 def _has_parameter(members: list[Definition]) -> bool:
     """Whether this storage class is a function parameter.
 
-    Asks every member, not the class representative: which def represents a
-    class is an artifact of union order, and the argument-sited one need not be
-    it.
+    Asks every member: which def represents a class is an artifact of union
+    order, so the argument-sited one need not be it.
     """
     return any(
         isinstance(d, AssignDef) and isinstance(d.site, Argument)
@@ -299,17 +292,26 @@ def _shares_storage(
 ) -> bool:
     """Whether more than one place in this function holds *region* separately.
 
-    Not the same question as ``AliasAnalysis.is_shared``, which counts every
-    name.  What decides a representation is whether a second name gets its own
-    *storage*: a name the emitter binds by reference copies nothing, so a value
-    representation stays unobservable through it.  ``for row in xss`` and the
+    Not ``AliasAnalysis.is_shared``, which counts every name.  What decides a
+    representation is whether a second name gets its own *storage*: a name the
+    emitter binds by reference copies nothing.  ``for row in xss`` and the
     ``_src = xs`` aliases ``ZipElim`` introduces are both of that kind, and both
     are common enough that counting them would box most idiomatic programs.
 
-    Deliberately mirrors the emitter's binding rules rather than approximating
-    them: discounting a name the emitter then *copies* would be a
-    miscompilation, not a lost optimization.
+    Mirrors the emitter's binding rules exactly rather than approximating them:
+    discounting a name the emitter then *copies* would be a miscompilation.
     """
+    for d in alias.defs_in(region):
+        if (
+            isinstance(d, AssignDef)
+            and isinstance(d.site, Argument)
+            and is_rebound(storage, d)
+        ):
+            # `_arg_decl` passes a *rebound* parameter by value.  Boxed, the
+            # copy is of the handle and writes still reach the caller; unboxed
+            # it copies the sequence and they do not.
+            return True
+
     by_name: dict[NamedId, list[AssignDef]] = {}
     for d in alias.defs_in(region):
         # Only definitions that *bind* a name count.  A phi and an
@@ -328,41 +330,16 @@ def _shares_storage(
 def _binds_by_reference(
     d: AssignDef, storage: StorageAnalysis, def_use: DefineUseAnalysis,
 ) -> bool:
-    """Whether the emitter binds *d* as a reference to storage that exists
-    already.
+    """Whether *d* is a reference to storage that exists already, *and* that
+    storage is inside this function.
 
-    Mirrors ``_arg_decl``, ``_foreach_decl`` and ``_is_readonly_alias``.  All
-    three require that the name is never rebound, since a ``const`` reference
-    cannot be.
+    The one deliberate difference from the emitter: a parameter binds by
+    reference too, but to the **caller's** storage, which is a place of its own.
+    Discounting it would make ``zss = [xs]`` look unshared.  Spelled as one
+    extra term so the divergence stays visible rather than becoming a second
+    copy of the rule to keep in sync.
     """
-    if _is_rebound(d, storage):
-        return False
-    match d.site:
-        case Argument():
-            # Never: a parameter's reference points at the *caller's* storage,
-            # which is a place of its own.  Discounting it would let
-            # `zss = [xs]` look unshared -- the slot would be the only holder
-            # counted, and the caller would vanish.
-            return False
-        case ForStmt() | ListComp():
-            return True
-        case Assign(expr=Var() as src_var):
-            # `_is_readonly_alias`: the target must declare at this assign, and
-            # the source must not be rebound either
-            src = def_use.find_def_from_use(src_var)
-            return (
-                d in storage.declare_at_assign
-                and isinstance(src, AssignDef)
-                and not _is_rebound(src, storage)
-            )
-        case _:
-            return False
-
-
-def _is_rebound(d: Definition, storage: StorageAnalysis) -> bool:
-    """As ``CppEmitter._is_rebound``: is the name ever bound to another value?"""
-    cls = storage.def_class[d]
-    return any(
-        m is not d and isinstance(m, AssignDef) and isinstance(m.site, Assign)
-        for m in storage.class_members[cls]
+    return (
+        binds_by_reference(storage, def_use, d)
+        and not isinstance(d.site, Argument)
     )

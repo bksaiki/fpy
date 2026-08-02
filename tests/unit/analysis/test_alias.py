@@ -3,10 +3,6 @@
 One test per aliasing route the analysis models, plus the properties that make it
 usable: element cells terminate on nested types, and a uniquely-owned list is
 distinguished from a shared one.
-
-The predicate that matters to a consumer is ``is_uniquely_owned``: it holds when
-exactly one cell refers to the allocation and it does not escape, which is
-precisely when copying the list would be unobservable.
 """
 
 import fpy2 as fp
@@ -23,8 +19,6 @@ def _sites(func: fp.Function):
 
 
 class TestUniqueOwnership:
-    """A list nothing else refers to is uniquely owned."""
-
     def test_fresh_local_is_uniquely_owned(self):
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -160,15 +154,10 @@ class TestAliasingRoutes:
 
 
 class TestEscape:
-    """The two routes out of a function, which mean opposite things.
-
-    A ``return`` transfers ownership; a call argument shares it.  Collapsing them
-    would forgo every returned value, which is a large share of all allocations.
-    """
+    """The two routes out of a function: a ``return`` transfers ownership, a
+    call argument shares it."""
 
     def test_returned_fresh_list_transfers_ownership(self):
-        """The value moves to the caller and nothing here keeps it, so a copy at
-        the boundary is unobservable."""
         @fp.fpy
         def f(x: fp.Real) -> list[fp.Real]:
             with fp.FP64:
@@ -298,8 +287,6 @@ class TestNesting:
 
 
 class TestMayAlias:
-    """The pairwise query, for consumers that want it."""
-
     def test_aliased_names_may_alias(self):
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -331,11 +318,7 @@ class TestMayAlias:
 
 
 class TestCapturedByNonLists:
-    """A list can be captured by an expression that is not itself a list.
-
-    Both of these looked uniquely owned until ground truth said otherwise, so
-    they are pinned here rather than left to the integration check.
-    """
+    """A list can be captured by an expression that is not itself a list."""
 
     def test_comprehension_variable_shares_the_element(self):
         """``[row for row in xss]`` is a new outer list over the *same* rows, so
@@ -407,11 +390,7 @@ class TestTupleFields:
 
 
 class TestConservativeRoutes:
-    """Routes that reported a list uniquely owned until they were modelled.
-
-    Each of these silently authorised an unobservable-copy claim that a consumer
-    would have acted on, so they are pinned individually.
-    """
+    """Routes that would authorise an unobservable-copy claim if unmodelled."""
 
     def test_escape_reaches_nested_elements(self):
         """Returning a ``list[list[Real]]`` hands out its rows as well, so a copy

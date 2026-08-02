@@ -152,7 +152,7 @@ class TestEnumerate:
             f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))] * 2,
         )
         # No list-of-tuples anywhere ...
-        assert 'fpy::list<std::tuple' not in out
+        assert 'std::vector<std::tuple' not in out
         # ... just the one per-iteration tuple.
         assert out.count('std::make_tuple') == 1
         assert 'for (int64_t i = 0;' in out

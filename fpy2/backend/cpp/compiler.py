@@ -89,6 +89,22 @@ def _collect_call_names(ast: FuncDef) -> dict[Call, str]:
     return out
 
 
+def _find_spec(specs: list[Function], func: Function) -> Function:
+    """The specialization of *func* among *specs*.
+
+    A public entry keeps its user-given name through ``Specialize``; if it is
+    the only spec there is nothing to match against anyway.
+    """
+    for s in specs:
+        if s.ast.name == func.ast.name:
+            return s
+    if len(specs) == 1:
+        return specs[0]
+    raise CppCompileError(
+        f'`{func.name}` has no specialization in this module'
+    )
+
+
 def _callees(ast: FuncDef) -> list[Function]:
     """Every :class:`Function` *ast* calls."""
     out: list[Function] = []
@@ -148,11 +164,9 @@ class CppCompiler(Backend):
             When ``True`` (default), represent a list as a plain
             ``std::vector`` wherever :mod:`fpy2.analysis.alias` proves
             nothing can observe the difference (see :mod:`.unbox`).
-            A list that *is* shared keeps its ``fpy::list`` handle, so
-            the choice is per list and per nesting level, not per
-            program.  Set ``False`` to keep every handle -- which is
-            always correct, just slower at a native boundary, where
-            converting a nested list dominated the call.
+            The choice is per list and per nesting level.  ``False``
+            keeps every handle -- always correct, but slower at a
+            native boundary.
     """
 
     _unsafe_cast_int: bool
@@ -241,12 +255,7 @@ class CppCompiler(Backend):
 
     def specialize(self, module: Module) -> list[Function]:
         """Steps 1-3 of the pipeline: the fully-specialized functions, in
-        leaves-first emission order.
-
-        Separate from :meth:`compile_module` so a consumer of the per-spec
-        analyses can reach them — the analyses only make sense on a spec, whose
-        types are concrete.
-        """
+        leaves-first emission order."""
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
 
@@ -278,12 +287,8 @@ class CppCompiler(Backend):
     def analyze(
         self, func: Function, *, is_called: bool = False,
     ) -> SpecAnalyses:
-        """The per-spec analyses one fully-specialized function is emitted from.
-
-        Separate from :meth:`_compile_function` so a consumer of the analyses —
-        notably the representation decision in :mod:`.unbox` — can be exercised
-        without going through emission.
-        """
+        """The per-spec analyses one fully-specialized function is emitted
+        from."""
         ast = func.ast
         if bad := unclosed_data_free_vars(ast):
             raise CppCompileError(
@@ -343,21 +348,21 @@ class CppCompiler(Backend):
         *,
         ctx: Context | None = None,
         arg_types: Collection[Type | None] | None = None,
+        module: Module | None = None,
     ) -> tuple[list[CppType], CppType]:
         """The C++ storage types of *func*'s parameters and result.
 
-        A caller cannot derive these from FPy types alone: how a list is
-        represented depends on :mod:`.unbox`, and with ``unbox=True`` the same
-        FPy signature can compile to ``fpy::list<T>`` or ``std::vector<T>``.
-        Anything constructing arguments for a generated function — a test
-        harness, or a program embedding a kernel — has to ask.
+        Not derivable from FPy types alone: how a list is represented depends on
+        :mod:`.unbox`, so the same FPy signature can compile to ``fpy::list<T>``
+        or ``std::vector<T>``.  Pass the *module* being compiled whenever there
+        is one — a function another compiled function calls keeps its handles.
         """
-        m = Module()
-        m.add(func, ctx=ctx, arg_types=arg_types)
-        specs = self.specialize(m)
+        if module is None:
+            module = Module()
+            module.add(func, ctx=ctx, arg_types=arg_types)
+        specs = self.specialize(module)
         called = {id(c.ast) for s in specs for c in _callees(s.ast)}
-        # emission order is leaves-first, so the entry is last
-        entry = specs[-1]
+        entry = _find_spec(specs, func)
         a = self.analyze(entry, is_called=id(entry.ast) in called)
 
         params = []
