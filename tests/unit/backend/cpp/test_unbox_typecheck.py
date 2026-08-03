@@ -12,6 +12,7 @@ representation is chosen, and a `return` whose type disagrees with the
 function's is a compile error, not a wrong answer.
 """
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -20,7 +21,7 @@ from pathlib import Path
 import fpy2 as fp
 import pytest
 
-from fpy2.backend.cpp.compiler import CppCompiler
+from fpy2.backend.cpp.compiler import CppCompileError, CppCompiler
 from fpy2.backend.cpp.types import CppList
 from fpy2.module import Module
 from fpy2.types import ListType, RealType
@@ -194,30 +195,171 @@ def test_a_fresh_nested_result_is_fully_unboxed():
 
 
 # --------------------------------------------------------------------------
-# Found while writing the tests above: a *pre-existing* emitter bug, not an
-# unbox one -- it reproduces identically with `unbox=False`.  Reported here
-# because it is the first thing that fell out of running a C++ compiler over
-# emitted code, which no unit test does today.
+# Found while writing the tests above, and none of it is an unbox bug -- all of
+# it reproduces with `unbox=False`.  It is the first thing that fell out of
+# running a C++ compiler over emitted code, which nothing else does.
+#
+# `format_infer` picks a bound per expression and joins where several values
+# reach one place.  The join was never pushed back *down*, so each contributor
+# kept its own narrower bound and the backend gave one place two storages.
+# Scalars survive that on implicit conversion; `std::vector` has no converting
+# constructor across element types, so these are hard errors.
 
-@pytest.mark.xfail(
-    reason='pre-existing: a returned list literal takes the literal\'s own '
-           'element format instead of the declared return element type; '
-           'reproduces with unbox=False',
-    strict=True,
+@fp.fpy
+def j_two_returned_literals(c: fp.Real) -> list[fp.Real]:
+    """Two returns: `{1.5, 2.5}` narrows differently from `{3}`."""
+    with fp.FP64:
+        if c > 0:
+            return [1.5, 2.5]
+        else:
+            return [3.0]
+
+
+@fp.fpy
+def j_nested_literal() -> fp.Real:
+    """No returns involved -- a nested literal's own rows disagree."""
+    with fp.FP64:
+        xss = [[1.5], [3.0, 4.0]]
+        return xss[0][0]
+
+
+@fp.fpy
+def j_ternary_over_lists(c: fp.Real) -> fp.Real:
+    """One C++ ternary, so one type across both arms."""
+    with fp.FP64:
+        xs = [1.5, 2.5] if c > 0 else [3.0]
+        return xs[0]
+
+
+@fp.fpy
+def j_list_inside_a_returned_tuple(c: fp.Real):
+    """`std::tuple` does convert across element types -- but only when its
+    elements do, and two `std::vector`s do not."""
+    with fp.FP64:
+        if c > 0:
+            return ([1.5, 2.5], 1.5)
+        else:
+            return ([3.0], 3.0)
+
+
+@fp.fpy
+def j_comprehension_against_a_literal(c: fp.Real) -> list[fp.Real]:
+    """A comprehension builds its vector element by element, so its body is a
+    contributor too."""
+    with fp.FP64:
+        if c > 0:
+            return [1.5 for _ in range(3)]
+        else:
+            return [3.0]
+
+
+JOIN_CASES = [
+    (j_two_returned_literals, [R]),
+    (j_nested_literal, []),
+    (j_ternary_over_lists, [R]),
+    (j_list_inside_a_returned_tuple, [R]),
+    (j_comprehension_against_a_literal, [R]),
+]
+
+
+@pytest.mark.parametrize('unbox', [True, False])
+@pytest.mark.parametrize(
+    'func,arg_types', JOIN_CASES, ids=[f.name for f, _ in JOIN_CASES],
 )
-def test_returned_list_literal_uses_the_declared_element_type():
-    """`-> list[fp.Real]` returning `[1.0, 2.0]` emits
-    `std::vector<uint8_t>{1, 2}`, and two branches returning differently
-    valued literals emit two *different* element types from one function.
-    Neither typechecks."""
-    @fp.fpy
-    def bad(c: fp.Real) -> list[fp.Real]:
-        with fp.FP64:
-            if c > 0:
-                return [1.5, 2.5]
-            else:
-                return [3.0]
-
+def test_a_joined_place_has_one_element_type(func, arg_types, unbox):
     m = Module()
-    m.add(bad, ctx=fp.FP64, arg_types=[R])
+    m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
+    _typecheck(m, unbox=unbox)
+    # One element type throughout -- which one it is, is storage selection's
+    # business, and `unbox=False` spells the same list `fpy::list`.  Read off
+    # the function alone; the runtime helpers are templates and would
+    # contribute a `T`.
+    body = CppCompiler(unbox=unbox).compile_module(m)
+    elts = re.findall(r'(?:std::vector|fpy::(?:list|make_list))<(\w+)>', body)
+    assert len(set(elts)) == 1, body
+
+
+# --------------------------------------------------------------------------
+# The other half: a *variable* reaching a joined place.  `_push_format` cannot
+# re-decide one -- its storage was fixed by its own definition -- so the
+# backend converts at the boundary instead.
+
+@fp.fpy
+def v_narrower_variable(c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """`xs` narrows to `uint8_t` on its own; the other return is `double`."""
+    with fp.FP64:
+        xs = [1.0, 2.0]
+        if c > 0:
+            return xs
+        else:
+            return [y]
+
+
+@fp.fpy
+def v_narrower_variable_nested(c: fp.Real, y: fp.Real) -> list[list[fp.Real]]:
+    """Nested, where the range constructor does not reach -- the rows need
+    converting too."""
+    with fp.FP64:
+        xss = [[1.0, 2.0]]
+        if c > 0:
+            return xss
+        else:
+            return [[y]]
+
+
+CONVERT_CASES = [v_narrower_variable, v_narrower_variable_nested]
+
+
+@pytest.mark.parametrize(
+    'func', CONVERT_CASES, ids=[f.name for f in CONVERT_CASES],
+)
+def test_a_narrower_variable_is_converted_at_the_boundary(func):
+    m = Module()
+    m.add(func, ctx=fp.FP64, arg_types=[R, R])
     _typecheck(m)
+
+
+# A boxed list is the one thing conversion must not rebuild: a new allocation
+# is a different object, and the handle is there precisely so FPy's aliasing
+# survives.  Both cases below are refused; only the first is refused for a
+# reason that will not go away.
+
+@fp.fpy
+def r_genuinely_shared(c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """`xs` is a name *and* a container slot, so rebuilding it would hand the
+    caller something `zss` no longer aliases."""
+    with fp.FP64:
+        xs = [1.0, 2.0]
+        zss = [xs]
+        zss[0][0] = 1.0
+        if c > 0:
+            return xs
+        else:
+            return [y]
+
+
+@fp.fpy
+def r_boxed_only_by_conservatism(c: fp.Real, y: fp.Real):
+    """Nothing here outlives the return -- `xs` keeps its handle only because
+    a name plus a container field reads as two places.  That is the
+    `named_in_tuple` entry in `docs/todos/unboxing-gaps.md`; closing it turns
+    this case into a conversion."""
+    with fp.FP64:
+        xs = [1.0, 2.0]
+        if c > 0:
+            return (xs, 1.0)
+        else:
+            return ([y], y)
+
+
+REFUSE_CASES = [r_genuinely_shared, r_boxed_only_by_conservatism]
+
+
+@pytest.mark.parametrize(
+    'func', REFUSE_CASES, ids=[f.name for f in REFUSE_CASES],
+)
+def test_a_shared_list_is_refused_rather_than_unshared(func):
+    m = Module()
+    m.add(func, ctx=fp.FP64, arg_types=[R, R])
+    with pytest.raises(CppCompileError, match='rebuilding a shared list'):
+        CppCompiler().compile_module(m)

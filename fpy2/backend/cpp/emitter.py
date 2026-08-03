@@ -81,6 +81,7 @@ from ...ast.fpyast import (
     FuncDef,
     Hexnum,
     If1Stmt,
+    IfExpr,
     IfStmt,
     IndexedAssign,
     Integer,
@@ -302,6 +303,9 @@ class CppEmitter(Visitor):
         self._unsafe_cast_int = unsafe_cast_int
         self.writer = _IndentedWriter()
         self._tmp_counter = 0
+        # The storage this function returns, set once the signature is
+        # emitted; see :meth:`_visit_return`.
+        self._return_storage: CppType | None = None
         self.op_table: ScalarOpTable = make_op_table()
         # Build a site → scope lookup over the analysis's scope list.
         self._scope_by_site: dict[ContextScopeSite, ContextScope] = {
@@ -645,6 +649,8 @@ class CppEmitter(Visitor):
         # ``with`` block).
         ret_ty = self._infer_return_storage(func)
         ret_str = ret_ty.format() if ret_ty is not None else 'void'
+        # Read back by each `return` to convert a narrower value into it.
+        self._return_storage = ret_ty
 
         # Emit arg list.  Each argument's class is anchored to the bare
         # source name in ``StorageInfer``, so it's safe to use ``arg.name``
@@ -799,60 +805,168 @@ class CppEmitter(Visitor):
                     at=stmt,
                 )
 
+    def _emit_at(self, e: Expr, want: CppType | None, ctx) -> str:
+        """Emit *e* as a value of storage *want*.
+
+        One place admits one C++ type, but ``format_infer`` bounds each
+        expression by *its own* values — correctly: that is the question it
+        answers.  ``[3.0]`` really is bounded by ``{3}``, even where it has to
+        be a ``std::vector<double>`` because the other ``return`` is one.
+        Reconciling the two is a storage question, so it lives here.
+
+        An expression that *constructs* its value is simply built at *want*.
+        Anything else already has storage of its own and is converted
+        (:meth:`_convert_storage`), which is where a shared list gets refused.
+        """
+        if want is None:
+            return self._visit_expr(e, ctx)
+        if isinstance(want, CppScalar):
+            # A scalar has no identity, so there is nothing to build at a
+            # storage: C++ converts it at the point of use.
+            return self._visit_expr(e, ctx)
+        match e:
+            case ListExpr() if isinstance(want, CppList):
+                parts = [self._emit_braced(elt, want.elt, ctx) for elt in e.elts]
+                return self._list_new_init(want, parts)
+            case TupleExpr() if (
+                isinstance(want, CppTuple) and len(want.elts) == len(e.elts)
+            ):
+                parts = [
+                    self._emit_at(elt, w, ctx)
+                    for elt, w in zip(e.elts, want.elts)
+                ]
+                return f'std::make_tuple({", ".join(parts)})'
+            case ListComp() if isinstance(want, CppList):
+                return self._emit_list_comp_at(e, want, ctx)
+            case IfExpr():
+                cond = self._visit_expr(e.cond, ctx)
+                ift = self._emit_at(e.ift, want, ctx)
+                iff = self._emit_at(e.iff, want, ctx)
+                return f'({cond} ? {ift} : {iff})'
+        emitted = self._visit_expr(e, ctx)
+        src = self._storage_or_none(e)
+        if src is None:
+            return emitted
+        return self._convert_storage(emitted, src, want, at=e)
+
+    def _emit_braced(self, e: Expr, want: CppType, ctx) -> str:
+        """:meth:`_emit_at`, for an element of a braced initializer.
+
+        A braced init forbids a narrowing conversion, so a scalar element's
+        cast has to be spelled even though the same conversion would be
+        implicit anywhere else.
+        """
+        code = self._emit_at(e, want, ctx)
+        if isinstance(want, CppScalar):
+            src = self._storage_or_none(e)
+            if isinstance(src, CppScalar) and src != want:
+                return self._explicit_cast(code, want)
+        return code
+
     def _emit_assign_rhs(
         self, expr: Expr, target_ty: CppType, ctx,
     ) -> str:
-        """Emit an assignment's RHS, coercing a list-literal wrapper to
-        the target's storage when they disagree.
+        """Emit an assignment's RHS at the target's storage.
 
-        Why this matters: ``_storage_for_expr`` picks the list's wrapper
-        from format inference (the tight per-expression join), but
-        :class:`StorageInfer` may have widened the variable's storage
-        beyond that — e.g. when a subsequent ``x[i] = y`` (IndexedAssign)
-        joins the def with a wider value.  Emitting
-        ``vector<wide> x = vector<narrow>{...}`` is a hard C++ type
-        error, and per-element narrowing inside the literal also
-        triggers ``-Wnarrowing`` when the element expressions were
-        emitted at the wider type (e.g. ``Round`` lowers to a
-        ``static_cast`` into the active context's scalar).  Using the
-        target's storage for the wrapper keeps the literal consistent
-        with the variable's declared type.
+        ``_storage_for_expr`` bounds the RHS by its own values, but
+        :class:`StorageInfer` may have widened the variable beyond that — a
+        later ``x[i] = y`` joins the def with a wider value.  Emitting
+        ``vector<wide> x = vector<narrow>{...}`` is a hard type error, and
+        narrowing per element trips ``-Wnarrowing`` when the elements were
+        emitted at the wider type (``Round`` lowers to a ``static_cast``).
         """
-        if isinstance(expr, ListExpr) and isinstance(target_ty, CppList):
-            return self._emit_list_expr_at(expr, target_ty, ctx)
-        return self._visit_expr(expr, ctx)
+        return self._emit_at(expr, target_ty, ctx)
 
-    def _emit_list_expr_at(
-        self, e: ListExpr, wrapper_ty: CppList, ctx,
+    def _convert_storage(
+        self, code: str, src: CppType, want: CppType, *, at: Expr,
     ) -> str:
-        """Emit ``[a, b, c]`` as ``wrapper_ty{a, b, c}``, casting each
-        element to ``wrapper_ty.elt`` when the per-element emitted
-        storage disagrees.  Mirrors :meth:`_visit_list_expr` but with
-        an externally-supplied wrapper type."""
-        elt_target = wrapper_ty.elt
-        parts: list[str] = []
-        for elt in e.elts:
-            elt_str = self._visit_expr(elt, ctx)
-            if isinstance(elt_target, CppScalar):
-                # Cast when the element's per-expression storage
-                # differs from the wrapper's element type.  Defensive
-                # ``try`` mirrors ``_storage_for_expr``'s exception
-                # contract — non-storable formats (e.g., symbolic
-                # REAL_FORMAT) just skip the cast.
-                try:
-                    elt_storage = self._storage_for_expr(elt)
-                except CppEmitError:
-                    elt_storage = None
-                if (
-                    isinstance(elt_storage, CppScalar)
-                    and elt_storage != elt_target
-                ):
-                    elt_str = self._explicit_cast(elt_str, elt_target)
-            parts.append(elt_str)
-        return self._list_new_init(wrapper_ty, parts)
+        """*code*, of storage *src*, as storage *want*.
+
+        Format inference gives one place one bound, and ``_push_format`` puts
+        every *constructor* that reaches a place at that bound.  A variable
+        cannot be re-decided that way -- its storage was fixed by its own
+        definition -- so a narrower one flowing into a wider place arrives here
+        and is converted.
+
+        Scalars convert implicitly, and so does a ``std::tuple`` whose fields
+        do.  ``std::vector`` does not, so a list is rebuilt element-wise.
+        """
+        if src == want:
+            return code
+        if isinstance(src, CppTuple) and isinstance(want, CppTuple):
+            if len(src.elts) != len(want.elts):
+                return code
+            base = self._bind_operand(code)
+            fields = [
+                self._convert_storage(f'std::get<{i}>({base})', s, w, at=at)
+                for i, (s, w) in enumerate(zip(src.elts, want.elts))
+            ]
+            return f'std::make_tuple({", ".join(fields)})'
+        if not (isinstance(src, CppList) and isinstance(want, CppList)):
+            return code
+        if src.boxed:
+            # A rebuilt list is a different object, and a handle exists exactly
+            # so that FPy's aliasing survives.  Unsharing it here would be
+            # silent, so refuse instead.
+            raise CppEmitError(
+                f'unsupported: `{src.format()}` cannot become `{want.format()}` '
+                f'— rebuilding a shared list would copy it out of its aliases',
+                at=at,
+            )
+        unboxed = CppList(want.elt, boxed=False)
+        if src.elt != want.elt:
+            code = self._rebuild_list(code, src, unboxed, at=at)
+        if not want.boxed:
+            return code
+        # A value has no aliases to lose, so giving it a handle is free.
+        return f'std::make_shared<{unboxed.format()}>({code})'
+
+    def _rebuild_list(
+        self, code: str, src: CppList, want: CppList, *, at: Expr,
+    ) -> str:
+        """A new list of *want*, element-wise from *code*.
+
+        Unboxed: :meth:`_convert_storage` adds the handle afterwards if one is
+        wanted, so that the boxed case has exactly one place that allocates.
+        """
+        assert not want.boxed, 'the caller boxes; see _convert_storage'
+        base = self._bind_operand(code)
+        if not isinstance(src.elt, CppList):
+            # Flat: the range constructor converts each element on the way in.
+            return self._list_new_range(
+                want, self._list_begin(src, base), self._list_end(src, base),
+            )
+        out, i = self._fresh_temp(), self._fresh_temp()
+        n = self._list_len(src, base)
+        self.writer.add_line(f'{want.format()} {out};')
+        self.writer.add_line(f'{self._member(want, out)}reserve({n});')
+        self.writer.add_line(f'for (size_t {i} = 0; {i} < {n}; ++{i}) {{')
+        self.writer.indent()
+        elt = self._convert_storage(
+            self._list_at_raw(src, base, i), src.elt, want.elt, at=at,
+        )
+        self.writer.add_line(f'{self._list_push(want, out, elt)};')
+        self.writer.dedent()
+        self.writer.add_line('}')
+        return out
+
+    def _storage_or_none(self, e: Expr) -> CppType | None:
+        """:meth:`_storage_for_expr`, or ``None`` where it has no answer.
+
+        A format with no storage on the ladder — a symbolic ``REAL_FORMAT``, say
+        — is not a disagreement to repair.  Callers that only want to *adjust* a
+        representation skip it rather than failing the compile.
+        """
+        try:
+            return self._storage_for_expr(e)
+        except CppEmitError:
+            return None
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
-        rhs = self._visit_expr(stmt.expr, ctx)
+        # A function has one return type, so every `return` produces it: built
+        # at that storage where the value is constructed here, converted where
+        # it comes from somewhere with storage of its own.
+        rhs = self._emit_at(stmt.expr, self._return_storage, ctx)
         self.writer.add_line(f'return {rhs};')
 
     def _resolve_scope_ctx(self, scope: ContextScope) -> Context | None:
@@ -1086,17 +1200,15 @@ class CppEmitter(Visitor):
         """
         Emit a numeric literal as a C++ expression.
 
-        An FPy literal is an exact rational, rounded where it is *used* and
-        under the context in force there.  C++ has no such thing: every literal
-        it can spell is a value of some format.  So a value binary64 holds
-        exactly prints as itself, and one it cannot is refused.
+        An FPy literal is an exact rational, rounded where it is *used*.  C++
+        has no such thing — every literal it can spell is a value of some
+        format — so one binary64 holds exactly prints as itself and one it
+        cannot is refused.  The alternative, ``num / denom``, is an *operation*
+        where FPy has a constant: it rounds under whatever mode happens to be
+        set, and ``-O2`` folds it to nearest regardless.
 
-        The alternative — ``num / denom`` — is an *operation* where FPy has a
-        constant.  It rounds under whatever mode happens to be set rather than
-        the one the program asked for, and ``-O2`` folds it to nearest
-        regardless, so it is not even that.  ``fp.round`` is how a program says
-        which format the constant is in; :meth:`_fold_rounded_literal` folds it
-        here rather than emitting a cast of something unspellable.
+        ``fp.round`` is how a program says which format a constant is in; see
+        :meth:`_fold_rounded_literal`.
         """
         if v.denominator == 1:
             return str(v.numerator)
@@ -2180,10 +2292,11 @@ class CppEmitter(Visitor):
     def _scalar_cast_types(self, e):
         """Source/target scalar storage for a round-like node ``e``.
 
-        The argument's storage is only used to short-circuit
-        same-type casts.  Non-dyadic numeric literals
-        (e.g., ``fp.round(3.14159265359)``) have a SetFormat with
-        no representable storage — that's fine, we always cast."""
+        The argument's storage is only used to short-circuit same-type casts.
+        A non-dyadic literal has a ``SetFormat`` with no representable storage
+        — fine, we always cast.  ``Round`` folds those before getting here
+        (:meth:`_fold_rounded_literal`); ``Cast`` does not, and refuses them at
+        emission instead, which is right for a cast that asserts exactness."""
         try:
             arg_ty = self._scalar_storage_for_expr(e.arg)
         except CppEmitError:
@@ -2224,12 +2337,10 @@ class CppEmitter(Visitor):
     def _fold_rounded_literal(self, e) -> str | None:
         """``Round(<literal>)`` as a C++ literal, or ``None`` to emit a cast.
 
-        This is the only way an inexact constant reaches C++ at all: the
-        argument has no representation of its own (see
-        :meth:`_emit_numeric_literal`), and rounding it here is what the
-        program asked for.  Doing it at compile time also gets the mode the
-        program asked for rather than whatever ``fesetround`` left behind, and
-        is immune to ``-O2`` folding the division to nearest.
+        The only way an inexact constant reaches C++ at all, since the argument
+        has no representation of its own (:meth:`_emit_numeric_literal`).
+        Rounding at compile time also uses the mode the program asked for
+        rather than whatever ``fesetround`` last left behind.
         """
         if not isinstance(e.arg, Decnum | Hexnum | Rational | Digits | Integer):
             return None
@@ -2359,17 +2470,22 @@ class CppEmitter(Visitor):
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
         # ``(a, b, c)`` → ``std::make_tuple(a, b, c)``.  Type deduction
         # from the argument types matches what the format-inference
-        # pipeline assigns to the tuple slot — no explicit type prefix.
-        elts = ', '.join(self._visit_expr(elt, ctx) for elt in e.elts)
-        return f'std::make_tuple({elts})'
+        # pipeline assigns to the tuple slot — no explicit type prefix,
+        # but a field whose own storage is narrower has to be converted
+        # or deduction produces a tuple type nothing accepts.
+        return self._emit_at(e, self._storage_for_expr(e), ctx)
 
     def _visit_list_expr(self, e: ListExpr, ctx) -> str:
         # ``[a, b, c]`` → ``fpy::make_list<T>({a, b, c})`` where ``T`` comes
-        # from format inference on the list expression.
-        parts = [self._visit_expr(elt, ctx) for elt in e.elts]
-        return self._list_new_init(self._storage_for_expr(e), parts)
+        # from format inference on the list expression.  One vector, one
+        # element type, so each element is emitted at ``T`` rather than at
+        # whatever it is on its own.
+        return self._emit_at(e, self._storage_for_expr(e), ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx) -> str:
+        return self._emit_list_comp_at(e, self._storage_for_expr(e), ctx)
+
+    def _emit_list_comp_at(self, e: ListComp, result_ty: CppType, ctx) -> str:
         # ``[elt for x1 in iter1 [for x2 in iter2 ...]]``
         #
         # Emitted as a temporary ``fpy::list<T> tmp;`` followed by
@@ -2378,7 +2494,10 @@ class CppEmitter(Visitor):
         # value.  The temp shape mirrors the cpp/ backend; future
         # polish may inline directly into an ``Assign`` target to skip
         # the temp + copy.
-        result_ty = self._storage_for_expr(e)
+        #
+        # *result_ty* is supplied because a comprehension builds its vector
+        # element by element, so it is a contributor to whatever place it
+        # reaches — see :meth:`_emit_at`.
         tmp = self._fresh_temp()
         self.writer.add_line(
                     f'{result_ty.format()} {tmp} = '
@@ -2388,7 +2507,8 @@ class CppEmitter(Visitor):
         for target, iterable in zip(e.targets, e.iterables):
             self._open_comp_loop(target, iterable, e, ctx)
 
-        elt = self._visit_expr(e.elt, ctx)
+        elt_want = result_ty.elt if isinstance(result_ty, CppList) else None
+        elt = self._emit_at(e.elt, elt_want, ctx)
         self.writer.add_line(f'{self._list_push(result_ty, tmp, elt)};')
 
         for _ in e.targets:
@@ -2559,25 +2679,18 @@ class CppEmitter(Visitor):
         # unified storage (chosen by format inference + storage
         # selection over the merged formats).  Non-scalar branches
         # must already match — there's no widening for lists/tuples.
+        out_ty = self._storage_for_expr(e)
+        if not isinstance(out_ty, CppScalar):
+            # A list or tuple arm is built at the ternary's storage, or
+            # converted into it — see :meth:`_emit_at`.
+            return self._emit_at(e, out_ty, ctx)
         cond = self._visit_expr(e.cond, ctx)
         ift = self._visit_expr(e.ift, ctx)
         iff = self._visit_expr(e.iff, ctx)
-        out_ty = self._storage_for_expr(e)
-        if isinstance(out_ty, CppScalar):
-            ift_ty = self._scalar_storage_for_expr(e.ift)
-            iff_ty = self._scalar_storage_for_expr(e.iff)
-            ift = self._maybe_cast(ift, ift_ty, out_ty, at=e)
-            iff = self._maybe_cast(iff, iff_ty, out_ty, at=e)
-        else:
-            ift_ty_ = self._storage_for_expr(e.ift)
-            iff_ty_ = self._storage_for_expr(e.iff)
-            if ift_ty_ != out_ty or iff_ty_ != out_ty:
-                raise CppEmitError(
-                    f'IfExpr branches have incompatible non-scalar '
-                    f'storages: ift=`{ift_ty_!r}`, iff=`{iff_ty_!r}`, '
-                    f'expected `{out_ty!r}`',
-                    at=e,
-                )
+        ift_ty = self._scalar_storage_for_expr(e.ift)
+        iff_ty = self._scalar_storage_for_expr(e.iff)
+        ift = self._maybe_cast(ift, ift_ty, out_ty, at=e)
+        iff = self._maybe_cast(iff, iff_ty, out_ty, at=e)
         return f'({cond} ? {ift} : {iff})'
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
