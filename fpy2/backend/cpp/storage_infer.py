@@ -375,12 +375,12 @@ class _PlaceFloors(DefaultVisitor):
         for stmt in self.assigns:
             if not isinstance(stmt.target, NamedId):
                 continue
+            d = self.def_use.find_def_from_site(stmt.target, stmt)
             try:
                 eff = self._effective(stmt.expr)
             except RuntimeError:
                 continue          # incompatible kinds: not a widening question
             if isinstance(eff, ListFormat | TupleFormat):
-                d = self.def_use.find_def_from_site(stmt.target, stmt)
                 self._raise(d, eff)
 
 
@@ -402,13 +402,13 @@ def place_floors(
     rise and the ladder is finite, so this settles; the cap is a backstop.
     """
     v = _PlaceFloors(def_use, by_def, by_expr, ret_fmt, base)
-    v._visit_function(ast, None)
+    v._visit_function(ast, None)          # collects the assignments to revisit
     for _ in range(8):
+        v.changed = False
+        v._visit_function(ast, None)      # places -> the defs reaching them
+        v._propagate_up()                 # defs -> containers and aliases
         if not v.changed:
             break
-        v.changed = False
-        v._visit_function(ast, None)
-        v._propagate_up()
     return v.floors
 
 
