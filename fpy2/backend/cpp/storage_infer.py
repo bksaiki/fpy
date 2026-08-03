@@ -33,23 +33,34 @@ numeric suffixes (``x_1``, ``x_2``, …).
 
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import reduce
 
 from ...analysis import Definition
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.format_infer import FormatBound
+from ...analysis.format_infer.analysis import (
+    ListFormat,
+    TupleFormat,
+    _join_bounds,
+)
 from ...analysis.reaching_defs import AssignDef, PhiDef
 from ...ast.fpyast import (
     Argument,
     Assign,
     Expr,
     ForStmt,
+    FuncDef,
+    IfExpr,
     IndexedAssign,
     ListComp,
+    ListExpr,
     ListRef,
     NamedId,
     Stmt,
+    TupleExpr,
     Var,
 )
+from ...ast.visitor import DefaultVisitor
 from ...utils import Unionfind
 from .storage import StorageSelectionError, aggregate_storage
 from .types import CppList, CppTuple, CppType
@@ -218,6 +229,189 @@ def _is_external(members: list[Definition]) -> bool:
     return False
 
 
+class _PlaceFloors(DefaultVisitor):
+    """Per-def lower bounds from the places each def's value reaches.
+
+    One place admits one C++ type.  :meth:`emitter._emit_at` builds a
+    *constructor* at the place's type, but a variable cannot be rebuilt that
+    way: changing a list's element type means a new buffer, and a shared list
+    cannot survive one — which is the refusal in ``_convert_storage``.  So raise
+    the variable's own storage instead, and there is nothing left to convert.
+
+    Lists only.  A scalar converts free at the point of use, so widening its
+    declaration would change a signature to no purpose.
+
+    The shape mirrors ``_emit_at`` deliberately: the same set of expressions
+    contribute to a place, and the two must agree about which.
+    """
+
+    def __init__(
+        self,
+        def_use: DefineUseAnalysis,
+        by_def: dict[Definition, FormatBound],
+        by_expr: dict[Expr, FormatBound],
+        ret_fmt: FormatBound,
+        base: 'StorageAnalysis',
+    ):
+        self.def_use = def_use
+        self.by_def = by_def
+        self.by_expr = by_expr
+        self.ret_fmt = ret_fmt
+        self.base = base
+        self.floors: dict[Definition, FormatBound] = {}
+        self.assigns: list[Assign] = []
+        self.changed = False
+
+    def _pinned(self, d: Definition) -> bool:
+        """Whether *d* has no storage of its own to raise.
+
+        The emitter binds some names as a ``const`` reference to storage that
+        already exists — ``ys = xs``, ``row = xss[i]``, a loop target.  Those are
+        spelled ``auto``, so raising one would make ``storage_of`` describe a
+        type the reference does not have and nothing would catch it until the
+        mismatch surfaced somewhere else.  ``allow_projection`` is on because
+        refusing to raise is the safe direction.
+
+        A *parameter* is also bound by reference but its type is spelled from
+        ``storage_of`` in the signature, so raising it does what it says — the
+        ABI changes, and ``signature()`` reports it.
+        """
+        if isinstance(d.site, Argument):
+            return False
+        return binds_by_reference(
+            self.base, self.def_use, d, allow_projection=True,
+        )
+
+    def _raise(self, d: Definition, fmt: FormatBound) -> None:
+        if self._pinned(d):
+            return
+        cur = self.floors.get(d)
+        raised = fmt if cur is None else _join_bounds(cur, fmt)
+        if raised != cur:
+            self.floors[d] = raised
+            self.changed = True
+
+    def _push(self, e: Expr, fmt: FormatBound) -> None:
+        if not isinstance(fmt, ListFormat):
+            return
+        match e:
+            case Var():
+                self._raise(self.def_use.find_def_from_use(e), fmt)
+            case ListExpr():
+                for elt in e.elts:
+                    self._push(elt, fmt.elt)
+            case ListComp():
+                self._push(e.elt, fmt.elt)
+            case IfExpr():
+                self._push(e.ift, fmt)
+                self._push(e.iff, fmt)
+
+    def _push_tuple(self, e: Expr, fmt: FormatBound) -> None:
+        """A tuple's fields are separate places, each with its own type."""
+        if isinstance(e, TupleExpr) and isinstance(fmt, TupleFormat):
+            if len(e.elts) == len(fmt.elts):
+                for elt, sub in zip(e.elts, fmt.elts):
+                    self._push_tuple(elt, sub)
+                    self._push(elt, sub)
+
+    def _visit_return(self, stmt, ctx):
+        super()._visit_return(stmt, ctx)
+        self._push(stmt.expr, self.ret_fmt)
+        self._push_tuple(stmt.expr, self.ret_fmt)
+
+    def _visit_list_expr(self, e: ListExpr, ctx):
+        super()._visit_list_expr(e, ctx)
+        fmt = self.by_expr.get(e)
+        if isinstance(fmt, ListFormat):
+            for elt in e.elts:
+                self._push(elt, fmt.elt)
+                self._push_tuple(elt, fmt.elt)
+
+    def _visit_tuple_expr(self, e: TupleExpr, ctx):
+        super()._visit_tuple_expr(e, ctx)
+        self._push_tuple(e, self.by_expr.get(e))
+
+    def _visit_if_expr(self, e: IfExpr, ctx):
+        super()._visit_if_expr(e, ctx)
+        fmt = self.by_expr.get(e)
+        self._push(e, fmt)
+        self._push_tuple(e, fmt)
+
+    def _visit_assign(self, stmt: Assign, ctx):
+        super()._visit_assign(stmt, ctx)
+        self.assigns.append(stmt)
+
+    # -- the other direction ------------------------------------------------
+
+    def _effective(self, e: Expr) -> FormatBound:
+        """*e*'s bound with the floors its leaves have picked up.
+
+        Raising a variable raises every container built from it: once ``base``
+        is a ``vector<double>``, ``scratch = [base]`` has to be a
+        ``vector<vector<double>>`` or the container's element type and the
+        variable's own declaration disagree — which is the same conflict one
+        level out.
+        """
+        match e:
+            case Var():
+                d = self.def_use.find_def_from_use(e)
+                own, floor = self.by_def.get(d), self.floors.get(d)
+                return own if floor is None else _join_bounds(own, floor)
+            case ListExpr() if e.elts:
+                elts = [self._effective(x) for x in e.elts]
+                return ListFormat(reduce(_join_bounds, elts))
+            case TupleExpr():
+                return TupleFormat(tuple(self._effective(x) for x in e.elts))
+            case ListComp():
+                return ListFormat(self._effective(e.elt))
+            case IfExpr():
+                return _join_bounds(
+                    self._effective(e.ift), self._effective(e.iff),
+                )
+        return self.by_expr.get(e)
+
+    def _propagate_up(self) -> None:
+        """Floor each assignment target by what its RHS now builds."""
+        for stmt in self.assigns:
+            if not isinstance(stmt.target, NamedId):
+                continue
+            try:
+                eff = self._effective(stmt.expr)
+            except RuntimeError:
+                continue          # incompatible kinds: not a widening question
+            if isinstance(eff, ListFormat | TupleFormat):
+                d = self.def_use.find_def_from_site(stmt.target, stmt)
+                self._raise(d, eff)
+
+
+def place_floors(
+    ast: FuncDef,
+    def_use: DefineUseAnalysis,
+    by_def: dict[Definition, FormatBound],
+    by_expr: dict[Expr, FormatBound],
+    ret_fmt: FormatBound,
+    base: 'StorageAnalysis',
+) -> dict[Definition, FormatBound]:
+    """See :class:`_PlaceFloors`.
+
+    *base* is the unraised storage analysis, needed only to tell which names the
+    emitter binds by reference — those have no storage to raise.
+
+    The two directions feed each other -- a place raises a variable, a raised
+    variable raises the container holding it -- so iterate.  Bounds only ever
+    rise and the ladder is finite, so this settles; the cap is a backstop.
+    """
+    v = _PlaceFloors(def_use, by_def, by_expr, ret_fmt, base)
+    v._visit_function(ast, None)
+    for _ in range(8):
+        if not v.changed:
+            break
+        v.changed = False
+        v._visit_function(ast, None)
+        v._propagate_up()
+    return v.floors
+
+
 def _is_in_place_assign(d: AssignDef) -> bool:
     """Does *d* come from an in-place ``IndexedAssign`` (``xs[i] = e``)?
 
@@ -244,6 +438,7 @@ class StorageInfer:
     def infer(
         def_use: DefineUseAnalysis,
         def_to_bound: dict[Definition, FormatBound],
+        floors: dict[Definition, FormatBound] | None = None,
     ) -> StorageAnalysis:
         """
         Build a :class:`StorageAnalysis` from def-use info and per-def
@@ -253,6 +448,10 @@ class StorageInfer:
             def_use:      def-use analysis result for the function.
             def_to_bound: format bound for each SSA def (typically
                           ``format_info.by_def``).
+            floors:       per-def lower bounds from the places each def
+                          reaches, from :func:`place_floors`.  A storage
+                          decision, not a format one: the bounds themselves
+                          stay exactly as the analysis reported them.
 
         Returns:
             A :class:`StorageAnalysis` carrying the per-def C++ name and
@@ -299,6 +498,10 @@ class StorageInfer:
         for c, members in class_members.items():
             bounds = [def_to_bound[d] for d in members if d in def_to_bound]
             assert bounds, f'no format bounds for class {c} members={members}'
+            # A class is one C++ variable, so a floor on any member raises all
+            # of them -- which is what makes the widening reach an alias.
+            if floors:
+                bounds += [floors[d] for d in members if d in floors]
             try:
                 class_storage[c] = aggregate_storage(bounds)
             except StorageSelectionError as e:

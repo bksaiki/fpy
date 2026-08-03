@@ -319,15 +319,15 @@ def test_a_narrower_variable_is_converted_at_the_boundary(func):
     _typecheck(m)
 
 
-# A boxed list is the one thing conversion must not rebuild: a new allocation
-# is a different object, and the handle is there precisely so FPy's aliasing
-# survives.  Both cases below are refused; only the first is refused for a
-# reason that will not go away.
+# A local's storage is raised to the places it reaches
+# (`storage_infer.place_floors`), so a narrower *local* never has to be
+# rebuilt.  These would all have been refused before that landed.
 
 @fp.fpy
-def r_genuinely_shared(c: fp.Real, y: fp.Real) -> list[fp.Real]:
-    """`xs` is a name *and* a container slot, so rebuilding it would hand the
-    caller something `zss` no longer aliases."""
+def w_shared_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """`xs` is a name *and* a container slot, so it keeps its handle -- and a
+    handle cannot be rebuilt.  Raising `xs` to `double` means there is nothing
+    to rebuild, and raising it also raises `zss`, which holds it."""
     with fp.FP64:
         xs = [1.0, 2.0]
         zss = [xs]
@@ -339,11 +339,7 @@ def r_genuinely_shared(c: fp.Real, y: fp.Real) -> list[fp.Real]:
 
 
 @fp.fpy
-def r_boxed_only_by_conservatism(c: fp.Real, y: fp.Real):
-    """Nothing here outlives the return -- `xs` keeps its handle only because
-    a name plus a container field reads as two places.  That is the
-    `named_in_tuple` entry in `docs/todos/unboxing-gaps.md`; closing it turns
-    this case into a conversion."""
+def w_shared_local_in_a_tuple(c: fp.Real, y: fp.Real):
     with fp.FP64:
         xs = [1.0, 2.0]
         if c > 0:
@@ -352,14 +348,143 @@ def r_boxed_only_by_conservatism(c: fp.Real, y: fp.Real):
             return ([y], y)
 
 
-REFUSE_CASES = [r_genuinely_shared, r_boxed_only_by_conservatism]
+@fp.fpy
+def w_mixed_precision_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """The format the program asked for, not a narrowing accident: `lo`'s
+    elements are FP32-rounded *values* living in a `vector<double>`."""
+    with fp.FP32:
+        lo = [fp.round(y), fp.round(y)]
+    with fp.FP64:
+        zss = [lo]
+        if c > 0:
+            return lo
+        else:
+            return [y]
+
+
+WIDEN_CASES = [
+    w_shared_local,
+    w_shared_local_in_a_tuple,
+    w_mixed_precision_local,
+]
 
 
 @pytest.mark.parametrize(
-    'func', REFUSE_CASES, ids=[f.name for f in REFUSE_CASES],
+    'func', WIDEN_CASES, ids=[f.name for f in WIDEN_CASES],
 )
-def test_a_shared_list_is_refused_rather_than_unshared(func):
+def test_a_shared_local_is_widened_not_rebuilt(func):
     m = Module()
     m.add(func, ctx=fp.FP64, arg_types=[R, R])
-    with pytest.raises(CppCompileError, match='rebuilding a shared list'):
+    _typecheck(m)
+
+
+def test_a_widened_parameter_is_reported_in_the_signature():
+    """A parameter is raised like any other def, which changes the ABI -- so
+    the caller has to be told.  Already the policy for a store (`xs[0] = y`
+    widens via `_list_set_widen`); this is the same answer at a join."""
+    @fp.fpy
+    def widen(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+        with fp.FP64:
+            if c > 0:
+                return xs
+            else:
+                return [y]
+
+    args = [ListType(RealType(fp.FP32)), R, R]
+    m = Module()
+    m.add(widen, ctx=fp.FP64, arg_types=args)
+    _typecheck(m)
+    params, ret = CppCompiler().signature(widen, ctx=fp.FP64, arg_types=args)
+    assert 'double' in params[0].format(), params[0].format()
+    assert params[0].format() == ret.format()
+
+
+@fp.fpy
+def p_alias(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """`ys = xs` binds `const auto&`."""
+    with fp.FP64:
+        ys = xs
+        if c > 0:
+            return ys
+        else:
+            return [y]
+
+
+@fp.fpy
+def p_projection(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """`row = xss[0]` binds `const auto&` to a slot."""
+    with fp.FP64:
+        row = xss[0]
+        if c > 0:
+            return row
+        else:
+            return [y]
+
+
+@fp.fpy
+def p_loop_target(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """A loop target binds `const auto&` to each element."""
+    with fp.FP64:
+        out = [y]
+        for row in xss:
+            if c > 0:
+                out = row
+        return out
+
+
+PINNED_CASES = [
+    (p_alias, [ListType(RealType(fp.FP32)), R, R]),
+    (p_projection, [ListType(ListType(RealType(fp.FP32))), R, R]),
+    (p_loop_target, [ListType(ListType(RealType(fp.FP32))), R, R]),
+]
+
+
+@pytest.mark.parametrize(
+    'func,arg_types', PINNED_CASES, ids=[f.name for f, _ in PINNED_CASES],
+)
+def test_a_reference_bound_name_is_not_raised(func, arg_types):
+    """A name the emitter binds as `const auto&` has no storage of its own.
+
+    Regression: `place_floors` raised these, so `storage_of` reported a type the
+    reference did not have.  The binding is spelled `auto`, so nothing caught it
+    -- `const auto& ys = xs;` then `return ys;` emitted `fpy::list<float>` as
+    `fpy::list<double>` and only the C++ compiler objected.  Refusing is right:
+    the reference names a shared list, and a rebuild would unshare it.
+    """
+    m = Module()
+    m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
+    with pytest.raises(CppCompileError, match='is shared'):
         CppCompiler().compile_module(m)
+
+
+def test_a_callee_result_is_refused_rather_than_unshared():
+    """What raising a definition cannot reach.
+
+    `g`'s return representation is fixed by `g`'s own body, so nothing on the
+    caller's side can raise it -- and rebuilding it would copy a shared list
+    out of its aliases.  The only remaining reachable refusal.
+    """
+    @fp.fpy
+    def g(zs: list[fp.Real]) -> list[fp.Real]:
+        with fp.FP32:
+            return zs
+
+    @fp.fpy
+    def f(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+        with fp.FP64:
+            ws = g(xs)
+            if c > 0:
+                return ws
+            else:
+                return [y]
+
+    L32 = ListType(RealType(fp.FP32))
+    m = Module()
+    m.add(g, ctx=fp.FP32, arg_types=[L32])
+    m.add(f, ctx=fp.FP64, arg_types=[L32, R, R])
+    with pytest.raises(CppCompileError, match='is shared') as exc:
+        CppCompiler().compile_module(m)
+    # Actionable: name the callee, since that is the only place it can be fixed.
+    msg = str(exc.value)
+    assert '`g`' in msg, msg
+    assert 'element type' in msg, msg

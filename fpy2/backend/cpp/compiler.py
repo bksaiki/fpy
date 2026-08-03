@@ -42,7 +42,7 @@ from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError, choose_storage
-from .storage_infer import StorageAnalysis, StorageInfer
+from .storage_infer import StorageAnalysis, StorageInfer, place_floors
 from .types import CppType
 from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis
 from .utils import CPP_HEADERS, CPP_HELPERS
@@ -360,8 +360,22 @@ class CppCompiler(Backend):
         )
 
         try:
+            du = format_info.type_info.def_use
+            # Twice: the floors need to know which names the emitter binds by
+            # reference, and that is a property of the storage analysis.  A
+            # reference-bound name has no storage of its own to raise.
+            base = StorageInfer.infer(du, format_info.by_def)
             storage = StorageInfer.infer(
-                format_info.type_info.def_use, format_info.by_def,
+                du,
+                format_info.by_def,
+                place_floors(
+                    ast,
+                    du,
+                    format_info.by_def,
+                    format_info.by_expr,
+                    format_info.fn_fmt.ret_fmt,
+                    base,
+                ),
             )
         except StorageSelectionError as e:
             raise CppCompileError(

@@ -66,6 +66,7 @@ from ...ast.fpyast import (
     Ast,
     BinaryOp,
     BoolVal,
+    Call,
     Cast,
     Compare,
     ContextStmt,
@@ -908,11 +909,7 @@ class CppEmitter(Visitor):
             # A rebuilt list is a different object, and a handle exists exactly
             # so that FPy's aliasing survives.  Unsharing it here would be
             # silent, so refuse instead.
-            raise CppEmitError(
-                f'unsupported: `{src.format()}` cannot become `{want.format()}` '
-                f'— rebuilding a shared list would copy it out of its aliases',
-                at=at,
-            )
+            raise self._refuse_unsharing(src, want, at)
         unboxed = CppList(want.elt, boxed=False)
         if src.elt != want.elt:
             code = self._rebuild_list(code, src, unboxed, at=at)
@@ -920,6 +917,48 @@ class CppEmitter(Visitor):
             return code
         # A value has no aliases to lose, so giving it a handle is free.
         return f'std::make_shared<{unboxed.format()}>({code})'
+
+    def _refuse_unsharing(
+        self, src: CppList, want: CppList, at: Expr,
+    ) -> CppEmitError:
+        """The one representation change with no sound lowering.
+
+        Points at the *definition* as well as the use: this is where the
+        conflict surfaces, but the declaration is where it can be fixed — give
+        the list the wider format and nothing needs converting.
+        """
+        what, where, fix = 'this list', '', 'define it at the wider format'
+        if isinstance(at, Var):
+            what = f'`{at.name}`'
+            fix = f'define {what} at the wider format'
+            site = self.def_use.find_def_from_use(at).site
+            loc = getattr(site, 'loc', None)
+            if loc is not None:
+                # Line only: the file is already in the location prefix, and
+                # ``Location.format`` opens a backtick it never closes.
+                where = f' (defined on line {loc.start_line})'
+        elif isinstance(at, Call):
+            # The remaining reachable case: a callee's return representation is
+            # fixed by its own body, so nothing on this side can raise it.
+            callee = getattr(at.func, 'name', at.func)
+            what = f'the list `{callee}` returns'
+            fix = f'have `{callee}` return the wider format'
+        if src.elt == want.elt:
+            detail = (
+                f'is `{src.format()}` where `{want.format()}` is needed'
+            )
+        else:
+            detail = (
+                f'holds `{src.elt.format()}` elements where '
+                f'`{want.elt.format()}` is needed'
+            )
+        return CppEmitError(
+            f'unsupported: {what}{where} {detail}.  Changing a list\'s element '
+            f'type needs a new buffer, and this one is shared — so the copy '
+            f'would not be the list its other references name.  Either {fix}, '
+            f'or do not mix formats at this point.',
+            at=at,
+        )
 
     def _rebuild_list(
         self, code: str, src: CppList, want: CppList, *, at: Expr,
@@ -951,12 +990,22 @@ class CppEmitter(Visitor):
         return out
 
     def _storage_or_none(self, e: Expr) -> CppType | None:
-        """:meth:`_storage_for_expr`, or ``None`` where it has no answer.
+        """The storage *e* actually emits as, or ``None`` where unknown.
 
         A format with no storage on the ladder — a symbolic ``REAL_FORMAT``, say
         — is not a disagreement to repair.  Callers that only want to *adjust* a
         representation skip it rather than failing the compile.
+
+        A variable reads as its **declaration**, which is not always what its
+        own format bound would choose: ``storage_infer`` aggregates a whole
+        storage class and raises it to the places the class reaches (see
+        ``storage_infer.place_floors``).  Asking ``by_expr`` here would compare
+        against a type the emitted name does not have.
         """
+        if isinstance(e, Var):
+            d = self.def_use.find_def_from_use(e)
+            ty = self.storage.storage_of(d)
+            return ty if self.unbox is None else self.unbox.annotate(e, ty)
         try:
             return self._storage_for_expr(e)
         except CppEmitError:
