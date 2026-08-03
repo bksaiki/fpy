@@ -120,6 +120,21 @@ def s_two_lists_in_a_tuple(xs: list[fp.Real], c: fp.Real, y: fp.Real):
 
 
 @fp.fpy
+def s_tuple_with_list_via_a_local(c: fp.Real, y: fp.Real):
+    """Bound to a local first, which is the whole point.
+
+    A tuple's *declaration* comes from `unbox`'s `_read` and its *return type*
+    from `_stamp`, and only `_stamp` descends into a tuple -- so the two
+    disagree about the list field and no conversion between them exists.
+    Returned inline the two paths agree, which is why every other tuple shape
+    here compiles.
+    """
+    with fp.FP64:
+        t = [y, y], 1.0
+        return t
+
+
+@fp.fpy
 def s_alias_then_return(
     xs: list[fp.Real], c: fp.Real, y: fp.Real,
 ) -> list[fp.Real]:
@@ -233,6 +248,7 @@ SHAPES = [
     (s_nested_returns, SCALARS),
     (s_list_in_a_tuple, SCALARS),
     (s_two_lists_in_a_tuple, FLAT),
+    (s_tuple_with_list_via_a_local, SCALARS),
     (s_alias_then_return, FLAT),
     (s_projection_then_return, NESTED),
     (s_loop_target, NESTED),

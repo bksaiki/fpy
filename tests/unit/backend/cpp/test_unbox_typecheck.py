@@ -490,7 +490,44 @@ def test_a_callee_result_is_refused_rather_than_unshared():
     assert 'element type' in msg, msg
 
 
-def test_widening_the_call_site_is_a_real_workaround():
+@fp.fpy
+def m_tuple_with_list_via_a_local(y: fp.Real):
+    """A tuple holding a list, bound to a local before being returned."""
+    with fp.FP64:
+        t = [y, y], 1.0
+        return t
+
+
+def test_a_declaration_agrees_with_what_is_handed_through_it():
+    """One representation per place, including a list inside a tuple.
+
+    Regression: `unbox` had *two* traversals stamping representations onto a
+    type, and only one descended into tuples.  The declaration came from the one
+    that did not, the return type from the one that did, so this emitted
+
+        std::tuple<std::vector<double>, uint8_t> f() {
+            std::tuple<fpy::list<double>, uint8_t> t = ...;   // disagrees
+            return t;
+        }
+
+    which no C++ compiler accepts.  Returned *inline* both paths agreed, which is
+    why every other tuple case compiled and this one did not.
+    """
+    m = Module()
+    m.add(m_tuple_with_list_via_a_local, ctx=fp.FP64, arg_types=[R])
+    _typecheck(m)
+
+    # The point is agreement, not which answer: the two spellings of the tuple
+    # type in the emitted function must be the same one.  Read the function
+    # alone -- the runtime helpers legitimately use `make_shared` for
+    # `fpy::make_list`.
+    body = CppCompiler().compile_module(m)
+    tuples = set(re.findall(r'std::tuple<[^>]*>', body))
+    assert len(tuples) == 1, f'declaration and return type disagree: {tuples}'
+    # ...and here the answer should be unboxed: nothing else holds the list, so
+    # a handle would be a pointless allocation.
+    assert 'fpy::list' not in body, body
+    assert 'make_shared' not in body, body
     """The escape hatch the refusal above recommends, pinned.
 
     A callee's formats already follow its call site, so passing the wider list

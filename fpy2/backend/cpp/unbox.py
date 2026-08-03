@@ -28,8 +28,15 @@ costs 5 of the 50 functions with a list parameter — the kernels worth unboxing
 entry points a *native* caller invokes, and a native caller is not bound by this.
 
 Refusal means keeping the handle, never failing a compile; reasons are recorded in
-:attr:`UnboxAnalysis.boxed_because`.  A list inside a tuple is always refused:
-:func:`_read` walks only the ``CppList`` spine and cannot reach one.
+:attr:`UnboxAnalysis.boxed_because`.
+
+A list inside a tuple is decided like any other, and :func:`_stamp` is the *only*
+place any of it is decided — for an expression, for the return type, and for a
+storage class's declaration.  There used to be a second traversal for the
+declaration that did not descend into tuples, so ``t = [y, y], 1.0; return t``
+declared ``std::tuple<fpy::list<T>, …>`` and returned
+``std::tuple<std::vector<T>, …>``, which does not compile.  Keep it one
+traversal.
 """
 
 from dataclasses import dataclass, field
@@ -159,9 +166,27 @@ class UnboxAnalysis:
 
         return self._stamp(ty, at, 0)
 
-    def _stamp(self, ty: CppType, regions_at, depth: int) -> CppType:
+    def _stamp(
+        self, ty: CppType, regions_at, depth: int,
+        cls: Definition | None = None,
+    ) -> CppType:
         """*ty* with a representation for each list level, following tuple
-        fields too — a list inside a tuple is decided like any other."""
+        fields too — a list inside a tuple is decided like any other.
+
+        The single place a representation is chosen.  It is used for an
+        expression (:meth:`annotate`), for the return type
+        (:meth:`annotate_return`), and for a storage class's declaration —
+        which must agree, or a variable is declared as one thing and handed
+        over as another.  They did not always: a second traversal used to
+        produce the declaration and it did not descend into tuples, so
+        ``t = [y, y], 1.0; return t`` declared a boxed field and returned an
+        unboxed one.
+
+        *cls* records why a level kept its handle, for a storage class.  Only
+        down the list spine: ``boxed_because`` is keyed by depth, so two list
+        fields of one tuple would collide, and nothing consumes a reason for a
+        tuple field.
+        """
         if isinstance(ty, CppTuple):
             return CppTuple(
                 self._stamp(
@@ -172,10 +197,20 @@ class UnboxAnalysis:
             )
         if not isinstance(ty, CppList):
             return ty
-        elt = self._stamp(ty.elt, regions_at, depth + 1)
+        elt = self._stamp(ty.elt, regions_at, depth + 1, cls)
         regions = regions_at(depth)
         boxed = not regions or any(self.boxed.get(r, True) for r in regions)
+        if boxed and cls is not None:
+            self.boxed_because[(cls, depth)] = self._reason(regions)
         return CppList(elt, boxed=boxed)
+
+    def _reason(self, regions: set[Region]) -> str:
+        """Why a level kept its handle."""
+        if not regions:
+            return 'no alias information'
+        if any(r in self.at_boundary for r in regions):
+            return 'reached across a boundary'
+        return 'shared'
 
 
 class Unbox:
@@ -229,10 +264,13 @@ class Unbox:
         # 2. a called function keeps a parameter's handle only where it
         #    *retains* it; its callers read the same summary, so both ends
         #    reach the same answer.
+        # A tuple is here too: it may hold a list, and that list's
+        # representation has to be decided or the declaration and the return
+        # type disagree about it.
         classes = [
             (cls, _regions(cls, storage, alias))
             for cls, ty in storage.class_storage.items()
-            if isinstance(ty, CppList)
+            if isinstance(ty, CppList | CppTuple)
         ]
         if is_called:
             for cls, per_depth in classes:
@@ -260,10 +298,12 @@ class Unbox:
                             out.boxed[r] = True
                             changed = True
 
-        # 5. read the decision back out per class
+        # 5. read the decision back out per class -- through the same
+        #    traversal `annotate` and `annotate_return` use, so a variable's
+        #    declaration cannot disagree with what is handed through it.
         for cls, per_depth in classes:
             ty = storage.class_storage[cls]
-            out.storage[cls] = _read(ty, per_depth, cls, out, 0)
+            out.storage[cls] = out._stamp(ty, _at_depth(per_depth), 0, cls)
         return out
 
 
@@ -277,11 +317,15 @@ def _regions(
     ``alias._merge_redefinitions`` unions on exactly those two, so a class
     cannot span regions that could answer differently.  Taking a conjunction
     over several would silently repair a violation of that; this reports it.
+
+    A tuple contributes its own region and stops: :func:`_stamp` descends into
+    its fields with :func:`_fields`, which needs the tuple's region rather than
+    a per-depth entry of its own.
     """
     ty = storage.class_storage[cls]
     per_depth: list[Region | None] = []
     depth = 0
-    while isinstance(ty, CppList):
+    while isinstance(ty, CppList | CppTuple):
         found = {
             r for d in storage.class_members[cls]
             if (r := alias.region_of(d, depth)) is not None
@@ -292,6 +336,8 @@ def _regions(
             f'analysis does not mirror'
         )
         per_depth.append(found.pop() if found else None)
+        if isinstance(ty, CppTuple):
+            break
         ty, depth = ty.elt, depth + 1
     return per_depth
 
@@ -303,26 +349,16 @@ def _fields(alias: AliasAnalysis, regions: set[Region], i: int) -> set[Region]:
     }
 
 
-def _read(
-    ty: CppType,
-    per_depth: list[Region | None],
-    cls: Definition,
-    out: UnboxAnalysis,
-    depth: int,
-) -> CppType:
-    if not isinstance(ty, CppList):
-        return ty
-    elt = _read(ty.elt, per_depth, cls, out, depth + 1)
-    region = per_depth[depth]
-    if region is None:
-        out.boxed_because[(cls, depth)] = 'no alias information'
-    elif region in out.at_boundary:
-        out.boxed_because[(cls, depth)] = 'reached across a boundary'
-    elif out.boxed.get(region, True):
-        out.boxed_because[(cls, depth)] = 'shared'
-    else:
-        return CppList(elt, boxed=False)
-    return CppList(elt, boxed=True)
+def _at_depth(per_depth: list[Region | None]):
+    """A ``regions_at`` callback over a storage class's per-depth regions.
+
+    :func:`_stamp`'s other callers key off an expression or the return group;
+    this is the same interface over a class, so all three share one traversal.
+    """
+    def at(depth: int) -> set[Region]:
+        r = per_depth[depth] if depth < len(per_depth) else None
+        return set() if r is None else {r}
+    return at
 
 
 def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:

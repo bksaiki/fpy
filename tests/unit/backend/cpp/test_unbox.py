@@ -276,23 +276,6 @@ class TestInvisibleToTheHarness:
         storage, _ = _decide(k, [ListType(R), R])
         assert _levels(storage['xs']) == [True]
 
-    def test_a_list_inside_a_tuple_keeps_its_handle(self):
-        """``Unbox`` walks the ``CppList`` spine and stops at a tuple.
-        Undecided is not the same as boxed — the two representations then do
-        not compile together."""
-        from fpy2.types import TupleType
-
-        @fp.fpy
-        def f(t: tuple[list[fp.Real], fp.Real]) -> fp.Real:
-            with fp.FP64:
-                return fp.fst(t)[0]
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64, arg_types=[TupleType(ListType(R), R)],
-        )
-        assert 'std::tuple<fpy::list<double>, double>' in out
-        assert 'std::vector' not in out
-
     def test_signature_agrees_with_what_the_module_emits(self):
         """A function another compiled function calls keeps its handles, so a
         signature computed for it *alone* is not the one it gets in company —
@@ -678,3 +661,25 @@ class TestListsInsideTuples:
         out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
         assert 'std::tuple<fpy::list<double>, uint8_t>' in out, out
         assert f([1.0, 2.0], ctx=fp.FP64) == 55
+
+    def test_a_read_only_tuple_parameter_unboxes(self):
+        """A tuple *parameter* holding a list, only read.
+
+        The caller owns the vector and we take the tuple by ``const`` reference,
+        so there is nothing to share and no allocation to make.  This case was
+        pinned the other way until the declaration stopped being decided by a
+        traversal that skipped tuples -- and the two tests contradicted each
+        other, which is how the skip survived.
+        """
+        from fpy2.types import TupleType
+
+        @fp.fpy
+        def f(t: tuple[list[fp.Real], fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return fp.fst(t)[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[TupleType(ListType(R), R)],
+        )
+        assert 'const std::tuple<std::vector<double>, double>&' in out, out
+        assert 'fpy::list' not in out, out
