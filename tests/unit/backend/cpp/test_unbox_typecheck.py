@@ -488,3 +488,33 @@ def test_a_callee_result_is_refused_rather_than_unshared():
     msg = str(exc.value)
     assert '`g`' in msg, msg
     assert 'element type' in msg, msg
+
+
+def test_widening_the_call_site_is_a_real_workaround():
+    """The escape hatch the refusal above recommends, pinned.
+
+    A callee's formats already follow its call site, so passing the wider list
+    specializes `g` at the wider format and nothing needs converting.  Since
+    that is the only advice the error can give, it must not quietly stop being
+    true -- if specialization ever stopped tracking argument formats, the
+    message would become a lie and this is what would notice.
+    """
+    @fp.fpy
+    def g(zs: list[fp.Real]) -> list[fp.Real]:
+        with fp.FP32:
+            return zs
+
+    @fp.fpy
+    def f(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+        with fp.FP64:
+            ws = g(xs)
+            return ws if c > 0 else [y]
+
+    m = Module()
+    m.add(f, ctx=fp.FP64, arg_types=[L, R, R])      # a *FP64* list, not FP32
+    _typecheck(m)
+    # `g` came along specialized at the caller's format: had it stayed FP32 the
+    # body would say `float` somewhere, and the refusal would have fired.
+    body = CppCompiler().compile_module(m)
+    assert 'float' not in body, body
+    assert 'double' in body, body

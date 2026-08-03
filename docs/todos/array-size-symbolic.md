@@ -1,359 +1,75 @@
-# Array-size analysis: symbolic sizes via union-find
+# Array-size analysis: symbolic sizes
 
-> **Status: implemented.**  The proposal below was the original design;
-> the as-built differs in a few deliberate ways, summarized here.  The
-> rest of the document is retained as design rationale.
->
-> ### As-built summary
->
-> - **Representation.** No bespoke `SymbolicSize` / `_SizeUF`.  Following
->   the type-inference precedent, a *size variable* is a `NamedId` minted
->   by a `Gensym`, and the analysis carries a shared
->   `Unionfind[NamedId | int]` (`fpy2.utils.Unionfind`).  So:
->   `ArraySize: TypeAlias = int | NamedId | None`.
-> - **Concrete int is the representative.** Pinning a class to a constant
->   is just `union(int, var)` with the `int` as leader — no separate
->   `pin`/`resolve` map.
-> - **Result is fully resolved; the union-find is not exposed.** Before
->   returning, every size is replaced by its representative (`_resolve`,
->   cf. type inference's `_resolve_type`): an `int` if the class is pinned,
->   else the canonical variable.  So `ArraySizeAnalysis` carries **no**
->   `size_uf`; a size is known iff it's an `int`, and the helpers
->   `concrete_size(size)` / `is_size_eq(b1, b2)` take no union-find.
-> - **Size-preserving propagation is mostly free.** `ys = xs`,
->   `[f(x) for x in xs]`, `enumerate(xs)`, `xs[:]`, and `IndexedAssign`
->   already thread `.size`, so the size variable rides along — no special
->   per-op symbol plumbing was needed.  Arguments / free vars mint one
->   fresh variable for their outer list dimension (`_arg_bound`).
-> - **Phase 3 (loop-phi merge) was NOT implemented — it is unsound.**
->   Optimistically merging the pre-loop and post-body size vars assumes
->   the body preserves length, which is false for size-changing bodies
->   (e.g. `ys = ys[1:]`).  Instead the loop fixpoint uses the ordinary
->   join: a size-preserving body re-propagates the *same* variable so the
->   join keeps it; a size-changing body yields a different size so the
->   join goes to `None`.  Sound, and no optimism required.
-> - **`zip` is strict, not min.** (Already corrected in the operation
->   rules below.)  Any concrete input pins the symbolic inputs to it and
->   the result is that int; all-symbolic inputs are merged and the result
->   keeps the representative.
-> - **Cross-function safety.** `_refine_sizes` (call-result size overlay)
->   adopts only *concrete* `int` callee sizes — a callee's size variables
->   belong to its own run and must not leak across the call.
-> - **Convergence (open question #3) resolved.** The visitor keeps a
->   monotone `_uf_changes` counter (bumped only on a real union); the loop
->   fixpoint requires both stored-bound stability *and* a stable counter,
->   so a `zip`-merge inside a loop body can't terminate the fixpoint one
->   iteration early.
-> - **Assertion-seeded equalities (done).** `assert len(xs) == len(ys)`
->   merges the two size variables and `assert len(xs) == N` pins one — but
->   only for *unconditional* asserts (not nested in an `if`/loop), so the
->   equality holds on every execution.
->
-> ### Remaining work
->
-> The analysis is implemented; what's left is **consumer integration** —
-> nothing yet reads the symbolic equalities (`format_infer` ignores
-> non-`int` sizes, a safe no-op):
->
-> - **Bounds-check elimination** — discharge `ys[i]` when `is_size_eq`
->   proves `len(ys) == len(xs)` and `i < len(xs)`.  The flagship payoff;
->   three equality sources now feed it (arguments, strict `zip`, asserts).
-> - **`format_infer` `Sum`** — fall back to a runtime-bounded loop when the
->   list size is a tracked variable rather than a static `int`.
+**Implemented.** `array_size` used to track sizes as a flat `int | None`, which is
+precise for compile-time constants and throws away everything about runtime sizes
+that are *statically constrained to be equal* — `ys = xs` makes `len(ys) ==
+len(xs)`, and the old lattice recorded `None`. It now tracks those equalities.
 
-## Context
+What remains is **consumer integration**: nothing reads them yet. This document
+is the as-built record plus that remaining work; the original design proposal has
+been dropped, since the implementation diverged from it in ways worth stating
+directly rather than reconstructing from a diff.
 
-The current `array_size` analysis tracks list sizes as a flat lattice
-`ArraySize: TypeAlias = int | None`.  This is precise for
-compile-time-known constants but throws away **all** information about
-runtime sizes that are statically constrained to be equal:
+## As built
 
-```python
-def f(xs: list[fp.Real]) -> list[fp.Real]:
-    ys = xs                       # len(ys) == len(xs), but we record None
-    return ys
+- **A size variable is a `NamedId`** minted by a `Gensym`, with a shared
+  `Unionfind[NamedId | int]` — following the type-inference precedent rather than
+  a bespoke `SymbolicSize` class. So `ArraySize: TypeAlias = int | NamedId | None`.
+- **A concrete `int` is the class representative.** Pinning is `union(int, var)`
+  with the `int` as leader; no separate pin/resolve map.
+- **The result is fully resolved and the union-find is not exposed.** `_resolve`
+  (cf. type inference's `_resolve_type`) replaces every size by its
+  representative before returning, so a size is known iff it is an `int`, and
+  `concrete_size` / `is_size_eq` take no union-find argument.
+- **Propagation is mostly free.** `ys = xs`, `[f(x) for x in xs]`,
+  `enumerate(xs)`, `xs[:]`, and `IndexedAssign` already thread `.size`, so the
+  variable rides along. Arguments and free variables mint one fresh variable for
+  their outer dimension (`_arg_bound`).
+- **`zip` is strict, not `min`.** Any concrete input pins the symbolic ones to it;
+  all-symbolic inputs merge and the result keeps the representative.
+- **Unconditional `assert` seeds equalities.** `assert len(xs) == len(ys)` merges
+  the two variables and `assert len(xs) == N` pins one — only when not nested in
+  an `if` or loop, so the equality holds on every execution.
+- **Calls adopt only concrete callee sizes.** `_refine_sizes` ignores a callee's
+  size *variables*: they belong to that run and must not leak across the call.
 
-def g(xs: list[fp.Real]) -> list[fp.Real]:
-    ys = [0.0 for _ in xs]        # len(ys) == len(xs)
-    for i, x in enumerate(xs):
-        ys[i] = x                 # in-bounds because lengths match
-    return ys
-```
+Two deliberate departures from the original plan:
 
-Several downstream consumers would benefit from knowing
-`len(ys) == len(xs)` symbolically:
+- **No optimistic loop-phi merge.** Merging the pre-loop and post-body size
+  variables assumes the body preserves length, which `ys = ys[1:]` violates. The
+  loop fixpoint uses the ordinary join instead: a size-preserving body
+  re-propagates the *same* variable so the join keeps it, and a size-changing body
+  yields a different size so the join goes to `None`. Sound with no optimism.
+- **Convergence needs the union-find in the check.** A merge does not change the
+  `NamedId` stored in `by_def`, so bound-stability alone can end the fixpoint one
+  iteration early — a `zip`-merge inside a loop body would be missed. The visitor
+  keeps a monotone `_uf_changes` counter and the fixpoint requires both stored
+  bounds *and* that counter to be stable.
 
-- `mpfx/format_infer.py:Sum` could fall back to a runtime-bounded loop
-  rather than refusing to expand when the size isn't a static `int`.
-- A future bounds-check elimination pass could discharge `ys[i]` given
-  `i < len(xs)` and `len(ys) == len(xs)`.
-- A future allocation analysis could match a `[…]`-comprehension's
-  allocation size to the iterable.
+## Remaining work: nothing consumes the equalities
 
-## Goals
+`format_infer` ignores non-`int` sizes, which is a safe no-op.
 
-1. Extend the lattice so equal-but-unknown sizes are tracked.
-2. Preserve the existing API for consumers that only care about
-   concrete `int` sizes.
-3. Don't regress fixpoint convergence (loops in the inferred function
-   must still terminate the analysis).
-4. Stay scoped — pick the operations whose symbolic propagation
-   actually buys precision; don't gold-plate.
+- **Bounds-check elimination** — the flagship payoff. Discharge `ys[i]` when
+  `is_size_eq` proves `len(ys) == len(xs)` and `i < len(xs)`. Three equality
+  sources already feed it (arguments, strict `zip`, asserts). This is also what
+  the C++ backend's bounds-check TODO would want, so the two are worth doing
+  together — see `backend-cpp.md`.
+- **`format_infer` `Sum`** — fall back to a runtime-bounded loop when the size is
+  a tracked variable rather than a static `int`.
 
-## Non-goals
+## Caveats for consumers
 
-- Reasoning about size *expressions* (e.g., `len(xs) + 1`).  Only
-  equivalence classes of "same size."
-- Cross-function symbolic propagation.  Each analysis run is
-  self-contained; symbols are fresh per-function.
-- Recognising user-written `assert len(xs) == len(ys)` constraints in
-  the first cut (it falls out for free if/when assertions are part of
-  the analysis input, but isn't required day-1).
-- Alias analysis.  The fresh-def model for `IndexedAssign` already
-  handles size propagation across mutations of the *same* name; aliased
-  variables remain a separate, pre-existing limitation.
-
-## Design
-
-### Lattice extension
-
-```python
-@dataclass(frozen=True)
-class SymbolicSize:
-    """Identifier for an equivalence class of unknown sizes."""
-    id: int
-
-ArraySize: TypeAlias = int | SymbolicSize | None
-```
-
-- `int n` — known concrete size (current behavior, unchanged).
-- `SymbolicSize(id)` — unknown size, but tracked by an id that's
-  shared with other sizes proven equal via the union-find.
-- `None` — top (no information; equivalent to "we gave up").
-
-### Union-find: `_SizeUF`
-
-```python
-class _SizeUF:
-    """Tracks equivalence classes of symbolic sizes within one analysis run."""
-
-    def fresh(self, key: object | None = None) -> SymbolicSize:
-        """Mint a new symbol.  When *key* is non-None, repeated calls
-        with the same key return the same symbol (used to anchor symbols
-        to AST node identity for fixpoint convergence)."""
-
-    def merge(self, a: SymbolicSize, b: SymbolicSize) -> None:
-        """Merge two classes.  Monotone — only collapses, never splits."""
-
-    def equiv(self, a: SymbolicSize, b: SymbolicSize) -> bool:
-        """True iff *a* and *b* are in the same equivalence class."""
-
-    def pin(self, s: SymbolicSize, n: int) -> None:
-        """Record that the class equals concrete *n*.  Future
-        :meth:`resolve` calls return *n*."""
-
-    def resolve(self, s: SymbolicSize) -> int | None:
-        """Return the class's pinned concrete size, or ``None``."""
-```
-
-The UF lives on the visitor and is exposed in `ArraySizeAnalysis`:
-
-```python
-@dataclass
-class ArraySizeAnalysis:
-    by_expr: dict[Expr, ArraySizeBound]
-    by_def: dict[Definition, ArraySizeBound]
-    ret_size: ArraySizeBound | None
-    def_use: DefineUseAnalysis
-    size_uf: _SizeUF              # NEW
-```
-
-Consumers can ask `info.size_uf.equiv(a, b)` to test equivalence.  A
-helper `is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound, uf) -> bool`
-should wrap the common case of checking two `ListSize.size` fields.
-
-### Mint sites — where new symbols are created
-
-Symbols **must be keyed on AST node identity** so that revisiting a
-node during the loop fixpoint returns the *same* symbol.  Without this,
-every iteration mints a fresh symbol, the phi never stabilizes, and the
-analysis diverges.  Concrete keys per site:
-
-| Site                         | Key                | Notes                               |
-|------------------------------|--------------------|-------------------------------------|
-| `Argument: list[T]`          | the `Argument` node | One symbol per arg.                |
-| Free var `list[T]`           | `(FuncDef, name)`   |                                    |
-| `range(n)`                   | `Range1` node       | If `n` is static, use `int`.       |
-| `range(start, stop)`         | `Range2` node       | Same idea.                         |
-| `range(start, stop, step)`   | `Range3` node       | Same.                              |
-| `Empty(…dims)`               | `Empty` node        | One symbol per dimension.          |
-| `xs[a:b]`                    | `ListSlice` node    | If `a, b` static, pin to `b - a`.  |
-| `xs + ys` (concat)           | concat-expr node    | If both static, pin to sum.        |
-
-For operations that **preserve** length, propagate the existing symbol
-without minting:
-
-- `[expr for x in xs]` → same symbol as `xs.size`.
-- `enumerate(xs)`      → same symbol.
-- `zip(xs)` (1-arg)    → same symbol.
-- `zip(xs, ys, …)`     → all-equal: see "Operation rules" below.
-- `xs[i] = e`          → same symbol (length is unchanged by element
-  mutation; this is a free win from the existing fresh-def
-  IndexedAssign treatment).
-- `reverse(xs)`        → same symbol.
-- `ys = xs` (rebind)   → same symbol.
-
-### Operation rules
-
-Where the rule isn't "fresh symbol" or "propagate symbol," the visitor
-needs to compute relationships explicitly.  Highlights:
-
-- **`zip(xs1, …, xsN)`**: FPy's `zip` is *strict* — it raises unless
-  every input has the same length (it does **not** truncate to the
-  shortest like Python's default `zip`).  So the result length *equals*
-  the common input length.  If all inputs are *equal* (UF-equiv)
-  symbols, the result keeps that symbol.  If any input is concrete,
-  every other input must equal it on the non-raising path, so the
-  result size is exactly that int — and a symbolic input can be
-  `pin`/`merge`d to it.  Statically-conflicting concrete sizes mean the
-  call always raises (the result is unreachable): report `None`.
-- **List concatenation `xs + ys`**: result size = `len(xs) + len(ys)`.
-  Concrete + concrete → int.  Anything else → fresh symbol (we don't
-  track sums, see Non-goals).
-- **`Empty(d1, …, dN)`**: each dimension's symbol is keyed on the
-  corresponding `Expr` argument (or pinned to the int value if static).
-
-### Join rule extension
-
-```python
-def _join_size(uf: _SizeUF, a: ArraySize, b: ArraySize) -> ArraySize:
-    if a == b:                     # int == int, or same symbol
-        return a
-    match a, b:
-        case None, _ | _, None:
-            return None
-        case int(), int():         # different concrete values
-            return None
-        case SymbolicSize(), SymbolicSize() if uf.equiv(a, b):
-            return a
-        case SymbolicSize() as s, int(n) | int(n), SymbolicSize() as s:
-            return n if uf.resolve(s) == n else None
-        case _:
-            return None
-```
-
-### Phi handling in loops
-
-When a phi merges `lhs` (pre-loop) and `rhs` (post-body) symbols, and
-they're distinct, **the right action is `merge(lhs, rhs)`** — the loop
-body is repeatedly assigning to the same name, so by the loop-back
-edge those two symbols denote the same runtime size.  After the merge,
-they're UF-equivalent and the join collapses.
-
-**Convergence argument:** UF merges are monotone (classes only
-collapse).  The set of symbols a single function ever creates is
-bounded (one per AST mint site, plus one per loop's lhs/rhs phi pair).
-So the lattice has finite height per program, and the fixpoint
-terminates.
-
-### Public API impact
-
-- `ArraySize` becomes a wider union; consumers that wrote
-  `isinstance(b.size, int)` keep working (they'll now correctly classify
-  `SymbolicSize` as "not a known concrete size").
-- Consumers that wrote `b.size == n` keep working (different type ⇒
-  unequal).
-- Consumers that wrote `b.size is None` may want to broaden to "no
-  *concrete* size known" — depends on semantics.  Add a helper
-  `concrete_size(b: ArraySize) -> int | None`.
-- New helper `is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound, uf) ->
-  bool` for the recursive structural-equality-of-sizes check.
-
-## Implementation plan
-
-### Phase 1 — UF + lattice extension, no symbolic propagation
-
-- Add `SymbolicSize`, `_SizeUF`.
-- Wire `size_uf` through `_ArraySizeInferInstance` and
-  `ArraySizeAnalysis`.
-- Mint a fresh symbol for each `Argument: list[T]` (replacing today's
-  `None`).  Keep all other mint sites at `None` for now.
-- Update `_join_size` to handle the new variant.
-- Verify nothing breaks: existing tests must still pass, just with
-  argument lists having a `SymbolicSize` instead of `None`.
-
-### Phase 2 — propagate through size-preserving operations
-
-- `Var` (rebind), `[expr for x in xs]`, `enumerate`, `IndexedAssign`'s
-  fresh def, `reverse`, slices that resolve to `b - a`.
-- Add tests confirming `ys = xs ⇒ size_uf.equiv(ys.size, xs.size)`.
-
-### Phase 3 — phi merging in loops
-
-- In `_iterate_to_fixpoint`'s phi-update step, when both edges are
-  `SymbolicSize` and unequal, call `uf.merge(lhs, rhs)` instead of
-  going to `None`.
-- Tests confirming a loop that re-binds `xs = xs[1:] + [0.0]`-style
-  preserves the symbol.
-
-### Phase 4 — opt-in concrete pinning
-
-- When a symbol gets joined with a concrete int, optionally `pin` the
-  class.  Skip on first pass — implement only if a consumer needs it.
-
-### Phase 5 — operation rules for size-changing ops
-
-- `zip(*xss)` with all-equal symbols.
-- Concatenation: pin to sum when all concrete.
-- Skip rules whose programs in the codebase don't actually exercise.
-
-### Phase 6 — consumer integration
-
-- Update `mpfx/format_infer.py:Sum` to consult `size_uf` and emit a
-  runtime-bounded loop when the size is symbolic.
-- (Future) bounds-check elimination consumer.
-
-## Risks / open questions
-
-1. **Symbol keying details**: `Empty(m, n)` mints two symbols, one per
-   dimension argument.  What if the *same* `Expr` is reused as
-   different dimensions of nested `Empty` calls?  Probably fine — each
-   `Empty` is its own AST node, so the key tuple includes the position.
-   Worth a focused test.
-
-2. **Cross-function symbol identity**: each `analyze` call gets a
-   fresh UF.  If a downstream pass invokes `analyze` on multiple
-   functions and tries to compare their symbols, equality fails.  This
-   is the right behavior (a function's args are unrelated to another
-   function's args), but consumers should be aware.  Document on
-   `_SizeUF`.
-
-3. **Mutability of UF inside fixpoint**: the loop fixpoint runs the
-   body multiple times; each pass might call `uf.merge`.  Convergence
-   needs the merge operation to be monotone (it is — it only
-   collapses).  But the *visible bound* of a phi doesn't change just
-   because merge happened — the UF has more equivalences but the
-   `SymbolicSize` value stored in `by_def` is still the same id.  So
-   the fixpoint's `prev != current` check might miss a UF change.
-   Need to either (a) include UF state in the convergence check, or (b)
-   prove that any UF change forces some `by_def` change downstream.
-   (b) seems likely but needs verification.
-
-4. **Type alias vs class**: `SymbolicSize` could be a `NewType(int)`
-   instead of a dataclass.  Dataclass is friendlier for `match`
-   patterns; `NewType` is leaner.  Pick during implementation.
-
-5. **`hash` and `==` semantics for `SymbolicSize`**: must be by `id`,
-   not by representative.  That way two `ArraySize` values are `==` iff
-   they're the same symbol, leaving UF consultation as the only way to
-   ask the deeper "are these equivalent?" question.  Avoids surprising
-   hash-equal behavior changing as classes merge.
+- **Size variables are per-`analyze` call.** Two runs mint unrelated variables, so
+  comparing symbols across functions fails. That is correct — one function's
+  arguments are unrelated to another's — but a consumer holding results from two
+  runs must not compare them.
+- **`Empty(m, n)` mints one variable per dimension**, keyed including position, so
+  reusing one `Expr` as two dimensions is fine. Worth a focused test if anything
+  starts depending on it.
 
 ## Out of scope
 
-- Reasoning about arbitrary integer expressions (`len(xs) + 1`,
-  `2 * len(xs)`, etc.).  Useful but a much bigger design (linear
-  arithmetic, Presburger, etc.).  This proposal stops at equivalence.
-- Whole-program / inter-procedural symbolic sizes.
-- User assertions (`assert len(xs) == len(ys)`) — natural extension
-  once assertions are part of the analysis pipeline.
+- Arbitrary integer expressions (`len(xs) + 1`, `2 * len(xs)`). A much larger
+  design — linear arithmetic, Presburger. This stops at equivalence.
+- Interprocedural symbolic sizes.
