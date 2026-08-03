@@ -13,9 +13,9 @@ def eigenvalue_calculation_TNG(
     c: fp.Real,
     d: fp.Real,
 ) -> fp.Real:
-    return fp.sqrt(
-        fp.pow(a + d, fp.round(2)) + fp.pow(b - c, fp.round(2))
-    ) - fp.sqrt(fp.pow(a - d, fp.round(2)) + fp.pow(b + c, fp.round(2)))
+    return fp.sqrt(fp.pow(a + d, fp.round(2)) + fp.pow(b - c, fp.round(2))) - fp.sqrt(
+        fp.pow(a - d, fp.round(2)) + fp.pow(b + c, fp.round(2))
+    )
 
 
 @fp.fpy(
@@ -33,9 +33,7 @@ def eigenvalue_calculation_TNG_stable(
 ) -> fp.Real:
     sos = ((a * a + b * b) + c * c) + d * d
     det = a * d - b * c
-    return fp.sqrt(sos + fp.round(2) * det) - fp.sqrt(
-        sos - fp.round(2) * det
-    )
+    return fp.sqrt(sos + fp.round(2) * det) - fp.sqrt(sos - fp.round(2) * det)
 
 
 @fp.fpy(

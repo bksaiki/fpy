@@ -65,7 +65,7 @@ def nmse_example_3_6(x: fp.Real) -> fp.Real:
         "cite": ["hamming-1987", "herbie-2015"],
         "fpbench_domain": "textbook",
         "pre": lambda x: x != fp.round(0),
-    }
+    },
 )
 def nmse_problem_3_3_1(x: fp.Real) -> fp.Real:
     return fp.round(1) / (x + fp.round(1)) - fp.round(1) / x
@@ -91,7 +91,11 @@ def nmse_problem_3_3_2(x: fp.Real, eps: fp.Real) -> fp.Real:
     }
 )
 def nmse_problem_3_3_3(x: fp.Real) -> fp.Real:
-    return fp.round(1) / (x + fp.round(1)) - fp.round(2) / x + fp.round(1) / (x - fp.round(1))
+    return (
+        fp.round(1) / (x + fp.round(1))
+        - fp.round(2) / x
+        + fp.round(1) / (x - fp.round(1))
+    )
 
 
 @fp.fpy(
@@ -103,7 +107,9 @@ def nmse_problem_3_3_3(x: fp.Real) -> fp.Real:
     }
 )
 def nmse_problem_3_3_4(x: fp.Real) -> fp.Real:
-    return fp.pow(x + fp.round(1), fp.round(1) / fp.round(3)) - fp.pow(x, fp.round(1) / fp.round(3))
+    return fp.pow(x + fp.round(1), fp.round(1) / fp.round(3)) - fp.pow(
+        x, fp.round(1) / fp.round(3)
+    )
 
 
 @fp.fpy(
