@@ -1392,6 +1392,73 @@ class TestFormatInfer:
             f'expected REAL_FORMAT among s bounds with widening, got {s_bounds}'
         )
 
+    def test_literal_bound_reports_a_format_only_for_a_signed_zero(self):
+        """``_literal_bound`` may only answer ``FP32`` for a value ``FP32``
+        contains.
+
+        A signed zero is the one literal value ``SetFormat`` cannot state, so it
+        gets a format bound instead.  ``as_real`` returns a ``Float`` for
+        exactly that case today -- but that invariant lives in
+        ``fpy2.ast.fpyast``, and answering ``FP32`` on the strength of the
+        *type* would be a false bound the moment some other ``Float`` came
+        back: ``1e-400`` is a ``Float`` and is not in ``FP32``, and no consumer
+        of the bound could detect the lie.  So the discriminator has to be the
+        value.
+        """
+        from fpy2.analysis.format_infer.analysis import _literal_bound
+        from fpy2.number import Float
+
+        class _FakeLiteral:
+            """A literal whose ``as_real`` hands back the ``Float`` given."""
+            def __init__(self, real, rational):
+                self._real, self._rational = real, rational
+
+            def as_real(self):
+                return self._real
+
+            def as_rational(self):
+                return self._rational
+
+        neg_zero = _FakeLiteral(Float(s=True, exp=0, c=0), Fraction(0))
+        assert _literal_bound(neg_zero) == fp.FP32.format()
+
+        # Not a zero, so `FP32` is not known to contain it -- and it does not:
+        # `2**-400` is far below `FP32`'s smallest subnormal.  A `Float` is an
+        # exact rational whenever it is finite, so the set states it exactly.
+        tiny = Float(s=False, exp=-400, c=1)
+        assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) != fp.FP32.format()
+        assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) == \
+            SetFormat.from_value(tiny.as_rational())
+
+        # No rational value at all: the honest bound is the scalar top.
+        assert _literal_bound(_FakeLiteral(Float(isinf=True), None)) == REAL_FORMAT
+        assert _literal_bound(_FakeLiteral(Float(isnan=True), None)) == REAL_FORMAT
+
+    def test_a_negative_zero_literal_gets_a_float_bound(self):
+        """The end-to-end direction, through the real AST rather than a fake.
+
+        ``SetFormat`` holds ``Fraction``s and a ``Fraction`` has no signed zero,
+        so ``SetFormat({0})`` would claim ``-0.0`` and ``+0.0`` are one value.
+        They are distinguishable by ``copysign`` and by division.
+        """
+        @fp.fpy
+        def neg() -> fp.Real:
+            with fp.FP64:
+                return -0.0
+
+        @fp.fpy
+        def pos() -> fp.Real:
+            with fp.FP64:
+                return 0.0
+
+        neg_info = FormatInfer.analyze(neg.ast)
+        pos_info = FormatInfer.analyze(pos.ast)
+        # `-0.0` reports a format; `+0.0` is exactly the integer 0, so it keeps
+        # the precise singleton set and nothing about it regresses.
+        assert neg_info.fn_fmt.ret_fmt == fp.FP32.format(), neg_info.fn_fmt.ret_fmt
+        assert pos_info.fn_fmt.ret_fmt == SetFormat.from_value(Fraction(0)), \
+            pos_info.fn_fmt.ret_fmt
+
     def test_exact_binop_mul_by_zero_set_stays_set(self):
         """``Mul(loose_format, SetFormat({0}))`` short-circuits to
         ``SetFormat({0})`` rather than producing a degenerate

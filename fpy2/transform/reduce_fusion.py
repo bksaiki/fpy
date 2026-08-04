@@ -30,9 +30,9 @@ already-built list.
 Only the boolean reductions are fused.  ``Sum`` / ``AMin`` / ``AMax`` pay the
 same allocation cost, but fusing them is blocked on the cpp emitter accepting
 an implicit narrowing inside ``std::accumulate`` that it rejects at an
-ordinary assignment; see ``docs/todos/reduce-fusion.md``.  Multi-stage
-comprehensions (``[e for a in xs for b in ys]``) would need nested loops and
-are left alone.
+ordinary assignment; tracked under "Open TODOs" in ``docs/todos/backend-cpp.md``,
+where the blocker lives.  Multi-stage comprehensions
+(``[e for a in xs for b in ys]``) would need nested loops and are left alone.
 """
 
 import dataclasses

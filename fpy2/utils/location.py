@@ -32,4 +32,4 @@ class Location:
         return self.__key() == other.__key()
 
     def format(self):
-        return f'`{self.source}:{self.start_line}:{self.start_column}'
+        return f'`{self.source}:{self.start_line}:{self.start_column}`'

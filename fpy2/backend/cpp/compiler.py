@@ -360,9 +360,8 @@ class CppCompiler(Backend):
         )
 
         try:
-            storage = StorageInfer.infer(
-                format_info.type_info.def_use, format_info.by_def,
-            )
+            du = format_info.type_info.def_use
+            storage = StorageInfer.infer(du, format_info.by_def)
         except StorageSelectionError as e:
             raise CppCompileError(
                 f'storage selection failed for `{func.name}`: {e}'

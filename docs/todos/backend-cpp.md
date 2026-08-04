@@ -1,9 +1,10 @@
 # C++ backend — design notes & open TODOs
 
-The cpp backend (`fpy2/backend/cpp/`) compiles FPy to C++ end-to-end
-across scalar arithmetic, control flow, lists, tuples, in-place
-mutation, the `<cmath>` family, and rounding-context boundaries.  Unit
-coverage lives at `tests/unit/backend/cpp/`.
+The cpp backend (`fpy2/backend/cpp/`) compiles FPy to C++ end-to-end across
+scalar arithmetic, control flow, lists, tuples, in-place mutation, the `<cmath>`
+family, and rounding-context boundaries. Unit coverage lives at
+`tests/unit/backend/cpp/`; the differential harness is
+`tests/infra/backend/cpp.py`.
 
 Module layout:
 
@@ -12,326 +13,219 @@ Module layout:
 - `ops.py` — per-op tables of supported C++ signatures.
 - `storage.py` — storage-type ladder, format-containment helpers.
 - `storage_infer.py` — per-SSA-def storage assignment via union-find.
-- `types.py` — `CppScalar` / `CppList` / `CppTuple` and source-string
-  formatting.
-- `utils.py` — header / helper preamble.
+- `unbox.py` — which lists may drop the `fpy::list` handle.
+- `types.py` — `CppScalar` / `CppList` / `CppTuple` and source formatting.
+- `target.py`, `utils.py` — target description, header / helper preamble.
 
-The remaining work is at the bottom under [Open TODOs](#open-todos).
-The sections in between are the design pieces that any of the open
-TODOs build on — read the design before making changes.
+Read the design before changing anything; [Open TODOs](#open-todos) is at the
+bottom. Narrower questions have their own documents:
 
-## Strategy
+- `unboxing-gaps.md` — what stays boxed, and why.
+- `cpp-narrower-variable-at-a-join.md` — two element types meeting at one place.
+- `format-infer-aliasing.md` — an unsound bound the backend inherits.
+- **`reals-in-integer-storage.md`** — the largest open correctness problem: a
+  real narrowed into an integer holds neither `-0.0` nor NaN.
+- `cpp-literal-tokens-and-sum.md` — three smaller disagreements between the
+  emitted C++ and the interpreter.
 
-The backend was built up in **vertical slices**: each commit got a
-small subset of the language compiling end-to-end before broadening
-coverage.  The unit suite stays green at every commit.
+The correctness criterion those last three are measured against: *if the
+compiler succeeds, the emitted C++ must compile and must behave as the FPy
+interpreter does.* A refusal is always acceptable — the compiler may be limited —
+so a shape it cannot handle should raise, never miscompile.
 
 ## Design
 
 ### Storage vs. rounding
 
-The core insight is that **storage type and rounding format are
-separate**:
+The core insight is that **storage type and rounding format are separate**:
 
-- **Rounding format** (from `FormatInfer`): the smallest format that
-  bounds the value of an expression at runtime.  Per-expression.
-- **Storage format**: the C++ type used to *hold* the value in a
-  variable.  Per-definition.  Must contain the rounding format of
-  every expression assigned into that variable (across phi merges
-  and SSA rebinds).
+- **Rounding format** (`FormatInfer`): the smallest format that bounds an
+  expression's value at runtime. Per-expression.
+- **Storage format**: the C++ type that *holds* the value. Per-definition. Must
+  contain the rounding format of everything assigned into that variable.
 
-A storage choice is **valid** iff for every expression assigned into
-the variable, the rounding format is contained in (representable by)
-the storage format.  We pick the smallest valid storage type from a
-fixed ladder: `int{8,16,32,64}_t` / `uint*` / `float` / `double`.
-Unbounded integer formats (`MPFixedFormat` with `expmin >= 0`) fall
-back to `int64_t`; non-abstractable / `REAL_FORMAT` results are
-rejected with an error pointing at the offending expression.
+We pick the smallest valid storage from a fixed ladder: `int{8,16,32,64}_t` /
+`uint*` / `float` / `double`. Unbounded integer formats fall back to `int64_t`;
+non-abstractable / `REAL_FORMAT` results are rejected with an error naming the
+offending expression.
+
+Two things complicate the per-expression story, both documented separately: a
+list also has a *representation* (handle or value — `unbox.py`), and where
+several expressions reach one place they must agree on one C++ type
+(`emitter._emit_at`).
 
 ### SSA rebinds → fresh C++ variables
 
-The cpp emitter is free to give every SSA def its own C++ variable.
-The *one* constraint is that defs joined by either of two coalescing
-edges must share storage:
+The emitter is free to give every SSA def its own C++ variable. The one
+constraint is that defs joined by a coalescing edge share storage:
 
-- **Phi edges** — a phi merge means both incoming defs write to the
-  same C++ variable.
-- **In-place mutation edges** — `xs[i] = e` is in-place per the FPy
-  interpreter (`interpret/byte.py:_visit_indexed_assign`), so the
-  SSA-fresh def at the `IndexedAssign` site is unioned with its
-  `prev`.  Same C++ name, no widening, no rename.
+- **Phi edges** — a phi merge means both incoming defs write one variable.
+- **In-place mutation edges** — `xs[i] = e` mutates in place per the interpreter
+  (`interpret/byte.py:_visit_indexed_assign`), so the SSA-fresh def at the
+  `IndexedAssign` is unioned with its `prev`. Same name, no rename.
 
-`storage_infer.py` computes the partition with `Unionfind[Definition]`.
-Function-argument and free-variable defs anchor a class to the bare
-source name; other classes for the same source name pick up `_1`,
-`_2`, … suffixes.
+`storage_infer.py` computes the partition with `Unionfind[Definition]`. Argument
+and free-variable defs anchor a class to the bare source name; other classes for
+the same name take `_1`, `_2`, … suffixes.
 
 Per-class declaration shape:
 
-- **Single-writer (`declare_at_assign`)** — the lowest-index writer
-  is its declaration site; the emitter folds the type into the
-  assign (`double t = (a + b);`, `for (int64_t i = 0; …)`,
-  `double y = x;` followed by reassignments inside an `if1` body or
-  loop).
-- **Multi-writer hoisted (`hoists_before`)** — only required when a
-  class has writers in disjoint branches of an `if/else` and the
-  variable did not exist before the `if` (the merge phi has
-  `is_intro=True`).  In that case the emitter hoists `T name{};`
-  *just before* the responsible `IfStmt` (anchoring to the outermost
-  responsible if when nested).
+- **`declare_at_assign`** — the lowest-index writer is the declaration site, so
+  the type folds into the assign (`double t = (a + b);`).
+- **`hoists_before`** — a class with writers in disjoint `if`/`else` branches
+  where the variable did not exist before the `if` (the merge phi is
+  `is_intro=True`). No single writer dominates, so the emitter hoists
+  `T name{};` just before the responsible `IfStmt`.
 
 ### Operation type matching
 
-C++ doesn't have ad-hoc polymorphism for primitive numeric ops:
-each operator is only defined on a fixed set of operand-type
-combinations.  `ops.py` enumerates the supported signatures per
-FPy op type.  Each `UnaryCppOp` / `BinaryCppOp` / `TernaryCppOp` is
-parameterized by:
+C++ has no ad-hoc polymorphism for primitive numeric ops, so `ops.py` enumerates
+supported signatures per FPy op, parameterized by *argument C++ types* and
+*output context*. At an op site the emitter matches the active rounding context
+(`ContextUseAnalysis`) against the signature's `out_ctx`, and each operand's
+storage against `in_ty`. On a miss it falls back to the all-active-context
+signature and casts every operand in.
 
-- *argument C++ types* (`CppScalar`) — the concrete scalar types
-  the generated C++ feeds the operator.  ``int8_t + int8_t`` is
-  one signature, ``float + float`` is another.
-- *output context* (a full `Context` — format + rounding mode).
-  Its C++ type comes from `choose_storage(out_ctx.format())`; the
-  rounding-mode half is enforced separately by the `fesetround`
-  boundary at `with` blocks.
+**Every** conversion is an explicit `static_cast` — no reliance on implicit
+promotion, even for lossless widenings. Two paths:
 
-At an op site the emitter consults:
-
-- The **active rounding context** at the expression
-  (`ContextUseAnalysis.find_scope_from_use(e).ctx`) — must equal
-  the signature's `out_ctx`.
-- Each operand's **C++ storage type** (from `StorageAnalysis`) —
-  must equal the signature's `in_ty`.
-
-Direct-match preferred; on miss the emitter falls back to the
-all-active-context signature and casts every operand into the active
-context's storage type.  **Every** type conversion goes through an
-explicit `static_cast` — no reliance on C++ implicit promotion, even
-for "lossless" widenings.
-
-The cast helper splits into two paths:
-
-- `_maybe_cast` — used for *implicit* casts (op-dispatch fallback,
-  comparison cast-to-supremum).  Rejects the compilation when the
-  conversion is lossy (`not scalar_fits_in(arg_ty, target_ty)`).
-  The error tells the user to wrap the operand in `fp.round(...)`
-  or pick a context that holds the value.
-- `_explicit_cast` — used for *user-explicit* casts (`Round` /
-  `RoundExact` lowerings, `xs[static_cast<size_t>(i)]` subscripts).
-  Emits the `static_cast` unconditionally; the user has already
-  said they accept the conversion.
-
-So a lossy implicit cast like FP64 → FP32 (or int64 → FP64) fails
-to compile until the program wraps the wider operand in
-`fp.round(...)` — making the rounding step part of the source.
-
-The default table covers `Add`/`Sub`/`Mul`/`Div`, `Neg`, `Abs`, all
-of `<cmath>` (transcendental + algebraic + FP rounding helpers),
-`Pow`/`Hypot`/`Atan2`/etc., and `Fma` — across FP32 / FP64 with each
-of the four `fesetround`-supported rounding modes (RNE / RTZ / RTP /
-RTN), plus the integer ladder (`SINT8…64`, `UINT8…64`, `INTEGER`)
-where applicable.
+- `_maybe_cast` — *implicit* casts (op-dispatch fallback, comparison
+  cast-to-supremum). **Rejects** a lossy conversion, telling the user to wrap the
+  operand in `fp.round(...)`. So FP64 → FP32 fails to compile until the rounding
+  is written in the source.
+- `_explicit_cast` — *user-explicit* casts (`Round`, subscript `size_t`). Emitted
+  unconditionally; the user already accepted the conversion.
 
 ### Context boundaries
 
-The active rounding context at every `FuncDef` / `ContextStmt` site
-comes from `ContextUseAnalysis`.
+The active context at every `FuncDef` / `ContextStmt` comes from
+`ContextUseAnalysis`.
 
-**Validation is gated on use.**  A scope is only validated when
-some primitive op (`NullaryOp` / `UnaryOp` / `BinaryOp` /
-`TernaryOp` / `Call`) actually dispatches under it — i.e., when
-`ctx_use.uses[scope]` is non-empty.  Scopes with no uses (e.g.,
-a function-level scope where every op lives inside a nested `with`,
-or a `with` block that holds an exotic context but only does
-context-free work like list indexing) are skipped entirely: no
-validation, no `fesetround`.  This means programs without a
-rounding-context use don't need a supported function-level context,
-and `with UnsupportedCtx:` blocks compile freely as long as nothing
-inside them dispatches under that scope.
+**Validation is gated on use.** A scope is validated only when some primitive op
+actually dispatches under it. Scopes with no uses are skipped entirely — no
+validation, no `fesetround` — so a program with no rounding-context use needs no
+supported function-level context, and `with UnsupportedCtx:` compiles as long as
+nothing inside dispatches under it.
 
-When a scope *is* used, validation runs:
+When a scope is used:
 
-- The context must be a concrete :class:`Context` — symbolic
-  context variables (`ContextUse` falls back to a fresh `NamedId`
-  when partial-eval can't pin one) are rejected at the
+- The context must be concrete; a symbolic context variable is rejected at its
   introduction site.
-- **Float contexts** must use a rounding mode supported by
-  `fesetround` (RNE / RTZ / RTP / RTN).  `_visit_function` /
-  `_visit_context` save / set / restore `fenv` only when the active
-  mode actually *changes*.  The active mode is tracked on
-  `_current_rm: RM | None`:
-  - At function entry it's seeded from the function-level scope:
-    a concrete FP context's RM (the FPy contract says the caller
-    delivers it), or `None` for a symbolic / integer / unsupported
-    outer scope.
-  - `None` means "unknown" — any nested concrete-FP `with` block
-    must emit `fesetround` unconditionally to recover certainty,
-    matching the user's "safest option" rule.
-  - When `_current_rm` is concrete and matches the target, the
-    `with` block is a no-op at the C++ level (no fenv noise for
-    plain `with FP64:` under an FP64 function).
-- **Integer contexts** must use RTZ — that matches C++'s integer
-  truncation, and other modes would require per-operation
-  emulation.  No runtime support emitted.
+- **Float contexts** need an `fesetround`-supported mode (RNE / RTZ / RTP / RTN).
+  `_current_rm` tracks the mode the live `fenv` is guaranteed to hold, seeded at
+  entry from the function-level scope (`None` = unknown, so a nested concrete
+  `with` must emit `fesetround` unconditionally). A matching mode makes the
+  `with` a C++-level no-op.
+- **Integer contexts** must use RTZ — that is what C++ integer truncation does.
 
-`Round`, `RoundExact`, `Cast`:
+`Round` / `Cast`:
 
-- `Round(arg)` lowers to `static_cast<target>(arg)` — the cast's
-  rounding mode comes from the surrounding `fesetround` boundary,
-  not the cast itself.
-- `RoundExact(arg)` adds a runtime assertion that the cast was
-  lossless: cast → bind to a temp →
-  `assert(arg == tmp || (std::isnan(arg) && std::isnan(tmp)))`
-  for FP operands (NaN-aware) or `assert(arg == tmp)` for purely
-  integer pairs.
-- `Cast(arg)` is the identity — analysis-only annotation, no
-  generated code.  Same-type `Round` / `RoundExact` short-circuit
-  to the identity.
+- `Round(arg)` lowers to `static_cast<target>(arg)`, whose rounding mode comes
+  from the surrounding `fesetround` boundary. A **literal** argument is folded at
+  compile time instead (`_fold_rounded_literal`) — C++ has no exact-real literal,
+  so this is the only way an inexact constant is representable at all, and it
+  also gets the mode the program asked for rather than whatever `fesetround`
+  last left behind.
+- `Cast(arg)` — the node `fp.cast` and `fp.round_exact` both parse to — is the
+  same cast plus a runtime assertion that it was lossless, NaN-aware for FP
+  operands. Same-type short-circuits to the identity.
 
 ### Pipeline
 
 ```
-FuncDef
-  → Monomorphize.apply_by_arg(arg_types)   # ground type vars
-  → DefineUse.analyze
-  → ContextUse.analyze                     # resolves with-block ctxs
-  → ArraySizeInfer.analyze
-  → FormatInfer.analyze                     # rounding format per def/expr
-  → StorageInfer.infer                      # storage class per SSA def
+Module
+  → Specialize                 # one FuncDef per (callee, ctx, arg formats)
+  → DefineUse
+  → ContextUse                 # resolves with-block contexts
+  → ArraySizeInfer             # FormatInfer needs it for bounded iteration
+  → FormatInfer                # rounding format per def/expr
+  → StorageInfer               # storage per SSA def
+  → Alias / Escape             # what may refer to what; what a callee retains
+  → Unbox                      # handle or value, per alias region
   → emit C++
 ```
 
-`ArraySizeInfer` is needed because `FormatInfer` consults it for
-bounded-iteration mode (loops with statically-known length).
-`ContextUse` builds a `site → ContextScope` lookup that the emitter
-also consults for `with` boundaries and per-op active contexts.
+`Specialize` means a callee's formats follow its call site — so a callee called with a wider
+list is automatically instantiated wider, which is the workaround
+`cpp-narrower-variable-at-a-join.md` relies on.
 
 ### Translation-unit preamble
 
-`CppCompiler.compile` returns a function definition only so
-single-function tests can use exact-string equality.  Callers that
-want a complete translation unit pull `headers()`, `helpers()`, or
-`prelude()` (the two combined) explicitly.  Header coverage tracks
-exactly what the emitted code uses (`<cassert>` for assertions,
-`<cfenv>` for `fesetround`, `<cmath>` for transcendentals,
-`<cstdint>` for fixed-width ints, `<numeric>` for `accumulate`,
-`<vector>` and `<tuple>`).
-
-Helpers is currently empty — cpp doesn't yet need custom runtime
-support — but the slot exists for future additions
-(see [TODOs](#open-todos)).
+`CppCompiler.compile` returns a function definition only, so single-function
+tests can use exact-string equality. Callers wanting a full translation unit
+pull `headers()`, `helpers()`, or `prelude()`. `helpers()` carries the runtime:
+`fpy::list<T>` (a `shared_ptr<vector<T>>`), `fpy::make_list`, and the nary
+`fpy::min` / `fpy::max`. Headers track exactly what the emitted code uses.
 
 ## Open TODOs
 
-These items are queued for a future pass.  The design above defines
-the constraints they need to fit; pick whichever is most relevant
-to your changes.
-
 ### Bounds-checked list operations
 
-`_visit_list_ref`, `_visit_list_slice`, and `_visit_indexed_assign`
-currently emit raw `xs[i]` / iterator arithmetic with no out-of-
-range check.  The FPy interpreter is strict (raises on out-of-range
-indices); cpp should match.  Likely shape: a small bounds-checked
-subscript helper added to `CPP_HELPERS`, called from each subscript
-site.  See the TODO comments at `emitter.py:_visit_list_ref` and
-`_visit_list_slice` for current behavior.
+`_visit_list_ref`, `_visit_list_slice`, and `_visit_indexed_assign` emit raw
+`xs[i]` with no range check — `xs[10]` on a shorter list is undefined behaviour,
+while the interpreter raises. Likely shape: a checked subscript helper in
+`CPP_HELPERS`, called from each subscript site.
 
 ### RAII fenv guard
 
-When a function-level `fesetround` is active and the body executes
-`return X;`, the trailing `fesetround(prev)` is dead code — the
-caller's rounding mode is leaked.  Best fix is an RAII guard
-emitted as part of the helper preamble:
+A `return` inside an active `fesetround` scope leaves the restore unreachable, so
+the caller's rounding mode leaks:
+
+```cpp
+double leak(double x) {
+    const auto _tmp1 = std::fegetround();
+    std::fesetround(FE_TOWARDZERO);
+    return (x + static_cast<double>(1));
+    std::fesetround(_tmp1);          // dead
+}
+```
+
+Fix with a guard in the helper preamble whose destructor runs on every exit path:
 
 ```cpp
 struct __cpp_FenvGuard {
     int prev;
-    explicit __cpp_FenvGuard(int new_rm) : prev(std::fegetround()) {
-        std::fesetround(new_rm);
-    }
+    explicit __cpp_FenvGuard(int rm) : prev(std::fegetround()) { std::fesetround(rm); }
     ~__cpp_FenvGuard() { std::fesetround(prev); }
 };
 ```
 
-`_visit_function` and `_visit_context` would then declare a guard at
-the start of the affected scope; the destructor runs on every exit
-path (including `return`).  Drop the manual save / set / restore
-emission once the guard lands.
+`_visit_function` / `_visit_context` declare a guard instead of the manual
+save / set / restore.
 
-### Classification ops + nary `Min` / `Max`
+### Narrowing inside `std::accumulate`, so `Sum` can fuse
 
-`IsFinite` / `IsInf` / `IsNan` / `IsNormal` / `Signbit` return
-`bool` — they don't fit the existing `(in_fmt, out_ctx)` shape (the
-output isn't a numeric context).  Either add a `bool`-output slot to
-the op-table classes, or special-case these in `_visit_unaryop`
-alongside `Len` / `Sum` / `Enumerate`.
+`ReduceFusion` fuses `any` / `all` over a comprehension into one loop, skipping
+the intermediate vector. `Sum` / `AMin` / `AMax` pay the same allocation cost but
+are not fused, because the fused shape needs an implicit narrowing inside
+`std::accumulate` that `_maybe_cast` rejects at an ordinary assignment. Today
+`sum([x * x for x in xs])` still materializes:
 
-`Min` / `Max` are nary in FPy.  These reduce naturally to pairwise
-`std::fmin` / `std::fmax` in `_visit_naryop`.
+```cpp
+std::vector<double> _tmp1 = std::vector<double>(0);
+for (double x : xs) { _tmp1.push_back((x * x)); }
+return std::accumulate(_tmp1.begin(), _tmp1.end(), static_cast<double>(0));
+```
 
-### Round-trip tests against `cc -std=c++17`
-
-Mirror `tests/infra/backend/cpp.py`: compile each test program with
-the cpp backend, run it through `cc -std=c++17`, link, and exec —
-asserting the runtime result matches the FPy interpreter's.  Catches
-header-omission bugs and silent dispatch errors that pure-string
-unit tests miss.
+The emitter side is the blocker; see `fpy2/transform/reduce_fusion.py`'s module
+docstring for the transform side.
 
 ### `fpy2/backend/cpp/README.md`
 
-A short README in the package directory pointing at this file and
-listing the public surface (`CppCompiler.compile` / `headers` /
-`helpers` / `prelude`, exception types).
+A short package README pointing at this file and listing the public surface
+(`CppCompiler.compile` / `headers` / `helpers` / `prelude`, exception types).
 
-### Whole-call-graph optimization pass
+## Out of scope
 
-`CppCompiler(optimize=True)` currently applies `ZipElim` (and any
-future optimizing transforms wired into `_run_pipeline`) only to
-the top-level `FuncDef` of each `compile` / `add` call.  Callees
-reached transitively via `FormatInfer`'s `by_call` walk still see
-their original AST — so e.g. a `for ... in zip(...)` inside a
-library helper continues to lower to a `std::vector<std::tuple<...>>`
-even when the top-level was optimized.
+- Linking an external multi-precision library.
+- Emitting exact arithmetic where format inference reports `REAL_FORMAT`; those
+  programs are rejected with an error naming the symbolic expression.
+- `with FP64 as ctx:` — binding the active context to a name.
 
-Proposed shape:
+## Done since this document was written
 
-1. Before `_run_pipeline` runs, construct a call graph rooted at the
-   top-level `Function`.  Walk every `Call` in the body, look up its
-   target via the existing `Function` linkage, and recurse — keyed
-   by `FuncDef` identity so each callee is visited once.  The
-   existing `_discover_specializations` does part of this walk
-   *after* `FormatInfer`; we want the structural walk *before*.
-2. Apply the optimizing transforms (`ZipElim`, …) to each FuncDef
-   in the graph, producing a `FuncDef → FuncDef` rewrite map.
-3. Thread the rewrite map through the pipeline so `FormatInfer`
-   (and downstream consumers that look up callee ASTs) see the
-   rewritten version.  The cleanest plumbing point is probably the
-   `fn.ast` access in `_FormatInferInstance._visit_call`
-   ([format_infer/analysis.py:1060](fpy2/analysis/format_infer/analysis.py))
-   — substitute via the map before handing to the sub-analysis.
-4. The `PreAnalysisCache` is keyed by `FuncDef`; the rewritten
-   FuncDefs become its new keys.  As long as the rewrite is
-   deterministic (same input → same output identity), the cache
-   semantics carry over.
-
-Open questions:
-
-- Whether the rewrite should be eager (apply once up-front, mutate
-  the map) or lazy (rewrite-on-demand during the walk).  Eager is
-  simpler; lazy avoids work for unreachable callees but those are
-  rare in practice.
-- Whether to expose the rewrite map externally for debugging /
-  caching across multiple `compile` calls within the same
-  `CppTranslationUnit` build.
-
-## Out of scope (for the first pass)
-
-- Linking against an external multi-precision library (mpfr, etc.).
-- Generating exact arithmetic where the format-inference fallback
-  reports `REAL_FORMAT` — those programs are rejected with a clear
-  error pointing at the symbolic expression.  (Future work: emit a
-  multi-precision fallback rather than rejecting.)
-- Binding the active rounding context to a name in `with`
-  (`with FP64 as ctx:` …) — the emitter currently rejects.
+Kept as a record so they are not re-proposed: classification ops
+(`isfinite`/`isinf`/`isnan`/`isnormal`/`signbit`) and nary `Min`/`Max`; the
+execute-and-bit-compare harness (`tests/infra/backend/cpp.py --mode run`, plus a
+generated format matrix); and whole-call-graph optimization — `Specialize` runs
+before the pipeline, so `ZipElim` and friends reach callees, not just the entry.

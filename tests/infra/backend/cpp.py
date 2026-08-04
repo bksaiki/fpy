@@ -376,6 +376,31 @@ def _rand_value(ty, rng: random.Random, list_len: int, int_mode: bool):
             raise ValueError(f'cannot generate input for type: {ty.format()}')
 
 
+def _round_to_format(value, ty):
+    """*value*, rounded to whatever format *ty* declares.
+
+    The driver declares each parameter at the backend's storage type, so an
+    FP32 parameter rounds whatever literal it is handed — while the interpreter
+    would keep the value unrounded.  The two would then disagree for a reason
+    that is not a bug.  Rounding here means both sides start from the same
+    number.
+
+    Identity for FP64, which is every corpus program: the pool is already
+    binary64, and the round preserves ``-0.0`` and NaN.
+    """
+    match ty:
+        case fp.types.RealType():
+            return float(ty.ctx.round(value))
+        case fp.types.ListType():
+            return [_round_to_format(v, ty.elt) for v in value]
+        case fp.types.TupleType():
+            return tuple(
+                _round_to_format(v, t) for v, t in zip(value, ty.elts)
+            )
+        case _:
+            return value
+
+
 def _cpp_type(ty) -> str:
     """C++ storage type for an (instantiated) argument type — must match the
     backend's choice (FP64 real -> ``double``, etc.)."""
@@ -416,16 +441,33 @@ def _cpp_value(value, cty) -> str:
         case CppScalar.BOOL:
             return 'true' if value else 'false'
         case _:
+            # Spelled at the *target* scalar, not at ``double``: these go inside
+            # braced initializers, which reject a narrowing conversion.  A
+            # `double` infinity handed to a `std::vector<float>{...}` is a hard
+            # error even though the value is representable.
+            t = cty.format()
             v = float(value)
+            if not cty.is_float():
+                # An integral `numeric_limits` has no NaN or infinity —
+                # `quiet_NaN()` returns 0 — so a driver built this way would
+                # pass 0 and the mismatch would read as agreement.  Unreachable
+                # today (no emitted signature narrows a *parameter* to an
+                # integer), so refuse rather than guess.
+                raise ValueError(
+                    f'cannot build a driver value for integer storage {t}: '
+                    f'{value!r} (see _cpp_value)'
+                )
             if math.isnan(v):
-                return 'std::numeric_limits<double>::quiet_NaN()'
+                return f'std::numeric_limits<{t}>::quiet_NaN()'
             if math.isinf(v):
-                inf = 'std::numeric_limits<double>::infinity()'
+                inf = f'std::numeric_limits<{t}>::infinity()'
                 return f'-{inf}' if v < 0 else inf
             # ``repr`` is the shortest round-tripping decimal; C++ parses it
             # (correctly-rounded) to the identical double.  Decimal — not a
-            # hex-float literal — keeps the driver valid under C++11.
-            return repr(v)
+            # hex-float literal — keeps the driver valid under C++11.  A cast
+            # for a narrower target, for the same braced-init reason; the value
+            # is representable there (see ``_round_to_format``), so it is exact.
+            return repr(v) if t == 'double' else f'static_cast<{t}>({repr(v)})'
 
 
 def _cpp_literal(value, ty) -> str:
@@ -458,6 +500,7 @@ def _cpp_literal(value, ty) -> str:
 def _emit_driver(
     output_dir: Path, prefix: str, compiler: fp.CppCompiler,
     func: fp.Function, arg_types: list, samples: list,
+    ctx=fp.FP64, suffix: str = '',
 ) -> Path:
     """Write a self-contained translation unit: headers, helpers, the
     compiled function, and a ``main`` that calls it once per sample and
@@ -465,12 +508,15 @@ def _emit_driver(
 
     *samples* is a list of ``(inputs, expected)``; each ``inputs`` is the
     list of Python argument values to pass (empty for a nullary function).
+
+    *suffix* distinguishes several instantiations of one function, which
+    otherwise hash to the same file name.
     """
-    name = hashlib.md5(func.name.encode()).hexdigest()
+    name = hashlib.md5((func.name + suffix).encode()).hexdigest()
     cpp_path = output_dir / f'{prefix}_{name}_run.cpp'
-    body = compiler.compile(func, ctx=fp.FP64, arg_types=arg_types)
+    body = compiler.compile(func, ctx=ctx, arg_types=arg_types)
     params, ret_ty = compiler.signature(
-        func, ctx=fp.FP64, arg_types=arg_types,
+        func, ctx=ctx, arg_types=arg_types,
     )
     counter = [0]
     main_lines = ['int main() {']
@@ -521,13 +567,22 @@ def _build_and_run(cpp_path: Path) -> str:
 
 def _run_and_check(
     output_dir: Path, prefix: str, compiler: fp.CppCompiler, func: fp.Function,
+    *, ctx=fp.FP64, arg_types: list | None = None, suffix: str = '',
+    stats: dict | None = None,
 ) -> str | None:
     """Run *func* through the interpreter and the compiled binary on the
     same synthesized inputs and compare bit-for-bit.  Returns ``None`` on
     agreement, an error string on mismatch, or ``'skip'`` when the
-    interpreter rejects every sampled input (nothing to compare against)."""
-    ty_info = fp.analysis.TypeInfer.check(func.ast)
-    arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
+    interpreter rejects every sampled input (nothing to compare against).
+
+    *arg_types* overrides the default all-FP64 instantiation, so a caller can
+    execute a program whose lists are at some other format — a shape no corpus
+    program has.  Inputs are rounded to whatever formats it declares; see
+    :func:`_round_to_format`.
+    """
+    if arg_types is None:
+        ty_info = fp.analysis.TypeInfer.check(func.ast)
+        arg_types = [_inst_type(ty) for ty in ty_info.arg_types]
 
     # Generate deterministic samples; keep only those the oracle accepts so
     # the compiled binary is never run on inputs the interpreter rejects.
@@ -536,7 +591,10 @@ def _run_and_check(
     for k in range(n):
         # `lseed=k` is shared across args (paired lists stay equal-length);
         # `vseed=k + i` decorrelates values between argument positions.
-        inputs = [_gen_value(ty, k + i, k) for i, ty in enumerate(arg_types)]
+        inputs = [
+            _round_to_format(_gen_value(ty, k + i, k), ty)
+            for i, ty in enumerate(arg_types)
+        ]
         try:
             expected = _interp(func, inputs)
         except Exception:
@@ -550,17 +608,35 @@ def _run_and_check(
         rng = random.Random(0)
         for s in range(_RANDOM_SAMPLES):
             list_len = rng.randint(0, _MAX_RANDOM_LEN)
-            inputs = [_rand_value(ty, rng, list_len, s % 2 == 0) for ty in arg_types]
+            inputs = [
+                _round_to_format(
+                    _rand_value(ty, rng, list_len, s % 2 == 0), ty,
+                )
+                for ty in arg_types
+            ]
             try:
                 expected = _interp(func, inputs)
             except Exception:
                 continue
             samples.append((inputs, expected))
 
+    if stats is not None:
+        # How much was actually compared, not just how many programs ran: a
+        # caller's coverage floor is meaningless if every surviving sample
+        # happens to pass an empty list.
+        stats['samples'] = stats.get('samples', 0) + len(samples)
+        stats['nonempty'] = stats.get('nonempty', 0) + sum(
+            1 for inputs, _ in samples
+            if any(isinstance(v, list) and v for v in inputs)
+        )
+
     if not samples:
         return 'skip'
 
-    driver = _emit_driver(output_dir, prefix, compiler, func, arg_types, samples)
+    driver = _emit_driver(
+        output_dir, prefix, compiler, func, arg_types, samples,
+        ctx=ctx, suffix=suffix,
+    )
     out = _build_and_run(driver)
     lines = [ln for ln in out.splitlines() if ln.strip()]
     if len(lines) != len(samples):
@@ -1629,6 +1705,226 @@ def _test_regressions(
     )
 
 ###########################################################
+# Generated format matrix
+#
+# Every function above is instantiated at FP64, because `_inst_type` is what
+# fills in a free `Real`.  So no executed program has ever had a list at
+# another format -- and the join/widening machinery in `storage_infer` and
+# `emitter._emit_at` exists precisely to reconcile two formats meeting at one
+# place.  `tests/unit/backend/cpp/test_generated_typecheck.py` covers the same
+# matrix for *ill-typed emission*; this covers it for *wrong answers*, which is
+# the class only execution can catch.
+
+
+@fp.fpy
+def _gen_return_param_or_literal(
+    xs: list[fp.Real], c: fp.Real, y: fp.Real,
+) -> list[fp.Real]:
+    with fp.FP64:
+        if c > 0:
+            return xs
+        else:
+            return [y]
+
+
+@fp.fpy
+def _gen_ternary_param(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> fp.Real:
+    with fp.FP64:
+        zs = xs if c > 0 else [y, y]
+        return zs[0]
+
+
+@fp.fpy
+def _gen_write_then_return(
+    xs: list[fp.Real], c: fp.Real, y: fp.Real,
+) -> list[fp.Real]:
+    with fp.FP64:
+        if c > 0:
+            xs[0] = y
+        return xs
+
+
+@fp.fpy
+def _gen_nested_param_sum(xss: list[list[fp.Real]], y: fp.Real) -> fp.Real:
+    with fp.FP64:
+        acc = y
+        for row in xss:
+            for x in row:
+                acc = acc + x
+        return acc
+
+
+@fp.fpy
+def _gen_row_write(xss: list[list[fp.Real]], y: fp.Real) -> fp.Real:
+    with fp.FP64:
+        xss[0][0] = y
+        return xss[0][0]
+
+
+@fp.fpy
+def _gen_alias_then_mutate(xs: list[fp.Real], y: fp.Real) -> fp.Real:
+    with fp.FP64:
+        ys = xs
+        ys[0] = y
+        return xs[0]
+
+
+@fp.fpy
+def _gen_list_into_tuple(xs: list[fp.Real], y: fp.Real) -> fp.Real:
+    with fp.FP64:
+        t = (xs, y)
+        zs = fp.fst(t)
+        zs[0] = y
+        return xs[0]
+
+
+@fp.fpy
+def _gen_comprehension_of_rows(
+    xss: list[list[fp.Real]], y: fp.Real,
+) -> fp.Real:
+    with fp.FP64:
+        rows = [row for row in xss]
+        rows[0][0] = y
+        return xss[0][0]
+
+
+# ``'flat'`` takes one ``list[Real]``, ``'nested'`` one ``list[list[Real]]``;
+# the remaining parameters are scalars, in declaration order.
+_generated_funcs: list[tuple[fp.Function, str, int]] = [
+    (_gen_return_param_or_literal, 'flat', 2),
+    (_gen_ternary_param, 'flat', 2),
+    (_gen_write_then_return, 'flat', 2),
+    (_gen_nested_param_sum, 'nested', 1),
+    (_gen_row_write, 'nested', 1),
+    (_gen_alias_then_mutate, 'flat', 1),
+    (_gen_list_into_tuple, 'flat', 1),
+    (_gen_comprehension_of_rows, 'nested', 1),
+]
+
+_GEN_FORMATS = (fp.FP32, fp.FP64)
+
+# Instantiations known to disagree with the interpreter, keyed by label so the
+# *other* combinations of the same shape still run -- this shape passes at 6 of
+# its 8.  Strict: an entry that starts agreeing is reported as a failure, so a
+# fix cannot leave a stale suppression behind.  That is how this one survived
+# unnoticed in the first place.
+_generated_xfail: dict[str, str] = {
+    # Empty, and worth keeping that way: an entry here says the compiler
+    # produces a *wrong answer* for some instantiation, which the correctness
+    # criterion does not allow.  A shape the backend cannot handle belongs in
+    # the "not compared" list below -- refused, not divergent.
+    #
+    # Note a refusal never reaches the strict check, so an entry that starts
+    # being refused rather than diverging goes stale silently.  Re-read this
+    # list when a refusal appears for something listed here.
+}
+
+
+def _test_generated(
+    output_dir: Path, mode: str = 'compile',
+) -> list[tuple[str, str, str]]:
+    """Execute each shape at every combination of list-element and scalar
+    format, bit-comparing against the interpreter.
+
+    Skipped outside ``run`` mode: the point is the comparison, and
+    ``test_generated_typecheck.py`` already covers emission over a wider matrix.
+    A *refusal* is a legitimate answer here too -- a shared list cannot change
+    element type -- so a ``CppCompileError`` is recorded, not failed.  Refusals
+    are printed: a shape quietly regressing into one is a loss of coverage that
+    no failure count would show.
+
+    There is deliberately no outer-context axis.  Every shape pins its context
+    with ``with fp.FP64:``, so varying it produced byte-identical programs and
+    only inflated the counts.  Making it mean something needs two changes
+    together -- drop the ``with`` from some shapes *and* pass ``ctx`` into
+    ``_interp``, which hardcodes ``fp.FP64`` -- or the oracle and the binary
+    disagree for a reason that is not a bug.
+    """
+    if mode != 'run' or _CXX is None:
+        return []
+    compiler = fp.CppCompiler(unsafe_cast_int=True)
+    failures: list[tuple[str, str, str]] = []
+    xfailed: list[str] = []
+    refused: list[str] = []
+    stats: dict[str, int] = {}
+    ran = 0
+    for func, sig, n_scalars in _generated_funcs:
+        if not _selected(func.name):
+            continue
+        for elt_fmt in _GEN_FORMATS:
+            for scalar_fmt in _GEN_FORMATS:
+                elt = fp.types.RealType(elt_fmt)
+                lst = (
+                    fp.types.ListType(elt) if sig == 'flat'
+                    else fp.types.ListType(fp.types.ListType(elt))
+                )
+                arg_types = [
+                    lst,
+                    *[fp.types.RealType(scalar_fmt)] * n_scalars,
+                ]
+                tag = f'{elt_fmt.nbits}_{scalar_fmt.nbits}'
+                label = f'{func.name}[{tag}]'
+                try:
+                    err = _run_and_check(
+                        output_dir, 'generated', compiler, func,
+                        arg_types=arg_types, suffix=tag, stats=stats,
+                    )
+                except fp.backend.CppCompileError as e:
+                    # A refusal is an answer, not a failure -- but say so.
+                    refused.append(f'{label}: {str(e).split(": ")[-1][:70]}')
+                    continue
+                except Exception as e:
+                    failures.append(('generated', label, str(e)))
+                    continue
+                if err == 'skip':
+                    refused.append(f'{label}: no sample the interpreter accepts')
+                    continue
+                known = _generated_xfail.get(label)
+                if known is not None:
+                    if err is None:
+                        failures.append((
+                            'generated', label,
+                            f'now agrees with the interpreter -- remove the '
+                            f'_generated_xfail entry ({known})',
+                        ))
+                    else:
+                        xfailed.append(f'{label}: {known}')
+                    continue
+                if err is not None:
+                    failures.append(('generated', label, err))
+                else:
+                    ran += 1
+    print(
+        f'=== generated format matrix: {ran} instantiations, '
+        f'{stats.get("samples", 0)} samples bit-compared '
+        f'({stats.get("nonempty", 0)} with a non-empty list) ==='
+    )
+    for note in xfailed:
+        print(f'     known divergence: {note}')
+    for note in refused:
+        print(f'     not compared: {note}')
+    # A `-k` run tests a subset on purpose, so the minimums below do not apply.
+    if _select is not None:
+        return failures
+    if stats.get('nonempty', 0) < 200:
+        failures.append((
+            'generated', '<coverage>',
+            f'only {stats.get("nonempty", 0)} samples with a non-empty list '
+            f'were compared; the counts above can stay high while every '
+            f'comparison is on an empty list, which touches none of the '
+            f'join/widening/aliasing behaviour this stage exists for',
+        ))
+    if ran < 20:
+        failures.append((
+            'generated', '<coverage>',
+            f'only {ran} instantiations executed; the matrix has stopped '
+            f'covering anything (refusals and skips are not failures, so this '
+            f'check is what keeps the stage honest)',
+        ))
+    return failures
+
+
+###########################################################
 # Name filter
 
 _select: 're.Pattern[str] | None' = None
@@ -1699,6 +1995,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     failures += _test_libraries(output_dir, mode=mode)
     failures += _test_regressions(output_dir, mode=mode, cov=cov)
     failures += _test_typed_regressions(output_dir, mode=mode)
+    failures += _test_generated(output_dir, mode=mode)
 
     if delete:
         shutil.rmtree(output_dir)

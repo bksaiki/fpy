@@ -179,3 +179,49 @@ class TestIfExpr:
         # The narrow branch (F32 ``x``) widens to ``double``; the
         # wide branch (``y``) stays as-is.
         assert '? static_cast<double>(x) : y' in out
+
+
+class TestNegativeZero:
+    """``-0.0`` is a distinct value, and an integer storage cannot hold it.
+
+    ``format_infer`` bounds a literal by the singleton set of its exact value,
+    but a ``Fraction`` has no signed zero -- so ``-0.0`` and ``+0.0`` both give
+    ``SetFormat({0})``, and the narrowest type containing that is ``uint8_t``.
+    A negative-zero literal therefore reports the narrowest *float* format
+    instead (``format_infer._literal_bound``).
+    """
+
+    def test_a_returned_negative_zero_keeps_its_sign(self, cc):
+        """Regression: this returned `+0.0`.  The sign is observable --
+        `x / -0.0` is `-inf` where `x / 0.0` is `+inf`."""
+        @fp.fpy
+        def f() -> fp.Real:
+            return -0.0
+
+        out = cc.compile(f, ctx=fp.FP64, arg_types=[])
+        assert 'uint8_t' not in out, out
+        assert 'float f()' in out or 'double f()' in out, out
+        # The interpreter is the reference, and it keeps the sign.
+        import math
+        got = float(f(ctx=fp.FP64))
+        assert got == 0.0 and math.copysign(1.0, got) < 0, got
+
+    def test_a_negative_zero_in_a_list_literal_compiles(self, cc):
+        """Regression: `std::vector<uint8_t>{-0.0}` is a hard `-Wnarrowing`
+        error, so this did not compile at all."""
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            with fp.FP64:
+                return [-0.0, -0.0]
+
+        out = cc.compile(f, ctx=fp.FP64, arg_types=[])
+        assert 'uint8_t' not in out, out
+
+    def test_a_positive_zero_still_narrows(self, cc):
+        """The guard is for the *negative* literal only: `+0.0` is exactly the
+        integer 0, so it keeps the narrow storage and nothing regresses."""
+        @fp.fpy
+        def f() -> fp.Real:
+            return 0.0
+
+        assert 'uint8_t' in cc.compile(f, ctx=fp.FP64, arg_types=[])
