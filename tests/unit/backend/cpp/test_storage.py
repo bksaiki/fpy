@@ -85,16 +85,27 @@ class TestStorageScalar:
         assert choose_storage_scalar(neg.format()) == CppScalar.F32
 
     def test_a_range_counter_keeps_an_integer_storage(self):
-        """The shape ``_range_counter_scalar`` builds, via ``.format()``.
+        """The shape ``_range_counter_scalar`` builds, reaching the ladder via
+        ``.format()``.
 
-        A counter is an integer and never a ``-0.0``, but it reaches the ladder
-        as a materialized fixed-point format — and no ``Format`` can say "no
-        negative zero".  Only the carve-out in ``AbstractFormat.from_format``
-        keeps this an integer; without it every loop counter becomes ``float``.
+        A counter is an integer and never a ``-0.0``.  It only stays an integer
+        because ``enable_neg_zero`` lets the materialized format say so; without
+        it every loop counter becomes ``float``.
         """
         from fpy2.analysis.format_infer.format import AbstractFormat
         counter = AbstractFormat(float('inf'), 0, fp.RealFloat.from_int(10))
         assert choose_storage_scalar(counter.format()) == CppScalar.S8
+
+    def test_integer_arithmetic_keeps_an_integer_storage(self):
+        """``int8 + int8`` is ``int16_t``, not ``float``.
+
+        The sum has a finite precision, so it materializes as a *float*-shaped
+        format on the way to the ladder — and a float format admits a negative
+        zero unless ``enable_neg_zero`` says otherwise.
+        """
+        from fpy2.analysis.format_infer.format import AbstractFormat
+        a = AbstractFormat.from_format(fp.SINT8.format())
+        assert choose_storage_scalar((a + a).format()) == CppScalar.S16
 
     def test_a_positive_zero_bound_still_narrows(self):
         """The counterweight: ``+0.0`` is exactly the integer 0, so the

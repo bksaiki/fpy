@@ -137,30 +137,25 @@ class AbstractFormat:
     def __neg__(self) -> 'AbstractFormat':
         """Negation of the format (swaps positive and negative bounds).
 
-        ``has_neg_zero`` is deliberately **not** derived here yet, and the same
-        goes for :meth:`__add__`, :meth:`__sub__` and :meth:`__mul__`.  The
-        correct rule is not a flag swap: negation yields a ``-0.0`` exactly when
-        the operand contains a ``+0.0``, and since ``pos_bound >= 0 >=
-        neg_bound`` holds by convention, every operand does.  A conservative
-        ``True`` here would therefore mark every arithmetic result as holding a
-        negative zero and collapse integer storage wholesale, so the rule needs
-        to be derived per operator against real measurement rather than assumed.
-
-        Leaving it ``False`` reproduces today's behaviour exactly: the flag is an
-        extra containment *requirement*, so under-reporting it accepts the same
-        storages as before rather than a narrower one.  Concretely, ``-z`` on an
-        integer-bounded ``z`` still selects an integer and still drops the sign;
-        that case is unfixed, not newly broken.
+        ``has_neg_zero`` carries over unchanged.  Negation maps ``+0.0`` to
+        ``-0.0``, and every grid contains a ``+0.0`` -- ``pos_bound >= 0 >=
+        neg_bound`` holds by convention and nothing excludes zero -- so the image
+        holds a ``-0.0`` exactly when this number system has one at all.  A
+        system without: ``-(0)`` under ``SINT8`` is ``+0.0``, since
+        two's-complement has a single zero.
         """
         # negation maps +inf <-> -inf; NaN is unsigned so it is preserved
         return AbstractFormat(
             self.prec, self.exp, -self.neg_bound, neg_bound=-self.pos_bound,
             has_pos_inf=self.has_neg_inf, has_neg_inf=self.has_pos_inf, has_nan=self.has_nan,
+            has_neg_zero=self.has_neg_zero,
         )
 
     def __abs__(self) -> 'AbstractFormat':
         """Absolute value of the format (clamps the negative bound to zero)."""
-        # abs maps -inf to +inf, so +inf is present if either infinity was
+        # abs maps -inf to +inf, so +inf is present if either infinity was.
+        # `has_neg_zero` is left at its default: `abs` never yields a negative
+        # zero, so false is the derived answer here, not an omission.
         return AbstractFormat(
             self.prec, self.exp, self.pos_bound, neg_bound=RealFloat.from_int(0),
             has_pos_inf=self.has_pos_inf or self.has_neg_inf, has_neg_inf=False, has_nan=self.has_nan,
@@ -211,10 +206,14 @@ class AbstractFormat:
             or (self.has_pos_inf and other.has_neg_inf)
             or (self.has_neg_inf and other.has_pos_inf)
         )
+        # A sum is `-0.0` only when *both* addends are: IEEE-754 gives a
+        # like-signed sum that sign, and every other zero sum is `+0.0`.
+        has_neg_zero = self.has_neg_zero and other.has_neg_zero
 
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=has_pos_inf, has_neg_inf=has_neg_inf, has_nan=has_nan,
+            has_neg_zero=has_neg_zero,
         )
 
     def __sub__(self, other: 'AbstractFormat') -> 'AbstractFormat':
@@ -264,10 +263,16 @@ class AbstractFormat:
             or (self.has_pos_inf and other.has_pos_inf)
             or (self.has_neg_inf and other.has_neg_inf)
         )
+        # `a - b` is `a + (-b)`, so by the sum rule both addends must be able to
+        # be `-0.0`: `a` directly, and `-b` when *b* can be `+0.0`.  Every grid
+        # contains a `+0.0` -- `pos_bound >= 0 >= neg_bound` holds by convention
+        # and nothing excludes zero -- so only `a` is in question.
+        has_neg_zero = self.has_neg_zero
 
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=has_pos_inf, has_neg_inf=has_neg_inf, has_nan=has_nan,
+            has_neg_zero=has_neg_zero,
         )
 
 
@@ -298,9 +303,18 @@ class AbstractFormat:
         other_inf = other.has_pos_inf or other.has_neg_inf
         inf_out = self_inf or other_inf
         has_nan = self.has_nan or other.has_nan or inf_out
+        # A zero product takes the XOR of the operand signs (IEEE-754 §6.3, in
+        # every rounding mode), so a `-0.0` needs a sign disagreement -- and one
+        # is always available once *either* number system has a signed zero:
+        # every grid contains a `+0.0`, and a negative times that zero is
+        # `-0.0`.  When neither system has one, no product can be one:
+        # two's-complement has a single zero, and `(-2) * 0` under `SINT8` is
+        # `+0.0`.
+        has_neg_zero = self.has_neg_zero or other.has_neg_zero
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=inf_out, has_neg_inf=inf_out, has_nan=has_nan,
+            has_neg_zero=has_neg_zero,
         )
 
     def __and__(self, other: 'AbstractFormat') -> 'AbstractFormat':
@@ -367,26 +381,13 @@ class AbstractFormat:
         -inf).  This round-trips with :meth:`format`, which sets the
         ``enable_*`` flags.
 
-        **Carve-out: a fixed-point format reports no negative zero**, whatever
-        its ``representable_in`` says.  ``MPFixedFormat`` (which backs FPy's
-        ``INTEGER``) does hold one, but taking it at face value marks every
-        integer-valued bound as needing a signed zero — and since no ``Format``
-        has an ``enable_neg_zero``, :meth:`format` cannot materialize a
-        fixed-point format *without* one either, so an integer bound that
-        round-trips through it acquires the flag as well.  Between them, loop
-        counters and integer arithmetic all retype to ``float``.
-
-        TODO: drop the carve-out once ``MPFixedFormat`` / ``MPBFixedFormat``
-        grow an option to disable ``-0.0``.  Then integer contexts can say so
-        directly, ``format()`` becomes lossless, and the real bug behind the
-        carve-out is fixable: FPy's ``INTEGER`` genuinely has a negative zero
-        while C++ ``int64_t`` does not, so ``-z`` on an integer ``z`` returns
-        ``-0.0`` from the interpreter and ``0`` from compiled code.  Under this
-        carve-out that divergence stays as it is today.
-
-        Because a membership flag is a containment *requirement*, under-reporting
-        it only ever accepts the storages it accepted before — so the carve-out
-        costs nothing in soundness relative to today and defers precision.
+        ``has_neg_zero`` round-trips like the others, via each format's
+        ``enable_neg_zero``.  That flag exists for this: without it
+        :meth:`format` could not express "no negative zero", so every
+        integer-valued bound materialized on the way to storage selection would
+        acquire one and lose its integer storage — ``int8 + int8`` lands on a
+        *float*-shaped ``MPBFloatFormat``, whose value set legitimately includes
+        a ``-0.0`` unless told otherwise.
         """
         # finite grid: quantum, precision, and bounds
         match fmt:
@@ -436,8 +437,27 @@ class AbstractFormat:
         af.has_pos_inf = fmt.representable_in(Float.inf(s=False))
         af.has_neg_inf = fmt.representable_in(Float.inf(s=True))
         af.has_nan = fmt.representable_in(Float.nan())
+        # `MPFixedFormat` is taken as having no negative zero, whatever it says.
+        #
+        # TODO: this is a lie and it needs fixing.  `MPFixedFormat` -- which backs
+        # FPy's `INTEGER` -- really does hold a negative zero, deliberately so.
+        # But C++ has no integer type that does, and believing the format costs
+        # integer storage everywhere: measured, it retypes every `range` counter
+        # as `float`, and it diverges the loop fixpoint in
+        # `test_while{5,6,7}_rounded` all the way to `REAL_FORMAT`, which no C++
+        # type can hold.  The honest fix is either for `MPFixedContext` to flatten
+        # signed zeros the way `FixedContext` already does, or for the backend to
+        # stop storing `INTEGER`-bounded reals in `int64_t`.  Until then this
+        # leaves one known divergence unfixed: `-z` on an integer `z` returns
+        # `-0.0` from the interpreter and `0` from compiled code (see
+        # `docs/todos/reals-in-integer-storage.md`).
+        #
+        # Deliberately *not* extended to `MPBFixedFormat`: its `enable_neg_zero`
+        # is the one thing that lets a bound say "this really can be a negative
+        # zero" and so reach a float storage, which is the whole point of the
+        # flag.  Only the unbounded fixed-point case is distrusted here.
         af.has_neg_zero = (
-            not isinstance(fmt, MPFixedFormat | MPBFixedFormat)
+            not isinstance(fmt, MPFixedFormat)
             and fmt.representable_in(Float(s=True, exp=0, c=0))
         )
         return af
@@ -479,15 +499,27 @@ class AbstractFormat:
             if bounds_bounded:
                 assert isinstance(self.pos_bound, RealFloat)
                 assert isinstance(self.neg_bound, RealFloat)
-                neg_maxval = self.neg_bound
-                if not neg_maxval.s:
-                    # MPBFloatFormat requires a strictly-negative neg_maxval;
-                    # widen symmetrically (sound over-approximation).
-                    neg_maxval = RealFloat(s=True, x=self.pos_bound)
-                return MPBFloatFormat(
-                    self.prec, emin, self.pos_bound, neg_maxval,
-                    enable_nan=enable_nan, enable_inf=enable_inf,
-                )
+                if not self._prec_constrains():
+                    # An integer grid: describe it as fixed-point.  Materializing
+                    # as a float would be correct but perverse — every value would
+                    # be subnormal — and, more to the point, a float format has a
+                    # signed zero.  `int8 + int8` lands here, and describing it as a
+                    # float is what cost it its `int16_t` storage.
+                    return MPBFixedFormat(
+                        self.exp - 1, self.pos_bound, self.neg_bound,
+                        enable_nan=enable_nan, enable_inf=enable_inf,
+                        enable_neg_zero=self.has_neg_zero,
+                    )
+                else:
+                    neg_maxval = self.neg_bound
+                    if not neg_maxval.s:
+                        # MPBFloatFormat requires a strictly-negative neg_maxval;
+                        # widen symmetrically (sound over-approximation).
+                        neg_maxval = RealFloat(s=True, x=self.pos_bound)
+                    return MPBFloatFormat(
+                        self.prec, emin, self.pos_bound, neg_maxval,
+                        enable_nan=enable_nan, enable_inf=enable_inf,
+                    )
             if bounds_unbounded:
                 return MPSFloatFormat(
                     self.prec, emin, enable_nan=enable_nan, enable_inf=enable_inf,
@@ -506,11 +538,43 @@ class AbstractFormat:
                 return MPBFixedFormat(
                     nmin, self.pos_bound, self.neg_bound,
                     enable_nan=enable_nan, enable_inf=enable_inf,
+                    enable_neg_zero=self.has_neg_zero,
                 )
             if bounds_unbounded:
-                return MPFixedFormat(nmin, enable_nan=enable_nan, enable_inf=enable_inf)
+                return MPFixedFormat(nmin, enable_nan=enable_nan, enable_inf=enable_inf,
+                    enable_neg_zero=self.has_neg_zero)
 
         return REAL_FORMAT
+
+    def _prec_constrains(self) -> bool:
+        """Does ``prec`` actually thin the grid inside the bounds?
+
+        The grid has spacing ``2**exp``; spanning the bounds at that spacing
+        needs some number of significand bits.  If ``prec`` supplies at least
+        that many it removes nothing, and the value set is the *whole* grid —
+        which is exactly what a fixed-point format describes.  If ``prec`` is
+        smaller, values thin out as the magnitude grows, and only a floating-point
+        format can say that.
+
+        So this is the float/fixed discriminator, and it is about the precision
+        constraint alone — not about whether the values happen to be integers.
+        ``A(24, -149, ±3.4e38)`` (FP32's own shape) needs 278 bits to span its
+        range at quantum ``2**-149`` and has 24, so it is genuinely floating.
+        ``A(9, 0, +254, -256)`` — the sum of two ``int8`` formats — needs 9 and
+        has 9, so it is genuinely fixed.
+
+        Only meaningful with a finite ``prec``/``exp`` and finite bounds; callers
+        check that first.
+        """
+        if not isinstance(self.prec, int) or not isinstance(self.exp, int):
+            return True
+        if isinstance(self.pos_bound, float) or isinstance(self.neg_bound, float):
+            return True
+        needed = max(
+            _maxval_precision(self.pos_bound, self.exp),
+            _maxval_precision(RealFloat(s=False, x=self.neg_bound), self.exp),
+        )
+        return self.prec < needed
 
     def effective_prec(self):
         """Effective maximum precision."""
