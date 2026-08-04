@@ -668,7 +668,7 @@ def _join_bounds(
 def _literal_bound(e) -> FormatBound:
     """A numeric literal's bound: the singleton set of its exact value.
 
-    Except a **negative zero**.  ``SetFormat`` holds :class:`Fraction`s, and a
+    Except a **signed zero**.  ``SetFormat`` holds :class:`Fraction`s, and a
     ``Fraction`` has no signed zero — so ``SetFormat({0})`` would assert that
     ``-0.0`` and ``+0.0`` are the same value.  They are not: ``-0.0`` is a
     distinct real that compares equal to ``+0.0`` but is distinguishable by
@@ -676,15 +676,27 @@ def _literal_bound(e) -> FormatBound:
     opposite signs.
 
     So the set cannot state this literal's value, and a bound that cannot state
-    a value must not pretend to.  Report the narrowest *format* that does
-    contain it instead — less precise, but true.
+    a value must not pretend to.  Report a *format* that does contain it
+    instead — less precise, but true.  Every binary floating-point format has a
+    signed zero, so ``FP32`` is a true bound for one; it is picked as a small
+    widely-supported format, and nothing here depends on which.
 
-    ``as_real`` returns a :class:`Float` for exactly this case and a
-    :class:`Fraction` otherwise, so it is the discriminator.
+    The discriminator is the literal's **value**, not the type ``as_real``
+    happens to return.  ``as_real`` returns a :class:`Float` only for a signed
+    zero today, but that invariant lives in :mod:`fpy2.ast.fpyast` and this
+    function cannot enforce it: a ``Float`` holding, say, ``1e-400`` is not in
+    ``FP32``, and answering ``FP32`` for it would be a false bound no consumer
+    could detect.  A non-zero ``Float`` *is* an exact rational, so it takes the
+    ``SetFormat`` path; anything else — an infinity or a NaN, which no literal
+    parses to — has no rational value at all, so the honest answer is the
+    scalar top.
     """
     v = e.as_real()
     if isinstance(v, Float):
-        return FP32.format()
+        if v.is_zero():
+            return FP32.format()
+        if v.isinf or v.isnan:
+            return REAL_FORMAT
     return SetFormat.from_value(e.as_rational())
 
 
