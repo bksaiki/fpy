@@ -1419,14 +1419,14 @@ class TestFormatInfer:
             def as_rational(self):
                 return self._rational
 
+        from fpy2.analysis.format_infer.analysis import _SIGNED_ZERO_FORMAT
         neg_zero = _FakeLiteral(Float(s=True, exp=0, c=0), Fraction(0))
-        assert _literal_bound(neg_zero) == fp.FP32.format()
+        assert _literal_bound(neg_zero) == _SIGNED_ZERO_FORMAT
 
-        # Not a zero, so `FP32` is not known to contain it -- and it does not:
-        # `2**-400` is far below `FP32`'s smallest subnormal.  A `Float` is an
-        # exact rational whenever it is finite, so the set states it exactly.
+        # Not a zero, so the two-zeros format does not contain it.  A `Float` is
+        # an exact rational whenever it is finite, so the set states it exactly.
         tiny = Float(s=False, exp=-400, c=1)
-        assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) != fp.FP32.format()
+        assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) != _SIGNED_ZERO_FORMAT
         assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) == \
             SetFormat.from_value(tiny.as_rational())
 
@@ -1455,7 +1455,8 @@ class TestFormatInfer:
         pos_info = FormatInfer.analyze(pos.ast)
         # `-0.0` reports a format; `+0.0` is exactly the integer 0, so it keeps
         # the precise singleton set and nothing about it regresses.
-        assert neg_info.fn_fmt.ret_fmt == fp.FP32.format(), neg_info.fn_fmt.ret_fmt
+        from fpy2.analysis.format_infer.analysis import _SIGNED_ZERO_FORMAT
+        assert neg_info.fn_fmt.ret_fmt == _SIGNED_ZERO_FORMAT, neg_info.fn_fmt.ret_fmt
         assert pos_info.fn_fmt.ret_fmt == SetFormat.from_value(Fraction(0)), \
             pos_info.fn_fmt.ret_fmt
 
@@ -1475,7 +1476,11 @@ class TestFormatInfer:
         from fpy2.analysis.format_infer.analysis import exact_unop
         import operator
         zero = SetFormat(frozenset((Fraction(0),)))
-        assert exact_unop(zero, operator.neg) is None
+        # Not a set -- and, since Phase 4, a *tight* bound rather than a
+        # give-up: the values are kept and only the zero's sign is surrendered.
+        got = exact_unop(zero, operator.neg)
+        assert not isinstance(got, SetFormat)
+        assert got is not None and got.has_neg_zero
         # A set with no zero in it negates exactly, as before.
         assert exact_unop(SetFormat(frozenset((Fraction(2),))), operator.neg) \
             == SetFormat(frozenset((Fraction(-2),)))
@@ -1497,8 +1502,10 @@ class TestFormatInfer:
         pos = SetFormat(frozenset((Fraction(2),)))
         neg = SetFormat(frozenset((Fraction(-2),)))
         assert exact_binop(zero, pos, operator.mul) == zero
-        assert exact_binop(zero, neg, operator.mul) is None   # -0.0
-        assert exact_binop(neg, zero, operator.mul) is None   # -0.0
+        for got in (exact_binop(zero, neg, operator.mul),
+                    exact_binop(neg, zero, operator.mul)):
+            assert not isinstance(got, SetFormat)      # may be -0.0
+            assert got is not None and got.has_neg_zero
 
     def test_add_and_sub_to_zero_follow_the_ieee_sign_rule(self):
         """An exactly-zero sum of *opposite-signed* operands is ``+0.0`` in
@@ -1513,9 +1520,11 @@ class TestFormatInfer:
         one = SetFormat(frozenset((Fraction(1),)))
         neg_one = SetFormat(frozenset((Fraction(-1),)))
         assert exact_binop(zero, zero, operator.add) == zero
-        assert exact_binop(one, neg_one, operator.add) is None
-        assert exact_binop(one, one, operator.sub) is None
-        assert exact_binop(zero, zero, operator.sub) is None
+        for got in (exact_binop(one, neg_one, operator.add),
+                    exact_binop(one, one, operator.sub),
+                    exact_binop(zero, zero, operator.sub)):
+            assert not isinstance(got, SetFormat)
+            assert got is not None and got.has_neg_zero
         # A non-zero result is unaffected either way.
         assert exact_binop(one, one, operator.add) \
             == SetFormat(frozenset((Fraction(2),)))

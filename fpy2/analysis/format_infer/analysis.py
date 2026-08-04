@@ -135,7 +135,7 @@ from typing import Any, TypeAlias
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...function import Function
-from ...number import FP32, INTEGER, REAL, Context, Float, RealFloat
+from ...number import INTEGER, REAL, Context, Float, RealFloat
 from ...number.format import REAL_FORMAT, Format
 from ...types import (
     BoolType,
@@ -478,6 +478,46 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
 
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
+_SIGNED_ZERO_FORMAT: Format = AbstractFormat(
+    1, 0, RealFloat(s=False, exp=0, c=0),
+    neg_bound=RealFloat(s=True, exp=0, c=0), has_neg_zero=True,
+).format()
+"""
+A format whose value set is exactly the two zeros, ``{+0.0, -0.0}``.
+
+The bound for a value that is known to be a zero but not known to be the
+*positive* one -- which :class:`SetFormat` cannot say, since it holds
+:class:`Fraction`\\ s.  It is tight: it admits neither ``1.0`` nor anything else,
+so it claims far less than naming a whole float format would.
+
+Its ``has_neg_zero`` is what keeps it off an integer storage.  ``uint8_t`` holds
+the integer 0 and neither sign, and the C++ ladder's rungs report
+``has_neg_zero=False`` for every integer type, so containment rejects them and
+the value lands on a float -- which is the whole point.
+"""
+
+
+def _set_with_signed_zero(
+    values: frozenset[Fraction],
+) -> 'AbstractFormat | None':
+    """*values*, widened by the possibility that its zero is a negative one.
+
+    The honest bound when an operation's exact result is a zero whose sign is
+    not provably positive: the values are known, and the only thing a
+    :class:`SetFormat` cannot carry is which zero it holds — so say the values
+    *and* set ``has_neg_zero``.
+
+    Strictly tighter than giving up.  Returning ``None`` sends the caller to the
+    active scope's whole format (:meth:`_bound_if_fits` → :meth:`_op_bound`);
+    this keeps the value range and gives up only the zero's sign.  ``None`` is
+    still the answer for a non-dyadic set, which no ``AbstractFormat`` can pin.
+    """
+    af = _setformat_to_abstract(SetFormat(values))
+    if af is None:
+        return None
+    af.has_neg_zero = True
+    return af
+
 
 def _zero_result_is_positive(
     op: Callable[..., Any], *operands: Fraction,
@@ -581,17 +621,19 @@ def exact_binop(
         return None
     if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
         values: set[Fraction] = set()
+        signed_zero = False
         for va in lhs.values:
             for vb in rhs.values:
                 r = op(va, vb)
                 if r == 0 and not _zero_result_is_positive(op, va, vb):
-                    # May be a `-0.0`; see :func:`_zero_result_is_positive`.
-                    # Ahead of the cap, because collapsing to an AbstractFormat
-                    # would not rescue it — one bounded by zero on both sides
-                    # says the same unstatable thing a `{0}` set does.
-                    return None
+                    signed_zero = True
                 values.add(r)
         result = frozenset(values)
+        if signed_zero:
+            # A set cannot say which zero this is, so report the same values as
+            # an AbstractFormat that can.  Supersedes the cap: this is already
+            # the collapsed form.
+            return _set_with_signed_zero(result)
         if cap is not None and len(result) > cap:
             # collapse an over-large set to its covering AbstractFormat
             return _setformat_to_abstract(SetFormat(result))
@@ -635,12 +677,15 @@ def exact_unop(
         return None
     if isinstance(arg, SetFormat):
         values: set[Fraction] = set()
+        signed_zero = False
         for v in arg.values:
             r = op(v)
             if r == 0 and not _zero_result_is_positive(op, v):
                 # `neg(+0.0)` is `-0.0`, which a `Fraction` set cannot state.
-                return None
+                signed_zero = True
             values.add(r)
+        if signed_zero:
+            return _set_with_signed_zero(frozenset(values))
         return SetFormat(frozenset(values))
     af = _to_abstract(arg)
     if af is None:
@@ -755,9 +800,8 @@ def _literal_bound(e) -> FormatBound:
 
     So the set cannot state this literal's value, and a bound that cannot state
     a value must not pretend to.  Report a *format* that does contain it
-    instead — less precise, but true.  Every binary floating-point format has a
-    signed zero, so ``FP32`` is a true bound for one; it is picked as a small
-    widely-supported format, and nothing here depends on which.
+    instead: :data:`_SIGNED_ZERO_FORMAT`, whose value set is exactly the two
+    zeros.
 
     This is the written-out case of the invariant :func:`_zero_result_is_positive`
     maintains for computed values: a ``SetFormat`` never holds a negative zero,
@@ -768,9 +812,9 @@ def _literal_bound(e) -> FormatBound:
     The discriminator is the literal's **value**, not the type ``as_real``
     happens to return.  ``as_real`` returns a :class:`Float` only for a signed
     zero today, but that invariant lives in :mod:`fpy2.ast.fpyast` and this
-    function cannot enforce it: a ``Float`` holding, say, ``1e-400`` is not in
-    ``FP32``, and answering ``FP32`` for it would be a false bound no consumer
-    could detect.  A non-zero ``Float`` *is* an exact rational, so it takes the
+    function cannot enforce it: a ``Float`` holding, say, ``1e-400`` is not a
+    zero, and answering the two-zeros format for it would be a false bound no
+    consumer could detect.  A non-zero ``Float`` *is* an exact rational, so it takes the
     ``SetFormat`` path; anything else — an infinity or a NaN, which no literal
     parses to — has no rational value at all, so the honest answer is the
     scalar top.
@@ -778,7 +822,7 @@ def _literal_bound(e) -> FormatBound:
     v = e.as_real()
     if isinstance(v, Float):
         if v.is_zero():
-            return FP32.format()
+            return _SIGNED_ZERO_FORMAT
         if v.isinf or v.isnan:
             return REAL_FORMAT
     return SetFormat.from_value(e.as_rational())
