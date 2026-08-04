@@ -36,9 +36,19 @@ from ..ast import Call, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
 from ..module import Module
-from ..number import Context
+from ..number import Context, RoundingMode
+from ..number.context.efloat import EFloatContext, EFloatFormat
+from ..number.context.exponential import ExpContext, ExpFormat
+from ..number.context.fixed import FixedContext, FixedFormat
 from ..number.context.format import Format
-from ..number.context.real import REAL_FORMAT
+from ..number.context.ieee754 import IEEEContext, IEEEFormat
+from ..number.context.mp_fixed import MPFixedContext, MPFixedFormat
+from ..number.context.mp_float import MPFloatContext, MPFloatFormat
+from ..number.context.mpb_fixed import MPBFixedContext, MPBFixedFormat
+from ..number.context.mpb_float import MPBFloatContext, MPBFloatFormat
+from ..number.context.mps_float import MPSFloatContext, MPSFloatFormat
+from ..number.context.real import REAL_FORMAT, RealFormat
+from ..number.context.sm_fixed import SMFixedContext, SMFixedFormat
 from ..types import BoolType, ListType, RealType, TupleType, Type
 from .monomorphize import Monomorphize
 
@@ -47,63 +57,62 @@ from .monomorphize import Monomorphize
 # to feed `Monomorphize` at callees — the spec key does *not* go through
 # this conversion).
 
-
-_FORMAT_TO_CTX: dict[Format, Context] | None = None
-
-
 def _format_to_ctx(fmt: Format) -> Context | None:
-    """Best-effort recovery of a canonical :class:`Context` from a
-    :class:`Format`.  Returns ``None`` for formats outside the canonical
-    registry — the caller falls back to ``RealType(None)``."""
-    global _FORMAT_TO_CTX
-    if _FORMAT_TO_CTX is None:
-        from ..libraries.base import (
-            BF16,
-            FP8P1,
-            FP8P2,
-            FP8P3,
-            FP8P4,
-            FP8P5,
-            FP8P6,
-            FP8P7,
-            FP16,
-            FP32,
-            FP64,
-            FP128,
-            FP256,
-            INTEGER,
-            MX_E2M1,
-            MX_E2M3,
-            MX_E3M2,
-            MX_E4M3,
-            MX_E5M2,
-            MX_E8M0,
-            MX_INT8,
-            S1E4M3,
-            S1E5M2,
-            SINT8,
-            SINT16,
-            SINT32,
-            SINT64,
-            TF32,
-            UINT8,
-            UINT16,
-            UINT32,
-            UINT64,
-        )
-        canonical = (
-            FP16, FP32, FP64, FP128, FP256, BF16, TF32, INTEGER,
-            SINT8, SINT16, SINT32, SINT64,
-            UINT8, UINT16, UINT32, UINT64,
-            S1E5M2, S1E4M3,
-            MX_E5M2, MX_E4M3, MX_E3M2, MX_E2M3, MX_E2M1,
-            MX_E8M0, MX_INT8,
-            FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7,
-        )
-        _FORMAT_TO_CTX = {}
-        for ctx in canonical:
-            _FORMAT_TO_CTX.setdefault(ctx.format(), ctx)
-    return _FORMAT_TO_CTX.get(fmt)
+    """Best-effort recovery of a :class:`Context` from a :class:`Format`.
+
+    Each format is paired with the context class that describes it, and the
+    context is rebuilt via that class's ``from_format``.  Returns ``None``
+    when no context can describe the format — the caller falls back to
+    ``RealType(None)``.
+
+    The cases are ordered most-derived first, since ``IEEEFormat`` is an
+    ``EFloatFormat`` and ``FixedFormat``/``SMFixedFormat`` are both
+    ``MPBFixedFormat``\\s.
+    """
+    # A `Format` describes a set of values, not how to round into it, so the
+    # rounding mode has to be chosen here.  RNE is `from_format`'s default and
+    # matches every canonical float context; the fixed-point family instead
+    # uses RTZ, which is what every canonical integer context (`SINT*`,
+    # `UINT*`, `INTEGER`) is built with and what the cpp backend requires of
+    # integer storage, since C++ integer arithmetic truncates.
+    if isinstance(fmt, MPFixedFormat | MPBFixedFormat):
+        rm = RoundingMode.RTZ
+    else:
+        rm = RoundingMode.RNE
+
+    try:
+        match fmt:
+            # `IEEEFormat` before `EFloatFormat`
+            case IEEEFormat():
+                return IEEEContext.from_format(fmt, rm=rm)
+            case EFloatFormat():
+                return EFloatContext.from_format(fmt, rm=rm)
+            # `FixedFormat` and `SMFixedFormat` before `MPBFixedFormat`
+            case FixedFormat():
+                return FixedContext.from_format(fmt, rm=rm)
+            case SMFixedFormat():
+                return SMFixedContext.from_format(fmt, rm=rm)
+            case MPBFixedFormat():
+                return MPBFixedContext.from_format(fmt, rm=rm)
+            case MPFixedFormat():
+                return MPFixedContext.from_format(fmt, rm=rm)
+            case ExpFormat():
+                return ExpContext.from_format(fmt, rm=rm)
+            case MPBFloatFormat():
+                return MPBFloatContext.from_format(fmt, rm=rm)
+            case MPSFloatFormat():
+                return MPSFloatContext.from_format(fmt, rm=rm)
+            case MPFloatFormat():
+                return MPFloatContext.from_format(fmt, rm=rm)
+            case RealFormat():
+                # the polymorphic top: callers treat it as "no context"
+                return None
+            case _:
+                return None
+    except (NotImplementedError, TypeError, ValueError):
+        # some `from_format`s reject formats their context cannot express
+        # (e.g. NaN/Inf disabled); recovery is best-effort
+        return None
 
 
 def _bound_to_type(bound: FormatBound) -> Type | None:

@@ -76,6 +76,52 @@ class TestSignMagnitudeKeepsNegativeZero():
         assert ctx.decode(encoded).s
         assert ctx.decode(encoded).is_zero()
 
+    @pytest.mark.parametrize('rm', _ROUNDING_MODES)
+    def test_round_preserves_negative_zero(self, rm: fp.RoundingMode):
+        # sign-magnitude can hold `-0`, so rounding must not discard the sign
+        ctx = fp.SMFixedContext(0, 8, rm)
+        r = ctx.round(_NEG_ZERO)
+        assert r.is_zero() and r.s, f'round(-0) under {rm} lost its sign'
+        assert ctx.representable_under(r)
+        assert ctx.encode(r) == ctx.encode(_NEG_ZERO)
+
+    @pytest.mark.parametrize('rm', _ROUNDING_MODES)
+    def test_round_preserves_positive_zero(self, rm: fp.RoundingMode):
+        ctx = fp.SMFixedContext(0, 8, rm)
+        r = ctx.round(_ZERO)
+        assert r.is_zero() and not r.s
+        assert ctx.encode(r) == ctx.encode(_ZERO)
+
+    def test_round_negative_zero_from_float(self):
+        ctx = fp.SMFixedContext(0, 8)
+        assert ctx.round(-0.0).s
+        assert not ctx.round(0.0).s
+
+    @pytest.mark.parametrize('rm', _ROUNDING_MODES)
+    @given(real_floats(prec_max=8, exp_min=-8, exp_max=8))
+    def test_round_is_always_representable(self, rm: fp.RoundingMode, x: fp.RealFloat):
+        ctx = fp.SMFixedContext(0, 8, rm)
+        r = ctx.round(x)
+        assert ctx.representable_under(r)
+        assert ctx.decode(ctx.encode(r)) == r
+
+
+class TestMPFixedKeepsNegativeZero():
+    """`MPFixedContext` also reports `-0` as representable, so it must keep it."""
+
+    @pytest.mark.parametrize('rm', _ROUNDING_MODES)
+    def test_round_preserves_negative_zero(self, rm: fp.RoundingMode):
+        ctx = fp.MPFixedContext(-1, rm)
+        r = ctx.round(_NEG_ZERO)
+        assert ctx.representable_under(_NEG_ZERO)
+        assert r.is_zero() and r.s, f'round(-0) under {rm} lost its sign'
+        assert ctx.representable_under(r)
+
+    def test_round_preserves_positive_zero(self):
+        ctx = fp.MPFixedContext(-1)
+        r = ctx.round(_ZERO)
+        assert r.is_zero() and not r.s
+
 
 class TestRoundNeverProducesNegativeZero():
 
