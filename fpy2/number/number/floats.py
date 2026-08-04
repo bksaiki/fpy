@@ -157,7 +157,15 @@ class Float:
 
     def __hash__(self): # type: ignore
         # Complex has __hash__ = None, so mypy thinks there's a type mismatch.
-        return hash((self._isinf, self._isnan, self._real))
+        if self._isnan:
+            # ensure that all NaN values have the same hash
+            return hash(float('nan'))
+        elif self._isinf:
+            # ensure that all Inf values have the same hash
+            return hash(float('inf')) if not self._real._s else hash(float('-inf'))
+        else:
+            # hash the underlying RealFloat value
+            return hash(self._real)
 
     def __eq__(self, other):
         if not isinstance(other, Float | RealFloat | int | float | Fraction):

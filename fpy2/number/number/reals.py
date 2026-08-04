@@ -24,7 +24,6 @@ from ...utils import (
     float_to_bits,
     is_dyadic,
     is_power_of_two,
-    trailing_zeros,
 )
 from ..globals import get_current_float_converter, get_current_str_converter
 from ..round import RoundingDirection, RoundingMode
@@ -173,14 +172,14 @@ class RealFloat(numbers.Rational):
         return fn(self)
 
     def __hash__(self): # type: ignore[override]
-        # we want numerically equivalent values to have the same hash
-        if self._c == 0:
-            # all zeros are numerically equivalent, even if they have different signs and exponents
-            return hash(())
-        else:
-            # normalize by shifting off trailing zeros to ensure that values with different
-            tzc = trailing_zeros(self._c)
-            return hash((self._s, self._exp + tzc, self._c >> tzc))
+        # first, try hashing as an integer
+        try:
+            i = int(self)
+            return hash(i)
+        except ValueError:
+            # fallback to hashing as a rational
+            q = self.as_rational()
+            return hash(q)
 
     def __eq__(self, other):
         if not isinstance(other, RealFloat | int | float | Fraction):
@@ -536,12 +535,14 @@ class RealFloat(numbers.Rational):
         return self._flags.underflow_post
 
     def as_rational(self) -> Fraction:
+        # scale by shifting rather than `2 ** exp`: the latter goes through
+        # `pow`, which is dramatically slower for a large exponent
         if self._c == 0: # case: zero
             return Fraction(0)
         elif self._exp >= 0: # case: definitely integer
-            return Fraction(self.m * (2 ** self._exp))
+            return Fraction(self.m << self._exp)
         else: # case: likely fractional
-            return Fraction(self.m, 2 ** (-self._exp))
+            return Fraction(self.m, 1 << -self._exp)
 
     @staticmethod
     def from_int(x: int):
@@ -611,9 +612,10 @@ class RealFloat(numbers.Rational):
                 return RealFloat.from_int(n)
             else:
                 # case: has fractional bits
+                # `x` is dyadic, so `d` is a power of two and `n` is
+                # already the significand at position `-exp`
                 exp = d.bit_length() - 1
-                m = n * (2 ** exp) // d
-                return RealFloat(m=m, exp=-exp)
+                return RealFloat(m=n, exp=-exp)
 
     @staticmethod
     def zero(s: bool = False):

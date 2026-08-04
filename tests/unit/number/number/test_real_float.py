@@ -31,6 +31,43 @@ class TestRealFloatConstructors():
         assert isinstance(x, fp.RealFloat)
         assert x == a
 
+    @given(real_floats(prec_max=16, exp_min=-32, exp_max=32))
+    def test_from_rational_roundtrip(self, x: fp.RealFloat):
+        # `from_rational` recovers the value, though not necessarily the encoding
+        y = fp.RealFloat.from_rational(x.as_rational())
+        assert y == x
+
+
+class TestRealFloatAsRational():
+    """Testing `RealFloat.as_rational`, which must be exact."""
+
+    @given(real_floats(prec_max=16, exp_min=-64, exp_max=64))
+    def test_exact(self, x: fp.RealFloat):
+        q = x.as_rational()
+        assert isinstance(q, Fraction)
+        assert q == x
+        # the value is `(-1)^s * c * 2**exp`, computed independently here
+        assert q == Fraction(x.m) * Fraction(2) ** x.exp
+
+    @given(st.integers(min_value=-64, max_value=64), st.integers(min_value=-64, max_value=64))
+    def test_scaling_by_power_of_two(self, m: int, exp: int):
+        # covers both the `exp >= 0` and `exp < 0` branches
+        x = fp.RealFloat(m=m, exp=exp)
+        assert x.as_rational() == Fraction(m) * Fraction(2) ** exp
+
+    @given(st.booleans(), st.integers(min_value=-32, max_value=32))
+    def test_zero(self, s: bool, exp: int):
+        # zero of either sign, at any exponent
+        assert fp.RealFloat(s=s, exp=exp, c=0).as_rational() == 0
+
+    @pytest.mark.parametrize('exp', [-(10 ** 6), 10 ** 6])
+    def test_large_exponent_is_tractable(self, exp: int):
+        # `2 ** exp` routes through `pow` and is dramatically slower than a
+        # shift at this magnitude; guard against reintroducing it
+        x = fp.RealFloat(s=False, exp=exp, c=3)
+        assert x.as_rational() == Fraction(3) * Fraction(2) ** exp
+        assert hash(x) == hash(x.as_rational())
+
 
 class TestRealFloatReprMethods():
     """Testing `RealFloat` representation methods"""
