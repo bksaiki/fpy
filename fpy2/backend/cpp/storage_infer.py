@@ -298,11 +298,11 @@ class _PlaceFloors(DefaultVisitor):
           makes ``storage_of`` describe a type the reference does not have, and
           the ``auto`` hides it until the mismatch surfaces somewhere else.
 
-        The one exception is a parameter of a function compiled code calls: its
-        caller's argument type is already fixed, so raising it underneath emits
-        a call that does not compile.  Same rule ``unbox`` states for
-        representations — a function compiled code calls keeps its signature on
-        both sides.  A native caller is not bound by that.
+        One exception: a parameter of a function compiled code *calls*.  Its
+        caller's argument type is already fixed, so raising it underneath emits a
+        call that does not compile — the rule ``unbox`` states for
+        representations, that a called function keeps its signature on both
+        sides.  A native caller is not bound by it.
         """
         if isinstance(d.site, Argument):
             return self.is_called
@@ -546,25 +546,18 @@ def place_floors(
     base: 'StorageAnalysis',
     is_called: bool = False,
 ) -> dict[Definition, FormatBound]:
-    """See :class:`_PlaceFloors`.
+    """See :class:`_PlaceFloors`.  *base* is the unraised storage analysis, used
+    only to tell which names the emitter binds by reference.
 
-    *base* is the unraised storage analysis, needed only to tell which names the
-    emitter binds by reference — those have no storage to raise.
+    The two directions feed each other — a place raises a variable, a raised
+    variable raises the container built from it — so iterate.  One round per
+    statement suffices: a place's own bound is fixed, so every floor originates
+    in the first round and later rounds only carry it along one edge.  The
+    corpus settles in one or two.
 
-    The two directions feed each other -- a place raises a variable, a raised
-    variable raises the container holding it -- so iterate to a fixpoint.
-
-    It terminates in at most one round per assignment.  A place's own bound is
-    fixed (it comes from ``by_expr`` / ``ret_fmt``, which this does not touch),
-    so every floor originates in the first round and later rounds only carry it
-    along assignment edges -- and a chain of those is no longer than the number
-    of assignments.  One extra round detects that nothing moved.
-
-    Measured over the corpus: 175 functions settle in one round, 44 in two, and
-    the largest has 34 assignments.  So the bound is slack by a wide margin,
-    which is why it asserts rather than breaking: falling out of this loop with
-    work left would return a *partial* answer, and an under-raised definition
-    reappears later as a type disagreement the emitter has to refuse.
+    Asserts rather than breaking: leaving the loop with work outstanding would
+    return a *partial* answer, and an under-raised definition resurfaces as a
+    type disagreement the emitter has to refuse.
     """
     v = _PlaceFloors(def_use, by_def, by_expr, ret_fmt, base, is_called)
     v._visit_function(ast, None)          # collects the assignments to revisit

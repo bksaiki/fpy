@@ -580,6 +580,21 @@ class CppEmitter(Visitor):
         """
         return self._binds_reference(target_def)
 
+    def _emitted_storage_of(self, d) -> CppType:
+        """The type *d*'s C++ name actually has.
+
+        ``storage_of`` is the type the analysis *chose*; when the emitter binds
+        the name as ``const auto&`` the type is the one C++ *deduced* from the
+        initializer, and the two can differ.  Every caller reasoning about the
+        emitted code wants this one.
+        """
+        src = self._reference_source(d)
+        if src is not None:
+            ty = self._storage_or_none(src)
+            if ty is not None:
+                return ty
+        return self.storage.storage_of(d)
+
     def _reference_source(self, d) -> 'Expr | None':
         """The initializer *d*'s C++ name deduces its type from, if any.
 
@@ -996,6 +1011,30 @@ class CppEmitter(Visitor):
             f'unsupported: this value is `{src.format()}` where '
             f'`{want.format()}` is needed, and C++ has no conversion between '
             f'them.  Keeping the two formats the same at this point avoids it.',
+            at=at,
+        )
+
+    def _require_no_narrowing(
+        self, src: CppType | None, want: CppType | None, at: Expr,
+    ) -> None:
+        """Refuse a store C++ would narrow silently.
+
+        The sibling of :meth:`_require_bridgeable`, for the one case where a
+        format disagreement is a *wrong answer* instead of a compile error: C++
+        accepts a narrowing store into a slot, and FPy says the list then holds
+        the wider value.  Widening the container instead is not available --
+        another name may already alias it, which ``format_infer`` does not track
+        (see ``docs/todos/format-infer-aliasing.md``).
+        """
+        if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
+            return
+        if scalar_fits_in(src, want):
+            return
+        raise CppEmitError(
+            f'unsupported: storing a `{src.format()}` into a slot of '
+            f'`{want.format()}` would narrow it, and the list would then not '
+            f'hold the value FPy says it does.  Round the value to the list\'s '
+            f'format, or build the list at the wider one.',
             at=at,
         )
 
@@ -2881,7 +2920,7 @@ class CppEmitter(Visitor):
         target_name = self.storage.def_to_name[target_def]
         idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
         chain = target_name
-        level = self.storage.storage_of(target_def)
+        level = self._emitted_storage_of(target_def)
         for idx in idxs:
             if not isinstance(level, CppList):
                 raise CppEmitError(
@@ -2893,9 +2932,9 @@ class CppEmitter(Visitor):
             level = level.elt
         # The slot's type comes from the container, so there is nowhere to put
         # a conversion: the value has to already fit.
-        self._require_bridgeable(
-            self._storage_or_none(stmt.expr), level, stmt.expr,
-        )
+        src = self._storage_or_none(stmt.expr)
+        self._require_bridgeable(src, level, stmt.expr)
+        self._require_no_narrowing(src, level, stmt.expr)
         rhs = self._emit_at(stmt.expr, level, ctx)
         self.writer.add_line(f'{chain} = {rhs};')
 

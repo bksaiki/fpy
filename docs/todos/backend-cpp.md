@@ -18,11 +18,20 @@ Module layout:
 - `target.py`, `utils.py` — target description, header / helper preamble.
 
 Read the design before changing anything; [Open TODOs](#open-todos) is at the
-bottom. Three narrower questions have their own documents:
+bottom. Narrower questions have their own documents:
 
 - `unboxing-gaps.md` — what stays boxed, and why.
 - `cpp-narrower-variable-at-a-join.md` — two element types meeting at one place.
 - `format-infer-aliasing.md` — an unsound bound the backend inherits.
+- **`reals-in-integer-storage.md`** — the largest open correctness problem: a
+  real narrowed into an integer holds neither `-0.0` nor NaN.
+- `cpp-literal-tokens-and-sum.md` — three smaller disagreements between the
+  emitted C++ and the interpreter.
+
+The correctness criterion those last three are measured against: *if the
+compiler succeeds, the emitted C++ must compile and must behave as the FPy
+interpreter does.* A refusal is always acceptable — the compiler may be limited —
+so a shape it cannot handle should raise, never miscompile.
 
 ## Design
 

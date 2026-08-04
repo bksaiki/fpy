@@ -1809,13 +1809,14 @@ _GEN_FORMATS = (fp.FP32, fp.FP64)
 # fix cannot leave a stale suppression behind.  That is how this one survived
 # unnoticed in the first place.
 _generated_xfail: dict[str, str] = {
-    # `ys = xs; ys[0] = y` where `y` is wider than `xs`'s elements.  The two
-    # names are one list, so after the store it holds an FP64 value and
-    # `xs[0]` is FP64 -- but `format_infer` widens only `ys`'s def and reports
-    # `ret_fmt` as FP32, which no binary32 can hold.  The backend implements
-    # that faithfully and truncates.  Unsound in the analysis, not in codegen;
-    # see docs/todos/format-infer-aliasing.md.
-    '_gen_alias_then_mutate[32_64]': 'format_infer ignores list aliasing',
+    # Empty, and worth keeping that way: an entry here says the compiler
+    # produces a *wrong answer* for some instantiation, which the correctness
+    # criterion does not allow.  A shape the backend cannot handle belongs in
+    # the "not compared" list below -- refused, not divergent.
+    #
+    # Note a refusal never reaches the strict check, so an entry that starts
+    # being refused rather than diverging goes stale silently.  Re-read this
+    # list when a refusal appears for something listed here.
 }
 
 
