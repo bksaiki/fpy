@@ -954,11 +954,11 @@ class CppEmitter(Visitor):
     ) -> str:
         """*code*, of storage *src*, as storage *want*.
 
-        Format inference gives one place one bound, and ``_push_format`` puts
+        Format inference gives one place one bound, and :meth:`_emit_at` builds
         every *constructor* that reaches a place at that bound.  A variable
-        cannot be re-decided that way -- its storage was fixed by its own
-        definition -- so a narrower one flowing into a wider place arrives here
-        and is converted.
+        cannot be built that way -- its storage was fixed by its own definition
+        -- so a narrower one flowing into a wider place arrives here and is
+        converted.
 
         A scalar is cast: ``std::make_tuple`` below deduces its type from the
         argument, so leaving the conversion implicit rebuilds the tuple at the
@@ -1133,9 +1133,9 @@ class CppEmitter(Visitor):
 
         A variable reads as its **declaration**, which is not always what its
         own format bound would choose: ``storage_infer`` aggregates a whole
-        storage class and raises it to the places the class reaches (see
-        ``storage_infer.place_floors``).  Asking ``by_expr`` here would compare
-        against a type the emitted name does not have.
+        storage class, so every member reads as the type the class settled on.
+        Asking ``by_expr`` here would compare against a type the emitted name
+        does not have.
         """
         if isinstance(e, Var):
             d = self.def_use.find_def_from_use(e)

@@ -52,7 +52,7 @@ offending expression.
 Two things complicate the per-expression story, both documented separately: a
 list also has a *representation* (handle or value — `unbox.py`), and where
 several expressions reach one place they must agree on one C++ type
-(`storage_infer.place_floors` and `emitter._emit_at`).
+(`emitter._emit_at`).
 
 ### SSA rebinds → fresh C++ variables
 
@@ -139,15 +139,13 @@ Module
   → ContextUse                 # resolves with-block contexts
   → ArraySizeInfer             # FormatInfer needs it for bounded iteration
   → FormatInfer                # rounding format per def/expr
-  → StorageInfer  ×2           # storage per SSA def; see place_floors
+  → StorageInfer               # storage per SSA def
   → Alias / Escape             # what may refer to what; what a callee retains
   → Unbox                      # handle or value, per alias region
   → emit C++
 ```
 
-`StorageInfer` runs twice: `place_floors` needs to know which names the emitter
-binds by reference, and that is a property of the storage analysis. `Specialize`
-means a callee's formats follow its call site — so a callee called with a wider
+`Specialize` means a callee's formats follow its call site — so a callee called with a wider
 list is automatically instantiated wider, which is the workaround
 `cpp-narrower-variable-at-a-join.md` relies on.
 

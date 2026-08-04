@@ -280,9 +280,9 @@ def test_a_joined_place_has_one_element_type(func, arg_types, unbox):
 
 
 # --------------------------------------------------------------------------
-# The other half: a *variable* reaching a joined place.  `_push_format` cannot
-# re-decide one -- its storage was fixed by its own definition -- so the
-# backend converts at the boundary instead.
+# The other half: a *variable* reaching a joined place.  Emitting the
+# contributors at the place's type cannot reach one -- a variable's storage was
+# fixed by its own definition -- so the backend converts at the boundary.
 
 @fp.fpy
 def v_narrower_variable(c: fp.Real, y: fp.Real) -> list[fp.Real]:
@@ -319,15 +319,20 @@ def test_a_narrower_variable_is_converted_at_the_boundary(func):
     _typecheck(m)
 
 
-# A local's storage is raised to the places it reaches
-# (`storage_infer.place_floors`), so a narrower *local* never has to be
-# rebuilt.  These would all have been refused before that landed.
+# --------------------------------------------------------------------------
+# And the boundary of that: a narrower list something *else* also names.
+#
+# The conversion above rebuilds the list, which is invisible only because
+# nothing else holds that buffer.  Once something does, the rebuilt copy is a
+# different list from the one the other references see, and there is no sound
+# lowering -- so the compiler refuses.  These are all legal FPy programs; the
+# limitation is the C++ backend's.  `docs/todos/cpp-narrower-variable-at-a-join.md`
+# records what it would take to compile them.
 
 @fp.fpy
-def w_shared_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
-    """`xs` is a name *and* a container slot, so it keeps its handle -- and a
-    handle cannot be rebuilt.  Raising `xs` to `double` means there is nothing
-    to rebuild, and raising it also raises `zss`, which holds it."""
+def s_local_in_a_list(c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """`xs` is a name *and* a slot of `zss`, so it keeps its handle -- and a
+    handle cannot be rebuilt without `zss` still naming the old buffer."""
     with fp.FP64:
         xs = [1.0, 2.0]
         zss = [xs]
@@ -339,7 +344,8 @@ def w_shared_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
 
 
 @fp.fpy
-def w_shared_local_in_a_tuple(c: fp.Real, y: fp.Real):
+def s_local_in_a_tuple(c: fp.Real, y: fp.Real):
+    """The same, one level in: the tuple's field fixes the list's type."""
     with fp.FP64:
         xs = [1.0, 2.0]
         if c > 0:
@@ -349,9 +355,9 @@ def w_shared_local_in_a_tuple(c: fp.Real, y: fp.Real):
 
 
 @fp.fpy
-def w_mixed_precision_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
+def s_mixed_precision_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
     """The format the program asked for, not a narrowing accident: `lo`'s
-    elements are FP32-rounded *values* living in a `vector<double>`."""
+    elements are FP32-rounded *values*, and `zss` holds the same buffer."""
     with fp.FP32:
         lo = [fp.round(y), fp.round(y)]
     with fp.FP64:
@@ -362,46 +368,20 @@ def w_mixed_precision_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
             return [y]
 
 
-WIDEN_CASES = [
-    w_shared_local,
-    w_shared_local_in_a_tuple,
-    w_mixed_precision_local,
-]
-
-
-@pytest.mark.parametrize(
-    'func', WIDEN_CASES, ids=[f.name for f in WIDEN_CASES],
-)
-def test_a_shared_local_is_widened_not_rebuilt(func):
-    m = Module()
-    m.add(func, ctx=fp.FP64, arg_types=[R, R])
-    _typecheck(m)
-
-
-def test_a_widened_parameter_is_reported_in_the_signature():
-    """A parameter is raised like any other def, which changes the ABI -- so
-    the caller has to be told.  Already the policy for a store (`xs[0] = y`
-    widens via `_list_set_widen`); this is the same answer at a join."""
-    @fp.fpy
-    def widen(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
-        with fp.FP64:
-            if c > 0:
-                return xs
-            else:
-                return [y]
-
-    args = [ListType(RealType(fp.FP32)), R, R]
-    m = Module()
-    m.add(widen, ctx=fp.FP64, arg_types=args)
-    _typecheck(m)
-    params, ret = CppCompiler().signature(widen, ctx=fp.FP64, arg_types=args)
-    assert 'double' in params[0].format(), params[0].format()
-    assert params[0].format() == ret.format()
+@fp.fpy
+def s_parameter(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """A parameter: the caller holds the same list, and the signature already
+    committed to its element type, so neither side can move."""
+    with fp.FP64:
+        if c > 0:
+            return xs
+        else:
+            return [y]
 
 
 @fp.fpy
-def p_alias(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
-    """`ys = xs` binds `const auto&`."""
+def s_alias(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+    """`ys = xs` binds `const auto&`, so `ys` has no buffer of its own."""
     with fp.FP64:
         ys = xs
         if c > 0:
@@ -411,7 +391,7 @@ def p_alias(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
 
 
 @fp.fpy
-def p_projection(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+def s_projection(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Real]:
     """`row = xss[0]` binds `const auto&` to a slot."""
     with fp.FP64:
         row = xss[0]
@@ -422,7 +402,7 @@ def p_projection(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Re
 
 
 @fp.fpy
-def p_loop_target(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+def s_loop_target(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Real]:
     """A loop target binds `const auto&` to each element."""
     with fp.FP64:
         out = [y]
@@ -432,24 +412,31 @@ def p_loop_target(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.R
         return out
 
 
-PINNED_CASES = [
-    (p_alias, [ListType(RealType(fp.FP32)), R, R]),
-    (p_projection, [ListType(ListType(RealType(fp.FP32))), R, R]),
-    (p_loop_target, [ListType(ListType(RealType(fp.FP32))), R, R]),
+L32 = ListType(RealType(fp.FP32))
+N32 = ListType(L32)
+
+SHARED_CASES = [
+    (s_local_in_a_list, [R, R]),
+    (s_local_in_a_tuple, [R, R]),
+    (s_mixed_precision_local, [R, R]),
+    (s_parameter, [L32, R, R]),
+    (s_alias, [L32, R, R]),
+    (s_projection, [N32, R, R]),
+    (s_loop_target, [N32, R, R]),
 ]
 
 
 @pytest.mark.parametrize(
-    'func,arg_types', PINNED_CASES, ids=[f.name for f, _ in PINNED_CASES],
+    'func,arg_types', SHARED_CASES, ids=[f.name for f, _ in SHARED_CASES],
 )
-def test_a_reference_bound_name_is_not_raised(func, arg_types):
-    """A name the emitter binds as `const auto&` has no storage of its own.
+def test_a_shared_narrower_list_is_refused(func, arg_types):
+    """Refusing is the whole point: the alternative is silently unsharing.
 
-    Regression: `place_floors` raised these, so `storage_of` reported a type the
-    reference did not have.  The binding is spelled `auto`, so nothing caught it
-    -- `const auto& ys = xs;` then `return ys;` emitted `fpy::list<float>` as
-    `fpy::list<double>` and only the C++ compiler objected.  Refusing is right:
-    the reference names a shared list, and a rebuild would unshare it.
+    The last three matter most, because there the mismatch would be invisible.
+    A reference binding is spelled `const auto&`, so nothing in the emitted text
+    states its element type -- `const auto& ys = xs;` followed by `return ys;`
+    would hand back an `fpy::list<float>` as an `fpy::list<double>` and only the
+    C++ compiler would object.
     """
     m = Module()
     m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
@@ -458,11 +445,12 @@ def test_a_reference_bound_name_is_not_raised(func, arg_types):
 
 
 def test_a_callee_result_is_refused_rather_than_unshared():
-    """What raising a definition cannot reach.
+    """The refusal names the callee, since that is the only place to fix it.
 
-    `g`'s return representation is fixed by `g`'s own body, so nothing on the
-    caller's side can raise it -- and rebuilding it would copy a shared list
-    out of its aliases.  The only remaining reachable refusal.
+    `g`'s return type is fixed by `g`'s own body, so nothing on the caller's
+    side can change it, and rebuilding the result would copy a list out of its
+    aliases.  Returned straight out of the call there is no local to blame, so
+    the message has to reach for the callee's name instead.
     """
     @fp.fpy
     def g(zs: list[fp.Real]) -> list[fp.Real]:
@@ -472,39 +460,29 @@ def test_a_callee_result_is_refused_rather_than_unshared():
     @fp.fpy
     def f(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
         with fp.FP64:
-            ws = g(xs)
             if c > 0:
-                return ws
+                return g(xs)
             else:
                 return [y]
 
-    L32 = ListType(RealType(fp.FP32))
     m = Module()
     m.add(g, ctx=fp.FP32, arg_types=[L32])
     m.add(f, ctx=fp.FP64, arg_types=[L32, R, R])
     with pytest.raises(CppCompileError, match='is shared') as exc:
         CppCompiler().compile_module(m)
-    # Actionable: name the callee, since that is the only place it can be fixed.
     msg = str(exc.value)
     assert '`g`' in msg, msg
     assert 'element type' in msg, msg
 
 
-def test_a_called_functions_parameter_is_not_raised():
-    """Raising a parameter changes the ABI, so only an entry point may have it.
+def test_a_callees_parameter_at_a_join_is_refused():
+    """The refusal fires inside a callee too, reached through the call.
 
-    Regression: `place_floors` raised *any* parameter, including one belonging
-    to a function compiled code calls -- so the callee's signature moved out
-    from under the call site, and this emitted
-    `g(const fpy::list<double>&)` called with an `fpy::list<float>`.  It does
-    not compile, and before `place_floors` existed the same program was
-    correctly refused.
-
-    Same rule `unbox` already states for representations: a function compiled
-    code calls keeps its signature on both sides.  The caller can pass a wider
-    list instead -- `test_a_widened_parameter_is_reported_in_the_signature`
-    covers the entry-point direction, where raising *is* allowed because a
-    native caller is not bound by an existing signature.
+    A function compiled code calls keeps one signature on both sides -- the same
+    rule `unbox` states for representations -- so the callee's narrower list
+    parameter is as immovable as an entry point's.  The fix is on the caller's
+    side: pass the wider list and specialization carries the format down, which
+    `test_widening_the_call_site_is_a_real_workaround` pins.
     """
     @fp.fpy
     def g(zs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
@@ -518,7 +496,7 @@ def test_a_called_functions_parameter_is_not_raised():
             return w[0]
 
     m = Module()
-    m.add(f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP32)), R, R])
+    m.add(f, ctx=fp.FP64, arg_types=[L32, R, R])
     with pytest.raises(CppCompileError, match='is shared'):
         CppCompiler().compile_module(m)
 

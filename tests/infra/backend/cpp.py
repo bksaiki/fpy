@@ -1903,7 +1903,7 @@ def _test_generated(
         print(f'     known divergence: {note}')
     for note in refused:
         print(f'     not compared: {note}')
-    # A `-k` run tests a subset on purpose, so the floors do not apply.
+    # A `-k` run tests a subset on purpose, so the minimums below do not apply.
     if _select is not None:
         return failures
     if stats.get('nonempty', 0) < 200:
