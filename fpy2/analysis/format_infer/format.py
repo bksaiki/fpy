@@ -55,6 +55,7 @@ class AbstractFormat:
     - `has_pos_inf`: whether `+inf` is a representable value
     - `has_neg_inf`: whether `-inf` is a representable value
     - `has_nan`: whether `NaN` is a representable value
+    - `has_neg_zero`: whether `-0.0` is a representable value
 
     A special-value flag is independent of the corresponding bound: e.g.
     `pos_bound = inf` means the finite grid is unbounded, not that `+inf` is a
@@ -68,6 +69,7 @@ class AbstractFormat:
     has_pos_inf: bool
     has_neg_inf: bool
     has_nan: bool
+    has_neg_zero: bool
 
     def __init__(
         self,
@@ -79,6 +81,7 @@ class AbstractFormat:
         has_pos_inf: bool = False,
         has_neg_inf: bool = False,
         has_nan: bool = False,
+        has_neg_zero: bool = False,
     ):
         if prec <= 0:
             raise ValueError("`prec` must be positive.")
@@ -90,11 +93,12 @@ class AbstractFormat:
         self.has_pos_inf = has_pos_inf
         self.has_neg_inf = has_neg_inf
         self.has_nan = has_nan
+        self.has_neg_zero = has_neg_zero
 
     def __hash__(self):
         return hash((
             self.prec, self.exp, self.pos_bound, self.neg_bound,
-            self.has_pos_inf, self.has_neg_inf, self.has_nan,
+            self.has_pos_inf, self.has_neg_inf, self.has_nan, self.has_neg_zero,
         ))
 
     def __eq__(self, other):
@@ -107,6 +111,7 @@ class AbstractFormat:
             and self.has_pos_inf == other.has_pos_inf
             and self.has_neg_inf == other.has_neg_inf
             and self.has_nan == other.has_nan
+            and self.has_neg_zero == other.has_neg_zero
         )
 
     def __str__(self) -> str:
@@ -115,6 +120,7 @@ class AbstractFormat:
                 (self.has_pos_inf, '+inf'),
                 (self.has_neg_inf, '-inf'),
                 (self.has_nan, 'nan'),
+                (self.has_neg_zero, '-0'),
             ) if flag
         )
         base = f'A({self.prec}, {self.exp}, +{self.pos_bound}, {self.neg_bound}'
@@ -125,10 +131,27 @@ class AbstractFormat:
         return AbstractFormat(
             self.prec, self.exp, self.pos_bound, neg_bound=self.neg_bound,
             has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+            has_neg_zero=self.has_neg_zero,
         )
 
     def __neg__(self) -> 'AbstractFormat':
-        """Negation of the format (swaps positive and negative bounds)."""
+        """Negation of the format (swaps positive and negative bounds).
+
+        ``has_neg_zero`` is deliberately **not** derived here yet, and the same
+        goes for :meth:`__add__`, :meth:`__sub__` and :meth:`__mul__`.  The
+        correct rule is not a flag swap: negation yields a ``-0.0`` exactly when
+        the operand contains a ``+0.0``, and since ``pos_bound >= 0 >=
+        neg_bound`` holds by convention, every operand does.  A conservative
+        ``True`` here would therefore mark every arithmetic result as holding a
+        negative zero and collapse integer storage wholesale, so the rule needs
+        to be derived per operator against real measurement rather than assumed.
+
+        Leaving it ``False`` reproduces today's behaviour exactly: the flag is an
+        extra containment *requirement*, so under-reporting it accepts the same
+        storages as before rather than a narrower one.  Concretely, ``-z`` on an
+        integer-bounded ``z`` still selects an integer and still drops the sign;
+        that case is unfixed, not newly broken.
+        """
         # negation maps +inf <-> -inf; NaN is unsigned so it is preserved
         return AbstractFormat(
             self.prec, self.exp, -self.neg_bound, neg_bound=-self.pos_bound,
@@ -338,10 +361,32 @@ class AbstractFormat:
         Callers should gate with ``isinstance(fmt, AbstractableFormat)``.
 
         Special-value membership is derived by probing *fmt*'s
-        :meth:`representable_in` with each signed infinity and NaN.  Probing
-        ``+inf``/``-inf`` separately captures per-sign asymmetry a single
-        ``enable_inf`` flag cannot (e.g. a positive-only format has no -inf).
-        This round-trips with :meth:`format`, which sets the ``enable_*`` flags.
+        :meth:`representable_in` with each signed infinity, NaN, and a negative
+        zero.  Probing ``+inf``/``-inf`` separately captures per-sign asymmetry a
+        single ``enable_inf`` flag cannot (e.g. a positive-only format has no
+        -inf).  This round-trips with :meth:`format`, which sets the
+        ``enable_*`` flags.
+
+        **Carve-out: a fixed-point format reports no negative zero**, whatever
+        its ``representable_in`` says.  ``MPFixedFormat`` (which backs FPy's
+        ``INTEGER``) does hold one, but taking it at face value marks every
+        integer-valued bound as needing a signed zero — and since no ``Format``
+        has an ``enable_neg_zero``, :meth:`format` cannot materialize a
+        fixed-point format *without* one either, so an integer bound that
+        round-trips through it acquires the flag as well.  Between them, loop
+        counters and integer arithmetic all retype to ``float``.
+
+        TODO: drop the carve-out once ``MPFixedFormat`` / ``MPBFixedFormat``
+        grow an option to disable ``-0.0``.  Then integer contexts can say so
+        directly, ``format()`` becomes lossless, and the real bug behind the
+        carve-out is fixable: FPy's ``INTEGER`` genuinely has a negative zero
+        while C++ ``int64_t`` does not, so ``-z`` on an integer ``z`` returns
+        ``-0.0`` from the interpreter and ``0`` from compiled code.  Under this
+        carve-out that divergence stays as it is today.
+
+        Because a membership flag is a containment *requirement*, under-reporting
+        it only ever accepts the storages it accepted before — so the carve-out
+        costs nothing in soundness relative to today and defers precision.
         """
         # finite grid: quantum, precision, and bounds
         match fmt:
@@ -387,9 +432,14 @@ class AbstractFormat:
                 raise ValueError(f'format is not abstractable: {fmt!r}')
 
         # special values: probe the format's representable set directly.
+        # TODO: drop the carve-out once MPFixedFormat / MPBFixedFormat gain an option to disable -0.0.
         af.has_pos_inf = fmt.representable_in(Float.inf(s=False))
         af.has_neg_inf = fmt.representable_in(Float.inf(s=True))
         af.has_nan = fmt.representable_in(Float.nan())
+        af.has_neg_zero = (
+            not isinstance(fmt, MPFixedFormat | MPBFixedFormat)
+            and fmt.representable_in(Float(s=True, exp=0, c=0))
+        )
         return af
 
     def format(self) -> Format:
@@ -490,7 +540,16 @@ class AbstractFormat:
              other's subnormal region (pos_bound <= 2^(other.exp + other.prec)), in which case
              the floating-point precision of other is irrelevant — all values fit exactly.
           4. Special values: every special value in self must also be in other
-             (a member of self that other lacks breaks containment).
+             (a member of self that other lacks breaks containment).  This
+             includes ``-0.0``, which conditions 1-3 cannot see: they compare
+             ``RealFloat`` bounds by magnitude, so the two zeros are
+             indistinguishable there.
+
+        Adding a membership implication only ever *removes* containments, so a
+        flag that under-reports costs precision rather than soundness.  The
+        arithmetic operators do not yet derive ``has_neg_zero`` for their
+        results, which is exactly such an under-report; see the note on
+        :meth:`__neg__`.
         """
 
         # 4. special values — each is a cheap membership implication
@@ -499,6 +558,8 @@ class AbstractFormat:
         if self.has_neg_inf and not other.has_neg_inf:
             return False
         if self.has_nan and not other.has_nan:
+            return False
+        if self.has_neg_zero and not other.has_neg_zero:
             return False
 
         # 1. quantum

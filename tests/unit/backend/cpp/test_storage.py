@@ -68,6 +68,41 @@ class TestStorageScalar:
         unbounded_int = MPFixedFormat(nmin=-1)
         assert choose_storage_scalar(unbounded_int) == CppScalar.S64
 
+    def test_a_signed_zero_bound_does_not_narrow_to_an_integer(self):
+        """A bound carrying a ``-0.0`` selects a float, not an integer.
+
+        The ladder is built by abstracting each C++ type's own ``Format``, so
+        the integer rungs report ``has_neg_zero=False`` and containment rejects
+        them.  Without that, the narrowest type containing "a zero" is
+        ``uint8_t``, which holds the integer 0 and neither sign — the mechanism
+        behind every signed-zero wrong answer in
+        ``docs/todos/reals-in-integer-storage.md``.
+        """
+        from fpy2.analysis.format_infer.format import AbstractFormat
+        pz = fp.RealFloat(s=False, exp=0, c=0)
+        nz = fp.RealFloat(s=True, exp=0, c=0)
+        neg = AbstractFormat(1, 0, pz, neg_bound=nz, has_neg_zero=True)
+        assert choose_storage_scalar(neg.format()) == CppScalar.F32
+
+    def test_a_range_counter_keeps_an_integer_storage(self):
+        """The shape ``_range_counter_scalar`` builds, via ``.format()``.
+
+        A counter is an integer and never a ``-0.0``, but it reaches the ladder
+        as a materialized fixed-point format — and no ``Format`` can say "no
+        negative zero".  Only the carve-out in ``AbstractFormat.from_format``
+        keeps this an integer; without it every loop counter becomes ``float``.
+        """
+        from fpy2.analysis.format_infer.format import AbstractFormat
+        counter = AbstractFormat(float('inf'), 0, fp.RealFloat.from_int(10))
+        assert choose_storage_scalar(counter.format()) == CppScalar.S8
+
+    def test_a_positive_zero_bound_still_narrows(self):
+        """The counterweight: ``+0.0`` is exactly the integer 0, so the
+        value-narrowing this backend relies on is untouched.  A blanket "no
+        zero narrows" rule would cost the ~20% of corpus list element types
+        that are value-narrowed."""
+        assert choose_storage(SetFormat(frozenset((Fraction(0),)))) == CppScalar.U8
+
 
 class TestStorageStructural:
     """``choose_storage`` recurses through TupleFormat / ListFormat."""

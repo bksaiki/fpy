@@ -92,6 +92,91 @@ class TestAbstractFormat():
         print(list(generate(A1.prec, Fraction(2) ** A1.exp, A1.bound)))
         print(list(generate(A2.prec, Fraction(2) ** A2.exp, A2.bound)))
 
+    # `has_neg_zero`: the one special-value flag whose value sits *inside* the
+    # finite grid.  `pos_bound >= 0 >= neg_bound` holds by convention and the
+    # bounds are compared by magnitude, so conditions 1-3 of containment cannot
+    # tell `+0.0` from `-0.0`; only this flag can.
+
+    _PZ = fp.RealFloat(s=False, exp=0, c=0)
+    _NZ = fp.RealFloat(s=True, exp=0, c=0)
+
+    def test_neg_zero_is_probed_from_the_format(self):
+        """A float format has a signed zero; a fixed one does not.
+
+        Regression target: reading it off the *bounds* instead would report
+        `True` for every format, since a bound of `-0.0` is magnitude-equal to
+        `+0.0`.
+        """
+        for ctx in (fp.FP32, fp.FP64):
+            assert AbstractFormat.from_format(ctx.format()).has_neg_zero, ctx
+        for ctx in (fp.UINT8, fp.SINT8, fp.SINT64):
+            assert not AbstractFormat.from_format(ctx.format()).has_neg_zero, ctx
+
+    def test_neg_zero_distinguishes_two_otherwise_equal_formats(self):
+        """The whole point: these differ only in the sign of their zero, and
+        every other field — including the magnitude of `neg_bound` — is equal."""
+        pos = AbstractFormat(1, 0, self._PZ, neg_bound=self._PZ)
+        neg = AbstractFormat(1, 0, self._PZ, neg_bound=self._NZ, has_neg_zero=True)
+        assert pos != neg
+        assert hash(pos) != hash(neg)
+        assert '-0' in str(neg) and '-0' not in str(pos)
+
+    def test_a_neg_zero_bound_is_not_contained_in_an_integer_format(self):
+        """Containment gains a fourth membership implication.
+
+        `uint8_t` holds the integer 0 but not a negative zero, so a bound
+        carrying one must not fit in it — this is what stops the C++ backend
+        selecting an integer storage and dropping the sign.
+        """
+        neg = AbstractFormat(1, 0, self._PZ, neg_bound=self._NZ, has_neg_zero=True)
+        for ctx in (fp.UINT8, fp.SINT8, fp.SINT64):
+            assert not (neg <= AbstractFormat.from_format(ctx.format())), ctx
+        # ...but it does fit a float, which has both zeros.
+        for ctx in (fp.FP32, fp.FP64):
+            assert neg <= AbstractFormat.from_format(ctx.format()), ctx
+
+    def test_a_positive_zero_bound_still_fits_an_integer(self):
+        """The other direction, so the implication cannot be "reject all zeros":
+        `+0.0` really is the integer 0 and keeps the narrow storage."""
+        pos = AbstractFormat(1, 0, self._PZ, neg_bound=self._PZ)
+        assert pos <= AbstractFormat.from_format(fp.UINT8.format())
+
+    def test_fixed_point_formats_are_carved_out(self):
+        """A fixed-point format reports no negative zero, whatever it says.
+
+        `MPFixedFormat` (FPy's `INTEGER`) genuinely holds one, but taking that at
+        face value marks every integer-valued bound as needing a signed zero —
+        and since no `Format` has an `enable_neg_zero`, `format()` cannot
+        materialize a fixed-point format without one either.  Between them, loop
+        counters and integer arithmetic all retype to `float`.
+
+        This test should **fail** once `MPFixedFormat`/`MPBFixedFormat` gain an
+        option to disable `-0.0`; that is the point, since the carve-out and the
+        `INTEGER`-vs-`int64_t` divergence it defers both go away together.
+        """
+        nz = fp.RealFloat(s=True, exp=0, c=0)
+        # the format itself says yes...
+        assert fp.INTEGER.format().representable_in(nz)
+        # ...but the abstraction deliberately says no.
+        assert not AbstractFormat.from_format(fp.INTEGER.format()).has_neg_zero
+        # A *float* format is unaffected by the carve-out.
+        assert AbstractFormat.from_format(fp.FP64.format()).has_neg_zero
+
+    def test_neg_zero_does_not_round_trip_through_format(self):
+        """Pins the documented asymmetry rather than leaving it to rot.
+
+        No `Format` has an `enable_neg_zero`, and every format `format()` can
+        produce admits a negative zero — so re-abstracting reports `True` even
+        where the original said `False`.  That is a sound over-approximation
+        (containment only ever gets stricter), and it does not reach the C++
+        storage ladder, which abstracts each type's own `Format` directly.
+        """
+        pos = AbstractFormat(1, 0, self._PZ, neg_bound=self._PZ)
+        assert not pos.has_neg_zero
+        assert AbstractFormat.from_format(pos.format()).has_neg_zero
+        # The ladder is unaffected: it abstracts `SINT8.format()` itself.
+        assert not AbstractFormat.from_format(fp.SINT8.format()).has_neg_zero
+
     def test_contains_examples(self):
         """Testing containment check."""
         # FP32 \subseteq FP64
