@@ -1603,9 +1603,49 @@ def _regression_replaced_slot(
         return xss[0][0] + ys[0]
 
 
+@fp.fpy
+def _regression_signed_zero_from_neg() -> fp.Real:
+    """A *statically-known* zero turned negative.
+
+    `format_infer` bounds a literal by the exact set of its values, and a
+    `Fraction` has no signed zero -- so `{0}` used to survive a negation, the
+    C++ backend stored it as `uint8_t`, and this returned `+0.0` where the
+    interpreter returns `-0.0`.
+
+    The whole family survived on coverage: `_float_bit_eq` has always
+    distinguished +0 from -0, but no program made a known zero go negative.
+    `x` is unused on purpose -- the point is that the zero is a compile-time
+    constant, which is what produces the set bound.
+    """
+    with fp.FP64:
+        z = 0.0
+        return -z
+
+
+@fp.fpy
+def _regression_signed_zero_from_mul() -> fp.Real:
+    """The same via multiplication: IEEE makes a product's zero sign the XOR of
+    the operand signs, so `0.0 * -1.0` is `-0.0`."""
+    with fp.FP64:
+        z = 0.0
+        return z * -1.0
+
+
+@fp.fpy
+def _regression_positive_zero_still_narrows() -> fp.Real:
+    """The other direction, so the fix above cannot be "widen everything":
+    `+0.0` really is the integer 0 and keeps its precise bound."""
+    with fp.FP64:
+        z = 0.0
+        return abs(z) + 0.0
+
+
 _regression_funcs: list[fp.Function] = [
     _regression_quant_dot_real_widen,
     _regression_empty_range,
+    _regression_signed_zero_from_neg,
+    _regression_signed_zero_from_mul,
+    _regression_positive_zero_still_narrows,
     _regression_calls_user_fn,
     _regression_any_bool_list,
     _regression_all_bool_list,

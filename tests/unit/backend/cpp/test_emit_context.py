@@ -315,27 +315,28 @@ class TestRealScopeLosslessWidening:
     def test_mixed_storage_widens_through_wider_ctx(self):
         """``with fp.REAL:`` over mixed-storage operands.
 
-        ``round(0.01)`` infers to an ``FP32`` bound (storage
-        ``float``) and ``round(0.0)`` infers to ``SetFormat({0})``
-        (storage ``uint8_t``).  The exact product is ``{0}`` so the
-        result also stores as ``uint8_t``, but the multiplication
-        itself can't run at ``uint8_t`` width (``float`` doesn't
-        losslessly downcast to ``uint8_t``).  The widening picks the
-        ``(float, float) → float under FP32`` sig, upcasts the
-        ``uint8_t`` operand to ``float``, then downcasts the product
-        back to ``uint8_t`` — sound because ``{0}`` fits losslessly.
+        ``round(0.01)`` infers to an ``FP32`` bound (storage ``float``);
+        ``round(0.0)`` infers to ``SetFormat({0})`` (storage ``uint8_t``).  The
+        multiplication cannot run at ``uint8_t`` width, so the widening picks
+        the ``(float, float) → float under FP32`` sig and upcasts the zero
+        operand.
+
+        The *result* is ``float``, not ``uint8_t``: ``F * {0}`` no longer infers
+        ``{0}``, because IEEE 754 makes that product ``-0.0`` for a negative
+        multiplicand and NaN for an infinite one, and neither is a value a
+        ``Fraction`` set can state.  See ``format_infer._zero_result_is_positive``.  A
+        ``uint8_t`` result was the old, unsound answer -- it is what made
+        ``0.0 * inf`` compile to ``static_cast<uint8_t>(NaN)``.
         """
         @fp.fpy(ctx=fp.FP32)
         def f() -> fp.Real:
             return fp.round(0.01) * fp.round(0.0) + fp.round(0.0)
 
         out = CppCompiler().compile(f, ctx=fp.FP32)
-        # Result format is ``SetFormat({0})`` → ``uint8_t`` storage.
-        assert 'uint8_t f(' in out
-        # The widening upcasts the zero operand to ``float`` for the
-        # multiplication, then casts the product back to ``uint8_t``.
+        assert 'float f(' in out
+        assert 'uint8_t' not in out, out
+        # The widening still upcasts the narrow zero operand for the product.
         assert 'static_cast<float>(' in out
-        assert 'static_cast<uint8_t>(' in out
 
     def test_sint8_mul_widens_to_int16(self):
         """Exact product of two ``SINT8`` operands fits in

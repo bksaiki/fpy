@@ -31,7 +31,10 @@ The analysis tracks a **format** that mirrors the basic-type structure::
   any other expression for which a number format is not meaningful.
 - :class:`SetFormat` describes an expression with a known, finite set of real
   values (e.g. a numeric literal or a join of numeric literals).  It is more
-  precise than any :class:`Format` containing all of its values.
+  precise than any :class:`Format` containing all of its values.  Its values are
+  :class:`Fraction`\\ s, which have no signed zero, so it carries the invariant
+  that ``Fraction(0)`` means exactly ``+0.0``; anything that could produce a
+  ``-0.0`` reports a :class:`Format` instead (see :func:`_zero_result_is_positive`).
 - A scalar :class:`Format` (e.g. ``IEEEFormat(es=8, nbits=32)``) describes a
   real-valued expression.  ``REAL_FORMAT`` is the **scalar top** — unrestricted
   real values (the format is unknown or unconstrained).
@@ -209,7 +212,12 @@ def _free_var_format(val: object) -> 'FormatBound':
         case Fraction():
             return SetFormat.from_value(val)
         case Float():
-            return SetFormat.from_value(val.as_rational()) if val.is_finite() else None
+            # A negative zero is finite but not statable as a `Fraction`, so it
+            # gets no set bound either -- see :func:`_zero_result_is_positive` for the
+            # invariant, and :func:`_literal_bound` for the written-out case.
+            if not val.is_finite() or (val.is_zero() and val.s):
+                return None
+            return SetFormat.from_value(val.as_rational())
         case RealFloat():
             return SetFormat.from_value(Fraction(val))
         case int() | float():
@@ -471,8 +479,62 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
 
+def _zero_result_is_positive(
+    op: Callable[..., Any], *operands: Fraction,
+) -> bool:
+    """For an application of *op* over *operands* whose exact result is zero:
+    is that zero provably ``+0.0``?
+
+    **The invariant this exists to maintain:** ``Fraction(0)`` in a
+    :class:`SetFormat` means exactly ``+0.0``.  A ``Fraction`` has no signed
+    zero, so a set cannot say which zero it holds — and consumers read it
+    literally.  The C++ backend picks the narrowest type containing ``{0}``,
+    which is ``uint8_t``, and an integer holds neither sign.  So an operation
+    that may have produced a ``-0.0`` reports a :class:`Format` instead of a
+    set: sound, and it costs only precision, because the caller then falls back
+    to the active scope's format (:meth:`_bound_if_fits` → :meth:`_op_bound`),
+    which contains the value whichever zero it is.
+
+    The verdict is per *application*, not per result value: the sign of a zero
+    is a property of the operands that produced it, not of the zero sitting in
+    the result set.
+
+    Every ``Fraction(0)`` *operand* is therefore a ``+0.0``, which leaves only
+    IEEE 754 §6.3 to read:
+
+    - **product**: the sign is the XOR of the operand signs, in every rounding
+      mode.  So a zero product is ``+0.0`` exactly when neither operand is
+      negative.
+    - **sum**: when the operands have the same sign, so does the result.  Both
+      operands zero means both are ``+0.0``, hence ``+0.0``.  Otherwise the
+      operands are opposite-signed and the exact sum is zero, which §6.3 makes
+      ``+0.0`` in every mode *except* ``roundTowardNegative`` — and this
+      function does not know the mode.
+    - **difference**: ``a - b`` is ``a + (-b)``, so a zero result always comes
+      from opposite-signed addends — mode-dependent, including ``0 - 0``.
+    - **absolute value**: never negative, so a zero result is ``+0.0``.
+    - **negation**: a zero result means a zero operand, i.e. ``+0.0``, so the
+      result is ``-0.0``.  Never positive.
+    """
+    if op is abs:
+        return True
+    if op is operator.mul:
+        return all(v >= 0 for v in operands)
+    if op is operator.add:
+        return all(v == 0 for v in operands)
+    return False
+
+
 def _is_zero_set(f: 'FormatBound') -> bool:
-    """``f`` is the precise singleton ``{0}``."""
+    """``f`` is the precise singleton ``{0}`` — and therefore exactly ``+0.0``.
+
+    Callers use this to apply algebraic identities that hold for ``+0.0`` and
+    not for ``-0.0``, so reading the sign off the set is load-bearing.  It is
+    sound because of :func:`_zero_result_is_positive`: every operation that could produce
+    the other zero declines to produce a set, so a ``SetFormat`` containing
+    ``Fraction(0)`` can only have come from a value that really is ``+0.0``
+    (a literal, a range, or a join of those).
+    """
     return isinstance(f, SetFormat) and f.values == _ZERO_SET.values
 
 
@@ -518,7 +580,18 @@ def exact_binop(
     ):
         return None
     if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
-        result = frozenset(op(va, vb) for va in lhs.values for vb in rhs.values)
+        values: set[Fraction] = set()
+        for va in lhs.values:
+            for vb in rhs.values:
+                r = op(va, vb)
+                if r == 0 and not _zero_result_is_positive(op, va, vb):
+                    # May be a `-0.0`; see :func:`_zero_result_is_positive`.
+                    # Ahead of the cap, because collapsing to an AbstractFormat
+                    # would not rescue it — one bounded by zero on both sides
+                    # says the same unstatable thing a `{0}` set does.
+                    return None
+                values.add(r)
+        result = frozenset(values)
         if cap is not None and len(result) > cap:
             # collapse an over-large set to its covering AbstractFormat
             return _setformat_to_abstract(SetFormat(result))
@@ -526,17 +599,15 @@ def exact_binop(
     lhs_zero = _is_zero_set(lhs)
     rhs_zero = _is_zero_set(rhs)
     if op is operator.mul and (lhs_zero or rhs_zero):
-        # UNSOUND, and knowingly so: in IEEE-754 `0 * x` is NaN when *x* is an
-        # infinity or a NaN, and `-0.0` when *x* is negative.  Kept because a
-        # recomputed abstract product is degenerate and drives a later add/sub's
-        # `prec` to 0 (`test_exact_binop_mul_by_zero_set_stays_set`).
+        # `0 * x` is not `{0}`: IEEE-754 gives NaN for an infinite or NaN *x*
+        # and `-0.0` for a negative *x*.  The other operand is a `Format` here
+        # — the set/set case returned above — and a float format admits all
+        # three, so none of them can be ruled out.
         #
-        # A consumer must not read `{0}` as "an integer can hold this".  The C++
-        # backend currently does, so `0.0 * inf` compiles to
-        # `static_cast<uint8_t>(NaN)` and returns 0 -- see
-        # `docs/todos/reals-in-integer-storage.md` for why the fix has to be
-        # uniform rather than a guard here.
-        return _ZERO_SET
+        # Widen rather than falling through to the abstract path: `{0}` lifts to
+        # an AbstractFormat bounded by zero on both sides, whose product drives
+        # a later add/sub's `prec` to 0.
+        return None
     if op is operator.add:
         if lhs_zero:
             return rhs if isinstance(rhs, SetFormat) else _to_abstract(rhs)
@@ -563,7 +634,14 @@ def exact_unop(
     if not isinstance(arg, AbstractableFormatBound):
         return None
     if isinstance(arg, SetFormat):
-        return SetFormat(frozenset(op(v) for v in arg.values))
+        values: set[Fraction] = set()
+        for v in arg.values:
+            r = op(v)
+            if r == 0 and not _zero_result_is_positive(op, v):
+                # `neg(+0.0)` is `-0.0`, which a `Fraction` set cannot state.
+                return None
+            values.add(r)
+        return SetFormat(frozenset(values))
     af = _to_abstract(arg)
     if af is None:
         return None
@@ -680,6 +758,12 @@ def _literal_bound(e) -> FormatBound:
     instead — less precise, but true.  Every binary floating-point format has a
     signed zero, so ``FP32`` is a true bound for one; it is picked as a small
     widely-supported format, and nothing here depends on which.
+
+    This is the written-out case of the invariant :func:`_zero_result_is_positive`
+    maintains for computed values: a ``SetFormat`` never holds a negative zero,
+    so ``Fraction(0)`` in one always means ``+0.0``.  Here the bound must be
+    *some* format (a literal has no scope to fall back to), which is why this
+    names one rather than returning ``None``.
 
     The discriminator is the literal's **value**, not the type ``as_real``
     happens to return.  ``as_real`` returns a :class:`Float` only for a signed

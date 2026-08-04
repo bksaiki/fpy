@@ -1459,18 +1459,119 @@ class TestFormatInfer:
         assert pos_info.fn_fmt.ret_fmt == SetFormat.from_value(Fraction(0)), \
             pos_info.fn_fmt.ret_fmt
 
-    def test_exact_binop_mul_by_zero_set_stays_set(self):
-        """``Mul(loose_format, SetFormat({0}))`` short-circuits to
-        ``SetFormat({0})`` rather than producing a degenerate
-        zero-bounded ``AbstractFormat`` whose subsequent ``add``/``sub``
-        drives ``prec`` to 0.
+    # ``Fraction(0)`` in a ``SetFormat`` means exactly ``+0.0`` -- a ``Fraction``
+    # has no signed zero, and consumers read the set literally (the C++ backend
+    # picks ``uint8_t`` for ``{0}``, which holds neither sign).  So every
+    # operation that may have produced a ``-0.0`` must answer with a format
+    # instead.  See ``format_infer._zero_result_is_positive``.
+
+    def test_neg_of_a_zero_set_does_not_stay_a_set(self):
+        """``-(+0.0)`` is ``-0.0``, but ``-Fraction(0) == Fraction(0)``.
+
+        This was a live wrong answer: `z = 0.0; return -z` inferred ``{0}``,
+        stored as ``uint8_t``, and the emitted C++ returned ``+0.0`` where the
+        interpreter returns ``-0.0``.
+        """
+        from fpy2.analysis.format_infer.analysis import exact_unop
+        import operator
+        zero = SetFormat(frozenset((Fraction(0),)))
+        assert exact_unop(zero, operator.neg) is None
+        # A set with no zero in it negates exactly, as before.
+        assert exact_unop(SetFormat(frozenset((Fraction(2),))), operator.neg) \
+            == SetFormat(frozenset((Fraction(-2),)))
+
+    def test_abs_of_a_zero_set_stays_a_set(self):
+        """``abs`` can never produce a negative zero, so it keeps its
+        precision -- the widening is targeted, not blanket."""
+        from fpy2.analysis.format_infer.analysis import exact_unop
+        zero = SetFormat(frozenset((Fraction(0),)))
+        assert exact_unop(zero, abs) == zero
+
+    def test_mul_to_zero_follows_the_ieee_sign_rule(self):
+        """IEEE 754 §6.3: a product's zero sign is the XOR of the operand
+        signs, in every rounding mode.  So the set path can keep ``{0}`` when
+        neither operand is negative, and must widen when one is."""
+        from fpy2.analysis.format_infer.analysis import exact_binop
+        import operator
+        zero = SetFormat(frozenset((Fraction(0),)))
+        pos = SetFormat(frozenset((Fraction(2),)))
+        neg = SetFormat(frozenset((Fraction(-2),)))
+        assert exact_binop(zero, pos, operator.mul) == zero
+        assert exact_binop(zero, neg, operator.mul) is None   # -0.0
+        assert exact_binop(neg, zero, operator.mul) is None   # -0.0
+
+    def test_add_and_sub_to_zero_follow_the_ieee_sign_rule(self):
+        """An exactly-zero sum of *opposite-signed* operands is ``+0.0`` in
+        every rounding mode except ``roundTowardNegative``.  ``exact_binop``
+        does not know the mode, so it can only keep ``{0}`` where both addends
+        are themselves ``+0.0``.  A difference always has opposite-signed
+        addends (``a - b`` is ``a + (-b)``), so a zero difference always
+        widens -- including ``0 - 0``."""
+        from fpy2.analysis.format_infer.analysis import exact_binop
+        import operator
+        zero = SetFormat(frozenset((Fraction(0),)))
+        one = SetFormat(frozenset((Fraction(1),)))
+        neg_one = SetFormat(frozenset((Fraction(-1),)))
+        assert exact_binop(zero, zero, operator.add) == zero
+        assert exact_binop(one, neg_one, operator.add) is None
+        assert exact_binop(one, one, operator.sub) is None
+        assert exact_binop(zero, zero, operator.sub) is None
+        # A non-zero result is unaffected either way.
+        assert exact_binop(one, one, operator.add) \
+            == SetFormat(frozenset((Fraction(2),)))
+
+    def test_an_accumulator_starting_at_zero_keeps_its_set(self):
+        """Regression against over-widening.
+
+        ``acc = 0`` then ``acc += i`` puts a zero in every intermediate set, so
+        a rule keyed on "the result contains zero" widens the whole
+        accumulation.  The rule is keyed on the *operands* that produced each
+        zero instead: here the only zero comes from ``0 + 0``, which IEEE makes
+        ``+0.0`` in every mode.
+        """
+        @fp.fpy
+        def f():
+            with fp.REAL:
+                acc = 0
+                for i in range(10):
+                    acc += i
+                return acc
+
+        info = FormatInfer.analyze(f.ast, set_format_threshold=256)
+        acc = self._last_acc(info)
+        assert isinstance(acc, SetFormat), acc
+        assert Fraction(0) in acc.values, acc
+
+    def test_a_negative_zero_free_variable_gets_no_set_bound(self):
+        """A captured ``-0.0`` is finite, so the old code gave it
+        ``SetFormat({0})`` via ``as_rational`` -- same lie as the literal."""
+        from fpy2.analysis.format_infer.analysis import _free_var_format
+        from fpy2.number import Float
+        assert _free_var_format(Float(s=True, exp=0, c=0)) is None
+        # A `+0.0` capture is exactly the integer 0 and keeps its singleton.
+        assert _free_var_format(Float(s=False, exp=0, c=0)) \
+            == SetFormat(frozenset((Fraction(0),)))
+
+    def test_exact_binop_mul_by_zero_format_widens(self):
+        """``Mul(loose_format, SetFormat({0}))`` must not answer ``{0}``.
+
+        IEEE 754 makes ``0 * x`` a NaN for an infinite or NaN *x* and ``-0.0``
+        for a negative *x*.  An ``FP32`` bound admits all three, so none can be
+        ruled out -- and a ``Fraction`` set can state none of them.  ``{0}`` was
+        the old answer, and it is what made ``0.0 * inf`` compile to
+        ``static_cast<uint8_t>(NaN)``.
+
+        ``None`` specifically, rather than falling through to the abstract path:
+        ``{0}`` lifts to an ``AbstractFormat`` bounded by zero on both sides,
+        whose product drives a later ``add``/``sub``'s ``prec`` to 0.  ``None``
+        makes the caller use the scope format, which is well-formed.
         """
         from fpy2.analysis.format_infer.analysis import exact_binop
         import operator
         fp32_fmt = fp.FP32.format()
         zero = SetFormat(frozenset((Fraction(0),)))
-        assert exact_binop(fp32_fmt, zero, operator.mul) == zero
-        assert exact_binop(zero, fp32_fmt, operator.mul) == zero
+        assert exact_binop(fp32_fmt, zero, operator.mul) is None
+        assert exact_binop(zero, fp32_fmt, operator.mul) is None
 
     def test_exact_binop_add_zero_set_is_identity(self):
         """``Add(F, SetFormat({0}))`` and ``Sub(F, SetFormat({0}))``
