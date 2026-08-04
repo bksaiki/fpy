@@ -375,6 +375,7 @@ class CppCompiler(Backend):
                     format_info.by_expr,
                     format_info.fn_fmt.ret_fmt,
                     base,
+                    is_called,
                 ),
             )
         except StorageSelectionError as e:

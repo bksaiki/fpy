@@ -490,6 +490,39 @@ def test_a_callee_result_is_refused_rather_than_unshared():
     assert 'element type' in msg, msg
 
 
+def test_a_called_functions_parameter_is_not_raised():
+    """Raising a parameter changes the ABI, so only an entry point may have it.
+
+    Regression: `place_floors` raised *any* parameter, including one belonging
+    to a function compiled code calls -- so the callee's signature moved out
+    from under the call site, and this emitted
+    `g(const fpy::list<double>&)` called with an `fpy::list<float>`.  It does
+    not compile, and before `place_floors` existed the same program was
+    correctly refused.
+
+    Same rule `unbox` already states for representations: a function compiled
+    code calls keeps its signature on both sides.  The caller can pass a wider
+    list instead -- `test_a_widened_parameter_is_reported_in_the_signature`
+    covers the entry-point direction, where raising *is* allowed because a
+    native caller is not bound by an existing signature.
+    """
+    @fp.fpy
+    def g(zs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
+        with fp.FP64:
+            return zs if c > 0 else [y]
+
+    @fp.fpy
+    def f(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> fp.Real:
+        with fp.FP64:
+            w = g(xs, c, y)
+            return w[0]
+
+    m = Module()
+    m.add(f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP32)), R, R])
+    with pytest.raises(CppCompileError, match='is shared'):
+        CppCompiler().compile_module(m)
+
+
 @fp.fpy
 def m_tuple_with_list_via_a_local(y: fp.Real):
     """A tuple holding a list, bound to a local before being returned."""
@@ -528,6 +561,9 @@ def test_a_declaration_agrees_with_what_is_handed_through_it():
     # a handle would be a pointless allocation.
     assert 'fpy::list' not in body, body
     assert 'make_shared' not in body, body
+
+
+def test_widening_the_call_site_is_a_real_workaround():
     """The escape hatch the refusal above recommends, pinned.
 
     A callee's formats already follow its call site, so passing the wider list

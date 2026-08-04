@@ -537,7 +537,10 @@ class CppEmitter(Visitor):
             self.unbox.alias.region_of(d), storage,
         )
 
-    def _foreach_decl(self, target_def, name: str) -> str:
+    def _foreach_decl(
+        self, target_def, name: str,
+        *, elt: CppType | None = None, at: Expr | None = None,
+    ) -> str:
         """Loop-variable declaration for a range-for over a container.
 
         Same rule as :meth:`_arg_decl`: an element that is never rebound binds
@@ -545,10 +548,16 @@ class CppEmitter(Visitor):
         iteration.  Writing ``row[i] = e`` through it still reaches the
         container.  ``target_def is None`` marks a discarded element — always
         read-only, and ``const auto&`` lets the type deduce.
+
+        *elt* is the container's element type when the caller knows it.  The
+        target reads that element, so the two have to agree — there is nowhere
+        in a range-for to put a conversion.
         """
         if target_def is None:
             return f'const auto& {name}'
         storage = self.storage.storage_of(target_def)
+        if elt is not None and at is not None:
+            self._require_bridgeable(elt, storage, at)
         if binds_by_reference(self.storage, self.def_use, target_def):
             # same rule as `_arg_decl`
             if self._writes_through(target_def, storage):
@@ -569,11 +578,37 @@ class CppEmitter(Visitor):
 
         Still worth it for a tuple, where a copy is O(size).
         """
+        return self._binds_reference(target_def)
+
+    def _reference_source(self, d) -> 'Expr | None':
+        """The initializer *d*'s C++ name deduces its type from, if any.
+
+        Asked of the whole storage class, not of *d*.  A use resolves to the
+        latest def, and ``xs[i] = e`` makes a fresh one that is unioned with its
+        ``prev`` — so a name declared as ``const auto& L3 = N2[1]`` and then
+        written through is *read* through an ``IndexedAssign``-sited def whose own
+        site says nothing about the binding.  One member of the class carries the
+        declaration, and that is the one whose initializer fixed the type.
+        """
+        cls = self.storage.def_class[d]
+        for m in self.storage.class_members[cls]:
+            if isinstance(m.site, Assign) and self._binds_reference(m):
+                return m.site.expr
+        return None
+
+    def _binds_reference(self, d) -> bool:
+        """Whether the emitter binds *d*'s name as a reference.
+
+        The single answer for the question, because two callers need the *same*
+        one: this decides what to emit, and :meth:`_storage_or_none` decides what
+        the emitted name's type therefore is.  Answering differently in the two
+        places means the guard compares against a type the code does not have.
+        """
         return binds_by_reference(
-            self.storage, self.def_use, target_def,
+            self.storage, self.def_use, d,
             allow_projection=(
                 self.unbox is not None
-                and self.unbox.may_reference_projection(target_def)
+                and self.unbox.may_reference_projection(d)
             ),
         )
 
@@ -597,6 +632,8 @@ class CppEmitter(Visitor):
         binding: TupleBinding,
         src: str,
         site,
+        src_ty: CppType | None = None,
+        at: Expr | None = None,
     ) -> None:
         """Emit destructuring assigns extracting each element of
         *binding* from the tuple-valued local *src*.  The SSA defs
@@ -610,13 +647,26 @@ class CppEmitter(Visitor):
                     continue
                 case NamedId():
                     access = f'std::get<{i}>({src})'
+                    # The name is declared at its own storage but initialized
+                    # from the tuple's field, and there is no room for a
+                    # conversion between the two.
+                    if isinstance(src_ty, CppTuple) and i < len(src_ty.elts) and at is not None:
+                        d = self.def_use.find_def_from_site(elt, site)
+                        self._require_bridgeable(
+                            src_ty.elts[i], self.storage.storage_of(d), at,
+                        )
                     self._emit_bind(elt, site, access)
                 case TupleBinding():
                     access = f'std::get<{i}>({src})'
                     sub_tmp = self._fresh_temp()
                     # read-only (destructured) -> reference, no copy
                     self.writer.add_line(f'auto&& {sub_tmp} = {access};')
-                    self._destructure(elt, sub_tmp, site)
+                    sub_ty = (
+                        src_ty.elts[i]
+                        if isinstance(src_ty, CppTuple) and i < len(src_ty.elts)
+                        else None
+                    )
+                    self._destructure(elt, sub_tmp, site, sub_ty, at)
                 case _:
                     raise CppEmitError(
                         f'unsupported tuple-binding element {elt!r}',
@@ -799,7 +849,10 @@ class CppEmitter(Visitor):
                 tmp = self._fresh_temp()
                 # read-only (destructured) -> reference, no copy
                 self.writer.add_line(f'auto&& {tmp} = {rhs};')
-                self._destructure(stmt.target, tmp, stmt)
+                self._destructure(
+                    stmt.target, tmp, stmt,
+                    self._storage_or_none(stmt.expr), stmt.expr,
+                )
             case _:
                 raise CppEmitError(
                     f'unsupported assignment target {stmt.target!r}',
@@ -827,13 +880,13 @@ class CppEmitter(Visitor):
             return self._visit_expr(e, ctx)
         match e:
             case ListExpr() if isinstance(want, CppList):
-                parts = [self._emit_braced(elt, want.elt, ctx) for elt in e.elts]
+                parts = [self._emit_deduced(elt, want.elt, ctx) for elt in e.elts]
                 return self._list_new_init(want, parts)
             case TupleExpr() if (
                 isinstance(want, CppTuple) and len(want.elts) == len(e.elts)
             ):
                 parts = [
-                    self._emit_at(elt, w, ctx)
+                    self._emit_deduced(elt, w, ctx)
                     for elt, w in zip(e.elts, want.elts)
                 ]
                 return f'std::make_tuple({", ".join(parts)})'
@@ -850,12 +903,15 @@ class CppEmitter(Visitor):
             return emitted
         return self._convert_storage(emitted, src, want, at=e)
 
-    def _emit_braced(self, e: Expr, want: CppType, ctx) -> str:
-        """:meth:`_emit_at`, for an element of a braced initializer.
+    def _emit_deduced(self, e: Expr, want: CppType, ctx) -> str:
+        """:meth:`_emit_at` where C++ takes the type *from the argument*.
 
-        A braced init forbids a narrowing conversion, so a scalar element's
-        cast has to be spelled even though the same conversion would be
-        implicit anywhere else.
+        A braced initializer and ``std::make_tuple`` both do: the first rejects
+        a narrowing conversion outright, and the second silently deduces a
+        different type — ``std::make_tuple(a, b)`` with a ``float`` ``a`` builds
+        a ``std::tuple<float, double>`` that the surrounding declaration then
+        will not accept.  Either way the scalar's cast has to be spelled, even
+        though the same conversion is implicit anywhere else.
         """
         code = self._emit_at(e, want, ctx)
         if isinstance(want, CppScalar):
@@ -889,14 +945,18 @@ class CppEmitter(Visitor):
         definition -- so a narrower one flowing into a wider place arrives here
         and is converted.
 
-        Scalars convert implicitly, and so does a ``std::tuple`` whose fields
-        do.  ``std::vector`` does not, so a list is rebuilt element-wise.
+        A scalar is cast: ``std::make_tuple`` below deduces its type from the
+        argument, so leaving the conversion implicit rebuilds the tuple at the
+        type it already had.  ``std::vector`` has no converting constructor
+        either, so a list is rebuilt element-wise.
         """
         if src == want:
             return code
+        if isinstance(src, CppScalar) and isinstance(want, CppScalar):
+            return self._explicit_cast(code, want)
         if isinstance(src, CppTuple) and isinstance(want, CppTuple):
             if len(src.elts) != len(want.elts):
-                return code
+                raise self._refuse_mismatch(src, want, at)
             base = self._bind_operand(code)
             fields = [
                 self._convert_storage(f'std::get<{i}>({base})', s, w, at=at)
@@ -904,7 +964,10 @@ class CppEmitter(Visitor):
             ]
             return f'std::make_tuple({", ".join(fields)})'
         if not (isinstance(src, CppList) and isinstance(want, CppList)):
-            return code
+            # Nothing bridges these, so handing the code back unchanged would
+            # emit a type error inside generated C++ -- the worst place for a
+            # user to meet one.  Refuse here instead.
+            raise self._refuse_mismatch(src, want, at)
         if src.boxed:
             # A rebuilt list is a different object, and a handle exists exactly
             # so that FPy's aliasing survives.  Unsharing it here would be
@@ -917,6 +980,39 @@ class CppEmitter(Visitor):
             return code
         # A value has no aliases to lose, so giving it a handle is free.
         return f'std::make_shared<{unboxed.format()}>({code})'
+
+    def _refuse_mismatch(
+        self, src: CppType, want: CppType, at: Expr,
+    ) -> CppEmitError:
+        """One place wants two types and nothing in C++ bridges them.
+
+        Reached where a *representation* decision could not be reconciled --
+        distinct ``std::vector`` instantiations are unrelated types, and so are a
+        vector and a handle.  A limitation in the compiler is acceptable;
+        emitting C++ that does not compile is not, so this refuses rather than
+        letting the mismatch reach the C++ compiler.
+        """
+        return CppEmitError(
+            f'unsupported: this value is `{src.format()}` where '
+            f'`{want.format()}` is needed, and C++ has no conversion between '
+            f'them.  Keeping the two formats the same at this point avoids it.',
+            at=at,
+        )
+
+    def _require_bridgeable(
+        self, src: CppType | None, want: CppType | None, at: Expr,
+    ) -> None:
+        """Refuse unless *src* can reach *want*, for a site that cannot convert.
+
+        A slot store, a loop target and a destructured field all take their type
+        from something else, so the emitter has nowhere to put a conversion --
+        the only options are agreement or a refusal.
+        """
+        if src is None or want is None or src == want:
+            return
+        if isinstance(src, CppScalar) and isinstance(want, CppScalar):
+            return                # C++ converts these
+        raise self._refuse_mismatch(src, want, at)
 
     def _refuse_unsharing(
         self, src: CppList, want: CppList, at: Expr,
@@ -1004,8 +1100,22 @@ class CppEmitter(Visitor):
         """
         if isinstance(e, Var):
             d = self.def_use.find_def_from_use(e)
+            # A name the emitter binds as `const auto&` has the type C++
+            # *deduced* from its initializer, not the one `storage_of` chose --
+            # so follow the alias.  Missing this is how `[L3, L3]` came to hold
+            # a `fpy::list<uint8_t>` in a `std::vector<fpy::list<float>>`.
+            src = self._reference_source(d)
+            if src is not None:
+                return self._storage_or_none(src)
             ty = self.storage.storage_of(d)
             return ty if self.unbox is None else self.unbox.annotate(e, ty)
+        if isinstance(e, ListRef):
+            # ``xss[i]`` reads a *declared* element, so peel the container's
+            # declaration rather than asking ``by_expr`` -- which answers from
+            # the format, and can name a type the container does not hold.
+            base = self._storage_or_none(e.value)
+            if isinstance(base, CppList):
+                return base.elt
         try:
             return self._storage_for_expr(e)
         except CppEmitError:
@@ -2401,10 +2511,16 @@ class CppEmitter(Visitor):
             # An overflowing literal is a value the target format does have,
             # but ``HUGE_VAL``/``NAN`` are a separate spelling; leave it.
             return None
-        v = rounded.as_rational()
-        if _as_exact_double(v) is None:
-            return None
-        lit = self._emit_numeric_literal(v, at=e)
+        if rounded.is_zero() and rounded.s:
+            # Underflow to *negative* zero.  It has to be spelled here: a
+            # `Fraction` has no signed zero, so going through `as_rational`
+            # below would emit `0` and turn `x / -0.0` from -inf into +inf.
+            lit = '-0.0'
+        else:
+            v = rounded.as_rational()
+            if _as_exact_double(v) is None:
+                return None
+            lit = self._emit_numeric_literal(v, at=e)
         # The literal prints as a ``double``.  A narrower target still needs
         # its cast, but not a rounding one: the value is already in that
         # format, so no mode can change it.
@@ -2504,9 +2620,14 @@ class CppEmitter(Visitor):
         """
         if want is None or self.unbox is None:
             return emitted
-        have = self._storage_for_expr(e)
+        have = self._storage_or_none(e)
         if not (isinstance(have, CppList) and isinstance(want, CppList)):
+            self._require_bridgeable(have, want, e)
             return emitted
+        if have.elt != want.elt:
+            # The callee declared a different element type; nothing at the call
+            # site can bridge two `std::vector` instantiations.
+            raise self._refuse_mismatch(have, want, e)
         if have.boxed == want.boxed:
             return emitted
         if not have.boxed:
@@ -2638,7 +2759,11 @@ class CppEmitter(Visitor):
                     f'{self._list_range(iter_ty, iter_str)}) {{'
                 )
                 self.writer.indent()
-                self._destructure(target, tmp, comp_site)
+                self._destructure(
+                    target, tmp, comp_site,
+                    iter_ty.elt if isinstance(iter_ty, CppList) else None,
+                    iterable,
+                )
                 return
             case _:
                 raise CppEmitError(
@@ -2671,7 +2796,11 @@ class CppEmitter(Visitor):
             case _:
                 iter_str = self._visit_expr(iterable, ctx)
                 iter_ty = self._storage_for_expr(iterable)
-                decl = self._foreach_decl(loop_def, target_name)
+                decl = self._foreach_decl(
+                    loop_def, target_name,
+                    elt=iter_ty.elt if isinstance(iter_ty, CppList) else None,
+                    at=iterable,
+                )
                 self.writer.add_line(
                     f'for ({decl} : {self._list_range(iter_ty, iter_str)}) {{'
                 )
@@ -2762,7 +2891,12 @@ class CppEmitter(Visitor):
                 )
             chain = self._list_at(level, chain, idx)
             level = level.elt
-        rhs = self._visit_expr(stmt.expr, ctx)
+        # The slot's type comes from the container, so there is nowhere to put
+        # a conversion: the value has to already fit.
+        self._require_bridgeable(
+            self._storage_or_none(stmt.expr), level, stmt.expr,
+        )
+        rhs = self._emit_at(stmt.expr, level, ctx)
         self.writer.add_line(f'{chain} = {rhs};')
 
     def _visit_if1(self, stmt: If1Stmt, ctx):
@@ -2940,8 +3074,13 @@ class CppEmitter(Visitor):
                 # read-only aggregates — no per-element copy).
                 iter_str = self._visit_expr(stmt.iterable, ctx)
                 iter_ty = self._storage_for_expr(stmt.iterable)
+                decl = self._foreach_decl(
+                    target_def, target,
+                    elt=iter_ty.elt if isinstance(iter_ty, CppList) else None,
+                    at=stmt.iterable,
+                )
                 header = (
-                    f'for ({self._foreach_decl(target_def, target)} : '
+                    f'for ({decl} : '
                     f'{self._list_range(iter_ty, iter_str)})'
                 )
         self.writer.add_line(f'{header} {{')
@@ -2970,7 +3109,11 @@ class CppEmitter(Visitor):
         )
         self.writer.indent()
         assert isinstance(stmt.target, TupleBinding)
-        self._destructure(stmt.target, tmp, stmt)
+        self._destructure(
+            stmt.target, tmp, stmt,
+            iter_ty.elt if isinstance(iter_ty, CppList) else None,
+            stmt.iterable,
+        )
         self._visit_block(stmt.body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')

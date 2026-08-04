@@ -14,8 +14,8 @@ Two axes:
 - **Shape** -- hand-enumerated below, because a failure has to be readable.
   Adding one is a single function plus an entry in ``SHAPES``.
 - **Format** -- generated.  This is where the corpus has nothing, and it is also
-  the cheap axis: a program's formats come entirely from ``arg_types`` and
-  ``ctx``, so one source function yields eight programs.
+  the cheap axis: a program's formats come entirely from ``arg_types``, so
+  one source function yields four programs.
 
 The assertion is deliberately weak on purpose: a program may legitimately be
 *refused* (``CppEmitError``) -- a shared list cannot change element type, and
@@ -123,11 +123,10 @@ def s_two_lists_in_a_tuple(xs: list[fp.Real], c: fp.Real, y: fp.Real):
 def s_tuple_with_list_via_a_local(c: fp.Real, y: fp.Real):
     """Bound to a local first, which is the whole point.
 
-    A tuple's *declaration* comes from `unbox`'s `_read` and its *return type*
-    from `_stamp`, and only `_stamp` descends into a tuple -- so the two
-    disagree about the list field and no conversion between them exists.
-    Returned inline the two paths agree, which is why every other tuple shape
-    here compiles.
+    `unbox` used to stamp representations in two places and only one descended
+    into a tuple, so the declaration and the return type disagreed about the
+    list field.  Returned inline both went through the same path and agreed,
+    which is why every other tuple shape here compiled and this one did not.
     """
     with fp.FP64:
         t = [y, y], 1.0
@@ -277,16 +276,16 @@ def _arg_types(sig: str, elt_fmt, y_fmt):
 
 
 def _matrix():
-    """Every (shape, ctx, element format, scalar format) combination."""
+    """Every (shape, element format, scalar format) combination.
+
+    No outer-context axis: every shape pins its context with ``with fp.FP64:``,
+    so varying it produced byte-identical programs and only doubled the count.
+    """
     for func, sig in SHAPES:
-        for ctx in FORMATS:
-            for elt_fmt in FORMATS:
-                for y_fmt in FORMATS:
-                    label = (
-                        f'{func.name}__{ctx.__class__.__name__}'
-                        f'{ctx.nbits}_{elt_fmt.nbits}_{y_fmt.nbits}'
-                    )
-                    yield label, func, ctx, _arg_types(sig, elt_fmt, y_fmt)
+        for elt_fmt in FORMATS:
+            for y_fmt in FORMATS:
+                label = f'{func.name}__{elt_fmt.nbits}_{y_fmt.nbits}'
+                yield label, func, _arg_types(sig, elt_fmt, y_fmt)
 
 
 @pytest.fixture(scope='module')
@@ -300,10 +299,10 @@ def emitted():
     """
     sources: list[str] = []
     refused: list[str] = []
-    for i, (label, func, ctx, arg_types) in enumerate(_matrix()):
+    for i, (label, func, arg_types) in enumerate(_matrix()):
         m = Module()
         try:
-            m.add(func, ctx=ctx, arg_types=list(arg_types))
+            m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
             body = CppCompiler().compile_module(m)
         except CppCompileError as e:
             refused.append(f'{label}: {" ".join(str(e).split())[:100]}')
@@ -344,7 +343,7 @@ def test_enough_of_the_matrix_compiles(emitted):
     """
     sources, refused = emitted
     total = len(sources) + len(refused)
-    assert total > 100, f'the matrix shrank to {total} programs'
+    assert total > 60, f'the matrix shrank to {total} programs'
     assert len(sources) >= total * 0.6, (
         f'only {len(sources)}/{total} generated programs compile; the rest are '
         f'refused, so the typecheck above is checking less than it looks.\n  '

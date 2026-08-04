@@ -447,6 +447,16 @@ def _cpp_value(value, cty) -> str:
             # error even though the value is representable.
             t = cty.format()
             v = float(value)
+            if not cty.is_float():
+                # An integral `numeric_limits` has no NaN or infinity —
+                # `quiet_NaN()` returns 0 — so a driver built this way would
+                # pass 0 and the mismatch would read as agreement.  Unreachable
+                # today (no emitted signature narrows a *parameter* to an
+                # integer), so refuse rather than guess.
+                raise ValueError(
+                    f'cannot build a driver value for integer storage {t}: '
+                    f'{value!r} (see _cpp_value)'
+                )
             if math.isnan(v):
                 return f'std::numeric_limits<{t}>::quiet_NaN()'
             if math.isinf(v):
@@ -558,6 +568,7 @@ def _build_and_run(cpp_path: Path) -> str:
 def _run_and_check(
     output_dir: Path, prefix: str, compiler: fp.CppCompiler, func: fp.Function,
     *, ctx=fp.FP64, arg_types: list | None = None, suffix: str = '',
+    stats: dict | None = None,
 ) -> str | None:
     """Run *func* through the interpreter and the compiled binary on the
     same synthesized inputs and compare bit-for-bit.  Returns ``None`` on
@@ -608,6 +619,16 @@ def _run_and_check(
             except Exception:
                 continue
             samples.append((inputs, expected))
+
+    if stats is not None:
+        # How much was actually compared, not just how many programs ran: a
+        # caller's coverage floor is meaningless if every surviving sample
+        # happens to pass an empty list.
+        stats['samples'] = stats.get('samples', 0) + len(samples)
+        stats['nonempty'] = stats.get('nonempty', 0) + sum(
+            1 for inputs, _ in samples
+            if any(isinstance(v, list) and v for v in inputs)
+        )
 
     if not samples:
         return 'skip'
@@ -1794,75 +1815,104 @@ _generated_xfail: dict[str, str] = {
     # `ret_fmt` as FP32, which no binary32 can hold.  The backend implements
     # that faithfully and truncates.  Unsound in the analysis, not in codegen;
     # see docs/todos/format-infer-aliasing.md.
-    '_gen_alias_then_mutate[32_32_64]': 'format_infer ignores list aliasing',
-    '_gen_alias_then_mutate[64_32_64]': 'format_infer ignores list aliasing',
+    '_gen_alias_then_mutate[32_64]': 'format_infer ignores list aliasing',
 }
 
 
 def _test_generated(
     output_dir: Path, mode: str = 'compile',
 ) -> list[tuple[str, str, str]]:
-    """Execute each shape at every combination of list-element format, scalar
-    format, and outer context, bit-comparing against the interpreter.
+    """Execute each shape at every combination of list-element and scalar
+    format, bit-comparing against the interpreter.
 
     Skipped outside ``run`` mode: the point is the comparison, and
     ``test_generated_typecheck.py`` already covers emission over a wider matrix.
     A *refusal* is a legitimate answer here too -- a shared list cannot change
-    element type -- so a ``CppCompileError`` is recorded, not failed.
+    element type -- so a ``CppCompileError`` is recorded, not failed.  Refusals
+    are printed: a shape quietly regressing into one is a loss of coverage that
+    no failure count would show.
+
+    There is deliberately no outer-context axis.  Every shape pins its context
+    with ``with fp.FP64:``, so varying it produced byte-identical programs and
+    only inflated the counts.  Making it mean something needs two changes
+    together -- drop the ``with`` from some shapes *and* pass ``ctx`` into
+    ``_interp``, which hardcodes ``fp.FP64`` -- or the oracle and the binary
+    disagree for a reason that is not a bug.
     """
     if mode != 'run' or _CXX is None:
         return []
     compiler = fp.CppCompiler(unsafe_cast_int=True)
     failures: list[tuple[str, str, str]] = []
     xfailed: list[str] = []
+    refused: list[str] = []
+    stats: dict[str, int] = {}
     ran = 0
     for func, sig, n_scalars in _generated_funcs:
         if not _selected(func.name):
             continue
-        for ctx in _GEN_FORMATS:
-            for elt_fmt in _GEN_FORMATS:
-                for scalar_fmt in _GEN_FORMATS:
-                    elt = fp.types.RealType(elt_fmt)
-                    lst = (
-                        fp.types.ListType(elt) if sig == 'flat'
-                        else fp.types.ListType(fp.types.ListType(elt))
+        for elt_fmt in _GEN_FORMATS:
+            for scalar_fmt in _GEN_FORMATS:
+                elt = fp.types.RealType(elt_fmt)
+                lst = (
+                    fp.types.ListType(elt) if sig == 'flat'
+                    else fp.types.ListType(fp.types.ListType(elt))
+                )
+                arg_types = [
+                    lst,
+                    *[fp.types.RealType(scalar_fmt)] * n_scalars,
+                ]
+                tag = f'{elt_fmt.nbits}_{scalar_fmt.nbits}'
+                label = f'{func.name}[{tag}]'
+                try:
+                    err = _run_and_check(
+                        output_dir, 'generated', compiler, func,
+                        arg_types=arg_types, suffix=tag, stats=stats,
                     )
-                    arg_types = [
-                        lst,
-                        *[fp.types.RealType(scalar_fmt)] * n_scalars,
-                    ]
-                    tag = f'{ctx.nbits}_{elt_fmt.nbits}_{scalar_fmt.nbits}'
-                    label = f'{func.name}[{tag}]'
-                    try:
-                        err = _run_and_check(
-                            output_dir, 'generated', compiler, func,
-                            ctx=ctx, arg_types=arg_types, suffix=tag,
-                        )
-                    except fp.backend.CppCompileError:
-                        continue      # a refusal is an answer, not a failure
-                    except Exception as e:
-                        failures.append(('generated', label, str(e)))
-                        continue
-                    if err == 'skip':
-                        continue
-                    known = _generated_xfail.get(label)
-                    if known is not None:
-                        if err is None:
-                            failures.append((
-                                'generated', label,
-                                f'now agrees with the interpreter -- remove the '
-                                f'_generated_xfail entry ({known})',
-                            ))
-                        else:
-                            xfailed.append(f'{label}: {known}')
-                        continue
-                    if err is not None:
-                        failures.append(('generated', label, err))
+                except fp.backend.CppCompileError as e:
+                    # A refusal is an answer, not a failure -- but say so.
+                    refused.append(f'{label}: {str(e).split(": ")[-1][:70]}')
+                    continue
+                except Exception as e:
+                    failures.append(('generated', label, str(e)))
+                    continue
+                if err == 'skip':
+                    refused.append(f'{label}: no sample the interpreter accepts')
+                    continue
+                known = _generated_xfail.get(label)
+                if known is not None:
+                    if err is None:
+                        failures.append((
+                            'generated', label,
+                            f'now agrees with the interpreter -- remove the '
+                            f'_generated_xfail entry ({known})',
+                        ))
                     else:
-                        ran += 1
-    print(f'=== generated format matrix: {ran} instantiations bit-compared ===')
+                        xfailed.append(f'{label}: {known}')
+                    continue
+                if err is not None:
+                    failures.append(('generated', label, err))
+                else:
+                    ran += 1
+    print(
+        f'=== generated format matrix: {ran} instantiations, '
+        f'{stats.get("samples", 0)} samples bit-compared '
+        f'({stats.get("nonempty", 0)} with a non-empty list) ==='
+    )
     for note in xfailed:
         print(f'     known divergence: {note}')
+    for note in refused:
+        print(f'     not compared: {note}')
+    # A `-k` run tests a subset on purpose, so the floors do not apply.
+    if _select is not None:
+        return failures
+    if stats.get('nonempty', 0) < 200:
+        failures.append((
+            'generated', '<coverage>',
+            f'only {stats.get("nonempty", 0)} samples with a non-empty list '
+            f'were compared; the counts above can stay high while every '
+            f'comparison is on an empty list, which touches none of the '
+            f'join/widening/aliasing behaviour this stage exists for',
+        ))
     if ran < 20:
         failures.append((
             'generated', '<coverage>',

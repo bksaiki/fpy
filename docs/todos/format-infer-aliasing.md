@@ -58,10 +58,11 @@ widening failing to cross an alias edge rather than a call edge.
 
 ## Where it is pinned
 
-`tests/infra/backend/cpp.py::_generated_xfail`, two instantiations of
-`_gen_alias_then_mutate`. Strict — if either starts agreeing with the
-interpreter, the harness fails and asks for the entry to be removed. The other 6
-combinations of the same shape run normally.
+`tests/infra/backend/cpp.py::_generated_xfail`, the one instantiation of
+`_gen_alias_then_mutate` that has a narrower list than the value stored into it.
+Strict — if it starts agreeing with the interpreter, the harness fails and asks
+for the entry to be removed. The shape's other three format combinations run
+normally.
 
 The bug predates the branch's C++ work (reproduces at `50fd6aa`). It survived
 because no corpus program has a list at a format other than FP64, so nothing

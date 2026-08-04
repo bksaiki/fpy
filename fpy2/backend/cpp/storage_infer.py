@@ -57,6 +57,7 @@ from ...ast.fpyast import (
     ListRef,
     NamedId,
     Stmt,
+    TupleBinding,
     TupleExpr,
     Var,
 )
@@ -252,32 +253,60 @@ class _PlaceFloors(DefaultVisitor):
         by_expr: dict[Expr, FormatBound],
         ret_fmt: FormatBound,
         base: 'StorageAnalysis',
+        is_called: bool,
     ):
         self.def_use = def_use
         self.by_def = by_def
         self.by_expr = by_expr
         self.ret_fmt = ret_fmt
         self.base = base
+        self.is_called = is_called
         self.floors: dict[Definition, FormatBound] = {}
         self.assigns: list[Assign] = []
+        self.indexed: list[IndexedAssign] = []
+        self.loops: list[ForStmt] = []
         self.collected = False
         self.changed = False
 
     def _pinned(self, d: Definition) -> bool:
-        """Whether *d* has no storage of its own to raise.
+        """Whether *d*'s storage *class* has anything that cannot be raised.
 
-        The emitter binds some names as a ``const`` reference to storage that
-        already exists — ``ys = xs``, ``row = xss[i]``, a loop target.  Those are
-        spelled ``auto``, so raising one would make ``storage_of`` describe a
-        type the reference does not have and nothing would catch it until the
-        mismatch surfaced somewhere else.  ``allow_projection`` is on because
-        refusing to raise is the safe direction.
+        Asked about the class, not the definition: :meth:`StorageInfer.infer`
+        joins a floor into the whole class's bound, so a floor landing on one
+        member raises every member.  Checking only the def the floor arrived at
+        pins nothing — an ``xs[i] = e`` def shares its class with its ``prev``
+        by the in-place-mutation edge and is itself unpinnable, so it would
+        raise the very parameter or reference binding the check refused.
+        """
+        cls = self.base.def_class[d]
+        return any(
+            self._unraisable(m) for m in self.base.class_members[cls]
+        )
 
-        A *parameter* is also bound by reference but its type is spelled from
-        ``storage_of`` in the signature, so raising it does what it says — the
-        ABI changes, and ``signature()`` reports it.
+    def _unraisable(self, d: Definition) -> bool:
+        """Whether *d* alone has no storage of its own to raise.
+
+        The line is whether the emitter *spells* the type or lets C++ deduce it,
+        because raising only means anything when something reads ``storage_of``:
+
+        - **Spelled, so raisable.**  A parameter (``_arg_decl``), a loop target
+          and a comprehension target (``_foreach_decl``) all print
+          ``storage_of``, so raising one changes the declaration and the
+          reference follows.
+        - **Deduced, so not.**  ``ys = xs`` and ``row = xss[i]`` are emitted as
+          ``const auto&``, naming storage that already exists.  Raising one only
+          makes ``storage_of`` describe a type the reference does not have, and
+          the ``auto`` hides it until the mismatch surfaces somewhere else.
+
+        The one exception is a parameter of a function compiled code calls: its
+        caller's argument type is already fixed, so raising it underneath emits
+        a call that does not compile.  Same rule ``unbox`` states for
+        representations — a function compiled code calls keeps its signature on
+        both sides.  A native caller is not bound by that.
         """
         if isinstance(d.site, Argument):
+            return self.is_called
+        if isinstance(d.site, ForStmt | ListComp):
             return False
         return binds_by_reference(
             self.base, self.def_use, d, allow_projection=True,
@@ -346,7 +375,39 @@ class _PlaceFloors(DefaultVisitor):
         if not self.collected:
             self.assigns.append(stmt)
 
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+        super()._visit_indexed_assign(stmt, ctx)
+        if not self.collected:
+            self.indexed.append(stmt)
+
+    def _visit_for(self, stmt: ForStmt, ctx):
+        super()._visit_for(stmt, ctx)
+        if not self.collected:
+            self.loops.append(stmt)
+
     # -- the other direction ------------------------------------------------
+
+    def _class_bound(self, d: Definition) -> FormatBound:
+        """The bound *d*'s C++ variable will actually have.
+
+        Over the whole storage class, because that is the unit
+        :meth:`StorageInfer.infer` joins: a floor on any member decides them
+        all.  Reading one def's own floor is how ``L6`` came out ``double`` while
+        the tuple it was destructured from stayed ``uint8_t`` -- the return
+        raised the ``L6[i] = e`` def, and the destructuring def next to it in the
+        same class had no floor of its own to find.
+        """
+        cls = self.base.def_class[d]
+        out: FormatBound = None
+        for m in self.base.class_members[cls]:
+            for b in (self.by_def.get(m), self.floors.get(m)):
+                if b is None:
+                    continue
+                try:
+                    out = b if out is None else _join_bounds(out, b)
+                except RuntimeError:
+                    return None       # incompatible kinds: not a widening question
+        return out
 
     def _effective(self, e: Expr) -> FormatBound:
         """*e*'s bound with the floors its leaves have picked up.
@@ -359,9 +420,7 @@ class _PlaceFloors(DefaultVisitor):
         """
         match e:
             case Var():
-                d = self.def_use.find_def_from_use(e)
-                own, floor = self.by_def.get(d), self.floors.get(d)
-                return own if floor is None else _join_bounds(own, floor)
+                return self._class_bound(self.def_use.find_def_from_use(e))
             case ListExpr() if e.elts:
                 elts = [self._effective(x) for x in e.elts]
                 return ListFormat(reduce(_join_bounds, elts))
@@ -376,17 +435,106 @@ class _PlaceFloors(DefaultVisitor):
         return self.by_expr.get(e)
 
     def _propagate_up(self) -> None:
-        """Floor each assignment target by what its RHS now builds."""
+        """Carry each floor to the other places that must agree with it."""
         for stmt in self.assigns:
-            if not isinstance(stmt.target, NamedId):
-                continue
-            d = self.def_use.find_def_from_site(stmt.target, stmt)
             try:
                 eff = self._effective(stmt.expr)
             except RuntimeError:
                 continue          # incompatible kinds: not a widening question
-            if isinstance(eff, ListFormat | TupleFormat):
-                self._raise(d, eff)
+            match stmt.target:
+                case NamedId():
+                    if isinstance(eff, ListFormat | TupleFormat):
+                        d = self.def_use.find_def_from_site(stmt.target, stmt)
+                        self._raise(d, eff)
+                case TupleBinding():
+                    self._bind_destructured(stmt, eff)
+        for ix in self.indexed:
+            self._raise_container(ix)
+        for loop in self.loops:
+            self._bind_loop_target(loop)
+
+    def _bind_loop_target(self, stmt: ForStmt) -> None:
+        """``for row in xss`` reads an element, so the two must agree.
+
+        The target's type is spelled from ``storage_of``, so raising the
+        container alone leaves ``for (const fpy::list<float>& row :
+        std::vector<fpy::list<double>>)``.  Both directions, as for a
+        destructuring: neither side can be left behind.
+        """
+        if not isinstance(stmt.target, NamedId):
+            return          # a destructuring target rides on the tuple instead
+        d = self.def_use.find_def_from_site(stmt.target, stmt)
+        try:
+            eff = self._effective(stmt.iterable)
+        except RuntimeError:
+            return
+        if isinstance(eff, ListFormat) and isinstance(
+            eff.elt, ListFormat | TupleFormat,
+        ):
+            self._raise(d, eff.elt)
+        if not isinstance(stmt.iterable, Var):
+            return
+        mine = self._class_bound(d)
+        if isinstance(mine, ListFormat | TupleFormat):
+            self._raise(
+                self.def_use.find_def_from_use(stmt.iterable), ListFormat(mine),
+            )
+
+    def _bind_destructured(self, stmt: Assign, eff: FormatBound) -> None:
+        """``a, b = t`` reads each name with ``std::get``, so its type is the
+        tuple's field type, not one it can choose.
+
+        A name here has no storage of its own to raise -- but it cannot be
+        pinned either, because the *tuple* may be raised and then the field it
+        reads has moved.  So the floor goes down from the tuple's fields to the
+        names, which is the direction the emitter cannot fix.
+        """
+        if not isinstance(eff, TupleFormat):
+            return
+        target = stmt.target
+        if not isinstance(target, TupleBinding):
+            return
+        if len(target.elts) != len(eff.elts):
+            return
+        for sub, field in zip(target.elts, eff.elts):
+            if isinstance(sub, NamedId) and isinstance(
+                field, ListFormat | TupleFormat,
+            ):
+                self._raise(self.def_use.find_def_from_site(sub, stmt), field)
+        # ...and back up.  A name raised from somewhere else -- returned wide,
+        # say -- has to drag the field it reads with it, or the two disagree the
+        # other way round.
+        if not isinstance(stmt.expr, Var):
+            return
+        fields: list[FormatBound] = []
+        for sub, field in zip(target.elts, eff.elts):
+            if not isinstance(sub, NamedId):
+                fields.append(field)
+                continue
+            d = self.def_use.find_def_from_site(sub, stmt)
+            mine = self._class_bound(d)
+            fields.append(field if mine is None else _join_bounds(field, mine))
+        self._raise(
+            self.def_use.find_def_from_use(stmt.expr), TupleFormat(tuple(fields)),
+        )
+
+    def _raise_container(self, stmt: IndexedAssign) -> None:
+        """``xss[i] = e`` puts *e* in a slot, so the container's element level
+        has to hold it.
+
+        The emitter stores straight into the slot and never converts there, so
+        a floor on *e* alone would leave the two disagreeing.  One ``ListFormat``
+        per index peeled.
+        """
+        try:
+            eff = self._effective(stmt.expr)
+        except RuntimeError:
+            return
+        if not isinstance(eff, ListFormat | TupleFormat):
+            return
+        for _ in stmt.indices:
+            eff = ListFormat(eff)
+        self._raise(self.def_use.find_def_from_site(stmt.var, stmt), eff)
 
 
 def place_floors(
@@ -396,6 +544,7 @@ def place_floors(
     by_expr: dict[Expr, FormatBound],
     ret_fmt: FormatBound,
     base: 'StorageAnalysis',
+    is_called: bool = False,
 ) -> dict[Definition, FormatBound]:
     """See :class:`_PlaceFloors`.
 
@@ -417,17 +566,18 @@ def place_floors(
     work left would return a *partial* answer, and an under-raised definition
     reappears later as a type disagreement the emitter has to refuse.
     """
-    v = _PlaceFloors(def_use, by_def, by_expr, ret_fmt, base)
+    v = _PlaceFloors(def_use, by_def, by_expr, ret_fmt, base, is_called)
     v._visit_function(ast, None)          # collects the assignments to revisit
     v.collected = True
-    for _ in range(len(v.assigns) + 2):
+    for _ in range(len(v.assigns) + len(v.indexed) + len(v.loops) + 2):
         v.changed = False
         v._visit_function(ast, None)      # places -> the defs reaching them
         v._propagate_up()                 # defs -> containers and aliases
         if not v.changed:
             break
     assert not v.changed, (
-        f'place_floors did not settle in {len(v.assigns) + 2} rounds over '
+        f'place_floors did not settle in '
+        f'{len(v.assigns) + len(v.indexed) + len(v.loops) + 2} rounds over '
         f'{len(v.assigns)} assignments: a floor is rising without bound, so '
         f'either a join is not monotone or a cycle is feeding itself'
     )
