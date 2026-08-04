@@ -85,6 +85,13 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
     def total_bits(self) -> int:
         return self.nbits
 
+    def representable_in(self, x: RealFloat | Float) -> bool:
+        # unlike sign-magnitude, two's complement has a single encoding
+        # of zero, so a negative zero is not representable
+        if isinstance(x, Float | RealFloat) and x.is_zero() and x.s:
+            return False
+        return super().representable_in(x)
+
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
             raise TypeError(f'Expected \'Float\', got x={x}')
@@ -237,6 +244,15 @@ class FixedContext(MPBFixedContext, EncodableContext):
 
     def format(self) -> FixedFormat:
         return FixedFormat(self.signed, self.scale, self.nbits)
+
+    def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
+        r = super()._round_at(x, n, exact)
+        if r.is_zero() and r.s:
+            # rounding a negative value toward zero produces a negative zero,
+            # which two's complement cannot represent; normalize it away so
+            # that `self.round()` always returns a representable value
+            return Float(x=r, s=False, ctx=self)
+        return r
 
     @classmethod
     def from_format(

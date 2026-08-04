@@ -420,8 +420,9 @@ class MPFixedContext(OrdinalContext):
                 raise RuntimeError(f'unreachable {x}')
 
         # step 2. shortcut for exact zero values
+        # the sign is preserved: this format has a negative zero
         if xr.is_zero():
-            return Float(ctx=self)
+            return Float(s=xr.s, ctx=self)
 
         # step 3. round value based on rounding parameters
         xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, rng=self.rng, exact=exact)

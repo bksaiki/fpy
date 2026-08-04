@@ -8,6 +8,7 @@ an arbitrary-precision floating-point number.
 from __future__ import annotations
 
 import math
+import sys
 from fractions import Fraction
 from typing import TYPE_CHECKING, Optional, Self
 
@@ -157,7 +158,16 @@ class Float:
 
     def __hash__(self): # type: ignore
         # Complex has __hash__ = None, so mypy thinks there's a type mismatch.
-        return hash((self._isinf, self._isnan, self._real))
+        if self._isnan:
+            # ensure that all NaN values have the same hash
+            return 271828
+        elif self._isinf:
+            # ensure that all Inf values have the same hash;
+            # this is the hash Python gives `float('inf')`
+            return -sys.hash_info.inf if self._real._s else sys.hash_info.inf
+        else:
+            # hash the underlying RealFloat value
+            return hash(self._real)
 
     def __eq__(self, other):
         if not isinstance(other, Float | RealFloat | int | float | Fraction):
