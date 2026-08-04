@@ -132,7 +132,7 @@ from typing import Any, TypeAlias
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...function import Function
-from ...number import INTEGER, REAL, Context, Float, RealFloat
+from ...number import FP32, INTEGER, REAL, Context, Float, RealFloat
 from ...number.format import REAL_FORMAT, Format
 from ...types import (
     BoolType,
@@ -526,6 +526,16 @@ def exact_binop(
     lhs_zero = _is_zero_set(lhs)
     rhs_zero = _is_zero_set(rhs)
     if op is operator.mul and (lhs_zero or rhs_zero):
+        # UNSOUND, and knowingly so: in IEEE-754 `0 * x` is NaN when *x* is an
+        # infinity or a NaN, and `-0.0` when *x* is negative.  Kept because a
+        # recomputed abstract product is degenerate and drives a later add/sub's
+        # `prec` to 0 (`test_exact_binop_mul_by_zero_set_stays_set`).
+        #
+        # A consumer must not read `{0}` as "an integer can hold this".  The C++
+        # backend currently does, so `0.0 * inf` compiles to
+        # `static_cast<uint8_t>(NaN)` and returns 0 -- see
+        # `docs/todos/reals-in-integer-storage.md` for why the fix has to be
+        # uniform rather than a guard here.
         return _ZERO_SET
     if op is operator.add:
         if lhs_zero:
@@ -653,6 +663,29 @@ def _join_bounds(
             raise RuntimeError(
                 f'unreachable: cannot join incompatible formats {s1!r}, {s2!r}'
             )
+
+
+def _literal_bound(e) -> FormatBound:
+    """A numeric literal's bound: the singleton set of its exact value.
+
+    Except a **negative zero**.  ``SetFormat`` holds :class:`Fraction`s, and a
+    ``Fraction`` has no signed zero — so ``SetFormat({0})`` would assert that
+    ``-0.0`` and ``+0.0`` are the same value.  They are not: ``-0.0`` is a
+    distinct real that compares equal to ``+0.0`` but is distinguishable by
+    ``copysign``, and by division, where ``x / -0.0`` and ``x / +0.0`` have
+    opposite signs.
+
+    So the set cannot state this literal's value, and a bound that cannot state
+    a value must not pretend to.  Report the narrowest *format* that does
+    contain it instead — less precise, but true.
+
+    ``as_real`` returns a :class:`Float` for exactly this case and a
+    :class:`Fraction` otherwise, so it is the discriminator.
+    """
+    v = e.as_real()
+    if isinstance(v, Float):
+        return FP32.format()
+    return SetFormat.from_value(e.as_rational())
 
 
 def _list_set_widen(
@@ -1151,10 +1184,10 @@ class _FormatInferInstance(Visitor):
 
     # Numeric literals: exact real values bounded by the singleton set {v}
     def _visit_decnum(self, e: Decnum, ctx: None) -> FormatBound:
-        return SetFormat.from_value(e.as_rational())
+        return _literal_bound(e)
 
     def _visit_hexnum(self, e: Hexnum, ctx: None) -> FormatBound:
-        return SetFormat.from_value(e.as_rational())
+        return _literal_bound(e)
 
     def _visit_integer(self, e: Integer, ctx: None) -> FormatBound:
         return SetFormat.from_value(e.as_rational())
