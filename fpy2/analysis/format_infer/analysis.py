@@ -32,9 +32,9 @@ The analysis tracks a **format** that mirrors the basic-type structure::
 - :class:`SetFormat` describes an expression with a known, finite set of real
   values (e.g. a numeric literal or a join of numeric literals).  It is more
   precise than any :class:`Format` containing all of its values.  Its values are
-  :class:`Fraction`\\ s, which have no signed zero, so it carries the invariant
-  that ``Fraction(0)`` means exactly ``+0.0``; anything that could produce a
-  ``-0.0`` reports a :class:`Format` instead (see :func:`_zero_result_is_positive`).
+  :data:`SetValue` — an exact :class:`Fraction`, or :data:`NEG_ZERO` for the
+  negative zero a ``Fraction`` cannot represent — so a set says *which* zero it
+  holds rather than leaving it to an invariant.
 - A scalar :class:`Format` (e.g. ``IEEEFormat(es=8, nbits=32)``) describes a
   real-valued expression.  ``REAL_FORMAT`` is the **scalar top** — unrestricted
   real values (the format is unknown or unconstrained).
@@ -178,6 +178,40 @@ __all__ = [
 #####################################################################
 # Format lattice
 
+class NegZero:
+    """The value ``-0.0``, as a member of a :class:`SetFormat`.
+
+    A ``SetFormat`` holds a set of exact values, and ``-0.0`` is one — but a
+    :class:`Fraction` cannot represent it: ``Fraction(0)`` is *the* zero,
+    unsigned.  So the element domain is :data:`SetValue`, and this is its second
+    member.
+
+    Deliberately not a :class:`Float`: ``Float(-0.0) == Fraction(0)`` and the two
+    hash equally, so a ``frozenset`` would collapse them into one element.  A
+    distinct type keeps them distinct, which is the entire requirement.
+    """
+    __slots__ = ()
+
+    def __repr__(self):
+        return 'NEG_ZERO'
+
+    def __str__(self):
+        return '-0.0'
+
+    def __eq__(self, other):
+        return isinstance(other, NegZero)
+
+    def __hash__(self):
+        return hash(NegZero)
+
+
+NEG_ZERO = NegZero()
+"""The single :class:`NegZero` instance; compare with ``==`` or ``isinstance``."""
+
+SetValue: TypeAlias = Fraction | NegZero
+"""A member of a :class:`SetFormat`: an exact rational, or the negative zero."""
+
+
 @dataclass(frozen=True)
 class SetFormat:
     """
@@ -186,11 +220,16 @@ class SetFormat:
     Strictly more precise than any :class:`Format` that contains every value;
     when joined with such a format the format is returned (otherwise the join
     widens to ``REAL_FORMAT``).
+
+    Values are :data:`SetValue`, so the set says *which* zero it holds:
+    ``Fraction(0)`` is ``+0.0`` and :data:`NEG_ZERO` is ``-0.0``.  That is a
+    property of the representation rather than an invariant maintained by the
+    producers, which is what it replaced.
     """
-    values: frozenset[Fraction]
+    values: frozenset[SetValue]
 
     @staticmethod
-    def from_value(x: Fraction):
+    def from_value(x: SetValue):
         return SetFormat(frozenset((x,)))
 
 
@@ -212,11 +251,11 @@ def _free_var_format(val: object) -> 'FormatBound':
         case Fraction():
             return SetFormat.from_value(val)
         case Float():
-            # A negative zero is finite but not statable as a `Fraction`, so it
-            # gets no set bound either -- see :func:`_zero_result_is_positive` for the
-            # invariant, and :func:`_literal_bound` for the written-out case.
-            if not val.is_finite() or (val.is_zero() and val.s):
+            if not val.is_finite():
                 return None
+            # A captured `-0.0` is statable now: `NEG_ZERO` is a `SetValue`.
+            if val.is_zero() and val.s:
+                return SetFormat.from_value(NEG_ZERO)
             return SetFormat.from_value(val.as_rational())
         case RealFloat():
             return SetFormat.from_value(Fraction(val))
@@ -331,12 +370,14 @@ def _concrete_int(fmt: FormatBound) -> int | None:
     """
     if isinstance(fmt, SetFormat) and len(fmt.values) == 1:
         (v,) = fmt.values
-        if v.denominator == 1:
+        # `NEG_ZERO` is not an integer: it is a distinct value that no `range`
+        # bound may be, and it has no `denominator`.
+        if isinstance(v, Fraction) and v.denominator == 1:
             return v.numerator
     return None
 
 
-def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
+def _all_representable_in(values: frozenset[SetValue], fmt: Format) -> bool:
     """
     Returns true iff every value in *values* is representable under *fmt*.
 
@@ -348,6 +389,12 @@ def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
     if fmt == REAL_FORMAT:
         return True
     for v in values:
+        if isinstance(v, NegZero):
+            # Exact, thanks to `representable_in` knowing about signed zeros: a
+            # two's-complement format answers False and a float format True.
+            if not fmt.representable_in(RealFloat(s=True, exp=0, c=0)):
+                return False
+            continue
         if not is_dyadic(v):
             return False
         if not fmt.representable_in(RealFloat.from_rational(v)):
@@ -444,9 +491,16 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     """
     if not s.values:
         return None
-    if not all(is_dyadic(v) for v in s.values):
+    if not all(isinstance(v, NegZero) or is_dyadic(v) for v in s.values):
         return None
-    rfs = [RealFloat.from_rational(v) for v in s.values]
+    # `NEG_ZERO` becomes a `RealFloat` that carries the sign, which the bounds
+    # below then read like any other value.  Its presence also sets
+    # `has_neg_zero` on the result -- see the end of this function.
+    rfs = [
+        RealFloat(s=True, exp=0, c=0) if isinstance(v, NegZero)
+        else RealFloat.from_rational(v)
+        for v in s.values
+    ]
     # Bounds: max non-negative value and min non-positive value, with
     # zero used when no value falls on the corresponding side.  This
     # matches AbstractFormat's convention of pos_bound >= 0 and
@@ -461,7 +515,10 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     prec = max((rf.p for rf in rfs), default=1)
     prec = max(prec, 1)
     exp = min((rf.exp for rf in rfs), default=0)
-    return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+    return AbstractFormat(
+        prec, exp, pos_bound, neg_bound=neg_bound,
+        has_neg_zero=any(isinstance(v, NegZero) for v in s.values),
+    )
 
 
 def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | None:
@@ -478,102 +535,86 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
 
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
-_SIGNED_ZERO_FORMAT: Format = AbstractFormat(
-    1, 0, RealFloat(s=False, exp=0, c=0),
-    neg_bound=RealFloat(s=True, exp=0, c=0), has_neg_zero=True,
-).format()
-"""
-A format whose value set is exactly the two zeros, ``{+0.0, -0.0}``.
-
-The bound for a value that is known to be a zero but not known to be the
-*positive* one -- which :class:`SetFormat` cannot say, since it holds
-:class:`Fraction`\\ s.  It is tight: it admits neither ``1.0`` nor anything else,
-so it claims far less than naming a whole float format would.
-
-Its ``has_neg_zero`` is what keeps it off an integer storage.  ``uint8_t`` holds
-the integer 0 and neither sign, and the C++ ladder's rungs report
-``has_neg_zero=False`` for every integer type, so containment rejects them and
-the value lands on a float -- which is the whole point.
-"""
+def _set_as_fraction(v: SetValue) -> Fraction:
+    """*v*'s magnitude-and-sign as a rational: :data:`NEG_ZERO` becomes ``0``."""
+    return Fraction(0) if isinstance(v, NegZero) else v
 
 
-def _set_with_signed_zero(
-    values: frozenset[Fraction],
-) -> 'AbstractFormat | None':
-    """*values*, widened by the possibility that its zero is a negative one.
+def _set_is_negative(v: SetValue) -> bool:
+    """Does *v* carry a minus sign?  True for :data:`NEG_ZERO`."""
+    return True if isinstance(v, NegZero) else v < 0
 
-    The honest bound when an operation's exact result is a zero whose sign is
-    not provably positive: the values are known, and the only thing a
-    :class:`SetFormat` cannot carry is which zero it holds — so say the values
-    *and* set ``has_neg_zero``.
 
-    Strictly tighter than giving up.  Returning ``None`` sends the caller to the
-    active scope's whole format (:meth:`_bound_if_fits` → :meth:`_op_bound`);
-    this keeps the value range and gives up only the zero's sign.  ``None`` is
-    still the answer for a non-dyadic set, which no ``AbstractFormat`` can pin.
+def _set_neg(v: SetValue) -> SetValue:
+    """``-v``.  Negation exchanges the two zeros."""
+    if isinstance(v, NegZero):
+        return Fraction(0)
+    return NEG_ZERO if v == 0 else -v
+
+
+def _set_abs(v: SetValue) -> SetValue:
+    """``abs(v)``.  Never a negative zero."""
+    return Fraction(0) if isinstance(v, NegZero) else abs(v)
+
+
+def _set_add(a: SetValue, b: SetValue) -> SetValue:
+    """``a + b``.
+
+    IEEE-754 §6.3: a sum is ``-0.0`` only when both addends are.  Every other
+    zero sum — including ``1 + (-1)`` and ``(-0.0) + (+0.0)`` — is ``+0.0``.
     """
-    af = _setformat_to_abstract(SetFormat(values))
-    if af is None:
-        return None
-    af.has_neg_zero = True
-    return af
+    if isinstance(a, NegZero) and isinstance(b, NegZero):
+        return NEG_ZERO
+    return _set_as_fraction(a) + _set_as_fraction(b)
 
 
-def _zero_result_is_positive(
-    op: Callable[..., Any], *operands: Fraction,
-) -> bool:
-    """For an application of *op* over *operands* whose exact result is zero:
-    is that zero provably ``+0.0``?
+def _set_sub(a: SetValue, b: SetValue) -> SetValue:
+    """``a - b``, as ``a + (-b)``.
 
-    **The invariant this exists to maintain:** ``Fraction(0)`` in a
-    :class:`SetFormat` means exactly ``+0.0``.  A ``Fraction`` has no signed
-    zero, so a set cannot say which zero it holds — and consumers read it
-    literally.  The C++ backend picks the narrowest type containing ``{0}``,
-    which is ``uint8_t``, and an integer holds neither sign.  So an operation
-    that may have produced a ``-0.0`` reports a :class:`Format` instead of a
-    set: sound, and it costs only precision, because the caller then falls back
-    to the active scope's format (:meth:`_bound_if_fits` → :meth:`_op_bound`),
-    which contains the value whichever zero it is.
-
-    The verdict is per *application*, not per result value: the sign of a zero
-    is a property of the operands that produced it, not of the zero sitting in
-    the result set.
-
-    Every ``Fraction(0)`` *operand* is therefore a ``+0.0``, which leaves only
-    IEEE 754 §6.3 to read:
-
-    - **product**: the sign is the XOR of the operand signs, in every rounding
-      mode.  So a zero product is ``+0.0`` exactly when neither operand is
-      negative.
-    - **sum**: when the operands have the same sign, so does the result.  Both
-      operands zero means both are ``+0.0``, hence ``+0.0``.  Otherwise the
-      operands are opposite-signed and the exact sum is zero, which §6.3 makes
-      ``+0.0`` in every mode *except* ``roundTowardNegative`` — and this
-      function does not know the mode.
-    - **difference**: ``a - b`` is ``a + (-b)``, so a zero result always comes
-      from opposite-signed addends — mode-dependent, including ``0 - 0``.
-    - **absolute value**: never negative, so a zero result is ``+0.0``.
-    - **negation**: a zero result means a zero operand, i.e. ``+0.0``, so the
-      result is ``-0.0``.  Never positive.
+    Not special-cased: routing through :func:`_set_add` reproduces every
+    measured case, including ``(-0.0) - (+0.0) = -0.0`` and
+    ``(-0.0) - (-0.0) = +0.0``.
     """
-    if op is abs:
-        return True
-    if op is operator.mul:
-        return all(v >= 0 for v in operands)
-    if op is operator.add:
-        return all(v == 0 for v in operands)
-    return False
+    return _set_add(a, _set_neg(b))
+
+
+def _set_mul(a: SetValue, b: SetValue) -> SetValue:
+    """``a * b``.
+
+    IEEE-754 §6.3: a product's sign is the XOR of the operand signs, in every
+    rounding mode — so a zero product is ``-0.0`` exactly when the signs differ.
+    That is why a negative operand and a ``+0.0`` give ``-0.0`` even though
+    neither is a negative zero.
+    """
+    product = _set_as_fraction(a) * _set_as_fraction(b)
+    if product != 0:
+        return product
+    return NEG_ZERO if _set_is_negative(a) != _set_is_negative(b) else Fraction(0)
+
+
+_SET_BINOPS: dict[Any, Callable[[SetValue, SetValue], SetValue]] = {
+    operator.add: _set_add,
+    operator.sub: _set_sub,
+    operator.mul: _set_mul,
+}
+"""Exact binary arithmetic over :data:`SetValue`, keyed by the operator the
+caller passes.  An operator absent here has no set-level rule, so
+:func:`exact_binop` falls back to the abstract path rather than guessing."""
+
+_SET_UNOPS: dict[Any, Callable[[SetValue], SetValue]] = {
+    operator.neg: _set_neg,
+    abs: _set_abs,
+}
+"""Exact unary arithmetic over :data:`SetValue`; see :data:`_SET_BINOPS`."""
 
 
 def _is_zero_set(f: 'FormatBound') -> bool:
     """``f`` is the precise singleton ``{0}`` — and therefore exactly ``+0.0``.
 
     Callers use this to apply algebraic identities that hold for ``+0.0`` and
-    not for ``-0.0``, so reading the sign off the set is load-bearing.  It is
-    sound because of :func:`_zero_result_is_positive`: every operation that could produce
-    the other zero declines to produce a set, so a ``SetFormat`` containing
-    ``Fraction(0)`` can only have come from a value that really is ``+0.0``
-    (a literal, a range, or a join of those).
+    not for ``-0.0``, so reading the sign off the set is load-bearing — and it is
+    now structural: a negative zero is :data:`NEG_ZERO`, a different element, so
+    ``{Fraction(0)}`` cannot be holding one.  No invariant to maintain.
     """
     return isinstance(f, SetFormat) and f.values == _ZERO_SET.values
 
@@ -620,20 +661,14 @@ def exact_binop(
     ):
         return None
     if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
-        values: set[Fraction] = set()
-        signed_zero = False
-        for va in lhs.values:
-            for vb in rhs.values:
-                r = op(va, vb)
-                if r == 0 and not _zero_result_is_positive(op, va, vb):
-                    signed_zero = True
-                values.add(r)
-        result = frozenset(values)
-        if signed_zero:
-            # A set cannot say which zero this is, so report the same values as
-            # an AbstractFormat that can.  Supersedes the cap: this is already
-            # the collapsed form.
-            return _set_with_signed_zero(result)
+        # Exact arithmetic over `SetValue`, which carries the sign of a zero --
+        # so the result set says which zero it holds and nothing has to widen.
+        set_op = _SET_BINOPS.get(op)
+        if set_op is None:
+            return None
+        result = frozenset(
+            set_op(va, vb) for va in lhs.values for vb in rhs.values
+        )
         if cap is not None and len(result) > cap:
             # collapse an over-large set to its covering AbstractFormat
             return _setformat_to_abstract(SetFormat(result))
@@ -676,17 +711,12 @@ def exact_unop(
     if not isinstance(arg, AbstractableFormatBound):
         return None
     if isinstance(arg, SetFormat):
-        values: set[Fraction] = set()
-        signed_zero = False
-        for v in arg.values:
-            r = op(v)
-            if r == 0 and not _zero_result_is_positive(op, v):
-                # `neg(+0.0)` is `-0.0`, which a `Fraction` set cannot state.
-                signed_zero = True
-            values.add(r)
-        if signed_zero:
-            return _set_with_signed_zero(frozenset(values))
-        return SetFormat(frozenset(values))
+        # See :func:`exact_binop`: `SetValue` carries the sign of a zero, so
+        # `neg({+0.0})` is exactly `{-0.0}` rather than something widened.
+        set_op = _SET_UNOPS.get(op)
+        if set_op is None:
+            return None
+        return SetFormat(frozenset(set_op(v) for v in arg.values))
     af = _to_abstract(arg)
     if af is None:
         return None
@@ -791,38 +821,25 @@ def _join_bounds(
 def _literal_bound(e) -> FormatBound:
     """A numeric literal's bound: the singleton set of its exact value.
 
-    Except a **signed zero**.  ``SetFormat`` holds :class:`Fraction`s, and a
-    ``Fraction`` has no signed zero — so ``SetFormat({0})`` would assert that
-    ``-0.0`` and ``+0.0`` are the same value.  They are not: ``-0.0`` is a
-    distinct real that compares equal to ``+0.0`` but is distinguishable by
-    ``copysign``, and by division, where ``x / -0.0`` and ``x / +0.0`` have
-    opposite signs.
-
-    So the set cannot state this literal's value, and a bound that cannot state
-    a value must not pretend to.  Report a *format* that does contain it
-    instead: :data:`_SIGNED_ZERO_FORMAT`, whose value set is exactly the two
-    zeros.
-
-    This is the written-out case of the invariant :func:`_zero_result_is_positive`
-    maintains for computed values: a ``SetFormat`` never holds a negative zero,
-    so ``Fraction(0)`` in one always means ``+0.0``.  Here the bound must be
-    *some* format (a literal has no scope to fall back to), which is why this
-    names one rather than returning ``None``.
+    Including a **signed zero**.  ``-0.0`` is a distinct real -- it compares
+    equal to ``+0.0`` but is told apart by ``copysign``, and by division, where
+    ``x / -0.0`` and ``x / +0.0`` have opposite signs -- and a :class:`Fraction`
+    cannot represent it.  :data:`NEG_ZERO` can, so the set states this literal's
+    value exactly like any other.
 
     The discriminator is the literal's **value**, not the type ``as_real``
     happens to return.  ``as_real`` returns a :class:`Float` only for a signed
     zero today, but that invariant lives in :mod:`fpy2.ast.fpyast` and this
-    function cannot enforce it: a ``Float`` holding, say, ``1e-400`` is not a
-    zero, and answering the two-zeros format for it would be a false bound no
-    consumer could detect.  A non-zero ``Float`` *is* an exact rational, so it takes the
-    ``SetFormat`` path; anything else — an infinity or a NaN, which no literal
-    parses to — has no rational value at all, so the honest answer is the
-    scalar top.
+    function cannot enforce it: a ``Float`` holding ``1e-400`` is not a zero, and
+    answering ``NEG_ZERO`` for it would be a false bound no consumer could
+    detect.  A non-zero ``Float`` *is* an exact rational, so it takes the
+    ``as_rational`` path; an infinity or a NaN -- which no literal parses to --
+    has no rational value at all, so the honest answer is the scalar top.
     """
     v = e.as_real()
     if isinstance(v, Float):
         if v.is_zero():
-            return _SIGNED_ZERO_FORMAT
+            return SetFormat.from_value(NEG_ZERO if v.s else Fraction(0))
         if v.isinf or v.isnan:
             return REAL_FORMAT
     return SetFormat.from_value(e.as_rational())

@@ -1392,24 +1392,21 @@ class TestFormatInfer:
             f'expected REAL_FORMAT among s bounds with widening, got {s_bounds}'
         )
 
-    def test_literal_bound_reports_a_format_only_for_a_signed_zero(self):
-        """``_literal_bound`` may only answer ``FP32`` for a value ``FP32``
-        contains.
+    def test_literal_bound_states_a_signed_zero_exactly(self):
+        """A ``-0.0`` literal gets ``SetFormat({NEG_ZERO})`` -- an exact bound.
 
-        A signed zero is the one literal value ``SetFormat`` cannot state, so it
-        gets a format bound instead.  ``as_real`` returns a ``Float`` for
-        exactly that case today -- but that invariant lives in
-        ``fpy2.ast.fpyast``, and answering ``FP32`` on the strength of the
-        *type* would be a false bound the moment some other ``Float`` came
-        back: ``1e-400`` is a ``Float`` and is not in ``FP32``, and no consumer
-        of the bound could detect the lie.  So the discriminator has to be the
-        value.
+        The discriminator is the literal's **value**, not the type ``as_real``
+        returns.  ``as_real`` returns a ``Float`` only for a signed zero today,
+        but that invariant lives in ``fpy2.ast.fpyast`` and ``_literal_bound``
+        cannot enforce it: ``1e-400`` is a ``Float`` and is not a zero, so
+        answering ``NEG_ZERO`` for it would be a false bound no consumer could
+        detect.
         """
-        from fpy2.analysis.format_infer.analysis import _literal_bound
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, _literal_bound
         from fpy2.number import Float
 
         class _FakeLiteral:
-            """A literal whose ``as_real`` hands back the ``Float`` given."""
+            """A literal whose ``as_real`` hands back the value given."""
             def __init__(self, real, rational):
                 self._real, self._rational = real, rational
 
@@ -1419,28 +1416,27 @@ class TestFormatInfer:
             def as_rational(self):
                 return self._rational
 
-        from fpy2.analysis.format_infer.analysis import _SIGNED_ZERO_FORMAT
         neg_zero = _FakeLiteral(Float(s=True, exp=0, c=0), Fraction(0))
-        assert _literal_bound(neg_zero) == _SIGNED_ZERO_FORMAT
-
-        # Not a zero, so the two-zeros format does not contain it.  A `Float` is
-        # an exact rational whenever it is finite, so the set states it exactly.
+        assert _literal_bound(neg_zero) == SetFormat.from_value(NEG_ZERO)
+        # `+0.0` is exactly the integer 0 and keeps its `Fraction`.
+        pos_zero = _FakeLiteral(Float(s=False, exp=0, c=0), Fraction(0))
+        assert _literal_bound(pos_zero) == SetFormat.from_value(Fraction(0))
+        # A finite non-zero `Float` is an exact rational, so it takes that path.
         tiny = Float(s=False, exp=-400, c=1)
-        assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) != _SIGNED_ZERO_FORMAT
         assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) == \
             SetFormat.from_value(tiny.as_rational())
-
         # No rational value at all: the honest bound is the scalar top.
         assert _literal_bound(_FakeLiteral(Float(isinf=True), None)) == REAL_FORMAT
         assert _literal_bound(_FakeLiteral(Float(isnan=True), None)) == REAL_FORMAT
 
-    def test_a_negative_zero_literal_gets_a_float_bound(self):
-        """The end-to-end direction, through the real AST rather than a fake.
+    def test_a_negative_zero_literal_keeps_its_sign_end_to_end(self):
+        """Through the real AST: the two zeros get *different* bounds.
 
-        ``SetFormat`` holds ``Fraction``s and a ``Fraction`` has no signed zero,
-        so ``SetFormat({0})`` would claim ``-0.0`` and ``+0.0`` are one value.
-        They are distinguishable by ``copysign`` and by division.
+        This is what a `Fraction`-only set could not do, and why `-0.0` used to
+        report a whole format instead.
         """
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO
+
         @fp.fpy
         def neg() -> fp.Real:
             with fp.FP64:
@@ -1451,36 +1447,24 @@ class TestFormatInfer:
             with fp.FP64:
                 return 0.0
 
-        neg_info = FormatInfer.analyze(neg.ast)
-        pos_info = FormatInfer.analyze(pos.ast)
-        # `-0.0` reports a format; `+0.0` is exactly the integer 0, so it keeps
-        # the precise singleton set and nothing about it regresses.
-        from fpy2.analysis.format_infer.analysis import _SIGNED_ZERO_FORMAT
-        assert neg_info.fn_fmt.ret_fmt == _SIGNED_ZERO_FORMAT, neg_info.fn_fmt.ret_fmt
-        assert pos_info.fn_fmt.ret_fmt == SetFormat.from_value(Fraction(0)), \
-            pos_info.fn_fmt.ret_fmt
+        assert FormatInfer.analyze(neg.ast).fn_fmt.ret_fmt == \
+            SetFormat.from_value(NEG_ZERO)
+        assert FormatInfer.analyze(pos.ast).fn_fmt.ret_fmt == \
+            SetFormat.from_value(Fraction(0))
 
-    # ``Fraction(0)`` in a ``SetFormat`` means exactly ``+0.0`` -- a ``Fraction``
-    # has no signed zero, and consumers read the set literally (the C++ backend
-    # picks ``uint8_t`` for ``{0}``, which holds neither sign).  So every
-    # operation that may have produced a ``-0.0`` must answer with a format
-    # instead.  See ``format_infer._zero_result_is_positive``.
+    def test_neg_of_a_zero_set_is_exactly_the_other_zero(self):
+        """``-(+0.0)`` is ``-0.0``, stated exactly.
 
-    def test_neg_of_a_zero_set_does_not_stay_a_set(self):
-        """``-(+0.0)`` is ``-0.0``, but ``-Fraction(0) == Fraction(0)``.
-
-        This was a live wrong answer: `z = 0.0; return -z` inferred ``{0}``,
-        stored as ``uint8_t``, and the emitted C++ returned ``+0.0`` where the
-        interpreter returns ``-0.0``.
+        This was the original wrong answer: `z = 0.0; return -z` inferred
+        ``{0}``, stored as ``uint8_t``, and the emitted C++ returned ``+0.0``
+        where the interpreter returns ``-0.0``.
         """
-        from fpy2.analysis.format_infer.analysis import exact_unop
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, exact_unop
         import operator
         zero = SetFormat(frozenset((Fraction(0),)))
-        # Not a set -- and, since Phase 4, a *tight* bound rather than a
-        # give-up: the values are kept and only the zero's sign is surrendered.
-        got = exact_unop(zero, operator.neg)
-        assert not isinstance(got, SetFormat)
-        assert got is not None and got.has_neg_zero
+        assert exact_unop(zero, operator.neg) == SetFormat.from_value(NEG_ZERO)
+        # ...and back again.
+        assert exact_unop(SetFormat.from_value(NEG_ZERO), operator.neg) == zero
         # A set with no zero in it negates exactly, as before.
         assert exact_unop(SetFormat(frozenset((Fraction(2),))), operator.neg) \
             == SetFormat(frozenset((Fraction(-2),)))
@@ -1493,39 +1477,39 @@ class TestFormatInfer:
         assert exact_unop(zero, abs) == zero
 
     def test_mul_to_zero_follows_the_ieee_sign_rule(self):
-        """IEEE 754 §6.3: a product's zero sign is the XOR of the operand
-        signs, in every rounding mode.  So the set path can keep ``{0}`` when
-        neither operand is negative, and must widen when one is."""
-        from fpy2.analysis.format_infer.analysis import exact_binop
+        """IEEE 754 §6.3: a product's zero sign is the XOR of the operand signs,
+        in every rounding mode -- so a negative operand and a ``+0.0`` give
+        ``-0.0`` even though neither operand is a signed zero."""
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, exact_binop
         import operator
         zero = SetFormat(frozenset((Fraction(0),)))
+        nzero = SetFormat.from_value(NEG_ZERO)
         pos = SetFormat(frozenset((Fraction(2),)))
         neg = SetFormat(frozenset((Fraction(-2),)))
         assert exact_binop(zero, pos, operator.mul) == zero
-        for got in (exact_binop(zero, neg, operator.mul),
-                    exact_binop(neg, zero, operator.mul)):
-            assert not isinstance(got, SetFormat)      # may be -0.0
-            assert got is not None and got.has_neg_zero
+        assert exact_binop(zero, neg, operator.mul) == nzero
+        assert exact_binop(neg, zero, operator.mul) == nzero
+        assert exact_binop(nzero, pos, operator.mul) == nzero
+        assert exact_binop(nzero, neg, operator.mul) == zero      # signs agree
 
     def test_add_and_sub_to_zero_follow_the_ieee_sign_rule(self):
-        """An exactly-zero sum of *opposite-signed* operands is ``+0.0`` in
-        every rounding mode except ``roundTowardNegative``.  ``exact_binop``
-        does not know the mode, so it can only keep ``{0}`` where both addends
-        are themselves ``+0.0``.  A difference always has opposite-signed
-        addends (``a - b`` is ``a + (-b)``), so a zero difference always
-        widens -- including ``0 - 0``."""
-        from fpy2.analysis.format_infer.analysis import exact_binop
+        """A sum is ``-0.0`` only when both addends are; ``a - b`` is
+        ``a + (-b)``, which derives every subtraction case without a special
+        rule."""
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, exact_binop
         import operator
         zero = SetFormat(frozenset((Fraction(0),)))
+        nzero = SetFormat.from_value(NEG_ZERO)
         one = SetFormat(frozenset((Fraction(1),)))
         neg_one = SetFormat(frozenset((Fraction(-1),)))
         assert exact_binop(zero, zero, operator.add) == zero
-        for got in (exact_binop(one, neg_one, operator.add),
-                    exact_binop(one, one, operator.sub),
-                    exact_binop(zero, zero, operator.sub)):
-            assert not isinstance(got, SetFormat)
-            assert got is not None and got.has_neg_zero
-        # A non-zero result is unaffected either way.
+        assert exact_binop(nzero, nzero, operator.add) == nzero
+        assert exact_binop(nzero, zero, operator.add) == zero
+        assert exact_binop(one, neg_one, operator.add) == zero
+        assert exact_binop(nzero, zero, operator.sub) == nzero
+        assert exact_binop(zero, zero, operator.sub) == zero
+        assert exact_binop(nzero, nzero, operator.sub) == zero
+        assert exact_binop(one, one, operator.sub) == zero
         assert exact_binop(one, one, operator.add) \
             == SetFormat(frozenset((Fraction(2),)))
 
@@ -1551,13 +1535,16 @@ class TestFormatInfer:
         assert isinstance(acc, SetFormat), acc
         assert Fraction(0) in acc.values, acc
 
-    def test_a_negative_zero_free_variable_gets_no_set_bound(self):
-        """A captured ``-0.0`` is finite, so the old code gave it
-        ``SetFormat({0})`` via ``as_rational`` -- same lie as the literal."""
-        from fpy2.analysis.format_infer.analysis import _free_var_format
+    def test_a_negative_zero_free_variable_keeps_its_sign(self):
+        """A captured ``-0.0`` is statable, so it gets a set like any capture.
+
+        The old code handed it ``SetFormat({0})`` via ``as_rational``, which said
+        it was ``+0.0``."""
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, _free_var_format
         from fpy2.number import Float
-        assert _free_var_format(Float(s=True, exp=0, c=0)) is None
-        # A `+0.0` capture is exactly the integer 0 and keeps its singleton.
+        assert _free_var_format(Float(s=True, exp=0, c=0)) \
+            == SetFormat.from_value(NEG_ZERO)
+        # A `+0.0` capture is exactly the integer 0 and keeps its `Fraction`.
         assert _free_var_format(Float(s=False, exp=0, c=0)) \
             == SetFormat(frozenset((Fraction(0),)))
 

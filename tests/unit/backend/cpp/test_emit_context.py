@@ -323,10 +323,10 @@ class TestRealScopeLosslessWidening:
 
         The *result* is ``float``, not ``uint8_t``: ``F * {0}`` no longer infers
         ``{0}``, because IEEE 754 makes that product ``-0.0`` for a negative
-        multiplicand and NaN for an infinite one, and neither is a value a
-        ``Fraction`` set can state.  See ``format_infer._zero_result_is_positive``.  A
-        ``uint8_t`` result was the old, unsound answer -- it is what made
-        ``0.0 * inf`` compile to ``static_cast<uint8_t>(NaN)``.
+        multiplicand and NaN for an infinite one -- and a ``Format`` operand
+        cannot rule either out.  A ``uint8_t`` result was the old, unsound
+        answer: it is what made ``0.0 * inf`` compile to
+        ``static_cast<uint8_t>(NaN)``.
         """
         @fp.fpy(ctx=fp.FP32)
         def f() -> fp.Real:
