@@ -53,6 +53,7 @@ class MPBFixedFormat(SizedFormat):
         neg_maxval: RealFloat | None = None,
         enable_nan: bool = False,
         enable_inf: bool = False,
+        enable_neg_zero: bool = True,
     ):
         if not isinstance(nmin, int):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
@@ -82,8 +83,9 @@ class MPBFixedFormat(SizedFormat):
         self.neg_maxval = neg_maxval
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
+        self.enable_neg_zero = enable_neg_zero
 
-        self._mp_fmt = MPFixedFormat(nmin, enable_nan, enable_inf)
+        self._mp_fmt = MPFixedFormat(nmin, enable_nan, enable_inf, enable_neg_zero)
         self._pos_maxval_ord = self._mp_fmt._to_ordinal(pos_maxval)
         self._neg_maxval_ord = self._mp_fmt._to_ordinal(neg_maxval)
 
@@ -95,6 +97,7 @@ class MPBFixedFormat(SizedFormat):
             and self.neg_maxval == other.neg_maxval
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
+            and self.enable_neg_zero == other.enable_neg_zero
         )
 
     def __hash__(self):
@@ -105,6 +108,7 @@ class MPBFixedFormat(SizedFormat):
             self.neg_maxval,
             self.enable_nan,
             self.enable_inf,
+            self.enable_neg_zero,
         ))
 
     @property
@@ -113,6 +117,8 @@ class MPBFixedFormat(SizedFormat):
         return self.nmin + 1
 
     def representable_in(self, x: RealFloat | Float) -> bool:
+        if isinstance(x, Float | RealFloat) and x.is_zero() and x.s and not self.enable_neg_zero:
+            return False
         if not self._mp_fmt.representable_in(x):
             return False
         if not x.is_nonzero():
