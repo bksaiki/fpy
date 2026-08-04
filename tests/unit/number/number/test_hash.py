@@ -10,7 +10,6 @@ produce, i.e., they must follow the numeric hash specification.
 from fractions import Fraction
 
 import fpy2 as fp
-import pytest
 from hypothesis import given, strategies as st
 
 from ...generators import floats, real_floats
@@ -60,9 +59,10 @@ class TestHashEqContract:
     def test_real_float_hash_is_stable(self, x):
         assert hash(x) == hash(x)
 
-    @given(floats(prec_max=_PREC, exp_min=_EXP_MIN, exp_max=_EXP_MAX,
-                  allow_nan=False))
+    @given(floats(prec_max=_PREC, exp_min=_EXP_MIN, exp_max=_EXP_MAX))
     def test_float_hash_is_stable(self, x):
+        # NaN included: the allocation between the two calls claims the address
+        # an identity-based NaN hash would otherwise be handed twice in a row
         h1 = hash(x)
         keepalive = [float('nan')]  # noqa: F841
         h2 = hash(x)
@@ -162,11 +162,6 @@ class TestSpecialValues:
         assert fp.Float.inf() == float('inf')
         assert fp.Float.inf(s=True) == float('-inf')
 
-    @pytest.mark.xfail(reason=(
-        '`Float.__hash__` returns `hash(float(\'nan\'))` for NaN, which is '
-        'identity-based since Python 3.10 (bpo-43475) and so is not a '
-        'constant: it varies per call, per NaN value, and per process'
-    ))
     def test_nan_hash_is_constant(self):
         # NaN is not equal to itself, so no *particular* hash is required, but
         # the hash must at least be a constant: otherwise a NaN key cannot be
@@ -181,7 +176,6 @@ class TestSpecialValues:
             keepalive.append(float('nan'))
         assert len(set(hashes)) == 1, f'NaN hashes differ: {hashes}'
 
-    @pytest.mark.xfail(reason='same cause as `test_nan_hash_is_constant`')
     def test_nan_survives_dict_roundtrip(self):
         nan = fp.Float.nan()
         d = {nan: 'value'}
