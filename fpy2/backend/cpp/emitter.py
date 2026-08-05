@@ -107,6 +107,7 @@ from ...ast.fpyast import (
     Range2,
     Range3,
     Rational,
+    RationalVal,
     ReturnStmt,
     Round,
     Signbit,
@@ -161,6 +162,7 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTP: 'FE_UPWARD',
     RM.RTN: 'FE_DOWNWARD',
 }
+
 
 
 def _as_exact_double(v: Fraction) -> float | None:
@@ -351,6 +353,15 @@ class CppEmitter(Visitor):
         # the ``fesetround`` to keep simple ``with FP64:`` blocks
         # under an FP64-RNE function free of fenv noise.
         self._current_rm: RM | None = None
+        self._fenv_saved: list[str] = []
+        """Names holding the saved mode of each enclosing ``fesetround`` scope,
+        outermost first.
+
+        A ``return`` jumps over the restore at the end of every scope it sits
+        inside, so :meth:`_visit_return` restores from this before returning.
+        ``return`` is the only way out of a scope early -- FPy has no ``break``
+        or ``continue`` -- so this covers every path.
+        """
 
     # ------------------------------------------------------------------
     # List representation
@@ -1193,7 +1204,47 @@ class CppEmitter(Visitor):
         # at that storage where the value is constructed here, converted where
         # it comes from somewhere with storage of its own.
         rhs = self._emit_at(stmt.expr, self._return_storage, ctx)
+        if self._fenv_saved:
+            # This `return` is inside at least one `fesetround` scope, and it
+            # jumps over the restore each of those scopes emits after its body.
+            # Left alone, the mode escapes into the caller and silently changes
+            # arithmetic that has nothing to do with this function.
+            #
+            # The value has to be materialized first: it must be computed under
+            # this scope's mode, and C++ gives no point between evaluating a
+            # return expression and returning.  Unless the mode cannot affect it
+            # anyway, where a copy would cost a whole vector on a list return.
+            # Not `const`, so the return can still move out of the temp when one
+            # is needed.
+            #
+            # One restore, from the outermost scope: it saved the mode from
+            # before any of them were entered, which is the caller's.
+            if not self._mode_independent(stmt.expr):
+                ty = self._return_storage
+                tmp = self._fresh_temp()
+                decl = 'auto' if ty is None else ty.format()
+                self.writer.add_line(f'{decl} {tmp} = {rhs};')
+                rhs = tmp
+            self.writer.add_line(f'std::fesetround({self._fenv_saved[0]});')
         self.writer.add_line(f'return {rhs};')
+
+    def _mode_independent(self, e: Expr) -> bool:
+        """Is the emitted value of *e* independent of the live rounding mode?
+
+        A :class:`Var` already holds its value, and a literal — including one
+        ``_fold_rounded_literal`` produces, which is rounded at compile time
+        under the mode the program asked for — is a constant expression.
+
+        Asked of the AST rather than of the emitted text.  A text test would
+        have to track how a literal is *spelled*, and that spelling is not
+        stable: a narrow target already comes back from
+        :meth:`_fold_rounded_literal` wrapped in a ``static_cast``.  Answering
+        ``False`` costs a temp, never correctness, so anything unrecognized
+        falls through.
+        """
+        if isinstance(e, Var | RationalVal):
+            return True
+        return isinstance(e, Round) and self._fold_rounded_literal(e) is not None
 
     def _resolve_scope_ctx(self, scope: ContextScope) -> Context | None:
         """Concrete :class:`Context` for *scope*, substituting the
@@ -1350,9 +1401,11 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'const auto {fenv} = std::fegetround();')
         self.writer.add_line(f'std::fesetround({_FE_RM_MACRO[target_rm]});')
         self._current_rm = target_rm
+        self._fenv_saved.append(fenv)
         try:
             yield
         finally:
+            self._fenv_saved.pop()
             self._current_rm = prev_rm
         self.writer.add_line(f'std::fesetround({fenv});')
 
@@ -2568,7 +2621,7 @@ class CppEmitter(Visitor):
         Rounding at compile time also uses the mode the program asked for
         rather than whatever ``fesetround`` last left behind.
         """
-        if not isinstance(e.arg, Decnum | Hexnum | Rational | Digits | Integer):
+        if not isinstance(e.arg, RationalVal):
             return None
         active = self._active_ctx_for(e)
         if not isinstance(active, EFloatContext):

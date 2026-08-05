@@ -1113,6 +1113,139 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
     return []
 
 
+_RTZ_64 = fp.IEEEContext(11, 64, fp.RM.RTZ)
+_RTP_64 = fp.IEEEContext(11, 64, fp.RM.RTP)
+
+
+@fp.fpy
+def _fenv_early_return(x: fp.Real) -> fp.Real:
+    """Returns from *inside* a rounding scope.
+
+    The restore a scope emits after its body is unreachable from here, so
+    without a restore before the return the mode escapes into the caller.
+    """
+    with _RTZ_64:
+        y = x + 1.0
+        return y
+
+
+@fp.fpy
+def _fenv_return_after_scope(x: fp.Real) -> fp.Real:
+    """The counterweight: execution leaves the scope normally.
+
+    The restore has to still happen at the end of the block, or `z` is computed
+    under the scope's mode instead of the function's.
+    """
+    with _RTZ_64:
+        y = x + 1.0
+    z = y + 1.0
+    return z
+
+
+@fp.fpy
+def _fenv_nested_early_return(x: fp.Real) -> fp.Real:
+    """Two scopes deep, so the restore has to reach past both."""
+    with _RTZ_64:
+        with _RTP_64:
+            y = x + 1.0
+            return y
+
+
+def _test_fenv(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
+    """A kernel must not change the caller's rounding mode.
+
+    The differential driver cannot see this: it compares a kernel's *own*
+    result, and a leaked mode is correct there and wrong everywhere after.  So
+    the check is a driver that inspects `fegetround` across a call, and computes
+    a sum whose value differs between the modes involved.
+    """
+    group = 'fenv'
+    compiler = fp.CppCompiler()
+    cpp_path = output_dir / 'fenv_boundary.cpp'
+    print(f'Compiling fenv boundary test to `{cpp_path}`')
+    real = fp.types.RealType(fp.FP64)
+    module = fp.Module()
+    module.add(_fenv_early_return, ctx=fp.FP64, arg_types=[real])
+    module.add(_fenv_return_after_scope, ctx=fp.FP64, arg_types=[real])
+    module.add(_fenv_nested_early_return, ctx=fp.FP64, arg_types=[real])
+    with open(cpp_path, 'w') as f:
+        print('\n'.join(compiler.headers()), file=f)
+        print('#include <cstdio>', file=f)
+        print(compiler.helpers(), file=f)
+        print(compiler.compile_module(module), file=f)
+        print(_FENV_MAIN, file=f)
+
+    if mode == 'emit':
+        return []
+    if _CXX is None:
+        print('  SKIPPED (no C++ compiler driver)')
+        return []
+
+    exe = cpp_path.with_suffix('.exe')
+    try:
+        subprocess.run(
+            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f'  FAILED to build: {e.stderr[-400:]}')
+        return [(group, 'fenv_boundary', f'build failed: {e.stderr[-200:]}')]
+
+    r = subprocess.run([str(exe)], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
+        return [(group, 'fenv_boundary', f'assertion failed: {r.stdout.strip()}')]
+    return []
+
+
+_FENV_MAIN: str = """\
+// 1.0 + 1.5e-16 is just past half an ulp of 1.0, so RNE rounds it up and RTZ
+// truncates -- the cheapest expression that tells the two modes apart.
+static bool nearest_is_live() {
+    volatile double a = 1.0, b = 1.5e-16;
+    return (a + b) != 1.0;
+}
+
+int main() {
+    std::fesetround(FE_TONEAREST);
+    if (!nearest_is_live()) {
+        printf("precondition: FE_TONEAREST not in effect\\n");
+        return 1;
+    }
+
+    volatile double r = _fenv_early_return(1.0);
+    (void)r;
+    if (std::fegetround() != FE_TONEAREST || !nearest_is_live()) {
+        printf("_fenv_early_return leaked its rounding mode\\n");
+        return 1;
+    }
+
+    r = _fenv_nested_early_return(1.0);
+    (void)r;
+    if (std::fegetround() != FE_TONEAREST || !nearest_is_live()) {
+        printf("_fenv_nested_early_return leaked its rounding mode\\n");
+        return 1;
+    }
+
+    r = _fenv_return_after_scope(1.0);
+    (void)r;
+    if (std::fegetround() != FE_TONEAREST || !nearest_is_live()) {
+        printf("_fenv_return_after_scope leaked its rounding mode\\n");
+        return 1;
+    }
+
+    // ...and the scope still applied while it was open: 1.0 + 1.0 is exact, so
+    // both statements give 3 under any mode -- this pins the value, not the mode
+    if (_fenv_return_after_scope(1.0) != 3.0) {
+        printf("_fenv_return_after_scope computed %g, wanted 3\\n",
+               _fenv_return_after_scope(1.0));
+        return 1;
+    }
+    return 0;
+}
+"""
+
+
 _ABI_MAIN: str = """\
 int main() {
     // borrow: shares the caller's buffer, so the kernel's writes land in it
@@ -2031,6 +2164,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     failures += _test_runtime(output_dir, mode=mode)
     failures += _test_abi(output_dir, mode=mode)
     failures += _test_abi_native(output_dir, mode=mode)
+    failures += _test_fenv(output_dir, mode=mode)
     failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)
     failures += _test_regressions(output_dir, mode=mode, cov=cov)
