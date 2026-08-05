@@ -117,8 +117,8 @@ class MPBFixedFormat(SizedFormat):
         return self.nmin + 1
 
     def representable_in(self, x: RealFloat | Float) -> bool:
-        if isinstance(x, Float | RealFloat) and x.is_zero() and x.s and not self.enable_neg_zero:
-            return False
+        # `_mp_fmt` carries the same `enable_neg_zero`, so it rejects a
+        # negative zero on this format's behalf
         if not self._mp_fmt.representable_in(x):
             return False
         if not x.is_nonzero():
@@ -293,6 +293,7 @@ class MPBFixedContext(SizedContext):
         rng: RNG | None = None,
         enable_nan: bool = False,
         enable_inf: bool = False,
+        enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ):
@@ -326,7 +327,9 @@ class MPBFixedContext(SizedContext):
                         raise ValueError('Rounding Inf to unrepresentable value')
 
         # delegate format-level validation/normalization
-        self._fmt = MPBFixedFormat(nmin, maxval, neg_maxval, enable_nan, enable_inf)
+        self._fmt = MPBFixedFormat(
+            nmin, maxval, neg_maxval, enable_nan, enable_inf, enable_neg_zero,
+        )
 
         self.nmin = nmin
         self.pos_maxval = self._fmt.pos_maxval
@@ -337,6 +340,7 @@ class MPBFixedContext(SizedContext):
         self.rng = rng
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
+        self.enable_neg_zero = enable_neg_zero
         self.nan_value = nan_value
         self.inf_value = inf_value
 
@@ -351,6 +355,7 @@ class MPBFixedContext(SizedContext):
             and self.num_randbits == other.num_randbits
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
+            and self.enable_neg_zero == other.enable_neg_zero
             and self.nan_value == other.nan_value
             and self.inf_value == other.inf_value
         )
@@ -365,6 +370,7 @@ class MPBFixedContext(SizedContext):
             self.num_randbits,
             self.enable_nan,
             self.enable_inf,
+            self.enable_neg_zero,
             self.nan_value,
             self.inf_value
         ))
@@ -380,6 +386,7 @@ class MPBFixedContext(SizedContext):
         rng: DefaultOr[RNG | None] = DEFAULT,
         enable_nan: DefaultOr[bool] = DEFAULT,
         enable_inf: DefaultOr[bool] = DEFAULT,
+        enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
@@ -402,6 +409,8 @@ class MPBFixedContext(SizedContext):
             enable_nan = self.enable_nan
         if enable_inf is DEFAULT:
             enable_inf = self.enable_inf
+        if enable_neg_zero is DEFAULT:
+            enable_neg_zero = self.enable_neg_zero
         if nan_value is DEFAULT:
             nan_value = self.nan_value
         if inf_value is DEFAULT:
@@ -418,6 +427,7 @@ class MPBFixedContext(SizedContext):
             rng=rng,
             enable_nan=enable_nan,
             enable_inf=enable_inf,
+            enable_neg_zero=enable_neg_zero,
             nan_value=nan_value,
             inf_value=inf_value
         )
@@ -459,6 +469,7 @@ class MPBFixedContext(SizedContext):
             rng=rng,
             enable_nan=fmt.enable_nan,
             enable_inf=fmt.enable_inf,
+            enable_neg_zero=fmt.enable_neg_zero,
             nan_value=nan_value,
             inf_value=inf_value,
         )
@@ -526,11 +537,11 @@ class MPBFixedContext(SizedContext):
                 raise RuntimeError(f'unreachable {x}')
 
         # step 2. shortcut for exact zero values
-        # the sign is preserved: this format has a negative zero.
-        # `FixedContext` overrides `_round_at` to strip it, since two's
-        # complement does not.
+        # the sign is preserved only when this context has a negative zero;
+        # `FixedContext` is one that does not, since two's complement has a
+        # single encoding of zero
         if xr.is_zero():
-            return Float(s=xr.s, ctx=self)
+            return Float(s=xr.s and self.enable_neg_zero, ctx=self)
 
         # step 3. round value based on rounding parameters
         xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, rng=self.rng, exact=exact)
@@ -564,8 +575,12 @@ class MPBFixedContext(SizedContext):
             result._real._flags._set_inexact(True)
             return result
 
-        # step 5. return the rounded value
-        return Float(x=xr, ctx=self)
+        # step 5. return the rounded value.
+        if xr.is_zero() and xr.s and not self.enable_neg_zero:
+            # if -0 is not enabled, then return +0 instead of -0
+            return Float(x=xr, s=False, ctx=self)
+        else:
+            return Float(x=xr, ctx=self)
 
     def round(self, x, *, exact: bool = False):
         x = self._round_prepare(x)

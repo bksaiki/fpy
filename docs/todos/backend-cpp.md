@@ -26,8 +26,9 @@ bottom. Narrower questions have their own documents:
   Closed: the bound is sound, and the shape it used to refuse now compiles. A
   callee's list parameter still refuses, on ABI grounds.
 - `reals-in-integer-storage.md` — a real narrowed into an integer holds neither
-  `-0.0` nor NaN. Mostly closed: the narrowing is now gated on the bound
-  genuinely excluding those. One case remains, plus a latent bypass.
+  `-0.0` nor NaN. Closed: the narrowing is gated on the bound genuinely
+  excluding those, and `enable_neg_zero` lets a format say which zeros it holds.
+  Only the open question of whether to keep the narrowing at all remains.
 - **`cpp-literal-tokens-and-sum.md`** — the largest remaining set of known
   divergences between the emitted C++ and the interpreter.
 

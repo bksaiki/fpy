@@ -63,7 +63,10 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
         pos_maxval, neg_maxval = _fixed_to_mpb_fixed(signed, scale, nbits)
         nmin = scale - 1
 
-        MPBFixedFormat.__init__(self, nmin, pos_maxval, neg_maxval)
+        # unlike sign-magnitude, two's complement has a single encoding
+        # of zero, so a negative zero is not representable
+        MPBFixedFormat.__init__(self, nmin, pos_maxval, neg_maxval,
+                                enable_neg_zero=False)
         self.signed = signed
         self.scale = scale
         self.nbits = nbits
@@ -84,13 +87,6 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
 
     def total_bits(self) -> int:
         return self.nbits
-
-    def representable_in(self, x: RealFloat | Float) -> bool:
-        # unlike sign-magnitude, two's complement has a single encoding
-        # of zero, so a negative zero is not representable
-        if isinstance(x, Float | RealFloat) and x.is_zero() and x.s:
-            return False
-        return super().representable_in(x)
 
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
@@ -196,7 +192,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
         super().__init__(
             nmin, pos_maxval, rm, overflow, num_randbits,
             neg_maxval=neg_maxval, rng=rng,
-            enable_nan=False, enable_inf=False,
+            enable_nan=False, enable_inf=False, enable_neg_zero=False,
             nan_value=nan_value, inf_value=inf_value
         )
 
@@ -244,15 +240,6 @@ class FixedContext(MPBFixedContext, EncodableContext):
 
     def format(self) -> FixedFormat:
         return FixedFormat(self.signed, self.scale, self.nbits)
-
-    def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
-        r = super()._round_at(x, n, exact)
-        if r.is_zero() and r.s:
-            # rounding a negative value toward zero produces a negative zero,
-            # which two's complement cannot represent; normalize it away so
-            # that `self.round()` always returns a representable value
-            return Float(x=r, s=False, ctx=self)
-        return r
 
     @classmethod
     def from_format(

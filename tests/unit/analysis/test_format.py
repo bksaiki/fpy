@@ -11,6 +11,7 @@ from fractions import Fraction
 from typing import Generator
 
 from fpy2.analysis.format_infer import AbstractFormat
+from fpy2.number.context.mp_fixed import MPFixedFormat
 
 def is_power_of_two(v: Fraction) -> bool:
     assert v > 0
@@ -154,30 +155,32 @@ class TestAbstractFormat():
             assert af.format().representable_in(self._NZ) is hnz
             assert AbstractFormat.from_format(af.format()).has_neg_zero is hnz
 
-    def test_unbounded_fixed_point_is_not_believed_about_neg_zero(self):
-        """`MPFixedFormat` is taken as having no negative zero, whatever it says.
+    def test_unbounded_fixed_point_is_believed_about_neg_zero(self):
+        """`MPFixedFormat` is believed about its negative zero, in both
+        directions.
 
-        FPy's `INTEGER` really does hold one, deliberately.  But C++ has no
-        integer type that does, and believing the format costs integer storage
-        everywhere -- it retypes `range` counters as `float` and diverges the
-        loop fixpoint in `test_while{5,6,7}_rounded` to `REAL_FORMAT`.
-
-        This test should **fail** once that is fixed properly (either
-        `MPFixedContext` flattens signed zeros, or the backend stops storing
-        `INTEGER`-bounded reals in `int64_t`).  That is the point: the carve-out
-        and the divergence it defers -- negating an integer whose zero is not
-        statically known -- go away together.
+        `MPFixedFormat` was once carved out and taken as having none whatever it
+        said, which is what made `-x` on an `INTEGER` parameter return `0` where
+        the interpreter returned `-0.0`.  See
+        `docs/todos/reals-in-integer-storage.md`.
         """
         nz = fp.RealFloat(s=True, exp=0, c=0)
-        assert fp.INTEGER.format().representable_in(nz)          # the format says yes
+        # `INTEGER` declines it, and the abstraction agrees.
+        assert not fp.INTEGER.format().representable_in(nz)
         assert not AbstractFormat.from_format(fp.INTEGER.format()).has_neg_zero
 
-    def test_bounded_fixed_point_is_still_believed(self):
-        """The carve-out stops at the *unbounded* case.
+        # ...while an `MPFixedFormat` that does hold one is believed.
+        with_nz = MPFixedFormat(nmin=-1, enable_neg_zero=True)
+        assert with_nz.representable_in(nz)
+        assert AbstractFormat.from_format(with_nz).has_neg_zero
+
+    def test_bounded_fixed_point_is_believed(self):
+        """The *bounded* case, which reaches `from_format` by a different
+        `match` arm than the unbounded one above.
 
         `MPBFixedFormat.enable_neg_zero` is what lets a bound say "this really
         can be a negative zero" and so reach a float storage — the whole reason
-        the flag exists.  Extending the carve-out to it would silently undo that.
+        the flag exists.
         """
         pz = fp.RealFloat(s=False, exp=0, c=0)
         nz = fp.RealFloat(s=True, exp=0, c=0)

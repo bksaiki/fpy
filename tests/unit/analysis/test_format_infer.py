@@ -1396,20 +1396,13 @@ class TestFormatInfer:
             f'expected REAL_FORMAT among s bounds with widening, got {s_bounds}'
         )
 
-    def test_integer_valued_ops_do_not_inherit_integers_signed_zero(self):
-        """`_INTEGER_FORMAT` is not `INTEGER.format()`, though the grids match.
-
-        `INTEGER` is a rounding *context* and FPy's has a signed zero; a *count*
-        does not -- a list length is an integer, and an integer has one zero.
-        Conflating them made believing that signed zero unaffordable: every
-        counter and length inherited it, no C++ integer type holds one, so they
-        all widened to `float`.
+    def test_integer_valued_ops_do_not_inherit_a_signed_zero(self):
+        """A *count* has one zero -- a list length is an integer, which is what
+        `INTEGER` describes, so `_INTEGER_FORMAT` need not be distinct from it.
         """
         from fpy2.analysis.format_infer.format import AbstractFormat
-        assert _INTEGER_FORMAT != fp.INTEGER.format()
+        assert _INTEGER_FORMAT == fp.INTEGER.format()
         assert not AbstractFormat.from_format(_INTEGER_FORMAT).has_neg_zero
-        # ...but they describe the same value grid.
-        assert _INTEGER_FORMAT.nmin == fp.INTEGER.format().nmin
 
     def test_an_integer_count_keeps_an_integer_storage(self):
         """The consequence at the backend: `len(xs)` stays an integer."""

@@ -234,12 +234,15 @@ See the IEEE P3109 working group for more information:
 https://github.com/P3109/Public/blob/main/IEEE%20WG%20P3109%20Interim%20Report.pdf
 """
 
-INTEGER = MPFixedContext(-1, RM.RTZ)
+INTEGER = MPFixedContext(-1, RM.RTZ, enable_neg_zero=False)
 """
 Alias for an arbitrary-precision integer context with
 round towards zero rounding mode.
 
-Numbers rounded under this context behave like Python's native `int` type.
+Numbers rounded under this context behave like Python's native `int` type,
+which is why `-0.0` is not representable: an `int` has a single zero.  The
+underlying `MPFixedContext` does have a signed zero, so a caller wanting one
+can ask for it; this alias declines.
 """
 
 SINT8 = FixedContext(True, 0, 8, RM.RTZ, OV.WRAP)
