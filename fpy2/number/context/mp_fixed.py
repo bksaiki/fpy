@@ -186,6 +186,7 @@ class MPFixedContext(OrdinalContext):
 
     - `enable_nan`: if `True`, then NaN is representable [default: `False`]
     - `enable_inf`: if `True`, then infinity is representable [default: `False`]
+    - `enable_neg_zero`: if `True`, then `-0.0` is representable [default: `True`]
     - `nan_value`: if NaN is not enabled, what value should NaN round to? [default: `None`];
       if not set, then `round()` will raise a `ValueError` on NaN.
     - `inf_value`: if Inf is not enabled, what value should Inf round to? [default: `None`];
@@ -213,6 +214,16 @@ class MPFixedContext(OrdinalContext):
     enable_inf: bool
     """is infinity representable?"""
 
+    enable_neg_zero: bool
+    """is `-0.0` representable?
+
+    True by default: this format is sign-magnitude, so a zero carries a sign like
+    any other value.  Set false for a number system with a single zero -- FPy's
+    `INTEGER` is one, and two's complement is the reason `FixedContext` is
+    another.  When false, `round()` normalizes a negative zero away, so
+    `representable_in` and `round` agree.
+    """
+
     nan_value: Float | None
     """
     if NaN is not enabled, what value should NaN round to?
@@ -234,6 +245,7 @@ class MPFixedContext(OrdinalContext):
         rng: RNG | None = None,
         enable_nan: bool = False,
         enable_inf: bool = False,
+        enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ):
@@ -247,6 +259,8 @@ class MPFixedContext(OrdinalContext):
             raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
         if not isinstance(enable_inf, bool):
             raise TypeError(f'Expected \'bool\' for enable_inf={enable_inf}, got {type(enable_inf)}')
+        if not isinstance(enable_neg_zero, bool):
+            raise TypeError(f'Expected \'bool\' for enable_neg_zero={enable_neg_zero}, got {type(enable_neg_zero)}')
 
         if nan_value is not None:
             if not isinstance(nan_value, Float):
@@ -276,6 +290,7 @@ class MPFixedContext(OrdinalContext):
         self.rng = rng
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
+        self.enable_neg_zero = enable_neg_zero
         self.nan_value = nan_value
         self.inf_value = inf_value
 
@@ -287,6 +302,7 @@ class MPFixedContext(OrdinalContext):
             and self.num_randbits == other.num_randbits
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
+            and self.enable_neg_zero == other.enable_neg_zero
             and self.nan_value == other.nan_value
             and self.inf_value == other.inf_value
         )
@@ -298,6 +314,7 @@ class MPFixedContext(OrdinalContext):
             self.num_randbits,
             self.enable_nan,
             self.enable_inf,
+            self.enable_neg_zero,
             self.nan_value,
             self.inf_value
         ))
@@ -316,6 +333,7 @@ class MPFixedContext(OrdinalContext):
         rm: DefaultOr[RoundingMode] = DEFAULT,
         enable_nan: DefaultOr[bool] = DEFAULT,
         enable_inf: DefaultOr[bool] = DEFAULT,
+        enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
@@ -330,6 +348,8 @@ class MPFixedContext(OrdinalContext):
             enable_nan = self.enable_nan
         if enable_inf is DEFAULT:
             enable_inf = self.enable_inf
+        if enable_neg_zero is DEFAULT:
+            enable_neg_zero = self.enable_neg_zero
         if nan_value is DEFAULT:
             nan_value = self.nan_value
         if inf_value is DEFAULT:
@@ -347,6 +367,7 @@ class MPFixedContext(OrdinalContext):
             rng=rng,
             enable_nan=enable_nan,
             enable_inf=enable_inf,
+            enable_neg_zero=enable_neg_zero,
             nan_value=nan_value,
             inf_value=inf_value
         )
@@ -355,7 +376,9 @@ class MPFixedContext(OrdinalContext):
         return self.num_randbits != 0
 
     def format(self) -> MPFixedFormat:
-        return MPFixedFormat(self.nmin, self.enable_nan, self.enable_inf)
+        return MPFixedFormat(
+            self.nmin, self.enable_nan, self.enable_inf, self.enable_neg_zero,
+        )
 
     @classmethod
     def from_format(
@@ -378,6 +401,7 @@ class MPFixedContext(OrdinalContext):
             rng=rng,
             enable_nan=fmt.enable_nan,
             enable_inf=fmt.enable_inf,
+            enable_neg_zero=fmt.enable_neg_zero,
             nan_value=nan_value,
             inf_value=inf_value,
         )
@@ -426,15 +450,22 @@ class MPFixedContext(OrdinalContext):
                 raise RuntimeError(f'unreachable {x}')
 
         # step 2. shortcut for exact zero values
-        # the sign is preserved: this format has a negative zero
+        # the sign is preserved when this context has a negative zero
         if xr.is_zero():
-            return Float(s=xr.s, ctx=self)
+            s = xr.s and self.enable_neg_zero
+            return Float(s=s, ctx=self)
 
         # step 3. round value based on rounding parameters
         xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, rng=self.rng, exact=exact)
 
-        # step 4. wrap the value in a Float
-        return Float(x=xr, ctx=self)
+        # step 4. compute the actual sign
+        if xr.is_zero() and xr.s and not self.enable_neg_zero:
+            s = False
+        else:
+            s = xr.s
+
+        # step 5. wrap the value in a Float
+        return Float(x=xr, s=s, ctx=self)
 
     def round(self, x, *, exact: bool = False) -> Float:
         x = self._round_prepare(x)
