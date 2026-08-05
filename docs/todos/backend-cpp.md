@@ -22,9 +22,11 @@ bottom. Narrower questions have their own documents:
 
 - `unboxing-gaps.md` — what stays boxed, and why.
 - `cpp-narrower-variable-at-a-join.md` — two element types meeting at one place.
-- `format-infer-aliasing.md` — an unsound bound the backend inherits.
-- **`reals-in-integer-storage.md`** — the largest open correctness problem: a
-  real narrowed into an integer holds neither `-0.0` nor NaN.
+- **`format-infer-aliasing.md`** — the largest open correctness problem: an
+  unsound bound the backend inherits, currently held back by a refusal.
+- `reals-in-integer-storage.md` — a real narrowed into an integer holds neither
+  `-0.0` nor NaN. Mostly closed: the narrowing is now gated on the bound
+  genuinely excluding those. One case remains, plus a latent bypass.
 - `cpp-literal-tokens-and-sum.md` — three smaller disagreements between the
   emitted C++ and the interpreter.
 
