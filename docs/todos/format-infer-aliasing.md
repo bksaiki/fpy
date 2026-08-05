@@ -71,6 +71,20 @@ That would make this exact by construction and would benefit every analysis, not
 just this one. Worth doing if the exclusion turns out to be too blunt; nothing
 measured so far says it is.
 
+**A list aliased through a tuple still refuses, now in the backend.**
+`_gen_list_into_tuple` — `t = (xs, y); zs = fp.fst(t); zs[0] = y; return xs[0]` —
+gets a sound bound: `xs` widens to `fpy::list<double>` and so does the tuple's
+field. But the emitter still wants a `float` element somewhere and refuses:
+
+```
+unsupported: `xs` holds `double` elements where `float` is needed.
+```
+
+The refusal predates this work (it was the mirror of this message, `float` where
+`double` was needed). What changed is which half is wrong: the analysis is now
+consistent, so the remaining disagreement is the backend computing a stale
+element type for the tuple field.
+
 **`Alias` runs without escape summaries.** `format_infer` calls it with none, so
 it is maximally conservative about what a call may retain. That over-approximates
 the aliasing, which is the safe direction here (more aliasing means more

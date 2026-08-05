@@ -439,34 +439,19 @@ class AbstractFormat:
         af.has_nan = fmt.representable_in(Float.nan())
         # `MPFixedFormat` is taken as having no negative zero, whatever it says.
         #
-        # TODO: this is a lie and it needs fixing.  `MPFixedFormat` backs FPy's
-        # `INTEGER`, which really does hold a negative zero, deliberately -- but
-        # no C++ integer type does.
+        # TODO: a lie, and the last one here.  `MPFixedFormat` backs FPy's
+        # `INTEGER`, which does hold a negative zero -- but no C++ integer type
+        # does, and believing it diverges the loop fixpoint in
+        # `test_while{5,6,7}_rounded` to `REAL_FORMAT`, which nothing can store.
+        # It costs one divergence: `-x` for an `INTEGER` parameter `x == 0` gives
+        # `-0.0` from the interpreter and `0` from compiled code.  A *literal*
+        # zero is fine -- its bound is a `SetFormat`, which states the sign.
+        # `docs/todos/reals-in-integer-storage.md` has the diagnosis and the two
+        # candidate fixes.
         #
-        # The scope is now as narrow as it can be made from this side.  Integer
-        # *counts* no longer need the lie: `format_infer._INTEGER_FORMAT` is its
-        # own `MPFixedFormat` with `enable_neg_zero=False`, because a list length
-        # is an integer and an integer has one zero.  What remains is a real
-        # rounded under an ``INTEGER`` *scope*, whose bound is `INTEGER.format()`
-        # itself.
-        #
-        # Believing *that* is what is still unaffordable, and the obstacle is no
-        # longer storage selection -- it is the loop fixpoint.  For `x += 1`
-        # inside `with fp.INTEGER:`, the scope admits a `-0.0` while the sum
-        # provably cannot be one (a sum is `-0.0` only when both addends are), so
-        # `scope_af <= exact` correctly fails, `_bound_if_fits` takes its
-        # mixed-overlap branch, and `test_while{5,6,7}_rounded` widen to
-        # `REAL_FORMAT` -- which no C++ type can hold.  Intersecting the
-        # membership flags in that branch was tried and does not converge either.
-        #
-        # So the fix is either to stop `MPFixedContext` preserving signed zeros
-        # (contradicting `TestMPFixedKeepsNegativeZero`), or to make that
-        # fixpoint stable when a bound and its scope disagree about a membership
-        # flag.  Until then this leaves one divergence: negating an integer whose
-        # zero is not statically known -- `-x` for an `INTEGER` parameter `x == 0`
-        # gives `-0.0` from the interpreter and `0` from compiled code.  A
-        # *literal* zero is fine; its bound is a `SetFormat`, which states the
-        # sign via `NEG_ZERO`.  See `docs/todos/reals-in-integer-storage.md`.
+        # Not extended to `MPBFixedFormat`: its `enable_neg_zero` is what lets a
+        # bound say "this really can be a negative zero" and so reach a float
+        # storage, which is the whole point of the flag.
         af.has_neg_zero = (
             not isinstance(fmt, MPFixedFormat)
             and fmt.representable_in(Float(s=True, exp=0, c=0))
@@ -521,16 +506,15 @@ class AbstractFormat:
                         enable_nan=enable_nan, enable_inf=enable_inf,
                         enable_neg_zero=self.has_neg_zero,
                     )
-                else:
-                    neg_maxval = self.neg_bound
-                    if not neg_maxval.s:
-                        # MPBFloatFormat requires a strictly-negative neg_maxval;
-                        # widen symmetrically (sound over-approximation).
-                        neg_maxval = RealFloat(s=True, x=self.pos_bound)
-                    return MPBFloatFormat(
-                        self.prec, emin, self.pos_bound, neg_maxval,
-                        enable_nan=enable_nan, enable_inf=enable_inf,
-                    )
+                neg_maxval = self.neg_bound
+                if not neg_maxval.s:
+                    # MPBFloatFormat requires a strictly-negative neg_maxval;
+                    # widen symmetrically (sound over-approximation).
+                    neg_maxval = RealFloat(s=True, x=self.pos_bound)
+                return MPBFloatFormat(
+                    self.prec, emin, self.pos_bound, neg_maxval,
+                    enable_nan=enable_nan, enable_inf=enable_inf,
+                )
             if bounds_unbounded:
                 return MPSFloatFormat(
                     self.prec, emin, enable_nan=enable_nan, enable_inf=enable_inf,
@@ -637,11 +621,11 @@ class AbstractFormat:
              ``RealFloat`` bounds by magnitude, so the two zeros are
              indistinguishable there.
 
-        Adding a membership implication only ever *removes* containments, so a
-        flag that under-reports costs precision rather than soundness.  The
-        arithmetic operators do not yet derive ``has_neg_zero`` for their
-        results, which is exactly such an under-report; see the note on
-        :meth:`__neg__`.
+        Under-reporting a flag is not merely imprecise.  It accepts containments
+        that should fail, and storage selection reads that as permission -- a
+        bound that can hold a ``-0.0`` reaching an integer type is a wrong
+        answer, not a loose one.  Every operator derives ``has_neg_zero`` for
+        this reason.
         """
 
         # 4. special values

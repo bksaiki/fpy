@@ -864,6 +864,19 @@ def _literal_bound(e) -> FormatBound:
     return SetFormat.from_value(e.as_rational())
 
 
+def _has_list_depth(fmt: FormatBound, depth: int) -> bool:
+    """Can *fmt* be peeled *depth* times as a :class:`ListFormat`?
+
+    The precondition :func:`_list_set_widen` asserts.  Tested rather than
+    caught, so that a genuine shape bug still surfaces as the assertion it is.
+    """
+    for _ in range(depth):
+        if not isinstance(fmt, ListFormat):
+            return False
+        fmt = fmt.elt
+    return True
+
+
 def _list_set_widen(
     value_fmt: FormatBound,
     depth: int,
@@ -1153,13 +1166,11 @@ class _FormatInferInstance(Visitor):
     def _with_region_inserts(self, d: Definition, fmt: FormatBound) -> FormatBound:
         """*fmt*, widened by every store recorded against *d*'s alias region.
 
-        A store through one name mutates the list every name in the region
-        refers to, so each of their bounds has to admit the inserted value.
-        Replaying the record on *every* write rather than editing bounds in place
-        keeps this order-independent: a def computed after the store picks the
-        widening up when it is first set, and one computed before is re-widened
-        when the store is recorded (see :meth:`_visit_indexed_assign`).  Widening
-        only ever raises a bound, so a loop fixpoint still converges.
+        Replaying the record on each write, rather than editing bounds in place,
+        makes this order-independent: a def computed after the store picks the
+        widening up when it is first set, and one computed before is re-widened by
+        :meth:`_record_region_insert`.  Widening only raises a bound, so a loop
+        fixpoint still converges.
         """
         if not self._region_inserts:
             return fmt
@@ -1174,14 +1185,12 @@ class _FormatInferInstance(Visitor):
                 # keeps this flow-sensitive -- a read before the store still
                 # sees the narrow bound.
                 continue
-            try:
-                fmt = _list_set_widen(fmt, depth, insert_fmt, widen=self._widen)
-            except AssertionError:
-                # `_list_set_widen` asserts a `ListFormat` at each peeled level.
-                # A region can hold defs of differing nesting (a row and the
-                # matrix that holds it), and a store at one depth says nothing
-                # about a def shallower than that -- leave those alone.
-                pass
+            if not _has_list_depth(fmt, depth):
+                # A region can hold defs of differing nesting -- a row and the
+                # matrix that holds it -- and a store at one depth says nothing
+                # about a def shallower than that.
+                continue
+            fmt = _list_set_widen(fmt, depth, insert_fmt, widen=self._widen)
         return fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
@@ -1860,19 +1869,23 @@ class _FormatInferInstance(Visitor):
     ) -> None:
         """Note that a store put *insert_fmt* into *base*'s list at *depth*.
 
-        ``reaching_defs`` gives the store a fresh def of the name it was written
-        through, so that name's bound is widened directly.  But the list is one
-        object, and every other name in the same alias region now sees the
-        inserted value too -- ``ys = xs; ys[0] = y`` leaves ``xs[0]`` holding
-        ``y``.  Without this, ``xs``'s bound keeps its old element format and the
-        analysis reports a format the program exceeds; see
-        ``docs/todos/format-infer-aliasing.md``.
+        ``reaching_defs`` refreshes only the name written through, but the list is
+        one object: ``ys = xs; ys[0] = y`` leaves ``xs[0]`` holding ``y``.  Without
+        this, ``xs`` keeps its old element format and the analysis reports a bound
+        the program exceeds -- see ``docs/todos/format-infer-aliasing.md``.
         """
         region = self.alias.region_of(base)
         if region is None:
             return
         record = self._region_inserts.setdefault(region, [])
-        record.append((depth, insert_fmt, frozenset(already)))
+        entry = (depth, insert_fmt, frozenset(already))
+        if entry in record:
+            # A loop body is visited once per fixpoint iteration, so the same
+            # store arrives repeatedly.  Replaying a duplicate is harmless --
+            # widening is idempotent -- but the record would grow with the
+            # iteration count.
+            return
+        record.append(entry)
         # Defs already computed do not get another write on their own, so
         # re-widen them here.  Monotone, so this cannot cycle.
         for d in list(self.by_def):
