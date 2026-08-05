@@ -149,6 +149,7 @@ from ...types import (
     VarType,
 )
 from ...utils import is_dyadic
+from ..alias import Alias, AliasAnalysis, Region
 from ..array_size import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -915,13 +916,14 @@ def _format_of_scope(scope: ContextScope) -> Format:
 
 @dataclass(frozen=True)
 class PreAnalyses:
-    """Bundle of the four structural pre-analyses a
-    :class:`FormatAnalysis` depends on.  Identical for every
-    instantiation of the same :class:`FuncDef`."""
+    """Bundle of the structural pre-analyses a :class:`FormatAnalysis`
+    depends on.  Identical for every instantiation of the same
+    :class:`FuncDef`."""
     def_use: DefineUseAnalysis
     type_info: TypeAnalysis
     ctx_use: ContextUseAnalysis
     array_size: ArraySizeAnalysis
+    alias: AliasAnalysis
 
 
 class PreAnalysisCache:
@@ -944,6 +946,7 @@ class PreAnalysisCache:
         type_info: TypeAnalysis | None = None,
         ctx_use: ContextUseAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,
+        alias: AliasAnalysis | None = None,
     ) -> PreAnalyses:
         """Return the pre-analyses for *func*, computing them on the
         first request.  Pre-supplied analyses (via the keyword args)
@@ -963,7 +966,12 @@ class PreAnalysisCache:
             ctx_use = ContextUse.analyze(func, def_use=def_use)
         if array_size is None:
             array_size = ArraySizeInfer.analyze(func, type_info=type_info)
-        pre = PreAnalyses(def_use, type_info, ctx_use, array_size)
+        if alias is None:
+            # No escape summaries: `Alias` is then maximally conservative about
+            # what a call may retain, which over-approximates the aliasing --
+            # exactly the safe direction for the widening below.
+            alias = Alias.analyze(func, def_use=def_use, type_info=type_info)
+        pre = PreAnalyses(def_use, type_info, ctx_use, array_size, alias)
         self._table[key] = pre
         return pre
 
@@ -1090,7 +1098,11 @@ class _FormatInferInstance(Visitor):
         self.type_info = pre.type_info
         self.ctx_use = pre.ctx_use
         self.array_size = pre.array_size
+        self.alias = pre.alias
         self.by_def = {}
+        self._region_inserts: dict[
+            Region, list[tuple[int, FormatBound, frozenset[Definition]]]
+        ] = {}
         self.by_expr = {}
         self.by_call = {}
         self._pre_cache = pre_cache
@@ -1136,7 +1148,41 @@ class _FormatInferInstance(Visitor):
         return self.type_info.def_use
 
     def _set_def_bound(self, d: Definition, fmt: FormatBound):
-        self.by_def[d] = fmt
+        self.by_def[d] = self._with_region_inserts(d, fmt)
+
+    def _with_region_inserts(self, d: Definition, fmt: FormatBound) -> FormatBound:
+        """*fmt*, widened by every store recorded against *d*'s alias region.
+
+        A store through one name mutates the list every name in the region
+        refers to, so each of their bounds has to admit the inserted value.
+        Replaying the record on *every* write rather than editing bounds in place
+        keeps this order-independent: a def computed after the store picks the
+        widening up when it is first set, and one computed before is re-widened
+        when the store is recorded (see :meth:`_visit_indexed_assign`).  Widening
+        only ever raises a bound, so a loop fixpoint still converges.
+        """
+        if not self._region_inserts:
+            return fmt
+        region = self.alias.region_of(d)
+        if region is None:
+            return fmt
+        for depth, insert_fmt, already in self._region_inserts.get(region, ()):
+            if d in already:
+                # `reaching_defs` accounts for these two itself: the def the
+                # store reads is the list's state *before* it, and the def it
+                # creates already carries the widening.  Skipping them is what
+                # keeps this flow-sensitive -- a read before the store still
+                # sees the narrow bound.
+                continue
+            try:
+                fmt = _list_set_widen(fmt, depth, insert_fmt, widen=self._widen)
+            except AssertionError:
+                # `_list_set_widen` asserts a `ListFormat` at each peeled level.
+                # A region can hold defs of differing nesting (a row and the
+                # matrix that holds it), and a store at one depth says nothing
+                # about a def shallower than that -- leave those alone.
+                pass
+        return fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
         return self.by_def[d]
@@ -1804,6 +1850,34 @@ class _FormatInferInstance(Visitor):
         )
         d_def = self.def_use.find_def_from_site(stmt.var, stmt)
         self._set_def_bound(d_def, new_fmt)
+        self._record_region_insert(
+            d_use, len(stmt.indices), insert_fmt, already={d_use, d_def},
+        )
+
+    def _record_region_insert(
+        self, base: Definition, depth: int, insert_fmt: FormatBound,
+        *, already: set[Definition],
+    ) -> None:
+        """Note that a store put *insert_fmt* into *base*'s list at *depth*.
+
+        ``reaching_defs`` gives the store a fresh def of the name it was written
+        through, so that name's bound is widened directly.  But the list is one
+        object, and every other name in the same alias region now sees the
+        inserted value too -- ``ys = xs; ys[0] = y`` leaves ``xs[0]`` holding
+        ``y``.  Without this, ``xs``'s bound keeps its old element format and the
+        analysis reports a format the program exceeds; see
+        ``docs/todos/format-infer-aliasing.md``.
+        """
+        region = self.alias.region_of(base)
+        if region is None:
+            return
+        record = self._region_inserts.setdefault(region, [])
+        record.append((depth, insert_fmt, frozenset(already)))
+        # Defs already computed do not get another write on their own, so
+        # re-widen them here.  Monotone, so this cannot cycle.
+        for d in list(self.by_def):
+            if d not in already and self.alias.region_of(d) == region:
+                self.by_def[d] = self._with_region_inserts(d, self.by_def[d])
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
