@@ -458,11 +458,12 @@ class MPFixedContext(OrdinalContext):
         # step 3. round value based on rounding parameters
         xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, rng=self.rng, exact=exact)
 
-        # step 4. compute the actual sign
+        # step 5. return the rounded value.
         if xr.is_zero() and xr.s and not self.enable_neg_zero:
-            s = False
+            # if -0 is not enabled, then return +0 instead of -0
+            return Float(x=xr, s=False, ctx=self)
         else:
-            s = xr.s
+            return Float(x=xr, ctx=self)
 
         # step 5. wrap the value in a Float
         return Float(x=xr, s=s, ctx=self)

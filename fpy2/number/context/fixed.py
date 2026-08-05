@@ -196,7 +196,7 @@ class FixedContext(MPBFixedContext, EncodableContext):
         super().__init__(
             nmin, pos_maxval, rm, overflow, num_randbits,
             neg_maxval=neg_maxval, rng=rng,
-            enable_nan=False, enable_inf=False,
+            enable_nan=False, enable_inf=False, enable_neg_zero=False,
             nan_value=nan_value, inf_value=inf_value
         )
 
@@ -244,15 +244,6 @@ class FixedContext(MPBFixedContext, EncodableContext):
 
     def format(self) -> FixedFormat:
         return FixedFormat(self.signed, self.scale, self.nbits)
-
-    def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
-        r = super()._round_at(x, n, exact)
-        if r.is_zero() and r.s:
-            # rounding a negative value toward zero produces a negative zero,
-            # which two's complement cannot represent; normalize it away so
-            # that `self.round()` always returns a representable value
-            return Float(x=r, s=False, ctx=self)
-        return r
 
     @classmethod
     def from_format(
