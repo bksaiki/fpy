@@ -29,7 +29,9 @@ Currently supported:
   ``static_cast`` (with a NaN-aware assertion for ``Cast``).
 
 Anything else raises :class:`CppEmitError`, which the public
-``CppCompiler`` re-wraps as :class:`CppCompileError`.
+``CppCompiler`` re-wraps as :class:`CppCompileError`.  A violated
+invariant from an earlier phase raises :class:`CppInternalError`
+instead -- a backend bug rather than an uncompilable program.
 """
 
 import dataclasses
@@ -248,6 +250,32 @@ class CppEmitError(Exception):
             super().__init__(f'{loc.format()}: {msg}')
         else:
             super().__init__(msg)
+
+
+class CppInternalError(CppEmitError):
+    """An invariant an earlier phase was supposed to guarantee.
+
+    :class:`CppEmitError` reports a *program* the backend cannot compile — a
+    legal FPy program with no faithful C++ representation, or a shape the
+    emitter does not implement yet.  This reports a *backend bug*:
+    ``format_infer``, ``storage_infer``, or ``context_use`` handed the emitter
+    something structurally impossible, and the fix belongs in that phase rather
+    than in the user's program.  Told apart, because otherwise an analysis bug
+    reaches the user as "your program is unsupported" and sends them off to
+    rewrite working code.
+
+    A subclass, so existing handlers and the :class:`CppCompileError` wrapping
+    are unchanged; only the message differs.  The wrapping preserves the type on
+    ``__cause__``, which is what lets a test tell the two apart.
+
+    ``tests/unit/backend/cpp/test_internal_invariants.py`` asserts none of these
+    fires across the corpus.  ``docs/todos/cpp-refusal-audit.md`` has the audit
+    that separated them, and the list of sites deliberately left as
+    :class:`CppEmitError`.
+    """
+
+    def __init__(self, msg: str, *, at: 'Ast | None' = None):
+        super().__init__(f'internal error (please report): {msg}', at=at)
 
 
 class CppEmitter(Visitor):
@@ -1427,7 +1455,7 @@ class CppEmitter(Visitor):
         only take/return scalars."""
         ty = self._storage_for_expr(e)
         if not isinstance(ty, CppScalar):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected scalar storage for {type(e).__name__}, got {ty!r}',
                 at=e,
             )
@@ -1483,7 +1511,7 @@ class CppEmitter(Visitor):
         try:
             scope = self.ctx_use.find_scope_from_use(e)
         except KeyError as err:
-            raise CppEmitError(
+            raise CppInternalError(
                 f'no context scope registered for {type(e).__name__}',
                 at=e,
             ) from err
@@ -1871,7 +1899,7 @@ class CppEmitter(Visitor):
     def _as_tuple(self, acc: _TupleAccess, e: Expr) -> tuple[str, CppTuple]:
         """The (base string, tuple type) of *acc*, which must be a tuple."""
         if not isinstance(acc.ty, CppTuple):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'tuple accessor expects a tuple, got {acc.ty.format()}', at=e,
             )
         return acc.s, acc.ty
@@ -1886,7 +1914,7 @@ class CppEmitter(Visitor):
         if not (isinstance(result_ty, CppList)
                 and isinstance(result_ty.elt, CppTuple)
                 and len(result_ty.elt.elts) == 2):
-            raise CppEmitError(
+            raise CppInternalError(
                 'expected list[(int, T)] for enumerate result, '
                 f'got {result_ty!r}', at=e,
             )
@@ -1962,7 +1990,7 @@ class CppEmitter(Visitor):
         if not (isinstance(result_ty, CppList)
                 and isinstance(result_ty.elt, CppScalar)
                 and result_ty.elt.is_integer()):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'range(...) expected integer-list result, '
                 f'got `{result_ty!r}`',
                 at=e,
@@ -2294,7 +2322,7 @@ class CppEmitter(Visitor):
         cast (losslessly) into the active context's storage so the
         pairwise calls have a single deduced template type."""
         if not e.args:
-            raise CppEmitError(
+            raise CppInternalError(
                 f'{type(e).__name__} requires at least one argument',
                 at=e,
             )
@@ -2330,7 +2358,7 @@ class CppEmitter(Visitor):
             isinstance(arg_storage, CppList)
             and arg_storage.elt == CppScalar.BOOL
         ):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected list[bool] arg for {type(e).__name__}, '
                 f'got {arg_storage!r}',
                 at=e,
@@ -2361,14 +2389,14 @@ class CppEmitter(Visitor):
         """
         result_ty = self._storage_for_expr(e)
         if not isinstance(result_ty, CppScalar):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected scalar result for {type(e).__name__}, got {result_ty!r}',
                 at=e,
             )
         arg_storage = self._storage_for_expr(e.arg)
         if not (isinstance(arg_storage, CppList)
                 and isinstance(arg_storage.elt, CppScalar)):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected list[scalar] arg for {type(e).__name__}, '
                 f'got {arg_storage!r}',
                 at=e,
@@ -2453,7 +2481,7 @@ class CppEmitter(Visitor):
         result_ty = self._storage_for_expr(e)
         if not (isinstance(result_ty, CppList)
                 and isinstance(result_ty.elt, CppTuple)):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected list[tuple[...]] for zip result, got {result_ty!r}',
                 at=e,
             )
@@ -2923,7 +2951,7 @@ class CppEmitter(Visitor):
         level = self._emitted_storage_of(target_def)
         for idx in idxs:
             if not isinstance(level, CppList):
-                raise CppEmitError(
+                raise CppInternalError(
                     f'`{stmt.var}` is indexed {len(idxs)} deep but its storage '
                     f'is `{level!r}`',
                     at=stmt,
