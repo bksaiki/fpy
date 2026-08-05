@@ -110,13 +110,7 @@ _NON_CR_OPS = frozenset([
 # diverge from the interpreter for a known reason (populate as discovered,
 # e.g. exact-rational decimal literals rounded once in the interpreter vs.
 # per-literal in C++).
-_run_ignore: list[str] = [
-    # Quantized dot product that collapses to zero: the interpreter yields
-    # -0.0 and C++ `std::accumulate` (seeded with +0.0) yields +0.0 —
-    # numerically equal, a signed-zero-from-reduction edge.  This function
-    # exists to pin widening codegen (which compiles), not exact execution.
-    '_regression_quant_dot_real_widen',
-]
+_run_ignore: list[str] = []
 
 
 class _OpScan(DefaultVisitor):
@@ -1409,9 +1403,15 @@ def _regression_quant_dot_real_widen(
       lossless-widening dispatch in
       :meth:`fpy2.backend.cpp.emitter.CppEmitter._try_widen_binary`:
       the ``Mul`` widens both operands to ``int16_t``.
-    - ``sum(prods)`` under FP32 lowers to ``std::accumulate`` with
-      a ``float`` accumulator, taking advantage of the lossless
-      ``int16 → float`` implicit conversion.
+    - ``sum(prods)`` under FP32 lowers to ``std::accumulate`` seeded with the
+      first element cast to ``float``, taking advantage of the lossless
+      ``int16 → float`` conversion.  That the conversion is exact is what makes
+      the fold uni-precision at ``float`` -- ``init + *first`` converts to the
+      common type, which is the accumulator only because the element fits it --
+      and so equal to the interpreter's per-addition rounding.
+
+    Was in ``_run_ignore`` while ``sum`` seeded from a typed zero: this product
+    collapses to zero, and the interpreter's ``-0.0`` came out ``+0.0``.
     """
     with fp.SINT8:
         xqs = [fp.round(x) for x in xs]

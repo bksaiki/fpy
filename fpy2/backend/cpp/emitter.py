@@ -1963,22 +1963,7 @@ class CppEmitter(Visitor):
                     f'({self._list_len(arg_ty, arg)})'
                 )
             case Sum():
-                # ``sum(xs)`` → ``std::accumulate(begin, end, T(0))``
-                # with ``T`` taken from format inference.  Bind the operand
-                # to a reference first: when ``arg`` is a prvalue (e.g. a
-                # list literal), ``arg.begin()`` and ``arg.end()`` would
-                # otherwise name iterators into *different* temporaries — an
-                # invalid range (undefined behavior at runtime).  ``auto&&``
-                # lifetime-extends a temporary and binds an lvalue without
-                # copying.
-                result_ty = self._storage_for_expr(e)
-                arg_ty = self._storage_for_expr(e.arg)
-                src = self._bind_operand(arg)
-                return (
-                    f'std::accumulate({self._list_begin(arg_ty, src)}, '
-                    f'{self._list_end(arg_ty, src)}, '
-                    f'static_cast<{result_ty.format()}>(0))'
-                )
+                return self._emit_sum(e, arg)
             case AMin() | AMax():
                 return self._emit_amin_amax(e, arg)
             case AnyOf() | AllOf():
@@ -2492,6 +2477,73 @@ class CppEmitter(Visitor):
         for nxt in casted[1:]:
             result = f'{fn}({result}, {nxt})'
         return result
+
+    def _emit_sum(self, e: Sum, arg: str) -> str:
+        """``sum(xs)`` as the fold the interpreter performs.
+
+        ``_eval_sum`` seeds the accumulator with ``xs[0]`` **unrounded** and
+        performs *n-1* additions; an empty list is an exact ``+0``.  Emitting
+        ``accumulate(begin, end, T(0))`` instead does *n* additions from a typed
+        zero, which differs twice over: ``sum([-0.0])`` came out ``+0.0``,
+        because ``0.0 + -0.0`` is ``+0.0``, and a seed in a narrower format
+        rounded the first element away.  ``accumulate`` takes its seed and its
+        range separately, so the interpreter's shape is a range starting one
+        past ``begin``.
+
+        The empty guard is not optional: ``begin() + 1`` and ``xs[0]`` are both
+        undefined on an empty vector, and the differential harness runs length
+        zero.
+
+        The accumulator may be *wider* than the element: the seed cast is then
+        exact, so an unrounded seed survives it, and each addition promotes its
+        element exactly and rounds once -- which is what the interpreter does.
+        ``int16_t`` elements into a ``float`` accumulator is the corpus case.
+
+        Refuses only when the accumulator cannot hold an element exactly.  There
+        the seed rounds -- ``sum([5e-324])`` under FP32 is the element untouched
+        for the interpreter and ``0`` once seeded at ``float`` -- and no single
+        C++ accumulator type fixes it, since widening instead would perform the
+        additions in the wrong format.  ``scalar_fits_in`` is the same test
+        :meth:`_maybe_cast` uses to reject a lossy implicit operand widening.
+        """
+        result_ty = self._storage_for_expr(e)
+        arg_ty = self._storage_for_expr(e.arg)
+        elt_ty = arg_ty.elt if isinstance(arg_ty, CppList) else None
+        if not isinstance(elt_ty, CppScalar) or not isinstance(result_ty, CppScalar):
+            raise CppInternalError(
+                f'expected scalar element and result for `sum`, got '
+                f'{elt_ty!r} and {result_ty!r}',
+                at=e,
+            )
+        if not scalar_fits_in(elt_ty, result_ty):
+            raise CppEmitError(
+                f'unsupported: `sum` over `{elt_ty.format()}` elements '
+                f'accumulating in `{result_ty.format()}`, which cannot hold '
+                f'one exactly.  The interpreter seeds the fold with the first '
+                f'element unrounded, and no C++ accumulator type reproduces '
+                f'that while still rounding each addition to the active '
+                f'context.  Use a context whose format contains the element '
+                f'format.',
+                at=e,
+            )
+        # Bind the operand to a reference first: when ``arg`` is a prvalue (e.g.
+        # a list literal), ``arg.begin()`` and ``arg.end()`` would otherwise name
+        # iterators into *different* temporaries -- an invalid range.  ``auto&&``
+        # lifetime-extends a temporary and binds an lvalue without copying, and
+        # also keeps the three uses below to a single evaluation.
+        src = self._bind_operand(arg)
+        seed = self._list_at(arg_ty, src, '0')
+        if elt_ty != result_ty:
+            # `accumulate` deduces `T` from its seed, so an uncast seed would
+            # run the whole fold in the element type -- integer arithmetic, for
+            # the int16-into-float case.  Exact, by the check above.
+            seed = self._explicit_cast(seed, result_ty)
+        return (
+            f'({self._list_len(arg_ty, src)} == 0'
+            f' ? static_cast<{result_ty.format()}>(0)'
+            f' : std::accumulate({self._list_begin(arg_ty, src)} + 1, '
+            f'{self._list_end(arg_ty, src)}, {seed}))'
+        )
 
     def _emit_any_all(self, e: 'AnyOf | AllOf', arg_str: str) -> str:
         """``any(bs)`` / ``all(bs)`` -> ``std::any_of`` / ``std::all_of`` with an
