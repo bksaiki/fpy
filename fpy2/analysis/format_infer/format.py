@@ -381,22 +381,15 @@ class AbstractFormat:
         -inf).  This round-trips with :meth:`format`, which sets the
         ``enable_*`` flags.
 
-        ``has_neg_zero`` round-trips like the others, via each format's
+        ``has_neg_zero`` round-trips the same way, via each format's
         ``enable_neg_zero``.  That flag exists for this: without it
         :meth:`format` could not express "no negative zero", so every
         integer-valued bound materialized on the way to storage selection would
         acquire one and lose its integer storage — ``int8 + int8`` lands on a
         *float*-shaped ``MPBFloatFormat``, whose value set legitimately includes
-        a ``-0.0`` unless told otherwise.
-
-        Every probe here is believed.  A format that says it holds a negative
-        zero gets ``has_neg_zero``, and containment then keeps it away from the
-        integer rungs of the C++ storage ladder — which is correct, since no C++
-        integer type has one.  This used to carve out ``MPFixedFormat`` and take
-        it as having no negative zero whatever it said, because ``INTEGER`` was
-        built without ``enable_neg_zero`` and every list length and loop counter
-        inherited a signed zero it could not lose.  ``INTEGER`` now declines it
-        at the source, so the lie is no longer needed.
+        a ``-0.0`` unless told otherwise.  Every probe is believed, so a format
+        that does claim a negative zero is kept off the integer rungs of the C++
+        storage ladder by containment — correctly, as no C++ integer type has one.
         """
         # finite grid: quantum, precision, and bounds
         match fmt:

@@ -1397,12 +1397,8 @@ class TestFormatInfer:
         )
 
     def test_integer_valued_ops_do_not_inherit_a_signed_zero(self):
-        """A *count* has one zero -- a list length is an integer.
-
-        `_INTEGER_FORMAT` used to be a distinct `MPFixedFormat` to say so,
-        because `INTEGER` claimed a signed zero that every counter and length
-        then inherited, and no C++ integer type holds one, so they all widened
-        to `float`.  `INTEGER` now declines it, so the two agree.
+        """A *count* has one zero -- a list length is an integer, which is what
+        `INTEGER` describes, so `_INTEGER_FORMAT` need not be distinct from it.
         """
         from fpy2.analysis.format_infer.format import AbstractFormat
         assert _INTEGER_FORMAT == fp.INTEGER.format()

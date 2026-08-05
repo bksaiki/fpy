@@ -359,11 +359,8 @@ The format of an integer-*valued* expression: the result of ``Len``, ``Dim``,
 is, so reporting the active context's format would be unnecessarily loose.
 
 A *count* has one zero — a list length is an integer, and an integer has no
-signed zero.  This was once a separate ``MPFixedFormat`` for exactly that reason,
-because ``INTEGER`` claimed a signed zero that every length and counter then
-inherited and could not lose, forcing them all to widen to ``float`` in C++.
-``INTEGER`` now declines it, so the two agree and this is just a name for the
-intent.
+signed zero — which is exactly what ``INTEGER`` describes, so this is a name for
+the intent rather than a distinct format.
 """
 
 

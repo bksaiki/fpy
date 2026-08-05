@@ -98,13 +98,10 @@ class TestStorageScalar:
     def test_an_unbounded_signed_zero_is_refused_integer_storage(self):
         """``enable_neg_zero`` reaches this guard like the other two flags.
 
-        It used not to: ``AbstractFormat.from_format`` carved out
-        ``MPFixedFormat`` and took it as having no signed zero whatever it said,
-        so the flag was gone before storage selection ran -- which is what let
-        ``-x`` on an ``INTEGER`` parameter return ``0`` where the interpreter
-        returned ``-0.0``.  ``INTEGER`` now declines the signed zero itself, the
-        carve-out is gone, and a format that *does* claim one is refused
-        ``int64_t`` -- correctly, since no C++ integer type has a signed zero.
+        No C++ integer type has a signed zero, so a format claiming one is
+        refused ``int64_t`` rather than taking the fallback.  This flag used to be
+        discarded by ``AbstractFormat.from_format`` before storage selection ever
+        ran; see ``docs/todos/reals-in-integer-storage.md``.
         """
         from fpy2.number.context.mp_fixed import MPFixedFormat
         fmt = MPFixedFormat(nmin=-1, enable_neg_zero=True)

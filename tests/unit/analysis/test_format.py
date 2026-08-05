@@ -156,16 +156,13 @@ class TestAbstractFormat():
             assert AbstractFormat.from_format(af.format()).has_neg_zero is hnz
 
     def test_unbounded_fixed_point_is_believed_about_neg_zero(self):
-        """`MPFixedFormat` is believed about its negative zero, like every
-        other format.
+        """`MPFixedFormat` is believed about its negative zero, in both
+        directions.
 
-        This used to be carved out and taken as having no negative zero
-        whatever it said, because `INTEGER` claimed one and no C++ integer type
-        has one: believing it retyped every `range` counter as `float` and
-        diverged the loop fixpoint in `test_while{5,6,7}_rounded` to
-        `REAL_FORMAT`.  `INTEGER` now declines the signed zero at the source,
-        so the carve-out is gone and the probe is honest in both directions --
-        which is what closed the `-x`-on-an-`INTEGER`-parameter divergence.
+        `MPFixedFormat` was once carved out and taken as having none whatever it
+        said, which is what made `-x` on an `INTEGER` parameter return `0` where
+        the interpreter returned `-0.0`.  See
+        `docs/todos/reals-in-integer-storage.md`.
         """
         nz = fp.RealFloat(s=True, exp=0, c=0)
         # `INTEGER` declines it, and the abstraction agrees.
@@ -177,13 +174,13 @@ class TestAbstractFormat():
         assert with_nz.representable_in(nz)
         assert AbstractFormat.from_format(with_nz).has_neg_zero
 
-    def test_bounded_fixed_point_is_still_believed(self):
-        """The *bounded* case, which was never carved out.
+    def test_bounded_fixed_point_is_believed(self):
+        """The *bounded* case, which reaches `from_format` by a different
+        `match` arm than the unbounded one above.
 
         `MPBFixedFormat.enable_neg_zero` is what lets a bound say "this really
         can be a negative zero" and so reach a float storage — the whole reason
-        the flag exists.  Kept as a separate case from the unbounded one above:
-        the two reach `from_format` by different `match` arms.
+        the flag exists.
         """
         pz = fp.RealFloat(s=False, exp=0, c=0)
         nz = fp.RealFloat(s=True, exp=0, c=0)

@@ -227,11 +227,10 @@ class MPFixedContext(OrdinalContext):
     enable_neg_zero: bool
     """is `-0.0` representable?
 
-    True by default: this format is sign-magnitude, so a zero carries a sign like
-    any other value.  Set false for a number system with a single zero -- FPy's
-    `INTEGER` is one, and two's complement is the reason `FixedContext` is
-    another.  When false, `round()` normalizes a negative zero away, so
-    `representable_in` and `round` agree.
+    True by default, since this format is sign-magnitude.  Set false for a number
+    system with a single zero -- `INTEGER` and `FixedContext` are both such.  When
+    false, `round()` normalizes a negative zero away so that it agrees with
+    `representable_in`.
     """
 
     nan_value: Float | None

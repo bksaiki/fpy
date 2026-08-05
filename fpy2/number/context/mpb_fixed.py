@@ -117,8 +117,8 @@ class MPBFixedFormat(SizedFormat):
         return self.nmin + 1
 
     def representable_in(self, x: RealFloat | Float) -> bool:
-        if isinstance(x, Float | RealFloat) and x.is_zero() and x.s and not self.enable_neg_zero:
-            return False
+        # `_mp_fmt` carries the same `enable_neg_zero`, so it rejects a
+        # negative zero on this format's behalf
         if not self._mp_fmt.representable_in(x):
             return False
         if not x.is_nonzero():
@@ -537,9 +537,9 @@ class MPBFixedContext(SizedContext):
                 raise RuntimeError(f'unreachable {x}')
 
         # step 2. shortcut for exact zero values
-        # the sign is preserved: this format has a negative zero.
-        # `FixedContext` overrides `_round_at` to strip it, since two's
-        # complement does not.
+        # the sign is preserved only when this context has a negative zero;
+        # `FixedContext` is one that does not, since two's complement has a
+        # single encoding of zero
         if xr.is_zero():
             return Float(s=xr.s and self.enable_neg_zero, ctx=self)
 
